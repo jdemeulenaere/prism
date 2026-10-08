@@ -160,72 +160,22 @@ crates/prism-resolver/
     └── resolver_tests.rs
 ```
 
-### 3.2. Core Data Types
+### 3.2. Logical Model & Entities
 
-```rust
-/// Canonical representation of an import target.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ResolvedTarget {
-    /// Single `.prism` source file.
-    File(PathBuf),
-    /// Entire package directory (for wildcard or directory imports).
-    Package {
-        dir: PathBuf,
-        files: Vec<PathBuf>,
-    },
-}
+The resolver operates on the following conceptual entities:
 
-/// A node in the resolved dependency graph.
-#[derive(Debug, Clone)]
-pub struct SourceUnit {
-    pub path: PathBuf,
-    pub package_name: Option<String>,
-    pub workspace_root: PathBuf,
-    pub direct_dependencies: Vec<PathBuf>,
-}
+- **Resolved Target**: Represents the resolved filesystem entity of an import, which is either a concrete `.prism` source file or a package directory.
+- **Source Unit**: Represents a parsed `.prism` source file, its discovered workspace root, its associated package name, and its direct outgoing import dependencies.
+- **Dependency Graph**: A directed graph where nodes are source units and edges represent import dependencies, providing topological compilation ordering and cycle detection.
 
-/// Complete resolved project dependency graph.
-#[derive(Debug, Clone, Default)]
-pub struct DependencyGraph {
-    pub units: HashMap<PathBuf, SourceUnit>,
-    pub topological_order: Vec<PathBuf>,
-}
-```
+### 3.3. Engine Responsibilities
 
-### 3.3. Public API Contract
+The resolver engine provides four core operations:
 
-```rust
-pub struct Resolver;
-
-impl Resolver {
-    /// Discovers the workspace root strictly by comparing the source file's directory
-    /// with its package declaration. Requires ZERO build files and ZERO marker files.
-    pub fn discover_root(
-        file_path: &Path,
-        package_decl: Option<&PackageDecl>,
-    ) -> Result<PathBuf, ResolutionError>;
-
-    /// Resolves an import statement to its concrete filesystem path.
-    pub fn resolve_import(
-        source_file: &Path,
-        import_decl: &ImportDecl,
-        workspace_root: &Path,
-    ) -> Result<PathBuf, ResolutionError>;
-
-    /// Discovers all `.prism` files in a package directory, validating that all
-    /// share the same package declaration.
-    pub fn scan_package(
-        package_dir: &Path,
-        expected_package: Option<&PackageDecl>,
-    ) -> Result<Vec<PathBuf>, ResolutionError>;
-
-    /// Builds the full dependency DAG starting from an entry file or directory,
-    /// detecting cycles and computing compilation order.
-    pub fn build_dependency_graph(
-        entry_paths: &[PathBuf],
-    ) -> Result<DependencyGraph, ResolutionError>;
-}
-```
+1. **Root Discovery**: Given an entry file path and its optional package declaration, discovers the workspace root strictly by path-suffix comparison with zero marker files and zero configuration files.
+2. **Import Resolution**: Given a source file path, an import declaration, and the workspace root, resolves the import into a concrete filesystem path on disk.
+3. **Package Scanning**: Given a package directory, scans all direct `.prism` files belonging to the package and validates that all files share identical package declarations.
+4. **Dependency Graph Construction**: Given a set of entry paths, traverses import statements transitively to construct the complete dependency DAG, detecting circular references and producing the topological compilation order.
 
 ---
 
