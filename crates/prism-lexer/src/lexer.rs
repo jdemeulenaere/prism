@@ -10,6 +10,7 @@ pub struct Lexer<'a> {
     cursor: usize,
     line: u32,
     column: u32,
+    had_unclosed_comment: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -20,6 +21,7 @@ impl<'a> Lexer<'a> {
             cursor: 0,
             line: 1,
             column: 1,
+            had_unclosed_comment: false,
         }
     }
 
@@ -39,16 +41,26 @@ impl<'a> Lexer<'a> {
 
     /// Fetches the next token from the input stream.
     pub fn next_token(&mut self) -> Token {
-        self.skip_whitespace_and_comments();
+        let saw_newline = self.skip_whitespace_and_comments();
 
         let start_pos = self.cursor;
         let start_line = self.line;
         let start_col = self.column;
 
+        if self.had_unclosed_comment {
+            self.had_unclosed_comment = false;
+            return Token::with_newline(
+                TokenKind::Error("Unterminated block comment".to_string()),
+                Span::new(start_pos, start_pos, start_line, start_col),
+                saw_newline,
+            );
+        }
+
         if self.is_eof() {
-            return Token::new(
+            return Token::with_newline(
                 TokenKind::Eof,
                 Span::new(start_pos, start_pos, start_line, start_col),
+                saw_newline,
             );
         }
 
@@ -196,13 +208,13 @@ impl<'a> Lexer<'a> {
             b'0'..=b'9' => self.lex_number(),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.lex_ident_or_keyword(),
             _ => {
-                let bad = self.bump();
-                TokenKind::Error(format!("Unexpected character: {:?}", bad as char))
+                let bad = self.bump_char().unwrap_or(' ');
+                TokenKind::Error(format!("Unexpected character: {:?}", bad))
             }
         };
 
         let span = Span::new(start_pos, self.cursor, start_line, start_col);
-        Token::new(kind, span)
+        Token::with_newline(kind, span, saw_newline)
     }
 
     fn lex_ident_or_keyword(&mut self) -> TokenKind {
@@ -286,6 +298,19 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // Check for scientific notation: e.g. 1e10, 3.14e-2
+        if !self.is_eof() && (self.peek_byte() == b'e' || self.peek_byte() == b'E') {
+            is_float = true;
+            self.bump(); // 'e' or 'E'
+            if !self.is_eof() && (self.peek_byte() == b'+' || self.peek_byte() == b'-') {
+                self.bump();
+            }
+            while !self.is_eof() && (self.peek_byte().is_ascii_digit() || self.peek_byte() == b'_')
+            {
+                self.bump();
+            }
+        }
+
         let raw = self.input[start..self.cursor].replace('_', "");
         if is_float {
             match raw.parse::<f64>() {
@@ -310,7 +335,7 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 return TokenKind::String(result);
             } else if b == b'\\' {
-                self.bump();
+                self.bump(); // consume '\\'
                 if self.is_eof() {
                     return TokenKind::Error("Unterminated string escape".to_string());
                 }
@@ -322,16 +347,55 @@ impl<'a> Lexer<'a> {
                     b'"' => result.push('"'),
                     b'\'' => result.push('\''),
                     b'0' => result.push('\0'),
+                    b'u' => {
+                        // Unicode escape: \u{1F680} or \u0041
+                        if self.peek_byte() == b'{' {
+                            self.bump();
+                            let mut hex = String::new();
+                            while !self.is_eof() && self.peek_byte() != b'}' {
+                                hex.push(self.bump() as char);
+                            }
+                            if self.peek_byte() == b'}' {
+                                self.bump();
+                                match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                    Some(c) => result.push(c),
+                                    None => {
+                                        return TokenKind::Error(format!(
+                                            "Invalid unicode escape \\u{{{}}}",
+                                            hex
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return TokenKind::Error("Unterminated unicode escape".to_string());
+                            }
+                        } else {
+                            let mut hex = String::new();
+                            for _ in 0..4 {
+                                if !self.is_eof() {
+                                    hex.push(self.bump() as char);
+                                }
+                            }
+                            match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                Some(c) => result.push(c),
+                                None => {
+                                    return TokenKind::Error(format!(
+                                        "Invalid unicode escape \\u{}",
+                                        hex
+                                    ))
+                                }
+                            }
+                        }
+                    }
                     other => {
                         result.push(other as char);
                     }
                 }
-            } else if b == b'\n' {
-                self.bump();
-                result.push('\n');
             } else {
-                let ch = self.bump() as char;
-                result.push(ch);
+                match self.bump_char() {
+                    Some(ch) => result.push(ch),
+                    None => break,
+                }
             }
         }
 
@@ -357,10 +421,52 @@ impl<'a> Lexer<'a> {
                 b'\'' => '\'',
                 b'"' => '"',
                 b'0' => '\0',
+                b'u' => {
+                    if self.peek_byte() == b'{' {
+                        self.bump();
+                        let mut hex = String::new();
+                        while !self.is_eof() && self.peek_byte() != b'}' {
+                            hex.push(self.bump() as char);
+                        }
+                        if self.peek_byte() == b'}' {
+                            self.bump();
+                            match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                Some(c) => c,
+                                None => {
+                                    return TokenKind::Error(format!(
+                                        "Invalid unicode escape \\u{{{}}}",
+                                        hex
+                                    ))
+                                }
+                            }
+                        } else {
+                            return TokenKind::Error("Unterminated unicode escape".to_string());
+                        }
+                    } else {
+                        let mut hex = String::new();
+                        for _ in 0..4 {
+                            if !self.is_eof() {
+                                hex.push(self.bump() as char);
+                            }
+                        }
+                        match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                            Some(c) => c,
+                            None => {
+                                return TokenKind::Error(format!(
+                                    "Invalid unicode escape \\u{}",
+                                    hex
+                                ))
+                            }
+                        }
+                    }
+                }
                 other => other as char,
             }
         } else {
-            self.bump() as char
+            match self.bump_char() {
+                Some(c) => c,
+                None => return TokenKind::Error("Unterminated char literal".to_string()),
+            }
         };
 
         if self.is_eof() || self.peek_byte() != b'\'' {
@@ -370,7 +476,9 @@ impl<'a> Lexer<'a> {
         TokenKind::Char(ch)
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
+    fn skip_whitespace_and_comments(&mut self) -> bool {
+        let mut saw_newline = false;
+
         while !self.is_eof() {
             let b = self.peek_byte();
             match b {
@@ -379,6 +487,7 @@ impl<'a> Lexer<'a> {
                 }
                 b'\n' => {
                     self.bump();
+                    saw_newline = true;
                 }
                 b'/' => {
                     // Check if it's a line comment `//` or block comment `/*`
@@ -392,19 +501,35 @@ impl<'a> Lexer<'a> {
                                 self.bump();
                             }
                         } else if next == b'*' {
-                            // Block comment
-                            self.bump();
-                            self.bump();
-                            while !self.is_eof() {
-                                if self.peek_byte() == b'*'
+                            // Block comment with nesting
+                            self.bump(); // '/'
+                            self.bump(); // '*'
+                            let mut depth = 1usize;
+                            while !self.is_eof() && depth > 0 {
+                                if self.peek_byte() == b'/'
+                                    && self.cursor + 1 < self.bytes.len()
+                                    && self.bytes[self.cursor + 1] == b'*'
+                                {
+                                    self.bump();
+                                    self.bump();
+                                    depth += 1;
+                                } else if self.peek_byte() == b'*'
                                     && self.cursor + 1 < self.bytes.len()
                                     && self.bytes[self.cursor + 1] == b'/'
                                 {
                                     self.bump();
                                     self.bump();
-                                    break;
+                                    depth -= 1;
+                                } else {
+                                    if self.peek_byte() == b'\n' {
+                                        saw_newline = true;
+                                    }
+                                    self.bump();
                                 }
-                                self.bump();
+                            }
+                            if depth > 0 {
+                                self.had_unclosed_comment = true;
+                                break;
                             }
                         } else {
                             break;
@@ -416,6 +541,8 @@ impl<'a> Lexer<'a> {
                 _ => break,
             }
         }
+
+        saw_newline
     }
 
     fn peek_byte(&self) -> u8 {
@@ -439,6 +566,22 @@ impl<'a> Lexer<'a> {
             self.column += 1;
         }
         b
+    }
+
+    fn bump_char(&mut self) -> Option<char> {
+        if self.is_eof() {
+            return None;
+        }
+        let remaining = &self.input[self.cursor..];
+        let ch = remaining.chars().next()?;
+        self.cursor += ch.len_utf8();
+        if ch == '\n' {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
+        Some(ch)
     }
 
     fn is_eof(&self) -> bool {

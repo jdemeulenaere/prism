@@ -642,7 +642,8 @@ impl Parser {
     }
 
     fn current_precedence(&self) -> Precedence {
-        match self.peek_kind() {
+        let tok = self.peek();
+        match &tok.kind {
             TokenKind::Eq => Precedence::Assign,
             TokenKind::QuestionColon => Precedence::Elvis,
             TokenKind::PipePipe => Precedence::LogicalOr,
@@ -655,7 +656,9 @@ impl Parser {
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::Dot | TokenKind::QuestionDot => Precedence::Postfix,
+            TokenKind::LBracket => Precedence::Call,
             TokenKind::LParen => Precedence::Call,
+            TokenKind::LBrace if !tok.is_preceded_by_newline => Precedence::Call,
             _ => Precedence::Lowest,
         }
     }
@@ -763,16 +766,7 @@ impl Parser {
             }
 
             // Block or Closure: { ... }
-            TokenKind::LBrace => {
-                // Check if this is a closure with arrow `{ it -> ... }` or block
-                if self.is_closure_ahead() {
-                    self.parse_closure()
-                } else {
-                    let block = self.parse_block_expr()?;
-                    let span = block.span;
-                    Ok(Expr::new(ExprKind::Block(block), span))
-                }
-            }
+            TokenKind::LBrace => self.parse_lambda_or_block(),
 
             // Control flow
             TokenKind::If => self.parse_if(),
@@ -789,17 +783,35 @@ impl Parser {
         }
     }
 
-    fn is_closure_ahead(&self) -> bool {
-        // Quick lookahead inside { ... } to see if an arrow `->` occurs before a closing brace
+    fn parse_lambda_or_block(&mut self) -> Result<Expr, ParseError> {
+        if self.is_closure_with_arrow_ahead() {
+            self.parse_closure()
+        } else {
+            let block = self.parse_block_expr()?;
+            let span = block.span;
+            Ok(Expr::new(ExprKind::Block(block), span))
+        }
+    }
+
+    fn is_closure_with_arrow_ahead(&self) -> bool {
         let mut idx = self.cursor + 1;
+        let mut has_arrow = false;
         while idx < self.tokens.len() {
             match &self.tokens[idx].kind {
-                TokenKind::Arrow => return true,
-                TokenKind::RBrace | TokenKind::Eof => return false,
-                _ => idx += 1,
+                TokenKind::Arrow => {
+                    has_arrow = true;
+                    break;
+                }
+                TokenKind::Ident(_) => {
+                    idx += 1;
+                    if idx < self.tokens.len() && self.tokens[idx].kind == TokenKind::Comma {
+                        idx += 1;
+                    }
+                }
+                _ => return false,
             }
         }
-        false
+        has_arrow
     }
 
     fn parse_closure(&mut self) -> Result<Expr, ParseError> {
@@ -892,7 +904,19 @@ impl Parser {
                     }
                 }
                 let end = self.expect(TokenKind::RParen)?.span;
-                let span = left.span.merge(end);
+                let mut span = left.span.merge(end);
+
+                // Trailing lambda on call with parentheses: callee(args...) { body }
+                if self.peek_kind() == &TokenKind::LBrace && !self.peek().is_preceded_by_newline {
+                    let lambda = self.parse_lambda_or_block()?;
+                    span = span.merge(lambda.span);
+                    args.push(CallArg {
+                        name: None,
+                        value: lambda,
+                        span,
+                    });
+                }
+
                 Ok(Expr::new(
                     ExprKind::Call {
                         callee: Box::new(left),
@@ -902,10 +926,42 @@ impl Parser {
                 ))
             }
 
-            // Assignment: =
+            // Trailing lambda call without parentheses: callee { body }
+            TokenKind::LBrace => {
+                let lambda = self.parse_lambda_or_block()?;
+                let span = left.span.merge(lambda.span);
+                Ok(Expr::new(
+                    ExprKind::Call {
+                        callee: Box::new(left),
+                        args: vec![CallArg {
+                            name: None,
+                            value: lambda,
+                            span,
+                        }],
+                    },
+                    span,
+                ))
+            }
+
+            // Indexing: target[index]
+            TokenKind::LBracket => {
+                self.bump();
+                let index = self.parse_expr(Precedence::Lowest)?;
+                let end = self.expect(TokenKind::RBracket)?.span;
+                let span = left.span.merge(end);
+                Ok(Expr::new(
+                    ExprKind::Index {
+                        target: Box::new(left),
+                        index: Box::new(index),
+                    },
+                    span,
+                ))
+            }
+
+            // Assignment: = (right-associative)
             TokenKind::Eq => {
                 self.bump();
-                let right = self.parse_expr(Precedence::Assign)?;
+                let right = self.parse_expr(Precedence::Lowest)?;
                 let span = left.span.merge(right.span);
                 Ok(Expr::new(
                     ExprKind::Assign {
@@ -982,7 +1038,14 @@ impl Parser {
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::If)?.span;
-        let cond = self.parse_expr(Precedence::Lowest)?;
+        let cond = if self.peek_kind() == &TokenKind::LParen {
+            self.bump();
+            let c = self.parse_expr(Precedence::Lowest)?;
+            self.expect(TokenKind::RParen)?;
+            c
+        } else {
+            self.parse_expr(Precedence::Lowest)?
+        };
         let then_branch = self.parse_expr(Precedence::Lowest)?;
 
         let mut else_branch = None;
@@ -1008,7 +1071,12 @@ impl Parser {
     fn parse_when(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::When)?.span;
 
-        let target = if self.peek_kind() == &TokenKind::LBrace {
+        let target = if self.peek_kind() == &TokenKind::LParen {
+            self.bump();
+            let t = self.parse_expr(Precedence::Lowest)?;
+            self.expect(TokenKind::RParen)?;
+            Some(Box::new(t))
+        } else if self.peek_kind() == &TokenKind::LBrace {
             None
         } else {
             Some(Box::new(self.parse_expr(Precedence::Lowest)?))
@@ -1083,10 +1151,11 @@ impl Parser {
     fn parse_return(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::Return)?.span;
         // Check if expression follows on the same line or before delimiter
-        let has_value = !matches!(
-            self.peek_kind(),
-            TokenKind::RBrace | TokenKind::Semicolon | TokenKind::Eof
-        );
+        let has_value = !self.peek().is_preceded_by_newline
+            && !matches!(
+                self.peek_kind(),
+                TokenKind::RBrace | TokenKind::Semicolon | TokenKind::Eof
+            );
 
         if has_value {
             let val = self.parse_expr(Precedence::Lowest)?;

@@ -167,7 +167,13 @@ fn run_abi(path: &str) {
                 let comp = if *is_compose { "compose " } else { "" };
                 let param_str = params
                     .iter()
-                    .map(|(p, t)| format!("{}: {}", p, t))
+                    .map(|(p, t, def)| {
+                        if let Some(d) = def {
+                            format!("{}: {} = {}", p, t, d)
+                        } else {
+                            format!("{}: {}", p, t)
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(

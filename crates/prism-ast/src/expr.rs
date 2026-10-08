@@ -195,6 +195,10 @@ pub enum ExprKind {
         params: Vec<String>,
         body: Box<Expr>,
     },
+    Index {
+        target: Box<Expr>,
+        index: Box<Expr>,
+    },
 }
 
 /// A complete expression node with its source span.
@@ -284,6 +288,9 @@ impl fmt::Display for Expr {
             }
             ExprKind::Closure { params, body } => {
                 write!(f, "{{ {} -> {} }}", params.join(", "), body)
+            }
+            ExprKind::Index { target, index } => {
+                write!(f, "{}[{}]", target, index)
             }
         }
     }

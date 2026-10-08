@@ -1,11 +1,12 @@
-//! Deterministic hasher for ABI calculations.
+//! Deterministic 128-bit hasher for ABI calculations.
 
-/// Deterministic 64-bit FNV-1a hasher.
+/// Deterministic 128-bit FNV-1a hasher.
 ///
 /// Guaranteed to yield identical results across platforms, architectures, and compiler runs.
+/// The 128-bit state provides collision resistance with a birthday bound of ~2^64 items.
 #[derive(Debug, Clone)]
 pub struct DeterministicHasher {
-    state: u64,
+    state: u128,
 }
 
 impl Default for DeterministicHasher {
@@ -15,8 +16,8 @@ impl Default for DeterministicHasher {
 }
 
 impl DeterministicHasher {
-    pub const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    pub const PRIME: u64 = 0x100000001b3;
+    pub const OFFSET_BASIS: u128 = 0x6c62272e07bb014262b821756295c58d;
+    pub const PRIME: u128 = 0x0000000001000000000000000000013b;
 
     pub fn new() -> Self {
         Self {
@@ -26,14 +27,14 @@ impl DeterministicHasher {
 
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         for &byte in bytes {
-            self.state ^= byte as u64;
+            self.state ^= byte as u128;
             self.state = self.state.wrapping_mul(Self::PRIME);
         }
     }
 
     pub fn write_str(&mut self, s: &str) {
         self.write_bytes(s.as_bytes());
-        self.write_bytes(&[0xFF]); // Separator
+        self.write_bytes(&[0xFF]); // Separator tag
     }
 
     pub fn write_u8(&mut self, val: u8) {
@@ -44,7 +45,11 @@ impl DeterministicHasher {
         self.write_bytes(&val.to_le_bytes());
     }
 
-    pub fn finish(&self) -> u64 {
+    pub fn write_u128(&mut self, val: u128) {
+        self.write_bytes(&val.to_le_bytes());
+    }
+
+    pub fn finish(&self) -> u128 {
         self.state
     }
 }

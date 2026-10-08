@@ -173,10 +173,23 @@ impl fmt::Display for TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+    pub is_preceded_by_newline: bool,
 }
 
 impl Token {
     pub fn new(kind: TokenKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            is_preceded_by_newline: false,
+        }
+    }
+
+    pub fn with_newline(kind: TokenKind, span: Span, is_preceded_by_newline: bool) -> Self {
+        Self {
+            kind,
+            span,
+            is_preceded_by_newline,
+        }
     }
 }

@@ -192,4 +192,138 @@ mod tests {
             _ => panic!("Expected function"),
         }
     }
+
+    #[test]
+    fn test_when_inside_block() {
+        let src = r#"
+            fun test(): Int {
+                val f = {
+                    when (1) {
+                        1 -> 10
+                        else -> 20
+                    }
+                }
+                return 0
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse when inside block");
+        assert_eq!(file.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_general_trailing_lambdas() {
+        let src = r#"
+            fun render() {
+                // Parenthesized call with trailing lambda
+                Column(padding = 16) {
+                    Text("Hello")
+                }
+
+                // Bare call with trailing lambda only
+                val state = remember { mutableStateOf(0) }
+
+                // Method chain with trailing lambda
+                items.filter { it > 0 }
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse trailing lambdas");
+        match &file.declarations[0] {
+            Declaration::Function(f) => {
+                if let Some(FunctionBody::Block(b)) = &f.body {
+                    assert_eq!(b.stmts.len(), 3);
+
+                    // 1. Column(padding = 16) { Text("Hello") }
+                    if let ExprKind::Call { callee, args } = &b.stmts[0].kind {
+                        assert_eq!(callee.to_string(), "Column");
+                        assert_eq!(args.len(), 2);
+                        assert_eq!(args[0].name.as_deref(), Some("padding"));
+                        assert!(matches!(args[1].value.kind, ExprKind::Block(_)));
+                    } else {
+                        panic!("Expected Call expr for Column");
+                    }
+
+                    // 2. val state = remember { mutableStateOf(0) }
+                    if let ExprKind::LocalVar { initializer, .. } = &b.stmts[1].kind {
+                        if let ExprKind::Call { callee, args } = &initializer.kind {
+                            assert_eq!(callee.to_string(), "remember");
+                            assert_eq!(args.len(), 1);
+                        } else {
+                            panic!("Expected Call for remember");
+                        }
+                    } else {
+                        panic!("Expected LocalVar for state");
+                    }
+                } else {
+                    panic!("Expected block body");
+                }
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_right_associative_assignment() {
+        let src = r#"
+            fun test() {
+                a = b = c
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse assignment");
+        if let Declaration::Function(f) = &file.declarations[0] {
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                if let ExprKind::Assign { target, value } = &b.stmts[0].kind {
+                    assert_eq!(target.to_string(), "a");
+                    // value must be (b = c)
+                    assert!(matches!(value.kind, ExprKind::Assign { .. }));
+                } else {
+                    panic!("Expected assign");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_indexing_operator() {
+        let src = r#"
+            fun test(list: Vector<Int>): Int {
+                return list[0]
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse indexing");
+        if let Declaration::Function(f) = &file.declarations[0] {
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                if let ExprKind::Return(Some(val)) = &b.stmts[0].kind {
+                    if let ExprKind::Index { target, index } = &val.kind {
+                        assert_eq!(target.to_string(), "list");
+                        assert_eq!(index.to_string(), "0");
+                    } else {
+                        panic!("Expected Index expr");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_newline_aware_return() {
+        let src = r#"
+            fun test(): Int {
+                return
+                doWork()
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse newline return");
+        if let Declaration::Function(f) = &file.declarations[0] {
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                assert_eq!(b.stmts.len(), 2);
+                assert!(matches!(b.stmts[0].kind, ExprKind::Return(None)));
+                assert!(matches!(b.stmts[1].kind, ExprKind::Call { .. }));
+            }
+        }
+    }
 }
