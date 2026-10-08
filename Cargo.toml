@@ -6,6 +6,7 @@ members = [
     "crates/prism-parser",
     "crates/prism-abi",
     "crates/prism-cli",
+    "crates/prism-resolver",
 ]
 
 [workspace.package]

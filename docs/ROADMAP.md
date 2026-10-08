@@ -24,7 +24,7 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 - [ ] Lexer and Parser for basic language subset:
   - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
   - Default `private` visibility, explicit `package` and `public`.
-- [ ] Package & import resolver conforming to zero-config, zero-marker directory rules.
+- [x] Package & import resolver conforming to zero-config, zero-marker directory rules (`crates/prism-resolver`).
 - [ ] CLI commands: `prism check`, `prism fmt`.
 - [ ] Parsing and AST validation test suite.
 

@@ -38,3 +38,11 @@ dependencies = [
  "prism-ast",
  "prism-lexer",
 ]
+
+[[package]]
+name = "prism-resolver"
+version = "0.1.0"
+dependencies = [
+ "prism-ast",
+ "prism-parser",
+]
