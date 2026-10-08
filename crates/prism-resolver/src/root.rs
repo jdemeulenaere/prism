@@ -1,6 +1,6 @@
 //! Pure-path workspace root discovery algorithm and path normalization.
 //!
-//! Follows Section 2.1 of `package-resolution-spec.md` and Invariants 2 and 3.
+//! Follows Section 2.1 of `package-resolution.md` and Invariants 2 and 3.
 
 use crate::error::ResolveError;
 use prism_ast::PackageDecl;
@@ -135,7 +135,7 @@ pub fn discover_root(
 
 /// Discovers the workspace root from a source file path and package path segments.
 ///
-/// Algorithm per Section 2.1 of `package-resolution-spec.md`:
+/// Algorithm per Section 2.1 of `package-resolution.md`:
 /// 1. Path normalization and absolute directory extraction (`dir = parent(P)`).
 /// 2. If package is empty (`n == 0`), workspace root is `dir`.
 /// 3. If package is non-empty (`n > 0`):

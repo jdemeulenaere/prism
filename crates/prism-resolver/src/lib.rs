@@ -2,8 +2,8 @@
 //! import resolution, and dependency graph construction for Prism.
 //!
 //! Conforms strictly to:
-//! - `docs/specs/package-resolution-spec.md`
-//! - `docs/specs/compilation-and-abi-spec.md`
+//! - `docs/specs/package-resolution.md`
+//! - `docs/specs/compilation-and-abi.md`
 //! - `docs/INVARIANTS.md` (Invariants 1, 2, and 3)
 
 pub mod error;

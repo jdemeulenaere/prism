@@ -1,6 +1,6 @@
 //! Error catalog and diagnostics for package resolution.
 //!
-//! Follows the error catalog specified in Section 4 of `package-resolution-spec.md`.
+//! Follows the error catalog specified in Section 4 of `package-resolution.md`.
 
 use std::fmt;
 use std::path::PathBuf;

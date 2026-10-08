@@ -6,10 +6,10 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ## Phase 0: Foundations & Architecture (Completed)
 - [x] Project Vision & Invariants established ([`VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md), [`INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md)).
-- [x] Compilation & Execution Architecture Specification ([`specs/compilation-and-abi-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi-spec.md)).
-- [x] Zero-Cost Memory Architecture Specification ([`specs/memory-model-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model-spec.md)).
-- [x] Package Resolution & Root Discovery Specification ([`specs/package-resolution-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution-spec.md)).
-- [x] Syntax & Grammar Specification ([`specs/syntax-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax-spec.md)).
+- [x] Compilation & Execution Architecture Specification ([`specs/compilation-and-abi.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi.md)).
+- [x] Zero-Cost Memory Architecture Specification ([`specs/memory-model.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model.md)).
+- [x] Package Resolution & Root Discovery Specification ([`specs/package-resolution.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution.md)).
+- [x] Syntax & Grammar Specification ([`specs/syntax.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax.md)).
 - [x] AI Pair-Programming Guide ([`AGENTS.md`](file:///Users/jdemeulenaere/Development/lang/AGENTS.md)).
 - [x] Initialize Rust workspace (`prism-compiler`):
   - `prism-lexer`: Fast tokenizer.

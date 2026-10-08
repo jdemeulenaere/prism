@@ -47,10 +47,10 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 - [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md): Formal architectural contracts.
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
 - **Living Subsystem Specifications (`docs/specs/`)**:
-  - [`package-resolution-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution-spec.md): Zero-marker root discovery, import resolution, and package scanning.
-  - [`syntax-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax-spec.md): Concrete grammar, keyword list, and syntax examples.
-  - [`memory-model-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model-spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
-  - [`compilation-and-abi-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi-spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+  - [`package-resolution.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution.md): Zero-marker root discovery, import resolution, and package scanning.
+  - [`syntax.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax.md): Concrete grammar, keyword list, and syntax examples.
+  - [`memory-model.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
+  - [`compilation-and-abi.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
 
 ---
 

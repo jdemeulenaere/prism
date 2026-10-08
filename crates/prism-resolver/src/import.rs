@@ -1,6 +1,6 @@
 //! Sibling and root-anchored import resolution.
 //!
-//! Follows Section 2.2 of `package-resolution-spec.md` and Invariant 2.
+//! Follows Section 2.2 of `package-resolution.md` and Invariant 2.
 
 use crate::error::ResolveError;
 use crate::root::{normalize_path, verify_disk_casing_exists};
