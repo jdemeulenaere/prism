@@ -176,7 +176,7 @@ impl Parser {
     // --- Declarations ---
 
     pub fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
-        // Parse visibility: default is Private (Invariant 1 & ADR-0003)
+        // Parse visibility: default is Private (Invariant 1 & compilation-and-abi-spec.md)
         let mut visibility = Visibility::Private;
         let mut start_span = self.peek().span;
 

@@ -1,7 +1,7 @@
 //! Integration and acceptance test suite for `prism-resolver`.
 //!
 //! Conforms strictly to Section 5 ("Verification Fixtures & Acceptance Criteria") of
-//! `docs/specs/PACKAGE_RESOLUTION_SPEC.md` and Invariants 1, 2, and 3.
+//! `docs/specs/package-resolution-spec.md` and Invariants 1, 2, and 3.
 
 use prism_ast::{ImportDecl, Span};
 use prism_resolver::{

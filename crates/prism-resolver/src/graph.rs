@@ -1,6 +1,6 @@
 //! Import-directed dependency graph, Tarjan's SCC cycle grouping, and topological ordering.
 //!
-//! Follows Section 2.3 and Section 2.4 of `PACKAGE_RESOLUTION_SPEC.md` and Invariants 1 and 3.
+//! Follows Section 2.3 and Section 2.4 of `package-resolution-spec.md` and Invariants 1 and 3.
 
 use crate::error::ResolveError;
 use crate::import::resolve_import;

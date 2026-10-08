@@ -102,7 +102,7 @@ impl FileAbi {
                         })
                         .collect();
 
-                    // For generic functions, compute monomorphization hash of the body (ADR-0003)
+                    // For generic functions, compute monomorphization hash of the body (compilation-and-abi-spec.md)
                     // Hashing MUST be span-free to prevent comments/whitespace from altering ABI (Invariant 3)
                     let generic_body_hash = if !f.type_params.is_empty() {
                         let mut h = DeterministicHasher::new();

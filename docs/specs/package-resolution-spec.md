@@ -2,7 +2,7 @@
 
 **Status**: Living Architecture Specification (The Elephant)  
 **Applies To**: Milestone 1, Phase 1 (`prism-resolver`, `prism-cli`, and runtime loaders)  
-**Governing Invariants**: [Invariant 1 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L7), [Invariant 2 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L15), [Invariant 3 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L22), [ADR-0003 (`docs/adr/ADR-0003`)](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0003-module-resolution-and-abi-invalidation.md)
+**Governing Invariants & Specs**: [Invariant 1 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L7), [Invariant 2 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L15), [Invariant 3 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L22), [Compilation & ABI Spec (`docs/specs/compilation-and-abi-spec.md`)](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi-spec.md)
 
 ---
 

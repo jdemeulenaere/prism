@@ -7,7 +7,7 @@ use std::fmt;
 
 /// Declaration visibility modifier.
 ///
-/// Invariant 1 & ADR-0003: Default visibility is `private`.
+/// Invariant 1 & `compilation-and-abi-spec.md`: Default visibility is `private`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Visibility {
     /// Accessible only within the declaring source file (default when no keyword is provided).
@@ -88,7 +88,7 @@ pub enum FunctionBody {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub visibility: Visibility,
-    /// Native `compose` modifier (`compose fun`) per ADR-0002 & Invariant 6.
+    /// Native `compose` modifier (`compose fun`) per `memory-model-spec.md` & Invariant 6.
     pub is_compose: bool,
     pub name: String,
     pub type_params: Vec<String>,

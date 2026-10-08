@@ -6,7 +6,7 @@ Welcome to the **Prism** language repository. This document serves as the primar
 
 ## 1. The Core Philosophy: The Elephant & Goldfish Model
 This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874)):
-- **The Elephant (Durable Memory)**: All architectural invariants, grammar specifications, decisions, and roadmaps are permanently documented in `docs/`. When starting a task, **always consult the Elephant docs** to ensure alignment. Never introduce architectural changes without updating the relevant ADR or specification.
+- **The Elephant (Durable Memory)**: All architectural invariants, grammar specifications, decisions, and roadmaps are permanently documented in `docs/`. When starting a task, **always consult the Elephant docs** to ensure alignment. Never introduce architectural changes without updating the relevant specification or invariant document.
 - **The Goldfish (Ephemeral Execution)**: Individual tasks (lexing, parsing, lowering, codegen, tests) are executed as self-contained, test-driven units of work. Avoid bloated context; rely on the Elephant docs and test suites.
 
 ---
@@ -45,13 +45,12 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 
 - [`docs/VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md): High-level vision, principles, and two-tier execution model.
 - [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md): Formal architectural contracts.
-- [`docs/specs/SYNTAX_SPEC.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/SYNTAX_SPEC.md): Concrete grammar, keyword list, and syntax examples.
-- [`docs/specs/PACKAGE_RESOLUTION_SPEC.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/PACKAGE_RESOLUTION_SPEC.md): Zero-marker root discovery, import resolution, and package scanning.
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
-- **Architecture Decision Records**:
-  - [`docs/adr/ADR-0001`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0001-bootstrap-and-architecture.md): Bootstrap compiler in Rust & 2-tier execution.
-  - [`docs/adr/ADR-0002`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0002-memory-model-affine-types-and-ui-arenas.md): Zero-cost memory, `Heap<T>`, and UI slot handles.
-  - [`docs/adr/ADR-0003`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0003-module-resolution-and-abi-invalidation.md): Module resolution, default `private` visibility, and zero-marker root discovery.
+- **Living Subsystem Specifications (`docs/specs/`)**:
+  - [`package-resolution-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution-spec.md): Zero-marker root discovery, import resolution, and package scanning.
+  - [`syntax-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax-spec.md): Concrete grammar, keyword list, and syntax examples.
+  - [`memory-model-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model-spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
+  - [`compilation-and-abi-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi-spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
 
 ---
 

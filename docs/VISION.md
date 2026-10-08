@@ -12,7 +12,7 @@ It combines:
 
 ## 2. The Elephant-Goldfish Operating Model
 As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineering](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874):
-- **The Elephant (Durable Memory)**: The repository maintains permanent, living architecture specifications, invariants (`docs/INVARIANTS.md`), decision records (`docs/adr/`), and executable language test suites. Any contributor or AI agent can reorient itself in seconds.
+- **The Elephant (Durable Memory)**: The repository maintains permanent, living architecture specifications, invariants ([`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md)), subsystem specifications ([`docs/specs/`](file:///Users/jdemeulenaere/Development/lang/docs/specs)), and executable language test suites. Any contributor or AI agent can reorient itself in seconds.
 - **The Goldfish (Ephemeral Execution)**: Tasks are broken down into small, isolated, test-driven units of work executed with minimal context bloat.
 
 ---

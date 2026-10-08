@@ -5,12 +5,12 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 ---
 
 ## Phase 0: Foundations & Architecture (Completed)
-- [x] Project Vision & Invariants established (`VISION.md`, `INVARIANTS.md`).
-- [x] ADR-0001: Bootstrap in Rust & 2-Tier Execution Engine.
-- [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Heap).
-- [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
-- [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
-- [x] AI Pair-Programming Guide (`AGENTS.md`).
+- [x] Project Vision & Invariants established ([`VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md), [`INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md)).
+- [x] Compilation & Execution Architecture Specification ([`specs/compilation-and-abi-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi-spec.md)).
+- [x] Zero-Cost Memory Architecture Specification ([`specs/memory-model-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model-spec.md)).
+- [x] Package Resolution & Root Discovery Specification ([`specs/package-resolution-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution-spec.md)).
+- [x] Syntax & Grammar Specification ([`specs/syntax-spec.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax-spec.md)).
+- [x] AI Pair-Programming Guide ([`AGENTS.md`](file:///Users/jdemeulenaere/Development/lang/AGENTS.md)).
 - [x] Initialize Rust workspace (`prism-compiler`):
   - `prism-lexer`: Fast tokenizer.
   - `prism-parser`: Pratt parser + AST generation.

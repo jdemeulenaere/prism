@@ -1,6 +1,6 @@
 //! Optional CLI directory scanner for batch package validation (`prism check <dir>`).
 //!
-//! Follows Section 2.3 of `PACKAGE_RESOLUTION_SPEC.md`.
+//! Follows Section 2.3 of `package-resolution-spec.md`.
 
 use crate::error::ResolveError;
 use crate::root::discover_root;
