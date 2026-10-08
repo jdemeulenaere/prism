@@ -1,12 +1,12 @@
 # Prism Language Vision & Guiding Principles
 
 ## 1. High-Level Vision
-**Prism** (`.pm`) is a safe, expressive, statically typed programming language designed for high-performance native systems and first-class reactive UI application development.
+**Prism** (`.prism`) is a safe, expressive, statically typed programming language designed for high-performance native systems and first-class reactive UI application development.
 It combines:
 - The **ergonomics and readability of Kotlin** (`fun`, `val`/`var`, `when`, expression bodies, null safety).
-- The **zero-cost safety and native performance of Rust** (affine types, ownership, borrow checking, no garbage collector pauses).
+- The **zero-cost safety and native performance of Rust** (affine types, ownership, lifetimes `'a`, borrow checking, no garbage collector pauses).
 - The **developer velocity of zero-config conventions and instant hot reload**.
-- Native, first-class compiler integration for **declarative tree transformations (Compose-style)** using an arena/slot-table handle architecture.
+- Native, first-class compiler integration for **declarative tree transformations (Compose-style)** using slot-table state handles and re-entrant composition semantics.
 
 ---
 
@@ -22,22 +22,23 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 ### 3.1. Zero-Config Convention over Configuration
 - No mandatory build configuration files (`build.gradle`, `Cargo.toml`, `CMakeLists.txt`) for standard single-workspace development.
 - The file system is the package hierarchy:
-  - `package foo.bar` $\iff$ file lives in `<workspace_root>/foo/bar/*.pm`.
-  - `import doo` imports sibling module `doo.pm` in `foo/bar/`.
-  - `import //abc/xyz/util` imports `<workspace_root>/abc/xyz/util.pm`.
+  - `package foo.bar` $\iff$ file lives in `<workspace_root>/foo/bar/*.prism`.
+  - `import doo` imports sibling module `doo.prism` in `foo/bar/`.
+  - `import /abc/xyz/util` imports `<workspace_root>/abc/xyz/util.prism` (leading `/` anchors to the workspace root).
   - Empty package allows only relative imports.
 - Default symbol visibility is `package`. Explicit visibilities: `public`, `private`.
 
 ### 3.2. File-as-Compilation-Unit & ABI Stability
-- Every `.pm` file is an independent compilation unit.
-- Two-phase compilation pipeline:
-  1. **Signature/ABI extraction**: Fast lex & parse of declarations to yield a stable ABI hash (`.abi`).
-  2. **Body lowering & typechecking**: Depends solely on imported ABI hashes.
-- Internal body changes do not trigger recompilation of downstream files.
+- Every `.prism` file is an independent compilation unit for body code generation and artifact caching.
+- Package directories form the declaration symbol boundary:
+  - Phase 1: Fast declaration extraction (structs, functions, explicit signatures).
+  - Phase 2: Function body lowering & typechecking against imported ABI signatures.
+- Modifying private symbols or non-generic function bodies produces **zero downstream recompilations**.
+- Generic functions record a Monomorphization Hash of their body; downstream files re-monomorphize only when generic bodies change.
 
-### 3.3. Memory Model: Affine Types + Slotmap Reactive Handles
-- Strict ownership and borrow checking without a tracing garbage collector or runtime overhead.
-- UI trees and reactive states use **Slot-Table / Generational Arena handles** (lightweight `Copy` ID types) so event closures can access state seamlessly without lifetime entanglement.
+### 3.3. Memory Model: Affine Types, Lifetimes & Slot-Table Handles
+- Strict ownership, move semantics, and first-class lifetimes (`'a`) guarantee compile-time memory safety without runtime GC pauses.
+- UI trees and reactive states use **Slot-Table / Generational Arena handles** (lightweight `Copy` ID types) so event closures can capture and update state seamlessly without lifetime battles.
 
 ### 3.4. Three-Tier Execution Engine
 - **Tier 1 (Bytecode Interpreter)**: Instant execution for scripting, CLI scripts, formatting, and unit tests.

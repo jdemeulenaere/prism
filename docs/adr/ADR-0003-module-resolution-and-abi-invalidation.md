@@ -10,41 +10,45 @@ Furthermore, changing a private implementation detail in one file often triggers
 
 ## Decision
 
-### 1. Zero-Config Directory Conventions
-- Source files use the `.pm` extension.
+### 1. Zero-Config Directory Conventions & Syntax
+- Source files use the `.prism` extension.
 - Package declarations map directly to directory paths:
-  - `package foo.bar` $\iff$ file must reside in `<workspace_root>/foo/bar/*.pm`.
+  - `package foo.bar` $\iff$ file must reside in `<workspace_root>/foo/bar/*.prism`.
   - An empty package statement means the file is in `<workspace_root>/` and can only use relative imports.
 - Import resolution rules:
-  - `import doo`: Resolves to sibling file `doo.pm` in the current package directory.
-  - `import //abc/xyz/util`: Resolves to `<workspace_root>/abc/xyz/util.pm` (the `//` prefix anchors to the workspace root).
-- Workspace root is automatically discovered by locating `.git` or an optional `.prism-root` marker file.
+  - `import doo`: Resolves to sibling file `doo.prism` in the current package directory.
+  - `import /abc/xyz/util`: Resolves to `<workspace_root>/abc/xyz/util.prism` (a leading `/` anchors to the workspace root, matching standard POSIX filesystem root notation without colliding with `//` comments).
+- Workspace root is automatically discovered by locating `.git`, a `.prism-root` marker file, or falling back to the compiler invocation directory.
 
-### 2. Default Visibility
-- Default symbol visibility is `package` (accessible by any file sharing the same `package` declaration).
+### 2. Default Visibility & Explicit Signatures
+- Default symbol visibility is `package` (accessible by any file sharing the same `package` directory).
 - `public`: Accessible across any package via imports.
-- `private`: Accessible only within the declaring `.pm` file.
+- `private`: Accessible only within the declaring `.prism` file.
+- **Explicit Type Rule**: To enable independent Phase 1 ABI extraction without inspecting function bodies, all `public` and `package`-visible declarations must declare explicit parameter and return types. Type inference is permitted only within function bodies and `private` declarations.
 
-### 3. File as Independent Compilation Unit & Two-Phase ABI Extraction
-Each `.pm` file compiles independently according to a two-phase pipeline:
-1. **Phase 1: Header / Surface Signature Extraction**:
-   - The compiler lexes and parses declarations (`struct`, `class`, `fun`, `val`, `enum`, signatures).
-   - Private members and function bodies are skipped or hashed separately.
-   - Computes an **ABI Hash** representing the public and package interface of the file.
+### 3. File as Independent Compilation Unit & Two-Phase Pipeline
+1. **Phase 1: Package Declaration Extraction & ABI Hashing**:
+   - The compiler lexes and parses surface declarations (`struct`, `class`, `fun`, `val`, `enum`, signatures) across all `.prism` files in the target package.
+   - Computes an **ABI Hash** representing the public and package interface of each file.
 2. **Phase 2: Body Typechecking and Codegen**:
-   - Compiles function bodies against the ABI signatures of its imported dependencies.
-   - Downstream files depend **strictly** on the ABI hash of their imports.
+   - Compiles individual file bodies against the package symbol table and imported ABI signatures.
+   - Downstream files depend strictly on the ABI hashes of their imports.
 
-### 4. Compilation Avoidance Rule
-- If file `A.pm` is edited such that only private functions or function bodies change, its exported **ABI hash remains identical**.
-- Downstream file `B.pm` (which imports `A.pm`) is **never re-typechecked or recompiled**.
-- The cache key for `B.pm` is `Hash(Content(B.pm) + TargetConfig + ABI_Hash(A.pm))`.
+### 4. Generics & Monomorphization Invalidation
+- Generics are monomorphized at compile-time for zero-cost runtime performance.
+- The exported ABI of a generic function includes a **Monomorphization Hash** of its AST body.
+- If a generic function's body changes, downstream files instantiating that generic specialization must re-monomorphize. Non-generic functions maintain strict compilation avoidance.
+
+### 5. Inlining Decoupled Across Tiers
+- **Tier 1 (Interpreter) & Tier 2 (Cranelift Debug / Hot Reload)**: Cross-file inlining across compilation units is disabled to guarantee maximum compilation avoidance and predictable hot reload patching.
+- **Tier 3 (LLVM Release)**: Cross-file inlining is enabled via Link-Time Optimization (LTO).
 
 ## Consequences
 - **Positive**:
   - No build files required to start coding or running a project.
-  - Massive compilation avoidance during typical inner-loop development (editing function bodies).
+  - Massive compilation avoidance during inner-loop development.
+  - Unambiguous syntax (`import /core/fmt` avoids `//` comment collisions).
   - Clean separation of interface and implementation.
 - **Negative / Tradeoffs**:
-  - Requires strict validation that directory path matches `package` statement (compiler raises an error if mismatched).
-  - External 3P dependencies will need a clear conventions-based scheme (to be decided in a future ADR).
+  - Requires directory paths to match `package` statements.
+  - Generics require callers to re-monomorphize when their implementation changes.
