@@ -2,7 +2,7 @@
 
 **Status**: Living Architecture Specification (The Elephant)  
 **Applies To**: Milestone 1, Phase 1 (`prism-resolver`, `prism-cli`, and runtime loaders)  
-**Governing Invariants**: [Invariant 2 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L15), [ADR-0003 (`docs/adr/ADR-0003`)](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0003-module-resolution-and-abi-invalidation.md)
+**Governing Invariants**: [Invariant 1 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L7), [Invariant 2 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L15), [Invariant 3 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L22), [ADR-0003 (`docs/adr/ADR-0003`)](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0003-module-resolution-and-abi-invalidation.md)
 
 ---
 
@@ -12,6 +12,12 @@ Prism adopts a strict **convention-over-configuration** filesystem contract desi
 
 The filesystem hierarchy and source code declarations form a bidirectional, self-authenticating contract:
 `Directory Hierarchy` <===> `Package Hierarchy`
+
+Prism enforces a **strictly import-directed dependency model**:
+- Every compilation dependency is explicit. Compiling an entry file (e.g. `main.prism` or `app.prism`) resolves only the files transitively imported by that file.
+- Sibling files in the same directory do not implicitly share scope or pollute compilation. To access a sibling file's declarations, it must be explicitly imported (`import doo`).
+- Unimported files in the same directory (e.g. unfinished drafts or test fixtures) are never inspected during single-file compilation, do not slow down incremental builds, and produce zero recompilations.
+- Directory scanning is purely an optional CLI convenience when the user explicitly requests a batch check on an entire folder (`prism check <dir>`).
 
 This document serves as the permanent reference specification (**The Elephant**) for implementing and verifying the package resolver (`prism-resolver`).
 
@@ -28,23 +34,31 @@ Given:
 - Let `dir = parent(P)` be the directory containing `P`.
 
 1. **Path Canonicalization & Normalization**:
-   - Normalize `P` to resolve relative components (`.`, `..`), redundant separators, and canonicalize path separators (handling POSIX `/` and Windows `\`).
+   - Normalize `P` to eliminate redundant separators, resolve `.` components, and standardize path separators across POSIX and Windows.
    - Obtain absolute directory path `dir = parent(P)`.
 
-2. **Empty Package (Root Files)**:
+2. **Strict Case-Sensitivity Enforcement**:
+   - On all operating systems (including case-insensitive filesystems such as macOS APFS and Windows NTFS), directory segment names on disk must match package segments with strict case sensitivity.
+   - If the canonical on-disk directory casing differs from the declared package identifier casing, resolution aborts with `Error: PackagePathMismatch`.
+
+3. **Empty Package (Root Files)**:
    - If `K` is empty (the file omits `package` or declares empty package):
      `WorkspaceRoot(P) = dir`
-   - The file resides directly in the workspace root. It may only use sibling relative imports.
+   - The file resides directly in the workspace root. It may use sibling relative imports (`import helper`) or root-anchored imports (`import /core/fmt`).
 
-3. **Non-Empty Package**:
+4. **Non-Empty Package**:
    - If `n > m` (the package path has more segments than the filesystem path):
      ==> Emits diagnostic `Error: PackagePathMismatch`.
    - Compare the trailing `n` directory segments of `dir` against `K`:
-     Every segment `dir[m - n + i]` must exactly equal `k_i`.
+     Every segment `dir[m - n + i]` must exactly equal `k_i` (case-sensitive).
    - If all segments match:
      `WorkspaceRoot(P)` is obtained by stripping the trailing `n` segments from `dir`.
    - If any segment does not match:
      ==> Emits diagnostic `Error: PackagePathMismatch`.
+
+5. **Root Consistency Across Multi-File Graphs**:
+   - In any compilation graph, all resolved files must share the identical authoritative `WorkspaceRoot`.
+   - If a transitively imported file resolves to a different workspace root, the resolver emits `Error: InconsistentWorkspaceRoot`.
 
 #### Concrete Example
 Given file at `/workspace/projects/demo/foo/bar/app.prism` with `package foo.bar`:
@@ -66,14 +80,13 @@ If a file at `/workspace/foo/bar/app.prism` declares `package foo.baz`:
 
 ---
 
-### 2.2. Import Resolution Rules
+### 2.2. Import Syntax & Resolution Rules
 
 Imports fall into exactly two mutually exclusive categories:
 
 | Import Syntax | Classification | Root Anchor | Resolved Filesystem Target |
 | :--- | :--- | :---: | :--- |
 | `import doo` | **Sibling Import** | Current Package Dir | `<current_dir>/doo.prism` |
-| `import utils/math` | **Subdir Relative** | Current Package Dir | `<current_dir>/utils/math.prism` |
 | `import /core/fmt` | **Root-Anchored** | `<workspace_root>` | `<workspace_root>/core/fmt.prism` |
 | `import /app/ui/views` | **Root-Anchored** | `<workspace_root>` | `<workspace_root>/app/ui/views.prism` |
 
@@ -84,78 +97,92 @@ Given:
 - Parsed `ImportDecl { is_root, path }`.
 
 1. **Root-Anchored Import (`is_root == true`)**:
-   - Begins with leading slash: `import /core/fmt`.
+   - Begins with a leading slash: `import /core/fmt`.
    - Path components: `["core", "fmt"]`.
-   - Primary candidate: `T_1 = root/core/fmt.prism`.
-   - Secondary candidate (Directory package default): `T_2 = root/core/fmt/package.prism`.
-   - If `T_1` exists as a file, resolve to `T_1`.
-   - Else if `T_2` exists as a file, resolve to `T_2`.
-   - Else emit `Error: ImportNotFound`.
+   - Target candidate: `T = root/core/fmt.prism`.
+   - Candidate must exist as a regular file.
+   - If `T` exists, verify case sensitivity against actual disk casing and resolve to `T`.
+   - Else emit `Error: FileNotFound`.
 
 2. **Sibling Import (`is_root == false`)**:
-   - Does NOT begin with leading slash: `import doo`.
-   - Path components: `["doo"]`.
-   - Primary candidate: `T_1 = dir/doo.prism`.
-   - Secondary candidate: `T_2 = dir/doo/package.prism`.
-   - If `T_1` exists as a file, resolve to `T_1`.
-   - Else if `T_2` exists as a file, resolve to `T_2`.
-   - Else emit `Error: ImportNotFound`.
+   - Does NOT begin with a leading slash: `import doo`.
+   - Path components: exactly one identifier `["doo"]`.
+   - Target candidate: `T = dir/doo.prism`.
+   - Candidate must exist as a regular file.
+   - If `T` exists, verify case sensitivity against actual disk casing and resolve to `T`.
+   - Else emit `Error: FileNotFound`.
+
+3. **No Directory Fallbacks or Marker Files**:
+   - Prism has no `package.prism`, `mod.rs`, or `index.js`.
+   - Every import maps strictly and directly to an explicit `.prism` file.
+
+4. **Security & Workspace Jail**:
+   - Import paths must never contain relative navigation tokens (`.` or `..`). Path traversal attempts trigger `Error: InvalidImportPath`.
+   - Resolved targets must strictly reside within `root`. If a symbolic link points outside `root`, the resolver rejects it with `Error: WorkspaceBoundaryViolation`.
 
 ---
 
-### 2.3. Package Boundary Scanning
+### 2.3. Import-Directed Resolution vs CLI Directory Scanning
 
-In Prism, a **package directory** forms the collective declaration boundary:
-- All `.prism` files located directly within the same directory share `package` visibility.
-- Private symbols (`private` / default) remain strictly file-scoped.
-- Subdirectories are distinct packages and are **never** implicitly included into parent packages.
+Prism strictly decouples **file compilation dependencies** from **filesystem directory contents**.
 
-#### Algorithm: `scan_package_directory(package_dir: &Path) -> Vec<PathBuf>`
-1. Read all directory entries in `package_dir`.
-2. Filter entries:
-   - Exclude subdirectories.
-   - Exclude hidden files (starting with `.`, e.g. `.DS_Store`).
-   - Include files with exact canonical extension `.prism`.
-3. Sort file paths deterministically (lexicographically) to guarantee hermetic builds.
-4. Verify every discovered file in the directory declares the identical `package` statement matching this directory.
+#### 1. Import-Directed Compilation (Default)
+When compiling an entry file `entry.prism`:
+- The compiler parses `entry.prism`, extracts its imports, and resolves them recursively.
+- Only files reachable via transitive `import` statements are loaded and compiled.
+- Unimported sibling files in the same directory are completely ignored.
+- **Package Visibility Access Rule**:
+  When file `A` imports file `B` and accesses a declaration marked `package`:
+  - Access is granted if and only if `A.package == B.package`.
+  - If `A.package != B.package`, access is denied (`Error: PrivatePackageSymbol`).
+
+#### 2. Optional CLI Directory Discovery (`prism check <dir>`)
+When the user explicitly invokes batch analysis on a folder:
+- The resolver inspects direct entries in `<dir>`.
+- Filter criteria:
+  - Exclude subdirectories (subdirectories are distinct packages).
+  - Exclude hidden files (e.g. `.DS_Store`).
+  - Include files ending with canonical extension `.prism`.
+- **Package Homogeneity Validation**:
+  Every discovered `.prism` file in `<dir>` must declare the exact same `package` statement matching `<dir>`.
+  If any file declares a conflicting package, the scanner emits `Error: PackageHeterogeneity`.
 
 ---
 
-### 2.4. Dependency Graph & Cycle Detection
+### 2.4. Dependency Graph, Strongly Connected Components (SCCs), and Cycles
 
-#### Compilation Unit Order
 Prism decouples declarations (Phase 1 ABI) from implementations (Phase 2 Body Typechecking):
-- Phase 1 allows circular package references for declarations if mutually recursive types use `Heap<T>` or ID handles.
-- At the file level, Phase 2 compilation avoidance requires a **Directed Acyclic Graph (DAG)** of file ABI dependencies.
 
-#### Graph Construction:
-1. Entry point: List of input `.prism` files.
-2. For each file `P`:
-   - Discover workspace root `root`.
-   - Extract imports.
-   - Resolve each import to target path `T`.
-   - Add directed edge: `P -> T`.
-3. Cycle Detection:
-   - Perform Tarjan's or Kosaraju's Strongly Connected Components (SCC) algorithm.
-   - If an import cycle is detected in Phase 2 dependencies, produce a diagnostic trace:
-     `Cycle detected: a.prism -> b.prism -> c.prism -> a.prism`.
+1. **Import Dependency Graph**:
+   - Constructed as a directed graph where nodes are `.prism` source files and edges represent direct `import` references.
+   - Transitively traversed starting from one or more entry files.
+
+2. **Cyclic Dependencies & Strongly Connected Components (SCCs)**:
+   - Sibling or cross-package files may import each other (e.g. `user.prism` imports `account.prism`, while `account.prism` imports `user.prism`).
+   - Using Tarjan's or Kosaraju's algorithm, the dependency graph is partitioned into a DAG of **Strongly Connected Components (SCCs)**.
+   - **Phase 1 (Declaration ABI Extraction)**:
+     All files within an SCC are analyzed together. Their public and package declarations are extracted simultaneously. Mutual type references and mutual function calls across files are fully supported.
+   - **Phase 2 (Body Compilation & Topological Order)**:
+     The SCC DAG is compiled in topological order. Files outside the SCC depend only on the exported ABI hashes of the SCC.
+   - **Illegal Value Recursion**:
+     Circular import references are valid in Phase 1 as long as struct types do not contain infinite-size inline cycles without indirection (`Heap<T>` or ID handles). Infinite value-type layout cycles are caught during type layout verification (`Error: RecursiveTypeWithoutIndirection`).
 
 ---
 
-## 3. Data Structures & API Design for `prism-resolver`
+## 3. Data Structures & Architectural Layout for `prism-resolver`
 
 ### 3.1. Crate Architecture
-A dedicated crate `crates/prism-resolver` will be added to the Rust workspace:
+A dedicated crate `crates/prism-resolver` in the Rust workspace:
 ```
 crates/prism-resolver/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs          # Public facade
-│   ├── root.rs         # Pure path root discovery
+│   ├── lib.rs          # Public resolver facade
+│   ├── root.rs         # Pure path workspace root discovery
 │   ├── import.rs       # Sibling and root-anchored import resolver
-│   ├── package.rs      # Package directory scanner
-│   ├── graph.rs        # Multi-file dependency graph & cycle detector
-│   └── error.rs        # Structured resolution errors & diagnostics
+│   ├── graph.rs        # Dependency graph, SCC decomposition, and topological sort
+│   ├── scanner.rs      # Optional CLI directory scanner & homogeneity checker
+│   └── error.rs        # Resolution diagnostics and error types
 └── tests/
     └── resolver_tests.rs
 ```
@@ -164,18 +191,20 @@ crates/prism-resolver/
 
 The resolver operates on the following conceptual entities:
 
-- **Resolved Target**: Represents the resolved filesystem entity of an import, which is either a concrete `.prism` source file or a package directory.
-- **Source Unit**: Represents a parsed `.prism` source file, its discovered workspace root, its associated package name, and its direct outgoing import dependencies.
-- **Dependency Graph**: A directed graph where nodes are source units and edges represent import dependencies, providing topological compilation ordering and cycle detection.
+- **Workspace Root**: An absolute, canonical directory path discovered from an entry file path and its package declaration.
+- **Import Target**: A concrete `.prism` file path on disk, verified to exist within the workspace root.
+- **Source Node**: A compilation unit representing a `.prism` file, its discovered root, its declared package, and its direct outgoing imports.
+- **SCC Cluster**: A group of one or more source nodes forming a strongly connected component in the import graph.
+- **Dependency Graph**: A directed acyclic graph of SCC clusters providing deterministic compilation ordering.
 
 ### 3.3. Engine Responsibilities
 
 The resolver engine provides four core operations:
 
 1. **Root Discovery**: Given an entry file path and its optional package declaration, discovers the workspace root strictly by path-suffix comparison with zero marker files and zero configuration files.
-2. **Import Resolution**: Given a source file path, an import declaration, and the workspace root, resolves the import into a concrete filesystem path on disk.
-3. **Package Scanning**: Given a package directory, scans all direct `.prism` files belonging to the package and validates that all files share identical package declarations.
-4. **Dependency Graph Construction**: Given a set of entry paths, traverses import statements transitively to construct the complete dependency DAG, detecting circular references and producing the topological compilation order.
+2. **Import Resolution**: Given a source file path, an import declaration, and the workspace root, resolves the import into an absolute, verified `.prism` file path on disk.
+3. **Dependency Graph Builder**: Given an entry file, recursively resolves imports, detects cycles, groups mutually recursive files into SCCs, and produces a topologically sorted schedule.
+4. **CLI Directory Scanner**: Scans all direct `.prism` files in a folder for batch CLI verification, ensuring package homogeneity.
 
 ---
 
@@ -185,8 +214,10 @@ The resolver engine provides four core operations:
 | :--- | :--- | :--- | :--- |
 | `E1001` | `PackagePathMismatch` | `Package path 'foo.bar' does not match directory '/workspace/foo/baz'` | Rename directory to match package or update package statement. |
 | `E1002` | `FileNotFound` | `Cannot resolve import '/core/fmt': file '<root>/core/fmt.prism' not found` | Check spelling or verify target file exists at root. |
-| `E1003` | `CircularDependency` | `Circular import dependency detected: [a.prism -> b.prism -> a.prism]` | Refactor shared declarations into a sibling module. |
-| `E1004` | `PackageHeterogeneity` | `File 'b.prism' in package directory 'foo/bar' declares conflicting package 'foo.other'` | Ensure all files in a folder share the same package. |
+| `E1003` | `PackageHeterogeneity` | `File 'b.prism' in package directory 'foo/bar' declares conflicting package 'foo.other'` | Ensure all files in a folder share the same package. |
+| `E1004` | `InconsistentWorkspaceRoot` | `File 'dep.prism' resolves to root '/a', conflicting with workspace root '/b'` | Ensure all project dependencies reside within the same workspace root. |
+| `E1005` | `WorkspaceBoundaryViolation` | `Import resolves to path outside workspace root: '/etc/passwd'` | Remove symlink or relative path escaping the workspace. |
+| `E1006` | `InvalidImportPath` | `Invalid import path '..': relative parent traversal is forbidden` | Use sibling import 'name' or root-anchored import '/path'. |
 
 ---
 
@@ -203,8 +234,14 @@ A goldfish implementing `prism-resolver` must verify against the following test 
 4. **Sibling Import**:
    - From `/demo/app/ui/views.prism`: `import widgets` ==> `/demo/app/ui/widgets.prism`.
 5. **Directory Mismatch Rejection**:
-   - `/demo/app/ui/views.prism` with `package app.models` ==> Returns `PackagePathMismatch`.
-6. **Cycle Detection**:
-   - `a.prism` imports `b`, `b.prism` imports `a` ==> Returns `CircularDependency`.
-7. **Package Boundary Invariant**:
-   - `scan_package("/demo/app/ui")` finds `views.prism` and `widgets.prism`, but ignores `/demo/app/ui/components/sub.prism`.
+   - `/demo/app/ui/views.prism` with `package app.models` ==> Returns `PackagePathMismatch` (`E1001`).
+6. **Import-Directed Isolation**:
+   - Compiling `/demo/app/main.prism` which only imports `widgets.prism` ignores unimported `/demo/app/draft.prism`.
+7. **Mutual Recursion in SCC**:
+   - `a.prism` imports `b`, `b.prism` imports `a` ==> Grouped into single SCC cluster of size 2 without fatal graph cycle error.
+8. **CLI Directory Scanning & Homogeneity**:
+   - `scan_directory("/demo/app/ui")` finds `views.prism` and `widgets.prism`, but rejects if any file in that folder declares a different package (`E1003`).
+9. **Workspace Jail Enforcement**:
+   - Import target escaping root (e.g. symlink to `/tmp/outside.prism`) ==> Returns `WorkspaceBoundaryViolation` (`E1005`).
+10. **Strict Case-Sensitivity Enforcement**:
+    - Directory `Foo/Bar` with `package foo.bar` on macOS/Windows ==> Returns `PackagePathMismatch` (`E1001`).
