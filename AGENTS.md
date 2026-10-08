@@ -46,6 +46,7 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 - [`docs/VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md): High-level vision, principles, and two-tier execution model.
 - [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md): Formal architectural contracts.
 - [`docs/specs/SYNTAX_SPEC.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/SYNTAX_SPEC.md): Concrete grammar, keyword list, and syntax examples.
+- [`docs/specs/PACKAGE_RESOLUTION_SPEC.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/PACKAGE_RESOLUTION_SPEC.md): Zero-marker root discovery, import resolution, and package scanning.
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
 - **Architecture Decision Records**:
   - [`docs/adr/ADR-0001`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0001-bootstrap-and-architecture.md): Bootstrap compiler in Rust & 2-tier execution.
