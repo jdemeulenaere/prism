@@ -34,7 +34,7 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
 ### Invariant 5: Zero GC, Zero Hidden ARC, No Lifetime Annotations
 - Prism enforces memory safety through **value ownership and deterministic destruction**.
 - **No runtime Tracing Garbage Collector** and **no implicit Automatic Reference Counting (ARC)**.
-- **No explicit lifetime syntax (`'a`)**: Structs own their data by value, use `Box<T>` for recursive types, or use typed handles/IDs for graphs and relationships.
+- **No explicit lifetime syntax (`'a`)**: Structs own their data by value, use `Heap<T>` for recursive types, or use typed handles/IDs for graphs and relationships.
 - Borrowing (`&T`, `&mut T`) is strictly confined to function arguments and local scopes, with automatic lifetime elision for returning borrows.
 
 ### Invariant 6: First-Class `compose` Primitives & Native Hot Reload

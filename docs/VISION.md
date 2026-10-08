@@ -39,7 +39,7 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 
 ### 3.3. Pure Zero-Cost Memory: Value Ownership, Zero GC, Zero Hidden ARC
 - **No Garbage Collector & No Hidden ARC**: Memory is freed deterministically with zero runtime pauses and zero atomic counter overhead.
-- **No Lifetime Syntax (`'a`)**: Structs own their data by value, use `Box<T>` for recursive types, and use typed IDs/handles for graph topologies (data-oriented design).
+- **No Lifetime Syntax (`'a`)**: Structs own their data by value, use `Heap<T>` for recursive types, and use typed IDs/handles for graph topologies (data-oriented design).
 - **Stack-Scoped Borrows**: References (`&T`, `&mut T`) are strictly scoped to function arguments and local calls, with automatic lifetime elision for returning borrows.
 
 ### 3.4. First-Class `compose` Primitives & Hot Reload

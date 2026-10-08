@@ -29,7 +29,7 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 4. **Memory Architecture: Zero GC, Zero Hidden ARC, No Lifetime Annotations (`'a`)**:
    - Memory is freed deterministically with single-owner value semantics.
    - No tracing garbage collector and no implicit atomic retain/release counter overhead.
-   - Structs own their fields by value; recursive types use `Box<T>`.
+   - Structs own their fields by value; recursive types use `Heap<T>`.
    - Borrows (`&T`, `&mut T`) are strictly function/stack-scoped with automatic lifetime elision.
    - Graphs, peer relationships, and UI nodes use typed ID handles (Data-Oriented Design).
 5. **First-Class UI Primitives**:
@@ -49,7 +49,7 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
 - **Architecture Decision Records**:
   - [`docs/adr/ADR-0001`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0001-bootstrap-and-architecture.md): Bootstrap compiler in Rust & 3-tier execution.
-  - [`docs/adr/ADR-0002`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0002-memory-model-affine-types-and-ui-arenas.md): Zero-cost memory, `Box<T>`, and UI slot handles.
+  - [`docs/adr/ADR-0002`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0002-memory-model-affine-types-and-ui-arenas.md): Zero-cost memory, `Heap<T>`, and UI slot handles.
   - [`docs/adr/ADR-0003`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0003-module-resolution-and-abi-invalidation.md): Module resolution, default `private` visibility, and zero-marker root discovery.
 
 ---

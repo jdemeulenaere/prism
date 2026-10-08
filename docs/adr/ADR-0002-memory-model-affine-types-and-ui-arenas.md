@@ -1,4 +1,4 @@
-# ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Box)
+# ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Heap)
 
 ## Status
 Accepted
@@ -16,22 +16,22 @@ We need a memory model that achieves bare-metal C++/Rust execution speeds withou
 - Structs own their fields directly. When a variable goes out of scope, its memory is cleaned up deterministically.
 - Move semantics apply to owned non-primitive values. Passing an owned value moves it without copying.
 
-### 2. Recursive Types & Heap Indirection (`Box<T>`)
+### 2. Recursive Types & Heap Indirection (`Heap<T>`)
 - Because structs own their fields by value, recursive types (such as linked lists, AST expressions, or JSON trees) require heap indirection to achieve a finite compile-time memory layout:
   ```kotlin
   public enum Expr {
       Literal(Int)
-      Add(Box<Expr>, Box<Expr>)
+      Add(Heap<Expr>, Heap<Expr>)
   }
   ```
-- `Box<T>` is a unique, owned heap allocation with **zero GC and zero ARC**:
-  - `sizeof(Box<T>) == sizeof(usize)` (single 64-bit pointer).
+- `Heap<T>` is a unique, owned heap allocation with **zero GC and zero ARC**:
+  - `sizeof(Heap<T>) == sizeof(usize)` (single 64-bit pointer).
   - Maintains strict unique affine ownership.
-  - When `Box<T>` drops, it frees the heap buffer and drops `T` deterministically.
+  - When `Heap<T>` drops, it frees the heap buffer and drops `T` deterministically.
   - Requires **zero lifetime syntax** (`'a`).
 
 ### 3. Zero Lifetime Syntax (`'a`) & Function Lifetime Elision
-- **No Lifetimes on Structs**: Structs cannot declare lifetime parameters (`'a`) or hold long-lived borrowed references. Structs either contain their data by value, use `Box<T>` for heap indirection, or reference external entities using typed handles/IDs.
+- **No Lifetimes on Structs**: Structs cannot declare lifetime parameters (`'a`) or hold long-lived borrowed references. Structs either contain their data by value, use `Heap<T>` for heap indirection, or reference external entities using typed handles/IDs.
 - **Function Borrows & Lifetime Elision**: Functions may borrow arguments immutably (`&T`) or mutably (`&mut T`). When a function returns a borrowed reference, lifetime elision resolves the scope automatically:
   - **Rule 1 (Single Input Borrow)**: If a function accepts exactly one borrow parameter, an output borrow is implicitly tied to that parameter's scope at the call site (e.g. `fun first(items: &Vector<String>): &String`).
   - **Rule 2 (Method Receiver)**: In a method with a receiver borrow (`this: &T`), an output borrow is implicitly tied to the receiver.
@@ -54,6 +54,6 @@ We need a memory model that achieves bare-metal C++/Rust execution speeds withou
   - Zero GC pause micro-stutters during 120 FPS UI rendering.
   - Clean, approachable syntax matching Kotlin's developer experience.
   - No "lifetime contagion" across struct hierarchies.
-  - Clear, finite layout for recursive types via `Box<T>`.
+  - Clear, finite layout for recursive types via `Heap<T>`.
 - **Negative / Tradeoffs**:
-  - Developers cannot store a raw stack reference (`&T`) inside a struct; data models must use value containment, `Box<T>`, or ID handles.
+  - Developers cannot store a raw stack reference (`&T`) inside a struct; data models must use value containment, `Heap<T>`, or ID handles.

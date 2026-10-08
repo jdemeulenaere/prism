@@ -36,7 +36,7 @@ public fun describe(value: Int): String = when (value) {
 }
 ```
 
-### 2.2. Data Structures, Ownership, Enums & Box
+### 2.2. Data Structures, Ownership, Enums & Heap
 ```kotlin
 package demo.models
 
@@ -58,11 +58,11 @@ public fun updateName(user: &mut User, newName: String) {
     user.name = newName
 }
 
-// Algebraic Data Types (Enums) & Recursive Types via Box<T>
+// Algebraic Data Types (Enums) & Recursive Types via Heap<T>
 public enum Expr {
     Literal(Int)
-    Add(Box<Expr>, Box<Expr>)
-    Multiply(Box<Expr>, Box<Expr>)
+    Add(Heap<Expr>, Heap<Expr>)
+    Multiply(Heap<Expr>, Heap<Expr>)
 }
 
 // Returning borrows with automatic lifetime elision
@@ -134,7 +134,7 @@ public compose fun CounterView(initialCount: Int = 0) {
 - Exclusive mutable reference: `&mut T` (strictly stack/function-scoped).
 - Explicit call-site borrows for mutations: `updateName(&mut user, "Alice")`.
 - Lifetime elision: Return borrows automatically tied to input borrow scopes.
-- Heap indirection for recursive types: `Box<T>`.
+- Heap indirection for recursive types: `Heap<T>`.
 - No explicit lifetime parameters (`'a`) anywhere in the language.
 - Primitive types and Slot-Table State handles implement `Copy`.
 

@@ -7,7 +7,7 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 ## Phase 0: Foundations & Architecture (Current)
 - [x] Project Vision & Invariants established (`VISION.md`, `INVARIANTS.md`).
 - [x] ADR-0001: Bootstrap in Rust & 3-Tier Execution Engine.
-- [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Box).
+- [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Heap).
 - [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
 - [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
 - [x] AI Pair-Programming Guide (`AGENTS.md`).
