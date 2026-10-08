@@ -23,14 +23,14 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
 - In Tier 1 (interpreter) and Tier 2 (Cranelift debug/hot reload), cross-file inlining is disabled across compilation unit boundaries to guarantee maximum compilation avoidance. Tier 3 (LLVM release) enables cross-file inlining via LTO.
 
 ### Invariant 4: Kotlin Syntax Familiarity without Grammatical Ambiguity
-- Prism syntax should feel native to a Kotlin developer (`fun`, `val`, `var`, `class`, `struct`, `when`, `if` expressions, nullable types `T?`).
+- Prism syntax should feel native to a Kotlin developer (`fun`, `val`, `var`, `struct`, `enum`, `when`, `if` expressions, nullable types `T?`).
 - Parsing must be strictly deterministic and fast (Pratt expression parsing, unambiguous grammar rules).
 
 ### Invariant 5: Zero GC, Zero Hidden ARC, No Lifetime Annotations
 - Prism enforces memory safety through **value ownership and deterministic destruction**.
 - **No runtime Tracing Garbage Collector** and **no implicit Automatic Reference Counting (ARC)**.
-- **No explicit lifetime syntax (`'a`)**: Structs own their data. Graph references and shared relationships use typed IDs/handles (data-oriented design).
-- Borrowing (`&T`, `&mut T`) is strictly confined to function arguments and local scopes.
+- **No explicit lifetime syntax (`'a`)**: Structs own their data by value, use `Box<T>` for recursive types, or use typed handles/IDs for graphs and relationships.
+- Borrowing (`&T`, `&mut T`) is strictly confined to function arguments and local scopes, with automatic lifetime elision for returning borrows.
 
 ### Invariant 6: First-Class `compose` Primitives & Native Hot Reload
 - `compose` is a native language modifier (`compose fun`).

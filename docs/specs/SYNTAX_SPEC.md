@@ -33,7 +33,7 @@ public fun describe(value: Int): String = when (value) {
 }
 ```
 
-### 2.2. Data Structures, Ownership & Function Borrows
+### 2.2. Data Structures, Ownership, Enums & Box
 ```kotlin
 package demo.models
 
@@ -50,9 +50,21 @@ public struct User {
     val email: String?   // Nullable type
 }
 
-// Borrowing & mutation via function parameters (lowers to raw CPU pointers with zero cost)
+// Function borrowing & mutation with explicit call-site borrow
 public fun updateName(user: &mut User, newName: String) {
     user.name = newName
+}
+
+// Algebraic Data Types (Enums) & Recursive Types via Box<T>
+public enum Expr {
+    Literal(Int)
+    Add(Box<Expr>, Box<Expr>)
+    Multiply(Box<Expr>, Box<Expr>)
+}
+
+// Returning borrows with automatic lifetime elision
+public fun first(items: &Vector<String>): &String? {
+    return items.get(0)
 }
 
 // Data-Oriented Design: Referencing other objects via Typed IDs/Handles
@@ -117,6 +129,9 @@ compose fun CounterView(initialCount: Int = 0) {
 - Move semantics for owned non-primitive values.
 - Shared immutable reference: `&T` (strictly stack/function-scoped).
 - Exclusive mutable reference: `&mut T` (strictly stack/function-scoped).
+- Explicit call-site borrows for mutations: `updateName(&mut user, "Alice")`.
+- Lifetime elision: Return borrows automatically tied to input borrow scopes.
+- Heap indirection for recursive types: `Box<T>`.
 - No explicit lifetime parameters (`'a`) anywhere in the language.
 - Primitive types and Slot-Table State handles implement `Copy`.
 

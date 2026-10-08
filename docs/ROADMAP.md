@@ -7,7 +7,7 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 ## Phase 0: Foundations & Architecture (Current)
 - [x] Project Vision & Invariants established (`VISION.md`, `INVARIANTS.md`).
 - [x] ADR-0001: Bootstrap in Rust & 3-Tier Execution Engine.
-- [x] ADR-0002: Affine Types, Borrow Checking, and UI Arenas.
+- [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Box).
 - [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
 - [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
 - [ ] Initialize Rust workspace (`prism-compiler`):
@@ -21,17 +21,17 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ## Phase 1: Minimal Viable Bootstrap Compiler (Tier 1: Interpreter)
 - [ ] Lexer and Parser for basic language subset:
-  - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`.
+  - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
 - [ ] Package & import resolver conforming to zero-config directory rules.
-- [ ] AST / Bytecode Interpreter (`prism run file.pm`).
+- [ ] AST / Bytecode Interpreter (`prism run file.prism`).
 - [ ] CLI commands: `prism run`, `prism check`, `prism fmt`.
-- [ ] Integration test suite running executable `.pm` fixtures.
+- [ ] Integration test suite running executable `.prism` fixtures.
 
 ---
 
-## Phase 2: Type System, Affine Ownership & ABI Invalidation
-- [ ] Type checker with bidirectional type inference.
-- [ ] Affine types, ownership transfer, and borrow checker.
+## Phase 2: Type System, Value Ownership & ABI Invalidation
+- [ ] Type checker with bidirectional type inference and lifetime elision rules.
+- [ ] Value ownership transfer, move semantics, and borrow checker for functions.
 - [ ] ABI interface extraction & ABI hashing engine (`.abi` cache).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
 
@@ -40,14 +40,14 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 ## Phase 3: Native Backend & Hot Reload (Tier 2: Cranelift)
 - [ ] Intermediate Representation (Prism IR / SSA).
 - [ ] Cranelift JIT code generation backend.
-- [ ] Native execution via `prism run --native file.pm`.
+- [ ] Native execution via `prism run --native file.prism`.
 - [ ] Hot-reload runtime prototype: dynamic module reloading with state preservation.
 
 ---
 
 ## Phase 4: First-Class Compose Engine & UI Prototype
 - [ ] Compose runtime library: Slot table, group keys, memoization engine.
-- [ ] Compiler `@compose` transform: synthetic change-tracking bitmasks and slot injection.
+- [ ] Compiler `compose fun` transform: synthetic change-tracking bitmasks and slot injection.
 - [ ] State handle system (`remember { mutableStateOf(...) }`).
 - [ ] Declarative UI prototype with hot-reload rendering.
 

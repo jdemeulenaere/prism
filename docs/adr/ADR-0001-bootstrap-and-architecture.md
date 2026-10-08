@@ -5,7 +5,7 @@ We are creating a new statically typed programming language with Kotlin-like erg
 The compiler needs to be fast, safe, incremental, and provide both interpreter and native code generation modes.
 
 ## Decision
-1. **Bootstrap Implementation Language**: We will write the first compiler (`langc`) and CLI (`lang`) in **Rust**.
+1. **Bootstrap Implementation Language**: We will write the first compiler (`prismc`) and CLI (`prism`) in **Rust**.
    - Rust offers memory safety, zero-cost abstractions, excellent performance, rich compiler libraries (`logos`, `rowan` / `chumsky` / hand-written Pratt, `cranelift`), and great cross-compilation support.
 2. **Execution Architecture**:
    - **Tier 1 (AST / Bytecode Interpreter)**: Built into the compiler binary for instantaneous scripting, formatting, and unit testing.
