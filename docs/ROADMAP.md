@@ -10,6 +10,7 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 - [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Box).
 - [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
 - [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
+- [x] AI Pair-Programming Guide (`AGENTS.md`).
 - [ ] Initialize Rust workspace (`prism-compiler`):
   - `prism-lexer`: Fast tokenizer.
   - `prism-parser`: Pratt parser + AST generation.
@@ -22,7 +23,8 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 ## Phase 1: Minimal Viable Bootstrap Compiler (Tier 1: Interpreter)
 - [ ] Lexer and Parser for basic language subset:
   - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
-- [ ] Package & import resolver conforming to zero-config directory rules.
+  - Default `private` visibility, explicit `package` and `public`.
+- [ ] Package & import resolver conforming to zero-config, zero-marker directory rules.
 - [ ] AST / Bytecode Interpreter (`prism run file.prism`).
 - [ ] CLI commands: `prism run`, `prism check`, `prism fmt`.
 - [ ] Integration test suite running executable `.prism` fixtures.
@@ -45,15 +47,16 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ---
 
-## Phase 4: First-Class Compose Engine & UI Prototype
+## Phase 4: First-Class Compose Engine & UI Stack (Milestone 2)
 - [ ] Compose runtime library: Slot table, group keys, memoization engine.
 - [ ] Compiler `compose fun` transform: synthetic change-tracking bitmasks and slot injection.
 - [ ] State handle system (`remember { mutableStateOf(...) }`).
-- [ ] Declarative UI prototype with hot-reload rendering.
+- [ ] Declarative UI prototype with hot-reload rendering (desktop/mobile UI application).
+- [ ] Verification of real-world reactive UI apps running natively with zero GC pauses.
 
 ---
 
-## Phase 5: Self-Hosting Compiler & LSP (Milestone 2)
+## Phase 5: Self-Hosting Compiler & LSP (Milestone 3)
 - [ ] Prism Language Server Protocol (LSP) for VS Code / IDEs.
 - [ ] Port bootstrap Rust compiler to native Prism.
 - [ ] Full self-hosting compiler compilation and bootstrap verification.

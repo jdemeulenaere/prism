@@ -4,15 +4,20 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
 
 ---
 
-### Invariant 1: Single File as Compilation Unit & Explicit ABI Boundaries
+### Invariant 1: Single File as Compilation Unit & Explicit Export ABI Boundaries
 - Any `.prism` source file is compiled into machine code/bytecode independently.
-- To guarantee independent ABI extraction without inspecting function bodies, **all `public` and `package`-visible declarations must declare explicit parameter and return types**.
-- The ABI hash of a file depends **only** on its `public` and `package`-visible declarations, signatures, and generic AST representations. Private symbols and non-generic function bodies are excluded from the exported ABI.
+- **Default visibility is `private`**: Declarations without an explicit visibility modifier are private to the declaring file.
+- `package` visibility explicitly exposes a declaration to sibling files sharing the identical package.
+- `public` visibility explicitly exposes a declaration across packages.
+- To guarantee independent Phase 1 ABI extraction without inspecting function bodies, **all `public` and `package`-visible declarations must declare explicit parameter and return types**.
+- The exported ABI hash of a file depends **only** on its `public` and `package`-visible declarations, signatures, and generic AST representations. Private symbols and non-generic function bodies are excluded from the exported ABI.
 
-### Invariant 2: Zero Mandatory Build Files
-- A Prism project must be buildable, testable, and runnable using only directory conventions and import paths.
-- Leading `/` in an import (e.g. `import /core/fmt`) anchors to the workspace root.
-- Workspace root discovery detects version control (`.git`), a `.prism-root` marker file, or falls back to the compiler invocation directory.
+### Invariant 2: Zero Mandatory Build Files & Zero Marker Files
+- A Prism project requires no build configuration files (`build.gradle`, `Cargo.toml`, `CMakeLists.txt`) and **no marker files** (`.prism-root`, etc.).
+- **Pure Path Root Discovery**: The workspace root is deterministically discovered by comparing the filesystem path of the source file against its `package` declaration.
+  - Example: A file at `/workspace/app/ui/views.prism` declaring `package app.ui` maps directly to root `/workspace`.
+  - A file with an empty `package` declaration is located directly at `<workspace_root>/`.
+- Leading `/` in an import (e.g. `import /core/fmt`) anchors to this discovered workspace root.
 
 ### Invariant 3: Deterministic Hermetic Builds & Compilation Avoidance
 - The compilation artifact of a file is a pure function of:

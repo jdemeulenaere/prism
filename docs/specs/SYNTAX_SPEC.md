@@ -14,10 +14,13 @@ package demo.math
 
 import /core/fmt
 
-// Default visibility is 'package'
+// Default visibility is 'private' (accessible only within this file)
 fun square(x: Int): Int = x * x
 
-// Public function with explicit return type (required for ABI export)
+// 'package' visibility: accessible to any file in 'demo.math'
+package fun internalHelper(x: Int): Int = square(x) + 1
+
+// 'public' visibility with explicit return type (required for exported ABI)
 public fun hypotenuse(a: Double, b: Double): Double {
     val a2 = a * a
     val b2 = b * b
@@ -85,7 +88,7 @@ import /prism/ui/widgets
 import /prism/ui/state
 
 // First-class 'compose' keyword designates re-entrant UI functions
-compose fun CounterView(initialCount: Int = 0) {
+public compose fun CounterView(initialCount: Int = 0) {
     // 'remember' allocates a slot in the current composition's Slot Table.
     // 'count' is a lightweight Copy handle (State<Int>), safe to capture in escaping closures!
     val count = remember { mutableStateOf(initialCount) }
@@ -110,9 +113,9 @@ compose fun CounterView(initialCount: Int = 0) {
 ## 3. Lexical Structure & Grammar Highlights
 
 ### 3.1. Visibilities
-- Default (no keyword): `package` — accessible to all `.prism` files in the exact same package directory.
+- **Default (no keyword)**: `private` — accessible only within the declaring source file.
+- `package`: Accessible to all `.prism` files in the exact same package directory.
 - `public`: Accessible across any package.
-- `private`: Accessible only within the file.
 - **Export Rule**: All `public` and `package` declarations must have explicit parameter and return types for independent ABI extraction.
 
 ### 3.2. Types & Null Safety
@@ -139,3 +142,4 @@ compose fun CounterView(initialCount: Int = 0) {
 - Sibling import: `import doo` imports `doo.prism` in the same package.
 - Root import: `import /core/fmt` imports `<workspace_root>/core/fmt.prism`.
 - The leading `/` anchors to workspace root cleanly without colliding with `//` line comments.
+- Workspace root is dynamically discovered from the file's path and its `package` statement with **zero marker files**.

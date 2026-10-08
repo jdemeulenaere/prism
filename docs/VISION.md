@@ -19,14 +19,15 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 
 ## 3. Core Architectural Tenets
 
-### 3.1. Zero-Config Convention over Configuration
-- No mandatory build configuration files (`build.gradle`, `Cargo.toml`, `CMakeLists.txt`) for standard single-workspace development.
+### 3.1. Zero-Config Convention over Configuration & Pure Path Discovery
+- No mandatory build configuration files (`build.gradle`, `Cargo.toml`, `CMakeLists.txt`) and **no marker files**.
 - The file system is the package hierarchy:
   - `package foo.bar` $\iff$ file lives in `<workspace_root>/foo/bar/*.prism`.
+  - **Zero-Marker Workspace Root Discovery**: The workspace root is discovered directly from the entry file's filesystem path and its `package` declaration (e.g. `/home/user/project/foo/bar/main.prism` with `package foo.bar` directly resolves `/home/user/project` as root).
+  - Empty package means the file lives directly at `<workspace_root>/` and can only use relative imports.
   - `import doo` imports sibling module `doo.prism` in `foo/bar/`.
   - `import /abc/xyz/util` imports `<workspace_root>/abc/xyz/util.prism` (leading `/` anchors to workspace root).
-  - Empty package allows only relative imports.
-- Default symbol visibility is `package`. Explicit visibilities: `public`, `private`.
+- **Default Visibility is `private`**: A declaration without a modifier is visible only within its source file. Explicit modifiers: `package` (visible to package members) and `public` (visible across packages).
 
 ### 3.2. File-as-Compilation-Unit & ABI Stability
 - Every `.prism` file is an independent compilation unit for body code generation and artifact caching.
@@ -38,8 +39,8 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 
 ### 3.3. Pure Zero-Cost Memory: Value Ownership, Zero GC, Zero Hidden ARC
 - **No Garbage Collector & No Hidden ARC**: Memory is freed deterministically with zero runtime pauses and zero atomic counter overhead.
-- **No Lifetime Syntax (`'a`)**: Structs own their data. Graph references and shared relationships use typed IDs/handles (data-oriented design).
-- **Stack-Scoped Borrows**: References (`&T`, `&mut T`) are strictly scoped to function arguments and local calls.
+- **No Lifetime Syntax (`'a`)**: Structs own their data by value, use `Box<T>` for recursive types, and use typed IDs/handles for graph topologies (data-oriented design).
+- **Stack-Scoped Borrows**: References (`&T`, `&mut T`) are strictly scoped to function arguments and local calls, with automatic lifetime elision for returning borrows.
 
 ### 3.4. First-Class `compose` Primitives & Hot Reload
 - The `compose` keyword (`compose fun`) is a native language modifier.
@@ -55,5 +56,5 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 
 ## 4. Bootstrapping Roadmap
 - **Milestone 1**: Rust-based bootstrap compiler (`prismc`) and developer CLI (`prism`).
-- **Milestone 2**: Self-hosting compiler written in Prism itself.
-- **Milestone 3**: First-class Jetpack Compose UI engine and native hot-reload framework.
+- **Milestone 2**: First-class Jetpack Compose UI engine, reactive tree runtime, and native hot-reload framework.
+- **Milestone 3**: Self-hosting compiler written in Prism itself.
