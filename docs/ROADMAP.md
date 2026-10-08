@@ -1,0 +1,59 @@
+# Prism Roadmap & Milestones
+
+Following the **Elephant-Goldfish model**, this roadmap represents the long-term tracking memory (The Elephant). Each phase is broken down into small, verifiable, test-driven execution units (The Goldfish).
+
+---
+
+## Phase 0: Foundations & Architecture (Current)
+- [x] Project Vision & Invariants established (`VISION.md`, `INVARIANTS.md`).
+- [x] ADR-0001: Bootstrap in Rust & 3-Tier Execution Engine.
+- [x] ADR-0002: Affine Types, Borrow Checking, and UI Arenas.
+- [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
+- [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
+- [ ] Initialize Rust workspace (`prism-compiler`):
+  - `prism-lexer`: Fast tokenizer.
+  - `prism-parser`: Pratt parser + AST generation.
+  - `prism-ast`: Abstract Syntax Tree definitions.
+  - `prism-abi`: Surface signature extraction & ABI hashing.
+  - `prism-cli`: Developer command line interface (`prism`).
+
+---
+
+## Phase 1: Minimal Viable Bootstrap Compiler (Tier 1: Interpreter)
+- [ ] Lexer and Parser for basic language subset:
+  - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`.
+- [ ] Package & import resolver conforming to zero-config directory rules.
+- [ ] AST / Bytecode Interpreter (`prism run file.pm`).
+- [ ] CLI commands: `prism run`, `prism check`, `prism fmt`.
+- [ ] Integration test suite running executable `.pm` fixtures.
+
+---
+
+## Phase 2: Type System, Affine Ownership & ABI Invalidation
+- [ ] Type checker with bidirectional type inference.
+- [ ] Affine types, ownership transfer, and borrow checker.
+- [ ] ABI interface extraction & ABI hashing engine (`.abi` cache).
+- [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
+
+---
+
+## Phase 3: Native Backend & Hot Reload (Tier 2: Cranelift)
+- [ ] Intermediate Representation (Prism IR / SSA).
+- [ ] Cranelift JIT code generation backend.
+- [ ] Native execution via `prism run --native file.pm`.
+- [ ] Hot-reload runtime prototype: dynamic module reloading with state preservation.
+
+---
+
+## Phase 4: First-Class Compose Engine & UI Prototype
+- [ ] Compose runtime library: Slot table, group keys, memoization engine.
+- [ ] Compiler `@compose` transform: synthetic change-tracking bitmasks and slot injection.
+- [ ] State handle system (`remember { mutableStateOf(...) }`).
+- [ ] Declarative UI prototype with hot-reload rendering.
+
+---
+
+## Phase 5: Self-Hosting Compiler & LSP (Milestone 2)
+- [ ] Prism Language Server Protocol (LSP) for VS Code / IDEs.
+- [ ] Port bootstrap Rust compiler to native Prism.
+- [ ] Full self-hosting compiler compilation and bootstrap verification.
