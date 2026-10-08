@@ -1,46 +1,40 @@
-# ADR-0002: Affine Types, Lifetimes, and UI Arenas
+# ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles)
 
 ## Status
-Accepted
+Accepted (Supersedes previous lifetime annotation draft)
 
 ## Context
-Prism aims for native C++/Rust performance and zero-cost memory safety, combined with Kotlin-like ergonomics and first-class Compose-like UI trees.
-In standard Rust, combining borrow checking with UI trees (event listeners, closures capturing parent state, cyclic references) is notoriously verbose (`Rc<RefCell<...>>`, complex lifetime annotations).
-We need a memory model that preserves compile-time safety and deterministic destruction without ruining UI authoring ergonomics.
+Prism aims for native C++/Rust performance and zero-cost memory safety, combined with Kotlin-like ergonomics and first-class Compose UI trees.
+In standard Rust, combining borrow checking with UI trees and structs holding references leads to complex lifetime parameters (`'a`) and verbose escape hatches (`Rc<RefCell<...>>`).
+Conversely, garbage-collected languages (Java/Kotlin) and Swift's Automatic Reference Counting (ARC) introduce cache-contention and throughput pauses.
+We need a memory model that achieves bare-metal C++/Rust execution speeds without forcing developers to manage lifetimes or fight a borrow checker.
 
 ## Decision
 
-### 1. Affine Types, Ownership, and First-Class Lifetimes
-- Variables are owned by default. Passing an owned non-`Copy` value moves it.
-- Prism supports immutable borrows (`&T` or `val` view) and mutable borrows (`&mut T` or `var` inout).
-- Structs can hold borrowed references by declaring explicit lifetime parameters:
-  ```kotlin
-  public struct StringSlice<'a> {
-      val data: &'a str
-  }
-  ```
-- Lifetime elision is applied to standard function signatures to minimize syntactic clutter.
-- Values are dropped deterministically at the end of their scope. No tracing GC, no hidden background pauses.
+### 1. Pure Value Ownership & Deterministic Destruction
+- **Zero GC & Zero Implicit ARC**: The Prism runtime includes no garbage collector and introduces no hidden atomic retain/release counter instructions.
+- Structs and composite types own their fields directly. When a variable goes out of scope, its memory is cleaned up deterministically.
+- Move semantics apply to owned non-primitive values. Passing an owned value moves it without copying.
 
-### 2. Composable Recomposition & Closure Escapes
-- Composable functions (`@compose fun`) are re-entrant and can execute repeatedly upon state invalidation.
-- **Escaping UI Event Closures** (such as `Button(onClick = { ... })`) outlive the stack frame of the composable function:
-  - An escaping closure **cannot** borrow stack-local variables whose lifetime ends with the current composition pass.
-  - An escaping closure **can** capture:
-    1. Generational slot-table state handles (`State<T>`, `NodeId`), which are lightweight 64-bit integer values implementing `Copy`.
-    2. Explicitly cloned/moved data.
-    3. Shared reference-counted pointers (`Shared<T>`).
+### 2. Zero Lifetime Syntax (`'a`) & Stack-Only Borrows
+- **No Lifetimes on Structs**: Structs cannot declare lifetime parameters (`'a`) or hold long-lived borrowed references. Structs either contain their data by value or reference external entities using typed handles/IDs.
+- **Function Borrows**: Functions may borrow arguments immutably (`&T`) or mutably (`&mut T`). Because these borrows are bounded by the call stack of the function, the compiler validates safety automatically without any lifetime syntax.
 
-### 3. Slot Table Lifecycle & Generational Handles
-- Declarative UI nodes and reactive state values (`remember { mutableStateOf(...) }`) live in a managed runtime Slot Table.
-- **Deterministic Drops**: When a composable group or node is unmounted from the tree during recomposition, the slot table executes deterministic drops (`drop(&mut value)`) on all owned non-primitive resources registered in its slots.
-- **Stale Handle Safety**: If an asynchronous task or detached callback invokes a method on a stale generational state handle, it safely reads the last recorded snapshot or no-ops writes with a diagnostic warning, preventing use-after-free and abrupt process panics.
+### 3. Data-Oriented Design & Typed Handles for Graph Relationships
+- Graphs, many-to-one relationships, and UI component hierarchies use **Typed IDs/Handles** (e.g., `NodeId`, `EmployeeId`) within an owning collection or Arena.
+- Avoids cyclic memory leaks, maximizes CPU cache locality, enables trivial serialization, and guarantees safety.
+
+### 4. First-Class `compose fun` & Slot Table Handles
+- The `compose` keyword designates re-entrant composable functions (`compose fun`).
+- State variables (`remember { mutableStateOf(...) }`) reside in the UI runtime's Slot Table.
+- State references returned by `remember` are lightweight 64-bit `Copy` handles (`State<T>`).
+- UI event callbacks (e.g. `Button(onClick = { ... })`) capture state handles by value cleanly without pointer entanglement or lifetime issues.
 
 ## Consequences
 - **Positive**:
-  - Full systems programming capabilities with zero-cost memory abstractions, views, and string slices.
-  - Zero garbage collector overhead, deterministic performance, tiny memory footprint.
-  - Idiomatic Kotlin-like syntax for UI composition without exposing users to lifetime struggles in standard UI code.
+  - Predictable, microsecond-latency execution matching C++ and Rust.
+  - Zero GC pause micro-stutters during 120 FPS UI rendering.
+  - Clean, approachable syntax matching Kotlin's developer experience.
+  - No "lifetime contagion" across struct hierarchies.
 - **Negative / Tradeoffs**:
-  - Systems-level code using borrowed references in structs requires explicit lifetime annotations (`'a`).
-  - Developers writing UI event handlers must be aware that escaping closures require `Copy` state handles or clones rather than borrowing temporary stack locals.
+  - Developers cannot store a raw stack reference (`&T`) inside a struct; data models must use value containment or ID handles.

@@ -4,9 +4,9 @@
 **Prism** (`.prism`) is a safe, expressive, statically typed programming language designed for high-performance native systems and first-class reactive UI application development.
 It combines:
 - The **ergonomics and readability of Kotlin** (`fun`, `val`/`var`, `when`, expression bodies, null safety).
-- The **zero-cost safety and native performance of Rust** (affine types, ownership, lifetimes `'a`, borrow checking, no garbage collector pauses).
+- The **zero-cost safety and native performance of Rust** (value ownership, deterministic destruction, zero GC, zero hidden ARC, C++/Rust execution speed).
 - The **developer velocity of zero-config conventions and instant hot reload**.
-- Native, first-class compiler integration for **declarative tree transformations (Compose-style)** using slot-table state handles and re-entrant composition semantics.
+- Native, first-class compiler integration for **declarative tree transformations (Compose-style)** via the `compose` keyword and slot-table generational handles.
 
 ---
 
@@ -24,7 +24,7 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 - The file system is the package hierarchy:
   - `package foo.bar` $\iff$ file lives in `<workspace_root>/foo/bar/*.prism`.
   - `import doo` imports sibling module `doo.prism` in `foo/bar/`.
-  - `import /abc/xyz/util` imports `<workspace_root>/abc/xyz/util.prism` (leading `/` anchors to the workspace root).
+  - `import /abc/xyz/util` imports `<workspace_root>/abc/xyz/util.prism` (leading `/` anchors to workspace root).
   - Empty package allows only relative imports.
 - Default symbol visibility is `package`. Explicit visibilities: `public`, `private`.
 
@@ -36,11 +36,17 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 - Modifying private symbols or non-generic function bodies produces **zero downstream recompilations**.
 - Generic functions record a Monomorphization Hash of their body; downstream files re-monomorphize only when generic bodies change.
 
-### 3.3. Memory Model: Affine Types, Lifetimes & Slot-Table Handles
-- Strict ownership, move semantics, and first-class lifetimes (`'a`) guarantee compile-time memory safety without runtime GC pauses.
-- UI trees and reactive states use **Slot-Table / Generational Arena handles** (lightweight `Copy` ID types) so event closures can capture and update state seamlessly without lifetime battles.
+### 3.3. Pure Zero-Cost Memory: Value Ownership, Zero GC, Zero Hidden ARC
+- **No Garbage Collector & No Hidden ARC**: Memory is freed deterministically with zero runtime pauses and zero atomic counter overhead.
+- **No Lifetime Syntax (`'a`)**: Structs own their data. Graph references and shared relationships use typed IDs/handles (data-oriented design).
+- **Stack-Scoped Borrows**: References (`&T`, `&mut T`) are strictly scoped to function arguments and local calls.
 
-### 3.4. Three-Tier Execution Engine
+### 3.4. First-Class `compose` Primitives & Hot Reload
+- The `compose` keyword (`compose fun`) is a native language modifier.
+- Recomposition keying, parameter change tracking, and slot-table tree reconciliation are intrinsic to the compiler and runtime.
+- Generational slot-table handles (`State<T>`, `NodeId`) are lightweight `Copy` IDs, allowing event callbacks to capture state without pointers or borrow-checker fighting.
+
+### 3.5. Three-Tier Execution Engine
 - **Tier 1 (Bytecode Interpreter)**: Instant execution for scripting, CLI scripts, formatting, and unit tests.
 - **Tier 2 (Cranelift JIT & Dylib)**: Sub-second compilation and hot-reloading for UI iteration.
 - **Tier 3 (LLVM / Optimized AOT)**: Maximum-throughput optimized native binaries matching C++/Rust speed.

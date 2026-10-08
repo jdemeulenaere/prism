@@ -2,7 +2,7 @@
 
 ## 1. Overview
 Prism (`.prism`) adopts a syntax deeply inspired by Kotlin, prioritizing clean readability, minimal punctuation noise, and high parsing throughput.
-At the same time, Prism's semantic engine enforces Rust-level safety (ownership, first-class lifetimes `'a`, borrow checking, no data races) without runtime GC pauses.
+At the same time, Prism's semantic engine enforces Rust-level safety (value ownership, deterministic destruction, no data races) without runtime GC, without hidden ARC, and without complex lifetime annotations (`'a`).
 
 ---
 
@@ -33,50 +33,47 @@ public fun describe(value: Int): String = when (value) {
 }
 ```
 
-### 2.2. Data Structures, Ownership & Lifetimes
+### 2.2. Data Structures, Ownership & Function Borrows
 ```kotlin
 package demo.models
 
-// Value struct (allocated on stack or inlined)
+// Value struct (allocated inline on stack or inside parent struct)
 public struct Point {
     val x: Double
     val y: Double
 }
 
-// Struct with owned fields
+// Struct with owned fields (zero GC, zero ARC, deterministic cleanup)
 public struct User {
     val id: UInt64
     var name: String
     val email: String?   // Nullable type
 }
 
-// Borrowing & mutation
+// Borrowing & mutation via function parameters (lowers to raw CPU pointers with zero cost)
 public fun updateName(user: &mut User, newName: String) {
     user.name = newName
 }
 
-// Struct holding a borrowed reference with an explicit lifetime parameter
-public struct StringSlice<'a> {
-    val text: &'a str
-    val length: UInt
-}
+// Data-Oriented Design: Referencing other objects via Typed IDs/Handles
+public struct EmployeeId(val id: UInt32)
 
-// Lifetime elision on functions:
-public fun createSlice(source: &str): StringSlice {
-    return StringSlice(text = source, length = source.len())
+public struct Employee {
+    val id: EmployeeId
+    val name: String
+    val managerId: EmployeeId?   // References another Employee by ID without cycles or GC!
 }
 ```
 
-### 2.3. Reactive Tree & Compose Support
+### 2.3. Reactive Tree & Compose Support (`compose fun`)
 ```kotlin
 package demo.ui
 
 import /prism/ui/widgets
 import /prism/ui/state
 
-// '@compose' tells the compiler to inject slot-table memoization and re-entrant tracking
-@compose
-public fun CounterView(initialCount: Int = 0) {
+// First-class 'compose' keyword designates re-entrant UI functions
+compose fun CounterView(initialCount: Int = 0) {
     // 'remember' allocates a slot in the current composition's Slot Table.
     // 'count' is a lightweight Copy handle (State<Int>), safe to capture in escaping closures!
     val count = remember { mutableStateOf(initialCount) }
@@ -107,19 +104,20 @@ public fun CounterView(initialCount: Int = 0) {
 - **Export Rule**: All `public` and `package` declarations must have explicit parameter and return types for independent ABI extraction.
 
 ### 3.2. Types & Null Safety
-- Primitive types: `Int`, `Int8`, `Int16`, `Int32`, `Int64`, `UInt`, `UInt64`, `Float`, `Double`, `Bool`, `Char`, `String`, `str`.
+- Primitive types: `Int`, `Int8`, `Int16`, `Int32`, `Int64`, `UInt`, `UInt64`, `Float`, `Double`, `Bool`, `Char`, `String`.
 - Nullable types: `T?` represents optionality (lowered to zero-cost `Option<T>` in the backend).
 - Elvis operator `?:` and safe navigation `?.` work as in Kotlin:
   ```kotlin
   val len = name?.length ?: 0
   ```
 
-### 3.3. Ownership, References & Lifetimes
+### 3.3. Pure Zero-Cost Memory (Zero GC, Zero ARC, No Lifetimes)
 - Variables are immutable by default (`val`).
 - Mutable bindings use `var`.
-- Shared immutable reference: `&T` or `&'a T` (read-only borrow).
-- Exclusive mutable reference: `&mut T` or `&'a mut T` (read-write borrow).
-- Move semantics by default for heap resources (`String`, `Vector<T>`).
+- Move semantics for owned non-primitive values.
+- Shared immutable reference: `&T` (strictly stack/function-scoped).
+- Exclusive mutable reference: `&mut T` (strictly stack/function-scoped).
+- No explicit lifetime parameters (`'a`) anywhere in the language.
 - Primitive types and Slot-Table State handles implement `Copy`.
 
 ### 3.4. Imports & Workspace Anchor

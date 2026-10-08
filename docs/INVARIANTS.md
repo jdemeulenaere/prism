@@ -26,10 +26,14 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
 - Prism syntax should feel native to a Kotlin developer (`fun`, `val`, `var`, `class`, `struct`, `when`, `if` expressions, nullable types `T?`).
 - Parsing must be strictly deterministic and fast (Pratt expression parsing, unambiguous grammar rules).
 
-### Invariant 5: Safe Affine Memory with Lifetimes, Zero GC Pauses
-- Prism uses affine types, move semantics, borrow checking, and explicit lifetime parameters (`'a`) to guarantee memory safety at compile time without a tracing garbage collector.
-- Long-lived UI trees and reactive state variables use generational slot-table handles (lightweight `Copy` handle types) so closures can capture state without borrow-checker fighting.
+### Invariant 5: Zero GC, Zero Hidden ARC, No Lifetime Annotations
+- Prism enforces memory safety through **value ownership and deterministic destruction**.
+- **No runtime Tracing Garbage Collector** and **no implicit Automatic Reference Counting (ARC)**.
+- **No explicit lifetime syntax (`'a`)**: Structs own their data. Graph references and shared relationships use typed IDs/handles (data-oriented design).
+- Borrowing (`&T`, `&mut T`) is strictly confined to function arguments and local scopes.
 
-### Invariant 6: First-Class Compose Engine & Native Hot Reload
+### Invariant 6: First-Class `compose` Primitives & Native Hot Reload
+- `compose` is a native language modifier (`compose fun`).
 - Recomposition keying, parameter change tracking, and slot-table tree reconciliation are intrinsic to the compiler and runtime.
+- Slot-table state handles (`State<T>`, `NodeId`) are lightweight `Copy` IDs that eliminate pointer cycle issues.
 - Hot reload during development swaps function pointers in Cranelift JIT / interpreter tables while keeping slot-table state intact.
