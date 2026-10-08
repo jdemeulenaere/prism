@@ -1,4 +1,10 @@
-# Prism Syntax & Grammar Specification (Draft)
+# Prism Syntax & Grammar Specification
+
+**Status**: Living Architecture Specification (The Elephant)  
+**Applies To**: `prism-lexer`, `prism-parser`, `prism-ast`  
+**Governing Invariants**: [Invariant 4 (`docs/INVARIANTS.md`)](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md#L30)
+
+---
 
 ## 1. Overview
 Prism (`.prism`) adopts a syntax deeply inspired by Kotlin, prioritizing clean readability, minimal punctuation noise, and high parsing throughput.

@@ -24,7 +24,7 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 - The file system is the package hierarchy:
   - `package foo.bar` $\iff$ file lives in `<workspace_root>/foo/bar/*.prism`.
   - **Zero-Marker Workspace Root Discovery**: The workspace root is discovered directly from the entry file's filesystem path and its `package` declaration (e.g. `/home/user/project/foo/bar/main.prism` with `package foo.bar` directly resolves `/home/user/project` as root).
-  - Empty package means the file lives directly at `<workspace_root>/` and can only use relative imports.
+  - Empty package means the file lives directly at `<workspace_root>/` and can use sibling relative imports or root-anchored imports.
   - `import doo` imports sibling module `doo.prism` in `foo/bar/`.
   - `import /abc/xyz/util` imports `<workspace_root>/abc/xyz/util.prism` (leading `/` anchors to workspace root).
 - **Default Visibility is `private`**: A declaration without a modifier is visible only within its source file. Explicit modifiers: `package` (visible to package members) and `public` (visible across packages).

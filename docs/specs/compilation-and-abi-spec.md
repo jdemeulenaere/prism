@@ -104,6 +104,7 @@ Prism implements a two-tier execution engine to decouple inner-loop developer ve
 
 ### 5.1. Tier 1: Cranelift JIT & Dylib Backend
 - Embedded directly inside the `prism` compiler CLI binary without external heavy toolchain dependencies.
+- **Supported Tier 1 Architectures**: `x86_64` and `aarch64` (ARM64).
 - Compiles native machine code directly to memory in 5–15 milliseconds.
 - Used for `prism run <file.prism>`, test execution (`prism test`), and interactive UI hot reloading.
 - **Inlining Rule**: Cross-file inlining across compilation units is strictly disabled in Tier 1 to preserve 100% compilation avoidance and enable dynamic function-pointer table swapping during live hot reload.
