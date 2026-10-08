@@ -124,12 +124,13 @@ impl DependencyGraph {
             for import_decl in &source_file.imports {
                 let resolved_target =
                     resolve_import(&current_path, import_decl, &authoritative_root)?;
-                direct_imports.push(resolved_target.clone());
+                if !direct_imports.contains(&resolved_target) {
+                    direct_imports.push(resolved_target.clone());
+                }
                 if !visited.contains(&resolved_target) {
                     worklist.push_back(resolved_target);
                 }
             }
-            direct_imports.dedup();
 
             let package = source_file
                 .package
@@ -172,9 +173,21 @@ impl DependencyGraph {
         &self.sccs
     }
 
-    /// Returns true if the dependency graph contains any cyclic SCC clusters.
+    /// Returns true if the dependency graph contains any cyclic SCC clusters or self-loops.
     pub fn is_cyclic(&self) -> bool {
-        self.sccs.iter().any(|c| c.files.len() > 1)
+        self.sccs.iter().any(|c| {
+            if c.files.len() > 1 {
+                true
+            } else if let Some(single_file) = c.files.first() {
+                if let Some(node) = self.nodes.get(single_file) {
+                    node.direct_imports.contains(single_file)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        })
     }
 
     /// Returns the total number of files in the dependency graph.

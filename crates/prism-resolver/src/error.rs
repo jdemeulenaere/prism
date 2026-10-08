@@ -176,10 +176,22 @@ impl fmt::Display for ResolveError {
                 )
             }
             ResolveError::Io { path, message } => {
-                write!(f, "IO error at '{}': {}", path.display(), message)
+                write!(
+                    f,
+                    "{}: IO error at '{}': {}",
+                    self.code(),
+                    path.display(),
+                    message
+                )
             }
             ResolveError::Parse { path, message } => {
-                write!(f, "Parse error in '{}': {}", path.display(), message)
+                write!(
+                    f,
+                    "{}: Parse error in '{}': {}",
+                    self.code(),
+                    path.display(),
+                    message
+                )
             }
         }
     }

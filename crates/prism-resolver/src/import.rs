@@ -31,14 +31,19 @@ pub fn resolve_import(
     }
 
     for component in &import.path {
-        if component == ".."
+        if component.is_empty()
+            || component == ".."
             || component == "."
             || component.contains('/')
             || component.contains('\\')
         {
             return Err(ResolveError::InvalidImportPath {
                 import_path: import_str,
-                reason: "relative parent traversal is forbidden".to_string(),
+                reason: if component.is_empty() {
+                    "empty import path components are forbidden".to_string()
+                } else {
+                    "relative parent traversal is forbidden".to_string()
+                },
             });
         }
     }
@@ -62,6 +67,7 @@ pub fn resolve_import(
     } else {
         let parent = source_file
             .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         (parent, &[][..], format!("{}.prism", import.path[0]))
@@ -73,6 +79,14 @@ pub fn resolve_import(
     }
     candidate.push(&file_name);
     let normalized_candidate = normalize_path(&candidate);
+
+    // Disallow self-imports (ADV-04)
+    if normalized_candidate == normalize_path(source_file) {
+        return Err(ResolveError::InvalidImportPath {
+            import_path: import_str,
+            reason: "a file cannot import itself".to_string(),
+        });
+    }
 
     // 3. Workspace Jail Enforcement:
     // If the candidate file exists or base_dir exists, verify against workspace_root
@@ -138,14 +152,19 @@ pub fn candidate_target_path(
     }
 
     for component in &import.path {
-        if component == ".."
+        if component.is_empty()
+            || component == ".."
             || component == "."
             || component.contains('/')
             || component.contains('\\')
         {
             return Err(ResolveError::InvalidImportPath {
                 import_path: import_str,
-                reason: "relative parent traversal is forbidden".to_string(),
+                reason: if component.is_empty() {
+                    "empty import path components are forbidden".to_string()
+                } else {
+                    "relative parent traversal is forbidden".to_string()
+                },
             });
         }
     }
@@ -167,6 +186,7 @@ pub fn candidate_target_path(
     } else {
         let parent = source_file
             .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         (parent, &[][..], format!("{}.prism", import.path[0]))

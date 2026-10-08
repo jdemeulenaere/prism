@@ -500,3 +500,154 @@ fn test_candidate_target_path_helper() {
     let candidate = candidate_target_path(source_file, &sibling_import, root).unwrap();
     assert_eq!(candidate, Path::new("/demo/app/ui/widgets.prism"));
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial Audit Verifications (ADV-01 through ADV-08)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_adv01_relative_path_case_sensitivity() {
+    // ADV-01: When relative path is provided, disk case check must not be skipped.
+    let ws = TestWorkspace::new("adv01_rel_case");
+    // Create App/Ui on disk (capitalized)
+    let file = ws.write_file("App/Ui/views.prism", "package app.ui\n");
+
+    // Change current directory or pass relative path from parent
+    let parent = file.parent().unwrap().parent().unwrap();
+    let original_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(parent).unwrap();
+
+    let rel_path = Path::new("App/Ui/views.prism");
+    let err = discover_root_from_segments(rel_path, &["app", "ui"])
+        .expect_err("should reject case mismatch even on relative path");
+    assert_eq!(err.code(), "E1001");
+
+    // Sibling import from relative single-file
+    let sibling_file = Path::new("views.prism");
+    let import_decl = ImportDecl {
+        is_root: false,
+        path: vec!["helper".to_string()],
+        span: Span::dummy(),
+    };
+    ws.write_file("Helper.prism", "fun help() {}\n");
+    let sibling_err = prism_resolver::resolve_import(sibling_file, &import_decl, Path::new("."))
+        .expect_err("sibling import on relative file must enforce case check");
+    assert_eq!(sibling_err.code(), "E1002");
+
+    std::env::set_current_dir(original_cwd).unwrap();
+}
+
+#[test]
+fn test_adv02_leading_parent_traversal_normalization() {
+    // ADV-02: Leading .. must be retained in relative paths
+    assert_eq!(
+        prism_resolver::normalize_path(Path::new("../a/b")),
+        PathBuf::from("../a/b")
+    );
+    assert_eq!(
+        prism_resolver::normalize_path(Path::new("../../secret.prism")),
+        PathBuf::from("../../secret.prism")
+    );
+    assert_eq!(
+        prism_resolver::normalize_path(Path::new("a/../../b")),
+        PathBuf::from("../b")
+    );
+    // Root paths still clamp .. at filesystem root
+    assert_eq!(
+        prism_resolver::normalize_path(Path::new("/..")),
+        PathBuf::from("/")
+    );
+    assert_eq!(
+        prism_resolver::normalize_path(Path::new("/a/..")),
+        PathBuf::from("/")
+    );
+}
+
+#[test]
+fn test_adv03_windows_verbatim_path_normalization() {
+    // ADV-03: Windows verbatim (\\?\) paths must not be corrupted
+    assert_eq!(
+        prism_resolver::normalize_path(Path::new(r"\\?\C:\foo\bar")),
+        PathBuf::from(r"\\?\C:\foo\bar")
+    );
+}
+
+#[test]
+fn test_adv04_self_import_rejected() {
+    // ADV-04: File importing itself must be rejected
+    let ws = TestWorkspace::new("adv04_self_import");
+    let self_file = ws.write_file("self.prism", "import self\n");
+    let content = std::fs::read_to_string(&self_file).unwrap();
+    let ast = prism_parser::parse_source(&content).unwrap();
+
+    let err = prism_resolver::resolve_import(&self_file, &ast.imports[0], ws.path())
+        .expect_err("self-import must be rejected");
+    assert_eq!(err.code(), "E1006");
+}
+
+#[test]
+fn test_adv05_empty_import_path_component_rejected() {
+    // ADV-05: Empty path component in import must return E1006
+    let dummy_file = Path::new("/demo/main.prism");
+    let dummy_root = Path::new("/demo");
+
+    let invalid_import = ImportDecl {
+        is_root: true,
+        path: vec!["core".to_string(), "".to_string(), "fmt".to_string()],
+        span: Span::dummy(),
+    };
+
+    let err = prism_resolver::resolve_import(dummy_file, &invalid_import, dummy_root)
+        .expect_err("empty path component must be rejected");
+    assert_eq!(err.code(), "E1006");
+}
+
+#[test]
+fn test_adv_diamond_dependency_topological_sort() {
+    // A -> B, C; B, C -> D (diamond dependency)
+    // Topological order must place D before B and C, and B and C before A.
+    let ws = TestWorkspace::new("diamond_test");
+    let a = ws.write_file("a.prism", "import b\nimport c\n");
+    let b = ws.write_file("b.prism", "import d\n");
+    let c = ws.write_file("c.prism", "import d\n");
+    let d = ws.write_file("d.prism", "fun base() {}\n");
+
+    let graph = DependencyGraph::from_entry(&a).expect("diamond graph must build");
+    assert_eq!(graph.len(), 4);
+    assert!(!graph.is_cyclic());
+
+    let sccs = graph.topological_order();
+    assert_eq!(sccs.len(), 4);
+
+    let order: Vec<PathBuf> = sccs.iter().flat_map(|c| c.files.clone()).collect();
+    let pos_a = order.iter().position(|x| x == &a).unwrap();
+    let pos_b = order.iter().position(|x| x == &b).unwrap();
+    let pos_c = order.iter().position(|x| x == &c).unwrap();
+    let pos_d = order.iter().position(|x| x == &d).unwrap();
+
+    // D must compile before B and C; B and C must compile before A
+    assert!(pos_d < pos_b);
+    assert!(pos_d < pos_c);
+    assert!(pos_b < pos_a);
+    assert!(pos_c < pos_a);
+}
+
+#[test]
+fn test_adv_three_node_mutual_recursion_scc() {
+    // A -> B -> C -> A (3-node mutual cycle)
+    let ws = TestWorkspace::new("three_node_scc");
+    let a = ws.write_file("a.prism", "import b\n");
+    let b = ws.write_file("b.prism", "import c\n");
+    let c = ws.write_file("c.prism", "import a\n");
+
+    let graph = DependencyGraph::from_entry(&a).expect("3-node cycle must group into SCC");
+    assert_eq!(graph.len(), 3);
+    assert!(graph.is_cyclic());
+
+    let sccs = graph.sccs();
+    assert_eq!(sccs.len(), 1);
+    assert_eq!(sccs[0].files.len(), 3);
+    assert!(sccs[0].files.contains(&a));
+    assert!(sccs[0].files.contains(&b));
+    assert!(sccs[0].files.contains(&c));
+}

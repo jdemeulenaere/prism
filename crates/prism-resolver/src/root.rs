@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 /// Representation of a parsed path with normalized separators and resolved relative components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedPath {
+    pub prefix: String,
     pub drive: String,
     pub has_root: bool,
     pub segments: Vec<String>,
@@ -22,8 +23,26 @@ impl NormalizedPath {
         let uses_backslash = path_str.contains('\\');
         let standardized = path_str.replace('\\', "/");
 
+        let mut prefix = String::new();
         let mut drive = String::new();
         let mut rest = standardized.as_str();
+
+        // Check Windows verbatim prefix (e.g. "\\?\" or "\\?\UNC\")
+        if rest.starts_with("//?/") {
+            prefix = if uses_backslash {
+                r"\\?\".to_string()
+            } else {
+                "//?/".to_string()
+            };
+            rest = &rest[4..];
+        } else if rest.starts_with("//") {
+            prefix = if uses_backslash {
+                r"\\".to_string()
+            } else {
+                "//".to_string()
+            };
+            rest = &rest[2..];
+        }
 
         // Check Windows drive prefix (e.g. "C:")
         if rest.len() >= 2 {
@@ -41,8 +60,14 @@ impl NormalizedPath {
 
         for seg in raw_segments {
             if seg == ".." {
-                if !segments.is_empty() {
-                    segments.pop();
+                if let Some(last) = segments.last() {
+                    if last != ".." {
+                        segments.pop();
+                        continue;
+                    }
+                }
+                if !has_root {
+                    segments.push(seg.to_string());
                 }
             } else {
                 segments.push(seg.to_string());
@@ -50,6 +75,7 @@ impl NormalizedPath {
         }
 
         Self {
+            prefix,
             drive,
             has_root,
             segments,
@@ -61,10 +87,13 @@ impl NormalizedPath {
     pub fn to_path_buf(&self) -> PathBuf {
         let sep = if self.uses_backslash { "\\" } else { "/" };
         let mut s = String::new();
+        if !self.prefix.is_empty() {
+            s.push_str(&self.prefix);
+        }
         if !self.drive.is_empty() {
             s.push_str(&self.drive);
         }
-        if self.has_root {
+        if self.has_root && !s.ends_with('/') && !s.ends_with('\\') {
             s.push_str(sep);
         }
         s.push_str(&self.segments.join(sep));
@@ -130,6 +159,7 @@ pub fn discover_root_from_segments(
     };
 
     let dir_norm = NormalizedPath {
+        prefix: norm.prefix.clone(),
         drive: norm.drive.clone(),
         has_root: norm.has_root,
         segments: dir_segments.clone(),
@@ -175,6 +205,7 @@ pub fn discover_root_from_segments(
     // Compute root by stripping n segments from dir_segments
     let root_segments = dir_segments[..start_idx].to_vec();
     let root_norm = NormalizedPath {
+        prefix: norm.prefix,
         drive: norm.drive,
         has_root: norm.has_root,
         segments: root_segments,
@@ -184,8 +215,15 @@ pub fn discover_root_from_segments(
 
     // Strict Case-Sensitivity Enforcement on disk:
     // If candidate_root exists on disk, verify every segment matches on-disk casing exactly.
-    if candidate_root.exists() {
-        let mut curr = candidate_root.clone();
+    // For relative paths where candidate_root is empty (""), use "." as check base (ADV-01).
+    let check_base = if candidate_root.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        &candidate_root
+    };
+
+    if check_base.exists() {
+        let mut curr = check_base.to_path_buf();
         for pkg_seg in package_segments {
             let seg_str = pkg_seg.as_ref();
             if !verify_disk_casing_exists(&curr, seg_str) {
