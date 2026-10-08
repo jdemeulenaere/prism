@@ -10,8 +10,8 @@
 
 Prism adopts a strict **convention-over-configuration** filesystem contract designed to eliminate build configuration files (`Cargo.toml`, `build.gradle.kts`, `CMakeLists.txt`) and **eliminate marker files** (`.git`, `.prism-root`, `package.json`).
 
-The filesystem hierarchy and source code declarations form a bidirectional, self-authenticating bijection:
-$$\text{Directory Hierarchy} \iff \text{Package Hierarchy}$$
+The filesystem hierarchy and source code declarations form a bidirectional, self-authenticating contract:
+`Directory Hierarchy` <===> `Package Hierarchy`
 
 This document serves as the permanent reference specification (**The Elephant**) for implementing and verifying the package resolver (`prism-resolver`).
 
@@ -23,35 +23,35 @@ This document serves as the permanent reference specification (**The Elephant**)
 
 #### Algorithm
 Given:
-- Source file path $P = (d_1, d_2, \dots, d_m, \text{filename.prism})$
-- Declared package path $K = [k_1, k_2, \dots, k_n]$ (where each $k_i$ is a package identifier segment, e.g., `["foo", "bar"]` for `package foo.bar`)
-- Let $\text{parent}(P) = [d_1, d_2, \dots, d_m]$ be the directory containing $P$.
+- Source file path `P = dir_1/dir_2/.../dir_m/filename.prism`
+- Declared package path segments `K = [k_1, k_2, ..., k_n]` (e.g. `["foo", "bar"]` for `package foo.bar`)
+- Let `dir = parent(P)` be the directory containing `P`.
 
 1. **Path Canonicalization & Normalization**:
-   - Normalize $P$ to resolve relative components (`.`, `..`), redundant separators, and canonicalize path separators (handling POSIX `/` and Windows `\`).
-   - Obtain absolute directory path $D = \text{parent}(P)$.
+   - Normalize `P` to resolve relative components (`.`, `..`), redundant separators, and canonicalize path separators (handling POSIX `/` and Windows `\`).
+   - Obtain absolute directory path `dir = parent(P)`.
 
 2. **Empty Package (Root Files)**:
-   - If $K = []$ (file omits `package` statement or declares empty package):
-     $$\text{WorkspaceRoot}(P) = D$$
+   - If `K` is empty (the file omits `package` or declares empty package):
+     `WorkspaceRoot(P) = dir`
    - The file resides directly in the workspace root. It may only use sibling relative imports.
 
 3. **Non-Empty Package**:
-   - If $n > m$ (the package path has more segments than the filesystem path):
-     $$\implies \text{Error: PackagePathMismatch}$$
-   - Compare the trailing $n$ directory segments of $D$ against $K$:
-     $$\forall i \in \{1, \dots, n\}, \quad d_{m - n + i} \stackrel{?}{=} k_i$$
+   - If `n > m` (the package path has more segments than the filesystem path):
+     ==> Emits diagnostic `Error: PackagePathMismatch`.
+   - Compare the trailing `n` directory segments of `dir` against `K`:
+     Every segment `dir[m - n + i]` must exactly equal `k_i`.
    - If all segments match:
-     $$\text{WorkspaceRoot}(P) = [d_1, d_2, \dots, d_{m - n}]$$
+     `WorkspaceRoot(P)` is obtained by stripping the trailing `n` segments from `dir`.
    - If any segment does not match:
-     $$\implies \text{Error: PackagePathMismatch}$$
+     ==> Emits diagnostic `Error: PackagePathMismatch`.
 
 #### Concrete Example
 Given file at `/workspace/projects/demo/foo/bar/app.prism` with `package foo.bar`:
-- $D = \text{["workspace", "projects", "demo", "foo", "bar"]}$
-- $K = \text{["foo", "bar"]}$ ($n = 2$)
-- Suffix check: $D$'s last 2 segments are `["foo", "bar"]`, which matches $K$.
-- Suffix stripped: $\text{WorkspaceRoot} = \text{["workspace", "projects", "demo"]}$.
+- `dir = /workspace/projects/demo/foo/bar`
+- `K = ["foo", "bar"]` (length 2)
+- Suffix check: `dir`'s trailing 2 segments are `foo/bar`, which matches `K`.
+- Suffix stripped: `WorkspaceRoot = /workspace/projects/demo`.
 
 #### Error Handling: Package-Directory Mismatch
 If a file at `/workspace/foo/bar/app.prism` declares `package foo.baz`:
@@ -79,26 +79,26 @@ Imports fall into exactly two mutually exclusive categories:
 
 #### Formal Resolution Rules
 Given:
-- Source file $P$ located in directory $D = \text{parent}(P)$.
-- Discovered workspace root $W = \text{WorkspaceRoot}(P)$.
+- Source file `P` located in directory `dir = parent(P)`.
+- Discovered workspace root `root = WorkspaceRoot(P)`.
 - Parsed `ImportDecl { is_root, path }`.
 
 1. **Root-Anchored Import (`is_root == true`)**:
    - Begins with leading slash: `import /core/fmt`.
    - Path components: `["core", "fmt"]`.
-   - Primary candidate: $T_1 = W \mathbin{/} \text{core} \mathbin{/} \text{fmt.prism}$.
-   - Secondary candidate (Directory package default): $T_2 = W \mathbin{/} \text{core} \mathbin{/} \text{fmt} \mathbin{/} \text{package.prism}$.
-   - If $T_1$ exists as a file, resolve to $T_1$.
-   - Else if $T_2$ exists as a file, resolve to $T_2$.
+   - Primary candidate: `T_1 = root/core/fmt.prism`.
+   - Secondary candidate (Directory package default): `T_2 = root/core/fmt/package.prism`.
+   - If `T_1` exists as a file, resolve to `T_1`.
+   - Else if `T_2` exists as a file, resolve to `T_2`.
    - Else emit `Error: ImportNotFound`.
 
 2. **Sibling Import (`is_root == false`)**:
    - Does NOT begin with leading slash: `import doo`.
    - Path components: `["doo"]`.
-   - Primary candidate: $T_1 = D \mathbin{/} \text{doo.prism}$.
-   - Secondary candidate: $T_2 = D \mathbin{/} \text{doo} \mathbin{/} \text{package.prism}$.
-   - If $T_1$ exists as a file, resolve to $T_1$.
-   - Else if $T_2$ exists as a file, resolve to $T_2$.
+   - Primary candidate: `T_1 = dir/doo.prism`.
+   - Secondary candidate: `T_2 = dir/doo/package.prism`.
+   - If `T_1` exists as a file, resolve to `T_1`.
+   - Else if `T_2` exists as a file, resolve to `T_2`.
    - Else emit `Error: ImportNotFound`.
 
 ---
@@ -130,11 +130,11 @@ Prism decouples declarations (Phase 1 ABI) from implementations (Phase 2 Body Ty
 
 #### Graph Construction:
 1. Entry point: List of input `.prism` files.
-2. For each file $P$:
-   - Discover workspace root $W$.
+2. For each file `P`:
+   - Discover workspace root `root`.
    - Extract imports.
-   - Resolve each import to target path $T$.
-   - Add directed edge: $P \to T$.
+   - Resolve each import to target path `T`.
+   - Add directed edge: `P -> T`.
 3. Cycle Detection:
    - Perform Tarjan's or Kosaraju's Strongly Connected Components (SCC) algorithm.
    - If an import cycle is detected in Phase 2 dependencies, produce a diagnostic trace:
@@ -245,16 +245,16 @@ impl Resolver {
 A goldfish implementing `prism-resolver` must verify against the following test fixtures:
 
 1. **Standard Nested Package**:
-   - `/demo/app/ui/views.prism` with `package app.ui` $\implies$ Root is `/demo`.
+   - `/demo/app/ui/views.prism` with `package app.ui` ==> Root is `/demo`.
 2. **Root File**:
-   - `/demo/main.prism` with no `package` statement $\implies$ Root is `/demo`.
+   - `/demo/main.prism` with no `package` statement ==> Root is `/demo`.
 3. **Leading Slash Root Import**:
-   - From `/demo/app/ui/views.prism`: `import /core/fmt` $\implies$ `/demo/core/fmt.prism`.
+   - From `/demo/app/ui/views.prism`: `import /core/fmt` ==> `/demo/core/fmt.prism`.
 4. **Sibling Import**:
-   - From `/demo/app/ui/views.prism`: `import widgets` $\implies$ `/demo/app/ui/widgets.prism`.
+   - From `/demo/app/ui/views.prism`: `import widgets` ==> `/demo/app/ui/widgets.prism`.
 5. **Directory Mismatch Rejection**:
-   - `/demo/app/ui/views.prism` with `package app.models` $\implies$ Returns `PackagePathMismatch`.
+   - `/demo/app/ui/views.prism` with `package app.models` ==> Returns `PackagePathMismatch`.
 6. **Cycle Detection**:
-   - `a.prism` imports `b`, `b.prism` imports `a` $\implies$ Returns `CircularDependency`.
+   - `a.prism` imports `b`, `b.prism` imports `a` ==> Returns `CircularDependency`.
 7. **Package Boundary Invariant**:
    - `scan_package("/demo/app/ui")` finds `views.prism` and `widgets.prism`, but ignores `/demo/app/ui/components/sub.prism`.
