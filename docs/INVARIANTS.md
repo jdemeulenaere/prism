@@ -5,7 +5,7 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
 ---
 
 ### Invariant 1: Single File as Compilation Unit & Explicit Export ABI Boundaries
-- Any `.prism` source file is compiled into machine code/bytecode independently.
+- Any `.prism` source file is compiled into native machine code independently.
 - **Default visibility is `private`**: Declarations without an explicit visibility modifier are private to the declaring file.
 - `package` visibility explicitly exposes a declaration to sibling files sharing the identical package.
 - `public` visibility explicitly exposes a declaration across packages.
@@ -25,7 +25,7 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
   2. The resolved ABI hashes of its direct imports (including generic monomorphization hashes).
   3. The compiler version and target triple.
 - If those inputs do not change, compilation must be completely avoided (cache hit).
-- In Tier 1 (interpreter) and Tier 2 (Cranelift debug/hot reload), cross-file inlining is disabled across compilation unit boundaries to guarantee maximum compilation avoidance. Tier 3 (LLVM release) enables cross-file inlining via LTO.
+- In Tier 1 (Cranelift JIT debug/hot reload), cross-file inlining is disabled across compilation unit boundaries to guarantee maximum compilation avoidance. Tier 2 (LLVM release) enables cross-file inlining via LTO.
 
 ### Invariant 4: Kotlin Syntax Familiarity without Grammatical Ambiguity
 - Prism syntax should feel native to a Kotlin developer (`fun`, `val`, `var`, `struct`, `enum`, `when`, `if` expressions, nullable types `T?`).
@@ -41,4 +41,4 @@ These invariants are permanent, non-negotiable architectural rules. All compiler
 - `compose` is a native language modifier (`compose fun`).
 - Recomposition keying, parameter change tracking, and slot-table tree reconciliation are intrinsic to the compiler and runtime.
 - Slot-table state handles (`State<T>`, `NodeId`) are lightweight `Copy` IDs that eliminate pointer cycle issues.
-- Hot reload during development swaps function pointers in Cranelift JIT / interpreter tables while keeping slot-table state intact.
+- Hot reload during development swaps function pointers in Cranelift JIT tables while keeping slot-table state intact.

@@ -6,7 +6,7 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ## Phase 0: Foundations & Architecture (Current)
 - [x] Project Vision & Invariants established (`VISION.md`, `INVARIANTS.md`).
-- [x] ADR-0001: Bootstrap in Rust & 3-Tier Execution Engine.
+- [x] ADR-0001: Bootstrap in Rust & 2-Tier Execution Engine.
 - [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Heap).
 - [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
 - [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
@@ -20,14 +20,13 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ---
 
-## Phase 1: Minimal Viable Bootstrap Compiler (Tier 1: Interpreter)
+## Phase 1: Front-End Parser, AST & Package Resolver
 - [ ] Lexer and Parser for basic language subset:
   - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
   - Default `private` visibility, explicit `package` and `public`.
 - [ ] Package & import resolver conforming to zero-config, zero-marker directory rules.
-- [ ] AST / Bytecode Interpreter (`prism run file.prism`).
-- [ ] CLI commands: `prism run`, `prism check`, `prism fmt`.
-- [ ] Integration test suite running executable `.prism` fixtures.
+- [ ] CLI commands: `prism check`, `prism fmt`.
+- [ ] Parsing and AST validation test suite.
 
 ---
 
@@ -39,11 +38,12 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ---
 
-## Phase 3: Native Backend & Hot Reload (Tier 2: Cranelift)
+## Phase 3: Tier 1 Native Execution & Hot Reload (Cranelift JIT)
 - [ ] Intermediate Representation (Prism IR / SSA).
-- [ ] Cranelift JIT code generation backend.
-- [ ] Native execution via `prism run --native file.prism`.
-- [ ] Hot-reload runtime prototype: dynamic module reloading with state preservation.
+- [ ] Cranelift JIT native code generator.
+- [ ] In-memory native execution via `prism run file.prism` (<15ms startup).
+- [ ] Hot-reload runtime prototype: dynamic function-pointer patching with state preservation.
+- [ ] Integration test suite running executable `.prism` native test fixtures.
 
 ---
 
@@ -56,7 +56,8 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ---
 
-## Phase 5: Self-Hosting Compiler & LSP (Milestone 3)
+## Phase 5: Tier 2 Release Backend (LLVM AOT), LSP & Self-Hosting (Milestone 3)
+- [ ] Tier 2 LLVM AOT native code generator (`prism build --release`) with whole-program optimization and LTO.
 - [ ] Prism Language Server Protocol (LSP) for VS Code / IDEs.
 - [ ] Port bootstrap Rust compiler to native Prism.
 - [ ] Full self-hosting compiler compilation and bootstrap verification.

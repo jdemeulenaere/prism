@@ -47,10 +47,9 @@ As defined in [Elephants, Goldfish, and the New Golden Age of Software Engineeri
 - Recomposition keying, parameter change tracking, and slot-table tree reconciliation are intrinsic to the compiler and runtime.
 - Generational slot-table handles (`State<T>`, `NodeId`) are lightweight `Copy` IDs, allowing event callbacks to capture state without pointers or borrow-checker fighting.
 
-### 3.5. Three-Tier Execution Engine
-- **Tier 1 (Bytecode Interpreter)**: Instant execution for scripting, CLI scripts, formatting, and unit tests.
-- **Tier 2 (Cranelift JIT & Dylib)**: Sub-second compilation and hot-reloading for UI iteration.
-- **Tier 3 (LLVM / Optimized AOT)**: Maximum-throughput optimized native binaries matching C++/Rust speed.
+### 3.5. Two-Tier Native Execution Engine
+- **Tier 1 (Cranelift JIT & Dylib)**: Sub-second compilation (<15ms) directly into memory for instant scripting (`prism run`), unit tests, and function-pointer hot reloading during UI development.
+- **Tier 2 (LLVM / Optimized AOT)**: Maximum-throughput optimized native binaries matching C++/Rust speed with whole-program optimization and LTO.
 
 ---
 

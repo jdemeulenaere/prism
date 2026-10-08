@@ -43,12 +43,12 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 
 ## 3. Key Reference Documents ("The Elephant")
 
-- [`docs/VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md): High-level vision, principles, and three-tier execution model.
+- [`docs/VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md): High-level vision, principles, and two-tier execution model.
 - [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md): Formal architectural contracts.
 - [`docs/specs/SYNTAX_SPEC.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/SYNTAX_SPEC.md): Concrete grammar, keyword list, and syntax examples.
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
 - **Architecture Decision Records**:
-  - [`docs/adr/ADR-0001`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0001-bootstrap-and-architecture.md): Bootstrap compiler in Rust & 3-tier execution.
+  - [`docs/adr/ADR-0001`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0001-bootstrap-and-architecture.md): Bootstrap compiler in Rust & 2-tier execution.
   - [`docs/adr/ADR-0002`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0002-memory-model-affine-types-and-ui-arenas.md): Zero-cost memory, `Heap<T>`, and UI slot handles.
   - [`docs/adr/ADR-0003`](file:///Users/jdemeulenaere/Development/lang/docs/adr/ADR-0003-module-resolution-and-abi-invalidation.md): Module resolution, default `private` visibility, and zero-marker root discovery.
 

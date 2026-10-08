@@ -43,8 +43,8 @@ Furthermore, changing a private implementation detail in one file often triggers
 - If a generic function's body changes, downstream files instantiating that generic specialization must re-monomorphize. Non-generic functions maintain strict compilation avoidance.
 
 ### 5. Inlining Decoupled Across Tiers
-- **Tier 1 (Interpreter) & Tier 2 (Cranelift Debug / Hot Reload)**: Cross-file inlining across compilation units is disabled to guarantee maximum compilation avoidance and predictable hot reload patching.
-- **Tier 3 (LLVM Release)**: Cross-file inlining is enabled via Link-Time Optimization (LTO).
+- **Tier 1 (Cranelift JIT Debug / Hot Reload)**: Cross-file inlining across compilation units is disabled to guarantee maximum compilation avoidance and predictable hot reload patching.
+- **Tier 2 (LLVM Release)**: Cross-file inlining is enabled via Link-Time Optimization (LTO).
 
 ## Consequences
 - **Positive**:
