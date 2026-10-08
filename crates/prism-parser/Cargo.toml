@@ -1,0 +1,10 @@
+[package]
+name = "prism-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-ast = { path = "../prism-ast" }
+prism-lexer = { path = "../prism-lexer" }

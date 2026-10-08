@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/prism-ast",
+    "crates/prism-lexer",
+    "crates/prism-parser",
+    "crates/prism-abi",
+    "crates/prism-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Prism Authors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/prism-lang/prism"

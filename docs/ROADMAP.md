@@ -4,14 +4,14 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ---
 
-## Phase 0: Foundations & Architecture (Current)
+## Phase 0: Foundations & Architecture (Completed)
 - [x] Project Vision & Invariants established (`VISION.md`, `INVARIANTS.md`).
 - [x] ADR-0001: Bootstrap in Rust & 2-Tier Execution Engine.
 - [x] ADR-0002: Zero-Cost Memory Architecture (Zero GC, Zero ARC, Data-Oriented Handles, Heap).
 - [x] ADR-0003: Zero-Config Conventions, Module Resolution & ABI Invalidation.
 - [x] Initial Syntax Specification (`SYNTAX_SPEC.md`).
 - [x] AI Pair-Programming Guide (`AGENTS.md`).
-- [ ] Initialize Rust workspace (`prism-compiler`):
+- [x] Initialize Rust workspace (`prism-compiler`):
   - `prism-lexer`: Fast tokenizer.
   - `prism-parser`: Pratt parser + AST generation.
   - `prism-ast`: Abstract Syntax Tree definitions.
@@ -20,7 +20,7 @@ Following the **Elephant-Goldfish model**, this roadmap represents the long-term
 
 ---
 
-## Phase 1: Front-End Parser, AST & Package Resolver
+## Phase 1: Front-End Parser, AST & Package Resolver (Current)
 - [ ] Lexer and Parser for basic language subset:
   - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
   - Default `private` visibility, explicit `package` and `public`.

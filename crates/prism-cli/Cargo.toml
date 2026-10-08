@@ -1,0 +1,16 @@
+[package]
+name = "prism-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "prism"
+path = "src/main.rs"
+
+[dependencies]
+prism-ast = { path = "../prism-ast" }
+prism-lexer = { path = "../prism-lexer" }
+prism-parser = { path = "../prism-parser" }
+prism-abi = { path = "../prism-abi" }

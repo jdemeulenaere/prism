@@ -1,0 +1,15 @@
+//! `prism-abi`: Surface signature extraction & deterministic ABI hashing.
+//!
+//! Enforces Invariant 1 and ADR-0003:
+//! - Default visibility is `private`.
+//! - Private symbols and non-generic function bodies are excluded from the exported ABI.
+//! - Exported (`public` and `package`) declarations must declare explicit types.
+//! - Computes deterministic ABI hash for incremental compilation avoidance.
+
+pub mod error;
+pub mod hasher;
+pub mod signature;
+
+pub use error::AbiError;
+pub use hasher::DeterministicHasher;
+pub use signature::{ExportedSymbol, FileAbi};

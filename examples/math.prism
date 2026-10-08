@@ -1,0 +1,24 @@
+package demo.math
+
+import /core/fmt
+
+// Default visibility is 'private' (accessible only within this file)
+fun square(x: Int): Int = x * x
+
+// 'package' visibility: accessible to any file in 'demo.math'
+package fun internalHelper(x: Int): Int = square(x) + 1
+
+// 'public' visibility with explicit return type (required for exported ABI)
+public fun hypotenuse(a: Double, b: Double): Double {
+    val a2 = a * a
+    val b2 = b * b
+    return (a2 + b2).sqrt()
+}
+
+// When expression & pattern matching
+public fun describe(value: Int): String = when (value) {
+    0 -> "zero"
+    1, 2, 3 -> "small number"
+    in 4..10 -> "medium number"
+    else -> "large number"
+}

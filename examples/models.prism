@@ -1,0 +1,26 @@
+package demo.models
+
+// Value struct (allocated inline on stack or inside parent struct)
+public struct Point {
+    val x: Double
+    val y: Double
+}
+
+// Struct with owned fields (zero GC, zero ARC, deterministic cleanup)
+public struct User {
+    val id: UInt64
+    var name: String
+    val email: String?   // Nullable type
+}
+
+// Function borrowing & mutation with explicit call-site borrow
+public fun updateName(user: &mut User, newName: String) {
+    user.name = newName
+}
+
+// Algebraic Data Types (Enums) & Recursive Types via Heap<T>
+public enum Expr {
+    Literal(Int)
+    Add(Heap<Expr>, Heap<Expr>)
+    Multiply(Heap<Expr>, Heap<Expr>)
+}
