@@ -1,0 +1,34 @@
+schema: spec-driven
+
+# Project context (optional)
+context: |
+  Prism Language Architecture & Non-Negotiable Invariants:
+  - Canonical file extension is `.prism`.
+  - Default visibility is `private`. All `public` and `package` declarations MUST declare explicit parameter and return types for Phase 1 independent ABI extraction.
+  - Zero-config, zero-marker workspace root discovery: filesystem path matches package declaration.
+  - Memory: Zero GC, zero hidden ARC, no lifetime annotations (`'a`). Value ownership, stack borrows, `Heap<T>` for recursive types, typed handles for graphs.
+  - First-class UI primitives: `compose` modifier (`compose fun`) and slot-table state handles (`State<T>`, `NodeId`).
+  - File as compilation unit: Phase 1 extracts exported ABI interface hashes; Phase 2 compiles bodies. Body edits must produce zero downstream recompilations.
+  - Implementation tasks must follow the Elephant-Goldfish model: clear behavioral requirements/scenarios in specs, technical decisions in design.md, and testable checklist in tasks.md.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

@@ -4,10 +4,19 @@ Welcome to the **Prism** language repository. This document serves as the primar
 
 ---
 
-## 1. The Core Philosophy: The Elephant & Goldfish Model
-This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874)):
-- **The Elephant (Durable Memory)**: All architectural invariants, grammar specifications, decisions, and roadmaps are permanently documented in `docs/`. When starting a task, **always consult the Elephant docs** to ensure alignment. Never introduce architectural changes without updating the relevant specification or invariant document.
-- **The Goldfish (Ephemeral Execution)**: Individual tasks (lexing, parsing, lowering, codegen, tests) are executed as self-contained, test-driven units of work. Avoid bloated context; rely on the Elephant docs and test suites.
+## 1. The Core Philosophy: The Elephant & Goldfish Model via OpenSpec
+This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874)) using [OpenSpec](https://github.com/Fission-AI/openspec):
+- **The Elephant (Durable Memory)**: All architectural invariants, grammar specifications, decisions, and roadmaps are permanently documented in [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md) and [`openspec/specs/`](file:///Users/jdemeulenaere/Development/lang/openspec/specs). When starting a task, **always consult the Elephant specs** to ensure alignment.
+- **The Goldfish (Ephemeral Execution)**: Tasks are proposed and executed via [`openspec/changes/<change-name>/`](file:///Users/jdemeulenaere/Development/lang/openspec/changes) work packets:
+  - `proposal.md`: Motivation and scope boundary.
+  - `design.md`: Technical approach, trade-offs, and design decisions (eliminates separate ADR drift).
+  - `tasks.md`: Atomic, test-driven checklist.
+  - `specs/`: Delta specifications with concrete scenarios (WHEN/THEN).
+  - Once verified, the change is archived to `openspec/changes/archive/` and its delta specs merge into `openspec/specs/`.
+- **OpenSpec Workflows / Slash Commands**:
+  - `/opsx-propose "change-name"`: Creates and populates the change packet.
+  - `/opsx-apply`: Executes the tasks against the spec.
+  - `/opsx-archive`: Merges deltas and archives the change.
 
 ---
 
@@ -46,11 +55,11 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 - [`docs/VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md): High-level vision, principles, and two-tier execution model.
 - [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md): Formal architectural contracts.
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
-- **Living Subsystem Specifications (`docs/specs/`)**:
-  - [`package-resolution.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/package-resolution.md): Zero-marker root discovery, import resolution, and package scanning.
-  - [`syntax.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax.md): Concrete grammar, keyword list, and syntax examples.
-  - [`memory-model.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
-  - [`compilation-and-abi.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+- **Living Subsystem Specifications (`openspec/specs/` and `docs/specs/`)**:
+  - [`package-resolution`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
+  - [`docs/specs/syntax.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax.md): Concrete grammar, keyword list, and syntax examples.
+  - [`docs/specs/memory-model.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
+  - [`docs/specs/compilation-and-abi.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
 
 ---
 
