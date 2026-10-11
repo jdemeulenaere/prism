@@ -55,11 +55,12 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 - [`docs/VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md): High-level vision, principles, and two-tier execution model.
 - [`docs/INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md): Formal architectural contracts.
 - [`docs/ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/docs/ROADMAP.md): Current phase, progress, and milestone tracking.
-- **Living Subsystem Specifications (`openspec/specs/` and `docs/specs/`)**:
+- **Living Subsystem Specifications (`openspec/specs/`)**:
   - [`package-resolution`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
-  - [`docs/specs/syntax.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/syntax.md): Concrete grammar, keyword list, and syntax examples.
-  - [`docs/specs/memory-model.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/memory-model.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
-  - [`docs/specs/compilation-and-abi.md`](file:///Users/jdemeulenaere/Development/lang/docs/specs/compilation-and-abi.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+  - [`syntax`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/syntax/spec.md): Concrete grammar, keyword list, and syntax examples.
+  - [`memory-model`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/memory-model/spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
+  - [`compilation-and-abi`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/compilation-and-abi/spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+  - [`system-invariants`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/system-invariants/spec.md): Formal requirements and scenarios for all 6 non-negotiable invariants.
 
 ---
 
