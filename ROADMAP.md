@@ -1,11 +1,11 @@
 # Prism Roadmap & Milestones
 
-Following the **Elephant-Goldfish model**, this roadmap represents the long-term tracking memory (The Elephant). Each phase is broken down into small, verifiable, test-driven execution units (The Goldfish).
+Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents the high-level milestone tracking memory. Each phase is broken down into small, verifiable, test-driven work packets in `openspec/changes/`.
 
 ---
 
 ## Phase 0: Foundations & Architecture (Completed)
-- [x] Project Vision & Invariants established ([`VISION.md`](file:///Users/jdemeulenaere/Development/lang/docs/VISION.md), [`INVARIANTS.md`](file:///Users/jdemeulenaere/Development/lang/docs/INVARIANTS.md), [`openspec/specs/system-invariants`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/system-invariants/spec.md)).
+- [x] Project Vision & Invariants established ([`README.md`](file:///Users/jdemeulenaere/Development/lang/README.md), [`openspec/specs/system-invariants`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/system-invariants/spec.md)).
 - [x] Compilation & Execution Architecture Specification ([`openspec/specs/compilation-and-abi`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/compilation-and-abi/spec.md)).
 - [x] Zero-Cost Memory Architecture Specification ([`openspec/specs/memory-model`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/memory-model/spec.md)).
 - [x] Package Resolution & Root Discovery Specification ([`openspec/specs/package-resolution`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/package-resolution/spec.md)).
