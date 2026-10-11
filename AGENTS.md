@@ -17,6 +17,9 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
   - `/opsx-propose "change-name"`: Creates and populates the change packet.
   - `/opsx-apply`: Executes the tasks against the spec.
   - `/opsx-archive`: Merges deltas and archives the change.
+  - `/opsx-sync`: Syncs delta specs from a change into main specs without archiving.
+  - `/opsx-explore`: Interactive thinking partner for clarifying ideas before drafting specs.
+  - `/opsx-update`: Revises existing planning artifacts to reconcile changes.
 
 ---
 
