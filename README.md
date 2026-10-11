@@ -13,10 +13,10 @@ It combines:
 ## The Elephant-Goldfish Operating Model via OpenSpec
 
 Prism follows the **Elephant-Goldfish model** (see [Rensin, 2024](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874)) using [OpenSpec](https://github.com/Fission-AI/openspec):
-- **The Elephant (Durable Memory)**: The repository maintains permanent, living architecture specifications in [`openspec/specs/`](file:///Users/jdemeulenaere/Development/lang/openspec/specs).
+- **The Elephant (Durable Memory)**: The repository maintains permanent, living architecture specifications in [`openspec/specs/`](openspec/specs).
 - **The Goldfish (Ephemeral Execution)**: Tasks are broken down into self-contained work packets in `openspec/changes/<change-name>/` with concrete requirements, scenarios, technical decisions, and testable tasks.
 
-See [`AGENTS.md`](file:///Users/jdemeulenaere/Development/lang/AGENTS.md) for contributor and agent workflow guidelines.
+See [`AGENTS.md`](AGENTS.md) for contributor and agent workflow guidelines.
 
 ---
 
@@ -57,18 +57,18 @@ See [`AGENTS.md`](file:///Users/jdemeulenaere/Development/lang/AGENTS.md) for co
 
 ## Specifications & Invariants
 
-All formal system specifications are maintained in [`openspec/specs/`](file:///Users/jdemeulenaere/Development/lang/openspec/specs):
-- [`system-invariants`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/system-invariants/spec.md): The 6 non-negotiable architectural rules.
-- [`package-resolution`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/package-resolution/spec.md): Zero-marker discovery and import resolution.
-- [`syntax`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
-- [`memory-model`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/memory-model/spec.md): Value ownership, borrowing, `Heap<T>`, and lifetime elision.
-- [`compilation-and-abi`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/compilation-and-abi/spec.md): 2-phase compilation, ABI hashing, and execution tiers.
+All formal system specifications are maintained in [`openspec/specs/`](openspec/specs):
+- [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable architectural rules.
+- [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker discovery and import resolution.
+- [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
+- [`memory-model`](openspec/specs/memory-model/spec.md): Value ownership, borrowing, `Heap<T>`, and lifetime elision.
+- [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): 2-phase compilation, ABI hashing, and execution tiers.
 
 ---
 
 ## Bootstrapping Roadmap
 
-Development progress is tracked in [`ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/ROADMAP.md):
+Development progress is tracked in [`ROADMAP.md`](ROADMAP.md):
 - **Milestone 1**: Rust-based bootstrap compiler (`prismc`) and developer CLI (`prism`).
 - **Milestone 2**: First-class Jetpack Compose UI engine, reactive tree runtime, and native hot-reload framework.
 - **Milestone 3**: Self-hosting compiler written in Prism itself.

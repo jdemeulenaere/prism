@@ -6,8 +6,8 @@ Welcome to the **Prism** language repository. This document serves as the primar
 
 ## 1. The Core Philosophy: The Elephant & Goldfish Model via OpenSpec
 This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874)) using [OpenSpec](https://github.com/Fission-AI/openspec):
-- **The Elephant (Durable Memory)**: All architectural invariants, grammar specifications, decisions, and roadmaps are permanently documented in [`openspec/specs/`](file:///Users/jdemeulenaere/Development/lang/openspec/specs). When starting a task, **always consult the Elephant specs** to ensure alignment.
-- **The Goldfish (Ephemeral Execution)**: Tasks are proposed and executed via [`openspec/changes/<change-name>/`](file:///Users/jdemeulenaere/Development/lang/openspec/changes) work packets:
+- **The Elephant (Durable Memory)**: All architectural invariants, grammar specifications, decisions, and roadmaps are permanently documented in [`openspec/specs/`](openspec/specs). When starting a task, **always consult the Elephant specs** to ensure alignment.
+- **The Goldfish (Ephemeral Execution)**: Tasks are proposed and executed via [`openspec/changes/<change-name>/`](openspec/changes) work packets:
   - `proposal.md`: Motivation and scope boundary.
   - `design.md`: Technical approach, trade-offs, and design decisions (eliminates separate ADR drift).
   - `tasks.md`: Atomic, test-driven checklist.
@@ -25,7 +25,7 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
 
 ## 2. Architectural Invariants Quick-Sheet (Non-Negotiable)
 
-Any proposed code, grammar, or compiler change must uphold these rules (detailed in [`openspec/specs/system-invariants/spec.md`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/system-invariants/spec.md)):
+Any proposed code, grammar, or compiler change must uphold these rules (detailed in [`openspec/specs/system-invariants/spec.md`](openspec/specs/system-invariants/spec.md)):
 
 1. **File Extension**: Canonical extension is `.prism`.
 2. **Default Visibility is `private`**:
@@ -55,14 +55,14 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
 
 ## 3. Key Reference Documents ("The Elephant")
 
-- [`README.md`](file:///Users/jdemeulenaere/Development/lang/README.md): High-level vision, principles, and two-tier execution model.
-- [`ROADMAP.md`](file:///Users/jdemeulenaere/Development/lang/ROADMAP.md): Current phase, progress, and milestone tracking.
+- [`README.md`](README.md): High-level vision, principles, and two-tier execution model.
+- [`ROADMAP.md`](ROADMAP.md): Current phase, progress, and milestone tracking.
 - **Living Subsystem Specifications (`openspec/specs/`)**:
-  - [`package-resolution`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
-  - [`syntax`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/syntax/spec.md): Concrete grammar, keyword list, and syntax examples.
-  - [`memory-model`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/memory-model/spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
-  - [`compilation-and-abi`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/compilation-and-abi/spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
-  - [`system-invariants`](file:///Users/jdemeulenaere/Development/lang/openspec/specs/system-invariants/spec.md): Formal requirements and scenarios for all 6 non-negotiable invariants.
+  - [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
+  - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, keyword list, and syntax examples.
+  - [`memory-model`](openspec/specs/memory-model/spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
+  - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+  - [`system-invariants`](openspec/specs/system-invariants/spec.md): Formal requirements and scenarios for all 6 non-negotiable invariants.
 
 ---
 
