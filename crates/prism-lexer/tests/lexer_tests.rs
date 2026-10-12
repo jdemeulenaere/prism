@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn test_numbers_and_ranges() {
-        let input = "42 3.5 0xFF 0b1010 4..10";
+        let input = "42 3.5 0xFF 0xFF_FF 0b1010 0b1010_0001 1_000_000 3.14_15 4..10";
         let tokens = Lexer::new(input).tokenize_all();
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|t| t.kind).collect();
 
@@ -45,7 +45,11 @@ mod tests {
                 TokenKind::Int(42),
                 TokenKind::Float(3.5),
                 TokenKind::Int(255),
+                TokenKind::Int(65535),
                 TokenKind::Int(10),
+                TokenKind::Int(161),
+                TokenKind::Int(1000000),
+                TokenKind::Float(3.1415),
                 TokenKind::Int(4),
                 TokenKind::DotDot,
                 TokenKind::Int(10),
@@ -159,12 +163,33 @@ mod tests {
 
     #[test]
     fn test_utf8_strings_and_chars() {
-        let input = r#"val msg = "café 🚀" val c = 'é' val rocket = '\u{1F680}'"#;
+        let input = r#"val msg = "café 🚀" val c = 'é' val rocket = '\u{1F680}' val a = "\u0041""#;
         let tokens = Lexer::new(input).tokenize_all();
 
         assert_eq!(tokens[3].kind, TokenKind::String("café 🚀".to_string()));
         assert_eq!(tokens[7].kind, TokenKind::Char('é'));
         assert_eq!(tokens[11].kind, TokenKind::Char('🚀'));
+        assert_eq!(tokens[15].kind, TokenKind::String("A".to_string()));
+
+        // Raw newline in single-line string rejected without consuming next line
+        let raw_nl_input = "val s = \"hello\nval next = 42";
+        let raw_nl_tokens = Lexer::new(raw_nl_input).tokenize_all();
+        assert!(matches!(raw_nl_tokens[3].kind, TokenKind::Error(_)));
+        assert_eq!(raw_nl_tokens[4].kind, TokenKind::Val);
+        assert_eq!(raw_nl_tokens[4].is_preceded_by_newline, true);
+
+        // Malformed unicode escape doesn't consume closing quote
+        let malformed_u = r#"val bad = "\u12""#;
+        let malformed_tokens = Lexer::new(malformed_u).tokenize_all();
+        assert!(matches!(malformed_tokens[3].kind, TokenKind::Error(_)));
+        // Closing quote was not consumed, so it remains at span 15
+        assert!(matches!(malformed_tokens[4].kind, TokenKind::Error(_)));
+        assert_eq!(malformed_tokens[4].span.start, 15);
+
+        // Unterminated string before EOF
+        let unclosed = r#"val s = "unclosed"#;
+        let unclosed_tokens = Lexer::new(unclosed).tokenize_all();
+        assert!(matches!(unclosed_tokens[3].kind, TokenKind::Error(_)));
     }
 
     #[test]
@@ -189,7 +214,25 @@ mod tests {
     fn test_unclosed_block_comment() {
         let input = "/* unclosed comment";
         let tokens = Lexer::new(input).tokenize_all();
-        assert!(matches!(tokens[0].kind, TokenKind::Error(_)));
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::Error("Unterminated block comment".to_string())
+        );
+        assert_eq!(tokens[0].span.start, 0);
+        assert_eq!(tokens[0].span.end, 19);
+        assert_eq!(tokens[0].span.line, 1);
+        assert_eq!(tokens[0].span.column, 1);
+
+        // Nested unclosed comment
+        let nested_input = "val a = 1 /* outer /* inner */ still open";
+        let tokens2 = Lexer::new(nested_input).tokenize_all();
+        assert_eq!(tokens2[3].kind, TokenKind::Int(1));
+        assert_eq!(
+            tokens2[4].kind,
+            TokenKind::Error("Unterminated block comment".to_string())
+        );
+        assert_eq!(tokens2[4].span.start, 10);
+        assert_eq!(tokens2[4].span.end, 41);
     }
 
     #[test]
@@ -200,5 +243,45 @@ mod tests {
         assert_eq!(tokens[0].kind, TokenKind::Float(1e10));
         assert_eq!(tokens[1].kind, TokenKind::Float(3.14e-2));
         assert_eq!(tokens[2].kind, TokenKind::Float(2e5));
+    }
+
+    #[test]
+    fn test_newline_tracking() {
+        let input = "val a = 1\nval b = 2\r\n(3 + 4)\n// line comment\nval c = 5\n/* multiline\ncomment */val d = 6 /* inline */ + 7";
+        let tokens = Lexer::new(input).tokenize_all();
+
+        // val a = 1 (on first line)
+        assert_eq!(tokens[0].kind, TokenKind::Val);
+        assert_eq!(tokens[0].is_preceded_by_newline, false);
+        assert_eq!(tokens[1].kind, TokenKind::Ident("a".to_string()));
+        assert_eq!(tokens[1].is_preceded_by_newline, false);
+        assert_eq!(tokens[2].kind, TokenKind::Eq);
+        assert_eq!(tokens[2].is_preceded_by_newline, false);
+        assert_eq!(tokens[3].kind, TokenKind::Int(1));
+        assert_eq!(tokens[3].is_preceded_by_newline, false);
+
+        // val b = 2 (preceded by \n)
+        assert_eq!(tokens[4].kind, TokenKind::Val);
+        assert_eq!(tokens[4].is_preceded_by_newline, true);
+
+        // (3 + 4) (preceded by \r\n)
+        assert_eq!(tokens[8].kind, TokenKind::LParen);
+        assert_eq!(tokens[8].is_preceded_by_newline, true);
+
+        // val c = 5 (preceded by line comment + newline)
+        let val_c = tokens.iter().find(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "c")).unwrap();
+        let val_before_c_idx = tokens.iter().position(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "c")).unwrap() - 1;
+        assert_eq!(tokens[val_before_c_idx].kind, TokenKind::Val);
+        assert_eq!(tokens[val_before_c_idx].is_preceded_by_newline, true);
+        assert_eq!(val_c.is_preceded_by_newline, false);
+
+        // val d = 6 (preceded by multiline comment with newline)
+        let val_before_d_idx = tokens.iter().position(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "d")).unwrap() - 1;
+        assert_eq!(tokens[val_before_d_idx].kind, TokenKind::Val);
+        assert_eq!(tokens[val_before_d_idx].is_preceded_by_newline, true);
+
+        // + 7 (preceded by inline block comment on same line)
+        let plus_tok = tokens.iter().find(|t| t.kind == TokenKind::Plus).unwrap();
+        assert_eq!(plus_tok.is_preceded_by_newline, false);
     }
 }

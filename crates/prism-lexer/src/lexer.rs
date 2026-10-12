@@ -10,7 +10,7 @@ pub struct Lexer<'a> {
     cursor: usize,
     line: u32,
     column: u32,
-    had_unclosed_comment: bool,
+    unclosed_comment_span: Option<Span>,
 }
 
 impl<'a> Lexer<'a> {
@@ -21,7 +21,7 @@ impl<'a> Lexer<'a> {
             cursor: 0,
             line: 1,
             column: 1,
-            had_unclosed_comment: false,
+            unclosed_comment_span: None,
         }
     }
 
@@ -47,11 +47,10 @@ impl<'a> Lexer<'a> {
         let start_line = self.line;
         let start_col = self.column;
 
-        if self.had_unclosed_comment {
-            self.had_unclosed_comment = false;
+        if let Some(comment_span) = self.unclosed_comment_span.take() {
             return Token::with_newline(
                 TokenKind::Error("Unterminated block comment".to_string()),
-                Span::new(start_pos, start_pos, start_line, start_col),
+                comment_span,
                 saw_newline,
             );
         }
@@ -334,6 +333,11 @@ impl<'a> Lexer<'a> {
             if b == b'"' {
                 self.bump();
                 return TokenKind::String(result);
+            } else if b == b'\n' {
+                // Reject unescaped raw newlines in single-line strings without consuming the newline
+                return TokenKind::Error(
+                    "Unterminated string literal: raw unescaped newline".to_string(),
+                );
             } else if b == b'\\' {
                 self.bump(); // consume '\\'
                 if self.is_eof() {
@@ -352,8 +356,17 @@ impl<'a> Lexer<'a> {
                         if self.peek_byte() == b'{' {
                             self.bump();
                             let mut hex = String::new();
-                            while !self.is_eof() && self.peek_byte() != b'}' {
-                                hex.push(self.bump() as char);
+                            while !self.is_eof()
+                                && self.peek_byte() != b'}'
+                                && self.peek_byte() != b'"'
+                                && self.peek_byte() != b'\n'
+                            {
+                                let ch = self.peek_byte();
+                                if ch.is_ascii_hexdigit() {
+                                    hex.push(self.bump() as char);
+                                } else {
+                                    break;
+                                }
                             }
                             if self.peek_byte() == b'}' {
                                 self.bump();
@@ -363,7 +376,7 @@ impl<'a> Lexer<'a> {
                                         return TokenKind::Error(format!(
                                             "Invalid unicode escape \\u{{{}}}",
                                             hex
-                                        ))
+                                        ));
                                     }
                                 }
                             } else {
@@ -372,18 +385,27 @@ impl<'a> Lexer<'a> {
                         } else {
                             let mut hex = String::new();
                             for _ in 0..4 {
-                                if !self.is_eof() {
+                                if !self.is_eof() && self.peek_byte().is_ascii_hexdigit() {
                                     hex.push(self.bump() as char);
+                                } else {
+                                    break;
                                 }
                             }
-                            match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                                Some(c) => result.push(c),
-                                None => {
-                                    return TokenKind::Error(format!(
-                                        "Invalid unicode escape \\u{}",
-                                        hex
-                                    ))
+                            if hex.len() == 4 {
+                                match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                    Some(c) => result.push(c),
+                                    None => {
+                                        return TokenKind::Error(format!(
+                                            "Invalid unicode escape \\u{}",
+                                            hex
+                                        ));
+                                    }
                                 }
+                            } else {
+                                return TokenKind::Error(format!(
+                                    "Invalid unicode escape: expected 4 hex digits, found '{}'",
+                                    hex
+                                ));
                             }
                         }
                     }
@@ -407,6 +429,9 @@ impl<'a> Lexer<'a> {
         if self.is_eof() {
             return TokenKind::Error("Unterminated char literal".to_string());
         }
+        if self.peek_byte() == b'\n' {
+            return TokenKind::Error("Unescaped newline in char literal".to_string());
+        }
 
         let ch = if self.peek_byte() == b'\\' {
             self.bump();
@@ -425,8 +450,17 @@ impl<'a> Lexer<'a> {
                     if self.peek_byte() == b'{' {
                         self.bump();
                         let mut hex = String::new();
-                        while !self.is_eof() && self.peek_byte() != b'}' {
-                            hex.push(self.bump() as char);
+                        while !self.is_eof()
+                            && self.peek_byte() != b'}'
+                            && self.peek_byte() != b'\''
+                            && self.peek_byte() != b'\n'
+                        {
+                            let ch = self.peek_byte();
+                            if ch.is_ascii_hexdigit() {
+                                hex.push(self.bump() as char);
+                            } else {
+                                break;
+                            }
                         }
                         if self.peek_byte() == b'}' {
                             self.bump();
@@ -436,7 +470,7 @@ impl<'a> Lexer<'a> {
                                     return TokenKind::Error(format!(
                                         "Invalid unicode escape \\u{{{}}}",
                                         hex
-                                    ))
+                                    ));
                                 }
                             }
                         } else {
@@ -445,24 +479,36 @@ impl<'a> Lexer<'a> {
                     } else {
                         let mut hex = String::new();
                         for _ in 0..4 {
-                            if !self.is_eof() {
+                            if !self.is_eof() && self.peek_byte().is_ascii_hexdigit() {
                                 hex.push(self.bump() as char);
+                            } else {
+                                break;
                             }
                         }
-                        match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                            Some(c) => c,
-                            None => {
-                                return TokenKind::Error(format!(
-                                    "Invalid unicode escape \\u{}",
-                                    hex
-                                ))
+                        if hex.len() == 4 {
+                            match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                Some(c) => c,
+                                None => {
+                                    return TokenKind::Error(format!(
+                                        "Invalid unicode escape \\u{}",
+                                        hex
+                                    ));
+                                }
                             }
+                        } else {
+                            return TokenKind::Error(format!(
+                                "Invalid unicode escape: expected 4 hex digits, found '{}'",
+                                hex
+                            ));
                         }
                     }
                 }
                 other => other as char,
             }
         } else {
+            if self.peek_byte() == b'\n' {
+                return TokenKind::Error("Unescaped newline in char literal".to_string());
+            }
             match self.bump_char() {
                 Some(c) => c,
                 None => return TokenKind::Error("Unterminated char literal".to_string()),
@@ -502,6 +548,9 @@ impl<'a> Lexer<'a> {
                             }
                         } else if next == b'*' {
                             // Block comment with nesting
+                            let comment_start_pos = self.cursor;
+                            let comment_start_line = self.line;
+                            let comment_start_col = self.column;
                             self.bump(); // '/'
                             self.bump(); // '*'
                             let mut depth = 1usize;
@@ -528,7 +577,12 @@ impl<'a> Lexer<'a> {
                                 }
                             }
                             if depth > 0 {
-                                self.had_unclosed_comment = true;
+                                self.unclosed_comment_span = Some(Span::new(
+                                    comment_start_pos,
+                                    self.cursor,
+                                    comment_start_line,
+                                    comment_start_col,
+                                ));
                                 break;
                             }
                         } else {
