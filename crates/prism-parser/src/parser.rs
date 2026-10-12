@@ -8,11 +8,11 @@ use prism_lexer::{Lexer, Token, TokenKind};
 pub enum Precedence {
     Lowest = 0,
     Assign = 1,     // =
-    Elvis = 2,      // ?:
-    LogicalOr = 3,  // ||
-    LogicalAnd = 4, // &&
-    Equality = 5,   // ==, !=
-    Comparison = 6, // <, <=, >, >=
+    LogicalOr = 2,  // ||
+    LogicalAnd = 3, // &&
+    Equality = 4,   // ==, !=
+    Comparison = 5, // <, <=, >, >=
+    Elvis = 6,      // ?:
     Range = 7,      // ..
     Sum = 8,        // +, -
     Product = 9,    // *, /, %
@@ -81,6 +81,10 @@ impl Parser {
             TokenKind::Ident(s) => {
                 self.bump();
                 Ok((s, tok.span))
+            }
+            TokenKind::Compose => {
+                self.bump();
+                Ok(("compose".to_string(), tok.span))
             }
             _ => Err(ParseError::new(
                 format!("Expected identifier, found '{}'", tok.kind),
@@ -352,6 +356,12 @@ impl Parser {
                 let (fname, _) = self.expect_ident()?;
                 self.expect(TokenKind::Colon)?;
                 let fty = self.parse_type()?;
+                if matches!(fty.kind, TypeKind::Reference { .. }) {
+                    return Err(ParseError::new(
+                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (Invariant 4)",
+                        fty.span,
+                    ));
+                }
                 let f_end = fty.span;
                 fields.push(StructField {
                     is_var,
@@ -393,6 +403,12 @@ impl Parser {
                 let (fname, _) = self.expect_ident()?;
                 self.expect(TokenKind::Colon)?;
                 let fty = self.parse_type()?;
+                if matches!(fty.kind, TypeKind::Reference { .. }) {
+                    return Err(ParseError::new(
+                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (Invariant 4)",
+                        fty.span,
+                    ));
+                }
                 let f_end = fty.span;
                 fields.push(StructField {
                     is_var,
@@ -645,19 +661,19 @@ impl Parser {
         let tok = self.peek();
         match &tok.kind {
             TokenKind::Eq => Precedence::Assign,
-            TokenKind::QuestionColon => Precedence::Elvis,
             TokenKind::PipePipe => Precedence::LogicalOr,
             TokenKind::AmpAmp => Precedence::LogicalAnd,
             TokenKind::EqEq | TokenKind::BangEq => Precedence::Equality,
             TokenKind::Lt | TokenKind::LtEq | TokenKind::Gt | TokenKind::GtEq => {
                 Precedence::Comparison
             }
+            TokenKind::QuestionColon => Precedence::Elvis,
             TokenKind::DotDot => Precedence::Range,
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::Dot | TokenKind::QuestionDot => Precedence::Postfix,
-            TokenKind::LBracket => Precedence::Call,
-            TokenKind::LParen => Precedence::Call,
+            TokenKind::LBracket if !tok.is_preceded_by_newline => Precedence::Call,
+            TokenKind::LParen if !tok.is_preceded_by_newline => Precedence::Call,
             TokenKind::LBrace if !tok.is_preceded_by_newline => Precedence::Call,
             _ => Precedence::Lowest,
         }
@@ -706,6 +722,10 @@ impl Parser {
                 let name = s.clone();
                 self.bump();
                 Ok(Expr::new(ExprKind::Ident(name), tok.span))
+            }
+            TokenKind::Compose => {
+                self.bump();
+                Ok(Expr::new(ExprKind::Ident("compose".to_string()), tok.span))
             }
 
             // Unary operators
@@ -829,8 +849,26 @@ impl Parser {
         }
         self.expect(TokenKind::Arrow)?;
 
-        let body = self.parse_expr(Precedence::Lowest)?;
+        let mut stmts = Vec::new();
+        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
+            let expr = self.parse_expr(Precedence::Lowest)?;
+            stmts.push(expr);
+            if self.peek_kind() == &TokenKind::Semicolon {
+                self.bump();
+            }
+        }
         let end = self.expect(TokenKind::RBrace)?.span;
+
+        let body = if stmts.len() == 1 && !matches!(stmts[0].kind, ExprKind::LocalVar { .. }) {
+            stmts.remove(0)
+        } else {
+            let b_span = if stmts.is_empty() {
+                start.merge(end)
+            } else {
+                stmts.first().unwrap().span.merge(stmts.last().unwrap().span)
+            };
+            Expr::new(ExprKind::Block(BlockExpr { stmts, span: b_span }), b_span)
+        };
 
         Ok(Expr::new(
             ExprKind::Closure {
@@ -958,10 +996,18 @@ impl Parser {
                 ))
             }
 
-            // Assignment: = (right-associative)
+            // Assignment: = (non-associative, disallowing chained assignments)
             TokenKind::Eq => {
-                self.bump();
-                let right = self.parse_expr(Precedence::Lowest)?;
+                let eq_tok = self.bump();
+                let right = self.parse_expr(Precedence::Assign)?;
+                if matches!(right.kind, ExprKind::Assign { .. })
+                    || matches!(left.kind, ExprKind::Assign { .. })
+                {
+                    return Err(ParseError::new(
+                        "Chained assignments are not allowed; use separate statements",
+                        eq_tok.span,
+                    ));
+                }
                 let span = left.span.merge(right.span);
                 Ok(Expr::new(
                     ExprKind::Assign {
@@ -1038,14 +1084,9 @@ impl Parser {
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::If)?.span;
-        let cond = if self.peek_kind() == &TokenKind::LParen {
-            self.bump();
-            let c = self.parse_expr(Precedence::Lowest)?;
-            self.expect(TokenKind::RParen)?;
-            c
-        } else {
-            self.parse_expr(Precedence::Lowest)?
-        };
+        self.expect(TokenKind::LParen)?;
+        let cond = self.parse_expr(Precedence::Lowest)?;
+        self.expect(TokenKind::RParen)?;
         let then_branch = self.parse_expr(Precedence::Lowest)?;
 
         let mut else_branch = None;
@@ -1079,7 +1120,13 @@ impl Parser {
         } else if self.peek_kind() == &TokenKind::LBrace {
             None
         } else {
-            Some(Box::new(self.parse_expr(Precedence::Lowest)?))
+            return Err(ParseError::new(
+                format!(
+                    "Expected '(' or '{{' after 'when', found '{}'",
+                    self.peek_kind()
+                ),
+                self.peek().span,
+            ));
         };
 
         self.expect(TokenKind::LBrace)?;

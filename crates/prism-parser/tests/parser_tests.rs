@@ -225,6 +225,12 @@ mod tests {
 
                 // Method chain with trailing lambda
                 items.filter { it > 0 }
+
+                // Multi-statement closure with parameters
+                items.forEach { item ->
+                    val s = item * item
+                    println(s)
+                }
             }
         "#;
 
@@ -232,7 +238,7 @@ mod tests {
         match &file.declarations[0] {
             Declaration::Function(f) => {
                 if let Some(FunctionBody::Block(b)) = &f.body {
-                    assert_eq!(b.stmts.len(), 3);
+                    assert_eq!(b.stmts.len(), 4);
 
                     // 1. Column(padding = 16) { Text("Hello") }
                     if let ExprKind::Call { callee, args } = &b.stmts[0].kind {
@@ -255,6 +261,28 @@ mod tests {
                     } else {
                         panic!("Expected LocalVar for state");
                     }
+
+                    // 4. items.forEach { item -> val s = item * item; println(s) }
+                    if let ExprKind::Call { callee, args } = &b.stmts[3].kind {
+                        if let ExprKind::MemberAccess { member, .. } = &callee.kind {
+                            assert_eq!(member, "forEach");
+                        } else {
+                            panic!("Expected MemberAccess for forEach");
+                        }
+                        assert_eq!(args.len(), 1);
+                        if let ExprKind::Closure { params, body } = &args[0].value.kind {
+                            assert_eq!(params, &vec!["item".to_string()]);
+                            if let ExprKind::Block(cb) = &body.kind {
+                                assert_eq!(cb.stmts.len(), 2);
+                            } else {
+                                panic!("Expected Block body in closure");
+                            }
+                        } else {
+                            panic!("Expected Closure in trailing lambda");
+                        }
+                    } else {
+                        panic!("Expected Call expr for forEach");
+                    }
                 } else {
                     panic!("Expected block body");
                 }
@@ -264,22 +292,82 @@ mod tests {
     }
 
     #[test]
-    fn test_right_associative_assignment() {
+    fn test_non_associative_assignment_rejected() {
         let src = r#"
             fun test() {
                 a = b = c
             }
         "#;
 
-        let file = parse_source(src).expect("Failed to parse assignment");
-        if let Declaration::Function(f) = &file.declarations[0] {
-            if let Some(FunctionBody::Block(b)) = &f.body {
-                if let ExprKind::Assign { target, value } = &b.stmts[0].kind {
-                    assert_eq!(target.to_string(), "a");
-                    // value must be (b = c)
-                    assert!(matches!(value.kind, ExprKind::Assign { .. }));
+        let res = parse_source(src);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.message.contains("Chained assignments are not allowed"));
+    }
+
+    #[test]
+    fn test_operator_precedence_table() {
+        // 1. Arithmetic and comparison: a + b * c > d -> ((a + (b * c)) > d)
+        let src1 = r#"
+            fun test(a: Int, b: Int, c: Int, d: Int): Bool = a + b * c > d
+        "#;
+        let file1 = parse_source(src1).expect("Failed to parse arithmetic/comparison precedence");
+        if let Declaration::Function(f) = &file1.declarations[0] {
+            if let Some(FunctionBody::Expr(e)) = &f.body {
+                if let ExprKind::Binary { op, left, right: _ } = &e.kind {
+                    assert_eq!(*op, BinaryOp::Gt);
+                    if let ExprKind::Binary { op: op2, left: _, right: right2 } = &left.kind {
+                        assert_eq!(*op2, BinaryOp::Add);
+                        if let ExprKind::Binary { op: op3, .. } = &right2.kind {
+                            assert_eq!(*op3, BinaryOp::Mul);
+                        } else {
+                            panic!("Expected b * c");
+                        }
+                    } else {
+                        panic!("Expected a + (b * c)");
+                    }
                 } else {
-                    panic!("Expected assign");
+                    panic!("Expected > comparison");
+                }
+            }
+        }
+
+        // 2. Elvis tighter than comparison: age ?: 0 >= 18 -> ((age ?: 0) >= 18)
+        let src2 = r#"
+            fun test(age: Int?): Bool = age ?: 0 >= 18
+        "#;
+        let file2 = parse_source(src2).expect("Failed to parse elvis vs comparison");
+        if let Declaration::Function(f) = &file2.declarations[0] {
+            if let Some(FunctionBody::Expr(e)) = &f.body {
+                if let ExprKind::Binary { op, left, right: _ } = &e.kind {
+                    assert_eq!(*op, BinaryOp::GtEq);
+                    if let ExprKind::Binary { op: elvis_op, .. } = &left.kind {
+                        assert_eq!(*elvis_op, BinaryOp::Elvis);
+                    } else {
+                        panic!("Expected (age ?: 0) on left of >=");
+                    }
+                } else {
+                    panic!("Expected >= binary op");
+                }
+            }
+        }
+
+        // 3. Elvis looser than arithmetic: base ?: offset + 10 -> (base ?: (offset + 10))
+        let src3 = r#"
+            fun test(base: Int?, offset: Int): Int = base ?: offset + 10
+        "#;
+        let file3 = parse_source(src3).expect("Failed to parse elvis vs sum");
+        if let Declaration::Function(f) = &file3.declarations[0] {
+            if let Some(FunctionBody::Expr(e)) = &f.body {
+                if let ExprKind::Binary { op, left: _, right } = &e.kind {
+                    assert_eq!(*op, BinaryOp::Elvis);
+                    if let ExprKind::Binary { op: sum_op, .. } = &right.kind {
+                        assert_eq!(*sum_op, BinaryOp::Add);
+                    } else {
+                        panic!("Expected (offset + 10) on right of ?:");
+                    }
+                } else {
+                    panic!("Expected ?: binary op");
                 }
             }
         }
@@ -310,20 +398,203 @@ mod tests {
 
     #[test]
     fn test_newline_aware_return() {
-        let src = r#"
+        // 1. Bare return followed by newline
+        let src1 = r#"
             fun test(): Int {
                 return
                 doWork()
             }
         "#;
-
-        let file = parse_source(src).expect("Failed to parse newline return");
-        if let Declaration::Function(f) = &file.declarations[0] {
+        let file1 = parse_source(src1).expect("Failed to parse newline return");
+        if let Declaration::Function(f) = &file1.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
                 assert_eq!(b.stmts.len(), 2);
                 assert!(matches!(b.stmts[0].kind, ExprKind::Return(None)));
                 assert!(matches!(b.stmts[1].kind, ExprKind::Call { .. }));
             }
         }
+
+        // 2. Return with expression on same line
+        let src2 = r#"
+            fun test(): Int {
+                return 42
+            }
+        "#;
+        let file2 = parse_source(src2).expect("Failed to parse return with expr");
+        if let Declaration::Function(f) = &file2.declarations[0] {
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                assert_eq!(b.stmts.len(), 1);
+                if let ExprKind::Return(Some(val)) = &b.stmts[0].kind {
+                    assert_eq!(val.to_string(), "42");
+                } else {
+                    panic!("Expected Return(Some(42))");
+                }
+            }
+        }
+
+        // 3. Semicolon-free statement separation
+        let src3 = r#"
+            fun test() {
+                val a = 1
+                val b = 2
+                val c = 3
+            }
+        "#;
+        let file3 = parse_source(src3).expect("Failed to parse semicolon-free statements");
+        if let Declaration::Function(f) = &file3.declarations[0] {
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                assert_eq!(b.stmts.len(), 3);
+            }
+        }
+    }
+
+    #[test]
+    fn test_lparen_newline_suppression() {
+        let src = r#"
+            fun test() {
+                cleanup()
+                (1 + 2).toString()
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse newline separated call and grouping");
+        if let Declaration::Function(f) = &file.declarations[0] {
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                assert_eq!(b.stmts.len(), 2);
+                // First stmt is cleanup()
+                if let ExprKind::Call { callee, args } = &b.stmts[0].kind {
+                    assert_eq!(callee.to_string(), "cleanup");
+                    assert_eq!(args.len(), 0);
+                } else {
+                    panic!("Expected cleanup() call");
+                }
+                // Second stmt is (1 + 2).toString()
+                if let ExprKind::Call { callee, .. } = &b.stmts[1].kind {
+                    if let ExprKind::MemberAccess { target, member, .. } = &callee.kind {
+                        assert_eq!(member, "toString");
+                        assert!(matches!(target.kind, ExprKind::Binary { .. }));
+                    } else {
+                        panic!("Expected MemberAccess for toString");
+                    }
+                } else {
+                    panic!("Expected Call for toString()");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mandatory_parentheses_control_flow() {
+        let unparenthesized_if = r#"
+            fun test() {
+                if isValid { doWork() }
+            }
+        "#;
+        let res = parse_source(unparenthesized_if);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().message.contains("Expected '('"));
+
+        let unparenthesized_when = r#"
+            fun test() {
+                when status {
+                    0 -> 1
+                    else -> 2
+                }
+            }
+        "#;
+        let res2 = parse_source(unparenthesized_when);
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().message.contains("Expected '(' or '{'"));
+    }
+
+    #[test]
+    fn test_compose_as_contextual_identifier() {
+        let src = r#"
+            fun process(pipeline: Pipeline, compose: Step): Step {
+                return pipeline.compose(compose)
+            }
+        "#;
+
+        let file = parse_source(src).expect("Failed to parse compose as contextual identifier");
+        if let Declaration::Function(f) = &file.declarations[0] {
+            assert_eq!(f.params.len(), 2);
+            assert_eq!(f.params[1].name, "compose");
+            if let Some(FunctionBody::Block(b)) = &f.body {
+                if let ExprKind::Return(Some(val)) = &b.stmts[0].kind {
+                    if let ExprKind::Call { callee, args } = &val.kind {
+                        if let ExprKind::MemberAccess { member, .. } = &callee.kind {
+                            assert_eq!(member, "compose");
+                        } else {
+                            panic!("Expected member access compose");
+                        }
+                        assert_eq!(args.len(), 1);
+                        assert_eq!(args[0].value.to_string(), "compose");
+                    } else {
+                        panic!("Expected Call expression");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_reject_struct_field_borrow() {
+        let src1 = r#"
+            struct View {
+                val data: &String
+            }
+        "#;
+        let res1 = parse_source(src1);
+        assert!(res1.is_err());
+        let err1 = res1.unwrap_err();
+        assert!(err1.message.contains("borrowed reference types"));
+        assert!(err1.message.contains("Invariant 4"));
+
+        let src2 = r#"
+            struct MutableRefHolder(val ptr: &mut Int)
+        "#;
+        let res2 = parse_source(src2);
+        assert!(res2.is_err());
+        let err2 = res2.unwrap_err();
+        assert!(err2.message.contains("borrowed reference types"));
+    }
+
+    #[test]
+    fn test_negative_error_diagnostics() {
+        // 1. Missing closing parenthesis in expression
+        let src1 = "fun test(): Int { (1 + 2 }";
+        let res1 = parse_source(src1);
+        assert!(res1.is_err());
+        let err1 = res1.unwrap_err();
+        assert!(err1.message.contains("Expected ')'"));
+        assert_eq!(err1.span.line, 1);
+
+        // 2. Missing parameter colon/type
+        let src2 = "fun test(x): Int = x";
+        let res2 = parse_source(src2);
+        assert!(res2.is_err());
+        let err2 = res2.unwrap_err();
+        assert!(err2.message.contains("Expected ':'"));
+
+        // 3. Invalid top-level declaration token
+        let src3 = "12345";
+        let res3 = parse_source(src3);
+        assert!(res3.is_err());
+        let err3 = res3.unwrap_err();
+        assert!(err3.message.contains("Expected declaration"));
+
+        // 4. compose modifier on struct
+        let src4 = "compose struct BadStruct { val x: Int }";
+        let res4 = parse_source(src4);
+        assert!(res4.is_err());
+        let err4 = res4.unwrap_err();
+        assert!(err4.message.contains("'compose' modifier is only valid on functions"));
+
+        // 5. Unterminated block struct
+        let src5 = "struct OpenStruct { val x: Int";
+        let res5 = parse_source(src5);
+        assert!(res5.is_err());
+        let err5 = res5.unwrap_err();
+        assert!(err5.message.contains("Expected '}'"));
     }
 }
