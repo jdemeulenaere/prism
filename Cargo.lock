@@ -22,6 +22,7 @@ dependencies = [
  "prism-ast",
  "prism-lexer",
  "prism-parser",
+ "prism-resolver",
 ]
 
 [[package]]

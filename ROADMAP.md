@@ -21,12 +21,13 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 ---
 
 ## Phase 1: Front-End Parser, AST & Package Resolver (Current)
-- [ ] Lexer and Parser for basic language subset:
+- [x] Lexer and Parser for basic language subset:
   - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
   - Default `private` visibility, explicit `package` and `public`.
 - [x] Package & import resolver conforming to zero-config, zero-marker directory rules (`crates/prism-resolver`).
-- [ ] CLI commands: `prism check`, `prism fmt`.
-- [ ] Parsing and AST validation test suite.
+- [x] CLI multi-file workspace and package checking (`prism check`).
+- [x] Parsing and AST validation test suite.
+- [ ] Code formatting command (`prism fmt`).
 
 ---
 

@@ -3,7 +3,9 @@ name = "prism-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+[lib]
+name = "prism_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "prism"
@@ -14,3 +16,4 @@ prism-ast = { path = "../prism-ast" }
 prism-lexer = { path = "../prism-lexer" }
 prism-parser = { path = "../prism-parser" }
 prism-abi = { path = "../prism-abi" }
+prism-resolver = { path = "../prism-resolver" }

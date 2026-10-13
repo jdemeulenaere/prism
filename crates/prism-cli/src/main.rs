@@ -17,7 +17,7 @@ USAGE:
     prism <COMMAND> [OPTIONS] <FILE>
 
 COMMANDS:
-    check <file.prism>     Lex, parse, and validate source file and ABI
+    check <path>           Lex, parse, and validate source file or directory and ABI
     dump-ast <file.prism>  Print the Abstract Syntax Tree for a source file
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
     tokens <file.prism>    Tokenize source file and print stream of tokens
@@ -94,31 +94,30 @@ fn read_file_or_exit(path: &str) -> String {
 }
 
 fn run_check(path: &str) {
-    let content = read_file_or_exit(path);
-    let ast = match parse_source(&content) {
-        Ok(ast) => ast,
+    let p = std::path::Path::new(path);
+    match prism_cli::check_path(p) {
+        Ok(report) => {
+            println!(
+                "✓ Check passed: '{}' (Workspace root: {}, Total units: {})",
+                path,
+                report.workspace_root.display(),
+                report.total_files
+            );
+            for file in &report.checked_files {
+                println!(
+                    "  - {} (package: {}, exported: {}, ABI: 0x{})",
+                    file.path.display(),
+                    file.package,
+                    file.exported_symbols,
+                    file.abi_hash
+                );
+            }
+        }
         Err(err) => {
-            eprintln!("Syntax Error: {}", err);
+            eprint!("{}", err.render());
             process::exit(1);
         }
-    };
-
-    let abi = match FileAbi::extract(&ast) {
-        Ok(abi) => abi,
-        Err(err) => {
-            eprintln!("ABI Error: {}", err);
-            process::exit(1);
-        }
-    };
-
-    let pkg = abi.package.as_deref().unwrap_or("<root>");
-    println!(
-        "✓ Check passed: '{}' (Package: {}, Exported symbols: {}, ABI Hash: 0x{})",
-        path,
-        pkg,
-        abi.symbols.len(),
-        abi.abi_hash_hex()
-    );
+    }
 }
 
 fn run_dump_ast(path: &str) {
