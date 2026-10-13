@@ -81,7 +81,7 @@ When running batch analysis on a folder (`prism check <dir>`), the scanner MUST 
 - **THEN** the scanner MUST reject the batch check with `PackageHeterogeneity` (`E1003`)
 
 ### Requirement: CLI Workspace Analysis and Dependency-Ordered Validation
-The compiler CLI `prism check` command MUST accept either an individual source file or a directory path, executing workspace root discovery, import resolution, cycle detection, and Phase 1 ABI verification in topological dependency order.
+The compiler CLI `prism check` command MUST accept either an individual source file or a directory path, executing workspace root discovery, import resolution, SCC cycle grouping, and Phase 1 ABI verification in topological dependency order.
 
 #### Scenario: Single entry file with transitive dependency resolution
 - **WHEN** user executes `prism check <file.prism>` on an entry source file that imports sibling or root modules
@@ -93,8 +93,12 @@ The compiler CLI `prism check` command MUST accept either an individual source f
 
 #### Scenario: Circular dependency diagnostic error reporting
 - **WHEN** user executes `prism check` on source files containing mutually recursive or cyclical imports
-- **THEN** the CLI detects the cycle, formats a user-friendly diagnostic listing the cyclic import path or SCC cluster, and exits with a non-zero exit code
+- **THEN** the CLI groups the files into an SCC cluster and extracts Phase 1 ABIs for all cluster members in topological order without error
 
 #### Scenario: Workspace root multi-package analysis
 - **WHEN** user executes `prism check <workspace_root>` on a workspace directory containing multiple package subdirectories
 - **THEN** the CLI recursively scans all packages, builds the global dependency graph without requiring marker files, and validates all source units in topological order
+
+#### Scenario: Symlink escaping workspace boundary rejected
+- **WHEN** an entry file or directory entry points to a symlink resolving outside the discovered workspace root
+- **THEN** the CLI rejects the target with `WorkspaceBoundaryViolation` (`E1005`)

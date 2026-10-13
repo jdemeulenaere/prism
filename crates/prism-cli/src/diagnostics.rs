@@ -115,8 +115,15 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             out.push_str(&format!("  --> {}: {}\n", path.display(), message));
         }
         ResolveError::Parse { path, message } => {
-            out.push_str(&format!("error[{}]: syntax error\n", code));
-            out.push_str(&format!("  --> {}: {}\n", path.display(), message));
+            out.push_str("error[E2001]: syntax error\n");
+            out.push_str(&format!("  --> {}:1:1\n", path.display()));
+            if let Ok(src) = std::fs::read_to_string(path) {
+                if let Some(first_line) = src.lines().next() {
+                    out.push_str(&format!("    1 | {}\n", first_line));
+                    out.push_str("      | ^\n");
+                }
+            }
+            out.push_str(&format!("   = note: {}\n", message));
         }
     }
 

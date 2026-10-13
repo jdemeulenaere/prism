@@ -218,8 +218,8 @@ fn test_cli_binary_package_heterogeneity_e1003() {
 }
 
 #[test]
-fn test_cli_binary_cyclic_dependency_e1007() {
-    let temp = create_temp_dir("cycle_e1007");
+fn test_cli_binary_mutual_recursion_succeeds() {
+    let temp = create_temp_dir("mutual_recursion");
     let pkg_dir = temp.join("cycle");
     fs::create_dir_all(&pkg_dir).unwrap();
 
@@ -234,10 +234,56 @@ fn test_cli_binary_cyclic_dependency_e1007() {
         .output()
         .expect("failed to execute prism CLI");
 
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+    assert!(stdout.contains("Total units: 2"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_cli_binary_symlink_escape_rejected_e1005() {
+    let temp = create_temp_dir("cli_symlink_escape");
+    let outside = create_temp_dir("cli_outside");
+    let secret = outside.join("secret.prism");
+    fs::write(&secret, "package pkg\npublic fun secret(): Int = 42\n").unwrap();
+
+    let pkg_dir = temp.join("pkg");
+    fs::create_dir_all(&pkg_dir).unwrap();
+    let link = pkg_dir.join("escaped.prism");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&link)
+        .output()
+        .expect("failed to execute prism CLI");
+
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error[E1007]: cyclic dependency detected"));
-    assert!(stderr.contains("a.prism ->"));
+    assert!(stderr.contains("error[E1005]: import escapes workspace boundary"));
+
+    fs::remove_dir_all(&temp).ok();
+    fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn test_cli_binary_syntax_error_e2001() {
+    let temp = create_temp_dir("syntax_err");
+    let file = temp.join("bad.prism");
+    fs::write(&file, "fun main(\n").unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E2001]: syntax error"));
 
     fs::remove_dir_all(&temp).ok();
 }

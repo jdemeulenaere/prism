@@ -90,16 +90,22 @@ pub fn resolve_import(
 
     // 3. Workspace Jail Enforcement:
     // If the candidate file exists or base_dir exists, verify against workspace_root
-    if normalized_candidate.exists() && workspace_root.exists() {
+    let effective_root = if workspace_root.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        workspace_root
+    };
+
+    if normalized_candidate.exists() && effective_root.exists() {
         if let (Ok(canon_target), Ok(canon_root)) = (
             normalized_candidate.canonicalize(),
-            workspace_root.canonicalize(),
+            effective_root.canonicalize(),
         ) {
             if !canon_target.starts_with(&canon_root) {
                 return Err(ResolveError::WorkspaceBoundaryViolation {
                     import_path: import_str,
                     target_path: canon_target,
-                    workspace_root: workspace_root.to_path_buf(),
+                    workspace_root: effective_root.to_path_buf(),
                 });
             }
         }

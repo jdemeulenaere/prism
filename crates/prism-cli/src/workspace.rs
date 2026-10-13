@@ -108,11 +108,8 @@ pub fn check_file(entry_file: &Path) -> Result<CheckReport, WorkspaceError> {
 
     let graph = DependencyGraph::from_entry(entry_file)?;
 
-    // Check for cycles
-    if graph.is_cyclic() {
-        let cycle = extract_cycle_path(&graph);
-        return Err(WorkspaceError::Cycle { cycle });
-    }
+    // Assert that all reachable files reside inside the discovered workspace root
+    assert_workspace_boundary(&graph)?;
 
     validate_and_extract_abi(&graph)
 }
@@ -157,10 +154,8 @@ pub fn check_directory(dir: &Path) -> Result<CheckReport, WorkspaceError> {
 
     let graph = DependencyGraph::from_entries(&all_files)?;
 
-    if graph.is_cyclic() {
-        let cycle = extract_cycle_path(&graph);
-        return Err(WorkspaceError::Cycle { cycle });
-    }
+    // Assert that all files reside inside the discovered workspace root
+    assert_workspace_boundary(&graph)?;
 
     validate_and_extract_abi(&graph)
 }
@@ -224,15 +219,46 @@ fn collect_dirs_with_prism_files(dir: &Path, dirs: &mut Vec<PathBuf>) -> Result<
     Ok(())
 }
 
-/// Extracts a representative cycle path from a cyclic dependency graph.
-fn extract_cycle_path(graph: &DependencyGraph) -> Vec<PathBuf> {
+/// Asserts that all files in the dependency graph reside within the discovered workspace root.
+fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceError> {
+    let effective_root = if graph.workspace_root.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        graph.workspace_root.clone()
+    };
+    let canon_root = effective_root.canonicalize().map_err(|e| WorkspaceError::Io {
+        path: effective_root.clone(),
+        message: e.to_string(),
+    })?;
+
+    for path in graph.nodes.keys() {
+        let canon_path = path.canonicalize().map_err(|e| WorkspaceError::Io {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        if !canon_path.starts_with(&canon_root) {
+            return Err(WorkspaceError::Resolve(ResolveError::WorkspaceBoundaryViolation {
+                import_path: path.display().to_string(),
+                target_path: canon_path,
+                workspace_root: effective_root,
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// Extracts a representative directed cycle path from a cyclic dependency graph.
+pub fn extract_cycle_path(graph: &DependencyGraph) -> Vec<PathBuf> {
     for cluster in graph.sccs() {
         if cluster.files.len() > 1 {
-            let mut cycle = cluster.files.clone();
-            if let Some(first) = cycle.first().cloned() {
-                cycle.push(first);
+            let scc_set: std::collections::HashSet<&PathBuf> = cluster.files.iter().collect();
+            for start_file in &cluster.files {
+                let mut path = Vec::new();
+                let mut visited = std::collections::HashSet::new();
+                if let Some(cycle) = find_cycle_dfs(start_file, graph, &scc_set, &mut path, &mut visited) {
+                    return cycle;
+                }
             }
-            return cycle;
         } else if let Some(single) = cluster.files.first() {
             if let Some(node) = graph.get_node(single) {
                 if node.direct_imports.contains(single) {
@@ -242,6 +268,38 @@ fn extract_cycle_path(graph: &DependencyGraph) -> Vec<PathBuf> {
         }
     }
     Vec::new()
+}
+
+fn find_cycle_dfs(
+    curr: &PathBuf,
+    graph: &DependencyGraph,
+    scc_set: &std::collections::HashSet<&PathBuf>,
+    path: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> Option<Vec<PathBuf>> {
+    path.push(curr.clone());
+    visited.insert(curr.clone());
+
+    if let Some(node) = graph.get_node(curr) {
+        for neighbor in &node.direct_imports {
+            if !scc_set.contains(neighbor) {
+                continue;
+            }
+            if let Some(pos) = path.iter().position(|p| p == neighbor) {
+                let mut cycle = path[pos..].to_vec();
+                cycle.push(neighbor.clone());
+                return Some(cycle);
+            }
+            if !visited.contains(neighbor) {
+                if let Some(cycle) = find_cycle_dfs(neighbor, graph, scc_set, path, visited) {
+                    return Some(cycle);
+                }
+            }
+        }
+    }
+
+    path.pop();
+    None
 }
 
 /// Validates AST and extracts ABI for all files in topological order.
@@ -380,8 +438,8 @@ mod tests {
     }
 
     #[test]
-    fn test_check_file_cycle_detected() {
-        let temp = create_temp_dir("cycle");
+    fn test_check_file_mutual_recursion_succeeds() {
+        let temp = create_temp_dir("mutual_recursion");
         let pkg_dir = temp.join("p");
         fs::create_dir_all(&pkg_dir).unwrap();
 
@@ -391,17 +449,62 @@ mod tests {
         fs::write(&a, "package p\nimport b\npublic fun fa(): Int = 1\n").unwrap();
         fs::write(&b, "package p\nimport a\npublic fun fb(): Int = 2\n").unwrap();
 
-        let err = check_file(&a).unwrap_err();
-        match err {
-            WorkspaceError::Cycle { cycle } => {
-                assert!(cycle.len() >= 2);
-                let rendered = diagnostics::format_cycle_error(&cycle);
-                assert!(rendered.contains("error[E1007]: cyclic dependency detected"));
+        let report = check_file(&a).unwrap();
+        assert_eq!(report.total_files, 2);
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_directed_cycle_extraction_order() {
+        let temp = create_temp_dir("directed_cycle");
+        let pkg_dir = temp.join("p");
+        fs::create_dir_all(&pkg_dir).unwrap();
+
+        let a = pkg_dir.join("a.prism");
+        let b = pkg_dir.join("b.prism");
+        let c = pkg_dir.join("c.prism");
+
+        // Directed cycle: a -> c -> b -> a
+        fs::write(&a, "package p\nimport c\npublic fun fa(): Int = 1\n").unwrap();
+        fs::write(&c, "package p\nimport b\npublic fun fc(): Int = 3\n").unwrap();
+        fs::write(&b, "package p\nimport a\npublic fun fb(): Int = 2\n").unwrap();
+
+        let graph = DependencyGraph::from_entry(&a).unwrap();
+        let cycle = extract_cycle_path(&graph);
+        assert!(cycle.len() >= 4);
+        assert_eq!(cycle[0], a);
+        assert_eq!(cycle[1], c);
+        assert_eq!(cycle[2], b);
+        assert_eq!(cycle[3], a);
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_symlink_workspace_boundary_rejected() {
+        let temp = create_temp_dir("symlink_escape");
+        let outside = create_temp_dir("outside");
+        let secret = outside.join("secret.prism");
+        fs::write(&secret, "package pkg\npublic fun secret(): Int = 42\n").unwrap();
+
+        let pkg_dir = temp.join("pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let link = pkg_dir.join("escaped.prism");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        #[cfg(unix)]
+        {
+            let err = check_file(&link).unwrap_err();
+            match err {
+                WorkspaceError::Resolve(ResolveError::WorkspaceBoundaryViolation { .. }) => {}
+                other => panic!("expected WorkspaceBoundaryViolation, got {:?}", other),
             }
-            other => panic!("expected Cycle error, got {:?}", other),
         }
 
         fs::remove_dir_all(&temp).ok();
+        fs::remove_dir_all(&outside).ok();
     }
 
     #[test]
