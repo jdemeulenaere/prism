@@ -14,6 +14,7 @@ context: |
   - The normative invariants are openspec/specs/system-invariants/spec.md; the lines above summarize them.
   - openspec/specs/ describes only implemented behavior. Planned designs live in docs/architecture.md: a change implementing one copies the relevant requirements into its delta specs and removes them from docs/architecture.md.
   - openspec/changes/archive/ is history, never a source of truth for current behavior.
+  - Only propose a change for decisions (new semantics, grammar rules, new or reassigned error codes, changed scenarios, architecture). Bugs where the spec already implies the right behavior are plain fixes with regression tests and no change packet (AGENTS.md section 1).
   - Every compiler error code is listed in openspec/specs/diagnostics/spec.md; a change adding an error takes the next unused code in its stage's range and adds it there.
 
 # Per-artifact rules (optional)

@@ -13,6 +13,10 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
   - `tasks.md`: Atomic, test-driven checklist.
   - `specs/`: Delta specifications with concrete scenarios (WHEN/THEN).
   - Once verified, the change is archived to `openspec/changes/archive/` and its delta specs merge into `openspec/specs/`.
+- **Change packet or plain fix?** Not every change needs a change packet:
+  - **Plain fix** (no change packet): the code is wrong and the spec already states, or obviously implies, the correct behaviour. Crashes always count. Commit the fix with a regression test that runs real `.prism` source (not a hand-built AST), named after the spec scenario it protects. If the spec was silent on that case, add the missing scenario to the main spec in the same commit; that pins down existing intent rather than changing behaviour.
+  - **OpenSpec change**: the fix needs a decision someone could reasonably disagree with. That covers new semantics, a grammar rule, a new or reassigned error code (beyond taking the next free code for a new error kind, per [`diagnostics`](openspec/specs/diagnostics/spec.md)), changing an existing scenario, or an architectural choice.
+  - Quick test: if you'd want to review the *design* before seeing code, propose a change; if you'd only want to review the *diff*, make a plain fix.
 - **OpenSpec Workflows / Slash Commands**:
   - `/opsx-propose "change-name"`: Creates and populates the change packet.
   - `/opsx-apply`: Executes the tasks against the spec.
