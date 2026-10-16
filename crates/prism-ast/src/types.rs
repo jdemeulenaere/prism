@@ -14,8 +14,9 @@ pub enum TypeKind {
     Reference { mutable: bool, inner: Box<Type> },
     /// The unit type `()`.
     Unit,
-    /// A function type, e.g. `(Int, String) -> Bool`.
+    /// A function type, e.g. `(Int, String) -> Bool` or `compose () -> Unit`.
     Function {
+        is_compose: bool,
         params: Vec<Type>,
         return_type: Box<Type>,
     },
@@ -111,6 +112,10 @@ impl fmt::Display for Type {
                 }
                 Ok(())
             }
+            // `(() -> Unit)?`: without parentheses the `?` would bind to the return type.
+            TypeKind::Nullable(inner) if matches!(inner.kind, TypeKind::Function { .. }) => {
+                write!(f, "({})?", inner)
+            }
             TypeKind::Nullable(inner) => write!(f, "{}?", inner),
             TypeKind::Reference { mutable, inner } => {
                 if *mutable {
@@ -121,9 +126,13 @@ impl fmt::Display for Type {
             }
             TypeKind::Unit => write!(f, "()"),
             TypeKind::Function {
+                is_compose,
                 params,
                 return_type,
             } => {
+                if *is_compose {
+                    write!(f, "compose ")?;
+                }
                 write!(f, "(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {

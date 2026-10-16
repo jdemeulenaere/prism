@@ -213,4 +213,20 @@ mod tests {
         // Independent symbol reordering within a file should not invalidate the exported ABI
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
     }
+
+    #[test]
+    fn test_composable_function_type_in_exported_signature() {
+        let compose_src = "public fun Column(content: compose () -> Unit): Unit { }";
+        let plain_src = "public fun Column(content: () -> Unit): Unit { }";
+
+        let compose_abi = FileAbi::extract(&parse_source(compose_src).unwrap()).unwrap();
+        let plain_abi = FileAbi::extract(&parse_source(plain_src).unwrap()).unwrap();
+
+        let prism_abi::ExportedSymbol::Function { params, .. } = &compose_abi.symbols[0] else {
+            panic!("Expected exported function");
+        };
+        assert_eq!(params[0].1, "compose () -> Unit");
+        // The compose flag is part of the call contract, so it is part of the ABI.
+        assert_ne!(compose_abi.abi_hash, plain_abi.abi_hash);
+    }
 }

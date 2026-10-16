@@ -225,10 +225,11 @@ impl Type {
             },
             prism_ast::types::TypeKind::Unit => Type::Unit,
             prism_ast::types::TypeKind::Function {
+                is_compose,
                 params,
                 return_type,
             } => Type::Fn {
-                is_compose: false,
+                is_compose: *is_compose,
                 params: params.iter().map(Type::from_ast).collect(),
                 ret: Box::new(Type::from_ast(return_type)),
             },

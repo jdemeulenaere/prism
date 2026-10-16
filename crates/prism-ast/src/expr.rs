@@ -185,15 +185,19 @@ pub enum ExprKind {
         target: Box<Expr>,
         value: Box<Expr>,
     },
+    /// A local `val`/`var` declaration. The parser produces it only as a direct
+    /// element of [`BlockExpr::stmts`]; it is never an operand.
     LocalVar {
         is_var: bool,
         name: String,
         ty: Option<Type>,
         initializer: Box<Expr>,
     },
+    /// A closure `{ a, b -> ... }`, or `{ ... }` with no parameters. The body is
+    /// always a block, whatever the number of statements.
     Closure {
         params: Vec<String>,
-        body: Box<Expr>,
+        body: BlockExpr,
     },
     Index {
         target: Box<Expr>,
@@ -287,7 +291,11 @@ impl fmt::Display for Expr {
                 }
             }
             ExprKind::Closure { params, body } => {
-                write!(f, "{{ {} -> {} }}", params.join(", "), body)
+                write!(f, "{{ ")?;
+                if !params.is_empty() {
+                    write!(f, "{} -> ", params.join(", "))?;
+                }
+                write!(f, "... ({} stmts) }}", body.stmmts_len())
             }
             ExprKind::Index { target, index } => {
                 write!(f, "{}[{}]", target, index)

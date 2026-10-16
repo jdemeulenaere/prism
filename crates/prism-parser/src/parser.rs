@@ -37,6 +37,9 @@ pub struct Parser {
     /// Deepest tree level reached since the innermost open `parse_expr` or
     /// `parse_type` started; `peak - depth` is the height of what it parsed.
     peak: usize,
+    /// Whether a line break ends an expression, innermost delimiter last:
+    /// `false` inside `( )` and `[ ]`, `true` inside `{ }` and at the top level.
+    newline_modes: Vec<bool>,
 }
 
 impl Parser {
@@ -54,6 +57,7 @@ impl Parser {
             cursor: 0,
             depth: 0,
             peak: 0,
+            newline_modes: vec![true],
         }
     }
 
@@ -156,6 +160,47 @@ impl Parser {
             self.split_token(TokenKind::Amp, TokenKind::Amp)
         } else {
             self.bump()
+        }
+    }
+
+    // --- Newline Significance ---
+
+    /// Whether the current token starts a new line in a context where line
+    /// breaks end an expression (outside parentheses and brackets).
+    fn at_line_break(&self) -> bool {
+        self.peek().is_preceded_by_newline && self.newline_modes.last() != Some(&false)
+    }
+
+    /// Runs `f` with line breaks significant (`{ }`) or insignificant (`( )`, `[ ]`).
+    fn with_newlines<T>(
+        &mut self,
+        significant: bool,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        self.newline_modes.push(significant);
+        let result = f(self);
+        self.newline_modes.pop();
+        result
+    }
+
+    /// Reports a missing separator unless the current token is `}`, the end of
+    /// the file, or on a new line; `what` names the items and `separators` the
+    /// accepted separators, for the message.
+    fn expect_separated(&self, what: &str, separators: &str) -> Result<(), ParseError> {
+        if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof)
+            || self.peek().is_preceded_by_newline
+        {
+            Ok(())
+        } else {
+            Err(ParseError::new(
+                format!(
+                    "Expected {} between {}, found '{}'",
+                    separators,
+                    what,
+                    self.peek_kind()
+                ),
+                self.peek().span,
+            ))
         }
     }
 
@@ -349,30 +394,7 @@ impl Parser {
 
         // Parameters: (a: Int, b: Double = 0.0)
         self.expect(TokenKind::LParen)?;
-        let mut params = Vec::new();
-        while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-            let (param_name, p_span) = self.expect_ident()?;
-            self.expect(TokenKind::Colon)?;
-            let ty = self.parse_type()?;
-            let mut default_value = None;
-            if self.peek_kind() == &TokenKind::Eq {
-                self.bump();
-                default_value = Some(self.parse_expr(Precedence::Lowest)?);
-            }
-            let end_p_span = default_value.as_ref().map(|d| d.span).unwrap_or(ty.span);
-            params.push(Param {
-                name: param_name,
-                ty,
-                default_value,
-                span: p_span.merge(end_p_span),
-            });
-
-            if self.peek_kind() == &TokenKind::Comma {
-                self.bump();
-            } else {
-                break;
-            }
-        }
+        let params = self.with_newlines(false, Self::parse_params)?;
         let rparen_span = self.expect(TokenKind::RParen)?.span;
 
         // Return type: : ReturnType
@@ -407,6 +429,35 @@ impl Parser {
             body,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// Function parameters up to (not including) the closing `)`.
+    fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
+        let mut params = Vec::new();
+        while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
+            let (param_name, p_span) = self.expect_ident()?;
+            self.expect(TokenKind::Colon)?;
+            let ty = self.parse_type()?;
+            let mut default_value = None;
+            if self.peek_kind() == &TokenKind::Eq {
+                self.bump();
+                default_value = Some(self.parse_expr(Precedence::Lowest)?);
+            }
+            let end_p_span = default_value.as_ref().map(|d| d.span).unwrap_or(ty.span);
+            params.push(Param {
+                name: param_name,
+                ty,
+                default_value,
+                span: p_span.merge(end_p_span),
+            });
+
+            if self.peek_kind() == &TokenKind::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        Ok(params)
     }
 
     fn parse_struct(
@@ -503,6 +554,8 @@ impl Parser {
                     || self.peek_kind() == &TokenKind::Semicolon
                 {
                     self.bump();
+                } else {
+                    self.expect_separated("struct fields", "a newline, ',' or ';'")?;
                 }
             }
             self.expect(TokenKind::RBrace)?.span
@@ -555,6 +608,8 @@ impl Parser {
 
             if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semicolon {
                 self.bump();
+            } else {
+                self.expect_separated("enum variants", "a newline, ',' or ';'")?;
             }
         }
 
@@ -594,7 +649,7 @@ impl Parser {
         }
 
         self.expect(TokenKind::Eq)?;
-        let initializer = self.parse_expr(Precedence::Lowest)?;
+        let initializer = self.parse_initializer()?;
         let end_span = initializer.span;
 
         Ok(TopLevelVarDecl {
@@ -629,6 +684,18 @@ impl Parser {
         self.depth -= 1;
     }
 
+    /// Runs `f` one nesting level deeper, for constructs parsed outside
+    /// `parse_expr` (statement-position blocks and declarations, braced branches).
+    fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let outer_peak = self.enter()?;
+        let result = f(self);
+        self.exit(outer_peak);
+        result
+    }
+
     // --- Type Parsing ---
 
     pub fn parse_type(&mut self) -> Result<Type, ParseError> {
@@ -659,49 +726,18 @@ impl Parser {
             });
         }
 
-        // 2. Unit or Tuple/Function: ()
-        if self.peek_kind() == &TokenKind::LParen {
-            self.bump();
-            if self.peek_kind() == &TokenKind::RParen {
-                let end = self.bump().span;
-                let unit = Type::unit(start_span.merge(end));
-                return self.parse_type_suffix(unit);
-            }
-            // Parameter types for function type: (Int, String) -> Bool
-            let mut params = Vec::new();
-            while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-                params.push(self.parse_type()?);
-                if self.peek_kind() == &TokenKind::Comma {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            self.expect(TokenKind::RParen)?;
-            if self.peek_kind() == &TokenKind::Arrow {
-                self.bump();
-                let ret = self.parse_type()?;
-                let span = start_span.merge(ret.span);
-                let fn_ty = Type::new(
-                    TypeKind::Function {
-                        params,
-                        return_type: Box::new(ret),
-                    },
-                    span,
-                );
-                return self.parse_type_suffix(fn_ty);
-            } else if params.len() == 1 {
-                // Single parenthesized type: (Int) -> just Int
-                return self.parse_type_suffix(params.remove(0));
-            } else {
-                return Err(ParseError::new(
-                    "Tuple types are not supported; use a struct",
-                    start_span,
-                ));
-            }
+        // 2. Composable function type: compose (Int) -> Unit
+        if self.peek_kind() == &TokenKind::Compose && self.peek_ahead(1) == &TokenKind::LParen {
+            self.bump(); // 'compose'
+            return self.parse_paren_type(start_span, true);
         }
 
-        // 3. Named type: Ident optionally followed by generic arguments <T, U>
+        // 3. Unit, parenthesized type or function type: (), (Int), (Int, String) -> Bool
+        if self.peek_kind() == &TokenKind::LParen {
+            return self.parse_paren_type(start_span, false);
+        }
+
+        // 4. Named type: Ident optionally followed by generic arguments <T, U>
         let (name, span) = self.expect_ident()?;
         let mut type_args = Vec::new();
         let mut end_span = span;
@@ -725,8 +761,57 @@ impl Parser {
             Type::generic(name, type_args, start_span.merge(end_span))
         };
 
-        // 4. Suffix (e.g. nullable ?)
+        // 5. Suffix (e.g. nullable ?)
         self.parse_type_suffix(base_ty)
+    }
+
+    /// A type starting with `(`: unit `()`, a parenthesized type `(Int)`, or a
+    /// function type `(A, B) -> R`, which is the only form allowed after `compose`.
+    fn parse_paren_type(&mut self, start_span: Span, is_compose: bool) -> Result<Type, ParseError> {
+        self.expect(TokenKind::LParen)?;
+        let mut params = Vec::new();
+        while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
+            params.push(self.parse_type()?);
+            if self.peek_kind() == &TokenKind::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        let rparen_span = self.expect(TokenKind::RParen)?.span;
+
+        if self.peek_kind() == &TokenKind::Arrow {
+            self.bump();
+            // Right-associative: `(Int) -> (Int) -> Int` returns a function.
+            let ret = self.parse_type()?;
+            let span = start_span.merge(ret.span);
+            return Ok(Type::new(
+                TypeKind::Function {
+                    is_compose,
+                    params,
+                    return_type: Box::new(ret),
+                },
+                span,
+            ));
+        }
+        if is_compose {
+            return Err(ParseError::new(
+                format!(
+                    "Expected '->' after the parameter types of a 'compose' function type, found '{}'",
+                    self.peek_kind()
+                ),
+                self.peek().span,
+            ));
+        }
+        match params.len() {
+            0 => self.parse_type_suffix(Type::unit(start_span.merge(rparen_span))),
+            // Single parenthesized type: (Int) is just Int
+            1 => self.parse_type_suffix(params.remove(0)),
+            _ => Err(ParseError::new(
+                "Tuple types are not supported; use a struct",
+                start_span,
+            )),
+        }
     }
 
     fn parse_type_suffix(&mut self, base: Type) -> Result<Type, ParseError> {
@@ -788,6 +873,20 @@ impl Parser {
 
     fn current_precedence(&self) -> Precedence {
         let tok = self.peek();
+        // A line break ends the expression, except before the operators that
+        // conventionally start a continuation line (Kotlin's rule).
+        if self.at_line_break()
+            && !matches!(
+                tok.kind,
+                TokenKind::Dot
+                    | TokenKind::QuestionDot
+                    | TokenKind::AmpAmp
+                    | TokenKind::PipePipe
+                    | TokenKind::QuestionColon
+            )
+        {
+            return Precedence::Lowest;
+        }
         match &tok.kind {
             TokenKind::Eq => Precedence::Assign,
             TokenKind::PipePipe => Precedence::LogicalOr,
@@ -801,9 +900,7 @@ impl Parser {
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::Dot | TokenKind::QuestionDot => Precedence::Postfix,
-            TokenKind::LBracket if !tok.is_preceded_by_newline => Precedence::Call,
-            TokenKind::LParen if !tok.is_preceded_by_newline => Precedence::Call,
-            TokenKind::LBrace if !tok.is_preceded_by_newline => Precedence::Call,
+            TokenKind::LBracket | TokenKind::LParen | TokenKind::LBrace => Precedence::Call,
             _ => Precedence::Lowest,
         }
     }
@@ -831,16 +928,22 @@ impl Parser {
             // Grouping: (expr)
             TokenKind::LParen => self.parse_group(),
 
-            // Block or Closure: { ... }
-            TokenKind::LBrace => self.parse_lambda_or_block(),
+            // In expression position a brace is always a closure; blocks are
+            // parsed only in block position (bodies, branches, statements).
+            TokenKind::LBrace => self.parse_closure(),
 
             // Control flow
             TokenKind::If => self.parse_if(),
             TokenKind::When => self.parse_when(),
             TokenKind::Return => self.parse_return(),
 
-            // Local variable declaration: val x = 1, var y: Int = 2
-            TokenKind::Val | TokenKind::Var => self.parse_local_var(),
+            TokenKind::Val | TokenKind::Var => Err(ParseError::new(
+                format!(
+                    "A '{}' declaration is only allowed as a statement; wrap it in braces",
+                    self.peek_kind()
+                ),
+                self.peek().span,
+            )),
 
             _ => Err(ParseError::new(
                 format!("Unexpected token in expression: '{}'", self.peek_kind()),
@@ -926,7 +1029,7 @@ impl Parser {
 
     fn parse_group(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::LParen)?.span;
-        let expr = self.parse_expr(Precedence::Lowest)?;
+        let expr = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
         let end = self.expect(TokenKind::RParen)?.span;
         Ok(Expr::new(expr.kind, start.merge(end)))
     }
@@ -953,19 +1056,7 @@ impl Parser {
                 | TokenKind::If
                 | TokenKind::When
                 | TokenKind::Return
-                | TokenKind::Val
-                | TokenKind::Var
         )
-    }
-
-    fn parse_lambda_or_block(&mut self) -> Result<Expr, ParseError> {
-        if self.is_closure_with_arrow_ahead() {
-            self.parse_closure()
-        } else {
-            let block = self.parse_block_expr()?;
-            let span = block.span;
-            Ok(Expr::new(ExprKind::Block(block), span))
-        }
     }
 
     fn is_closure_with_arrow_ahead(&self) -> bool {
@@ -989,43 +1080,39 @@ impl Parser {
         has_arrow
     }
 
+    /// A closure `{ a, b -> ... }`, or `{ ... }` with zero parameters.
     fn parse_closure(&mut self) -> Result<Expr, ParseError> {
+        let has_header = self.is_closure_with_arrow_ahead();
         let start = self.expect(TokenKind::LBrace)?.span;
         let mut params = Vec::new();
+        let mut arrow = None;
 
-        while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
-            let (param, _) = self.expect_ident()?;
-            params.push(param);
-            if self.peek_kind() == &TokenKind::Comma {
-                self.bump();
-            } else {
-                break;
+        if has_header {
+            while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
+                let (param, _) = self.expect_ident()?;
+                params.push(param);
+                if self.peek_kind() == &TokenKind::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
             }
+            arrow = Some(self.expect(TokenKind::Arrow)?.span);
         }
-        let arrow = self.expect(TokenKind::Arrow)?.span;
 
-        let mut stmts = self.parse_stmts()?;
+        let stmts = self.with_newlines(true, Self::parse_stmts)?;
         let end = self.expect(TokenKind::RBrace)?.span;
 
-        let body = if stmts.len() == 1 && !matches!(stmts[0].kind, ExprKind::LocalVar { .. }) {
-            stmts.remove(0)
-        } else {
-            // The body block runs from `->` to `}`, so it never shares a span
-            // with the closure or with its own first statement.
-            let b_span = arrow.merge(end);
-            Expr::new(
-                ExprKind::Block(BlockExpr {
-                    stmts,
-                    span: b_span,
-                }),
-                b_span,
-            )
-        };
-
+        // The body block runs from `->` (or its first statement) to `}`, so it
+        // never shares a span with the closure or with its own first statement.
+        let body_start = arrow.unwrap_or_else(|| stmts.first().map_or(end, |s| s.span));
         Ok(Expr::new(
             ExprKind::Closure {
                 params,
-                body: Box::new(body),
+                body: BlockExpr {
+                    stmts,
+                    span: body_start.merge(end),
+                },
             },
             start.merge(end),
         ))
@@ -1064,6 +1151,32 @@ impl Parser {
 
     fn parse_call(&mut self, left: Expr) -> Result<Expr, ParseError> {
         self.expect(TokenKind::LParen)?;
+        let mut args = self.with_newlines(false, Self::parse_call_args)?;
+        let end = self.expect(TokenKind::RParen)?.span;
+        let mut span = left.span.merge(end);
+
+        // Trailing lambda on call with parentheses: callee(args...) { body }
+        if self.peek_kind() == &TokenKind::LBrace && !self.at_line_break() {
+            let lambda = self.parse_closure()?;
+            span = span.merge(lambda.span);
+            args.push(CallArg {
+                name: None,
+                span: lambda.span,
+                value: lambda,
+            });
+        }
+
+        Ok(Expr::new(
+            ExprKind::Call {
+                callee: Box::new(left),
+                args,
+            },
+            span,
+        ))
+    }
+
+    /// Call arguments up to (not including) the closing `)`.
+    fn parse_call_args(&mut self) -> Result<Vec<CallArg>, ParseError> {
         let mut args = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
             let mut name = None;
@@ -1090,31 +1203,11 @@ impl Parser {
                 break;
             }
         }
-        let end = self.expect(TokenKind::RParen)?.span;
-        let mut span = left.span.merge(end);
-
-        // Trailing lambda on call with parentheses: callee(args...) { body }
-        if self.peek_kind() == &TokenKind::LBrace && !self.peek().is_preceded_by_newline {
-            let lambda = self.parse_lambda_or_block()?;
-            span = span.merge(lambda.span);
-            args.push(CallArg {
-                name: None,
-                span: lambda.span,
-                value: lambda,
-            });
-        }
-
-        Ok(Expr::new(
-            ExprKind::Call {
-                callee: Box::new(left),
-                args,
-            },
-            span,
-        ))
+        Ok(args)
     }
 
     fn parse_trailing_lambda_call(&mut self, left: Expr) -> Result<Expr, ParseError> {
-        let lambda = self.parse_lambda_or_block()?;
+        let lambda = self.parse_closure()?;
         let span = left.span.merge(lambda.span);
         Ok(Expr::new(
             ExprKind::Call {
@@ -1131,7 +1224,7 @@ impl Parser {
 
     fn parse_index(&mut self, left: Expr) -> Result<Expr, ParseError> {
         self.expect(TokenKind::LBracket)?;
-        let index = self.parse_expr(Precedence::Lowest)?;
+        let index = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
         let end = self.expect(TokenKind::RBracket)?.span;
         let span = left.span.merge(end);
         Ok(Expr::new(
@@ -1222,7 +1315,7 @@ impl Parser {
 
     fn parse_block_expr(&mut self) -> Result<BlockExpr, ParseError> {
         let start = self.expect(TokenKind::LBrace)?.span;
-        let stmts = self.parse_stmts()?;
+        let stmts = self.with_newlines(true, Self::parse_stmts)?;
         let end = self.expect(TokenKind::RBrace)?.span;
         Ok(BlockExpr {
             stmts,
@@ -1231,30 +1324,64 @@ impl Parser {
     }
 
     /// Statements up to (not including) the closing `}` of a block or closure.
+    /// Two statements on one line must be separated by `;`.
     fn parse_stmts(&mut self) -> Result<Vec<Expr>, ParseError> {
         let mut stmts = Vec::new();
-        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
-            stmts.push(self.parse_expr(Precedence::Lowest)?);
-            if self.peek_kind() == &TokenKind::Semicolon {
+        loop {
+            while self.peek_kind() == &TokenKind::Semicolon {
                 self.bump();
+            }
+            if self.peek_kind() == &TokenKind::RBrace || self.is_eof() {
+                break;
+            }
+            stmts.push(self.parse_statement()?);
+            if self.peek_kind() != &TokenKind::Semicolon {
+                self.expect_separated("statements", "a newline or ';'")?;
             }
         }
         Ok(stmts)
     }
 
+    /// One statement: a declaration, a nested scope block, or an expression.
+    fn parse_statement(&mut self) -> Result<Expr, ParseError> {
+        match self.peek_kind() {
+            TokenKind::Val | TokenKind::Var => self.nested(Self::parse_local_var),
+            // A brace at the start of a statement opens a scope, not a closure.
+            TokenKind::LBrace => self.nested(Self::parse_block),
+            _ => self.parse_expr(Precedence::Lowest),
+        }
+    }
+
+    /// The body of an `if`/`else` or `when` branch: a block when braced,
+    /// otherwise a single expression.
+    fn parse_branch_body(&mut self) -> Result<Expr, ParseError> {
+        if self.peek_kind() == &TokenKind::LBrace {
+            self.nested(Self::parse_block)
+        } else {
+            self.parse_expr(Precedence::Lowest)
+        }
+    }
+
+    /// A block in block position, as an expression.
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        let block = self.parse_block_expr()?;
+        let span = block.span;
+        Ok(Expr::new(ExprKind::Block(block), span))
+    }
+
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::If)?.span;
         self.expect(TokenKind::LParen)?;
-        let cond = self.parse_expr(Precedence::Lowest)?;
+        let cond = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
         self.expect(TokenKind::RParen)?;
-        let then_branch = self.parse_expr(Precedence::Lowest)?;
+        let then_branch = self.parse_branch_body()?;
 
         let mut else_branch = None;
         let mut end_span = then_branch.span;
 
         if self.peek_kind() == &TokenKind::Else {
             self.bump();
-            let els = self.parse_expr(Precedence::Lowest)?;
+            let els = self.parse_branch_body()?;
             end_span = els.span;
             else_branch = Some(Box::new(els));
         }
@@ -1274,7 +1401,7 @@ impl Parser {
 
         let target = if self.peek_kind() == &TokenKind::LParen {
             self.bump();
-            let t = self.parse_expr(Precedence::Lowest)?;
+            let t = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
             self.expect(TokenKind::RParen)?;
             Some(Box::new(t))
         } else if self.peek_kind() == &TokenKind::LBrace {
@@ -1290,22 +1417,28 @@ impl Parser {
         };
 
         self.expect(TokenKind::LBrace)?;
-        let mut branches = Vec::new();
-
-        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
-            branches.push(self.parse_when_branch()?);
-
-            if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semicolon {
-                self.bump();
-            }
-        }
-
+        let branches = self.with_newlines(true, Self::parse_when_branches)?;
         let end = self.expect(TokenKind::RBrace)?.span;
 
         Ok(Expr::new(
             ExprKind::When { target, branches },
             start.merge(end),
         ))
+    }
+
+    /// `when` branches up to (not including) the closing `}`.
+    fn parse_when_branches(&mut self) -> Result<Vec<WhenBranch>, ParseError> {
+        let mut branches = Vec::new();
+        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
+            branches.push(self.parse_when_branch()?);
+
+            if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semicolon {
+                self.bump();
+            } else {
+                self.expect_separated("'when' branches", "a newline, ',' or ';'")?;
+            }
+        }
+        Ok(branches)
     }
 
     fn parse_when_branch(&mut self) -> Result<WhenBranch, ParseError> {
@@ -1333,7 +1466,7 @@ impl Parser {
         }
 
         self.expect(TokenKind::Arrow)?;
-        let body = self.parse_expr(Precedence::Lowest)?;
+        let body = self.parse_branch_body()?;
         let b_end = body.span;
 
         Ok(WhenBranch {
@@ -1371,7 +1504,7 @@ impl Parser {
         let start = self.expect(TokenKind::Return)?.span;
         // A value must start on the same line; anything else (`}`, `else`,
         // `,`, `)`, a newline...) ends a bare `return`.
-        let has_value = !self.peek().is_preceded_by_newline && Self::starts_expr(self.peek_kind());
+        let has_value = !self.at_line_break() && Self::starts_expr(self.peek_kind());
 
         if has_value {
             let val = self.parse_expr(Precedence::Lowest)?;
@@ -1404,7 +1537,7 @@ impl Parser {
         }
 
         self.expect(TokenKind::Eq)?;
-        let initializer = self.parse_expr(Precedence::Lowest)?;
+        let initializer = self.parse_initializer()?;
         let span = start.merge(initializer.span);
 
         Ok(Expr::new(
@@ -1416,5 +1549,18 @@ impl Parser {
             },
             span,
         ))
+    }
+
+    /// A declaration's initializer. It is parsed above assignment precedence, so
+    /// `val a = b = c` is a chained assignment rather than `val a = (b = c)`.
+    fn parse_initializer(&mut self) -> Result<Expr, ParseError> {
+        let initializer = self.parse_expr(Precedence::Assign)?;
+        if self.peek_kind() == &TokenKind::Eq && !self.at_line_break() {
+            return Err(ParseError::new(
+                "Chained assignments are not allowed; use separate statements",
+                self.peek().span,
+            ));
+        }
+        Ok(initializer)
     }
 }

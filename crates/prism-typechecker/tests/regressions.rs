@@ -350,3 +350,48 @@ fn imported_enum_variant_named_like_a_local_variant_accepted() {
     );
     assert!(errors.is_empty(), "{:?}", errors);
 }
+
+// Parameterless closures and composable function types (harden-parser-grammar).
+
+#[test]
+fn trailing_lambda_passed_to_a_non_function_parameter_rejected() {
+    assert_codes(
+        "fun takesInt(n: Int) { }\nfun f() { takesInt { 42 } }\n",
+        &["E4002"],
+    );
+}
+
+#[test]
+fn parameterless_trailing_lambda_checked_against_its_parameter_type() {
+    assert_ok("fun run(body: () -> Int): Int = body()\nfun f(): Int = run { 1 }\n");
+}
+
+#[test]
+fn non_composable_trailing_lambda_inside_a_compose_fun() {
+    assert_codes(
+        "compose fun Child() { }\nfun later(f: () -> Unit) { }\ncompose fun P() { later { Child() } }\n",
+        &["E4008"],
+    );
+}
+
+#[test]
+fn composable_content_lambda_may_call_composables() {
+    assert_ok(
+        "compose fun Item() { }\ncompose fun Column(content: compose () -> Unit) { content() }\ncompose fun Screen() { Column { Item() } }\n",
+    );
+}
+
+#[test]
+fn composable_function_type_is_not_a_plain_function_type() {
+    assert_codes(
+        "fun later(f: () -> Unit) { }\ncompose fun P(content: compose () -> Unit) { later(content) }\n",
+        &["E4002"],
+    );
+}
+
+#[test]
+fn declaration_as_an_unbraced_branch_body_never_reaches_the_checker() {
+    let src = "fun f(c: Bool): Int {\n    if (c) val x = 1\n    return x\n}\n";
+    let err = prism_parser::parse_source(src).expect_err("a declaration is not a branch body");
+    assert_eq!(err.code, "E2001");
+}

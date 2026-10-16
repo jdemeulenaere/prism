@@ -490,7 +490,10 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
             for p in params {
                 hasher.write_str(p);
             }
-            hash_expr_span_free(body, hasher);
+            hasher.write_u64(body.stmts.len() as u64);
+            for stmt in &body.stmts {
+                hash_expr_span_free(stmt, hasher);
+            }
         }
     }
 }

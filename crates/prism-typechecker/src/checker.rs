@@ -157,6 +157,7 @@ impl TypeChecker {
             TypeKind::Function {
                 params,
                 return_type,
+                ..
             } => {
                 for param in params {
                     self.check_annotation_visibility(param);
@@ -719,7 +720,7 @@ impl TypeChecker {
                     }
                 }
 
-                let body_ty = self.check_expr(body, exp_ret);
+                let body_ty = self.check_block(body, Some(exp_ret));
 
                 self.current_expected_return = prev_ret;
                 self.in_function = prev_in_func;
@@ -929,7 +930,7 @@ impl TypeChecker {
                     }
                     param_types.push(Type::Error);
                 }
-                let body_ty = self.infer_expr(body);
+                let body_ty = self.check_block(body, None);
 
                 self.current_expected_return = prev_ret;
                 self.in_function = prev_in_func;
@@ -2041,11 +2042,14 @@ mod tests {
         let mut checker = TypeChecker::new(None);
         let closure = expr(ExprKind::Closure {
             params: vec!["n".to_string()],
-            body: Box::new(expr(ExprKind::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(expr(ExprKind::Ident("n".to_string()))),
-                right: Box::new(expr(ExprKind::Literal(Literal::Int(1)))),
-            })),
+            body: BlockExpr {
+                stmts: vec![expr(ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(expr(ExprKind::Ident("n".to_string()))),
+                    right: Box::new(expr(ExprKind::Literal(Literal::Int(1)))),
+                })],
+                span: Span::dummy(),
+            },
         });
 
         let expected_fn = Type::Fn {
@@ -2800,10 +2804,13 @@ mod tests {
         // A standard (non-composable) closure: { MyView() }
         let closure = expr(ExprKind::Closure {
             params: Vec::new(),
-            body: Box::new(expr(ExprKind::Call {
-                callee: Box::new(expr(ExprKind::Ident("MyView".to_string()))),
-                args: Vec::new(),
-            })),
+            body: BlockExpr {
+                stmts: vec![expr(ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Ident("MyView".to_string()))),
+                    args: Vec::new(),
+                })],
+                span: Span::dummy(),
+            },
         });
 
         // Inferring the closure should not leak the outer compose context -> emits E4008!

@@ -246,7 +246,11 @@ mod tests {
                         assert_eq!(callee.to_string(), "Column");
                         assert_eq!(args.len(), 2);
                         assert_eq!(args[0].name.as_deref(), Some("padding"));
-                        assert!(matches!(args[1].value.kind, ExprKind::Block(_)));
+                        // A parameterless trailing lambda is a closure, not a block.
+                        assert!(matches!(
+                            &args[1].value.kind,
+                            ExprKind::Closure { params, body } if params.is_empty() && body.stmts.len() == 1
+                        ));
                     } else {
                         panic!("Expected Call expr for Column");
                     }
@@ -273,11 +277,7 @@ mod tests {
                         assert_eq!(args.len(), 1);
                         if let ExprKind::Closure { params, body } = &args[0].value.kind {
                             assert_eq!(params, &vec!["item".to_string()]);
-                            if let ExprKind::Block(cb) = &body.kind {
-                                assert_eq!(cb.stmts.len(), 2);
-                            } else {
-                                panic!("Expected Block body in closure");
-                            }
+                            assert_eq!(body.stmts.len(), 2);
                         } else {
                             panic!("Expected Closure in trailing lambda");
                         }
@@ -923,11 +923,8 @@ mod tests {
         let ExprKind::Closure { body, .. } = &args[0].value.kind else {
             panic!("Expected closure");
         };
-        let ExprKind::Block(block) = &body.kind else {
-            panic!("Expected block body");
-        };
         assert_eq!(text(src, body.span), "-> val y = x }");
-        assert_eq!(text(src, block.stmts[0].span), "val y = x");
+        assert_eq!(text(src, body.stmts[0].span), "val y = x");
     }
 
     #[test]
@@ -939,5 +936,331 @@ mod tests {
 
         let err = parse_source("fun f(x: Int) = x | 1").unwrap_err();
         assert_eq!(err.message, "Unexpected single '|'");
+    }
+
+    // --- harden-parser-grammar: braces, declarations, function types, newlines ---
+
+    /// The statements of the first function's block body.
+    fn block_stmts(src: &str) -> Vec<Expr> {
+        let file = parse_source(src).unwrap_or_else(|e| panic!("{}\n{}", e, src));
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Block(b)) = &f.body else {
+            panic!("Expected block body");
+        };
+        b.stmts.clone()
+    }
+
+    /// The first function's expression body.
+    fn expr_body(src: &str) -> Expr {
+        let file = parse_source(src).unwrap_or_else(|e| panic!("{}\n{}", e, src));
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        e.clone()
+    }
+
+    /// The parameter types of the first function, as written back by `Display`.
+    fn param_types(src: &str) -> Vec<Type> {
+        let file = parse_source(src).unwrap_or_else(|e| panic!("{}\n{}", e, src));
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        f.params.iter().map(|p| p.ty.clone()).collect()
+    }
+
+    #[track_caller]
+    fn assert_parse_error(src: &str, message_part: &str) {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", err);
+        assert!(
+            err.message.contains(message_part),
+            "expected '{}' in '{}' for {}",
+            message_part,
+            err.message,
+            src
+        );
+    }
+
+    /// A closure value with zero parameters, returning its body statement count.
+    #[track_caller]
+    fn parameterless_closure_len(e: &Expr) -> usize {
+        match &e.kind {
+            ExprKind::Closure { params, body } if params.is_empty() => body.stmts.len(),
+            other => panic!("Expected a parameterless closure, found {:?}", other),
+        }
+    }
+
+    fn call_args(e: &Expr) -> &[CallArg] {
+        match &e.kind {
+            ExprKind::Call { args, .. } => args,
+            other => panic!("Expected call, found {:?}", other),
+        }
+    }
+
+    #[test]
+    fn trailing_lambda_without_parameters_is_a_closure() {
+        let stmts = block_stmts(
+            "fun f() {\n    Column { Item() }\n    Button(onClick = handler) { Text(\"Click\") }\n}",
+        );
+        assert_eq!(parameterless_closure_len(&call_args(&stmts[0])[0].value), 1);
+        let args = call_args(&stmts[1]);
+        assert_eq!(args.len(), 2);
+        assert_eq!(parameterless_closure_len(&args[1].value), 1);
+    }
+
+    #[test]
+    fn brace_argument_and_initializer_are_closures() {
+        let stmts = block_stmts(
+            "fun f() {\n    g({ 1 })\n    Button(onClick = { count = 1 })\n    val f = { 1 }\n}",
+        );
+        assert_eq!(parameterless_closure_len(&call_args(&stmts[0])[0].value), 1);
+        assert_eq!(parameterless_closure_len(&call_args(&stmts[1])[0].value), 1);
+        let ExprKind::LocalVar { initializer, .. } = &stmts[2].kind else {
+            panic!("Expected declaration");
+        };
+        assert_eq!(parameterless_closure_len(initializer), 1);
+    }
+
+    #[test]
+    fn single_expression_closure_body_is_a_block() {
+        let e = expr_body("fun f() = run { x -> x + 1 }");
+        let ExprKind::Closure { params, body } = &call_args(&e)[0].value.kind else {
+            panic!("Expected closure");
+        };
+        assert_eq!(params, &vec!["x".to_string()]);
+        assert_eq!(body.stmts.len(), 1);
+        assert_eq!(body.stmts[0].to_string(), "(x + 1)");
+    }
+
+    #[test]
+    fn braces_in_block_position_stay_blocks() {
+        let stmts = block_stmts(
+            "fun f(c: Bool, x: Int) {\n    if (c) { a() } else { b() }\n    when (x) {\n        0 -> { a() }\n        else -> { }\n    }\n    { val t = 1 }\n}",
+        );
+        let ExprKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } = &stmts[0].kind
+        else {
+            panic!("Expected if");
+        };
+        assert!(matches!(then_branch.kind, ExprKind::Block(_)));
+        assert!(matches!(
+            else_branch.as_ref().unwrap().kind,
+            ExprKind::Block(_)
+        ));
+        let ExprKind::When { branches, .. } = &stmts[1].kind else {
+            panic!("Expected when");
+        };
+        assert!(branches
+            .iter()
+            .all(|b| matches!(b.body.kind, ExprKind::Block(_))));
+        assert!(matches!(stmts[2].kind, ExprKind::Block(_)));
+    }
+
+    #[test]
+    fn expression_bodied_function_returning_a_closure() {
+        assert_eq!(parameterless_closure_len(&expr_body("fun f() = { 1 }")), 1);
+    }
+
+    #[test]
+    fn parameterless_closure_body_span_differs_from_closure_and_statement() {
+        let src = "fun f() = run { val y = 1 }";
+        let e = expr_body(src);
+        let closure = &call_args(&e)[0].value;
+        let ExprKind::Closure { body, .. } = &closure.kind else {
+            panic!("Expected closure");
+        };
+        let text = |span: Span| &src[span.start..span.end];
+        assert_eq!(text(closure.span), "{ val y = 1 }");
+        assert_eq!(text(body.span), "val y = 1 }");
+        assert_eq!(text(body.stmts[0].span), "val y = 1");
+    }
+
+    #[test]
+    fn function_type_syntax() {
+        let types = param_types(
+            "fun f(onClick: () -> Unit, content: compose () -> Unit, item: compose (Int) -> Unit, g: (Int) -> (Int) -> Int, a: (() -> Unit)?, b: () -> Unit?, u: ()) { }",
+        );
+        let shown: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+        assert_eq!(
+            shown,
+            [
+                "() -> Unit",
+                "compose () -> Unit",
+                "compose (Int) -> Unit",
+                "(Int) -> (Int) -> Int",
+                "(() -> Unit)?",
+                "() -> Unit?",
+                "()",
+            ]
+        );
+        let compose_flags: Vec<bool> = types[..3]
+            .iter()
+            .map(|t| match &t.kind {
+                TypeKind::Function {
+                    is_compose, params, ..
+                } => {
+                    assert!(params.len() <= 1);
+                    *is_compose
+                }
+                other => panic!("Expected function type, found {:?}", other),
+            })
+            .collect();
+        assert_eq!(compose_flags, [false, true, true]);
+        // `->` is right-associative.
+        let TypeKind::Function { return_type, .. } = &types[3].kind else {
+            panic!("Expected function type");
+        };
+        assert!(matches!(return_type.kind, TypeKind::Function { .. }));
+        // `(() -> Unit)?` is a nullable function; `() -> Unit?` returns `Unit?`.
+        assert!(
+            matches!(&types[4].kind, TypeKind::Nullable(inner) if matches!(inner.kind, TypeKind::Function { .. }))
+        );
+        let TypeKind::Function { return_type, .. } = &types[5].kind else {
+            panic!("Expected function type");
+        };
+        assert!(matches!(return_type.kind, TypeKind::Nullable(_)));
+        assert!(matches!(types[6].kind, TypeKind::Unit));
+    }
+
+    #[test]
+    fn multiple_types_in_parentheses_without_an_arrow_rejected() {
+        assert_parse_error(
+            "fun f(p: (Int, String)) { }",
+            "Tuple types are not supported",
+        );
+        assert_parse_error("fun f(p: compose (Int)) { }", "Expected '->'");
+    }
+
+    #[test]
+    fn declarations_in_statement_position_only() {
+        for src in [
+            "fun f() { g(val z = 1) }",
+            "fun f() { x = val y = 3 }",
+            "fun f() = val x = 1",
+            "fun f(c: Bool): Int {\n    if (c) val x = 1\n    return x\n}",
+            "fun f(x: Int) { when (x) { else -> var y = 1 } }",
+        ] {
+            assert_parse_error(src, "only allowed as a statement");
+        }
+        let stmts = block_stmts("fun f(c: Bool) { if (c) { val x = 1 } }");
+        let ExprKind::If { then_branch, .. } = &stmts[0].kind else {
+            panic!("Expected if");
+        };
+        let ExprKind::Block(b) = &then_branch.kind else {
+            panic!("Expected block");
+        };
+        assert!(matches!(b.stmts[0].kind, ExprKind::LocalVar { .. }));
+    }
+
+    #[test]
+    fn chained_assignment_through_a_declaration_rejected() {
+        for src in [
+            "fun f() { val a = b = c }",
+            "val a = b = c",
+            "fun f() { a = b = c }",
+        ] {
+            assert_parse_error(src, "Chained assignments are not allowed");
+        }
+    }
+
+    #[test]
+    fn leading_minus_starts_a_new_statement() {
+        for src in [
+            "fun f() {\n    val a = b\n    -1\n}",
+            "fun f(c: Bool) {\n    if (c) { foo() }\n    -1\n}",
+        ] {
+            let stmts = block_stmts(src);
+            assert_eq!(stmts.len(), 2, "{}", src);
+            assert_eq!(stmts[1].to_string(), "(-1)");
+        }
+    }
+
+    #[test]
+    fn leading_minus_starts_a_new_when_branch() {
+        let e = expr_body("fun f(x: Int) = when (x) {\n    0 -> a\n    -1 -> b\n    else -> c\n}");
+        let ExprKind::When { branches, .. } = &e.kind else {
+            panic!("Expected when");
+        };
+        let patterns: Vec<String> = branches
+            .iter()
+            .map(|b| match &b.patterns[..] {
+                [WhenPattern::Expr(p)] => p.to_string(),
+                [WhenPattern::Else] => "else".to_string(),
+                other => panic!("Unexpected patterns {:?}", other),
+            })
+            .collect();
+        assert_eq!(patterns, ["0", "(-1)", "else"]);
+        assert_eq!(branches[0].body.to_string(), "a");
+    }
+
+    #[test]
+    fn continuation_operators_join_lines() {
+        let stmts = block_stmts(
+            "fun f() {\n    val ok = a\n        && b\n    val n = user\n        ?.name\n        ?: \"anon\"\n}",
+        );
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0].to_string(), "val ok = (a && b)");
+        assert_eq!(stmts[1].to_string(), "val n = (user?.name ?: \"anon\")");
+    }
+
+    #[test]
+    fn newlines_inside_parentheses_and_brackets_are_ignored() {
+        let stmts = block_stmts("fun f() {\n    g(a\n        - 1)\n    xs[i\n        + 1]\n}");
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0].to_string(), "g((a - 1))");
+        assert_eq!(stmts[1].to_string(), "xs[(i + 1)]");
+    }
+
+    #[test]
+    fn braces_inside_parentheses_restore_newline_sensitivity() {
+        let stmts = block_stmts("fun f() {\n    g({ a\n        -1 })\n}");
+        assert_eq!(parameterless_closure_len(&call_args(&stmts[0])[0].value), 2);
+    }
+
+    #[test]
+    fn leading_parenthesis_keeps_its_existing_rule() {
+        let stmts = block_stmts("fun f() {\n    cleanup()\n    (1 + 2).toString()\n}");
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn statements_and_members_on_one_line_need_a_separator() {
+        assert_parse_error(
+            "fun f() { val a = 1 val b = 2 }",
+            "Expected a newline or ';' between statements",
+        );
+        assert_parse_error(
+            "struct P { val x: Int val y: Int }",
+            "between struct fields",
+        );
+        assert_parse_error("enum E { A B }", "between enum variants");
+        assert_parse_error(
+            "fun f(x: Int) = when (x) { 0 -> a 1 -> b }",
+            "between 'when' branches",
+        );
+
+        assert_eq!(block_stmts("fun f() { val a = 1; val b = 2 }").len(), 2);
+        assert_eq!(
+            block_stmts("fun f() {\n    val a = 1\n    val b = 2\n}").len(),
+            2
+        );
+        for src in [
+            "struct P { val x: Int, val y: Int }",
+            "struct P {\n    val x: Int\n    val y: Int\n}",
+            "enum E { A, B }",
+            "enum E {\n    A\n    B\n}",
+            "fun f(x: Int) = when (x) { 0 -> a, 1 -> b, else -> c }",
+            "fun f(x: Int) = when (x) {\n    0 -> a\n    else -> c\n}",
+        ] {
+            parse_source(src).unwrap_or_else(|e| panic!("{}\n{}", e, src));
+        }
     }
 }
