@@ -61,6 +61,7 @@ All formal system specifications are maintained in [`openspec/specs/`](openspec/
 - [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable architectural rules.
 - [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker discovery and import resolution.
 - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
+- [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, nominal types, and diagnostic error catalog.
 - [`memory-model`](openspec/specs/memory-model/spec.md): Value ownership, borrowing, `Heap<T>`, and lifetime elision.
 - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): 2-phase compilation, ABI hashing, and execution tiers.
 

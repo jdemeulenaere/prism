@@ -20,7 +20,7 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 
 ---
 
-## Phase 1: Front-End Parser, AST & Package Resolver (Current)
+## Phase 1: Front-End Parser, AST & Package Resolver
 - [x] Lexer and Parser for basic language subset:
   - Primitive types, `val`/`var`, basic arithmetic, `fun`, `if`, `when`, `return`, `struct`, `enum`.
   - Default `private` visibility, explicit `package` and `public`.
@@ -31,9 +31,9 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 
 ---
 
-## Phase 2: Type System, Value Ownership & ABI Invalidation
-- [x] Type checker with bidirectional type inference and lifetime elision rules (`crates/prism-typechecker`).
-- [ ] Value ownership transfer, move semantics, and borrow checker for functions.
+## Phase 2: Type System, Value Ownership & ABI Invalidation (Current)
+- [x] Type checker with bidirectional type inference, nominal types, scoping, and diagnostics (`crates/prism-typechecker`).
+- [ ] Value ownership transfer, move semantics, borrow checker, and the 4 lifetime elision rules for functions.
 - [ ] ABI interface extraction & ABI hashing engine (`.abi` cache).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
 
