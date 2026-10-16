@@ -20,7 +20,7 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
   - `/opsx-sync`: Syncs delta specs from a change into main specs without archiving.
   - `/opsx-explore`: Interactive thinking partner for clarifying ideas before drafting specs.
   - `/opsx-update`: Revises existing planning artifacts to reconcile changes.
-  - Claude Code uses a colon instead of a dash (`/opsx:propose`, `/opsx:apply`, ...); its skills and commands live in `.claude/`, while `.agents/` holds the Antigravity copies. Regenerate both with `openspec init --tools claude,antigravity`.
+  - Claude Code uses a colon instead of a dash (`/opsx:propose`, `/opsx:apply`, ...); its skills and commands live in `.claude/`, while `.agents/` holds the Antigravity copies. Refresh both with `openspec update`; to change which tools are generated, run `openspec init --tools claude,antigravity`.
 
 ---
 
@@ -28,12 +28,14 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
 
 Every code, grammar, or compiler change must uphold these. The normative text, with scenarios, is [`openspec/specs/system-invariants/spec.md`](openspec/specs/system-invariants/spec.md); keep this list as a one-line summary of it.
 
-1. **File extension**: `.prism`; each file is its own compilation unit.
-2. **Default visibility is `private`**: `package` is visible within the package directory, `public` across packages; `public` and `package` declarations must declare explicit parameter and return types.
-3. **Zero-config, zero-marker root discovery**: no build or marker files; the workspace root comes from matching the file's path to its `package` declaration. Root-anchored imports use a leading slash (`import /core/fmt`), sibling imports a plain name (`import doo`).
-4. **Zero GC, zero hidden ARC, no lifetime annotations**: single-owner values, `Heap<T>` for recursion, stack-scoped borrows with elision, typed handles for graphs.
-5. **First-class UI**: `compose fun` is a native modifier; slot-table handles (`State<T>`, `NodeId`) are `Copy` IDs.
-6. **Compilation avoidance**: Phase 1 extracts ABI hashes, Phase 2 checks bodies; editing a non-generic body causes zero downstream recompilation.
+1. **Single-file compilation units with explicit export boundaries**: each `.prism` file compiles independently. Default visibility is `private`; `package` is visible within the package directory, `public` across packages. `public` and `package` declarations must declare explicit parameter and return types.
+2. **Zero build files, zero marker files**: the workspace root comes from matching the file's path to its `package` declaration. Root-anchored imports use a leading slash (`import /core/fmt`), sibling imports a plain name (`import doo`).
+3. **Deterministic hermetic builds and compilation avoidance**: a file's artifact depends only on its content, its direct imports' ABI hashes, the compiler version and the target. Phase 1 extracts ABI hashes, Phase 2 checks bodies; editing a non-generic body causes zero downstream recompilation.
+4. **Kotlin-like syntax without ambiguity**: `fun`, `val`/`var`, `struct`, `enum`, `when`, `if` and `T?`, parsed deterministically.
+5. **Zero-cost memory safety**: zero GC, zero hidden ARC, no lifetime annotations. Single-owner values, `Heap<T>` for recursion, stack-scoped borrows with elision, typed handles for graphs.
+6. **First-class compose and hot reload**: `compose fun` is a native modifier; slot-table handles (`State<T>`, `NodeId`) are `Copy` IDs; the Tier 1 JIT swaps composable bodies while keeping UI state.
+
+In code comments and diagnostics, cite an invariant by name ("the zero-marker invariant"), not by number.
 
 ---
 
@@ -41,11 +43,12 @@ Every code, grammar, or compiler change must uphold these. The normative text, w
 
 What is implemented and what is planned live in different places. Never treat a planned design as a description of the code.
 
-- **Implemented behavior: [`openspec/specs/`](openspec/specs)**, the source of truth for what the compiler does today:
+- **Implemented behavior: [`openspec/specs/`](openspec/specs)**, the source of truth for what the compiler does today. Each spec's `## Design Rationale` section records why past decisions were made:
   - [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
   - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
-  - [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, nominal types, and diagnostic error catalog.
+  - [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, and nominal types.
   - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): Phase 1 ABI extraction, deterministic ABI hashing, and monomorphization hashes.
+  - [`diagnostics`](openspec/specs/diagnostics/spec.md): The catalog of every compiler error code. A change that adds an error adds its code here.
   - [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable invariants. These are design constraints, so they also cover subsystems not built yet.
 - **Planned design: [`docs/architecture.md`](docs/architecture.md)**: code generation, compilation avoidance, execution tiers, the memory model and borrow checker, and the compose engine. A change that implements an item moves its requirements into `openspec/specs/` as delta specs and removes them from this document.
 - **Progress: [`ROADMAP.md`](ROADMAP.md)**: current phase and milestones. [`README.md`](README.md) is the high-level vision.

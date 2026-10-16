@@ -45,9 +45,6 @@ pub enum WorkspaceError {
         source: String,
         errors: Vec<prism_typechecker::TypeError>,
     },
-    Cycle {
-        cycle: Vec<PathBuf>,
-    },
     Io {
         path: PathBuf,
         message: String,
@@ -75,7 +72,6 @@ impl WorkspaceError {
                 source,
                 errors,
             } => diagnostics::format_type_errors(path, Some(source), errors),
-            WorkspaceError::Cycle { cycle } => diagnostics::format_cycle_error(cycle),
             WorkspaceError::Io { path, message } => {
                 format!(
                     "error[E1000]: IO error at '{}': {}\n",
@@ -272,63 +268,6 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
     Ok(())
 }
 
-/// Extracts a representative directed cycle path from a cyclic dependency graph.
-pub fn extract_cycle_path(graph: &DependencyGraph) -> Vec<PathBuf> {
-    for cluster in graph.sccs() {
-        if cluster.files.len() > 1 {
-            let scc_set: std::collections::HashSet<&PathBuf> = cluster.files.iter().collect();
-            for start_file in &cluster.files {
-                let mut path = Vec::new();
-                let mut visited = std::collections::HashSet::new();
-                if let Some(cycle) =
-                    find_cycle_dfs(start_file, graph, &scc_set, &mut path, &mut visited)
-                {
-                    return cycle;
-                }
-            }
-        } else if let Some(single) = cluster.files.first() {
-            if let Some(node) = graph.get_node(single) {
-                if node.direct_imports.contains(single) {
-                    return vec![single.clone(), single.clone()];
-                }
-            }
-        }
-    }
-    Vec::new()
-}
-
-fn find_cycle_dfs(
-    curr: &Path,
-    graph: &DependencyGraph,
-    scc_set: &std::collections::HashSet<&PathBuf>,
-    path: &mut Vec<PathBuf>,
-    visited: &mut std::collections::HashSet<PathBuf>,
-) -> Option<Vec<PathBuf>> {
-    path.push(curr.to_path_buf());
-    visited.insert(curr.to_path_buf());
-
-    if let Some(node) = graph.get_node(curr) {
-        for neighbor in &node.direct_imports {
-            if !scc_set.contains(neighbor) {
-                continue;
-            }
-            if let Some(pos) = path.iter().position(|p| p == neighbor) {
-                let mut cycle = path[pos..].to_vec();
-                cycle.push(neighbor.clone());
-                return Some(cycle);
-            }
-            if !visited.contains(neighbor) {
-                if let Some(cycle) = find_cycle_dfs(neighbor, graph, scc_set, path, visited) {
-                    return Some(cycle);
-                }
-            }
-        }
-    }
-
-    path.pop();
-    None
-}
-
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in topological SCC order.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
     // Phase 1: Extract surface FileAbi across all reachable files in the dependency graph
@@ -513,32 +452,6 @@ mod tests {
 
         let report = check_file(&a).unwrap();
         assert_eq!(report.total_files, 2);
-
-        fs::remove_dir_all(&temp).ok();
-    }
-
-    #[test]
-    fn test_directed_cycle_extraction_order() {
-        let temp = create_temp_dir("directed_cycle");
-        let pkg_dir = temp.join("p");
-        fs::create_dir_all(&pkg_dir).unwrap();
-
-        let a = pkg_dir.join("a.prism");
-        let b = pkg_dir.join("b.prism");
-        let c = pkg_dir.join("c.prism");
-
-        // Directed cycle: a -> c -> b -> a
-        fs::write(&a, "package p\nimport c\npublic fun fa(): Int = 1\n").unwrap();
-        fs::write(&c, "package p\nimport b\npublic fun fc(): Int = 3\n").unwrap();
-        fs::write(&b, "package p\nimport a\npublic fun fb(): Int = 2\n").unwrap();
-
-        let graph = DependencyGraph::from_entry(&a).unwrap();
-        let cycle = extract_cycle_path(&graph);
-        assert!(cycle.len() >= 4);
-        assert_eq!(cycle[0], a);
-        assert_eq!(cycle[1], c);
-        assert_eq!(cycle[2], b);
-        assert_eq!(cycle[3], a);
 
         fs::remove_dir_all(&temp).ok();
     }

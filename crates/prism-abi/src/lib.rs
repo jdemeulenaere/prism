@@ -1,6 +1,6 @@
 //! `prism-abi`: Surface signature extraction & deterministic ABI hashing.
 //!
-//! Enforces Invariant 1 and `compilation-and-abi.md`:
+//! Enforces the single-file compilation unit invariant and the `compilation-and-abi` spec:
 //! - Default visibility is `private`.
 //! - Private symbols and non-generic function bodies are excluded from the exported ABI.
 //! - Exported (`public` and `package`) declarations must declare explicit types.

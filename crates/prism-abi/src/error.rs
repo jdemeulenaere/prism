@@ -5,7 +5,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbiError {
-    /// Invariant 1: all `public` and `package`-visible functions must declare explicit return types.
+    /// Single-file compilation unit invariant: `public` and `package` functions must declare explicit return types.
     MissingExplicitReturnType {
         function_name: String,
         visibility: String,

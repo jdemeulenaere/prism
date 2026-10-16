@@ -1,6 +1,8 @@
 //! Import-directed dependency graph, Tarjan's SCC cycle grouping, and topological ordering.
 //!
-//! Follows Section 2.3 and Section 2.4 of `package-resolution.md` and Invariants 1 and 3.
+//! Implements the "Import-Directed Compilation Isolation" and "Dependency Graph and SCC Cycle
+//! Decomposition" requirements of the `package-resolution` spec, and upholds the single-file
+//! compilation unit and zero-marker invariants.
 
 use crate::error::ResolveError;
 use crate::import::resolve_import;
@@ -100,7 +102,7 @@ impl DependencyGraph {
 
             let current_root = discover_root(&current_path, source_file.package.as_ref())?;
 
-            // Root consistency check (Section 2.1 Rule 5 & E1004)
+            // Root consistency check (E1004 InconsistentWorkspaceRoot)
             let roots_differ = if current_root == authoritative_root {
                 false
             } else if let (Ok(c1), Ok(c2)) = (

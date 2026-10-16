@@ -1,6 +1,7 @@
 //! Sibling and root-anchored import resolution.
 //!
-//! Follows Section 2.2 of `package-resolution.md` and Invariant 2.
+//! Implements the "Import Resolution and Workspace Anchoring" requirement of the
+//! `package-resolution` spec, and upholds the zero-marker invariant.
 
 use crate::error::ResolveError;
 use crate::root::{normalize_path, verify_disk_casing_exists};

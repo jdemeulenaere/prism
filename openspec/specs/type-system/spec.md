@@ -1,7 +1,7 @@
 # Type System Specification
 
 ## Purpose
-The type system defines semantic analysis, lexical symbol resolution, nominal type definitions, bidirectional type checking, and expression/statement validation for Prism programs.
+The type system defines semantic analysis, lexical symbol resolution, nominal type definitions, bidirectional type checking, and expression/statement validation for Prism programs. Error codes are listed in the [`diagnostics`](../diagnostics/spec.md) spec.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ The type checker MUST resolve identifiers across nested lexical scopes (local bl
 
 #### Scenario: Duplicate symbol declaration rejected
 - **WHEN** a scope declares two variables or parameters with the identical identifier
-- **THEN** the type checker rejects the duplicate declaration with `DuplicateSymbolDeclaration` (`E4010`)
+- **THEN** the type checker rejects the duplicate declaration with `DuplicateSymbol` (`E4010`)
 
 ### Requirement: Static Type Inference and Assignment Compatibility
 The type checker MUST infer types for unannotated `val` and `var` bindings, enforce strict numeric typing without implicit coercion, and verify assignment compatibility for references, nullable types, and struct fields.
@@ -170,3 +170,16 @@ Phase 2 body checking MUST typecheck expressions against symbols exported in Pha
 #### Scenario: Accessing package-visibility symbol within same package succeeds
 - **WHEN** a file accesses a `package`-visible declaration defined in another file within the identical package directory
 - **THEN** the declaration resolves and typechecks successfully
+
+## Design Rationale
+Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
+
+- **A separate `prism-typechecker` crate.** Semantic analysis stays decoupled from the grammar and from module resolution, and can be tested with in-memory ASTs.
+- **Bidirectional checking, not Hindley-Milner.** Exported signatures and parameters always carry types, so local `infer`/`check` modes are enough. They are fast and deterministic and give precise errors without unification traces.
+- **A small subtyping lattice.** `Nothing` is assignable to every type, `T` to `T?`, `T?` to `U?` when `T` is assignable to `U`, and `&mut T` to `&T`. Everything else is invariant: in particular `Int` never widens to `Float`. An `Error` type is compatible with everything so one mistake does not cascade into secondary errors.
+- **Imports are checked against `FileAbi` only.** A file's body is checked against the exported signatures of its imports, never their bodies, which keeps each file an independent compilation unit. Symbols carry their declaring package so `package` visibility can be enforced (`E4007`).
+- **Compose context is a stack.** Entering a `compose fun` pushes `true`. A closure pushes `true` or `false` depending on whether its expected function type is composable, so a normal callback such as `onClick` inside a composable cannot call composables (`E4008`). Checking this statically avoids slot-table failures at runtime.
+- **Two passes per file, two phases per workspace.** Pass 1 registers all top-level symbols (private expression-bodied functions get their return type inferred in Pass 2), so declarations can refer to each other in any order. Across the workspace, every file's ABI is extracted before any body is checked, so files in an import cycle can see each other.
+- **Nominal types resolve lazily.** An annotation such as `user: User` stays a field-less nominal type and is resolved against the type namespace only where a member is read. Eager resolution was rejected: it resolves only one level (`order.user.name` still needs a second lookup), needs cycle guards for recursive types, and would make `Type` equality compare whole field lists.
+- **Type lookup skips values.** `lookup_type` returns the innermost struct or enum and ignores variables and functions, so a local `val User` cannot hide the struct `User`.
+- **Unknown type names stay opaque for now.** Rejecting them (`E4001`) needs a builtin type list and generic scoping. Until then, misuse surfaces as `E4006` at the first member access.

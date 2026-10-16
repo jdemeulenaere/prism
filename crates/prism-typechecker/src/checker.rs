@@ -636,7 +636,7 @@ impl TypeChecker {
 
             ExprKind::Ident(name) => match self.env.resolve(name, expr.span) {
                 Ok(sym) => {
-                    // Check visibility across packages (Invariant 2 & E4007)
+                    // Check visibility across packages (single-file compilation unit invariant, E4007)
                     if sym.visibility() == Visibility::Package {
                         let def_pkg = sym.defining_package().unwrap_or("");
                         let curr_pkg = self.current_package.as_deref().unwrap_or("");
@@ -1239,7 +1239,7 @@ impl TypeChecker {
                 params,
                 ret,
             } => {
-                // Composable context enforcement (Invariant 5 & E4008)
+                // Composable context enforcement (first-class compose invariant, E4008)
                 if is_compose && !self.is_in_compose() {
                     let callee_name = if let ExprKind::Ident(n) = &callee.kind {
                         n.clone()

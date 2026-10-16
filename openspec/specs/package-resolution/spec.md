@@ -102,3 +102,13 @@ The compiler CLI `prism check` command MUST accept either an individual source f
 #### Scenario: Symlink escaping workspace boundary rejected
 - **WHEN** an entry file or directory entry points to a symlink resolving outside the discovered workspace root
 - **THEN** the CLI rejects the target with `WorkspaceBoundaryViolation` (`E1005`)
+
+## Design Rationale
+Decisions from `cli-workspace-driver` and `fix-cli-workspace-audit`:
+
+- **No manifest file.** A `Prism.toml` was rejected because the workspace root must come from the entry file's path and `package` declaration alone (zero-marker invariant).
+- **File targets follow imports; directory targets scan.** `prism check <file>` loads only what the file transitively imports, so unrelated or half-written siblings never block it. `prism check <dir>` scans recursively and enforces package homogeneity per directory.
+- **Import cycles are allowed.** Files are processed in topological order of SCC clusters. Because exported declarations carry explicit types, Phase 1 can extract the ABI of every file in a cycle without reading any body, so a cycle is not an error (the old `E1007` was retired).
+- **Every input is boundary-checked.** Entry files and scanned files, not just imports, are canonicalized and must stay under the canonical workspace root, so a symlink cannot pull in files from outside (`E1005`).
+- **Case is verified against the disk.** On case-insensitive filesystems (APFS, NTFS) a plain existence check ignores case, so the resolver reads directory entries to compare each segment exactly. A project then behaves the same on every OS.
+- **An empty relative root means `.`.** A workspace root of `""` is normalized to `.` before existence checks so canonicalization and boundary checks are never skipped.

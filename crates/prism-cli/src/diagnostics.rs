@@ -2,7 +2,7 @@ use prism_abi::AbiError;
 use prism_parser::ParseError;
 use prism_resolver::ResolveError;
 use prism_typechecker::TypeError;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Formats a snippet with a line pointer when source text is provided.
 fn render_code_snippet(source: &str, line: u32, col: u32) -> Option<String> {
@@ -111,7 +111,7 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             out.push_str(&format!("  --> {}: {}\n", path.display(), message));
         }
         ResolveError::Parse { path, message } => {
-            out.push_str("error[E2001]: syntax error\n");
+            out.push_str(&format!("error[{}]: syntax error\n", code));
             out.push_str(&format!("  --> {}:1:1\n", path.display()));
             if let Ok(src) = std::fs::read_to_string(path) {
                 if let Some(first_line) = src.lines().next() {
@@ -127,20 +127,6 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
         out.push_str(&format!("   = help: {}\n", suggestion));
     }
 
-    out
-}
-
-/// Formats a circular import cycle error.
-pub fn format_cycle_error(cycle_nodes: &[PathBuf]) -> String {
-    let mut out = String::new();
-    out.push_str("error[E1007]: cyclic dependency detected\n");
-    let chain = cycle_nodes
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(" -> ");
-    out.push_str(&format!("   = note: circular import cycle: {}\n", chain));
-    out.push_str("   = help: refactor circular imports into a shared module or interface\n");
     out
 }
 
@@ -271,18 +257,6 @@ mod tests {
         let formatted = format_resolve_error(&err);
         assert!(formatted.contains("error[E1002]: imported file not found"));
         assert!(formatted.contains("cannot resolve import '/core/math'"));
-    }
-
-    #[test]
-    fn test_format_cycle_error() {
-        let cycle = vec![
-            PathBuf::from("a.prism"),
-            PathBuf::from("b.prism"),
-            PathBuf::from("a.prism"),
-        ];
-        let formatted = format_cycle_error(&cycle);
-        assert!(formatted.contains("error[E1007]: cyclic dependency detected"));
-        assert!(formatted.contains("a.prism -> b.prism -> a.prism"));
     }
 
     #[test]

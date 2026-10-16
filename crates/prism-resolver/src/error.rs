@@ -1,6 +1,6 @@
 //! Error catalog and diagnostics for package resolution.
 //!
-//! Follows the error catalog specified in Section 4 of `package-resolution.md`.
+//! Codes follow the catalog in the `diagnostics` spec (`openspec/specs/diagnostics/spec.md`).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -41,9 +41,9 @@ pub enum ResolveError {
     },
     /// E1006: An import path syntax is invalid (e.g. contains `..` or relative parent traversal).
     InvalidImportPath { import_path: String, reason: String },
-    /// IO error during resolution.
+    /// E1000: IO error during resolution.
     Io { path: PathBuf, message: String },
-    /// Parse error while parsing a file.
+    /// E2001: Parse error while parsing a file.
     Parse { path: PathBuf, message: String },
 }
 
@@ -58,11 +58,11 @@ impl ResolveError {
             ResolveError::WorkspaceBoundaryViolation { .. } => "E1005",
             ResolveError::InvalidImportPath { .. } => "E1006",
             ResolveError::Io { .. } => "E1000",
-            ResolveError::Parse { .. } => "E1000",
+            ResolveError::Parse { .. } => "E2001",
         }
     }
 
-    /// Returns a resolution suggestion according to Section 4 of the specification.
+    /// Returns a resolution suggestion for this error.
     pub fn suggestion(&self) -> Option<&'static str> {
         match self {
             ResolveError::PackagePathMismatch { .. } => {

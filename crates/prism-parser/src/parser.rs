@@ -180,7 +180,7 @@ impl Parser {
     // --- Declarations ---
 
     pub fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
-        // Parse visibility: default is Private (Invariant 1 & compilation-and-abi.md)
+        // Parse visibility: default is Private (single-file compilation unit invariant)
         let mut visibility = Visibility::Private;
         let mut start_span = self.peek().span;
 
@@ -358,7 +358,7 @@ impl Parser {
                 let fty = self.parse_type()?;
                 if matches!(fty.kind, TypeKind::Reference { .. }) {
                     return Err(ParseError::new(
-                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (Invariant 4)",
+                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (zero-cost memory invariant)",
                         fty.span,
                     ));
                 }
@@ -405,7 +405,7 @@ impl Parser {
                 let fty = self.parse_type()?;
                 if matches!(fty.kind, TypeKind::Reference { .. }) {
                     return Err(ParseError::new(
-                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (Invariant 4)",
+                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (zero-cost memory invariant)",
                         fty.span,
                     ));
                 }

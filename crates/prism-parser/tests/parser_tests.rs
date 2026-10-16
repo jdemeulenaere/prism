@@ -553,7 +553,7 @@ mod tests {
         assert!(res1.is_err());
         let err1 = res1.unwrap_err();
         assert!(err1.message.contains("borrowed reference types"));
-        assert!(err1.message.contains("Invariant 4"));
+        assert!(err1.message.contains("zero-cost memory invariant"));
 
         let src2 = r#"
             struct MutableRefHolder(val ptr: &mut Int)

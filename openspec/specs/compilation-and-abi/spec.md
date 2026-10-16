@@ -57,3 +57,9 @@ Exported generic functions MUST record a Monomorphization Hash of their body in 
 #### Scenario: Generic body hash ignores formatting
 - **WHEN** comments or blank lines are added to an exported generic function without changing its code
 - **THEN** its Monomorphization Hash and the file's ABI hash remain unchanged
+
+## Design Rationale
+- **The ABI comes from the AST, not from type checking.** Explicit types on exported declarations let Phase 1 run on every file independently and before any body is checked. This is what lets the Phase 2 type checker handle import cycles (`type-checker-core`).
+- **The hash ignores spans and formatting.** Source positions, comments and whitespace are excluded, including from a generic function's body hash, so reformatting never invalidates downstream files.
+- **Block-bodied exports default to `Unit` here.** ABI extraction only rejects expression-bodied exports without a return type. The type checker rejects both forms (`E4011`). Whether to tighten the ABI rule or relax the specs is an open item in `ROADMAP.md` (`resolve-nominal-type-annotations`).
+- **The hash algorithm is not final.** The code uses a 128-bit FNV-1a hash. The original design called for BLAKE3, and the choice must be made before the `.abi` cache exists (`docs/architecture.md` section 1).

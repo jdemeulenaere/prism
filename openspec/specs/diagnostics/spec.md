@@ -1,0 +1,71 @@
+# Prism Diagnostic Codes
+
+## Purpose
+The diagnostics specification is the single catalog of compiler error codes. Each code identifies one kind of error across all stages (resolution, parsing, ABI extraction and type checking), so tools and tests can key on codes instead of message text. The other specs reference these codes in their scenarios; this spec lists them all in one place.
+
+## Requirements
+
+### Requirement: Stable Diagnostic Codes
+Every error the compiler reports MUST carry a code from the catalog below. A code MUST keep its meaning once assigned, and a retired code MUST NOT be reused.
+
+#### Scenario: Rendered diagnostic header
+- **WHEN** `prism check` reports an error
+- **THEN** the diagnostic starts with `error[<code>]: <title>`, followed by the source location when one is known
+
+#### Scenario: Code range identifies the stage
+- **WHEN** a diagnostic is reported
+- **THEN** its code falls in the range of the stage that produced it: `E1xxx` resolution and I/O, `E2xxx` lexing and parsing, `E3xxx` Phase 1 ABI extraction, `E4xxx` Phase 2 type checking
+
+#### Scenario: New error kind gets a new code
+- **WHEN** a change introduces a new kind of error
+- **THEN** it takes the next unused code in its stage's range, adds it to this catalog, and does not reuse a retired code
+
+## Catalog
+
+### E1xxx: Resolution and I/O (`crates/prism-resolver`, `crates/prism-cli`)
+
+| Code | Name | Meaning |
+|---|---|---|
+| `E1000` | `Io` | A file or directory could not be read, or a `prism check` target does not exist. |
+| `E1001` | `PackagePathMismatch` | The declared `package` does not match the file's directory path, including a case-only mismatch or more package segments than directories. |
+| `E1002` | `FileNotFound` | An import targets a file that does not exist with the exact casing on disk. |
+| `E1003` | `PackageHeterogeneity` | Files directly inside one directory declare different packages. |
+| `E1004` | `InconsistentWorkspaceRoot` | A dependency resolves to a different workspace root than the entry file. |
+| `E1005` | `WorkspaceBoundaryViolation` | An import, entry file or scanned file resolves outside the workspace root, for example through a symlink. |
+| `E1006` | `InvalidImportPath` | An import path contains `.` or `..` segments or is otherwise malformed. |
+| `E1007` | (retired) | Cyclic dependency. Retired by `fix-cli-workspace-audit`, which allowed mutually recursive imports. Do not reuse. |
+
+### E2xxx: Lexing and parsing (`crates/prism-lexer`, `crates/prism-parser`)
+
+| Code | Name | Meaning |
+|---|---|---|
+| `E2001` | syntax error | The lexer produced an error token or the parser rejected the source. The parser stops at the first error. |
+
+### E3xxx: Phase 1 ABI extraction (`crates/prism-abi`)
+
+| Code | Name | Meaning |
+|---|---|---|
+| `E3001` | `MissingExplicitReturnType`, `MissingExplicitVarType` | An exported declaration lacks a type required for ABI extraction: an expression-bodied `public`/`package` function without a return type, or an exported top-level variable without a type. |
+
+### E4xxx: Phase 2 type checking (`crates/prism-typechecker`)
+
+| Code | Name | Meaning |
+|---|---|---|
+| `E4001` | `UnresolvedSymbol` | An identifier is not found in any enclosing scope or imported ABI. |
+| `E4002` | `TypeMismatch` | An expression's type is not assignable to the expected type, including implicit numeric widening and `null` for a non-nullable type. |
+| `E4003` | `ImmutabilityViolation` | Reassigning a `val`, assigning a `val` field, mutating a field of a `val` instance, or taking `&mut` of a `val`. |
+| `E4004` | `CallSignatureMismatch` | Wrong argument count or types, a missing or duplicate named argument, or a missing or duplicate struct field in a constructor call. |
+| `E4005` | `ReturnTypeMismatch` | A returned value is incompatible with the declared return type. |
+| `E4006` | `UnknownField` | A field does not exist on the struct, or member access on a non-struct or opaque type. |
+| `E4007` | `VisibilityViolation` | A `package`-visible symbol is accessed from another package. |
+| `E4008` | `InvalidComposeContext` | A `compose fun` is called outside a composable function or closure. |
+| `E4009` | `NonExhaustiveWhen` | A `when` in value position covers neither every enum variant nor has an `else`. |
+| `E4010` | `DuplicateSymbol` | Two declarations in the same scope share a name. |
+| `E4011` | `MissingReturnType` | A `public` or `package` function omits its return type. |
+
+A `public` or `package` function without a return type is reported as `E3001` when it has an expression body (Phase 1 rejects it first) and as `E4011` when it has a block body (Phase 1 accepts it as returning `Unit`). Unifying these is tracked in `ROADMAP.md`.
+
+## Design Rationale
+- **One code per error kind, separate from message text.** Tooling and tests match on codes, so messages can improve without breaking them.
+- **`E4011` instead of reusing `E4004`** (`resolve-nominal-type-annotations`): a missing return type is not a call error, and the type checker also runs without the ABI stage (unit tests, a future LSP), so it needs its own diagnostic rather than relying on `E3001`.
+- **`E1007` retired, not reused** (`fix-cli-workspace-audit`): mutually recursive imports are valid because exported declarations carry explicit types, so Phase 1 can extract every file in a cycle without reading any body.

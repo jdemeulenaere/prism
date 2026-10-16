@@ -57,7 +57,7 @@ impl Drop for TestWorkspace {
 
 #[test]
 fn test_fixture_1_standard_nested_package_pure_path() {
-    // Section 5.1: /demo/app/ui/views.prism with package app.ui ==> Root is /demo
+    // Scenario "Matching nested package declaration": /demo/app/ui/views.prism with package app.ui ==> Root is /demo
     let source_path = Path::new("/demo/app/ui/views.prism");
     let pkg_segments = vec!["app", "ui"];
 
@@ -87,7 +87,7 @@ fn test_fixture_1_standard_nested_package_disk() {
 
 #[test]
 fn test_fixture_2_root_file_pure_path() {
-    // Section 5.2: /demo/main.prism with no package statement ==> Root is /demo
+    // Scenario "Root-level file with empty package": /demo/main.prism with no package statement ==> Root is /demo
     let source_path = Path::new("/demo/main.prism");
     let empty_pkg: Vec<&str> = vec![];
 
@@ -115,7 +115,7 @@ fn test_fixture_2_root_file_disk() {
 
 #[test]
 fn test_fixture_3_leading_slash_root_import() {
-    // Section 5.3: From /demo/app/ui/views.prism: import /core/fmt ==> /demo/core/fmt.prism
+    // Scenario "Root-anchored import with leading slash": From /demo/app/ui/views.prism: import /core/fmt ==> /demo/core/fmt.prism
     let ws = TestWorkspace::new("fixture3");
     let views = ws.write_file(
         "app/ui/views.prism",
@@ -139,7 +139,7 @@ fn test_fixture_3_leading_slash_root_import() {
 
 #[test]
 fn test_fixture_4_sibling_import() {
-    // Section 5.4: From /demo/app/ui/views.prism: import widgets ==> /demo/app/ui/widgets.prism
+    // Scenario "Sibling import without leading slash": From /demo/app/ui/views.prism: import widgets ==> /demo/app/ui/widgets.prism
     let ws = TestWorkspace::new("fixture4");
     let views = ws.write_file(
         "app/ui/views.prism",
@@ -166,7 +166,7 @@ fn test_fixture_4_sibling_import() {
 
 #[test]
 fn test_fixture_5_directory_mismatch_pure_path() {
-    // Section 5.5: /demo/app/ui/views.prism with package app.models ==> Returns E1001
+    // Scenario "Directory path does not match declared package": /demo/app/ui/views.prism with package app.models ==> Returns E1001
     let source_path = Path::new("/demo/app/ui/views.prism");
     let mismatch_pkg = vec!["app", "models"];
 
@@ -206,7 +206,7 @@ fn test_fixture_5_directory_mismatch_disk() {
 
 #[test]
 fn test_fixture_6_import_directed_isolation() {
-    // Section 5.6: Compiling /demo/app/main.prism which only imports widgets.prism
+    // Scenario "Unimported sibling files ignored": Compiling /demo/app/main.prism which only imports widgets.prism
     // ignores unimported /demo/app/draft.prism (even if draft.prism contains syntax errors)
     let ws = TestWorkspace::new("fixture6");
     let main = ws.write_file(
@@ -235,7 +235,7 @@ fn test_fixture_6_import_directed_isolation() {
 
 #[test]
 fn test_fixture_7_mutual_recursion_scc() {
-    // Section 5.7: a.prism imports b, b.prism imports a
+    // Scenario "Mutually recursive sibling imports": a.prism imports b, b.prism imports a
     // ==> Grouped into single SCC cluster of size 2 without fatal graph cycle error.
     let ws = TestWorkspace::new("fixture7");
     let a = ws.write_file("demo/a.prism", "package demo\nimport b\nfun foo() {}\n");
@@ -259,7 +259,7 @@ fn test_fixture_7_mutual_recursion_scc() {
 
 #[test]
 fn test_fixture_8_cli_directory_scanning_and_homogeneity() {
-    // Section 5.8: scan_directory("/demo/app/ui") finds views.prism and widgets.prism,
+    // Scenario "Homogeneous folder": scan_directory("/demo/app/ui") finds views.prism and widgets.prism,
     // but rejects if any file in that folder declares a different package (E1003).
     let ws = TestWorkspace::new("fixture8");
     let views = ws.write_file("app/ui/views.prism", "package app.ui\nfun v() {}\n");
@@ -301,7 +301,7 @@ fn test_fixture_8_cli_directory_scanning_and_homogeneity() {
 
 #[test]
 fn test_fixture_9_workspace_jail_relative_traversal() {
-    // Section 5.9: Parent traversal forbidden (E1006)
+    // Scenario "Import attempting directory traversal": Parent traversal forbidden (E1006)
     let dummy_file = Path::new("/demo/app/main.prism");
     let dummy_root = Path::new("/demo");
 
@@ -320,7 +320,7 @@ fn test_fixture_9_workspace_jail_relative_traversal() {
 #[cfg(unix)]
 #[test]
 fn test_fixture_9_workspace_jail_symlink_escaping() {
-    // Section 5.9: Import target escaping root (e.g. symlink to /tmp/outside.prism) ==> E1005
+    // Scenario "Import target escaping workspace boundary": Import target escaping root (e.g. symlink to /tmp/outside.prism) ==> E1005
     let outside_ws = TestWorkspace::new("fixture9_outside");
     let outside_file = outside_ws.write_file("secret.prism", "package secret\n");
 
@@ -347,7 +347,7 @@ fn test_fixture_9_workspace_jail_symlink_escaping() {
 
 #[test]
 fn test_fixture_10_strict_case_sensitivity_root_discovery() {
-    // Section 5.10: Directory Foo/Bar with package foo.bar on macOS/Windows ==> Returns E1001
+    // Scenario "Strict case-sensitivity enforcement": Directory Foo/Bar with package foo.bar on macOS/Windows ==> Returns E1001
     let ws = TestWorkspace::new("fixture10");
     let file = ws.write_file("Foo/Bar/views.prism", "package foo.bar\n");
 

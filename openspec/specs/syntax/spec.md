@@ -203,4 +203,16 @@ Modifiers such as `compose` MUST function contextually, permitting their use as 
 - **THEN** `compose` is parsed as a valid identifier expression rather than a modifier keyword
 
 ## Design Rationale
-Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity.
+Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
+
+- **Hand-written lexer, no generator.** A streaming lexer over UTF-8 bytes keeps the bootstrap compiler free of build dependencies and procedural macros (`logos` was rejected), and gives exact control over newline tracking (`is_preceded_by_newline`), nested comments and `4..10` versus `4.10`.
+- **Pratt parsing for expressions, recursive descent for statements and declarations.** One precedence table defines every operator. LALR generators (`lalrpop`) were rejected because they struggle with trailing lambdas, contextual modifiers and semicolon-free newlines.
+- **Elvis between comparison and range.** `?:` binds tighter than comparison and equality but looser than range and arithmetic, so `age ?: 0 >= 18` is `(age ?: 0) >= 18` and `base ?: offset + 10` is `base ?: (offset + 10)`.
+- **Non-associative assignment.** `a = b = c` is rejected to rule out assignment-as-expression bugs.
+- **Mandatory parentheses on `if` and `when`.** Without them, `if isValid { doWork() }` would parse `{ doWork() }` as a trailing lambda on `isValid`. Multi-token lookahead to tell the two apart was rejected as fragile.
+- **Newlines end statements.** A `(` after a newline is not a call, and `return` before a newline, `}` or end of file returns unit. Mandatory semicolons were rejected for ergonomics.
+- **Multi-statement closures.** Closure bodies are blocks, because single-expression closures cannot hold setup logic.
+- **`compose` is a soft keyword.** It is a modifier only directly before `fun`, so common API names such as `pipeline.compose()` stay usable.
+- **Borrowed struct fields are rejected in the parser.** Enforcing the zero-cost memory invariant at AST construction means no struct can ever carry a lifetime dependency.
+- **`package` declaration versus `package` modifier.** A lookahead (`is_package_decl_ahead`) treats `package` followed by a dotted name as a declaration and `package fun` (or `struct`, `enum`, `val`, `var`) as visibility.
+- **Fail-fast errors.** The parser stops at the first syntax error with an exact span and never panics. Multi-error recovery is left for LSP support.

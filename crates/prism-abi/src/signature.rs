@@ -73,13 +73,13 @@ impl FileAbi {
 
             match decl {
                 Declaration::Function(f) => {
-                    // Check return type rule (Invariant 1)
+                    // Check return type rule (single-file compilation unit invariant)
                     let return_type_str = match &f.return_type {
                         Some(ty) => ty.to_string(),
                         None => {
                             // If it's a block body or no body, return type is Unit `()`
                             // If it's an expression body `= expr` without return type, it is an inferred return type
-                            // which is forbidden for exported ABI (Invariant 1).
+                            // which is forbidden for exported ABI.
                             match &f.body {
                                 Some(FunctionBody::Expr(_)) => {
                                     return Err(AbiError::MissingExplicitReturnType {
@@ -102,8 +102,8 @@ impl FileAbi {
                         })
                         .collect();
 
-                    // For generic functions, compute monomorphization hash of the body (compilation-and-abi.md)
-                    // Hashing MUST be span-free to prevent comments/whitespace from altering ABI (Invariant 3)
+                    // For generic functions, compute monomorphization hash of the body (`compilation-and-abi` spec)
+                    // Hashing MUST be span-free to prevent comments/whitespace from altering ABI (hermetic builds invariant)
                     let generic_body_hash = if !f.type_params.is_empty() {
                         let mut h = DeterministicHasher::new();
                         if let Some(body) = &f.body {
