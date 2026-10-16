@@ -68,6 +68,13 @@ pub enum TypeError {
     /// E4011: A `public` or `package` function omits its explicit return type annotation.
     MissingReturnType { function_name: String, span: Span },
 
+    /// E4012: A name used by the file is exported by more than one of its imports.
+    AmbiguousImport {
+        name: String,
+        modules: Vec<String>,
+        span: Span,
+    },
+
     /// E4013: A type cannot be inferred and must be written: a closure parameter with no expected
     /// function type, or a declaration whose inferred type depends on itself.
     CannotInferType { message: String, span: Span },
@@ -90,6 +97,7 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
             TypeError::MissingReturnType { .. } => "E4011",
+            TypeError::AmbiguousImport { .. } => "E4012",
             TypeError::CannotInferType { .. } => "E4013",
         }
     }
@@ -110,6 +118,7 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
             TypeError::MissingReturnType { span, .. } => *span,
+            TypeError::AmbiguousImport { span, .. } => *span,
             TypeError::CannotInferType { span, .. } => *span,
         }
     }
@@ -184,6 +193,14 @@ impl TypeError {
                 format!(
                     "exported function '{}' must declare an explicit return type",
                     function_name
+                )
+            }
+            TypeError::AmbiguousImport { name, modules, .. } => {
+                let modules: Vec<String> = modules.iter().map(|m| format!("'/{}'", m)).collect();
+                format!(
+                    "'{}' is exported by more than one import ({}); remove one of the imports or rename the symbol",
+                    name,
+                    modules.join(", ")
                 )
             }
             TypeError::CannotInferType { message, .. } => message.clone(),

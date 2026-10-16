@@ -28,7 +28,7 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 6. Ambiguous imports (D7)
 
-- [ ] 6.1 Add the import layer with candidate sets, and `TypeError::AmbiguousImport` (`E4012`) with its catalog row and CLI help line. Verify with multi-file tests for every scenario of "Ambiguous Imported Names Rejected at Use".
+- [x] 6.1 Add the import layer with candidate sets, and `TypeError::AmbiguousImport` (`E4012`) with its catalog row and CLI help line. Verify with multi-file tests for every scenario of "Ambiguous Imported Names Rejected at Use".
 
 ## 7. Discarded block values (D8)
 

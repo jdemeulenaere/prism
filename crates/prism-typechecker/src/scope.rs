@@ -202,6 +202,19 @@ impl Symbol {
 #[derive(Debug, Clone)]
 pub struct ScopeStack {
     scopes: Vec<HashMap<String, Symbol>>,
+    /// Symbols exported by direct imports, below the module scope. Each name maps to one
+    /// candidate per exporting module; a name with several candidates is ambiguous at use.
+    imports: HashMap<String, Vec<(String, Symbol)>>,
+}
+
+/// The result of looking a name up among the imports.
+pub enum ImportLookup<'a> {
+    /// No import exports the name.
+    None,
+    /// Exactly one import exports the name.
+    One(&'a Symbol),
+    /// Several imports export the name; holds their module paths.
+    Ambiguous(Vec<String>),
 }
 
 impl ScopeStack {
@@ -209,6 +222,35 @@ impl ScopeStack {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            imports: HashMap::new(),
+        }
+    }
+
+    /// Adds a symbol exported by the imported module `module` to the import layer. A module
+    /// contributes at most one candidate per name.
+    pub fn define_import(&mut self, module: &str, symbol: Symbol) {
+        let candidates = self.imports.entry(symbol.name.clone()).or_default();
+        if !candidates.iter().any(|(m, _)| m == module) {
+            candidates.push((module.to_string(), symbol));
+        }
+    }
+
+    /// Whether some import exports `name`.
+    pub fn is_imported(&self, name: &str) -> bool {
+        self.imports.contains_key(name)
+    }
+
+    /// Looks `name` up among the imports, keeping only candidates accepted by `keep`.
+    pub fn lookup_import(&self, name: &str, keep: impl Fn(&Symbol) -> bool) -> ImportLookup<'_> {
+        let candidates: Vec<&(String, Symbol)> = self
+            .imports
+            .get(name)
+            .map(|c| c.iter().filter(|(_, sym)| keep(sym)).collect())
+            .unwrap_or_default();
+        match candidates.as_slice() {
+            [] => ImportLookup::None,
+            [(_, sym)] => ImportLookup::One(sym),
+            many => ImportLookup::Ambiguous(many.iter().map(|(m, _)| m.clone()).collect()),
         }
     }
 
@@ -247,40 +289,64 @@ impl ScopeStack {
     }
 
     /// Looks up an identifier starting from the innermost scope outwards without emitting an error.
+    ///
+    /// Falls back to the imports when no scope declares the name; an ambiguous import gives
+    /// `None` (use [`Self::resolve`] to report it).
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
         for scope in self.scopes.iter().rev() {
             if let Some(symbol) = scope.get(name) {
                 return Some(symbol);
             }
         }
-        None
+        match self.lookup_import(name, |_| true) {
+            ImportLookup::One(symbol) => Some(symbol),
+            _ => None,
+        }
     }
 
     /// Looks up a nominal type name (struct or enum declaration) from the innermost scope outwards,
-    /// skipping value symbols (variables, functions) that share the name.
+    /// skipping value symbols (variables, functions) that share the name, then among the imports.
+    /// An ambiguous imported type name gives `None` (see [`Self::lookup_import`]).
     pub fn lookup_type(&self, name: &str) -> Option<&Symbol> {
-        self.scopes
+        let in_scope = self
+            .scopes
             .iter()
             .rev()
             .filter_map(|scope| scope.get(name))
-            .find(|symbol| {
-                matches!(
-                    symbol.kind,
-                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. }
-                )
-            })
+            .find(|symbol| is_type_symbol(symbol));
+        match in_scope {
+            Some(symbol) => Some(symbol),
+            None => match self.lookup_import(name, is_type_symbol) {
+                ImportLookup::One(symbol) => Some(symbol),
+                _ => None,
+            },
+        }
     }
 
-    /// Resolves an identifier starting from the innermost scope outwards.
+    /// Resolves an identifier starting from the innermost scope outwards, then among the imports.
     ///
-    /// Returns `Err(TypeError::UnresolvedSymbol)` (`E4001`) if not found in any scope level.
+    /// Returns `Err(TypeError::UnresolvedSymbol)` (`E4001`) if no scope or import declares it,
+    /// and `Err(TypeError::AmbiguousImport)` (`E4012`) if no scope declares it and several
+    /// imports export it.
     #[allow(clippy::result_large_err)]
     pub fn resolve(&self, name: &str, span: Span) -> Result<&Symbol, TypeError> {
-        self.lookup(name)
-            .ok_or_else(|| TypeError::UnresolvedSymbol {
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.get(name) {
+                return Ok(symbol);
+            }
+        }
+        match self.lookup_import(name, |_| true) {
+            ImportLookup::One(symbol) => Ok(symbol),
+            ImportLookup::Ambiguous(modules) => Err(TypeError::AmbiguousImport {
+                name: name.to_string(),
+                modules,
+                span,
+            }),
+            ImportLookup::None => Err(TypeError::UnresolvedSymbol {
                 name: name.to_string(),
                 span,
-            })
+            }),
+        }
     }
 
     /// Detaches every scope level nested inside the module scope, leaving only the module scope.
@@ -329,6 +395,14 @@ impl ScopeStack {
         }
         false
     }
+}
+
+/// Whether `symbol` declares a nominal type (a struct or an enum).
+pub fn is_type_symbol(symbol: &Symbol) -> bool {
+    matches!(
+        symbol.kind,
+        SymbolKind::Struct { .. } | SymbolKind::Enum { .. }
+    )
 }
 
 impl Default for ScopeStack {

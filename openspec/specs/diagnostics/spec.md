@@ -65,8 +65,9 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | `E4007` | `VisibilityViolation` | A `package`-visible symbol is accessed from another package. |
 | `E4008` | `InvalidComposeContext` | A `compose fun` is called outside a composable function or closure. |
 | `E4009` | `NonExhaustiveWhen` | A `when` in value position covers neither every enum variant nor has an `else`. |
-| `E4010` | `DuplicateSymbol` | Two declarations in the same scope share a name. |
+| `E4010` | `DuplicateSymbol` | Two declarations in the same scope share a name, including a top-level declaration with the same name as an imported symbol. |
 | `E4011` | `MissingReturnType` | A `public` or `package` function omits its return type. |
+| `E4012` | `AmbiguousImport` | A name the file uses (as a value, callee or type) is exported by more than one of its imports. Importing both without using the name is accepted. |
 | `E4013` | `CannotInferType` | A type cannot be inferred and must be written: a closure parameter with no expected function type, or an unannotated private declaration whose inferred type depends on itself (such as a recursive function without a return type). |
 
 A `public` or `package` function without a return type is reported as `E3001` when it has an expression body (Phase 1 rejects it first) and as `E4011` when it has a block body (Phase 1 accepts it as returning `Unit`). Unifying these is tracked in `ROADMAP.md`.

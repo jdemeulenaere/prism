@@ -1,7 +1,7 @@
 //! Main TypeChecker implementation: Pass 1 declaration registration and Pass 2 body checking.
 
 use crate::error::TypeError;
-use crate::scope::{Mutability, ScopeStack, Symbol, SymbolKind};
+use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::{NominalId, Type, TypeDef};
 use prism_abi::{ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, TopLevelVarDecl};
@@ -191,11 +191,16 @@ impl TypeChecker {
 
     /// Binds a type name in the current scope: a declared or imported struct or enum gives its
     /// identity, and `Range` with no user declaration gives the built-in range type.
+    /// An ambiguous imported type name gives the error type (`E4012` is reported by
+    /// [`Self::check_annotation_names`]).
     fn bind_type_name(&self, name: &str) -> Option<Type> {
-        match self.env.lookup_type(name) {
-            Some(sym) => Some(sym.ty()),
-            None if name == "Range" => Some(Type::Struct(NominalId::builtin_range())),
-            None => None,
+        if let Some(sym) = self.env.lookup_type(name) {
+            return Some(sym.ty());
+        }
+        match self.env.lookup_import(name, is_type_symbol) {
+            ImportLookup::Ambiguous(_) => Some(Type::Error),
+            _ if name == "Range" => Some(Type::Struct(NominalId::builtin_range())),
+            _ => None,
         }
     }
 
@@ -240,21 +245,30 @@ impl TypeChecker {
         true
     }
 
-    /// Reports `E4007` for every nominal type name in an annotation that has `package`
+    /// Reports `E4012` for every nominal type name in an annotation that several imports export,
+    /// and `E4007` for every one that has `package`
     /// visibility in another package.
-    fn check_annotation_visibility(&mut self, ast_ty: &prism_ast::types::Type) {
+    fn check_annotation_names(&mut self, ast_ty: &prism_ast::types::Type) {
         use prism_ast::types::TypeKind;
         match &ast_ty.kind {
             TypeKind::Named { name, type_args } => {
                 if let Some(sym) = self.env.lookup_type(name).cloned() {
                     self.check_visibility(&sym, ast_ty.span);
+                } else if let ImportLookup::Ambiguous(modules) =
+                    self.env.lookup_import(name, is_type_symbol)
+                {
+                    self.errors.push(TypeError::AmbiguousImport {
+                        name: name.clone(),
+                        modules,
+                        span: ast_ty.span,
+                    });
                 }
                 for arg in type_args {
-                    self.check_annotation_visibility(arg);
+                    self.check_annotation_names(arg);
                 }
             }
             TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => {
-                self.check_annotation_visibility(inner)
+                self.check_annotation_names(inner)
             }
             TypeKind::Function {
                 params,
@@ -262,9 +276,9 @@ impl TypeChecker {
                 ..
             } => {
                 for param in params {
-                    self.check_annotation_visibility(param);
+                    self.check_annotation_names(param);
                 }
-                self.check_annotation_visibility(return_type);
+                self.check_annotation_names(return_type);
             }
             TypeKind::Unit => {}
         }
@@ -376,7 +390,7 @@ impl TypeChecker {
                 _ => continue,
             };
             exported_types.insert(symbol.name.clone(), ty);
-            self.env.define(symbol).ok();
+            self.env.define_import(&abi.module, symbol);
         }
         let lower = |checker: &Self, ty_str: &str| {
             Type::parse_str(ty_str).bind_names(&|name| {
@@ -417,7 +431,7 @@ impl TypeChecker {
                         abi.package.clone(),
                         Span::dummy(),
                     );
-                    self.env.define(symbol).ok();
+                    self.env.define_import(&abi.module, symbol);
                 }
                 ExportedSymbol::Struct { name, fields, .. } => {
                     let fields = fields
@@ -493,7 +507,7 @@ impl TypeChecker {
                         abi.package.clone(),
                         Span::dummy(),
                     );
-                    self.env.define(symbol).ok();
+                    self.env.define_import(&abi.module, symbol);
                 }
             }
         }
@@ -541,16 +555,14 @@ impl TypeChecker {
                 }
                 _ => continue,
             };
-            if let Err(err) = self.env.define(symbol) {
-                self.errors.push(err);
-            }
+            self.define_top_level(symbol);
         }
 
         for decl in &source_file.declarations {
             match decl {
                 Declaration::Struct(s) => {
                     for f in &s.fields {
-                        self.check_annotation_visibility(&f.ty);
+                        self.check_annotation_names(&f.ty);
                     }
                     let fields = s
                         .fields
@@ -562,7 +574,7 @@ impl TypeChecker {
                 }
                 Declaration::Enum(e) => {
                     for payload in e.variants.iter().flat_map(|v| &v.fields) {
-                        self.check_annotation_visibility(payload);
+                        self.check_annotation_names(payload);
                     }
                     let variants: Vec<(String, Vec<Type>)> = e
                         .variants
@@ -615,7 +627,7 @@ impl TypeChecker {
                 }
                 Declaration::Var(v) => {
                     let ty = if let Some(annot) = &v.ty {
-                        self.check_annotation_visibility(annot);
+                        self.check_annotation_names(annot);
                         self.lower_type(annot)
                     } else if v.visibility != Visibility::Private {
                         self.errors.push(TypeError::TypeMismatch {
@@ -641,17 +653,29 @@ impl TypeChecker {
                         self.current_package.clone(),
                         v.span,
                     );
-                    if let Err(err) = self.env.define(sym) {
-                        self.errors.push(err);
-                    }
+                    self.define_top_level(sym);
                 }
             }
         }
     }
 
+    /// Defines a top-level declaration in module scope. A declaration with the same name as an
+    /// imported symbol is a duplicate (`E4010`), even though it shadows the import.
+    fn define_top_level(&mut self, symbol: Symbol) {
+        if self.env.is_imported(&symbol.name) {
+            self.errors.push(TypeError::DuplicateSymbol {
+                name: symbol.name.clone(),
+                span: symbol.span,
+            });
+        }
+        if let Err(err) = self.env.define(symbol) {
+            self.errors.push(err);
+        }
+    }
+
     fn register_function_decl(&mut self, f: &FunctionDecl) {
         for annot in f.params.iter().map(|p| &p.ty).chain(&f.return_type) {
-            self.check_annotation_visibility(annot);
+            self.check_annotation_names(annot);
         }
         let params: Vec<Type> = f.params.iter().map(|p| self.lower_type(&p.ty)).collect();
         let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -687,9 +711,7 @@ impl TypeChecker {
             self.current_package.clone(),
             f.span,
         );
-        if let Err(err) = self.env.define(sym) {
-            self.errors.push(err);
-        }
+        self.define_top_level(sym);
     }
 
     /// Pass 2: Typechecks the bodies of all top-level declarations in the module.
@@ -1105,7 +1127,7 @@ impl TypeChecker {
                 initializer,
             } => {
                 let var_ty = if let Some(a) = annot {
-                    self.check_annotation_visibility(a);
+                    self.check_annotation_names(a);
                     let expected = self.lower_type(a);
                     self.check_expr(initializer, &expected);
                     expected

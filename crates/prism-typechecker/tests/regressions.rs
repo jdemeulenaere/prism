@@ -667,3 +667,62 @@ fn closure_against_an_expected_function_type_still_inferred() {
     // A parameterless closure has nothing to infer.
     assert_ok("fun f() {\n    val g = { 1 }\n}\n");
 }
+
+// Ambiguous imported names (typechecker-soundness D7).
+
+const HELPER_A: (&str, &str) = (
+    "a/lib",
+    "package a\npublic fun helper(x: Int): Int = x\npublic struct User {\n    val id: Int\n}\n",
+);
+const HELPER_B: (&str, &str) = ("b/lib", "package b\npublic fun helper(x: String): Int = 1\npublic struct User {\n    val name: String\n}\n");
+
+#[test]
+fn using_a_name_exported_by_two_imports() {
+    let errors = check_with_modules(
+        &[HELPER_A, HELPER_B],
+        "package app\nfun g(): Int = helper(\"s\")\n",
+    );
+    assert_eq!(codes(&errors), ["E4012"], "{:?}", errors);
+    let message = errors[0].message();
+    assert!(
+        message.contains("/a/lib") && message.contains("/b/lib"),
+        "{}",
+        message
+    );
+}
+
+#[test]
+fn unused_colliding_names_accepted() {
+    assert_import_codes(
+        &[HELPER_A, HELPER_B],
+        "package app\nfun g(): Int = 1\n",
+        &[],
+    );
+}
+
+#[test]
+fn ambiguous_type_name_in_an_annotation() {
+    assert_import_codes(
+        &[HELPER_A, HELPER_B],
+        "package app\nfun f(u: User): Int = 1\n",
+        &["E4012"],
+    );
+}
+
+#[test]
+fn local_declaration_colliding_with_an_import() {
+    assert_import_codes(
+        &[HELPER_A],
+        "package app\nfun helper(x: String): Int = 1\n",
+        &["E4010"],
+    );
+}
+
+#[test]
+fn same_module_imported_twice_is_not_ambiguous() {
+    assert_import_codes(
+        &[HELPER_A, HELPER_A],
+        "package app\nfun g(): Int = helper(1)\n",
+        &[],
+    );
+}
