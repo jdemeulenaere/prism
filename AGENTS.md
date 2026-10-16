@@ -20,6 +20,7 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
   - `/opsx-sync`: Syncs delta specs from a change into main specs without archiving.
   - `/opsx-explore`: Interactive thinking partner for clarifying ideas before drafting specs.
   - `/opsx-update`: Revises existing planning artifacts to reconcile changes.
+  - Claude Code uses a colon instead of a dash (`/opsx:propose`, `/opsx:apply`, ...); its skills and commands live in `.claude/`, while `.agents/` holds the Antigravity copies. Regenerate both with `openspec init --tools claude,antigravity`.
 
 ---
 
