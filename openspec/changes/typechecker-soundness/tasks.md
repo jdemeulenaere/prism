@@ -4,8 +4,8 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 1. Rebase
 
-- [ ] 1.1 Confirm the plain-fix commits on `crates/prism-typechecker` are in place and `harden-parser-grammar` is applied. Rebase onto both. Verify `cargo test --workspace` passes, and that the repros for findings 3, 6, 7, 11, 12, 15, 16 and 20 still fail as described in proposal.md.
-- [ ] 1.2 Add MODIFIED blocks for `harden-parser-grammar`'s requirements "Parameterless Closures Are Checked as Closures" and "Composable Function Types Keep Their Compose Flag": their argument-site scenarios become `E4004` (D2). Verify with `openspec validate typechecker-soundness --strict`. Skip this task if the user picks D2's alternative.
+- [x] 1.1 Confirm the plain-fix commits on `crates/prism-typechecker` are in place and `harden-parser-grammar` is applied. Rebase onto both. Verify `cargo test --workspace` passes, and that the repros for findings 3, 6, 7, 11, 12, 15, 16 and 20 still fail as described in proposal.md.
+- [x] 1.2 Add MODIFIED blocks for `harden-parser-grammar`'s requirements "Parameterless Closures Are Checked as Closures" and "Composable Function Types Keep Their Compose Flag": their argument-site scenarios become `E4004` (D2). Verify with `openspec validate typechecker-soundness --strict`. Skip this task if the user picks D2's alternative.
 
 ## 2. Nominal identity (D3)
 
