@@ -283,6 +283,19 @@ impl ScopeStack {
             })
     }
 
+    /// Detaches every scope level nested inside the module scope, leaving only the module scope.
+    /// [`Self::restore_locals`] puts them back. Used to check a declaration's body on demand
+    /// while another body is being checked.
+    pub fn take_locals(&mut self) -> Vec<HashMap<String, Symbol>> {
+        self.scopes.split_off(1)
+    }
+
+    /// Re-attaches scope levels detached by [`Self::take_locals`].
+    pub fn restore_locals(&mut self, locals: Vec<HashMap<String, Symbol>>) {
+        self.scopes.truncate(1);
+        self.scopes.extend(locals);
+    }
+
     /// Removes a symbol from the current (innermost) scope level, returning it if it was there.
     pub fn remove(&mut self, name: &str) -> Option<Symbol> {
         self.scopes

@@ -4,7 +4,7 @@ use crate::error::TypeError;
 use crate::scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::{NominalId, Type, TypeDef};
 use prism_abi::{ExportedSymbol, FileAbi};
-use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl};
+use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, TopLevelVarDecl};
 use prism_ast::expr::{
     BinaryOp, BlockExpr, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
 };
@@ -44,6 +44,36 @@ enum Origin {
     Argument,
 }
 
+/// Inference state of an unannotated private top-level declaration, whose type comes from its
+/// body or initializer. Such a declaration is inferred on demand, the first time it is used, so
+/// its type does not depend on declaration order (D5 of `typechecker-soundness`).
+#[derive(Debug, Clone)]
+enum Inference {
+    /// Not inferred yet.
+    Pending(Box<PendingDecl>),
+    /// Being inferred: reaching it again means its type depends on itself.
+    InProgress,
+    /// Inferred; its symbol holds the type.
+    Done,
+}
+
+/// A declaration waiting for on-demand inference.
+#[derive(Debug, Clone)]
+enum PendingDecl {
+    Function(FunctionDecl),
+    Var(TopLevelVarDecl),
+}
+
+/// The state of the body being checked, swapped out while another declaration is inferred on
+/// demand.
+struct BodyContext {
+    locals: Vec<HashMap<String, Symbol>>,
+    in_compose_stack: Vec<bool>,
+    current_expected_return: Option<Type>,
+    in_function: bool,
+    origin: Origin,
+}
+
 /// How the value of a `when` is used.
 #[derive(Debug, Clone, Copy)]
 enum WhenUse<'a> {
@@ -68,6 +98,10 @@ pub struct TypeChecker {
     types: HashMap<NominalId, TypeDef>,
     /// Origin of the expected type currently being checked against.
     origin: Origin,
+    /// Unannotated private top-level declarations, by name, and how far their inference is.
+    inference: HashMap<String, Inference>,
+    /// Declarations already reported as depending on themselves (`E4013`).
+    recursive_inference: HashSet<String>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
@@ -105,6 +139,8 @@ impl TypeChecker {
             module_path: module_path.into(),
             types,
             origin: Origin::Value,
+            inference: HashMap::new(),
+            recursive_inference: HashSet::new(),
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
@@ -660,28 +696,115 @@ impl TypeChecker {
     pub fn check_module(&mut self, source_file: &SourceFile) {
         self.register_module_declarations(source_file);
 
+        // Unannotated private declarations get their type from their body, inferred on demand.
+        let mut inferred_spans = HashSet::new();
         for decl in &source_file.declarations {
+            let pending = match decl {
+                Declaration::Function(f)
+                    if f.visibility == Visibility::Private
+                        && f.return_type.is_none()
+                        && matches!(f.body, Some(FunctionBody::Expr(_))) =>
+                {
+                    Box::new(PendingDecl::Function(f.clone()))
+                }
+                Declaration::Var(v) if v.visibility == Visibility::Private && v.ty.is_none() => {
+                    Box::new(PendingDecl::Var(v.clone()))
+                }
+                _ => continue,
+            };
+            // A duplicate declaration (`E4010`) keeps the first one's inference.
+            if !self.inference.contains_key(decl.name()) {
+                self.inference
+                    .insert(decl.name().to_string(), Inference::Pending(pending));
+                inferred_spans.insert(decl.span());
+            }
+        }
+
+        for decl in &source_file.declarations {
+            if inferred_spans.contains(&decl.span()) {
+                // Inferred on first use, or here if never used before.
+                self.infer_declaration(decl.name());
+                continue;
+            }
             match decl {
                 Declaration::Function(f) => {
                     self.check_function_body(f);
                 }
-                Declaration::Var(v) => {
-                    let inferred = self.infer_expr(&v.initializer);
-                    if let Some(annot) = &v.ty {
-                        let expected = self.lower_type(annot);
-                        if !inferred.is_assignable_to(&expected) {
-                            self.errors.push(TypeError::TypeMismatch {
-                                expected,
-                                found: inferred.clone(),
-                                span: v.span,
-                            });
-                        }
-                    } else if v.visibility == Visibility::Private {
-                        self.env.update_type(&v.name, inferred);
-                    }
-                }
+                Declaration::Var(v) => self.check_top_level_var(v),
                 _ => {}
             }
+        }
+    }
+
+    /// Checks a top-level variable's initializer. An unannotated private variable takes the
+    /// initializer's type.
+    fn check_top_level_var(&mut self, v: &TopLevelVarDecl) {
+        let inferred = self.infer_expr(&v.initializer);
+        if let Some(annot) = &v.ty {
+            let expected = self.lower_type(annot);
+            if !inferred.is_assignable_to(&expected) {
+                self.errors.push(TypeError::TypeMismatch {
+                    expected,
+                    found: inferred.clone(),
+                    span: v.span,
+                });
+            }
+        } else if v.visibility == Visibility::Private {
+            self.env.update_type(&v.name, inferred);
+        }
+    }
+
+    /// Infers the unannotated private declaration `name` if it is still pending. Its body is
+    /// checked in a fresh body context (module scope only), so the body being checked when the
+    /// declaration is first used does not leak into it.
+    fn infer_declaration(&mut self, name: &str) {
+        let pending = match self.inference.get(name) {
+            Some(Inference::Pending(pending)) => pending.clone(),
+            _ => return,
+        };
+        self.inference
+            .insert(name.to_string(), Inference::InProgress);
+
+        let saved = BodyContext {
+            locals: self.env.take_locals(),
+            in_compose_stack: std::mem::replace(&mut self.in_compose_stack, vec![false]),
+            current_expected_return: self.current_expected_return.take(),
+            in_function: std::mem::replace(&mut self.in_function, false),
+            origin: std::mem::replace(&mut self.origin, Origin::Value),
+        };
+        match pending.as_ref() {
+            PendingDecl::Function(f) => self.check_function_body(f),
+            PendingDecl::Var(v) => self.check_top_level_var(v),
+        }
+        self.env.restore_locals(saved.locals);
+        self.in_compose_stack = saved.in_compose_stack;
+        self.current_expected_return = saved.current_expected_return;
+        self.in_function = saved.in_function;
+        self.origin = saved.origin;
+
+        self.inference.insert(name.to_string(), Inference::Done);
+    }
+
+    /// Before `name` is read at `span`, infers it if it is a pending unannotated declaration.
+    /// Reaching a declaration whose inference is in progress means its type depends on itself,
+    /// which reports `E4013` once per declaration. The use then sees the declaration's provisional
+    /// type, whose inferred part (a function's return type, a variable's type) is the error type.
+    fn ensure_inferred(&mut self, name: &str, span: Span) {
+        if !self.env.resolves_at_module_level(name) {
+            return;
+        }
+        match self.inference.get(name) {
+            Some(Inference::Pending(_)) => self.infer_declaration(name),
+            Some(Inference::InProgress) if self.recursive_inference.insert(name.to_string()) => {
+                self.errors.push(TypeError::CannotInferType {
+                    message: format!(
+                        "cannot infer the type of '{}' because it depends on itself; add an explicit type",
+                        name
+                    ),
+                    span,
+                });
+            }
+            _ => {}
         }
     }
 
@@ -935,6 +1058,23 @@ impl TypeChecker {
         inferred
     }
 
+    /// Types an identifier read as a value.
+    fn infer_ident(&mut self, name: &str, span: Span) -> Type {
+        match self.resolve_ident(name, span) {
+            Some(sym) => match sym.kind {
+                SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
+                    self.errors.push(TypeError::TypeNameAsValue {
+                        name: name.to_string(),
+                        span,
+                    });
+                    Type::Error
+                }
+                _ => sym.ty(),
+            },
+            None => Type::Error,
+        }
+    }
+
     /// Infers the type of an expression in inference mode.
     pub fn infer_expr(&mut self, expr: &Expr) -> Type {
         match &expr.kind {
@@ -947,19 +1087,10 @@ impl TypeChecker {
                 Literal::Null => Type::Nullable(Box::new(Type::Nothing)),
             },
 
-            ExprKind::Ident(name) => match self.resolve_ident(name, expr.span) {
-                Some(sym) => match sym.kind {
-                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
-                        self.errors.push(TypeError::TypeNameAsValue {
-                            name: name.clone(),
-                            span: expr.span,
-                        });
-                        Type::Error
-                    }
-                    _ => sym.ty(),
-                },
-                None => Type::Error,
-            },
+            ExprKind::Ident(name) => {
+                self.ensure_inferred(name, expr.span);
+                self.infer_ident(name, expr.span)
+            }
 
             ExprKind::Binary { op, left, right } => {
                 self.infer_binary_op(*op, left, right, expr.span)
@@ -1087,12 +1218,22 @@ impl TypeChecker {
                 self.in_function = true;
                 let prev_ret = self.current_expected_return.take();
 
+                // Without an expected function type, nothing gives the parameters a type (D6 of
+                // `typechecker-soundness`). They are bound to the error type so the body is still
+                // checked for other errors.
                 let mut param_types = Vec::new();
                 for name in params {
                     let sym =
                         Symbol::variable(name.clone(), Type::Error, Mutability::Val, expr.span);
-                    if let Err(err) = self.env.define(sym) {
-                        self.errors.push(err);
+                    match self.env.define(sym) {
+                        Ok(()) => self.errors.push(TypeError::CannotInferType {
+                            message: format!(
+                                "cannot infer the type of closure parameter '{}'; pass the closure where a function type is expected",
+                                name
+                            ),
+                            span: expr.span,
+                        }),
+                        Err(err) => self.errors.push(err),
                     }
                     param_types.push(Type::Error);
                 }

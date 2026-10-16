@@ -213,6 +213,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::MissingReturnType { .. } => {
             out.push_str("   = help: add an explicit return type such as ': Unit'; public and package functions must declare return types for ABI extraction\n");
         }
+        TypeError::CannotInferType { .. } => {
+            out.push_str("   = help: add an explicit type annotation, or pass the closure where a function type is expected\n");
+        }
         TypeError::NonExhaustiveWhen { .. } => {
             out.push_str(
                 "   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n",

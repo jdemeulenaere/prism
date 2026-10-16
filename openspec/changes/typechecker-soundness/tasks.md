@@ -23,8 +23,8 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 5. Inference (D5, D6)
 
-- [ ] 5.1 Add `TypeError::CannotInferType` (`E4013`), with its `diagnostics` catalog row and CLI help line. Add inference states and the fresh body context. Verify with tests for every scenario of "Order-Independent Inference of Private Declarations".
-- [ ] 5.2 Report `E4013` for closure parameters that have no expected type. Verify with tests for every scenario of "Closure Parameter Inference".
+- [x] 5.1 Add `TypeError::CannotInferType` (`E4013`), with its `diagnostics` catalog row and CLI help line. Add inference states and the fresh body context. Verify with tests for every scenario of "Order-Independent Inference of Private Declarations".
+- [x] 5.2 Report `E4013` for closure parameters that have no expected type. Verify with tests for every scenario of "Closure Parameter Inference".
 
 ## 6. Ambiguous imports (D7)
 

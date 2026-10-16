@@ -258,7 +258,16 @@ fn default_parameter_values_checked() {
 
 #[test]
 fn duplicate_closure_parameters_rejected_without_expected_type() {
-    assert_codes("fun f() {\n    val g = { x, x -> 1 }\n}\n", &["E4010"]);
+    // The first `x` also has no type to infer from (E4013); the second is the duplicate.
+    assert_codes(
+        "fun f() {\n    val g = { x, x -> 1 }\n}\n",
+        &["E4013", "E4010"],
+    );
+    // With an expected type, only the duplicate is reported.
+    assert_codes(
+        "fun run(f: (Int, Int) -> Int): Int = f(1, 2)\nfun g(): Int = run { x, x -> 1 }\n",
+        &["E4010"],
+    );
 }
 
 #[test]
@@ -581,4 +590,80 @@ fn borrow_passed_where_a_value_is_expected() {
 #[test]
 fn operators_do_not_read_through_heap() {
     assert_codes("fun f(h: Heap<Int>): Int = h + 1\n", &["E4002"]);
+}
+
+// Order-independent inference of private declarations (typechecker-soundness D5).
+
+#[test]
+fn use_before_an_inferred_function_declaration() {
+    let before = "fun g(): String {\n    val s: String = h()\n    return s\n}\nfun h() = 42\n";
+    let after = "fun h() = 42\nfun g(): String {\n    val s: String = h()\n    return s\n}\n";
+    assert_codes(before, &["E4002"]);
+    assert_codes(after, &["E4002"]);
+    assert_ok("fun g(): Int = h() + 1\nfun h() = 42\n");
+}
+
+#[test]
+fn use_before_an_inferred_top_level_value() {
+    assert_codes("fun g(): String = top\nval top = 42\n", &["E4005"]);
+    assert_ok("fun g(): Int = top\nval top = h()\nfun h() = 42\n");
+}
+
+#[test]
+fn recursive_inferred_function_reports_e4013() {
+    assert_codes(
+        "fun fact(n: Int) = if (n < 1) 1 else n * fact(n - 1)\n",
+        &["E4013"],
+    );
+    // Mutual recursion through two inferred functions.
+    assert_codes("fun a() = b()\nfun b() = a()\n", &["E4013"]);
+    // A value whose initializer reads itself.
+    assert_codes("val v = v + 1\n", &["E4013"]);
+    // An explicit return type breaks the cycle.
+    assert_ok("fun fact(n: Int): Int = if (n < 1) 1 else n * fact(n - 1)\n");
+}
+
+#[test]
+fn errors_in_an_inferred_body_reported_once() {
+    assert_codes(
+        "fun g(): Int = h()\nfun k(): Int = h()\nfun h() = undefinedThing\n",
+        &["E4001"],
+    );
+}
+
+#[test]
+fn inferred_body_does_not_see_the_caller_locals() {
+    // `h` is inferred while `g`'s body is being checked, but `x` is local to `g`.
+    assert_codes(
+        "fun g(): Int {\n    val x = 1\n    return h()\n}\nfun h() = x\n",
+        &["E4001"],
+    );
+}
+
+// Closure parameter inference (typechecker-soundness D6).
+
+#[test]
+fn unannotated_closure_parameter_without_an_expected_type() {
+    let errors = check("fun f() {\n    val g = { x -> x + 1 }\n}\n");
+    assert_eq!(codes(&errors), ["E4013"]);
+    assert!(
+        errors[0].message().contains("'x'"),
+        "{}",
+        errors[0].message()
+    );
+}
+
+#[test]
+fn calls_through_an_uninferred_closure_are_not_silently_accepted() {
+    assert_codes(
+        "fun f() {\n    val g = { x -> x + 1 }\n    val s: String = g(\"str\")\n}\n",
+        &["E4013"],
+    );
+}
+
+#[test]
+fn closure_against_an_expected_function_type_still_inferred() {
+    assert_ok("fun run(f: (Int) -> Int): Int = f(1)\nfun g(): Int = run { x -> x + 1 }\n");
+    // A parameterless closure has nothing to infer.
+    assert_ok("fun f() {\n    val g = { 1 }\n}\n");
 }

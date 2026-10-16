@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::Span;
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4011`).
+/// Semantic and type checking error categories (`E4001` - `E4013`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -67,6 +67,10 @@ pub enum TypeError {
 
     /// E4011: A `public` or `package` function omits its explicit return type annotation.
     MissingReturnType { function_name: String, span: Span },
+
+    /// E4013: A type cannot be inferred and must be written: a closure parameter with no expected
+    /// function type, or a declaration whose inferred type depends on itself.
+    CannotInferType { message: String, span: Span },
 }
 
 impl TypeError {
@@ -86,6 +90,7 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
             TypeError::MissingReturnType { .. } => "E4011",
+            TypeError::CannotInferType { .. } => "E4013",
         }
     }
 
@@ -105,6 +110,7 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
             TypeError::MissingReturnType { span, .. } => *span,
+            TypeError::CannotInferType { span, .. } => *span,
         }
     }
 
@@ -180,6 +186,7 @@ impl TypeError {
                     function_name
                 )
             }
+            TypeError::CannotInferType { message, .. } => message.clone(),
         }
     }
 }
