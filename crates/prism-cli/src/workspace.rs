@@ -5,9 +5,7 @@
 use crate::diagnostics;
 use prism_abi::{AbiError, FileAbi};
 use prism_parser::ParseError;
-use prism_resolver::{
-    scan_directory, DependencyGraph, ResolveError,
-};
+use prism_resolver::{scan_directory, DependencyGraph, ResolveError};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -62,18 +60,28 @@ impl WorkspaceError {
     pub fn render(&self) -> String {
         match self {
             WorkspaceError::Resolve(err) => diagnostics::format_resolve_error(err),
-            WorkspaceError::Parse { path, source, error } => {
-                diagnostics::format_parse_error(path, Some(source), error)
-            }
-            WorkspaceError::Abi { path, source, error } => {
-                diagnostics::format_abi_error(path, Some(source), error)
-            }
-            WorkspaceError::Type { path, source, errors } => {
-                diagnostics::format_type_errors(path, Some(source), errors)
-            }
+            WorkspaceError::Parse {
+                path,
+                source,
+                error,
+            } => diagnostics::format_parse_error(path, Some(source), error),
+            WorkspaceError::Abi {
+                path,
+                source,
+                error,
+            } => diagnostics::format_abi_error(path, Some(source), error),
+            WorkspaceError::Type {
+                path,
+                source,
+                errors,
+            } => diagnostics::format_type_errors(path, Some(source), errors),
             WorkspaceError::Cycle { cycle } => diagnostics::format_cycle_error(cycle),
             WorkspaceError::Io { path, message } => {
-                format!("error[E1000]: IO error at '{}': {}\n", path.display(), message)
+                format!(
+                    "error[E1000]: IO error at '{}': {}\n",
+                    path.display(),
+                    message
+                )
             }
             WorkspaceError::InvalidTarget(msg) => format!("error: {}\n", msg),
         }
@@ -185,7 +193,10 @@ pub fn check_path(path: &Path) -> Result<CheckReport, WorkspaceError> {
 }
 
 /// Helper to recursively discover directories that contain direct `.prism` files.
-fn collect_dirs_with_prism_files(dir: &Path, dirs: &mut Vec<PathBuf>) -> Result<(), WorkspaceError> {
+fn collect_dirs_with_prism_files(
+    dir: &Path,
+    dirs: &mut Vec<PathBuf>,
+) -> Result<(), WorkspaceError> {
     let entries = fs::read_dir(dir).map_err(|e| WorkspaceError::Io {
         path: dir.to_path_buf(),
         message: e.to_string(),
@@ -236,10 +247,12 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
     } else {
         graph.workspace_root.clone()
     };
-    let canon_root = effective_root.canonicalize().map_err(|e| WorkspaceError::Io {
-        path: effective_root.clone(),
-        message: e.to_string(),
-    })?;
+    let canon_root = effective_root
+        .canonicalize()
+        .map_err(|e| WorkspaceError::Io {
+            path: effective_root.clone(),
+            message: e.to_string(),
+        })?;
 
     for path in graph.nodes.keys() {
         let canon_path = path.canonicalize().map_err(|e| WorkspaceError::Io {
@@ -247,11 +260,13 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
             message: e.to_string(),
         })?;
         if !canon_path.starts_with(&canon_root) {
-            return Err(WorkspaceError::Resolve(ResolveError::WorkspaceBoundaryViolation {
-                import_path: path.display().to_string(),
-                target_path: canon_path,
-                workspace_root: effective_root,
-            }));
+            return Err(WorkspaceError::Resolve(
+                ResolveError::WorkspaceBoundaryViolation {
+                    import_path: path.display().to_string(),
+                    target_path: canon_path,
+                    workspace_root: effective_root,
+                },
+            ));
         }
     }
     Ok(())
@@ -265,7 +280,9 @@ pub fn extract_cycle_path(graph: &DependencyGraph) -> Vec<PathBuf> {
             for start_file in &cluster.files {
                 let mut path = Vec::new();
                 let mut visited = std::collections::HashSet::new();
-                if let Some(cycle) = find_cycle_dfs(start_file, graph, &scc_set, &mut path, &mut visited) {
+                if let Some(cycle) =
+                    find_cycle_dfs(start_file, graph, &scc_set, &mut path, &mut visited)
+                {
                     return cycle;
                 }
             }

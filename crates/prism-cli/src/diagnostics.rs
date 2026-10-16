@@ -72,10 +72,7 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             file_root,
             workspace_root,
         } => {
-            out.push_str(&format!(
-                "error[{}]: inconsistent workspace root\n",
-                code
-            ));
+            out.push_str(&format!("error[{}]: inconsistent workspace root\n", code));
             out.push_str(&format!("  --> {}:1:1\n", file.display()));
             out.push_str(&format!(
                 "   = note: dependency root '{}' conflicts with workspace root '{}'\n",
@@ -221,7 +218,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             out.push_str("   = help: use 'var' to declare a mutable binding or field\n");
         }
         TypeError::CallSignatureMismatch { .. } => {
-            out.push_str("   = help: verify parameter counts, argument types, or named parameters\n");
+            out.push_str(
+                "   = help: verify parameter counts, argument types, or named parameters\n",
+            );
         }
         TypeError::VisibilityViolation { .. } => {
             out.push_str("   = help: change declaration visibility to 'public' or access from the defining package\n");
@@ -230,7 +229,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             out.push_str("   = help: add 'compose' modifier to the caller or invoke within a composable function/closure\n");
         }
         TypeError::NonExhaustiveWhen { .. } => {
-            out.push_str("   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n");
+            out.push_str(
+                "   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n",
+            );
         }
         _ => {}
     }
@@ -254,7 +255,8 @@ mod tests {
         let formatted = format_resolve_error(&err);
         assert!(formatted.contains("error[E1001]: package path mismatch"));
         assert!(formatted.contains("--> src/views.prism:1:1"));
-        assert!(formatted.contains("help: Rename directory to match package or update package statement."));
+        assert!(formatted
+            .contains("help: Rename directory to match package or update package statement."));
     }
 
     #[test]

@@ -114,10 +114,7 @@ impl TypeError {
                 field_name,
                 ..
             } => {
-                format!(
-                    "unknown field '{}' on type '{}'",
-                    field_name, target_type
-                )
+                format!("unknown field '{}' on type '{}'", field_name, target_type)
             }
             TypeError::VisibilityViolation {
                 symbol,

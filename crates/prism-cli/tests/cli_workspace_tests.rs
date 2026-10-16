@@ -121,11 +121,7 @@ fn test_cli_binary_check_directory_multi_package() {
     fs::create_dir_all(&app_dir).unwrap();
 
     let helper = core_dir.join("helper.prism");
-    fs::write(
-        &helper,
-        "package core\npublic fun help(): Int = 99\n",
-    )
-    .unwrap();
+    fs::write(&helper, "package core\npublic fun help(): Int = 99\n").unwrap();
 
     let entry = app_dir.join("entry.prism");
     fs::write(
@@ -414,11 +410,7 @@ fn test_cli_binary_non_exhaustive_when_e4009() {
 fn test_cli_binary_val_immutability_e4003() {
     let temp = create_temp_dir("immutability_e4003");
     let file = temp.join("reassign.prism");
-    fs::write(
-        &file,
-        "fun main(): Unit {\n    val x = 1\n    x = 2\n}\n",
-    )
-    .unwrap();
+    fs::write(&file, "fun main(): Unit {\n    val x = 1\n    x = 2\n}\n").unwrap();
 
     let output = Command::new(prism_bin())
         .arg("check")
@@ -506,11 +498,7 @@ fn test_cli_binary_exhaustive_enum_when_success() {
 fn test_cli_binary_top_level_return_rejected_e4005() {
     let temp = create_temp_dir("top_level_return");
     let file = temp.join("top_return.prism");
-    fs::write(
-        &file,
-        "val x = return 10\n",
-    )
-    .unwrap();
+    fs::write(&file, "val x = return 10\n").unwrap();
 
     let output = Command::new(prism_bin())
         .arg("check")

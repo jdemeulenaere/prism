@@ -175,10 +175,18 @@ impl Symbol {
 
     pub fn defining_package(&self) -> Option<&str> {
         match &self.kind {
-            SymbolKind::Variable { defining_package, .. } => defining_package.as_deref(),
-            SymbolKind::Function { defining_package, .. } => defining_package.as_deref(),
-            SymbolKind::Struct { defining_package, .. } => defining_package.as_deref(),
-            SymbolKind::Enum { defining_package, .. } => defining_package.as_deref(),
+            SymbolKind::Variable {
+                defining_package, ..
+            } => defining_package.as_deref(),
+            SymbolKind::Function {
+                defining_package, ..
+            } => defining_package.as_deref(),
+            SymbolKind::Struct {
+                defining_package, ..
+            } => defining_package.as_deref(),
+            SymbolKind::Enum {
+                defining_package, ..
+            } => defining_package.as_deref(),
         }
     }
 
@@ -261,10 +269,11 @@ impl ScopeStack {
     /// Returns `Err(TypeError::UnresolvedSymbol)` (`E4001`) if not found in any scope level.
     #[allow(clippy::result_large_err)]
     pub fn resolve(&self, name: &str, span: Span) -> Result<&Symbol, TypeError> {
-        self.lookup(name).ok_or_else(|| TypeError::UnresolvedSymbol {
-            name: name.to_string(),
-            span,
-        })
+        self.lookup(name)
+            .ok_or_else(|| TypeError::UnresolvedSymbol {
+                name: name.to_string(),
+                span,
+            })
     }
 
     /// Updates the type of an existing symbol in the innermost scope that defines it

@@ -316,7 +316,12 @@ mod tests {
             if let Some(FunctionBody::Expr(e)) = &f.body {
                 if let ExprKind::Binary { op, left, right: _ } = &e.kind {
                     assert_eq!(*op, BinaryOp::Gt);
-                    if let ExprKind::Binary { op: op2, left: _, right: right2 } = &left.kind {
+                    if let ExprKind::Binary {
+                        op: op2,
+                        left: _,
+                        right: right2,
+                    } = &left.kind
+                    {
                         assert_eq!(*op2, BinaryOp::Add);
                         if let ExprKind::Binary { op: op3, .. } = &right2.kind {
                             assert_eq!(*op3, BinaryOp::Mul);
@@ -588,7 +593,9 @@ mod tests {
         let res4 = parse_source(src4);
         assert!(res4.is_err());
         let err4 = res4.unwrap_err();
-        assert!(err4.message.contains("'compose' modifier is only valid on functions"));
+        assert!(err4
+            .message
+            .contains("'compose' modifier is only valid on functions"));
 
         // 5. Unterminated block struct
         let src5 = "struct OpenStruct { val x: Int";

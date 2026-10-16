@@ -5,7 +5,9 @@ use crate::scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::Type;
 use prism_abi::{ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl};
-use prism_ast::expr::{BinaryOp, BlockExpr, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern};
+use prism_ast::expr::{
+    BinaryOp, BlockExpr, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
+};
 use prism_ast::module::SourceFile;
 use prism_ast::{Span, Visibility};
 
@@ -229,7 +231,10 @@ impl TypeChecker {
                     for f in &s.fields {
                         if !seen_fields.insert(f.name.clone()) {
                             self.errors.push(TypeError::DuplicateSymbol {
-                                name: format!("duplicate field '{}' in struct '{}'", f.name, s.name),
+                                name: format!(
+                                    "duplicate field '{}' in struct '{}'",
+                                    f.name, s.name
+                                ),
                                 span: f.span,
                             });
                         }
@@ -255,7 +260,10 @@ impl TypeChecker {
                     for v in &e.variants {
                         if !seen_variants.insert(v.name.clone()) {
                             self.errors.push(TypeError::DuplicateSymbol {
-                                name: format!("duplicate variant '{}' in enum '{}'", v.name, e.name),
+                                name: format!(
+                                    "duplicate variant '{}' in enum '{}'",
+                                    v.name, e.name
+                                ),
                                 span: v.span,
                             });
                         }
@@ -474,11 +482,14 @@ impl TypeChecker {
                     };
 
                     if declared_ret.is_none() {
-                        self.env.update_type(&f.name, Type::Fn {
-                            is_compose: f.is_compose,
-                            params: f.params.iter().map(|p| Type::from_ast(&p.ty)).collect(),
-                            ret: Box::new(expr_ty),
-                        });
+                        self.env.update_type(
+                            &f.name,
+                            Type::Fn {
+                                is_compose: f.is_compose,
+                                params: f.params.iter().map(|p| Type::from_ast(&p.ty)).collect(),
+                                ret: Box::new(expr_ty),
+                            },
+                        );
                     }
                 }
             }
@@ -538,7 +549,12 @@ impl TypeChecker {
                 self.current_expected_return = Some((**exp_ret).clone());
 
                 for (name, param_ty) in params.iter().zip(exp_params.iter()) {
-                    let sym = Symbol::variable(name.clone(), param_ty.clone(), Mutability::Val, expr.span);
+                    let sym = Symbol::variable(
+                        name.clone(),
+                        param_ty.clone(),
+                        Mutability::Val,
+                        expr.span,
+                    );
                     if let Err(err) = self.env.define(sym) {
                         self.errors.push(err);
                     }
@@ -629,7 +645,9 @@ impl TypeChecker {
                 }
             },
 
-            ExprKind::Binary { op, left, right } => self.infer_binary_op(*op, left, right, expr.span),
+            ExprKind::Binary { op, left, right } => {
+                self.infer_binary_op(*op, left, right, expr.span)
+            }
 
             ExprKind::Unary { op, expr: inner } => self.infer_unary_op(*op, inner, expr.span),
 
@@ -659,9 +677,7 @@ impl TypeChecker {
                 Type::Unit
             }
 
-            ExprKind::Assign { target, value } => {
-                self.check_assignment(target, value, expr.span)
-            }
+            ExprKind::Assign { target, value } => self.check_assignment(target, value, expr.span),
 
             ExprKind::Block(block) => self.check_block(block, None),
 
@@ -762,7 +778,8 @@ impl TypeChecker {
 
                 let mut param_types = Vec::new();
                 for name in params {
-                    let sym = Symbol::variable(name.clone(), Type::Error, Mutability::Val, expr.span);
+                    let sym =
+                        Symbol::variable(name.clone(), Type::Error, Mutability::Val, expr.span);
                     self.env.define(sym).ok();
                     param_types.push(Type::Error);
                 }
@@ -958,7 +975,9 @@ impl TypeChecker {
                         let base_ty = self.infer_expr(base);
                         let peeled = peel_indirection(&base_ty);
                         if let Type::Struct { fields, .. } = peeled {
-                            if let Some((_, is_var, _)) = fields.iter().find(|(n, _, _)| n == member) {
+                            if let Some((_, is_var, _)) =
+                                fields.iter().find(|(n, _, _)| n == member)
+                            {
                                 if !is_var {
                                     self.errors.push(TypeError::ImmutabilityViolation {
                                         message: format!(
@@ -986,7 +1005,9 @@ impl TypeChecker {
         let (target_ty, is_mutable) = match &target.kind {
             ExprKind::Ident(name) => match self.env.resolve(name, target.span) {
                 Ok(sym) => match &sym.kind {
-                    SymbolKind::Variable { ty, mutability, .. } => (ty.clone(), *mutability == Mutability::Var),
+                    SymbolKind::Variable { ty, mutability, .. } => {
+                        (ty.clone(), *mutability == Mutability::Var)
+                    }
                     _ => {
                         self.errors.push(TypeError::ImmutabilityViolation {
                             message: format!("cannot assign to non-variable '{}'", name),
@@ -1028,7 +1049,10 @@ impl TypeChecker {
                     if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
                         if !is_var {
                             self.errors.push(TypeError::ImmutabilityViolation {
-                                message: format!("cannot assign to immutable 'val' struct field '{}'", member),
+                                message: format!(
+                                    "cannot assign to immutable 'val' struct field '{}'",
+                                    member
+                                ),
                                 span,
                             });
                         } else if !base_mutable {
@@ -1227,7 +1251,8 @@ impl TypeChecker {
                     });
                 }
 
-                let (param_names, has_default) = if let ExprKind::Ident(callee_name) = &callee.kind {
+                let (param_names, has_default) = if let ExprKind::Ident(callee_name) = &callee.kind
+                {
                     if let Some(sym) = self.env.lookup(callee_name) {
                         if let SymbolKind::Function {
                             param_names,
@@ -1271,10 +1296,8 @@ impl TypeChecker {
                                 args.len()
                             )
                         };
-                        self.errors.push(TypeError::CallSignatureMismatch {
-                            message: msg,
-                            span,
-                        });
+                        self.errors
+                            .push(TypeError::CallSignatureMismatch { message: msg, span });
                         return *ret;
                     }
 
@@ -1324,7 +1347,10 @@ impl TypeChecker {
                     for (i, &assigned) in param_assigned.iter().enumerate().take(n_params) {
                         let has_def = has_default.get(i).copied().unwrap_or(false);
                         if !has_def && !assigned {
-                            let p_name = param_names.get(i).map(|s| s.as_str()).unwrap_or("parameter");
+                            let p_name = param_names
+                                .get(i)
+                                .map(|s| s.as_str())
+                                .unwrap_or("parameter");
                             self.errors.push(TypeError::CallSignatureMismatch {
                                 message: format!("missing required argument '{}'", p_name),
                                 span,
@@ -1560,7 +1586,9 @@ mod tests {
         assert_eq!(checker.infer_expr(&char_expr), Type::Char);
 
         let index_expr = expr(ExprKind::Index {
-            target: Box::new(expr(ExprKind::Literal(Literal::String("hello".to_string())))),
+            target: Box::new(expr(ExprKind::Literal(Literal::String(
+                "hello".to_string(),
+            )))),
             index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
         });
         assert_eq!(checker.infer_expr(&index_expr), Type::Char);
@@ -1754,7 +1782,9 @@ mod tests {
             branches: vec![
                 WhenBranch {
                     patterns: vec![WhenPattern::Expr(expr(ExprKind::Literal(Literal::Int(0))))],
-                    body: expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(Literal::Int(99))))))),
+                    body: expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(
+                        Literal::Int(99),
+                    )))))),
                     span: Span::dummy(),
                 },
                 WhenBranch {
@@ -1790,8 +1820,16 @@ mod tests {
         let call_pos = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
             args: vec![
-                CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(10))), span: Span::dummy() },
-                CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(20))), span: Span::dummy() },
+                CallArg {
+                    name: None,
+                    value: expr(ExprKind::Literal(Literal::Int(10))),
+                    span: Span::dummy(),
+                },
+                CallArg {
+                    name: None,
+                    value: expr(ExprKind::Literal(Literal::Int(20))),
+                    span: Span::dummy(),
+                },
             ],
         });
         let res_pos = checker.infer_expr(&call_pos);
@@ -1801,8 +1839,16 @@ mod tests {
         let call_named = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
             args: vec![
-                CallArg { name: Some("x".to_string()), value: expr(ExprKind::Literal(Literal::Int(10))), span: Span::dummy() },
-                CallArg { name: Some("y".to_string()), value: expr(ExprKind::Literal(Literal::Int(20))), span: Span::dummy() },
+                CallArg {
+                    name: Some("x".to_string()),
+                    value: expr(ExprKind::Literal(Literal::Int(10))),
+                    span: Span::dummy(),
+                },
+                CallArg {
+                    name: Some("y".to_string()),
+                    value: expr(ExprKind::Literal(Literal::Int(20))),
+                    span: Span::dummy(),
+                },
             ],
         });
         let res_named = checker.infer_expr(&call_named);
@@ -1849,8 +1895,16 @@ mod tests {
             initializer: Box::new(expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Ident("User".to_string()))),
                 args: vec![
-                    CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(1))), span: Span::dummy() },
-                    CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(20))), span: Span::dummy() },
+                    CallArg {
+                        name: None,
+                        value: expr(ExprKind::Literal(Literal::Int(1))),
+                        span: Span::dummy(),
+                    },
+                    CallArg {
+                        name: None,
+                        value: expr(ExprKind::Literal(Literal::Int(20))),
+                        span: Span::dummy(),
+                    },
                 ],
             })),
         });
@@ -1878,7 +1932,14 @@ mod tests {
             value: Box::new(expr(ExprKind::Literal(Literal::Int(21)))),
         });
         checker.infer_expr(&assign_val_binding);
-        assert_eq!(checker.errors.iter().filter(|e| e.code() == "E4003").count(), 2);
+        assert_eq!(
+            checker
+                .errors
+                .iter()
+                .filter(|e| e.code() == "E4003")
+                .count(),
+            2
+        );
 
         // var u2 = User(2, 30)
         let init_var = expr(ExprKind::LocalVar {
@@ -1888,8 +1949,16 @@ mod tests {
             initializer: Box::new(expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Ident("User".to_string()))),
                 args: vec![
-                    CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(2))), span: Span::dummy() },
-                    CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(30))), span: Span::dummy() },
+                    CallArg {
+                        name: None,
+                        value: expr(ExprKind::Literal(Literal::Int(2))),
+                        span: Span::dummy(),
+                    },
+                    CallArg {
+                        name: None,
+                        value: expr(ExprKind::Literal(Literal::Int(30))),
+                        span: Span::dummy(),
+                    },
                 ],
             })),
         });
@@ -1982,10 +2051,13 @@ mod tests {
             op: UnaryOp::Borrow,
             expr: Box::new(expr(ExprKind::Ident("x".to_string()))),
         });
-        assert_eq!(checker.infer_expr(&shared_borrow), Type::Reference {
-            mutable: false,
-            inner: Box::new(Type::Int),
-        });
+        assert_eq!(
+            checker.infer_expr(&shared_borrow),
+            Type::Reference {
+                mutable: false,
+                inner: Box::new(Type::Int),
+            }
+        );
 
         // Mutable borrow on val: &mut x -> E4003
         let mut_borrow_val = expr(ExprKind::Unary {
@@ -2007,10 +2079,13 @@ mod tests {
             op: UnaryOp::BorrowMut,
             expr: Box::new(expr(ExprKind::Ident("y".to_string()))),
         });
-        assert_eq!(checker.infer_expr(&mut_borrow_var), Type::Reference {
-            mutable: true,
-            inner: Box::new(Type::Int),
-        });
+        assert_eq!(
+            checker.infer_expr(&mut_borrow_var),
+            Type::Reference {
+                mutable: true,
+                inner: Box::new(Type::Int),
+            }
+        );
     }
 
     #[test]
@@ -2044,7 +2119,10 @@ mod tests {
             member: "x".to_string(),
             is_safe_nav: true,
         });
-        assert_eq!(checker.infer_expr(&safe_nav), Type::Nullable(Box::new(Type::Int)));
+        assert_eq!(
+            checker.infer_expr(&safe_nav),
+            Type::Nullable(Box::new(Type::Int))
+        );
 
         // Elvis: opt_int ?: 0 -> Int
         let elvis = expr(ExprKind::Binary {
@@ -2062,7 +2140,15 @@ mod tests {
             name: "Point".to_string(),
             fields: vec![("x".to_string(), false, Type::Int)],
         }));
-        checker.env.define(Symbol::variable("h", point_ty, Mutability::Val, Span::dummy())).unwrap();
+        checker
+            .env
+            .define(Symbol::variable(
+                "h",
+                point_ty,
+                Mutability::Val,
+                Span::dummy(),
+            ))
+            .unwrap();
 
         // Transparent dereference on Heap<Point>: h.x -> Int
         let field_access = expr(ExprKind::MemberAccess {
@@ -2112,8 +2198,16 @@ mod tests {
         let call_pub = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("add".to_string()))),
             args: vec![
-                CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(1))), span: Span::dummy() },
-                CallArg { name: None, value: expr(ExprKind::Literal(Literal::Int(2))), span: Span::dummy() },
+                CallArg {
+                    name: None,
+                    value: expr(ExprKind::Literal(Literal::Int(1))),
+                    span: Span::dummy(),
+                },
+                CallArg {
+                    name: None,
+                    value: expr(ExprKind::Literal(Literal::Int(2))),
+                    span: Span::dummy(),
+                },
             ],
         });
         assert_eq!(ext_checker.infer_expr(&call_pub), Type::Int);
@@ -2295,10 +2389,48 @@ mod tests {
                 ("Blue".to_string(), Vec::new()),
             ],
         };
-        checker.env.define(Symbol::variable("c", color_ty.clone(), Mutability::Val, Span::dummy())).unwrap();
-        checker.env.define(Symbol::top_level_variable("Red", color_ty.clone(), Mutability::Val, Visibility::Public, None, Span::dummy())).unwrap();
-        checker.env.define(Symbol::top_level_variable("Green", color_ty.clone(), Mutability::Val, Visibility::Public, None, Span::dummy())).unwrap();
-        checker.env.define(Symbol::top_level_variable("Blue", color_ty.clone(), Mutability::Val, Visibility::Public, None, Span::dummy())).unwrap();
+        checker
+            .env
+            .define(Symbol::variable(
+                "c",
+                color_ty.clone(),
+                Mutability::Val,
+                Span::dummy(),
+            ))
+            .unwrap();
+        checker
+            .env
+            .define(Symbol::top_level_variable(
+                "Red",
+                color_ty.clone(),
+                Mutability::Val,
+                Visibility::Public,
+                None,
+                Span::dummy(),
+            ))
+            .unwrap();
+        checker
+            .env
+            .define(Symbol::top_level_variable(
+                "Green",
+                color_ty.clone(),
+                Mutability::Val,
+                Visibility::Public,
+                None,
+                Span::dummy(),
+            ))
+            .unwrap();
+        checker
+            .env
+            .define(Symbol::top_level_variable(
+                "Blue",
+                color_ty.clone(),
+                Mutability::Val,
+                Visibility::Public,
+                None,
+                Span::dummy(),
+            ))
+            .unwrap();
 
         // Exhaustive: covers Red, Green, Blue without else -> OK
         let when_exhaustive = expr(ExprKind::When {
@@ -2310,7 +2442,9 @@ mod tests {
                     span: Span::dummy(),
                 },
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident("Green".to_string())))],
+                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident(
+                        "Green".to_string(),
+                    )))],
                     body: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                 },
@@ -2335,7 +2469,9 @@ mod tests {
                     span: Span::dummy(),
                 },
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident("Green".to_string())))],
+                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident(
+                        "Green".to_string(),
+                    )))],
                     body: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                 },
@@ -2348,7 +2484,9 @@ mod tests {
     #[test]
     fn test_top_level_return_rejected() {
         let mut checker = TypeChecker::new(None);
-        let ret_expr = expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(Literal::Int(42)))))));
+        let ret_expr = expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(
+            Literal::Int(42),
+        ))))));
         checker.infer_expr(&ret_expr);
         assert!(checker.errors.iter().any(|e| e.code() == "E4005"));
     }
@@ -2436,7 +2574,14 @@ mod tests {
         };
 
         checker.register_module_declarations(&source_file);
-        assert_eq!(checker.errors.iter().filter(|e| e.code() == "E4010").count(), 3);
+        assert_eq!(
+            checker
+                .errors
+                .iter()
+                .filter(|e| e.code() == "E4010")
+                .count(),
+            3
+        );
     }
 
     #[test]
@@ -2447,7 +2592,15 @@ mod tests {
             mutable: false,
             inner: Box::new(Type::String),
         };
-        checker.env.define(Symbol::variable("s", ref_str_ty, Mutability::Val, Span::dummy())).unwrap();
+        checker
+            .env
+            .define(Symbol::variable(
+                "s",
+                ref_str_ty,
+                Mutability::Val,
+                Span::dummy(),
+            ))
+            .unwrap();
 
         let index_expr = expr(ExprKind::Index {
             target: Box::new(expr(ExprKind::Ident("s".to_string()))),
@@ -2458,7 +2611,15 @@ mod tests {
 
         // Non-collection Heap: Heap<Int> -> cannot index -> E4002
         let heap_int_ty = Type::Heap(Box::new(Type::Int));
-        checker.env.define(Symbol::variable("h", heap_int_ty, Mutability::Val, Span::dummy())).unwrap();
+        checker
+            .env
+            .define(Symbol::variable(
+                "h",
+                heap_int_ty,
+                Mutability::Val,
+                Span::dummy(),
+            ))
+            .unwrap();
         let bad_index = expr(ExprKind::Index {
             target: Box::new(expr(ExprKind::Ident("h".to_string()))),
             index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),

@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn test_numbers_and_ranges() {
-        let input = "42 3.5 0xFF 0xFF_FF 0b1010 0b1010_0001 1_000_000 3.14_15 4..10";
+        let input = "42 3.5 0xFF 0xFF_FF 0b1010 0b1010_0001 1_000_000 1.23_45 4..10";
         let tokens = Lexer::new(input).tokenize_all();
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|t| t.kind).collect();
 
@@ -49,7 +49,7 @@ mod tests {
                 TokenKind::Int(10),
                 TokenKind::Int(161),
                 TokenKind::Int(1000000),
-                TokenKind::Float(3.1415),
+                TokenKind::Float(1.2345),
                 TokenKind::Int(4),
                 TokenKind::DotDot,
                 TokenKind::Int(10),
@@ -176,7 +176,7 @@ mod tests {
         let raw_nl_tokens = Lexer::new(raw_nl_input).tokenize_all();
         assert!(matches!(raw_nl_tokens[3].kind, TokenKind::Error(_)));
         assert_eq!(raw_nl_tokens[4].kind, TokenKind::Val);
-        assert_eq!(raw_nl_tokens[4].is_preceded_by_newline, true);
+        assert!(raw_nl_tokens[4].is_preceded_by_newline);
 
         // Malformed unicode escape doesn't consume closing quote
         let malformed_u = r#"val bad = "\u12""#;
@@ -252,36 +252,47 @@ mod tests {
 
         // val a = 1 (on first line)
         assert_eq!(tokens[0].kind, TokenKind::Val);
-        assert_eq!(tokens[0].is_preceded_by_newline, false);
+        assert!(!tokens[0].is_preceded_by_newline);
         assert_eq!(tokens[1].kind, TokenKind::Ident("a".to_string()));
-        assert_eq!(tokens[1].is_preceded_by_newline, false);
+        assert!(!tokens[1].is_preceded_by_newline);
         assert_eq!(tokens[2].kind, TokenKind::Eq);
-        assert_eq!(tokens[2].is_preceded_by_newline, false);
+        assert!(!tokens[2].is_preceded_by_newline);
         assert_eq!(tokens[3].kind, TokenKind::Int(1));
-        assert_eq!(tokens[3].is_preceded_by_newline, false);
+        assert!(!tokens[3].is_preceded_by_newline);
 
         // val b = 2 (preceded by \n)
         assert_eq!(tokens[4].kind, TokenKind::Val);
-        assert_eq!(tokens[4].is_preceded_by_newline, true);
+        assert!(tokens[4].is_preceded_by_newline);
 
         // (3 + 4) (preceded by \r\n)
         assert_eq!(tokens[8].kind, TokenKind::LParen);
-        assert_eq!(tokens[8].is_preceded_by_newline, true);
+        assert!(tokens[8].is_preceded_by_newline);
 
         // val c = 5 (preceded by line comment + newline)
-        let val_c = tokens.iter().find(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "c")).unwrap();
-        let val_before_c_idx = tokens.iter().position(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "c")).unwrap() - 1;
+        let val_c = tokens
+            .iter()
+            .find(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "c"))
+            .unwrap();
+        let val_before_c_idx = tokens
+            .iter()
+            .position(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "c"))
+            .unwrap()
+            - 1;
         assert_eq!(tokens[val_before_c_idx].kind, TokenKind::Val);
-        assert_eq!(tokens[val_before_c_idx].is_preceded_by_newline, true);
-        assert_eq!(val_c.is_preceded_by_newline, false);
+        assert!(tokens[val_before_c_idx].is_preceded_by_newline);
+        assert!(!val_c.is_preceded_by_newline);
 
         // val d = 6 (preceded by multiline comment with newline)
-        let val_before_d_idx = tokens.iter().position(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "d")).unwrap() - 1;
+        let val_before_d_idx = tokens
+            .iter()
+            .position(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "d"))
+            .unwrap()
+            - 1;
         assert_eq!(tokens[val_before_d_idx].kind, TokenKind::Val);
-        assert_eq!(tokens[val_before_d_idx].is_preceded_by_newline, true);
+        assert!(tokens[val_before_d_idx].is_preceded_by_newline);
 
         // + 7 (preceded by inline block comment on same line)
         let plus_tok = tokens.iter().find(|t| t.kind == TokenKind::Plus).unwrap();
-        assert_eq!(plus_tok.is_preceded_by_newline, false);
+        assert!(!plus_tok.is_preceded_by_newline);
     }
 }

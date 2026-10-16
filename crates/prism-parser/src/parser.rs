@@ -865,9 +865,19 @@ impl Parser {
             let b_span = if stmts.is_empty() {
                 start.merge(end)
             } else {
-                stmts.first().unwrap().span.merge(stmts.last().unwrap().span)
+                stmts
+                    .first()
+                    .unwrap()
+                    .span
+                    .merge(stmts.last().unwrap().span)
             };
-            Expr::new(ExprKind::Block(BlockExpr { stmts, span: b_span }), b_span)
+            Expr::new(
+                ExprKind::Block(BlockExpr {
+                    stmts,
+                    span: b_span,
+                }),
+                b_span,
+            )
         };
 
         Ok(Expr::new(
