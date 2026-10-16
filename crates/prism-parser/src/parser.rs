@@ -884,7 +884,7 @@ impl Parser {
                     has_arrow = true;
                     break;
                 }
-                TokenKind::Ident(_) => {
+                TokenKind::Ident(_) | TokenKind::Compose => {
                     idx += 1;
                     if idx < self.tokens.len() && self.tokens[idx].kind == TokenKind::Comma {
                         idx += 1;
@@ -980,14 +980,13 @@ impl Parser {
         let mut args = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
             let mut name = None;
-            // Check named argument: ident = expr
-            if let TokenKind::Ident(n) = self.peek_kind() {
-                if self.peek_ahead(1) == &TokenKind::Eq {
-                    let n = n.clone();
-                    self.bump(); // ident
-                    self.bump(); // '='
-                    name = Some(n);
-                }
+            // Check named argument: ident = expr (`compose` is a contextual keyword)
+            if matches!(self.peek_kind(), TokenKind::Ident(_) | TokenKind::Compose)
+                && self.peek_ahead(1) == &TokenKind::Eq
+            {
+                let (n, _) = self.expect_ident()?;
+                self.bump(); // '='
+                name = Some(n);
             }
             let value = self.parse_expr(Precedence::Lowest)?;
             let arg_span = value.span;

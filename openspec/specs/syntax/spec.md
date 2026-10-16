@@ -229,6 +229,10 @@ Modifiers such as `compose` MUST function contextually, permitting their use as 
 - **WHEN** code accesses a property or method named compose (`pipeline.compose(step)`)
 - **THEN** `compose` is parsed as a valid identifier expression rather than a modifier keyword
 
+#### Scenario: Named argument called compose
+- **WHEN** a call passes a named argument called `compose` (`g(compose = 1)`) or a closure declares a parameter called `compose` (`{ compose -> compose }`)
+- **THEN** `compose` is parsed as the argument name or parameter name, not as a modifier or an assignment
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 

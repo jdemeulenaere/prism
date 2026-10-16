@@ -752,4 +752,38 @@ mod tests {
             parse_source(src).unwrap();
         }
     }
+
+    #[test]
+    fn test_compose_as_named_argument_and_closure_param() {
+        let file = parse_source("fun f() = g(compose = 1)").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        assert_eq!(args[0].name.as_deref(), Some("compose"));
+        assert!(matches!(
+            args[0].value.kind,
+            ExprKind::Literal(Literal::Int(1))
+        ));
+
+        let file = parse_source("fun f() = g { compose -> compose }").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        let ExprKind::Closure { params, .. } = &args[0].value.kind else {
+            panic!("Expected closure");
+        };
+        assert_eq!(params, &vec!["compose".to_string()]);
+    }
 }
