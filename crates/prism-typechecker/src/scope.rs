@@ -291,6 +291,24 @@ impl ScopeStack {
             })
     }
 
+    /// Removes a symbol from the current (innermost) scope level, returning it if it was there.
+    pub fn remove(&mut self, name: &str) -> Option<Symbol> {
+        self.scopes
+            .last_mut()
+            .expect("scope stack cannot be empty")
+            .remove(name)
+    }
+
+    /// Whether `name` currently resolves to a module-level symbol (it is declared at module
+    /// level and no nested scope shadows it).
+    pub fn resolves_at_module_level(&self, name: &str) -> bool {
+        let innermost = self
+            .scopes
+            .iter()
+            .rposition(|scope| scope.contains_key(name));
+        innermost == Some(0)
+    }
+
     /// Updates the type of an existing symbol in the innermost scope that defines it
     /// (useful for inferred private expression bodies).
     pub fn update_type(&mut self, name: &str, new_type: Type) -> bool {

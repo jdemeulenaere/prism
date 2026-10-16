@@ -287,3 +287,66 @@ fn branches_join_with_null_into_nullable_type() {
         &["E4002"],
     );
 }
+
+// `when`: exhaustiveness, statement position and borrowed subjects.
+
+#[test]
+fn variant_pattern_with_payload_value_does_not_cover_variant() {
+    assert_codes(
+        "enum Shape {\n    Circle(Int),\n    Square\n}\nfun f(s: Shape): Int = when (s) {\n    Shape.Circle(1) -> 1,\n    Shape.Square -> 2\n}\n",
+        &["E4009"],
+    );
+}
+
+#[test]
+fn value_named_like_a_variant_does_not_cover_variant() {
+    assert_codes(
+        "enum Color {\n    Red,\n    Green\n}\nstruct H {\n    val Green: Color\n}\nfun f(c: Color, h: H): Int = when (c) {\n    Color.Red -> 1,\n    h.Green -> 2\n}\n",
+        &["E4009"],
+    );
+}
+
+#[test]
+fn when_statement_does_not_require_else() {
+    assert_ok(
+        "fun g() {\n}\nfun f(x: Int) {\n    when (x) {\n        1 -> g()\n    }\n    val y = 2\n}\nfun h(x: Int) {\n    when (x) {\n        1 -> g()\n    }\n}\n",
+    );
+    // In value position it still does.
+    assert_codes(
+        "fun f(x: Int): Int {\n    val y = when (x) {\n        1 -> 1\n    }\n    return y\n}\n",
+        &["E4009"],
+    );
+}
+
+#[test]
+fn when_over_borrowed_enum_matches_its_variants() {
+    assert_ok(
+        "enum Color {\n    Red,\n    Green\n}\nfun f(c: &Color): Int = when (c) {\n    Color.Red -> 1,\n    Color.Green -> 2\n}\nfun g(c: &mut Color): Int = when (c) {\n    Red -> 1,\n    Green -> 2\n}\n",
+    );
+}
+
+// Enum variants are namespaced by their enum.
+
+const TWO_ENUMS: &str =
+    "enum A {\n    None,\n    Some(Int)\n}\nenum B {\n    None,\n    Other\n}\n";
+
+#[test]
+fn same_named_variants_in_two_enums_accepted() {
+    assert_ok(&format!(
+        "{TWO_ENUMS}fun f(a: A): Int = when (a) {{\n    None -> 0,\n    Some(1) -> 1,\n    else -> 2\n}}\nfun g(b: B): Int = when (b) {{\n    None -> 0,\n    Other -> 1\n}}\nfun h(): B = B.None\nfun k(): A = Some(3)\n"
+    ));
+}
+
+#[test]
+fn ambiguous_bare_variant_outside_when_pattern_rejected() {
+    assert_codes(&format!("{TWO_ENUMS}fun h(): B = None\n"), &["E4001"]);
+}
+
+#[test]
+fn imported_enum_variant_named_like_a_local_variant_accepted() {
+    let errors = check_with_imports(
+        &["package lib\npublic enum Opt {\n    None,\n    Has(Int)\n}\n"],
+        "package app\nenum Mode {\n    None,\n    Fast\n}\nfun f(o: Opt): Int = when (o) {\n    Opt.None -> 0,\n    else -> 1\n}\nfun g(): Mode = Mode.None\n",
+    );
+    assert!(errors.is_empty(), "{:?}", errors);
+}

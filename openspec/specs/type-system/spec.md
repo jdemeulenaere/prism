@@ -145,6 +145,18 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 - **WHEN** a `when` expression is used in value position and fails to cover all possible enum variants or omit an `else` branch
 - **THEN** the type checker rejects the expression with a non-exhaustive pattern match error (`E4009`)
 
+#### Scenario: Only a variant name covers that variant
+- **WHEN** a `when` over an enum has a pattern naming a payload-free variant (`Color.Red`, or bare `Red` when no local binding shadows it)
+- **THEN** the pattern covers that variant, while a pattern that only evaluates to a variant value, such as `Shape.Circle(1)` or a field `h.Green`, covers nothing, so a variant with a payload is covered only by `else`
+
+#### Scenario: When statement needs no else branch
+- **WHEN** a `when` is used as a statement, either before the last statement of a block or as the last statement of a block whose expected type is `Unit`
+- **THEN** it needs no `else` branch, its branches need no common type, and it has type `Unit`
+
+#### Scenario: When over a borrowed enum
+- **WHEN** the subject of a `when` has type `&E` or `&mut E` for an enum `E`
+- **THEN** its patterns are checked against `E` and its variants count toward exhaustiveness
+
 #### Scenario: Block statement evaluation and Unit typing
 - **WHEN** evaluating a block of statements `{ s1; s2 }`
 - **THEN** assignment statements evaluate to `Unit`, an empty block `{}` evaluates to `Unit`, and the block's final expression determines the block type
@@ -183,6 +195,10 @@ The type checker MUST validate struct instantiations, field access expressions, 
 #### Scenario: Field access on a struct imported from another file
 - **WHEN** a file imports a module exporting `public struct User` and declares a parameter `user: User`
 - **THEN** `user.name` resolves against the imported struct's ABI field list and typechecks with the exported field type
+
+#### Scenario: Same-named variants in two enums
+- **WHEN** two enums visible in one file declare a variant with the same name (`enum A { None }` and `enum B { None }`)
+- **THEN** both declarations are accepted, the qualified paths `A.None` and `B.None` resolve, a bare `None` resolves as a `when` pattern over either enum, and a bare `None` elsewhere emits `E4001`
 
 #### Scenario: Type names are not values
 - **WHEN** a struct or enum name is used as a value (`fun f(): User = User`), a field is read from a struct name (`User.name`), or an enum name is called (`A()`)

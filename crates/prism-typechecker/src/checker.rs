@@ -10,6 +10,7 @@ use prism_ast::expr::{
 };
 use prism_ast::module::SourceFile;
 use prism_ast::{Span, Visibility};
+use std::collections::{HashMap, HashSet};
 
 /// Helper to peel reference (`&T`, `&mut T`) and `Heap<T>` indirection layers to access the underlying nominal type.
 pub fn peel_indirection(mut ty: &Type) -> &Type {
@@ -22,17 +23,12 @@ pub fn peel_indirection(mut ty: &Type) -> &Type {
     }
 }
 
-fn extract_variant_name(p_expr: &Expr) -> Option<&str> {
-    match &p_expr.kind {
-        ExprKind::Ident(name) => Some(name.as_str()),
-        ExprKind::MemberAccess { member, .. } => Some(member.as_str()),
-        ExprKind::Call { callee, .. } => match &callee.kind {
-            ExprKind::Ident(name) => Some(name.as_str()),
-            ExprKind::MemberAccess { member, .. } => Some(member.as_str()),
-            _ => None,
-        },
-        _ => None,
+/// Peels reference (`&T`, `&mut T`) layers, keeping `Heap<T>`.
+fn peel_references(mut ty: &Type) -> &Type {
+    while let Type::Reference { inner, .. } = ty {
+        ty = inner;
     }
+    ty
 }
 
 /// Static type checker and semantic analyzer for Prism source modules.
@@ -51,6 +47,11 @@ pub struct TypeChecker {
     pub unannotated_private_fns: Vec<String>,
     /// Whether the checker is currently evaluating within a function body.
     pub in_function: bool,
+    /// The enum that owns each module-level bare variant name (`Red` for `Color.Red`).
+    variant_owners: HashMap<String, String>,
+    /// Bare variant names declared by more than one enum. They are not bound at module level and
+    /// must be qualified (`B.None`), except as a `when` pattern over one of those enums.
+    ambiguous_variants: HashSet<String>,
 }
 
 impl TypeChecker {
@@ -64,6 +65,8 @@ impl TypeChecker {
             current_expected_return: None,
             unannotated_private_fns: Vec::new(),
             in_function: false,
+            variant_owners: HashMap::new(),
+            ambiguous_variants: HashSet::new(),
         }
     }
 
@@ -205,6 +208,30 @@ impl TypeChecker {
         Some(self.member_type(&ty, member, false, span))
     }
 
+    /// Binds the bare name of a variant of `enum_name` at module level.
+    ///
+    /// Variants are namespaced by their enum, so when two enums declare the same variant name the
+    /// bare name is unbound and recorded as ambiguous rather than reported as a duplicate. Any
+    /// other clash is a duplicate symbol, returned as `E4010`.
+    #[allow(clippy::result_large_err)]
+    fn define_variant(&mut self, enum_name: &str, symbol: Symbol) -> Result<(), TypeError> {
+        let name = symbol.name.clone();
+        if self.ambiguous_variants.contains(&name) {
+            return Ok(());
+        }
+        if let Some(owner) = self.variant_owners.get(&name) {
+            if owner != enum_name {
+                self.env.remove(&name);
+                self.variant_owners.remove(&name);
+                self.ambiguous_variants.insert(name);
+                return Ok(());
+            }
+        }
+        self.env.define(symbol)?;
+        self.variant_owners.insert(name, enum_name.to_string());
+        Ok(())
+    }
+
     /// Ingests exported symbols from an imported file's Phase 1 FileAbi.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
         for sym in &abi.symbols {
@@ -312,7 +339,7 @@ impl TypeChecker {
                                 Span::dummy(),
                             )
                         };
-                        self.env.define(v_sym).ok();
+                        self.define_variant(name, v_sym).ok();
                     }
                 }
                 ExportedSymbol::Var {
@@ -348,7 +375,7 @@ impl TypeChecker {
         for decl in &source_file.declarations {
             match decl {
                 Declaration::Struct(s) => {
-                    let mut seen_fields = std::collections::HashSet::new();
+                    let mut seen_fields = HashSet::new();
                     for f in &s.fields {
                         if !seen_fields.insert(f.name.clone()) {
                             self.errors.push(TypeError::DuplicateSymbol {
@@ -380,7 +407,7 @@ impl TypeChecker {
                     }
                 }
                 Declaration::Enum(e) => {
-                    let mut seen_variants = std::collections::HashSet::new();
+                    let mut seen_variants = HashSet::new();
                     for v in &e.variants {
                         if !seen_variants.insert(v.name.clone()) {
                             self.errors.push(TypeError::DuplicateSymbol {
@@ -445,7 +472,7 @@ impl TypeChecker {
                                 e.span,
                             )
                         };
-                        if let Err(err) = self.env.define(v_sym) {
+                        if let Err(err) = self.define_variant(&e.name, v_sym) {
                             self.errors.push(err);
                         }
                     }
@@ -829,7 +856,7 @@ impl TypeChecker {
             }
 
             ExprKind::When { target, branches } => {
-                self.infer_when_expr(target.as_deref(), branches, expr.span)
+                self.infer_when_expr(target.as_deref(), branches, true, expr.span)
             }
 
             ExprKind::Call { callee, args } => self.infer_call_expr(callee, args, expr.span),
@@ -1201,6 +1228,17 @@ impl TypeChecker {
         Type::Unit
     }
 
+    /// Typechecks an expression whose value is discarded. Only `when` differs from value
+    /// position: it needs neither an `else` nor a common branch type.
+    fn infer_statement(&mut self, stmt: &Expr) -> Type {
+        match &stmt.kind {
+            ExprKind::When { target, branches } => {
+                self.infer_when_expr(target.as_deref(), branches, false, stmt.span)
+            }
+            _ => self.infer_expr(stmt),
+        }
+    }
+
     fn check_block(&mut self, block: &BlockExpr, expected: Option<&Type>) -> Type {
         self.env.enter_scope();
         if block.stmts.is_empty() {
@@ -1210,30 +1248,45 @@ impl TypeChecker {
 
         let num_stmts = block.stmts.len();
         for stmt in &block.stmts[..num_stmts - 1] {
-            self.infer_expr(stmt);
+            self.infer_statement(stmt);
         }
 
+        // The tail of a block whose expected type is `Unit` is a statement too.
         let last_stmt = &block.stmts[num_stmts - 1];
-        let result_ty = if let Some(exp) = expected {
-            self.check_expr(last_stmt, exp)
-        } else {
-            self.infer_expr(last_stmt)
+        let result_ty = match expected {
+            Some(Type::Unit) if matches!(last_stmt.kind, ExprKind::When { .. }) => {
+                self.infer_statement(last_stmt)
+            }
+            Some(exp) => self.check_expr(last_stmt, exp),
+            None => self.infer_expr(last_stmt),
         };
 
         self.env.exit_scope();
         result_ty
     }
 
+    /// Typechecks a `when`. In value position (`value_position`) its branches must join to a
+    /// common type and it must be exhaustive (`E4009`); as a statement its value is discarded,
+    /// so neither applies and its type is `Unit`.
     fn infer_when_expr(
         &mut self,
         target: Option<&Expr>,
         branches: &[WhenBranch],
+        value_position: bool,
         span: Span,
     ) -> Type {
-        let subject_ty = target.map(|t| self.infer_expr(t));
+        // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as `Enum`.
+        let subject_ty = target.map(|t| {
+            let ty = self.infer_expr(t);
+            self.resolve_nominal(peel_references(&ty))
+        });
+        let subject_variants = match &subject_ty {
+            Some(Type::Enum { name, variants }) => Some((name.clone(), variants.clone())),
+            _ => None,
+        };
         let mut has_else = false;
         let mut unified_ty: Option<Type> = None;
-        let mut matched_variants = std::collections::HashSet::new();
+        let mut matched_variants = HashSet::new();
 
         for branch in branches {
             for pattern in &branch.patterns {
@@ -1242,11 +1295,13 @@ impl TypeChecker {
                         has_else = true;
                     }
                     WhenPattern::Expr(p_expr) => {
-                        if let Some(s_ty) = &subject_ty {
+                        let covered = subject_variants.as_ref().and_then(|(name, variants)| {
+                            self.unit_variant_pattern(p_expr, name, variants)
+                        });
+                        if let Some(v_name) = covered {
+                            matched_variants.insert(v_name);
+                        } else if let Some(s_ty) = &subject_ty {
                             self.check_expr(p_expr, s_ty);
-                            if let Some(v_name) = extract_variant_name(p_expr) {
-                                matched_variants.insert(v_name.to_string());
-                            }
                         } else {
                             self.check_expr(p_expr, &Type::Bool);
                         }
@@ -1261,7 +1316,7 @@ impl TypeChecker {
             }
 
             let branch_ty = self.infer_expr(&branch.body);
-            if branch_ty != Type::Nothing {
+            if value_position && branch_ty != Type::Nothing {
                 if let Some(current) = &unified_ty {
                     if let Some(joined) = current.join(&branch_ty) {
                         unified_ty = Some(joined);
@@ -1278,26 +1333,18 @@ impl TypeChecker {
             }
         }
 
-        // Exhaustiveness check: when in value position without else
-        let is_exhaustive = if has_else {
-            true
-        } else if let Some(s_ty) = &subject_ty {
-            let enum_variants = match self.resolve_nominal(peel_indirection(s_ty)) {
-                Type::Enum { variants, .. } => Some(variants),
-                _ => None,
-            };
+        if !value_position {
+            return Type::Unit;
+        }
 
-            if let Some(variants) = enum_variants {
+        // Exhaustiveness check: a `when` in value position needs an `else` or every variant
+        let is_exhaustive = has_else
+            || subject_variants.is_some_and(|(_, variants)| {
                 !variants.is_empty()
                     && variants
                         .iter()
                         .all(|(v_name, _)| matched_variants.contains(v_name))
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+            });
 
         if !is_exhaustive {
             self.errors.push(TypeError::NonExhaustiveWhen {
@@ -1308,6 +1355,46 @@ impl TypeChecker {
         }
 
         unified_ty.unwrap_or(Type::Unit)
+    }
+
+    /// If `pattern` names a payload-free variant of the subject enum `enum_name`, returns that
+    /// variant's name. Such a pattern covers the whole variant. A qualified path `Enum.Variant`
+    /// counts only when `Enum` is the subject's enum, and a bare `Variant` counts unless a local
+    /// binding shadows it. Values that merely equal a variant (`Shape.Circle(1)`, `h.Green`) never
+    /// count.
+    fn unit_variant_pattern(
+        &self,
+        pattern: &Expr,
+        enum_name: &str,
+        variants: &[(String, Vec<Type>)],
+    ) -> Option<String> {
+        let v_name = match &pattern.kind {
+            ExprKind::Ident(name) => {
+                let shadowed =
+                    self.env.lookup(name).is_some() && !self.env.resolves_at_module_level(name);
+                if shadowed {
+                    return None;
+                }
+                name
+            }
+            ExprKind::MemberAccess {
+                target,
+                member,
+                is_safe_nav: false,
+            } => match self.type_name_symbol(target) {
+                Some(sym)
+                    if sym.name == enum_name && matches!(sym.kind, SymbolKind::Enum { .. }) =>
+                {
+                    member
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        variants
+            .iter()
+            .any(|(name, payloads)| name == v_name && payloads.is_empty())
+            .then(|| v_name.clone())
     }
 
     fn infer_call_expr(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Type {
@@ -1406,7 +1493,7 @@ impl TypeChecker {
                     }
                 } else {
                     let mut param_assigned = vec![false; n_params];
-                    let mut seen_names = std::collections::HashSet::new();
+                    let mut seen_names = HashSet::new();
                     let mut positional_idx = 0;
 
                     for arg in args {
@@ -1502,7 +1589,7 @@ impl TypeChecker {
                     }
                 } else {
                     let mut field_assigned = vec![false; fields.len()];
-                    let mut seen_fields = std::collections::HashSet::new();
+                    let mut seen_fields = HashSet::new();
                     let mut pos_idx = 0;
 
                     for arg in args {
