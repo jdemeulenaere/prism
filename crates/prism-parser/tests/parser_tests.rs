@@ -717,4 +717,14 @@ mod tests {
         };
         assert!(bare_return(&args[0].value));
     }
+
+    #[test]
+    fn test_when_branch_without_pattern_rejected() {
+        let err = parse_source("fun f(x: Int) = when (x) { -> 1 }").unwrap_err();
+        assert!(err.message.contains("Expected a pattern"), "{}", err);
+        assert_eq!(err.span.column, 28);
+
+        let err = parse_source("fun f(x: Int) = when (x) { 0 -> 1, -> 2 }").unwrap_err();
+        assert!(err.message.contains("Expected a pattern"), "{}", err);
+    }
 }

@@ -68,6 +68,10 @@ Control flow constructs (`if` and `when`) MUST function as first-class expressio
 - **WHEN** a `when` expression matches over values or ranges (`when (x) { 0 -> "zero", in 1..10 -> "small", else -> "large" }`)
 - **THEN** each branch parses into its pattern (value, comma-separated values, `in` range, or `else`) and branch expression, in source order
 
+#### Scenario: When branch without a pattern rejected
+- **WHEN** a `when` branch has no pattern before its arrow (`when (x) { -> 1 }`)
+- **THEN** the parser reports a syntax error at the arrow
+
 ### Requirement: Null Safety and Optional Types
 The language MUST enforce compile-time null safety where nullable types are designated with `T?`.
 

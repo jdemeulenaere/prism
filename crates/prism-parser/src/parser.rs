@@ -1225,6 +1225,12 @@ impl Parser {
                     break;
                 }
             }
+            if patterns.is_empty() {
+                return Err(ParseError::new(
+                    "Expected a pattern or 'else' before '->' in 'when' branch",
+                    b_start,
+                ));
+            }
         }
 
         self.expect(TokenKind::Arrow)?;
