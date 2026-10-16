@@ -1,0 +1,2 @@
+// expect: E2001
+compose struct Bad { val x: Int }

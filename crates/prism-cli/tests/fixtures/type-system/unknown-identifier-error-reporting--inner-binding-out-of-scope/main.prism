@@ -1,0 +1,7 @@
+// expect: E4001
+fun f(): Int {
+    if (true) {
+        val inner = 1
+    }
+    return inner
+}

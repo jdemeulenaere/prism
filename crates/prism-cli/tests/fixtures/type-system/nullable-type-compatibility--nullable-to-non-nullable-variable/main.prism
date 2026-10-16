@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(maybe: String?): Unit {
+    val name: String = maybe
+}

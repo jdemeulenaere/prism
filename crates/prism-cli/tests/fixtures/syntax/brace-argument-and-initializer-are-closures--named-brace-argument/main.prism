@@ -1,0 +1,6 @@
+// expect: ok
+fun button(onClick: () -> Unit): Unit {}
+fun f(): Unit {
+    var count = 0
+    button(onClick = { count = 1 })
+}

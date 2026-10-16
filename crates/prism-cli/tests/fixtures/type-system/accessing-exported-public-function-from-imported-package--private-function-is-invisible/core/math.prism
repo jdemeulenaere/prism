@@ -1,0 +1,3 @@
+package core
+fun secret(): Int = 1
+public fun add(a: Int, b: Int): Int = a + b

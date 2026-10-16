@@ -1,0 +1,6 @@
+// expect: ok
+fun f(): Int {
+    var x = 10
+    x = 20
+    return x
+}

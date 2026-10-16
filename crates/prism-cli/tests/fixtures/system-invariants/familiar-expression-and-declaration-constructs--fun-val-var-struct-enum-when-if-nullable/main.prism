@@ -1,0 +1,18 @@
+// expect: ok
+struct Point {
+    val x: Int
+    var y: Int?
+}
+enum Shape {
+    Dot
+    Circle(Int)
+}
+fun describe(s: Shape, p: Point?, big: Bool): String {
+    var label = if (big) "big" else "small"
+    val y = p?.y ?: 0
+    label = when (s) {
+        Shape.Dot -> "dot"
+        else -> "circle"
+    }
+    return label
+}

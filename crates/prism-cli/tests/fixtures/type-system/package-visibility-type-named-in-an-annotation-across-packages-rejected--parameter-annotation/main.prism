@@ -1,0 +1,3 @@
+// expect: E4007
+import /core/models
+fun g(s: Secret): Int = 1

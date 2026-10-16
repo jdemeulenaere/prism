@@ -1,0 +1,3 @@
+package app
+import a
+public fun fc(): Int = 1

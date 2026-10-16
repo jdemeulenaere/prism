@@ -1,0 +1,5 @@
+// expect: ok
+struct User {
+    var name: String
+}
+fun f(u: &mut User): String = u.name

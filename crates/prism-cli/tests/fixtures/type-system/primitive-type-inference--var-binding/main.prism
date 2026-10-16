@@ -1,0 +1,7 @@
+// expect: ok
+fun takesInt(n: Int): Unit {}
+fun f(): Unit {
+    var x = 42
+    x = 43
+    takesInt(x)
+}

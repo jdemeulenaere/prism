@@ -1,0 +1,3 @@
+// expect: ok
+fun local(x: Int) {
+}

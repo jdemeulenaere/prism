@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(c: Bool): Unit {
+    val x: Int = if (c) 1 else "s"
+}

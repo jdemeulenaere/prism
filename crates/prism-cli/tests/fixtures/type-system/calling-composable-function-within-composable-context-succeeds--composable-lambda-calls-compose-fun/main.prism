@@ -1,0 +1,10 @@
+// expect: ok
+compose fun Label(): Unit {}
+compose fun Column(content: compose () -> Unit): Unit {
+    content()
+}
+compose fun Screen(): Unit {
+    Column {
+        Label()
+    }
+}

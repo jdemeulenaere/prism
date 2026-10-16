@@ -1,0 +1,5 @@
+// expect-current: E2001
+// FIXME(decision): same question as the `..` case: the parser rejects `.` before resolution can
+// report E1006.
+import ./sibling
+fun main(): Int = 1

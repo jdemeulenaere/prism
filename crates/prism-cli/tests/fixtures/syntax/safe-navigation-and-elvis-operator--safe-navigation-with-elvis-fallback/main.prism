@@ -1,0 +1,8 @@
+// expect: ok
+struct Name {
+    val length: Int
+}
+fun f(name: Name?): Int {
+    val len = name?.length ?: 0
+    return len
+}

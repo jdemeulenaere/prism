@@ -1,0 +1,6 @@
+// expect: ok
+struct Point {
+    val x: Double
+    val y: Double
+}
+fun f(p: Point): Double = p.x + p.y

@@ -1,0 +1,2 @@
+// expect: ok
+fun f(x: &&Int): Unit {}

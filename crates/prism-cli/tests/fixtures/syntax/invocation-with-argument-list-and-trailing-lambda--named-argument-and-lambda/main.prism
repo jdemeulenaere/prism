@@ -1,0 +1,8 @@
+// expect: ok
+fun button(onClick: () -> Unit, label: String): Unit {}
+fun handler(): Unit {}
+fun f(): Unit {
+    button(label = "Click") {
+        handler()
+    }
+}

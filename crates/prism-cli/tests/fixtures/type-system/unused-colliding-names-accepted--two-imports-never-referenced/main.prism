@@ -1,0 +1,4 @@
+// expect: ok
+import /a/lib
+import /b/lib
+fun f(): Int = 1

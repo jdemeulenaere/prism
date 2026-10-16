@@ -1,0 +1,6 @@
+// expect: ok
+fun takesChar(c: Char): Unit {}
+fun f(): Unit {
+    val c = 'a'
+    takesChar(c)
+}

@@ -1,0 +1,10 @@
+// expect: ok
+struct User {
+    val name: String
+}
+fun f(user: User?): String {
+    val n = user
+        ?.name
+        ?: "anon"
+    return n
+}

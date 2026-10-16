@@ -1,0 +1,6 @@
+// expect: ok
+fun takesInt(n: Int): Unit {}
+fun f(): Unit {
+    val x = 42
+    takesInt(x)
+}

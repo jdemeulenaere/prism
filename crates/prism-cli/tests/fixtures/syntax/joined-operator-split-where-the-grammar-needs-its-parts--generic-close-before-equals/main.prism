@@ -1,0 +1,4 @@
+// expect: ok
+fun f(x: Heap<Int>): Unit {
+    val y: Heap<Int>= x
+}

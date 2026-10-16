@@ -1,0 +1,4 @@
+// expect: E2001
+fun f(b: Int, c: Int): Unit {
+    val a = b = c
+}

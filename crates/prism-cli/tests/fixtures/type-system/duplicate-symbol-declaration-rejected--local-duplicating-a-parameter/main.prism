@@ -1,0 +1,8 @@
+// expect-current: ok
+// FIXME(decision): the spec says "a scope declares two variables or parameters with the identical
+// identifier" but does not say whether the parameters and the outermost block of the body are one
+// scope. Kotlin allows the local with a warning; Rust shadows silently. Today it is accepted.
+fun f(a: Int): Int {
+    val a = 2
+    return a
+}

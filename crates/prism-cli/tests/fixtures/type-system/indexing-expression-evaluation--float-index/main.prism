@@ -1,0 +1,2 @@
+// expect: E4002
+fun first(s: String): Char = s[0.5]

@@ -1,0 +1,3 @@
+// expect: E4011
+public fun greet(name: String) {
+}

@@ -1,0 +1,9 @@
+// expect: E4004
+fun takesInt(n: Int): Unit {}
+fun f(): Unit {
+    val x = 1
+    if (true) {
+        val x = "inner"
+        takesInt(x)
+    }
+}

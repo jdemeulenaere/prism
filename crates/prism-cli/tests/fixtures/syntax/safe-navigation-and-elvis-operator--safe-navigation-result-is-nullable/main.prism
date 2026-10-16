@@ -1,0 +1,7 @@
+// expect: E4002
+struct Name {
+    val length: Int
+}
+fun f(name: Name?): Unit {
+    val len: Int = name?.length
+}

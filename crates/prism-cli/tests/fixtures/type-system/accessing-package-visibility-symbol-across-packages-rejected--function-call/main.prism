@@ -1,0 +1,3 @@
+// expect: E4007
+import /core/math
+fun f(): Int = internalCalc()

@@ -1,0 +1,2 @@
+// expect: ok
+fun f(): Int = 1 /* a /* b */ c */ + 2

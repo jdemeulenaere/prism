@@ -1,0 +1,4 @@
+// expect: E4012
+import /a/lib
+import /b/lib
+fun f(): Int = helper("s")

@@ -1,0 +1,3 @@
+// expect: E4011
+package fun helper(x: Int) {
+}

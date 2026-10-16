@@ -1,0 +1,3 @@
+// expect: E1001
+package foo.bar.baz
+fun main(): Int = 1

@@ -1,0 +1,3 @@
+package core
+import helper
+fun f(): Int = internalCalc()

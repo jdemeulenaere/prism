@@ -1,0 +1,3 @@
+// expect: E1002
+import /core/fmt
+fun main(): Int = 1

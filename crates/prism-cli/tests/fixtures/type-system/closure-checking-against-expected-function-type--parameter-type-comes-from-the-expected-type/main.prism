@@ -1,0 +1,6 @@
+// expect: E4002
+fun apply(f: (Int) -> Int): Int = f(1)
+fun g(): Int = apply { x ->
+    val s: String = x
+    1
+}

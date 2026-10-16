@@ -1,0 +1,3 @@
+// expect: E1001
+package x.app
+fun main(): Int = 1

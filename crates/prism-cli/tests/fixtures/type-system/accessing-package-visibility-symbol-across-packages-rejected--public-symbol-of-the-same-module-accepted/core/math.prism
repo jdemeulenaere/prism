@@ -1,0 +1,3 @@
+package core
+package fun internalCalc(): Int = 1
+public fun open(): Int = 2

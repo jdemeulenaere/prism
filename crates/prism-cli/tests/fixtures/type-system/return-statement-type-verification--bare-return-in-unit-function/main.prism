@@ -1,0 +1,6 @@
+// expect: ok
+fun f(c: Bool): Unit {
+    if (c) {
+        return
+    }
+}

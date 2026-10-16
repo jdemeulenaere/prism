@@ -1,0 +1,3 @@
+// expect: ok
+struct P { val x: Int, val y: Int }
+enum E { A, B }

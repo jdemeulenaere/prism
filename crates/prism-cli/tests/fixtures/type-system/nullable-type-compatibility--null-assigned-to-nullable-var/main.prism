@@ -1,0 +1,5 @@
+// expect: ok
+fun f(): Unit {
+    var name: String? = "a"
+    name = null
+}

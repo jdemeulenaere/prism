@@ -1,0 +1,3 @@
+// expect: ok
+fun run(f: (Int) -> Int): Int = f(1)
+fun g(): Int = run { compose -> compose }

@@ -1,0 +1,4 @@
+// expect: ok
+package app
+import b
+public fun fa(): Int = fb()

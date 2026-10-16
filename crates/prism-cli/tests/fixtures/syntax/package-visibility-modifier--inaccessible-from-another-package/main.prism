@@ -1,0 +1,3 @@
+// expect: E4007
+import /lib/helper
+fun f(): Int = helper()

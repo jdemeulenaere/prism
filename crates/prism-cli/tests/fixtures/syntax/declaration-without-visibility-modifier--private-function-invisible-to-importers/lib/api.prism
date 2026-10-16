@@ -1,0 +1,2 @@
+package lib
+fun hidden(): Int = 1

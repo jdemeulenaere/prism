@@ -1,0 +1,3 @@
+// expect: ok
+fun f() = { 1 }
+fun g(): Int = f()()

@@ -1,0 +1,5 @@
+// expect: ok
+fun f(condition: Bool): Int {
+    val result = if (condition) 10 else 20
+    return result
+}

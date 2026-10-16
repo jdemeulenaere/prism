@@ -1,0 +1,3 @@
+// expect: ok
+package app
+fun main(): Int = 1

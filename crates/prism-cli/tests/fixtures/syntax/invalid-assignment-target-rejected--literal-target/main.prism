@@ -1,0 +1,4 @@
+// expect: E2001
+fun f(): Unit {
+    1 = 2
+}

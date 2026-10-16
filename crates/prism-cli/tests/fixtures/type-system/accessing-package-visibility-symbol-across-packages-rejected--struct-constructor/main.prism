@@ -1,0 +1,6 @@
+// expect: E4007
+import /core/models
+fun f(): Int {
+    val s = Secret(1)
+    return 1
+}

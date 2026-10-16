@@ -1,0 +1,7 @@
+// expect: E4002
+fun f(n: Int): Unit {
+    val x = when (n) {
+        0 -> "zero"
+        else -> 1
+    }
+}

@@ -1,0 +1,5 @@
+package core
+package enum Mode {
+    A,
+    B
+}

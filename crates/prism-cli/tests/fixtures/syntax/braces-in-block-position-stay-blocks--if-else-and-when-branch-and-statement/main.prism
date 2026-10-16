@@ -1,0 +1,13 @@
+// expect: ok
+fun a(): Unit {}
+fun b(): Unit {}
+fun f(c: Bool, x: Int): Unit {
+    if (c) { a() } else { b() }
+    val r = when (x) {
+        0 -> { a() }
+        else -> { b() }
+    }
+    {
+        val t = 1
+    }
+}

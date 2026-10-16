@@ -1,0 +1,3 @@
+// expect: E4014
+import /shop/api
+fun f(): Int = first().price

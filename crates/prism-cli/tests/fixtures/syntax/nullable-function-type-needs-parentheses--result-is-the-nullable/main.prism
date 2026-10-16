@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(b: () -> Int?): Unit {
+    val r: Int = b()
+}

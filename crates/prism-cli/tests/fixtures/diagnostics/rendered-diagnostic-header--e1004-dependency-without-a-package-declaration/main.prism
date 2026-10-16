@@ -1,0 +1,3 @@
+// expect: E1004
+import /core/dep
+fun main(): Int = 1

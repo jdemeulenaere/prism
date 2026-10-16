@@ -1,0 +1,3 @@
+// expect: ok
+fun g(compose: Int): Int = compose
+fun f(): Int = g(compose = 1)

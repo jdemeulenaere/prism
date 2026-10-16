@@ -1,0 +1,3 @@
+// expect: ok
+fun greet(msg: String, count: Int = 1, prefix: String = ">"): String = msg
+fun f(): String = greet("hi")

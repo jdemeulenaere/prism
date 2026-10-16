@@ -1,0 +1,10 @@
+// expect: ok
+struct Hidden {
+    val v: Int
+}
+enum Mode {
+    A,
+    B
+}
+fun hidden(): Int = Hidden(1).v
+fun mode(): Mode = Mode.A

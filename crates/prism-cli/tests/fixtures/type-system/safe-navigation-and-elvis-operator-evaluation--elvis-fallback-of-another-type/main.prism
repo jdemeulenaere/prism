@@ -1,0 +1,2 @@
+// expect: E4002
+fun orZero(n: Int?): Int = n ?: "none"

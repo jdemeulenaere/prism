@@ -1,0 +1,12 @@
+// expect: E4004
+fun takesInt(n: Int): Unit {}
+fun takesChar(c: Char): Unit {}
+fun takesBool(b: Bool): Unit {}
+fun f(): Unit {
+    val x = 42
+    val c = 'a'
+    val b = true
+    takesChar(x)
+    takesBool(c)
+    takesInt(b)
+}

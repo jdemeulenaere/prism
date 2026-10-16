@@ -1,0 +1,2 @@
+// expect: E4002
+fun f(): Bool = 1 < 2.0

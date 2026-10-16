@@ -1,0 +1,3 @@
+// expect: E4008
+compose fun Count(): Int = 1
+fun plain(): Int = Count()

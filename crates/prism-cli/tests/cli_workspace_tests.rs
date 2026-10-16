@@ -761,3 +761,40 @@ fn test_cli_binary_nonexistent_target_e1000() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+#[cfg(unix)]
+fn test_cli_binary_symlinked_directory_entry_rejected_e1005() {
+    let temp = create_temp_dir("cli_dir_symlink_escape");
+    let outside = create_temp_dir("cli_dir_outside");
+    fs::write(
+        outside.join("secret.prism"),
+        "package pkg\npublic fun secret(): Int = 42\n",
+    )
+    .unwrap();
+
+    let pkg_dir = temp.join("pkg");
+    fs::create_dir_all(&pkg_dir).unwrap();
+    fs::write(
+        pkg_dir.join("a.prism"),
+        "package pkg\npublic fun a(): Int = 1\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.join("secret.prism"), pkg_dir.join("link.prism")).unwrap();
+
+    // Both the package directory and the workspace root that contains it reject the entry.
+    for target in [&pkg_dir, &temp] {
+        let output = Command::new(prism_bin())
+            .arg("check")
+            .arg(target)
+            .output()
+            .expect("failed to execute prism CLI");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[E1005]"), "stderr: {}", stderr);
+    }
+
+    fs::remove_dir_all(&temp).ok();
+    fs::remove_dir_all(&outside).ok();
+}

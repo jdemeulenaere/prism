@@ -1,0 +1,4 @@
+// expect: E4007
+package app.ui
+import /app/models/store
+fun render(): Int = internalCount()

@@ -1,0 +1,4 @@
+// expect: ok
+fun f(onClick: () -> Unit): Unit {
+    onClick()
+}

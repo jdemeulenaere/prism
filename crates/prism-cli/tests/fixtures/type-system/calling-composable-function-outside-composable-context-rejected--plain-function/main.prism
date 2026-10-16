@@ -1,0 +1,5 @@
+// expect: E4008
+compose fun Label(): Unit {}
+fun render(): Unit {
+    Label()
+}

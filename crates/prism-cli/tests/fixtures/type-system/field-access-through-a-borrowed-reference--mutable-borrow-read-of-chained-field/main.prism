@@ -1,0 +1,8 @@
+// expect: ok
+struct User {
+    val name: String
+}
+struct Order {
+    val user: User
+}
+fun f(o: &mut Order): String = o.user.name

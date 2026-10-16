@@ -1,0 +1,3 @@
+// expect: ok
+fun f(s: String, i: Int): Char = s[i
+    + 1]

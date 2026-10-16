@@ -1,0 +1,3 @@
+// expect: E1000
+// entry: does-not-exist.prism
+// A `prism check` target that does not exist is reported with E1000, not as an uncoded error.

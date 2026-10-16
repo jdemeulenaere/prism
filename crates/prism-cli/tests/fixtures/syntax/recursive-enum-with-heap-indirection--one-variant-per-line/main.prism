@@ -1,0 +1,8 @@
+// expect: ok
+enum Expr {
+    Literal(Int)
+    Add(Heap<Expr>, Heap<Expr>)
+}
+fun f(): Unit {
+    val e = Expr.Literal(1)
+}

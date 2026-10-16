@@ -1,0 +1,5 @@
+// expect: ok
+fun take(x: Missing): Unit {}
+fun relay(x: Missing): Unit {
+    take(x)
+}

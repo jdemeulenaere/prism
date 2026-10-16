@@ -1,0 +1,4 @@
+package lib
+struct Hidden {
+    val v: Int
+}

@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(): Unit {
+    val x: Float = 1 + 2.0
+}

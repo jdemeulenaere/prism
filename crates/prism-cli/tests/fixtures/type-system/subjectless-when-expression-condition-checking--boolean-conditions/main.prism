@@ -1,0 +1,6 @@
+// expect: ok
+fun sign(n: Int): Int = when {
+    n < 0 -> 0 - 1
+    n == 0 -> 0
+    else -> 1
+}

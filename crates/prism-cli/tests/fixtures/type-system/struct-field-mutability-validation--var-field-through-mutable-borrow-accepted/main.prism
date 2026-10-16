@@ -1,0 +1,8 @@
+// expect: ok
+struct P {
+    val id: Int
+    var age: Int
+}
+fun f(p: &mut P): Unit {
+    p.age = 3
+}

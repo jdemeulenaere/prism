@@ -1,0 +1,5 @@
+// expect: E4005
+fun apply(f: (Int) -> Int): Int = f(1)
+fun g(): Int = apply { x ->
+    return "s"
+}

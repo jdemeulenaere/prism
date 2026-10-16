@@ -1,0 +1,5 @@
+// expect: ok
+compose fun Label(): Unit {}
+compose fun Screen(): Unit {
+    Label()
+}

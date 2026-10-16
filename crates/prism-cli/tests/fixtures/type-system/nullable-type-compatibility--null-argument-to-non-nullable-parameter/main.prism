@@ -1,0 +1,5 @@
+// expect: E4004
+fun greet(name: String): Unit {}
+fun f(): Unit {
+    greet(null)
+}

@@ -1,0 +1,3 @@
+// expect: ok
+package app.ui
+public fun render(): Int = 1

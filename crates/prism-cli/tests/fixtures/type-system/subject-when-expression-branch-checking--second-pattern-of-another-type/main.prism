@@ -1,0 +1,5 @@
+// expect: E4002
+fun name(n: Int): String = when (n) {
+    1, "two" -> "few"
+    else -> "other"
+}

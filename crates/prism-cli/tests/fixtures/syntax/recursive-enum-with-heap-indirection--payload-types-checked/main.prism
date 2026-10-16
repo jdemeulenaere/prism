@@ -1,0 +1,5 @@
+// expect: E4004
+enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }
+fun f(): Unit {
+    val e = Expr.Literal("one")
+}

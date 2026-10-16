@@ -1,0 +1,4 @@
+// expect: ok
+public fun f(x: Int): Int = x
+package val limit: Int = 1
+public struct S { val a: Int }

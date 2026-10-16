@@ -1,0 +1,5 @@
+// expect: ok
+struct User {
+    val name: String
+}
+fun nameOf(u: User?): String? = u?.name

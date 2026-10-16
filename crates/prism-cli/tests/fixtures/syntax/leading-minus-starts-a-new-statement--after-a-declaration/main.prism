@@ -1,0 +1,5 @@
+// expect: ok
+fun f(b: Int): Unit {
+    val a = b
+    -1
+}

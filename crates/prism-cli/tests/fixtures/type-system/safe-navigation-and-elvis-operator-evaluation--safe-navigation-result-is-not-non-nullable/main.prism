@@ -1,0 +1,5 @@
+// expect: E4005
+struct User {
+    val name: String
+}
+fun nameOf(u: User?): String = u?.name

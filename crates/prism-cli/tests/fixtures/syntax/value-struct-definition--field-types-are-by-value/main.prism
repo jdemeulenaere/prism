@@ -1,0 +1,5 @@
+// expect: E4002
+struct Point { val x: Double, val y: Double }
+fun f(p: Point): Unit {
+    val n: Int = p.x
+}

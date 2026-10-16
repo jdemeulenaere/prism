@@ -1,0 +1,3 @@
+package lib
+import helper
+fun f(): Int = helper()

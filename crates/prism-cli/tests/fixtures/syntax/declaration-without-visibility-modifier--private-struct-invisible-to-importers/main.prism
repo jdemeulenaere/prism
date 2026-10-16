@@ -1,0 +1,6 @@
+// expect: E4001
+import /lib/api
+fun f(): Int {
+    val h = Hidden(1)
+    return 1
+}

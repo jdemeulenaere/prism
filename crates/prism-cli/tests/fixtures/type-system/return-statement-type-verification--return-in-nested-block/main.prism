@@ -1,0 +1,7 @@
+// expect: E4005
+fun f(c: Bool): Int {
+    if (c) {
+        return "s"
+    }
+    return 1
+}

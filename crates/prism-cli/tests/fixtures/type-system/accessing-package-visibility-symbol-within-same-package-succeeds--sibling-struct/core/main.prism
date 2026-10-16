@@ -1,0 +1,3 @@
+package core
+import models
+fun f(s: Secret): Int = s.v

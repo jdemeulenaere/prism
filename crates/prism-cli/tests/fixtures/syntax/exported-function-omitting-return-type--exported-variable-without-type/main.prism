@@ -1,0 +1,2 @@
+// expect: E3001
+public val limit = 10

@@ -1,0 +1,5 @@
+// expect: ok
+fun f(c: Bool): Int {
+    val x: Int = if (c) 42 else return 0
+    return x
+}

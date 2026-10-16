@@ -1,0 +1,2 @@
+package b
+public fun helper(x: String): Int = 1

@@ -1,0 +1,5 @@
+// expect: ok
+fun f(x: Int): Bool = when (x) {
+    in 4..10 -> true
+    else -> false
+}

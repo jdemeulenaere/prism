@@ -1,0 +1,6 @@
+// expect: ok
+fun takesBool(b: Bool): Unit {}
+fun f(): Unit {
+    val b = true
+    takesBool(b)
+}

@@ -1,0 +1,2 @@
+// expect: E4010
+fun f(a: Int, a: Int): Int = a

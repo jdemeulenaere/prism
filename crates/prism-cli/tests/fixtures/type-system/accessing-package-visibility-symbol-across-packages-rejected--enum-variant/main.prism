@@ -1,0 +1,3 @@
+// expect: E4007
+import /core/models
+fun f(): Mode = Mode.A

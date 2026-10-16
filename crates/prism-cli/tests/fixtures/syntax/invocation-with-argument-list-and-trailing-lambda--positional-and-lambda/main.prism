@@ -1,0 +1,7 @@
+// expect: ok
+fun repeat(n: Int, body: () -> Unit): Unit {}
+fun f(): Unit {
+    repeat(3) {
+        val x = 1
+    }
+}

@@ -1,0 +1,4 @@
+// expect: E4003
+fun f(a: Int): Unit {
+    a = 2
+}

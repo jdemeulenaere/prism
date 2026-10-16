@@ -1,0 +1,3 @@
+// expect: E4004
+fun add(x: Int, y: Int): Int = x + y
+fun f(): Int = add(1)

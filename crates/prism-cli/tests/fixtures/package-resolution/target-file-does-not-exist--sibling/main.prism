@@ -1,0 +1,3 @@
+// expect: E1002
+import missing
+fun main(): Int = 1

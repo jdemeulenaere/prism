@@ -1,0 +1,2 @@
+package lib
+public fun api(): Int = 1

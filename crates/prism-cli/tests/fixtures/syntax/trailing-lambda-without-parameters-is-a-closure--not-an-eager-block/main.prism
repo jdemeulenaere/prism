@@ -1,0 +1,5 @@
+// expect: E4004
+fun takesInt(n: Int): Unit {}
+fun f(): Unit {
+    takesInt { 42 }
+}

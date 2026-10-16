@@ -1,0 +1,5 @@
+// expect: ok
+fun f(base: Int?, offset: Int): Int {
+    val total = base ?: offset + 10
+    return total
+}

@@ -1,0 +1,3 @@
+// expect: ok
+/* outer /* inner */ still comment */
+fun f(): Int = 1

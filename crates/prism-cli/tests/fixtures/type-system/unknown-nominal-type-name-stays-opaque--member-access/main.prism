@@ -1,0 +1,2 @@
+// expect: E4006
+fun size(x: Missing): Int = x.size

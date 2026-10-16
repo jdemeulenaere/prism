@@ -1,0 +1,3 @@
+// expect: E1001
+package app.ui
+fun render(): Int = 1

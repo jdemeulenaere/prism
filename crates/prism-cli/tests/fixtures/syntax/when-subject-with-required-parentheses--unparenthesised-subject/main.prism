@@ -1,0 +1,2 @@
+// expect: E2001
+fun f(status: Int): String = when status { 0 -> "ok", else -> "fail" }

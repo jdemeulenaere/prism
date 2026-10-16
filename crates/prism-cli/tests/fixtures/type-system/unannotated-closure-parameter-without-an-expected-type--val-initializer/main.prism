@@ -1,0 +1,4 @@
+// expect: E4013
+fun f(): Unit {
+    val g = { x -> x + 1 }
+}

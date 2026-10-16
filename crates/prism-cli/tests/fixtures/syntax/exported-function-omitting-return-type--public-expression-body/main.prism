@@ -1,0 +1,2 @@
+// expect: E3001
+public fun compute(x: Int) = x * 2

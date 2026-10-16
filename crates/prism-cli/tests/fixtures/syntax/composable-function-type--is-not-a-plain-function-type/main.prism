@@ -1,0 +1,5 @@
+// expect: E4004
+fun later(f: () -> Unit): Unit {}
+compose fun P(content: compose () -> Unit): Unit {
+    later(content)
+}

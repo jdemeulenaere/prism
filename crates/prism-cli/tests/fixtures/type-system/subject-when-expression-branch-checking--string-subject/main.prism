@@ -1,0 +1,6 @@
+// expect: ok
+fun code(s: String): Int = when (s) {
+    "a" -> 1
+    "b" -> 2
+    else -> 0
+}

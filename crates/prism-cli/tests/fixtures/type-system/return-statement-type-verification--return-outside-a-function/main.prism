@@ -1,0 +1,2 @@
+// expect: E4005
+val x = return 10

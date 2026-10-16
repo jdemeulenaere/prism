@@ -1,0 +1,6 @@
+// expect: E4004
+fun read(r: &Int): Int = 1
+fun f(): Int {
+    val s = "s"
+    return read(&s)
+}

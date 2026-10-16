@@ -1,0 +1,8 @@
+// expect: ok
+fun f(n: Int): Int {
+    val x: Int = when (n) {
+        0 -> return 0
+        else -> 42
+    }
+    return x
+}

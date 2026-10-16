@@ -1,0 +1,3 @@
+// expect: E4001
+import /lib/api
+fun f(): Int = hidden()

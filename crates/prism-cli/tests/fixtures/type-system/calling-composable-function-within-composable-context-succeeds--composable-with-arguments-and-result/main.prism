@@ -1,0 +1,5 @@
+// expect: ok
+compose fun Counter(start: Int): Int = start
+compose fun Screen(): Unit {
+    val n = Counter(1)
+}

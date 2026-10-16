@@ -1,0 +1,7 @@
+// expect: ok
+fun f(n: Int): Unit {
+    when (n) {
+        0 -> { val x = 1 }
+        else -> { }
+    }
+}

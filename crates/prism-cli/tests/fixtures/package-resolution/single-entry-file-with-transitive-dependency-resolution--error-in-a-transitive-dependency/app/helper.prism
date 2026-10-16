@@ -1,0 +1,5 @@
+package app
+package fun help(): Int {
+    val s: String = 1
+    return 1
+}

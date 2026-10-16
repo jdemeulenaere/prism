@@ -1,0 +1,6 @@
+// expect: E4010
+fun f(): Int {
+    val a = 1
+    val a = 2
+    return a
+}

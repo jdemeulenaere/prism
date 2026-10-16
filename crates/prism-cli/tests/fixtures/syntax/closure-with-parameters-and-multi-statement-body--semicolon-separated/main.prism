@@ -1,0 +1,5 @@
+// expect: ok
+fun forEach(items: Int, body: (Int) -> Unit): Unit {}
+fun f(): Unit {
+    forEach(3) { item -> val s = item * item; val t = s + 1 }
+}

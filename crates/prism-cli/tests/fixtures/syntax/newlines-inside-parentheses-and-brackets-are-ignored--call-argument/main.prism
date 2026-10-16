@@ -1,0 +1,4 @@
+// expect: ok
+fun g(n: Int): Int = n
+fun f(a: Int): Int = g(a
+    - 1)

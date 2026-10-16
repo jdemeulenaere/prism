@@ -1,0 +1,6 @@
+// expect: E4003
+fun bump(r: &mut Int): Unit {}
+fun f(): Unit {
+    val x = 1
+    bump(&mut x)
+}

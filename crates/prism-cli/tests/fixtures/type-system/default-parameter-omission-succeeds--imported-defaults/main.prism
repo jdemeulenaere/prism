@@ -1,0 +1,3 @@
+// expect: ok
+import /lib/greeter
+fun f(): String = greet("hi")

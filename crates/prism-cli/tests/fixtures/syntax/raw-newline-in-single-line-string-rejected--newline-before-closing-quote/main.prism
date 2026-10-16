@@ -1,0 +1,3 @@
+// expect: E2001
+fun f(): String = "hello
+world"

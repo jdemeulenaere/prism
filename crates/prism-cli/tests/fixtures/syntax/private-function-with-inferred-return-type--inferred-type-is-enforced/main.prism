@@ -1,0 +1,5 @@
+// expect: E4002
+fun localCompute(x: Int) = x * 2
+fun g(): Unit {
+    val s: String = localCompute(2)
+}

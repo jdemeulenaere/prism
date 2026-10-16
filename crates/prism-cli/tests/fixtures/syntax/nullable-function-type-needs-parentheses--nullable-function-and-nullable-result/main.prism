@@ -1,0 +1,4 @@
+// expect: ok
+fun f(a: (() -> Unit)?, b: () -> Unit?): Unit {
+    val r: Unit? = b()
+}

@@ -1,0 +1,7 @@
+// expect: ok
+compose fun Column(content: compose () -> Unit): Unit {
+    content()
+}
+compose fun Row(item: compose (Int) -> Unit): Unit {
+    item(1)
+}

@@ -1,0 +1,2 @@
+// expect: E2001
+fun f(): String = "\u{D800}"

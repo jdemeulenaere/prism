@@ -1,0 +1,5 @@
+// expect: E4002
+fun f() = { 1 }
+fun g(): Unit {
+    val n: Int = f()
+}

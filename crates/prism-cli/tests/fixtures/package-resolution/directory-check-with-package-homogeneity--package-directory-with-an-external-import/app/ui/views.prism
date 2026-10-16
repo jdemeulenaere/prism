@@ -1,0 +1,5 @@
+// expect: ok
+// entry: app/ui
+package app.ui
+import /core/fmt
+package fun v(): Int = println()

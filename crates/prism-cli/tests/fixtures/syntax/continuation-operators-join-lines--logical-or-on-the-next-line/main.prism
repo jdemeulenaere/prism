@@ -1,0 +1,6 @@
+// expect: ok
+fun f(a: Bool, b: Bool): Bool {
+    val ok = a
+        || b
+    return ok
+}

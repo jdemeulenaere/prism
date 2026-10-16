@@ -1,0 +1,6 @@
+// expect: ok
+fun cleanup(): Unit {}
+fun f(): Unit {
+    cleanup()
+    (1 + 2)
+}

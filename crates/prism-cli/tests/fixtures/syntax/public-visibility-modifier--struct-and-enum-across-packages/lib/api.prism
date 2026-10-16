@@ -1,0 +1,8 @@
+package lib
+public struct Point {
+    val x: Int
+}
+public enum Mode {
+    A,
+    B
+}

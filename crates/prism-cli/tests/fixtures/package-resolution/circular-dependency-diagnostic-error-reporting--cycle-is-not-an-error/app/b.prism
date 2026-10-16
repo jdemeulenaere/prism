@@ -1,0 +1,3 @@
+package app
+import a
+public fun fb(): Int = 2

@@ -1,0 +1,5 @@
+// expect: E4002
+fun f(n: Int): Int = when {
+    n -> 1
+    else -> 2
+}

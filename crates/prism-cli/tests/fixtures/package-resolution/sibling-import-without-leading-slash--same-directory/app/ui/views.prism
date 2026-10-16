@@ -1,0 +1,4 @@
+// expect: ok
+package app.ui
+import widgets
+fun render(): Int = button()

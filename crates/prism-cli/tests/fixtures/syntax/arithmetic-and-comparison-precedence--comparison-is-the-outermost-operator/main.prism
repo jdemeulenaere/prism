@@ -1,0 +1,2 @@
+// expect: E4005
+fun f(a: Int, b: Int, c: Int, d: Int): Int = a + b * c > d

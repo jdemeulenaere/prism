@@ -1,0 +1,8 @@
+// expect: E4008
+compose fun Label(): Unit {}
+fun later(f: () -> Unit): Unit {}
+compose fun Screen(): Unit {
+    later {
+        Label()
+    }
+}

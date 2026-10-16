@@ -1,0 +1,3 @@
+// expect: E4010
+fun twice(): Int = 1
+fun twice(): Int = 2

@@ -1,0 +1,5 @@
+// expect: E4004
+fun bump(r: &mut Int): Unit {}
+fun f(r: &Int): Unit {
+    bump(r)
+}

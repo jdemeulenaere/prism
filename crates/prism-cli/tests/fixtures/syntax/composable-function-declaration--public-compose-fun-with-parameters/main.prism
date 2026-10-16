@@ -1,0 +1,2 @@
+// expect: ok
+public compose fun CounterView(initialCount: Int = 0): Unit {}

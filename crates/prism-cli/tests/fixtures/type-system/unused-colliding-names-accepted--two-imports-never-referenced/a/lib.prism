@@ -1,0 +1,2 @@
+package a
+public fun helper(x: Int): Int = x

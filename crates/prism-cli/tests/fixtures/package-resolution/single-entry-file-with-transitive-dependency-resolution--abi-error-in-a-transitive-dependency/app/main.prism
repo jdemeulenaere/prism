@@ -1,0 +1,4 @@
+// expect: E3001
+package app
+import helper
+fun main(): Int = help()

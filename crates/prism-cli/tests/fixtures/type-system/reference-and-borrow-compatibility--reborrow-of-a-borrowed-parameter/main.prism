@@ -1,0 +1,7 @@
+// expect: ok
+fun read(r: &Int): Int = 1
+fun bump(r: &mut Int): Unit {}
+fun f(r: &mut Int): Unit {
+    read(r)
+    bump(r)
+}

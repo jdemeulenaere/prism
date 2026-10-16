@@ -1,0 +1,6 @@
+// expect: E2001
+fun f(a: Int, b: Int): Int {
+    val p = a
+    * b
+    return p
+}

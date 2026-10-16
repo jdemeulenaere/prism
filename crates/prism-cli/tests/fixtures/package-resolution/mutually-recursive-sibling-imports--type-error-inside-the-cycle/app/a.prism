@@ -1,0 +1,4 @@
+// expect: E4004
+package app
+import b
+public fun fa(): Int = fb("not an int")

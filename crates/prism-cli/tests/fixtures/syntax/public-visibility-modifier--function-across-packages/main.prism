@@ -1,0 +1,3 @@
+// expect: ok
+import /lib/api
+fun f(): Int = api()

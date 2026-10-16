@@ -1,0 +1,2 @@
+// expect: ok
+struct View { val data: String, val len: Int }

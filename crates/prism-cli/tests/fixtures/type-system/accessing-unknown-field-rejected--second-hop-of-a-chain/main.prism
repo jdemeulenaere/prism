@@ -1,0 +1,8 @@
+// expect: E4006
+struct Inner {
+    val v: Int
+}
+struct Outer {
+    val inner: Inner
+}
+fun f(o: Outer): Int = o.inner.w

@@ -1,0 +1,3 @@
+// expect: ok
+fun g(): Int = localCompute(2)
+fun localCompute(x: Int) = x * 2

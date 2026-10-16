@@ -1,0 +1,3 @@
+package lib
+fun hidden(): Int = 1
+public fun shown(): Int = 2

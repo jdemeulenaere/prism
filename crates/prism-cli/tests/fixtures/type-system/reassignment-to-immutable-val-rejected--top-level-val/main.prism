@@ -1,0 +1,5 @@
+// expect: E4003
+val limit: Int = 1
+fun f(): Unit {
+    limit = 2
+}

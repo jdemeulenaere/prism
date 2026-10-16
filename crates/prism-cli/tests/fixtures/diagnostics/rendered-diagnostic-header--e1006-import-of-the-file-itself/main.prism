@@ -1,0 +1,3 @@
+// expect: E1006
+import main
+fun main(): Int = 1

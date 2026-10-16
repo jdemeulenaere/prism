@@ -1,0 +1,5 @@
+// expect: ok
+fun f(age: Int?): Bool {
+    val eligible = age ?: 0 >= 18
+    return eligible
+}

@@ -1,0 +1,5 @@
+// expect: ok
+struct Pipeline {
+    val compose: Int
+}
+fun process(pipeline: Pipeline, compose: Int): Int = pipeline.compose + compose

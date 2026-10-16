@@ -1,0 +1,4 @@
+// expect: E4005
+fun f(): Int {
+    return
+}

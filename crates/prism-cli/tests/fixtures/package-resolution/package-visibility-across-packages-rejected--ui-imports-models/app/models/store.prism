@@ -1,0 +1,2 @@
+package app.models
+package fun internalCount(): Int = 1

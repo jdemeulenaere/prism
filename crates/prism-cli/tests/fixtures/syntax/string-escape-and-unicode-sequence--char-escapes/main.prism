@@ -1,0 +1,3 @@
+// expect: ok
+fun f(): Char = '\n'
+fun g(): Char = '\u{1F680}'

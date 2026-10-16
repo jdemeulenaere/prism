@@ -1,0 +1,3 @@
+// expect: E4001
+import /core/math
+fun f(): Int = secret()

@@ -1,0 +1,11 @@
+// expect: ok
+fun takesString(s: String): Unit {}
+fun takesInt(n: Int): Unit {}
+fun f(): Unit {
+    val x = 1
+    if (true) {
+        val x = "inner"
+        takesString(x)
+    }
+    takesInt(x)
+}

@@ -1,0 +1,3 @@
+package app
+import /core/math
+fun run(): Int = add(1, 2)

@@ -1,0 +1,3 @@
+// expect: ok
+struct Point { val x: Int, val y: Int }
+fun f(): Int = Point(1, 2).x

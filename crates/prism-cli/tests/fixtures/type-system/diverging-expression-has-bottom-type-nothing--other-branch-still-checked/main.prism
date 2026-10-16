@@ -1,0 +1,5 @@
+// expect: E4002
+fun f(c: Bool): Int {
+    val x: Int = if (c) return 0 else "s"
+    return x
+}

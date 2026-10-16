@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(g: (Int) -> (Int) -> Int): Unit {
+    val s: String = g(1)(2)
+}

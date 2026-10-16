@@ -1,0 +1,6 @@
+// expect: ok
+fun g(f: () -> Unit): Unit {}
+fun f(a: Int): Unit {
+    g({ a
+    -1 })
+}

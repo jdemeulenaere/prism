@@ -1,0 +1,4 @@
+// expect: E1003
+// entry: app/ui
+package app.ui
+fun v(): Int = 1

@@ -1,0 +1,7 @@
+// expect: ok
+fun sideEffect() {
+    val x = 1
+}
+fun g(): Unit {
+    sideEffect()
+}

@@ -1,0 +1,4 @@
+// expect: ok
+fun f(): Int {
+    return 42
+}

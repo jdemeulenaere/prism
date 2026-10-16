@@ -1,0 +1,5 @@
+// expect: ok
+fun greet(name: String?): Unit {}
+fun f(): Unit {
+    greet(null)
+}

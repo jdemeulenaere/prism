@@ -1,0 +1,2 @@
+// expect: E4002
+fun f(): Int = if (1) 2 else 3

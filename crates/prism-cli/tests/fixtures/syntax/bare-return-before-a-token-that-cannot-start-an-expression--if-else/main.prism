@@ -1,0 +1,5 @@
+// expect: ok
+fun g(): Unit {}
+fun f(c: Bool): Unit {
+    if (c) return else g()
+}

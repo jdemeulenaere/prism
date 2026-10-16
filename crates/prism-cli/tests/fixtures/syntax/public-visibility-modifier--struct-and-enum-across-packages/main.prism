@@ -1,0 +1,7 @@
+// expect: ok
+import /lib/api
+fun f(): Int {
+    val p = Point(1)
+    val m = Mode.A
+    return p.x
+}

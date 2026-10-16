@@ -1,0 +1,2 @@
+// expect: E3001
+package val limit = 1

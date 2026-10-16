@@ -1,0 +1,5 @@
+// expect: ok
+fun takesInt(n: Int): Unit {}
+fun f(n: Int?): Unit {
+    takesInt(n ?: 0)
+}

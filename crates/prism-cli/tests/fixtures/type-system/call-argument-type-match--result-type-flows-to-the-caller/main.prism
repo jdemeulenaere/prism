@@ -1,0 +1,5 @@
+// expect: E4002
+fun add(x: Int, y: Int): Int = x + y
+fun f(): Unit {
+    val s: String = add(1, 2)
+}

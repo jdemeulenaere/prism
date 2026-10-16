@@ -1,0 +1,9 @@
+// expect: E4003
+struct P {
+    val id: Int
+    var age: Int
+}
+fun f(): Unit {
+    val p = P(1, 2)
+    p.age = 3
+}

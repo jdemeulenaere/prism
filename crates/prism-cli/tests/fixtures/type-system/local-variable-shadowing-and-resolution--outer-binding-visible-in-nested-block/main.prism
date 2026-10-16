@@ -1,0 +1,8 @@
+// expect: ok
+fun takesInt(n: Int): Unit {}
+fun f(): Unit {
+    val x = 1
+    if (true) {
+        takesInt(x)
+    }
+}

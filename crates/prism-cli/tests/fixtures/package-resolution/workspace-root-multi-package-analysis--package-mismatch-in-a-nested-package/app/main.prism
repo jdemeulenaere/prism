@@ -1,0 +1,2 @@
+package wrong
+fun run(): Int = 1

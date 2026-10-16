@@ -1,0 +1,4 @@
+// expect: E4005
+// entry: app/ui
+package app.ui
+fun v(): Int = 1

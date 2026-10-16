@@ -1,0 +1,2 @@
+// expect: E4005
+fun f(): Int = 3.14e-2

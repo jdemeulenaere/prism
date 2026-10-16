@@ -1,0 +1,2 @@
+// expect: E4013
+fun fact(n: Int) = if (n < 1) 1 else n * fact(n - 1)

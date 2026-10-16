@@ -1,0 +1,4 @@
+// expect-current: E2001
+// FIXME(decision): same question as the `..` case, for a root-anchored import.
+import /core/../fmt
+fun main(): Int = 1

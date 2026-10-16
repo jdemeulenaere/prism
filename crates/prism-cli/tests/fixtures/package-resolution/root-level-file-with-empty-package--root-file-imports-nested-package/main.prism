@@ -1,0 +1,3 @@
+// expect: ok
+import /app/ui/views
+fun main(): Int = render()

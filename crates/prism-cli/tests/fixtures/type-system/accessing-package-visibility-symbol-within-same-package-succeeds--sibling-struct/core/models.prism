@@ -1,0 +1,4 @@
+package core
+package struct Secret {
+    val v: Int
+}

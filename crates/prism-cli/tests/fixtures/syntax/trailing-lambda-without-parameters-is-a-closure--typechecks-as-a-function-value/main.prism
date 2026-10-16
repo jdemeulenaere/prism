@@ -1,0 +1,6 @@
+// expect: ok
+fun column(content: () -> Unit): Unit {}
+fun item(): Unit {}
+fun f(): Unit {
+    column { item() }
+}

@@ -1,0 +1,8 @@
+// expect: ok
+fun takesString(s: String): Unit {}
+fun f(x: Int): Unit {
+    if (true) {
+        val x = "local"
+        takesString(x)
+    }
+}

@@ -1,0 +1,10 @@
+// expect: ok
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+fun code(c: Color): Int = when (c) {
+    Color.Red -> 1
+    else -> 0
+}

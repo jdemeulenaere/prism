@@ -1,0 +1,5 @@
+// expect: ok
+fun doWork(): Unit {}
+fun f(isValid: Bool): Unit {
+    if (isValid) { doWork() }
+}

@@ -1,0 +1,6 @@
+// expect: ok
+fun name(n: Int): String = when (n) {
+    0 -> "zero"
+    1, 2 -> "few"
+    else -> "many"
+}

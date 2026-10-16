@@ -1,0 +1,2 @@
+package core
+package fun internalCalc(): Int = 1
