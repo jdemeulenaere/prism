@@ -163,6 +163,37 @@ impl Type {
         }
     }
 
+    /// Joins the types of two branches (`if`/`else`, `when`) into the least type both are
+    /// assignable to, or `None` if they have no common type.
+    ///
+    /// `Nothing` joins to the other side, and a nullable side makes the join nullable, so
+    /// `Int` joined with `null` (`Nothing?`) is `Int?`.
+    pub fn join(&self, other: &Type) -> Option<Type> {
+        if self == &Type::Error || other == &Type::Error {
+            return Some(Type::Error);
+        }
+        if other.is_assignable_to(self) {
+            return Some(self.clone());
+        }
+        if self.is_assignable_to(other) {
+            return Some(other.clone());
+        }
+        match (self, other) {
+            (Type::Nullable(inner), _) => inner.join(other).map(Type::nullable),
+            (_, Type::Nullable(inner)) => self.join(inner).map(Type::nullable),
+            _ => None,
+        }
+    }
+
+    /// Makes a type nullable. `Error` stays `Error`, and nullable types never nest (`T??` is
+    /// `T?`).
+    pub fn nullable(self) -> Type {
+        match self {
+            Type::Error | Type::Nullable(_) => self,
+            other => Type::Nullable(Box::new(other)),
+        }
+    }
+
     /// Converts an AST type to a semantic `Type`.
     pub fn from_ast(ast_ty: &prism_ast::types::Type) -> Self {
         match &ast_ty.kind {

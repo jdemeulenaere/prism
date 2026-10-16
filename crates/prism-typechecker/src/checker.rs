@@ -813,14 +813,8 @@ impl TypeChecker {
                 let then_ty = self.infer_expr(then_branch);
                 if let Some(else_b) = else_branch {
                     let else_ty = self.infer_expr(else_b);
-                    if then_ty == Type::Nothing {
-                        else_ty
-                    } else if else_ty == Type::Nothing {
-                        then_ty
-                    } else if then_ty.is_assignable_to(&else_ty) {
-                        else_ty
-                    } else if else_ty.is_assignable_to(&then_ty) {
-                        then_ty
+                    if let Some(joined) = then_ty.join(&else_ty) {
+                        joined
                     } else {
                         self.errors.push(TypeError::TypeMismatch {
                             expected: then_ty.clone(),
@@ -1269,10 +1263,8 @@ impl TypeChecker {
             let branch_ty = self.infer_expr(&branch.body);
             if branch_ty != Type::Nothing {
                 if let Some(current) = &unified_ty {
-                    if branch_ty.is_assignable_to(current) {
-                        // keeps current
-                    } else if current.is_assignable_to(&branch_ty) {
-                        unified_ty = Some(branch_ty);
+                    if let Some(joined) = current.join(&branch_ty) {
+                        unified_ty = Some(joined);
                     } else {
                         self.errors.push(TypeError::TypeMismatch {
                             expected: current.clone(),
@@ -1644,7 +1636,7 @@ impl TypeChecker {
             }
             other => (other, false),
         };
-        let wrap = |ty: Type| if is_nullable { nullable(ty) } else { ty };
+        let wrap = |ty: Type| if is_nullable { ty.nullable() } else { ty };
 
         let peeled_ty = self.resolve_nominal(peel_indirection(base_ty));
 
@@ -1760,14 +1752,6 @@ fn contents_writable(mut ty: &Type, place_writable: bool) -> bool {
             Type::Nullable(inner) => ty = inner,
             _ => return writable,
         }
-    }
-}
-
-/// Makes `ty` nullable. `Error` stays `Error`.
-fn nullable(ty: Type) -> Type {
-    match ty {
-        Type::Error => ty,
-        other => Type::Nullable(Box::new(other)),
     }
 }
 

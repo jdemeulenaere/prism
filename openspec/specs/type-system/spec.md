@@ -71,6 +71,10 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **WHEN** `left ?: right` is evaluated and `left` is not nullable
 - **THEN** `right` is still typechecked (an unresolved name emits `E4001`, an incompatible type emits `E4002`), and the expression has the type of `left`
 
+#### Scenario: Nullable types never nest
+- **WHEN** a safe navigation reads a nullable field through a nullable value (`b?.a` where `a: A?`), so the chain `b?.a?.name` continues
+- **THEN** the result is `A?`, not `A??`, and the chain resolves `name` against `A` to give `String?`
+
 #### Scenario: Indexing expression evaluation
 - **WHEN** indexing into a collection or array `target[index]`
 - **THEN** `index` must evaluate to `Int` and the expression produces the element type (or emits `E4002` if incompatible)
@@ -120,6 +124,10 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 #### Scenario: If-else branch unification
 - **WHEN** an `if (cond) e1 else e2` expression is evaluated
 - **THEN** the condition must typecheck as `Bool`, and both branches must unify to a common type
+
+#### Scenario: Branches join with null into a nullable type
+- **WHEN** one branch of an `if`/`else` or `when` has type `T` and another is `null` or has type `T?` (e.g. `val x = if (c) 1 else null`)
+- **THEN** the branches join to `T?`
 
 #### Scenario: Diverging expression has bottom type Nothing
 - **WHEN** an expression diverges (such as a `return` expression) inside an `if` or `when` branch

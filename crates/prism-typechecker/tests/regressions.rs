@@ -266,3 +266,24 @@ fn parameter_assigned_twice_by_named_and_positional_arguments_rejected() {
         "{user}fun g(): User = User(\"a\", city = \"b\")\n"
     ));
 }
+
+// Nullable types: chains flatten and branches join with `null`.
+
+#[test]
+fn safe_navigation_chain_through_nullable_field_flattens() {
+    assert_ok(
+        "struct A {\n    val name: String\n}\nstruct B {\n    val a: A?\n}\nfun f(b: B?): String? = b?.a?.name\nfun g(b: B?): A? = b?.a\n",
+    );
+}
+
+#[test]
+fn branches_join_with_null_into_nullable_type() {
+    assert_ok(
+        "fun f(c: Bool): Int? {\n    val x = if (c) 1 else null\n    val y = if (c) null else 2\n    val z: Int? = when {\n        c -> 1,\n        else -> null\n    }\n    val w = when {\n        c -> null,\n        else -> 3\n    }\n    return w\n}\n",
+    );
+    // The joined type is nullable, so it is still not an `Int`.
+    assert_codes(
+        "fun f(c: Bool): Int {\n    val x = if (c) 1 else null\n    return x\n}\n",
+        &["E4002"],
+    );
+}
