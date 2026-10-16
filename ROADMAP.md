@@ -32,7 +32,7 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 ---
 
 ## Phase 2: Type System, Value Ownership & ABI Invalidation
-- [ ] Type checker with bidirectional type inference and lifetime elision rules.
+- [x] Type checker with bidirectional type inference and lifetime elision rules (`crates/prism-typechecker`).
 - [ ] Value ownership transfer, move semantics, and borrow checker for functions.
 - [ ] ABI interface extraction & ABI hashing engine (`.abi` cache).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.

@@ -62,6 +62,7 @@ Any proposed code, grammar, or compiler change must uphold these rules (detailed
   - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, keyword list, and syntax examples.
   - [`memory-model`](openspec/specs/memory-model/spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
   - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+  - [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, nominal types, and diagnostic error catalog.
   - [`system-invariants`](openspec/specs/system-invariants/spec.md): Formal requirements and scenarios for all 6 non-negotiable invariants.
 
 ---
