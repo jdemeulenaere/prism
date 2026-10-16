@@ -568,9 +568,13 @@ impl TypeChecker {
         self.env.enter_scope();
         self.push_compose_context(f.is_compose);
 
-        // Bind parameters in local scope
+        // Bind parameters in local scope. A default value is checked against its parameter type
+        // before the parameter is bound, so it may refer to earlier parameters only.
         for p in &f.params {
             let p_ty = Type::from_ast(&p.ty);
+            if let Some(default) = &p.default_value {
+                self.check_expr(default, &p_ty);
+            }
             let sym = Symbol::variable(p.name.clone(), p_ty, Mutability::Val, p.span);
             if let Err(err) = self.env.define(sym) {
                 self.errors.push(err);
@@ -899,7 +903,9 @@ impl TypeChecker {
                 for name in params {
                     let sym =
                         Symbol::variable(name.clone(), Type::Error, Mutability::Val, expr.span);
-                    self.env.define(sym).ok();
+                    if let Err(err) = self.env.define(sym) {
+                        self.errors.push(err);
+                    }
                     param_types.push(Type::Error);
                 }
                 let body_ty = self.infer_expr(body);
@@ -1000,26 +1006,29 @@ impl TypeChecker {
 
             BinaryOp::Elvis => {
                 let left_ty = self.infer_expr(left);
-                if let Type::Nullable(inner) = left_ty {
-                    let right_ty = self.infer_expr(right);
-                    if right_ty == Type::Nothing {
-                        *inner
-                    } else if *inner == Type::Nothing {
-                        right_ty
-                    } else if right_ty.is_assignable_to(&inner) {
-                        *inner
-                    } else if (*inner).is_assignable_to(&right_ty) {
-                        right_ty
-                    } else {
-                        self.errors.push(TypeError::TypeMismatch {
-                            expected: *inner.clone(),
-                            found: right_ty,
-                            span,
-                        });
-                        *inner
-                    }
+                // The right side is checked even when the left side cannot be null.
+                let inner = match left_ty {
+                    Type::Nullable(inner) => *inner,
+                    other => other,
+                };
+                let right_ty = self.infer_expr(right);
+                if inner == Type::Error || right_ty == Type::Error {
+                    Type::Error
+                } else if right_ty == Type::Nothing {
+                    inner
+                } else if inner == Type::Nothing {
+                    right_ty
+                } else if right_ty.is_assignable_to(&inner) {
+                    inner
+                } else if inner.is_assignable_to(&right_ty) {
+                    right_ty
                 } else {
-                    left_ty
+                    self.errors.push(TypeError::TypeMismatch {
+                        expected: inner.clone(),
+                        found: right_ty,
+                        span,
+                    });
+                    inner
                 }
             }
 
@@ -1418,6 +1427,15 @@ impl TypeChecker {
                                 continue;
                             }
                             if let Some(pos) = param_names.iter().position(|pn| pn == arg_name) {
+                                if param_assigned[pos] {
+                                    self.errors.push(TypeError::CallSignatureMismatch {
+                                        message: format!(
+                                            "parameter '{}' is already given a positional argument",
+                                            arg_name
+                                        ),
+                                        span: arg.span,
+                                    });
+                                }
                                 param_assigned[pos] = true;
                                 self.check_expr(&arg.value, &params[pos]);
                             } else {
@@ -1428,6 +1446,18 @@ impl TypeChecker {
                             }
                         } else {
                             if positional_idx < n_params {
+                                if param_assigned[positional_idx] {
+                                    self.errors.push(TypeError::CallSignatureMismatch {
+                                        message: format!(
+                                            "positional argument assigns parameter '{}', which is already given by name",
+                                            param_names
+                                                .get(positional_idx)
+                                                .map(String::as_str)
+                                                .unwrap_or("parameter")
+                                        ),
+                                        span: arg.span,
+                                    });
+                                }
                                 param_assigned[positional_idx] = true;
                                 self.check_expr(&arg.value, &params[positional_idx]);
                                 positional_idx += 1;
@@ -1496,6 +1526,15 @@ impl TypeChecker {
                                 continue;
                             }
                             if let Some(idx) = fields.iter().position(|(n, _, _)| n == arg_name) {
+                                if field_assigned[idx] {
+                                    self.errors.push(TypeError::CallSignatureMismatch {
+                                        message: format!(
+                                            "field '{}' of struct '{}' is already given a positional argument",
+                                            arg_name, name
+                                        ),
+                                        span: arg.span,
+                                    });
+                                }
                                 field_assigned[idx] = true;
                                 self.check_expr(&arg.value, &fields[idx].2);
                             } else {
@@ -1510,6 +1549,15 @@ impl TypeChecker {
                             }
                         } else {
                             if pos_idx < fields.len() {
+                                if field_assigned[pos_idx] {
+                                    self.errors.push(TypeError::CallSignatureMismatch {
+                                        message: format!(
+                                            "positional argument assigns field '{}' of struct '{}', which is already given by name",
+                                            fields[pos_idx].0, name
+                                        ),
+                                        span: arg.span,
+                                    });
+                                }
                                 field_assigned[pos_idx] = true;
                                 self.check_expr(&arg.value, &fields[pos_idx].2);
                                 pos_idx += 1;

@@ -17,7 +17,7 @@ The type checker MUST resolve identifiers across nested lexical scopes (local bl
 - **THEN** the type checker emits an unresolved symbol error (`E4001`)
 
 #### Scenario: Duplicate symbol declaration rejected
-- **WHEN** a scope declares two variables or parameters with the identical identifier
+- **WHEN** a scope declares two variables or parameters with the identical identifier, including two closure parameters with the same name whether or not the closure has an expected type
 - **THEN** the type checker rejects the duplicate declaration with `DuplicateSymbol` (`E4010`)
 
 ### Requirement: Static Type Inference and Assignment Compatibility
@@ -67,6 +67,10 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **WHEN** accessing a field via safe navigation `opt?.field` on `T?` or coalescing via `opt ?: default`
 - **THEN** `opt?.field` evaluates to `FieldType?` and `opt ?: default` evaluates to `T` when `default` is of type `T`
 
+#### Scenario: Elvis right side is always checked
+- **WHEN** `left ?: right` is evaluated and `left` is not nullable
+- **THEN** `right` is still typechecked (an unresolved name emits `E4001`, an incompatible type emits `E4002`), and the expression has the type of `left`
+
 #### Scenario: Indexing expression evaluation
 - **WHEN** indexing into a collection or array `target[index]`
 - **THEN** `index` must evaluate to `Int` and the expression produces the element type (or emits `E4002` if incompatible)
@@ -85,6 +89,14 @@ Function calls and closures MUST validate argument count, argument types, defaul
 #### Scenario: Default parameter omission succeeds
 - **WHEN** calling a function omitting arguments that have default expressions
 - **THEN** the call expression typechecks successfully
+
+#### Scenario: Default parameter values are checked
+- **WHEN** a parameter declares a default value (`fun f(a: Int, b: Int = "s")`)
+- **THEN** the default is typechecked against the parameter type in a scope holding only the earlier parameters, so a mismatch emits `E4002` and an unknown name emits `E4001`
+
+#### Scenario: Parameter assigned twice in one call rejected
+- **WHEN** a call or struct constructor gives the same parameter or field both a positional and a named argument (`f(a = 1, 5)` or `f(5, a = 1)` for `fun f(a: Int, b: Int = 2)`)
+- **THEN** the type checker emits `E4004`
 
 #### Scenario: Closure checking against expected function type
 - **WHEN** a closure `{ x -> x + 1 }` is passed to a parameter expecting `(Int) -> Int`

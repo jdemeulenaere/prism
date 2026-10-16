@@ -227,3 +227,42 @@ fn package_type_in_annotation_within_package_accepted() {
     let errors = check_with_imports(&[SECRET_LIB], "package app\nfun g(s: Open): Int = s.code\n");
     assert!(errors.is_empty(), "{:?}", errors);
 }
+
+// Expressions that used to go unchecked.
+
+#[test]
+fn elvis_right_side_checked_when_left_side_is_not_nullable() {
+    assert_codes("fun f(x: Int): Int = x ?: undefinedThing\n", &["E4001"]);
+    assert_codes("fun f(x: Int): Int = x ?: \"s\"\n", &["E4002"]);
+    assert_ok("fun f(x: Int): Int = x ?: 0\n");
+}
+
+#[test]
+fn default_parameter_values_checked() {
+    assert_codes("fun f(a: Int, b: Int = \"s\"): Int = a\n", &["E4002"]);
+    assert_codes("fun f(b: Int = nope): Int = b\n", &["E4001"]);
+    assert_ok("fun f(a: Int, b: Int = a + 1): Int = b\n");
+}
+
+#[test]
+fn duplicate_closure_parameters_rejected_without_expected_type() {
+    assert_codes("fun f() {\n    val g = { x, x -> 1 }\n}\n", &["E4010"]);
+}
+
+#[test]
+fn parameter_assigned_twice_by_named_and_positional_arguments_rejected() {
+    let f = "fun f(a: Int, b: Int = 2): Int = a\n";
+    assert_codes(&format!("{f}fun g(): Int = f(a = 1, 5)\n"), &["E4004"]);
+    assert_codes(&format!("{f}fun g(): Int = f(5, a = 1)\n"), &["E4004"]);
+    assert_ok(&format!("{f}fun g(): Int = f(5, b = 1)\n"));
+
+    let user = "struct User {\n    val name: String\n    val city: String\n}\n";
+    // `"b"` re-assigns `name`, so `city` is also missing.
+    assert_codes(
+        &format!("{user}fun g(): User = User(name = \"a\", \"b\")\n"),
+        &["E4004", "E4004"],
+    );
+    assert_ok(&format!(
+        "{user}fun g(): User = User(\"a\", city = \"b\")\n"
+    ));
+}
