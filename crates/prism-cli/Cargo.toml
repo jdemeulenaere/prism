@@ -17,3 +17,4 @@ prism-lexer = { path = "../prism-lexer" }
 prism-parser = { path = "../prism-parser" }
 prism-abi = { path = "../prism-abi" }
 prism-resolver = { path = "../prism-resolver" }
+prism-typechecker = { path = "../prism-typechecker" }

@@ -23,6 +23,7 @@ dependencies = [
  "prism-lexer",
  "prism-parser",
  "prism-resolver",
+ "prism-typechecker",
 ]
 
 [[package]]
@@ -44,6 +45,15 @@ dependencies = [
 name = "prism-resolver"
 version = "0.1.0"
 dependencies = [
+ "prism-ast",
+ "prism-parser",
+]
+
+[[package]]
+name = "prism-typechecker"
+version = "0.1.0"
+dependencies = [
+ "prism-abi",
  "prism-ast",
  "prism-parser",
 ]

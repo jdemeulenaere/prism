@@ -1,8 +1,7 @@
-//! Compiler diagnostics formatting for CLI errors.
-
 use prism_abi::AbiError;
 use prism_parser::ParseError;
 use prism_resolver::ResolveError;
+use prism_typechecker::TypeError;
 use std::path::{Path, PathBuf};
 
 /// Formats a snippet with a line pointer when source text is provided.
@@ -191,6 +190,54 @@ pub fn format_abi_error(path: &Path, source: Option<&str>, err: &AbiError) -> St
     out
 }
 
+/// Formats a list of type checking errors.
+pub fn format_type_errors(path: &Path, source: Option<&str>, errors: &[TypeError]) -> String {
+    let mut out = String::new();
+    for err in errors {
+        out.push_str(&format_type_error(path, source, err));
+    }
+    out
+}
+
+/// Formats an individual type checking error with source snippets and carets.
+pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> String {
+    let mut out = String::new();
+    let span = err.span();
+    out.push_str(&format!("error[{}]: {}\n", err.code(), err.message()));
+    out.push_str(&format!(
+        "  --> {}:{}:{}\n",
+        path.display(),
+        span.line,
+        span.column
+    ));
+    if let Some(src) = source {
+        if let Some(snippet) = render_code_snippet(src, span.line, span.column) {
+            out.push_str(&format!("{}\n", snippet));
+        }
+    }
+
+    match err {
+        TypeError::ImmutabilityViolation { .. } => {
+            out.push_str("   = help: use 'var' to declare a mutable binding or field\n");
+        }
+        TypeError::CallSignatureMismatch { .. } => {
+            out.push_str("   = help: verify parameter counts, argument types, or named parameters\n");
+        }
+        TypeError::VisibilityViolation { .. } => {
+            out.push_str("   = help: change declaration visibility to 'public' or access from the defining package\n");
+        }
+        TypeError::InvalidComposeContext { .. } => {
+            out.push_str("   = help: add 'compose' modifier to the caller or invoke within a composable function/closure\n");
+        }
+        TypeError::NonExhaustiveWhen { .. } => {
+            out.push_str("   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n");
+        }
+        _ => {}
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +288,19 @@ mod tests {
         assert!(formatted.contains("error[E2001]: syntax error"));
         assert!(formatted.contains("test.prism:2:5"));
         assert!(formatted.contains("val = 1"));
+    }
+
+    #[test]
+    fn test_format_type_error() {
+        let err = TypeError::TypeMismatch {
+            expected: prism_typechecker::Type::Int,
+            found: prism_typechecker::Type::String,
+            span: prism_ast::Span::new(15, 21, 2, 11),
+        };
+        let src = "fun main() {\n    val x: Int = \"hello\"\n}";
+        let formatted = format_type_error(Path::new("main.prism"), Some(src), &err);
+        assert!(formatted.contains("error[E4002]: type mismatch: expected 'Int', found 'String'"));
+        assert!(formatted.contains("main.prism:2:11"));
+        assert!(formatted.contains("val x: Int = \"hello\""));
     }
 }

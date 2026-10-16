@@ -1,5 +1,7 @@
 //! Workspace and multi-file project driver for Prism CLI.
 
+#![allow(clippy::result_large_err)]
+
 use crate::diagnostics;
 use prism_abi::{AbiError, FileAbi};
 use prism_parser::ParseError;
@@ -40,6 +42,11 @@ pub enum WorkspaceError {
         source: String,
         error: AbiError,
     },
+    Type {
+        path: PathBuf,
+        source: String,
+        errors: Vec<prism_typechecker::TypeError>,
+    },
     Cycle {
         cycle: Vec<PathBuf>,
     },
@@ -60,6 +67,9 @@ impl WorkspaceError {
             }
             WorkspaceError::Abi { path, source, error } => {
                 diagnostics::format_abi_error(path, Some(source), error)
+            }
+            WorkspaceError::Type { path, source, errors } => {
+                diagnostics::format_type_errors(path, Some(source), errors)
             }
             WorkspaceError::Cycle { cycle } => diagnostics::format_cycle_error(cycle),
             WorkspaceError::Io { path, message } => {
@@ -271,14 +281,14 @@ pub fn extract_cycle_path(graph: &DependencyGraph) -> Vec<PathBuf> {
 }
 
 fn find_cycle_dfs(
-    curr: &PathBuf,
+    curr: &Path,
     graph: &DependencyGraph,
     scc_set: &std::collections::HashSet<&PathBuf>,
     path: &mut Vec<PathBuf>,
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Option<Vec<PathBuf>> {
-    path.push(curr.clone());
-    visited.insert(curr.clone());
+    path.push(curr.to_path_buf());
+    visited.insert(curr.to_path_buf());
 
     if let Some(node) = graph.get_node(curr) {
         for neighbor in &node.direct_imports {
@@ -302,22 +312,57 @@ fn find_cycle_dfs(
     None
 }
 
-/// Validates AST and extracts ABI for all files in topological order.
+/// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in topological SCC order.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
+    // Phase 1: Extract surface FileAbi across all reachable files in the dependency graph
+    let mut abis: std::collections::HashMap<PathBuf, FileAbi> = std::collections::HashMap::new();
+
+    for (file_path, node) in &graph.nodes {
+        let abi = FileAbi::extract(&node.source_file).map_err(|err| {
+            let source = fs::read_to_string(file_path).unwrap_or_default();
+            WorkspaceError::Abi {
+                path: file_path.clone(),
+                source,
+                error: err,
+            }
+        })?;
+        abis.insert(file_path.clone(), abi);
+    }
+
+    // Phase 2: Typecheck function bodies and expressions in topological SCC order
     let mut checked_files = Vec::new();
 
     for cluster in graph.topological_order() {
         for file_path in &cluster.files {
             let node = graph.get_node(file_path).expect("node must exist in graph");
-            let abi = FileAbi::extract(&node.source_file).map_err(|err| {
+            let package_name = if node.package.is_empty() {
+                None
+            } else {
+                Some(node.package.join("."))
+            };
+
+            let mut checker = prism_typechecker::TypeChecker::new(package_name);
+
+            // Ingest FileAbi of all direct dependencies
+            for dep_path in &node.direct_imports {
+                if let Some(dep_abi) = abis.get(dep_path) {
+                    checker.ingest_file_abi(dep_abi);
+                }
+            }
+
+            // Pass 1 (file-level forward declarations) and Pass 2 (function body checks)
+            checker.check_module(&node.source_file);
+
+            if !checker.errors.is_empty() {
                 let source = fs::read_to_string(file_path).unwrap_or_default();
-                WorkspaceError::Abi {
+                return Err(WorkspaceError::Type {
                     path: file_path.clone(),
                     source,
-                    error: err,
-                }
-            })?;
+                    errors: checker.errors,
+                });
+            }
 
+            let abi = abis.get(file_path).expect("abi must exist");
             let package_str = if node.package.is_empty() {
                 "<root>".to_string()
             } else {

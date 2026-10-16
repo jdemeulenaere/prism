@@ -1,0 +1,13 @@
+[package]
+name = "prism-typechecker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-ast = { path = "../prism-ast" }
+prism-abi = { path = "../prism-abi" }
+
+[dev-dependencies]
+prism-parser = { path = "../prism-parser" }

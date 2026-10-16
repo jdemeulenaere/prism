@@ -308,3 +308,242 @@ fn test_cli_binary_abi_violation_e3001() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+fn test_cli_binary_type_mismatch_e4002() {
+    let temp = create_temp_dir("type_mismatch_e4002");
+    let file = temp.join("main.prism");
+    fs::write(&file, "fun main(): Int = \"wrong type\"\n").unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4002]: type mismatch: expected 'Int', found 'String'"));
+    assert!(stderr.contains("main.prism:1:19"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_package_visibility_e4007() {
+    let temp = create_temp_dir("package_visibility_e4007");
+    let core_dir = temp.join("core");
+    let app_dir = temp.join("app");
+    fs::create_dir_all(&core_dir).unwrap();
+    fs::create_dir_all(&app_dir).unwrap();
+
+    let secret = core_dir.join("secret.prism");
+    fs::write(
+        &secret,
+        "package core\npackage fun internal_fn(): Int = 42\n",
+    )
+    .unwrap();
+
+    let main = app_dir.join("main.prism");
+    fs::write(
+        &main,
+        "package app\nimport /core/secret\nfun main(): Int = internal_fn()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&main)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4007]: symbol 'internal_fn' in package 'core' has package visibility and cannot be accessed from package 'app'"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_compose_context_e4008() {
+    let temp = create_temp_dir("compose_context_e4008");
+    let file = temp.join("ui.prism");
+    fs::write(
+        &file,
+        "compose fun Button(): Unit {}\nfun regular(): Unit {\n    Button()\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4008]: composable function 'Button' can only be invoked within a composable context"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_non_exhaustive_when_e4009() {
+    let temp = create_temp_dir("when_e4009");
+    let file = temp.join("check_when.prism");
+    fs::write(
+        &file,
+        "fun classify(x: Int): String = when (x) { 0 -> \"zero\" }\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4009]: 'when' expression in value position must have an 'else' branch or be exhaustive"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_val_immutability_e4003() {
+    let temp = create_temp_dir("immutability_e4003");
+    let file = temp.join("reassign.prism");
+    fs::write(
+        &file,
+        "fun main(): Unit {\n    val x = 1\n    x = 2\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4003]: cannot reassign to immutable 'val' binding 'x'"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_struct_and_nominal_type_success() {
+    let temp = create_temp_dir("struct_success");
+    let file = temp.join("point.prism");
+    fs::write(
+        &file,
+        "struct Point {\n    val x: Int,\n    val y: Int\n}\n\nfun main(): Int {\n    val p = Point(10, 20)\n    return p.x\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_default_params_success() {
+    let temp = create_temp_dir("default_params");
+    let file = temp.join("defaults.prism");
+    fs::write(
+        &file,
+        "fun greet(msg: String, count: Int = 1): String = msg\n\nfun main(): String {\n    val a = greet(\"hello\")\n    val b = greet(\"world\", 2)\n    return a\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_exhaustive_enum_when_success() {
+    let temp = create_temp_dir("exhaustive_enum_when");
+    let file = temp.join("enum_when.prism");
+    fs::write(
+        &file,
+        "enum Status {\n    Active,\n    Inactive\n}\n\nfun describe(s: Status): Int = when (s) {\n    Active -> 1,\n    Inactive -> 0\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_top_level_return_rejected_e4005() {
+    let temp = create_temp_dir("top_level_return");
+    let file = temp.join("top_return.prism");
+    fs::write(
+        &file,
+        "val x = return 10\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4005]"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_unannotated_private_block_function_success() {
+    let temp = create_temp_dir("unannotated_block_fn");
+    let file = temp.join("block_fn.prism");
+    fs::write(
+        &file,
+        "fun do_side_effect() {\n    val x = 1\n}\n\nfun main(): Unit {\n    do_side_effect()\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+
+    fs::remove_dir_all(&temp).ok();
+}
