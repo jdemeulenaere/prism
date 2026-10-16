@@ -52,6 +52,9 @@ impl ExportedSymbol {
 pub struct FileAbi {
     /// Package name, if any (e.g. `demo.math`).
     pub package: Option<String>,
+    /// Module path: the file's root-relative path without extension (e.g. `demo/math/math`).
+    /// It is the defining module of every struct and enum the file exports.
+    pub module: String,
     /// All exported (`public` and `package`) symbols.
     pub symbols: Vec<ExportedSymbol>,
     /// 128-bit deterministic hash of the surface ABI.
@@ -59,8 +62,9 @@ pub struct FileAbi {
 }
 
 impl FileAbi {
-    /// Computes the surface ABI and deterministic hash from a parsed [`SourceFile`].
-    pub fn extract(file: &SourceFile) -> Result<Self, AbiError> {
+    /// Computes the surface ABI and deterministic hash from a parsed [`SourceFile`] whose module
+    /// path is `module`.
+    pub fn extract(file: &SourceFile, module: &str) -> Result<Self, AbiError> {
         let package = file.package.as_ref().map(|p| p.package_string());
         let mut symbols = Vec::new();
 
@@ -184,22 +188,25 @@ impl FileAbi {
         symbols.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
         // Compute deterministic ABI hash
-        let abi_hash = Self::calculate_hash(&package, &symbols);
+        let abi_hash = Self::calculate_hash(&package, module, &symbols);
 
         Ok(FileAbi {
             package,
+            module: module.to_string(),
             symbols,
             abi_hash,
         })
     }
 
-    fn calculate_hash(package: &Option<String>, symbols: &[ExportedSymbol]) -> u128 {
+    fn calculate_hash(package: &Option<String>, module: &str, symbols: &[ExportedSymbol]) -> u128 {
         let mut hasher = DeterministicHasher::new();
 
         if let Some(pkg) = package {
             hasher.write_str("package");
             hasher.write_str(pkg);
         }
+        hasher.write_str("module");
+        hasher.write_str(module);
 
         hasher.write_u64(symbols.len() as u64);
 

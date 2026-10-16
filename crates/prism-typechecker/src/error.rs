@@ -107,6 +107,7 @@ impl TypeError {
             TypeError::TypeMismatch {
                 expected, found, ..
             } => {
+                let (expected, found) = Type::render_pair(expected, found);
                 format!("type mismatch: expected '{}', found '{}'", expected, found)
             }
             TypeError::TypeNameAsValue { name, .. } => {
@@ -120,6 +121,7 @@ impl TypeError {
             TypeError::ReturnTypeMismatch {
                 expected, found, ..
             } => {
+                let (expected, found) = Type::render_pair(expected, found);
                 format!(
                     "return type mismatch: expected '{}', found '{}'",
                     expected, found

@@ -2,6 +2,41 @@
 
 use std::fmt;
 
+/// Module path of the compiler's built-in nominal types (such as `Range`).
+pub const BUILTIN_MODULE: &str = "<builtin>";
+
+/// Canonical identity of a struct or enum: its defining module (the root-relative file path
+/// without extension, such as `a/lib`) and its name. Two nominal types are equal exactly when
+/// their identities are equal.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NominalId {
+    pub module: String,
+    pub name: String,
+}
+
+impl NominalId {
+    pub fn new(module: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            module: module.into(),
+            name: name.into(),
+        }
+    }
+
+    /// The built-in `Range` type produced by `a..b`.
+    pub fn builtin_range() -> Self {
+        Self::new(BUILTIN_MODULE, "Range")
+    }
+}
+
+/// The definition behind a [`NominalId`], kept in the checker's type table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeDef {
+    /// Struct fields as `(name, is_var, type)`.
+    Struct { fields: Vec<(String, bool, Type)> },
+    /// Enum variants as `(name, payload types)`.
+    Enum { variants: Vec<(String, Vec<Type>)> },
+}
+
 /// Semantic representation of a Prism type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -25,16 +60,13 @@ pub enum Type {
     Nullable(Box<Type>),
     /// Single-owner heap boxed indirection `Heap<T>` for recursive types.
     Heap(Box<Type>),
-    /// User-defined nominal struct type.
-    Struct {
-        name: String,
-        fields: Vec<(String, bool, Type)>, // (name, is_var, type)
-    },
-    /// User-defined nominal enum type.
-    Enum {
-        name: String,
-        variants: Vec<(String, Vec<Type>)>, // (name, payload types)
-    },
+    /// Nominal struct type. Its fields live in the checker's type table.
+    Struct(NominalId),
+    /// Nominal enum type. Its variants live in the checker's type table.
+    Enum(NominalId),
+    /// A type name with no struct or enum declaration in scope. Opaque types compare by name,
+    /// and have no members.
+    Opaque(String),
     /// First-class function type.
     Fn {
         is_compose: bool,
@@ -53,7 +85,7 @@ impl Type {
     /// - `Nothing <= T` for all `T` (divergent expressions can be placed in any value branch)
     /// - `T <= T?` for all `T` (non-null value is assignable to nullable)
     /// - `&mut T <= &T` (mutable borrow can coerce to shared borrow at call sites)
-    /// - Structs and Enums are nominal (matched by name)
+    /// - Structs and Enums are nominal (matched by [`NominalId`])
     /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Float`)
     pub fn is_assignable_to(&self, expected: &Type) -> bool {
         if self == &Type::Error || expected == &Type::Error {
@@ -153,14 +185,7 @@ impl Type {
             }
         }
 
-        // Nominal Structs / Enums match by name (including nominal annotation conversions)
-        match (self, expected) {
-            (Type::Struct { name: n1, .. }, Type::Struct { name: n2, .. }) => n1 == n2,
-            (Type::Enum { name: n1, .. }, Type::Enum { name: n2, .. }) => n1 == n2,
-            (Type::Enum { name: n1, .. }, Type::Struct { name: n2, .. }) => n1 == n2,
-            (Type::Struct { name: n1, .. }, Type::Enum { name: n2, .. }) => n1 == n2,
-            _ => false,
-        }
+        false
     }
 
     /// Joins the types of two branches (`if`/`else`, `when`) into the least type both are
@@ -194,7 +219,33 @@ impl Type {
         }
     }
 
-    /// Converts an AST type to a semantic `Type`.
+    /// Rewrites every opaque type name inside `self` with `bind`, keeping names it returns
+    /// `None` for. Used to bind names lowered from annotations or ABI types to the struct or enum
+    /// they denote.
+    pub fn bind_names(self, bind: &dyn Fn(&str) -> Option<Type>) -> Type {
+        match self {
+            Type::Opaque(name) => bind(&name).unwrap_or(Type::Opaque(name)),
+            Type::Reference { mutable, inner } => Type::Reference {
+                mutable,
+                inner: Box::new(inner.bind_names(bind)),
+            },
+            Type::Nullable(inner) => Type::Nullable(Box::new(inner.bind_names(bind))),
+            Type::Heap(inner) => Type::Heap(Box::new(inner.bind_names(bind))),
+            Type::Fn {
+                is_compose,
+                params,
+                ret,
+            } => Type::Fn {
+                is_compose,
+                params: params.into_iter().map(|p| p.bind_names(bind)).collect(),
+                ret: Box::new(ret.bind_names(bind)),
+            },
+            other => other,
+        }
+    }
+
+    /// Converts an AST type to a semantic `Type`. Nominal names stay [`Type::Opaque`] until the
+    /// checker binds them in scope.
     pub fn from_ast(ast_ty: &prism_ast::types::Type) -> Self {
         match &ast_ty.kind {
             prism_ast::types::TypeKind::Named { name, type_args } => match name.as_str() {
@@ -208,13 +259,8 @@ impl Type {
                 "Heap" if type_args.len() == 1 => {
                     Type::Heap(Box::new(Type::from_ast(&type_args[0])))
                 }
-                _ => {
-                    // Nominal type or generic type parameter
-                    Type::Struct {
-                        name: name.clone(),
-                        fields: Vec::new(),
-                    }
-                }
+                // Nominal type or generic type parameter, bound by the checker's scope.
+                _ => Type::Opaque(name.clone()),
             },
             prism_ast::types::TypeKind::Nullable(inner) => {
                 Type::Nullable(Box::new(Type::from_ast(inner)))
@@ -288,10 +334,52 @@ impl Type {
             "String" => Type::String,
             "Unit" | "()" => Type::Unit,
             "Nothing" => Type::Nothing,
-            other => Type::Struct {
-                name: other.to_string(),
-                fields: Vec::new(),
-            },
+            other => Type::Opaque(other.to_string()),
+        }
+    }
+}
+
+impl Type {
+    /// Renders `expected` and `found` for a diagnostic. Nominal types show their bare names,
+    /// unless both render the same, in which case each nominal type is qualified with its
+    /// defining module (`a/lib::User` versus `b/lib::User`).
+    pub fn render_pair(expected: &Type, found: &Type) -> (String, String) {
+        let (e, f) = (expected.to_string(), found.to_string());
+        if e == f && expected != found {
+            (expected.qualified(), found.qualified())
+        } else {
+            (e, f)
+        }
+    }
+
+    /// Renders the type with every nominal type qualified by its defining module.
+    pub fn qualified(&self) -> String {
+        match self {
+            Type::Struct(id) | Type::Enum(id) => format!("{}::{}", id.module, id.name),
+            Type::Reference { mutable, inner } => {
+                format!(
+                    "{}{}",
+                    if *mutable { "&mut " } else { "&" },
+                    inner.qualified()
+                )
+            }
+            Type::Nullable(inner) => format!("{}?", inner.qualified()),
+            Type::Heap(inner) => format!("Heap<{}>", inner.qualified()),
+            Type::Fn {
+                is_compose,
+                params,
+                ret,
+            } => format!(
+                "{}({}) -> {}",
+                if *is_compose { "compose " } else { "" },
+                params
+                    .iter()
+                    .map(Type::qualified)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                ret.qualified()
+            ),
+            other => other.to_string(),
         }
     }
 }
@@ -315,8 +403,8 @@ impl fmt::Display for Type {
             }
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Heap(inner) => write!(f, "Heap<{}>", inner),
-            Type::Struct { name, .. } => write!(f, "{}", name),
-            Type::Enum { name, .. } => write!(f, "{}", name),
+            Type::Struct(id) | Type::Enum(id) => write!(f, "{}", id.name),
+            Type::Opaque(name) => write!(f, "{}", name),
             Type::Fn {
                 is_compose,
                 params,
@@ -384,6 +472,19 @@ mod tests {
         assert!(r_mut.is_assignable_to(&r_shared));
         // &Int cannot coerce to &mut Int
         assert!(!r_shared.is_assignable_to(&r_mut));
+    }
+
+    #[test]
+    fn test_nominal_identity_equality() {
+        let a_user = Type::Struct(NominalId::new("a/lib", "User"));
+        let b_user = Type::Struct(NominalId::new("b/lib", "User"));
+        let a_enum = Type::Enum(NominalId::new("a/lib", "User"));
+        assert!(a_user.is_assignable_to(&a_user.clone()));
+        assert!(!a_user.is_assignable_to(&b_user));
+        assert!(!a_user.is_assignable_to(&a_enum));
+        assert!(!a_enum.is_assignable_to(&a_user));
+        assert!(Type::Opaque("T".into()).is_assignable_to(&Type::Opaque("T".into())));
+        assert!(!Type::Opaque("User".into()).is_assignable_to(&a_user));
     }
 
     #[test]

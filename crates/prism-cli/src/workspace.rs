@@ -5,7 +5,7 @@
 use crate::diagnostics;
 use prism_abi::{AbiError, FileAbi};
 use prism_parser::ParseError;
-use prism_resolver::{scan_directory, DependencyGraph, ResolveError};
+use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -268,13 +268,30 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
     Ok(())
 }
 
+/// The module path of a source file: its root-relative path without extension, which is also its
+/// root-anchored import path (`a/lib` for `<root>/a/lib.prism`). The package segments are the
+/// file's directory relative to the workspace root.
+fn module_path(node: &SourceNode) -> String {
+    let stem = node
+        .path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    node.package
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(stem))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in topological SCC order.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
     // Phase 1: Extract surface FileAbi across all reachable files in the dependency graph
     let mut abis: std::collections::HashMap<PathBuf, FileAbi> = std::collections::HashMap::new();
 
     for (file_path, node) in &graph.nodes {
-        let abi = FileAbi::extract(&node.source_file).map_err(|err| {
+        let abi = FileAbi::extract(&node.source_file, &module_path(node)).map_err(|err| {
             let source = fs::read_to_string(file_path).unwrap_or_default();
             WorkspaceError::Abi {
                 path: file_path.clone(),
@@ -297,7 +314,7 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
                 Some(node.package.join("."))
             };
 
-            let mut checker = prism_typechecker::TypeChecker::new(package_name);
+            let mut checker = prism_typechecker::TypeChecker::new(package_name, module_path(node));
 
             // Ingest FileAbi of all direct dependencies
             for dep_path in &node.direct_imports {

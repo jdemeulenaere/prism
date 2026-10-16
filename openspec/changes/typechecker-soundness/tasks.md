@@ -9,9 +9,9 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 2. Nominal identity (D3)
 
-- [ ] 2.1 Introduce `NominalId`, `TypeTable`/`TypeDef`, `Type::Struct(NominalId)`, `Type::Enum(NominalId)` and `Type::Opaque`. Thread the module path through `TypeChecker::new`, with the CLI deriving it from the root-relative path. Port the hand-built unit tests. Verify `cargo test --workspace` stays green with no behavior change.
-- [ ] 2.2 Bind annotation names eagerly to an ID, remove `resolve_nominal`, and make `Range` a `<builtin>` type. Verify with tests for the scenarios "Built-in Range distinct…", "Struct and enum never equal" and "Annotation and constructor denote the same type".
-- [ ] 2.3 Add `module` to `FileAbi`. On ingestion, resolve ABI names against the exporter's own exports first (the interim rule). Verify with a multi-file test for "Same-named structs from different modules stay distinct".
+- [x] 2.1 Introduce `NominalId`, `TypeTable`/`TypeDef`, `Type::Struct(NominalId)`, `Type::Enum(NominalId)` and `Type::Opaque`. Thread the module path through `TypeChecker::new`, with the CLI deriving it from the root-relative path. Port the hand-built unit tests. Verify `cargo test --workspace` stays green with no behavior change.
+- [x] 2.2 Bind annotation names eagerly to an ID, remove `resolve_nominal`, and make `Range` a `<builtin>` type. Verify with tests for the scenarios "Built-in Range distinct…", "Struct and enum never equal" and "Annotation and constructor denote the same type".
+- [x] 2.3 Add `module` to `FileAbi`. On ingestion, resolve ABI names against the exporter's own exports first (the interim rule). Verify with a multi-file test for "Same-named structs from different modules stay distinct".
 
 ## 3. Mismatch codes (D2)
 

@@ -2,7 +2,7 @@
 
 use crate::error::TypeError;
 use crate::scope::{Mutability, ScopeStack, Symbol, SymbolKind};
-use crate::types::Type;
+use crate::types::{NominalId, Type, TypeDef};
 use prism_abi::{ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl};
 use prism_ast::expr::{
@@ -37,6 +37,11 @@ pub struct TypeChecker {
     pub env: ScopeStack,
     /// Canonical package path of the current file (e.g. `Some("app.ui")`).
     pub current_package: Option<String>,
+    /// Module path of the current file: its root-relative path without extension (`app/main`).
+    /// Nominal types declared in this file are identified by it.
+    pub module_path: String,
+    /// Definitions of every nominal type known to this file, keyed by identity.
+    types: HashMap<NominalId, TypeDef>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
@@ -55,11 +60,24 @@ pub struct TypeChecker {
 }
 
 impl TypeChecker {
-    /// Creates a new `TypeChecker` for a file in the given package.
-    pub fn new(current_package: Option<String>) -> Self {
+    /// Creates a new `TypeChecker` for the file with module path `module_path` (its root-relative
+    /// path without extension, such as `app/main`) in the given package.
+    pub fn new(current_package: Option<String>, module_path: impl Into<String>) -> Self {
+        let mut types = HashMap::new();
+        types.insert(
+            NominalId::builtin_range(),
+            TypeDef::Struct {
+                fields: vec![
+                    ("start".to_string(), false, Type::Int),
+                    ("end".to_string(), false, Type::Int),
+                ],
+            },
+        );
         Self {
             env: ScopeStack::new(),
             current_package,
+            module_path: module_path.into(),
+            types,
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
@@ -87,20 +105,41 @@ impl TypeChecker {
         }
     }
 
-    /// Resolves a nominal type reference lowered from an annotation or ABI type string
-    /// (a field-less `Type::Struct { name }`) to the struct or enum declared under that name.
-    ///
-    /// Types that already carry members, and names with no struct/enum declaration in scope
-    /// (opaque or generic type names), are returned unchanged.
-    pub fn resolve_nominal(&self, ty: &Type) -> Type {
-        if let Type::Struct { name, fields } = ty {
-            if fields.is_empty() {
-                if let Some(sym) = self.env.lookup_type(name) {
-                    return sym.ty();
-                }
-            }
+    /// The definition of the nominal type `id`, if this file knows it.
+    pub fn type_def(&self, id: &NominalId) -> Option<&TypeDef> {
+        self.types.get(id)
+    }
+
+    /// The fields of struct `id`, if its definition is known.
+    fn struct_fields(&self, id: &NominalId) -> Option<Vec<(String, bool, Type)>> {
+        match self.types.get(id) {
+            Some(TypeDef::Struct { fields }) => Some(fields.clone()),
+            _ => None,
         }
-        ty.clone()
+    }
+
+    /// The variants of enum `id`, if its definition is known.
+    fn enum_variants(&self, id: &NominalId) -> Option<Vec<(String, Vec<Type>)>> {
+        match self.types.get(id) {
+            Some(TypeDef::Enum { variants }) => Some(variants.clone()),
+            _ => None,
+        }
+    }
+
+    /// Binds a type name in the current scope: a declared or imported struct or enum gives its
+    /// identity, and `Range` with no user declaration gives the built-in range type.
+    fn bind_type_name(&self, name: &str) -> Option<Type> {
+        match self.env.lookup_type(name) {
+            Some(sym) => Some(sym.ty()),
+            None if name == "Range" => Some(Type::Struct(NominalId::builtin_range())),
+            None => None,
+        }
+    }
+
+    /// Lowers an annotation to a semantic type, binding each nominal name to the struct or enum
+    /// it denotes where the annotation appears. Names with no declaration stay opaque.
+    pub fn lower_type(&self, ast_ty: &prism_ast::types::Type) -> Type {
+        Type::from_ast(ast_ty).bind_names(&|name| self.bind_type_name(name))
     }
 
     /// Resolves an identifier, reporting `E4001` when it is unknown and `E4007` when it names a
@@ -234,7 +273,57 @@ impl TypeChecker {
     }
 
     /// Ingests exported symbols from an imported file's Phase 1 FileAbi.
+    ///
+    /// Each exported struct and enum is identified by the exporter's module path. A type name in
+    /// an exported signature binds to the exporter's own exported types first, then to the types
+    /// already in scope.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
+        // Declare the exporter's types first, so its signatures can refer to them in any order.
+        let mut exported_types: HashMap<String, Type> = HashMap::new();
+        for sym in &abi.symbols {
+            let (symbol, ty) = match sym {
+                ExportedSymbol::Struct {
+                    visibility, name, ..
+                } => {
+                    let id = NominalId::new(abi.module.clone(), name.clone());
+                    (
+                        Symbol::struct_decl(
+                            id.clone(),
+                            *visibility,
+                            abi.package.clone(),
+                            Span::dummy(),
+                        ),
+                        Type::Struct(id),
+                    )
+                }
+                ExportedSymbol::Enum {
+                    visibility, name, ..
+                } => {
+                    let id = NominalId::new(abi.module.clone(), name.clone());
+                    (
+                        Symbol::enum_decl(
+                            id.clone(),
+                            *visibility,
+                            abi.package.clone(),
+                            Span::dummy(),
+                        ),
+                        Type::Enum(id),
+                    )
+                }
+                _ => continue,
+            };
+            exported_types.insert(symbol.name.clone(), ty);
+            self.env.define(symbol).ok();
+        }
+        let lower = |checker: &Self, ty_str: &str| {
+            Type::parse_str(ty_str).bind_names(&|name| {
+                exported_types
+                    .get(name)
+                    .cloned()
+                    .or_else(|| checker.bind_type_name(name))
+            })
+        };
+
         for sym in &abi.symbols {
             match sym {
                 ExportedSymbol::Function {
@@ -247,15 +336,14 @@ impl TypeChecker {
                 } => {
                     let param_types = params
                         .iter()
-                        .map(|(_, ty_str, _)| Type::parse_str(ty_str))
+                        .map(|(_, ty_str, _)| lower(self, ty_str))
                         .collect();
                     let param_names = params.iter().map(|(n, _, _)| n.clone()).collect();
                     let has_default = params.iter().map(|(_, _, d)| d.is_some()).collect();
-                    let ret_ty = Type::parse_str(return_type);
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
                         params: param_types,
-                        ret: Box::new(ret_ty),
+                        ret: Box::new(lower(self, return_type)),
                     };
                     let symbol = Symbol::function_with_defaults(
                         name.clone(),
@@ -268,26 +356,13 @@ impl TypeChecker {
                     );
                     self.env.define(symbol).ok();
                 }
-                ExportedSymbol::Struct {
-                    visibility,
-                    name,
-                    fields,
-                    ..
-                } => {
-                    let field_types = fields
+                ExportedSymbol::Struct { name, fields, .. } => {
+                    let fields = fields
                         .iter()
-                        .map(|(f_name, is_var, f_ty)| {
-                            (f_name.clone(), *is_var, Type::parse_str(f_ty))
-                        })
+                        .map(|(f_name, is_var, f_ty)| (f_name.clone(), *is_var, lower(self, f_ty)))
                         .collect();
-                    let symbol = Symbol::struct_decl(
-                        name.clone(),
-                        field_types,
-                        *visibility,
-                        abi.package.clone(),
-                        Span::dummy(),
-                    );
-                    self.env.define(symbol).ok();
+                    let id = NominalId::new(abi.module.clone(), name.clone());
+                    self.types.entry(id).or_insert(TypeDef::Struct { fields });
                 }
                 ExportedSymbol::Enum {
                     visibility,
@@ -300,22 +375,15 @@ impl TypeChecker {
                         .map(|(v_name, f_types)| {
                             (
                                 v_name.clone(),
-                                f_types.iter().map(|s| Type::parse_str(s)).collect(),
+                                f_types.iter().map(|s| lower(self, s)).collect(),
                             )
                         })
                         .collect();
-                    let enum_ty = Type::Enum {
-                        name: name.clone(),
+                    let id = NominalId::new(abi.module.clone(), name.clone());
+                    let enum_ty = Type::Enum(id.clone());
+                    self.types.entry(id).or_insert(TypeDef::Enum {
                         variants: variant_types.clone(),
-                    };
-                    let symbol = Symbol::enum_decl(
-                        name.clone(),
-                        variant_types.clone(),
-                        *visibility,
-                        abi.package.clone(),
-                        Span::dummy(),
-                    );
-                    self.env.define(symbol).ok();
+                    });
 
                     for (v_name, f_types) in &variant_types {
                         let v_sym = if f_types.is_empty() {
@@ -349,7 +417,6 @@ impl TypeChecker {
                     is_var,
                     ty,
                 } => {
-                    let var_ty = Type::parse_str(ty);
                     let mutability = if *is_var {
                         Mutability::Var
                     } else {
@@ -357,7 +424,7 @@ impl TypeChecker {
                     };
                     let symbol = Symbol::top_level_variable(
                         name.clone(),
-                        var_ty,
+                        lower(self, ty),
                         mutability,
                         *visibility,
                         abi.package.clone(),
@@ -372,9 +439,11 @@ impl TypeChecker {
     /// Pass 1: Registers all top-level symbols (functions, structs, enums, variables) in module scope.
     ///
     /// Enables forward references so functions can call sibling functions declared later in the file.
+    /// Every struct and enum name is declared before any annotation is lowered, so field and
+    /// signature types may name types declared later in the file.
     pub fn register_module_declarations(&mut self, source_file: &SourceFile) {
         for decl in &source_file.declarations {
-            match decl {
+            let symbol = match decl {
                 Declaration::Struct(s) => {
                     let mut seen_fields = HashSet::new();
                     for f in &s.fields {
@@ -388,24 +457,8 @@ impl TypeChecker {
                             });
                         }
                     }
-                    for f in &s.fields {
-                        self.check_annotation_visibility(&f.ty);
-                    }
-                    let fields = s
-                        .fields
-                        .iter()
-                        .map(|f| (f.name.clone(), f.is_var, Type::from_ast(&f.ty)))
-                        .collect();
-                    let sym = Symbol::struct_decl(
-                        s.name.clone(),
-                        fields,
-                        s.visibility,
-                        self.current_package.clone(),
-                        s.span,
-                    );
-                    if let Err(err) = self.env.define(sym) {
-                        self.errors.push(err);
-                    }
+                    let id = NominalId::new(self.module_path.clone(), s.name.clone());
+                    Symbol::struct_decl(id, s.visibility, self.current_package.clone(), s.span)
                 }
                 Declaration::Enum(e) => {
                     let mut seen_variants = HashSet::new();
@@ -420,6 +473,31 @@ impl TypeChecker {
                             });
                         }
                     }
+                    let id = NominalId::new(self.module_path.clone(), e.name.clone());
+                    Symbol::enum_decl(id, e.visibility, self.current_package.clone(), e.span)
+                }
+                _ => continue,
+            };
+            if let Err(err) = self.env.define(symbol) {
+                self.errors.push(err);
+            }
+        }
+
+        for decl in &source_file.declarations {
+            match decl {
+                Declaration::Struct(s) => {
+                    for f in &s.fields {
+                        self.check_annotation_visibility(&f.ty);
+                    }
+                    let fields = s
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.is_var, self.lower_type(&f.ty)))
+                        .collect();
+                    let id = NominalId::new(self.module_path.clone(), s.name.clone());
+                    self.types.entry(id).or_insert(TypeDef::Struct { fields });
+                }
+                Declaration::Enum(e) => {
                     for payload in e.variants.iter().flat_map(|v| &v.fields) {
                         self.check_annotation_visibility(payload);
                     }
@@ -429,24 +507,15 @@ impl TypeChecker {
                         .map(|v| {
                             (
                                 v.name.clone(),
-                                v.fields.iter().map(Type::from_ast).collect(),
+                                v.fields.iter().map(|f| self.lower_type(f)).collect(),
                             )
                         })
                         .collect();
-                    let enum_ty = Type::Enum {
-                        name: e.name.clone(),
+                    let id = NominalId::new(self.module_path.clone(), e.name.clone());
+                    let enum_ty = Type::Enum(id.clone());
+                    self.types.entry(id).or_insert(TypeDef::Enum {
                         variants: variants.clone(),
-                    };
-                    let sym = Symbol::enum_decl(
-                        e.name.clone(),
-                        variants.clone(),
-                        e.visibility,
-                        self.current_package.clone(),
-                        e.span,
-                    );
-                    if let Err(err) = self.env.define(sym) {
-                        self.errors.push(err);
-                    }
+                    });
 
                     for (v_name, f_types) in &variants {
                         let v_sym = if f_types.is_empty() {
@@ -484,7 +553,7 @@ impl TypeChecker {
                 Declaration::Var(v) => {
                     let ty = if let Some(annot) = &v.ty {
                         self.check_annotation_visibility(annot);
-                        Type::from_ast(annot)
+                        self.lower_type(annot)
                     } else if v.visibility != Visibility::Private {
                         self.errors.push(TypeError::TypeMismatch {
                             expected: Type::Error,
@@ -521,12 +590,12 @@ impl TypeChecker {
         for annot in f.params.iter().map(|p| &p.ty).chain(&f.return_type) {
             self.check_annotation_visibility(annot);
         }
-        let params: Vec<Type> = f.params.iter().map(|p| Type::from_ast(&p.ty)).collect();
+        let params: Vec<Type> = f.params.iter().map(|p| self.lower_type(&p.ty)).collect();
         let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
         let has_default: Vec<bool> = f.params.iter().map(|p| p.default_value.is_some()).collect();
 
         let ret = if let Some(annot) = &f.return_type {
-            Type::from_ast(annot)
+            self.lower_type(annot)
         } else if f.visibility != Visibility::Private {
             self.errors.push(TypeError::MissingReturnType {
                 function_name: f.name.clone(),
@@ -572,7 +641,7 @@ impl TypeChecker {
                 Declaration::Var(v) => {
                     let inferred = self.infer_expr(&v.initializer);
                     if let Some(annot) = &v.ty {
-                        let expected = Type::from_ast(annot);
+                        let expected = self.lower_type(annot);
                         if !inferred.is_assignable_to(&expected) {
                             self.errors.push(TypeError::TypeMismatch {
                                 expected,
@@ -599,7 +668,7 @@ impl TypeChecker {
         // Bind parameters in local scope. A default value is checked against its parameter type
         // before the parameter is bound, so it may refer to earlier parameters only.
         for p in &f.params {
-            let p_ty = Type::from_ast(&p.ty);
+            let p_ty = self.lower_type(&p.ty);
             if let Some(default) = &p.default_value {
                 self.check_expr(default, &p_ty);
             }
@@ -609,7 +678,7 @@ impl TypeChecker {
             }
         }
 
-        let declared_ret = f.return_type.as_ref().map(Type::from_ast).or({
+        let declared_ret = f.return_type.as_ref().map(|t| self.lower_type(t)).or({
             if matches!(f.body, Some(FunctionBody::Block(_)) | None) {
                 Some(Type::Unit)
             } else {
@@ -646,7 +715,7 @@ impl TypeChecker {
                             &f.name,
                             Type::Fn {
                                 is_compose: f.is_compose,
-                                params: f.params.iter().map(|p| Type::from_ast(&p.ty)).collect(),
+                                params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
                                 ret: Box::new(expr_ty),
                             },
                         );
@@ -809,7 +878,7 @@ impl TypeChecker {
             } => {
                 let var_ty = if let Some(a) = annot {
                     self.check_annotation_visibility(a);
-                    let expected = Type::from_ast(a);
+                    let expected = self.lower_type(a);
                     self.check_expr(initializer, &expected);
                     expected
                 } else {
@@ -1057,13 +1126,7 @@ impl TypeChecker {
             BinaryOp::Range => {
                 self.check_expr(left, &Type::Int);
                 self.check_expr(right, &Type::Int);
-                Type::Struct {
-                    name: "Range".to_string(),
-                    fields: vec![
-                        ("start".to_string(), false, Type::Int),
-                        ("end".to_string(), false, Type::Int),
-                    ],
-                }
+                Type::Struct(NominalId::builtin_range())
             }
         }
     }
@@ -1279,10 +1342,12 @@ impl TypeChecker {
         // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as `Enum`.
         let subject_ty = target.map(|t| {
             let ty = self.infer_expr(t);
-            self.resolve_nominal(peel_references(&ty))
+            peel_references(&ty).clone()
         });
         let subject_variants = match &subject_ty {
-            Some(Type::Enum { name, variants }) => Some((name.clone(), variants.clone())),
+            Some(Type::Enum(id)) => self
+                .enum_variants(id)
+                .map(|variants| (id.clone(), variants)),
             _ => None,
         };
         let mut has_else = false;
@@ -1296,8 +1361,8 @@ impl TypeChecker {
                         has_else = true;
                     }
                     WhenPattern::Expr(p_expr) => {
-                        let covered = subject_variants.as_ref().and_then(|(name, variants)| {
-                            self.unit_variant_pattern(p_expr, name, variants)
+                        let covered = subject_variants.as_ref().and_then(|(id, variants)| {
+                            self.unit_variant_pattern(p_expr, id, variants)
                         });
                         if let Some(v_name) = covered {
                             matched_variants.insert(v_name);
@@ -1358,7 +1423,7 @@ impl TypeChecker {
         unified_ty.unwrap_or(Type::Unit)
     }
 
-    /// If `pattern` names a payload-free variant of the subject enum `enum_name`, returns that
+    /// If `pattern` names a payload-free variant of the subject enum `enum_id`, returns that
     /// variant's name. Such a pattern covers the whole variant. A qualified path `Enum.Variant`
     /// counts only when `Enum` is the subject's enum, and a bare `Variant` counts unless a local
     /// binding shadows it. Values that merely equal a variant (`Shape.Circle(1)`, `h.Green`) never
@@ -1366,7 +1431,7 @@ impl TypeChecker {
     fn unit_variant_pattern(
         &self,
         pattern: &Expr,
-        enum_name: &str,
+        enum_id: &NominalId,
         variants: &[(String, Vec<Type>)],
     ) -> Option<String> {
         let v_name = match &pattern.kind {
@@ -1382,12 +1447,8 @@ impl TypeChecker {
                 target,
                 member,
                 is_safe_nav: false,
-            } => match self.type_name_symbol(target) {
-                Some(sym)
-                    if sym.name == enum_name && matches!(sym.kind, SymbolKind::Enum { .. }) =>
-                {
-                    member
-                }
+            } => match self.type_name_symbol(target).map(|sym| sym.kind) {
+                Some(SymbolKind::Enum { id, .. }) if &id == enum_id => member,
                 _ => return None,
             },
             _ => return None,
@@ -1570,7 +1631,9 @@ impl TypeChecker {
 
                 *ret
             }
-            Type::Struct { name, fields } if is_constructor => {
+            Type::Struct(id) if is_constructor => {
+                let name = id.name.clone();
+                let fields = self.struct_fields(&id).unwrap_or_default();
                 let has_named = args.iter().any(|a| a.name.is_some());
                 if !has_named {
                     if args.len() != fields.len() {
@@ -1583,7 +1646,7 @@ impl TypeChecker {
                             ),
                             span,
                         });
-                        return Type::Struct { name, fields };
+                        return Type::Struct(id);
                     }
                     for (arg, (_, _, f_ty)) in args.iter().zip(fields.iter()) {
                         self.check_expr(&arg.value, f_ty);
@@ -1619,10 +1682,7 @@ impl TypeChecker {
                                 self.check_expr(&arg.value, &fields[idx].2);
                             } else {
                                 self.errors.push(TypeError::UnknownField {
-                                    target_type: Type::Struct {
-                                        name: name.clone(),
-                                        fields: fields.clone(),
-                                    },
+                                    target_type: Type::Struct(id.clone()),
                                     field_name: arg_name.clone(),
                                     span: arg.span,
                                 });
@@ -1667,7 +1727,7 @@ impl TypeChecker {
                     }
                 }
 
-                Type::Struct { name, fields }
+                Type::Struct(id)
             }
             Type::Error => Type::Error,
             other => {
@@ -1726,10 +1786,14 @@ impl TypeChecker {
         };
         let wrap = |ty: Type| if is_nullable { ty.nullable() } else { ty };
 
-        let peeled_ty = self.resolve_nominal(peel_indirection(base_ty));
+        let peeled_ty = peel_indirection(base_ty).clone();
+        let def = match &peeled_ty {
+            Type::Struct(id) | Type::Enum(id) => self.types.get(id).cloned(),
+            _ => None,
+        };
 
-        match &peeled_ty {
-            Type::Struct { fields, .. } => {
+        match (&peeled_ty, def) {
+            (Type::Struct(_), Some(TypeDef::Struct { fields })) => {
                 if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
                     (wrap(f_ty.clone()), Some(*is_var))
                 } else {
@@ -1741,12 +1805,9 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            Type::Enum { name, variants } => {
+            (Type::Enum(id), Some(TypeDef::Enum { variants })) => {
                 if let Some((_, payloads)) = variants.iter().find(|(v_name, _)| v_name == member) {
-                    let enum_ty = Type::Enum {
-                        name: name.clone(),
-                        variants: variants.clone(),
-                    };
+                    let enum_ty = Type::Enum(id.clone());
                     if payloads.is_empty() {
                         (wrap(enum_ty), None)
                     } else {
@@ -1766,7 +1827,7 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            other => {
+            (other, _) => {
                 self.errors.push(TypeError::UnknownField {
                     target_type: other.clone(),
                     field_name: member.to_string(),
@@ -1847,6 +1908,46 @@ fn contents_writable(mut ty: &Type, place_writable: bool) -> bool {
 mod tests {
     use super::*;
 
+    /// Declares a struct with the given fields in `checker`'s module, returning its type.
+    fn declare_struct(
+        checker: &mut TypeChecker,
+        name: &str,
+        fields: Vec<(String, bool, Type)>,
+    ) -> Type {
+        let id = NominalId::new(checker.module_path.clone(), name);
+        checker.types.insert(id.clone(), TypeDef::Struct { fields });
+        checker
+            .env
+            .define(Symbol::struct_decl(
+                id.clone(),
+                Visibility::Public,
+                None,
+                Span::dummy(),
+            ))
+            .unwrap();
+        Type::Struct(id)
+    }
+
+    /// Declares an enum with the given variants in `checker`'s module, returning its type.
+    fn declare_enum(
+        checker: &mut TypeChecker,
+        name: &str,
+        variants: Vec<(String, Vec<Type>)>,
+    ) -> Type {
+        let id = NominalId::new(checker.module_path.clone(), name);
+        checker.types.insert(id.clone(), TypeDef::Enum { variants });
+        checker
+            .env
+            .define(Symbol::enum_decl(
+                id.clone(),
+                Visibility::Public,
+                None,
+                Span::dummy(),
+            ))
+            .unwrap();
+        Type::Enum(id)
+    }
+
     // Helper to wrap expression in Expr
     fn expr(kind: ExprKind) -> Expr {
         Expr::new(kind, Span::dummy())
@@ -1854,7 +1955,7 @@ mod tests {
 
     #[test]
     fn test_strict_numeric_operations_reject_widening() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let plus = expr(ExprKind::Binary {
             op: BinaryOp::Add,
             left: Box::new(expr(ExprKind::Literal(Literal::Int(1)))),
@@ -1869,7 +1970,7 @@ mod tests {
 
     #[test]
     fn test_char_literal_and_indexing() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let char_expr = expr(ExprKind::Literal(Literal::Char('z')));
         assert_eq!(checker.infer_expr(&char_expr), Type::Char);
 
@@ -1884,7 +1985,7 @@ mod tests {
 
     #[test]
     fn test_val_reassignment_rejected_e4003() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let init = expr(ExprKind::LocalVar {
             is_var: false,
             name: "x".to_string(),
@@ -1905,7 +2006,7 @@ mod tests {
 
     #[test]
     fn test_error_sentinel_suppresses_cascade() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         // undefined + 1
         let err_expr = expr(ExprKind::Binary {
             op: BinaryOp::Add,
@@ -1921,7 +2022,7 @@ mod tests {
 
     #[test]
     fn test_compose_context_enforcement_e4008() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let compose_fn_sym = Symbol::function(
             "MyView",
             Type::Fn {
@@ -1948,7 +2049,7 @@ mod tests {
 
     #[test]
     fn test_when_expression_exhaustiveness_e4009() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let when_no_else = expr(ExprKind::When {
             target: Some(Box::new(expr(ExprKind::Literal(Literal::Int(1))))),
             branches: vec![WhenBranch {
@@ -1965,7 +2066,7 @@ mod tests {
 
     #[test]
     fn test_block_unit_and_trailing_expr() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let block_empty = expr(ExprKind::Block(BlockExpr {
             stmts: Vec::new(),
             span: Span::dummy(),
@@ -1989,7 +2090,7 @@ mod tests {
 
     #[test]
     fn test_call_signature_mismatch_e4004() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let fn_sym = Symbol::function(
             "add",
             Type::Fn {
@@ -2039,7 +2140,7 @@ mod tests {
 
     #[test]
     fn test_closure_checking_against_fn_type() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let closure = expr(ExprKind::Closure {
             params: vec!["n".to_string()],
             body: BlockExpr {
@@ -2065,7 +2166,7 @@ mod tests {
 
     #[test]
     fn test_when_diverging_branch_with_nothing() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         checker.in_function = true;
         checker.current_expected_return = Some(Type::Int);
         let when_expr = expr(ExprKind::When {
@@ -2094,18 +2195,15 @@ mod tests {
 
     #[test]
     fn test_struct_instantiation_and_field_access() {
-        let mut checker = TypeChecker::new(None);
-        let point_sym = Symbol::struct_decl(
+        let mut checker = TypeChecker::new(None, "<test>");
+        declare_struct(
+            &mut checker,
             "Point",
             vec![
                 ("x".to_string(), false, Type::Int),
                 ("y".to_string(), true, Type::Int),
             ],
-            Visibility::Public,
-            None,
-            Span::dummy(),
         );
-        checker.env.define(point_sym).unwrap();
 
         // Valid positional instantiation
         let call_pos = expr(ExprKind::Call {
@@ -2124,7 +2222,7 @@ mod tests {
             ],
         });
         let res_pos = checker.infer_expr(&call_pos);
-        assert!(matches!(res_pos, Type::Struct { ref name, .. } if name == "Point"));
+        assert!(matches!(res_pos, Type::Struct(ref id) if id.name == "Point"));
 
         // Valid named field instantiation
         let call_named = expr(ExprKind::Call {
@@ -2143,7 +2241,7 @@ mod tests {
             ],
         });
         let res_named = checker.infer_expr(&call_named);
-        assert!(matches!(res_named, Type::Struct { ref name, .. } if name == "Point"));
+        assert!(matches!(res_named, Type::Struct(ref id) if id.name == "Point"));
 
         // Field access: p.x -> Int
         let field_access = expr(ExprKind::MemberAccess {
@@ -2165,18 +2263,15 @@ mod tests {
 
     #[test]
     fn test_struct_field_mutability_validation_e4003() {
-        let mut checker = TypeChecker::new(None);
-        let user_sym = Symbol::struct_decl(
+        let mut checker = TypeChecker::new(None, "<test>");
+        declare_struct(
+            &mut checker,
             "User",
             vec![
                 ("id".to_string(), false, Type::Int),
                 ("age".to_string(), true, Type::Int),
             ],
-            Visibility::Public,
-            None,
-            Span::dummy(),
         );
-        checker.env.define(user_sym.clone()).unwrap();
 
         // val u = User(1, 20)
         let init_val = expr(ExprKind::LocalVar {
@@ -2271,18 +2366,15 @@ mod tests {
 
     #[test]
     fn test_enum_variant_constructor_typing() {
-        let mut checker = TypeChecker::new(None);
-        let opt_sym = Symbol::enum_decl(
+        let mut checker = TypeChecker::new(None, "<test>");
+        declare_enum(
+            &mut checker,
             "Option",
             vec![
                 ("None".to_string(), Vec::new()),
                 ("Some".to_string(), vec![Type::Int]),
             ],
-            Visibility::Public,
-            None,
-            Span::dummy(),
         );
-        checker.env.define(opt_sym).unwrap();
 
         // Qualified unit variant: Option.None -> Option
         let none_access = expr(ExprKind::MemberAccess {
@@ -2291,7 +2383,7 @@ mod tests {
             is_safe_nav: false,
         });
         let res_none = checker.infer_expr(&none_access);
-        assert!(matches!(res_none, Type::Enum { ref name, .. } if name == "Option"));
+        assert!(matches!(res_none, Type::Enum(ref id) if id.name == "Option"));
 
         // Qualified variant constructor call: Option.Some(42) -> Option
         let some_call = expr(ExprKind::Call {
@@ -2307,7 +2399,7 @@ mod tests {
             }],
         });
         let res_some = checker.infer_expr(&some_call);
-        assert!(matches!(res_some, Type::Enum { ref name, .. } if name == "Option"));
+        assert!(matches!(res_some, Type::Enum(ref id) if id.name == "Option"));
 
         // Option.Some("bad") -> E4002
         let some_bad = expr(ExprKind::Call {
@@ -2328,7 +2420,7 @@ mod tests {
 
     #[test]
     fn test_reference_and_borrow_typing() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let init_val = expr(ExprKind::LocalVar {
             is_var: false,
             name: "x".to_string(),
@@ -2381,20 +2473,13 @@ mod tests {
 
     #[test]
     fn test_nullability_safe_nav_and_elvis() {
-        let mut checker = TypeChecker::new(None);
-        let point_sym = Symbol::struct_decl(
+        let mut checker = TypeChecker::new(None, "<test>");
+        let point_ty = declare_struct(
+            &mut checker,
             "Point",
             vec![("x".to_string(), false, Type::Int)],
-            Visibility::Public,
-            None,
-            Span::dummy(),
         );
-        checker.env.define(point_sym).unwrap();
-
-        let opt_point_ty = Type::Nullable(Box::new(Type::Struct {
-            name: "Point".to_string(),
-            fields: vec![("x".to_string(), false, Type::Int)],
-        }));
+        let opt_point_ty = Type::Nullable(Box::new(point_ty));
         let init_opt = expr(ExprKind::LocalVar {
             is_var: false,
             name: "opt".to_string(),
@@ -2426,11 +2511,12 @@ mod tests {
 
     #[test]
     fn test_heap_indirection_field_access() {
-        let mut checker = TypeChecker::new(None);
-        let point_ty = Type::Heap(Box::new(Type::Struct {
-            name: "Point".to_string(),
-            fields: vec![("x".to_string(), false, Type::Int)],
-        }));
+        let mut checker = TypeChecker::new(None, "<test>");
+        let point_ty = Type::Heap(Box::new(declare_struct(
+            &mut checker,
+            "Point",
+            vec![("x".to_string(), false, Type::Int)],
+        )));
         checker
             .env
             .define(Symbol::variable(
@@ -2455,6 +2541,7 @@ mod tests {
         // ABI defined in package 'core.math'
         let abi = FileAbi {
             package: Some("core.math".to_string()),
+            module: "core/math/math".to_string(),
             symbols: vec![
                 ExportedSymbol::Function {
                     visibility: Visibility::Public,
@@ -2482,7 +2569,7 @@ mod tests {
         };
 
         // Case 1: Ingested from external package 'app.ui'
-        let mut ext_checker = TypeChecker::new(Some("app.ui".to_string()));
+        let mut ext_checker = TypeChecker::new(Some("app.ui".to_string()), "<test>");
         ext_checker.ingest_file_abi(&abi);
 
         // Calling public 'add' -> OK
@@ -2513,7 +2600,7 @@ mod tests {
         assert!(ext_checker.errors.iter().any(|e| e.code() == "E4007"));
 
         // Case 2: Ingested from identical package 'core.math'
-        let mut same_checker = TypeChecker::new(Some("core.math".to_string()));
+        let mut same_checker = TypeChecker::new(Some("core.math".to_string()), "<test>");
         same_checker.ingest_file_abi(&abi);
         assert_eq!(same_checker.infer_expr(&call_pkg), Type::Int);
         assert!(same_checker.errors.is_empty());
@@ -2521,7 +2608,7 @@ mod tests {
 
     #[test]
     fn test_default_param_omission_and_named_args() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let fn_ty = Type::Fn {
             is_compose: false,
             params: vec![Type::String, Type::Int, Type::String],
@@ -2604,18 +2691,15 @@ mod tests {
 
     #[test]
     fn test_struct_named_args_and_validation() {
-        let mut checker = TypeChecker::new(None);
-        let point_sym = Symbol::struct_decl(
+        let mut checker = TypeChecker::new(None, "<test>");
+        declare_struct(
+            &mut checker,
             "Point",
             vec![
                 ("x".to_string(), false, Type::Int),
                 ("y".to_string(), false, Type::Int),
             ],
-            Visibility::Public,
-            None,
-            Span::dummy(),
         );
-        checker.env.define(point_sym).unwrap();
 
         // Valid named: Point(x = 1, y = 2) -> OK
         let call_ok = expr(ExprKind::Call {
@@ -2671,15 +2755,16 @@ mod tests {
 
     #[test]
     fn test_exhaustive_enum_when_without_else() {
-        let mut checker = TypeChecker::new(None);
-        let color_ty = Type::Enum {
-            name: "Color".to_string(),
-            variants: vec![
+        let mut checker = TypeChecker::new(None, "<test>");
+        let color_ty = declare_enum(
+            &mut checker,
+            "Color",
+            vec![
                 ("Red".to_string(), Vec::new()),
                 ("Green".to_string(), Vec::new()),
                 ("Blue".to_string(), Vec::new()),
             ],
-        };
+        );
         checker
             .env
             .define(Symbol::variable(
@@ -2774,7 +2859,7 @@ mod tests {
 
     #[test]
     fn test_top_level_return_rejected() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let ret_expr = expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(
             Literal::Int(42),
         ))))));
@@ -2784,7 +2869,7 @@ mod tests {
 
     #[test]
     fn test_compose_isolation_across_closure() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let comp_fn = Symbol::function(
             "MyView",
             Type::Fn {
@@ -2820,7 +2905,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_struct_fields_and_enum_variants_rejected() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         let source_file = SourceFile {
             package: None,
             imports: Vec::new(),
@@ -2880,7 +2965,7 @@ mod tests {
 
     #[test]
     fn test_indexing_indirection_peeling_and_heap_rejection() {
-        let mut checker = TypeChecker::new(None);
+        let mut checker = TypeChecker::new(None, "<test>");
         // Borrowed string: &String
         let ref_str_ty = Type::Reference {
             mutable: false,
@@ -2925,7 +3010,8 @@ mod tests {
     /// Parses and fully checks a Prism source file, returning the accumulated errors.
     fn check_source(src: &str) -> Vec<TypeError> {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()));
+        let mut checker =
+            TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "<test>");
         checker.check_module(&file);
         checker.errors
     }
@@ -3052,13 +3138,13 @@ mod tests {
             "package demo.models\npublic struct Address {\n    val city: String\n}\npublic struct User {\n    var name: String\n    val email: String?\n    val home: Address\n}\n",
         )
         .expect("models must parse");
-        let abi = FileAbi::extract(&models).expect("models ABI must extract");
+        let abi = FileAbi::extract(&models, "demo/models/models").expect("models ABI must extract");
 
         let app = prism_parser::parse_source(
             "package demo.app\nfun nameOf(user: &User): String = user.name\nfun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\nfun emailOf(user: &User): String? = user.email\nfun cityOf(user: User): String = user.home.city\n",
         )
         .expect("app must parse");
-        let mut checker = TypeChecker::new(Some("demo.app".to_string()));
+        let mut checker = TypeChecker::new(Some("demo.app".to_string()), "<test>");
         checker.ingest_file_abi(&abi);
         checker.check_module(&app);
         assert!(checker.errors.is_empty(), "{:?}", checker.errors);

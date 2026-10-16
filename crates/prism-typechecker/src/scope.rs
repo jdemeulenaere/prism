@@ -1,7 +1,7 @@
 //! Lexical scoping and symbol environments for semantic analysis.
 
 use crate::error::TypeError;
-use crate::types::Type;
+use crate::types::{NominalId, Type};
 use prism_ast::{Span, Visibility};
 use std::collections::HashMap;
 
@@ -30,15 +30,15 @@ pub enum SymbolKind {
         visibility: Visibility,
         defining_package: Option<String>,
     },
-    /// Struct declaration with field definitions.
+    /// Struct declaration. Its fields live in the checker's type table under `id`.
     Struct {
-        fields: Vec<(String, bool, Type)>, // (name, is_var, type)
+        id: NominalId,
         visibility: Visibility,
         defining_package: Option<String>,
     },
-    /// Enum declaration with variant constructors.
+    /// Enum declaration. Its variants live in the checker's type table under `id`.
     Enum {
-        variants: Vec<(String, Vec<Type>)>, // (name, payloads)
+        id: NominalId,
         visibility: Visibility,
         defining_package: Option<String>,
     },
@@ -129,16 +129,15 @@ impl Symbol {
     }
 
     pub fn struct_decl(
-        name: impl Into<String>,
-        fields: Vec<(String, bool, Type)>,
+        id: NominalId,
         visibility: Visibility,
         defining_package: Option<String>,
         span: Span,
     ) -> Self {
         Self {
-            name: name.into(),
+            name: id.name.clone(),
             kind: SymbolKind::Struct {
-                fields,
+                id,
                 visibility,
                 defining_package,
             },
@@ -147,16 +146,15 @@ impl Symbol {
     }
 
     pub fn enum_decl(
-        name: impl Into<String>,
-        variants: Vec<(String, Vec<Type>)>,
+        id: NominalId,
         visibility: Visibility,
         defining_package: Option<String>,
         span: Span,
     ) -> Self {
         Self {
-            name: name.into(),
+            name: id.name.clone(),
             kind: SymbolKind::Enum {
-                variants,
+                id,
                 visibility,
                 defining_package,
             },
@@ -194,14 +192,8 @@ impl Symbol {
         match &self.kind {
             SymbolKind::Variable { ty, .. } => ty.clone(),
             SymbolKind::Function { fn_type, .. } => fn_type.clone(),
-            SymbolKind::Struct { fields, .. } => Type::Struct {
-                name: self.name.clone(),
-                fields: fields.clone(),
-            },
-            SymbolKind::Enum { variants, .. } => Type::Enum {
-                name: self.name.clone(),
-                variants: variants.clone(),
-            },
+            SymbolKind::Struct { id, .. } => Type::Struct(id.clone()),
+            SymbolKind::Enum { id, .. } => Type::Enum(id.clone()),
         }
     }
 }
@@ -382,8 +374,7 @@ mod tests {
     fn test_lookup_type_skips_shadowing_value_symbols() {
         let mut env = ScopeStack::new();
         let user = Symbol::struct_decl(
-            "User",
-            vec![("name".to_string(), true, Type::String)],
+            NominalId::new("<test>", "User"),
             Visibility::Private,
             None,
             Span::dummy(),

@@ -7,19 +7,31 @@ use prism_typechecker::{TypeChecker, TypeError};
 /// Parses and checks a single source file, returning its diagnostics.
 fn check(src: &str) -> Vec<TypeError> {
     let file = prism_parser::parse_source(src).expect("source must parse");
-    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()));
+    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");
     checker.check_module(&file);
     checker.errors
 }
 
 /// Checks `app` after ingesting the ABI of each source in `deps`, as `prism check` does for
-/// direct imports.
+/// direct imports. Dependency `i` gets the module path `dep{i}`.
 fn check_with_imports(deps: &[&str], app: &str) -> Vec<TypeError> {
+    let modules: Vec<(String, &str)> = deps
+        .iter()
+        .enumerate()
+        .map(|(i, src)| (format!("dep{i}"), *src))
+        .collect();
+    let modules: Vec<(&str, &str)> = modules.iter().map(|(m, s)| (m.as_str(), *s)).collect();
+    check_with_modules(&modules, app)
+}
+
+/// Checks `app` (module `app`) after ingesting the ABI of each `(module path, source)` in
+/// `deps`, as `prism check` does for direct imports.
+fn check_with_modules(deps: &[(&str, &str)], app: &str) -> Vec<TypeError> {
     let file = prism_parser::parse_source(app).expect("app must parse");
-    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()));
-    for dep in deps {
+    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");
+    for (module, dep) in deps {
         let dep_file = prism_parser::parse_source(dep).expect("dependency must parse");
-        checker.ingest_file_abi(&FileAbi::extract(&dep_file).expect("ABI must extract"));
+        checker.ingest_file_abi(&FileAbi::extract(&dep_file, module).expect("ABI must extract"));
     }
     checker.check_module(&file);
     checker.errors
@@ -394,4 +406,72 @@ fn declaration_as_an_unbraced_branch_body_never_reaches_the_checker() {
     let src = "fun f(c: Bool): Int {\n    if (c) val x = 1\n    return x\n}\n";
     let err = prism_parser::parse_source(src).expect_err("a declaration is not a branch body");
     assert_eq!(err.code, "E2001");
+}
+
+// Canonical nominal identity (typechecker-soundness D3).
+
+#[track_caller]
+fn assert_import_codes(deps: &[(&str, &str)], app: &str, expected: &[&str]) {
+    let errors = check_with_modules(deps, app);
+    assert_eq!(codes(&errors), expected, "{:?}\n{}", errors, app);
+}
+
+#[test]
+fn builtin_range_distinct_from_a_user_struct_named_range() {
+    assert_codes(
+        "struct Range {\n    val a: Int\n    val b: String\n}\nfun f(): String {\n    val r: Range = 1..10\n    return r.b\n}\n",
+        &["E4002"],
+    );
+    // Without a user declaration, `Range` names the built-in type.
+    assert_ok("fun f(): Int {\n    val r: Range = 1..10\n    return r.start\n}\n");
+}
+
+#[test]
+fn struct_and_enum_never_equal() {
+    assert_codes(
+        "struct S {\n    val x: Int\n}\nenum E {\n    A\n}\nfun f() {\n    val s: S = E.A\n}\n",
+        &["E4002"],
+    );
+    // A struct and an enum sharing a name across modules stay distinct.
+    assert_import_codes(
+        &[
+            ("m/kinds", "package m\npublic enum Kind {\n    A\n}\npublic fun k(): Kind = Kind.A\n"),
+            ("n/kinds", "package n\npublic struct Kind {\n    val x: Int\n}\npublic fun takeStruct(v: Kind): Int = v.x\n"),
+        ],
+        "package app\nfun f(): Int = takeStruct(k())\n",
+        &["E4002"],
+    );
+}
+
+#[test]
+fn annotation_and_constructor_denote_the_same_type() {
+    assert_ok(
+        "struct User {\n    val name: String\n}\nfun read(u: User): String = u.name\nfun f(): String {\n    val a: User = User(\"x\")\n    return read(a)\n}\n",
+    );
+}
+
+#[test]
+fn same_named_structs_from_different_modules_stay_distinct() {
+    let a = "package a\npublic struct User {\n    val name: String\n}\npublic struct Order {\n    val user: User\n}\n";
+    let b = "package b\npublic struct User {\n    val id: Int\n}\n";
+    assert_import_codes(
+        &[("b/lib", b), ("a/lib", a)],
+        "package app\nfun g(o: Order): Int = o.user.id\n",
+        &["E4006"],
+    );
+    assert_import_codes(
+        &[("b/lib", b), ("a/lib", a)],
+        "package app\nfun g(o: Order): String = o.user.name\n",
+        &[],
+    );
+}
+
+#[test]
+fn same_named_types_are_qualified_in_mismatch_messages() {
+    let errors =
+        check("struct Range {\n    val a: Int\n}\nfun f() {\n    val r: Range = 1..10\n}\n");
+    assert_eq!(
+        errors[0].message(),
+        "type mismatch: expected 'app::Range', found '<builtin>::Range'"
+    );
 }

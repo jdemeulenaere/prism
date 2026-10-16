@@ -142,7 +142,17 @@ fn run_abi(path: &str) {
         }
     };
 
-    let abi = match FileAbi::extract(&ast) {
+    // Without a workspace, the module path is the declared package plus the file name.
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let module = ast
+        .package
+        .as_ref()
+        .map(|p| format!("{}/{}", p.package_string().replace('.', "/"), stem))
+        .unwrap_or_else(|| stem.to_string());
+    let abi = match FileAbi::extract(&ast, &module) {
         Ok(abi) => abi,
         Err(err) => {
             eprintln!("ABI Error: {}", err);

@@ -30,8 +30,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         // The private changes MUST NOT alter the exported ABI hash!
         assert_eq!(abi1.symbols.len(), 1);
@@ -63,8 +63,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         // Public non-generic body edits produce zero ABI change (Compilation avoidance!)
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
@@ -88,8 +88,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         assert_ne!(abi1.abi_hash, abi2.abi_hash);
     }
@@ -104,7 +104,7 @@ mod tests {
         "#;
 
         let ast = parse_source(src).expect("Parse");
-        let err = FileAbi::extract(&ast).unwrap_err();
+        let err = FileAbi::extract(&ast, "test/file").unwrap_err();
 
         match err {
             AbiError::MissingExplicitReturnType {
@@ -138,8 +138,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         // The two enums have different memory layouts and variant shapes.
         // Their ABI hashes MUST be distinct!
@@ -166,8 +166,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         // Source Span line/column shifts MUST NOT alter generic body monomorphization hash!
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
@@ -186,8 +186,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         assert_ne!(abi1.abi_hash, abi2.abi_hash);
     }
@@ -207,8 +207,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1).expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2).expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
 
         // Independent symbol reordering within a file should not invalidate the exported ABI
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
@@ -219,8 +219,9 @@ mod tests {
         let compose_src = "public fun Column(content: compose () -> Unit): Unit { }";
         let plain_src = "public fun Column(content: () -> Unit): Unit { }";
 
-        let compose_abi = FileAbi::extract(&parse_source(compose_src).unwrap()).unwrap();
-        let plain_abi = FileAbi::extract(&parse_source(plain_src).unwrap()).unwrap();
+        let compose_abi =
+            FileAbi::extract(&parse_source(compose_src).unwrap(), "test/file").unwrap();
+        let plain_abi = FileAbi::extract(&parse_source(plain_src).unwrap(), "test/file").unwrap();
 
         let prism_abi::ExportedSymbol::Function { params, .. } = &compose_abi.symbols[0] else {
             panic!("Expected exported function");
