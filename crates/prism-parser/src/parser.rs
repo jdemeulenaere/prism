@@ -1066,6 +1066,17 @@ impl Parser {
                 eq_tok.span,
             ));
         }
+        let is_place = match &left.kind {
+            ExprKind::Ident(_) | ExprKind::Index { .. } => true,
+            ExprKind::MemberAccess { is_safe_nav, .. } => !is_safe_nav,
+            _ => false,
+        };
+        if !is_place {
+            return Err(ParseError::new(
+                "Invalid assignment target; expected a variable, field access or index expression",
+                left.span,
+            ));
+        }
         let span = left.span.merge(right.span);
         Ok(Expr::new(
             ExprKind::Assign {

@@ -727,4 +727,29 @@ mod tests {
         let err = parse_source("fun f(x: Int) = when (x) { 0 -> 1, -> 2 }").unwrap_err();
         assert!(err.message.contains("Expected a pattern"), "{}", err);
     }
+
+    #[test]
+    fn test_invalid_assignment_targets_rejected() {
+        for src in [
+            "fun f() { a + b = c }",
+            "fun f() { 1 = 2 }",
+            "fun f() { g() = 1 }",
+            "fun f() { a?.b = 1 }",
+        ] {
+            let err = parse_source(src).unwrap_err();
+            assert!(
+                err.message.contains("Invalid assignment target"),
+                "{}: {}",
+                src,
+                err
+            );
+        }
+        for src in [
+            "fun f() { a = 1 }",
+            "fun f() { a.b = 1 }",
+            "fun f() { a[0] = 1 }",
+        ] {
+            parse_source(src).unwrap();
+        }
+    }
 }

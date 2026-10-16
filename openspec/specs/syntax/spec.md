@@ -139,6 +139,10 @@ The parser MUST parse expressions according to Pratt operator precedence, correc
 - **WHEN** code attempts chained assignment (`a = b = c`)
 - **THEN** the parser rejects the expression with a compile error requiring separate statements
 
+#### Scenario: Invalid assignment target rejected
+- **WHEN** the left side of `=` is not a variable, a `.` field access or an index expression (`a + b = c`, `1 = 2`, `g() = 1`, `a?.b = c`)
+- **THEN** the parser rejects the assignment with a syntax error at the target
+
 #### Scenario: Elvis operator binds tighter than comparison
 - **WHEN** parsing `val eligible = age ?: 0 >= 18`
 - **THEN** the Elvis operator binds tighter than comparison: `((age ?: 0) >= 18)`
