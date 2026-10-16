@@ -93,6 +93,14 @@ The grammar MUST recognize `compose` as a native modifier on function declaratio
 ### Requirement: Lexical Tokenization and Escape Sequences
 The compiler MUST tokenize source text into a stream of typed tokens with accurate source spans, processing whitespace, line comments, nested block comments, and escape sequences while rejecting raw unescaped newlines in single-line strings.
 
+#### Scenario: Columns count characters
+- **WHEN** non-ASCII text precedes a token on its line (`/* café */ fun`)
+- **THEN** the token's column counts characters, not UTF-8 bytes (`fun` is at column 12)
+
+#### Scenario: Declaration and argument spans
+- **WHEN** a function has no body (`fun a(): Int` followed by blank lines), a call has a named argument (`n = 1`) or a trailing lambda, or a closure body holds a single `val`
+- **THEN** the function's span ends at its signature, a named argument's span covers `n = 1`, a trailing lambda argument's span covers only the lambda, and a closure body block spans from `->` to `}` so it never shares a span with its statement
+
 #### Scenario: Nested block comments ignored
 - **WHEN** source code contains nested block comments (`/* outer /* inner */ still comment */`)
 - **THEN** tokenizer ignores the comments and yields adjacent tokens without error

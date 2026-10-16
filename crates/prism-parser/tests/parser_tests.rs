@@ -859,4 +859,74 @@ mod tests {
             assert!(err.message.contains("out of range"), "{}: {}", src, err);
         }
     }
+
+    #[test]
+    fn test_spans_of_bodyless_functions_lambdas_and_closures() {
+        let text = |src: &'static str, span: Span| &src[span.start..span.end];
+
+        // S1: a function without a body ends at its signature.
+        let src = "fun a(): Int\n\n\nfun b()\nfun c() = 1";
+        let file = parse_source(src).unwrap();
+        let spans: Vec<Span> = file
+            .declarations
+            .iter()
+            .map(|d| match d {
+                Declaration::Function(f) => f.span,
+                _ => panic!("Expected function"),
+            })
+            .collect();
+        assert_eq!(text(src, spans[0]), "fun a(): Int");
+        assert_eq!(text(src, spans[1]), "fun b()");
+
+        // S2: a trailing lambda argument spans the lambda only, a named
+        // argument includes its name.
+        let src = "fun f() = g(n = 1) { x -> x }";
+        let file = parse_source(src).unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        assert_eq!(text(src, args[0].span), "n = 1");
+        assert_eq!(text(src, args[1].span), "{ x -> x }");
+        assert_eq!(text(src, e.span), "g(n = 1) { x -> x }");
+
+        let src = "fun f() = run { 1 }";
+        let file = parse_source(src).unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        assert_eq!(text(src, args[0].span), "{ 1 }");
+
+        // S3: a closure body block is distinct from its single `val`.
+        let src = "fun f() = g { x -> val y = x }";
+        let file = parse_source(src).unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        let ExprKind::Closure { body, .. } = &args[0].value.kind else {
+            panic!("Expected closure");
+        };
+        let ExprKind::Block(block) = &body.kind else {
+            panic!("Expected block body");
+        };
+        assert_eq!(text(src, body.span), "-> val y = x }");
+        assert_eq!(text(src, block.stmts[0].span), "val y = x");
+    }
 }

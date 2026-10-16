@@ -333,4 +333,20 @@ mod tests {
         let tokens = Lexer::new("fun f() = 9223372036854775808").tokenize_all();
         assert_eq!(tokens[5].kind, TokenKind::Int(9223372036854775808));
     }
+
+    #[test]
+    fn test_columns_count_characters() {
+        // S4: non-ASCII text in comments, strings and chars advances the
+        // column by one per character, not per byte.
+        for (src, column) in [
+            ("/* café */ fun", 12),
+            ("// é\n🚀🚀 fun", 4),
+            (r#""café" fun"#, 8),
+            ("'é' fun", 5),
+        ] {
+            let tokens = Lexer::new(src).tokenize_all();
+            let fun = tokens.iter().find(|t| t.kind == TokenKind::Fun).unwrap();
+            assert_eq!(fun.span.column, column, "{}", src);
+        }
+    }
 }

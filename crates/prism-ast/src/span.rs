@@ -11,7 +11,8 @@ pub struct Span {
     pub end: usize,
     /// 1-based line number of the start.
     pub line: u32,
-    /// 1-based column number of the start.
+    /// 1-based column number of the start, counted in characters (Unicode
+    /// scalar values), not bytes.
     pub column: u32,
 }
 

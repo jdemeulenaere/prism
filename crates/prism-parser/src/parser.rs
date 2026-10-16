@@ -356,7 +356,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect(TokenKind::RParen)?;
+        let rparen_span = self.expect(TokenKind::RParen)?.span;
 
         // Return type: : ReturnType
         let mut return_type = None;
@@ -367,7 +367,7 @@ impl Parser {
 
         // Body: = expr OR { ... } OR none (forward declaration / interface)
         let mut body = None;
-        let mut end_span = self.peek().span;
+        let mut end_span = return_type.as_ref().map_or(rparen_span, |t| t.span);
 
         if self.peek_kind() == &TokenKind::Eq {
             self.bump(); // '='
@@ -985,7 +985,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect(TokenKind::Arrow)?;
+        let arrow = self.expect(TokenKind::Arrow)?.span;
 
         let mut stmts = self.parse_stmts()?;
         let end = self.expect(TokenKind::RBrace)?.span;
@@ -993,15 +993,9 @@ impl Parser {
         let body = if stmts.len() == 1 && !matches!(stmts[0].kind, ExprKind::LocalVar { .. }) {
             stmts.remove(0)
         } else {
-            let b_span = if stmts.is_empty() {
-                start.merge(end)
-            } else {
-                stmts
-                    .first()
-                    .unwrap()
-                    .span
-                    .merge(stmts.last().unwrap().span)
-            };
+            // The body block runs from `->` to `}`, so it never shares a span
+            // with the closure or with its own first statement.
+            let b_span = arrow.merge(end);
             Expr::new(
                 ExprKind::Block(BlockExpr {
                     stmts,
@@ -1056,16 +1050,18 @@ impl Parser {
         let mut args = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
             let mut name = None;
+            let mut arg_start = self.peek().span;
             // Check named argument: ident = expr (`compose` is a contextual keyword)
             if matches!(self.peek_kind(), TokenKind::Ident(_) | TokenKind::Compose)
                 && self.peek_ahead(1) == &TokenKind::Eq
             {
-                let (n, _) = self.expect_ident()?;
+                let (n, n_span) = self.expect_ident()?;
                 self.bump(); // '='
                 name = Some(n);
+                arg_start = n_span;
             }
             let value = self.parse_expr(Precedence::Lowest)?;
-            let arg_span = value.span;
+            let arg_span = arg_start.merge(value.span);
             args.push(CallArg {
                 name,
                 value,
@@ -1086,8 +1082,8 @@ impl Parser {
             span = span.merge(lambda.span);
             args.push(CallArg {
                 name: None,
+                span: lambda.span,
                 value: lambda,
-                span,
             });
         }
 
@@ -1108,8 +1104,8 @@ impl Parser {
                 callee: Box::new(left),
                 args: vec![CallArg {
                     name: None,
+                    span: lambda.span,
                     value: lambda,
-                    span,
                 }],
             },
             span,

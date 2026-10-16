@@ -569,7 +569,8 @@ impl<'a> Lexer<'a> {
         if b == b'\n' {
             self.line += 1;
             self.column = 1;
-        } else {
+        } else if b & 0xC0 != 0x80 {
+            // Columns count characters: UTF-8 continuation bytes don't advance.
             self.column += 1;
         }
         b
