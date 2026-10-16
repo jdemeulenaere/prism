@@ -119,6 +119,46 @@ impl Parser {
         }
     }
 
+    /// Consumes the first character of the current two-character token as a
+    /// `first` token and leaves the rest as a `rest` token, for operators the
+    /// lexer joined where the grammar needs them apart (`Heap<Int>= x`, `&&x`).
+    fn split_token(&mut self, first: TokenKind, rest: TokenKind) -> Token {
+        let tok = &mut self.tokens[self.cursor];
+        let span = tok.span;
+        let head = Token::with_newline(
+            first,
+            Span::new(span.start, span.start + 1, span.line, span.column),
+            tok.is_preceded_by_newline,
+        );
+        tok.kind = rest;
+        tok.span = Span::new(span.start + 1, span.end, span.line, span.column + 1);
+        tok.is_preceded_by_newline = false;
+        head
+    }
+
+    /// Whether the current token closes a generic argument list (`>`, or the
+    /// `>` of a `>=` that the lexer joined).
+    fn at_closing_angle(&self) -> bool {
+        matches!(self.peek_kind(), TokenKind::Gt | TokenKind::GtEq)
+    }
+
+    fn expect_closing_angle(&mut self) -> Result<Token, ParseError> {
+        if self.peek_kind() == &TokenKind::GtEq {
+            Ok(self.split_token(TokenKind::Gt, TokenKind::Eq))
+        } else {
+            self.expect(TokenKind::Gt)
+        }
+    }
+
+    /// Consumes a prefix `&`, splitting `&&` into two borrows.
+    fn bump_amp(&mut self) -> Token {
+        if self.peek_kind() == &TokenKind::AmpAmp {
+            self.split_token(TokenKind::Amp, TokenKind::Amp)
+        } else {
+            self.bump()
+        }
+    }
+
     // --- Source File Parsing ---
 
     pub fn parse_source_file(&mut self) -> Result<SourceFile, ParseError> {
@@ -585,8 +625,8 @@ impl Parser {
         let start_span = self.peek().span;
 
         // 1. Borrow reference: &T or &mut T
-        if self.peek_kind() == &TokenKind::Amp {
-            self.bump();
+        if matches!(self.peek_kind(), TokenKind::Amp | TokenKind::AmpAmp) {
+            let start_span = self.bump_amp().span;
             let is_mut = if self.peek_kind() == &TokenKind::Mut {
                 self.bump();
                 true
@@ -651,7 +691,7 @@ impl Parser {
 
         if self.peek_kind() == &TokenKind::Lt {
             self.bump(); // '<'
-            while self.peek_kind() != &TokenKind::Gt && !self.is_eof() {
+            while !self.at_closing_angle() && !self.is_eof() {
                 type_args.push(self.parse_type()?);
                 if self.peek_kind() == &TokenKind::Comma {
                     self.bump();
@@ -659,7 +699,7 @@ impl Parser {
                     break;
                 }
             }
-            end_span = self.expect(TokenKind::Gt)?.span;
+            end_span = self.expect_closing_angle()?.span;
         }
 
         let base_ty = if type_args.is_empty() {
@@ -686,7 +726,7 @@ impl Parser {
         let mut params = Vec::new();
         if self.peek_kind() == &TokenKind::Lt {
             self.bump();
-            while self.peek_kind() != &TokenKind::Gt && !self.is_eof() {
+            while !self.at_closing_angle() && !self.is_eof() {
                 let (p, _) = self.expect_ident()?;
                 params.push(p);
                 if self.peek_kind() == &TokenKind::Comma {
@@ -695,7 +735,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(TokenKind::Gt)?;
+            self.expect_closing_angle()?;
         }
         Ok(params)
     }
@@ -767,7 +807,9 @@ impl Parser {
             | TokenKind::Compose => self.parse_atom(),
 
             // Unary operators
-            TokenKind::Minus | TokenKind::Bang | TokenKind::Amp => self.parse_unary(),
+            TokenKind::Minus | TokenKind::Bang | TokenKind::Amp | TokenKind::AmpAmp => {
+                self.parse_unary()
+            }
 
             // Grouping: (expr)
             TokenKind::LParen => self.parse_group(),
@@ -810,7 +852,7 @@ impl Parser {
 
     /// Prefix operators: `-`, `!`, `&` and `&mut`.
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
-        let tok = self.bump();
+        let tok = self.bump_amp();
         let op = match tok.kind {
             TokenKind::Minus => UnaryOp::Neg,
             TokenKind::Bang => UnaryOp::Not,
@@ -855,6 +897,7 @@ impl Parser {
                 | TokenKind::Minus
                 | TokenKind::Bang
                 | TokenKind::Amp
+                | TokenKind::AmpAmp
                 | TokenKind::LParen
                 | TokenKind::LBrace
                 | TokenKind::If

@@ -113,6 +113,10 @@ The compiler MUST tokenize source text into a stream of typed tokens with accura
 - **WHEN** a string literal is unclosed before end-of-file
 - **THEN** tokenizer emits an `Error` token with the unterminated literal span without panicking
 
+#### Scenario: Joined operator split where the grammar needs its parts
+- **WHEN** a generic argument list is closed directly before `=` (`val y: Heap<Int>= x`), or `&&` appears where a prefix borrow is expected (`&&x`, `&&Int`)
+- **THEN** the parser reads `>=` as `>` followed by `=`, and `&&` as two borrows, while `a && b` stays a logical and
+
 ### Requirement: Numeric Literal Formats
 The lexer MUST parse decimal integers, hexadecimal, binary, floating-point numbers with fractional decimals, visual digit separators (`_`), and scientific notation.
 

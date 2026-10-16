@@ -786,4 +786,42 @@ mod tests {
         };
         assert_eq!(params, &vec!["compose".to_string()]);
     }
+
+    #[test]
+    fn test_split_joined_operator_tokens() {
+        // `>=` closing a generic argument list is `>` followed by `=`.
+        let file = parse_source("fun f(x: Heap<Int>) { val y: Heap<Heap<Int>>= x }").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Block(body)) = &f.body else {
+            panic!("Expected block body");
+        };
+        let ExprKind::LocalVar { ty, .. } = &body.stmts[0].kind else {
+            panic!("Expected local var");
+        };
+        assert_eq!(ty.as_ref().unwrap().to_string(), "Heap<Heap<Int>>");
+        assert_eq!(ty.as_ref().unwrap().span.end, 44);
+
+        // `&&` in prefix position is a borrow of a borrow, in types and expressions.
+        let file = parse_source("fun f(x: &&Int, y: &&mut Int) = g(&&x, a && b)").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        assert_eq!(f.params[0].ty.to_string(), "&&Int");
+        assert_eq!(f.params[1].ty.to_string(), "&&mut Int");
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        assert_eq!(args[0].value.to_string(), "(&(&x))");
+        assert_eq!(args[0].value.span.start, 34);
+        let ExprKind::Unary { expr: inner, .. } = &args[0].value.kind else {
+            panic!("Expected borrow");
+        };
+        assert_eq!(inner.span.start, 35);
+        assert_eq!(args[1].value.to_string(), "(a && b)");
+    }
 }
