@@ -43,9 +43,21 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **WHEN** code attempts to assign to a struct field declared with `val`, or mutates a field on an immutable `val` struct instance
 - **THEN** the type checker emits an immutability violation error (`E4003`)
 
+#### Scenario: Mutability of nested field places
+- **WHEN** code assigns to a field path such as `o.user.name = "x"` or takes `&mut o.user.name`
+- **THEN** every hop must be mutable: the root is a `var` binding or is reached through `&mut`, every field on the path is `var`, and no hop goes through a shared `&` borrow; otherwise the type checker emits `E4003`
+
 #### Scenario: Reference and borrow compatibility
 - **WHEN** passing an argument to a parameter expecting `&T` or `&mut T`
 - **THEN** the argument must provide a matching borrow (with `&mut T` coercible to `&T`), and taking `&mut` on an immutable `val` binding is rejected
+
+#### Scenario: Borrowed constructor values match annotated references
+- **WHEN** a value built by a constructor (`val u = User("a")` or `val c = Color.Red`) is borrowed and passed to a parameter `&User`, `&mut User` or `&Color`
+- **THEN** the borrow matches: `&T` accepts `&U` when `U` is assignable to `T`, and `&mut T` accepts `&mut U` only when `T` and `U` are assignable to each other
+
+#### Scenario: Error types absorb borrows and safe navigation
+- **WHEN** the operand of `&`, `&mut` or a safe navigation `?.` already has an error
+- **THEN** the result has the error type, and no follow-on mismatch such as `found '&mut <error>'` is reported
 
 #### Scenario: Nullable type compatibility
 - **WHEN** `null` is assigned to a variable of type `T?`

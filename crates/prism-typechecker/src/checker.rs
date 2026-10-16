@@ -950,62 +950,49 @@ impl TypeChecker {
                 self.check_expr(inner, &Type::Bool);
                 Type::Bool
             }
-            UnaryOp::Borrow => {
-                let ty = self.infer_expr(inner);
-                Type::Reference {
+            UnaryOp::Borrow => match self.infer_expr(inner) {
+                Type::Error => Type::Error,
+                ty => Type::Reference {
                     mutable: false,
                     inner: Box::new(ty),
-                }
-            }
+                },
+            },
             UnaryOp::BorrowMut => {
-                // Assert target is mutable
+                let (ty, writable) = self.infer_place(inner);
+                if ty == Type::Error {
+                    return Type::Error;
+                }
                 match &inner.kind {
                     ExprKind::Ident(name) => {
-                        if let Ok(sym) = self.env.resolve(name, inner.span) {
-                            if let SymbolKind::Variable {
+                        // A `val` holding `&mut T` may be reborrowed mutably.
+                        let is_val = matches!(
+                            self.env.lookup(name).map(|sym| &sym.kind),
+                            Some(SymbolKind::Variable {
                                 mutability: Mutability::Val,
-                                ty,
                                 ..
-                            } = &sym.kind
-                            {
-                                if !matches!(ty, Type::Reference { mutable: true, .. }) {
-                                    self.errors.push(TypeError::ImmutabilityViolation {
-                                        message: format!(
-                                            "cannot take mutable borrow '&mut' of immutable 'val' binding '{}'",
-                                            name
-                                        ),
-                                        span,
-                                    });
-                                }
-                            }
+                            })
+                        );
+                        if is_val && !matches!(ty, Type::Reference { mutable: true, .. }) {
+                            self.errors.push(TypeError::ImmutabilityViolation {
+                                message: format!(
+                                    "cannot take mutable borrow '&mut' of immutable 'val' binding '{}'",
+                                    name
+                                ),
+                                span,
+                            });
                         }
                     }
-                    ExprKind::MemberAccess {
-                        target: base,
-                        member,
-                        ..
-                    } => {
-                        let base_ty = self.infer_expr(base);
-                        let peeled = self.resolve_nominal(peel_indirection(&base_ty));
-                        if let Type::Struct { fields, .. } = &peeled {
-                            if let Some((_, is_var, _)) =
-                                fields.iter().find(|(n, _, _)| n == member)
-                            {
-                                if !is_var {
-                                    self.errors.push(TypeError::ImmutabilityViolation {
-                                        message: format!(
-                                            "cannot take mutable borrow '&mut' of immutable 'val' struct field '{}'",
-                                            member
-                                        ),
-                                        span,
-                                    });
-                                }
-                            }
-                        }
+                    ExprKind::MemberAccess { member, .. } if !writable => {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot take mutable borrow '&mut' of field '{}': it is a 'val' field or is reached through a 'val' binding, 'val' field or shared '&' borrow",
+                                member
+                            ),
+                            span,
+                        });
                     }
                     _ => {}
                 }
-                let ty = self.infer_expr(inner);
                 Type::Reference {
                     mutable: true,
                     inner: Box::new(ty),
@@ -1039,62 +1026,40 @@ impl TypeChecker {
                 member,
                 is_safe_nav: false,
             } => {
-                let base_ty = self.infer_expr(base);
-                let base_mutable = match &base.kind {
-                    ExprKind::Ident(name) => match self.env.resolve(name, base.span) {
-                        Ok(sym) => match &sym.kind {
-                            SymbolKind::Variable { ty, mutability, .. } => {
-                                if let Type::Reference { mutable, .. } = ty {
-                                    *mutable
-                                } else {
-                                    *mutability == Mutability::Var
-                                }
-                            }
-                            _ => false,
-                        },
-                        _ => false,
-                    },
-                    _ => true,
-                };
-
-                let peeled_ty = self.resolve_nominal(peel_indirection(&base_ty));
-                if let Type::Struct { fields, .. } = &peeled_ty {
-                    if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
-                        if !is_var {
-                            self.errors.push(TypeError::ImmutabilityViolation {
-                                message: format!(
-                                    "cannot assign to immutable 'val' struct field '{}'",
-                                    member
-                                ),
-                                span,
-                            });
-                        } else if !base_mutable {
-                            self.errors.push(TypeError::ImmutabilityViolation {
-                                message: format!(
-                                    "cannot mutate field '{}' on immutable 'val' struct binding",
-                                    member
-                                ),
+                let (base_ty, base_writable) = self.infer_place(base);
+                let (field_ty, is_var) = self.member_type(&base_ty, member, false, target.span);
+                match is_var {
+                    Some(false) => {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot assign to immutable 'val' struct field '{}'",
+                                member
+                            ),
+                            span,
+                        });
+                        (field_ty, false)
+                    }
+                    Some(true) if !contents_writable(&base_ty, base_writable) => {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot assign to field '{}' of a value that is not mutable (a 'val' binding or field, or a shared '&' borrow)",
+                                member
+                            ),
+                            span,
+                        });
+                        (field_ty, false)
+                    }
+                    Some(true) => (field_ty, true),
+                    None => {
+                        if field_ty != Type::Error {
+                            self.errors.push(TypeError::UnknownField {
+                                target_type: base_ty.clone(),
+                                field_name: member.clone(),
                                 span,
                             });
                         }
-                        (f_ty.clone(), *is_var && base_mutable)
-                    } else {
-                        self.errors.push(TypeError::UnknownField {
-                            target_type: peeled_ty.clone(),
-                            field_name: member.clone(),
-                            span,
-                        });
                         (Type::Error, false)
                     }
-                } else if base_ty != Type::Error {
-                    self.errors.push(TypeError::UnknownField {
-                        target_type: base_ty.clone(),
-                        field_name: member.clone(),
-                        span,
-                    });
-                    (Type::Error, false)
-                } else {
-                    (Type::Error, false)
                 }
             }
             _ => {
@@ -1476,12 +1441,25 @@ impl TypeChecker {
         span: Span,
     ) -> Type {
         let target_ty = self.infer_expr(target);
+        self.member_type(&target_ty, member, is_safe_nav, span).0
+    }
 
-        if target_ty == Type::Error {
-            return Type::Error;
+    /// Types `member` accessed on a value of type `target_ty`, reporting unknown members.
+    ///
+    /// Returns the member's type and, when the member is a struct field, whether that field is
+    /// declared `var`.
+    fn member_type(
+        &mut self,
+        target_ty: &Type,
+        member: &str,
+        is_safe_nav: bool,
+        span: Span,
+    ) -> (Type, Option<bool>) {
+        if target_ty == &Type::Error {
+            return (Type::Error, None);
         }
 
-        let (base_ty, is_nullable) = match &target_ty {
+        let (base_ty, is_nullable) = match target_ty {
             Type::Nullable(inner) => {
                 if is_safe_nav {
                     (inner.as_ref(), true)
@@ -1491,29 +1469,26 @@ impl TypeChecker {
                         field_name: member.to_string(),
                         span,
                     });
-                    return Type::Error;
+                    return (Type::Error, None);
                 }
             }
             other => (other, false),
         };
+        let wrap = |ty: Type| if is_nullable { nullable(ty) } else { ty };
 
         let peeled_ty = self.resolve_nominal(peel_indirection(base_ty));
 
         match &peeled_ty {
             Type::Struct { fields, .. } => {
-                if let Some((_, _, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
-                    if is_nullable {
-                        Type::Nullable(Box::new(f_ty.clone()))
-                    } else {
-                        f_ty.clone()
-                    }
+                if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
+                    (wrap(f_ty.clone()), Some(*is_var))
                 } else {
                     self.errors.push(TypeError::UnknownField {
                         target_type: peeled_ty.clone(),
                         field_name: member.to_string(),
                         span,
                     });
-                    Type::Error
+                    (Type::Error, None)
                 }
             }
             Type::Enum { name, variants } => {
@@ -1523,17 +1498,14 @@ impl TypeChecker {
                         variants: variants.clone(),
                     };
                     if payloads.is_empty() {
-                        if is_nullable {
-                            Type::Nullable(Box::new(enum_ty))
-                        } else {
-                            enum_ty
-                        }
+                        (wrap(enum_ty), None)
                     } else {
-                        Type::Fn {
+                        let ctor = Type::Fn {
                             is_compose: false,
                             params: payloads.clone(),
                             ret: Box::new(enum_ty),
-                        }
+                        };
+                        (ctor, None)
                     }
                 } else {
                     self.errors.push(TypeError::UnknownField {
@@ -1541,7 +1513,7 @@ impl TypeChecker {
                         field_name: member.to_string(),
                         span,
                     });
-                    Type::Error
+                    (Type::Error, None)
                 }
             }
             other => {
@@ -1550,9 +1522,79 @@ impl TypeChecker {
                     field_name: member.to_string(),
                     span,
                 });
-                Type::Error
+                (Type::Error, None)
             }
         }
+    }
+
+    /// Infers the type of a place expression (a binding or a field path such as `o.user.name`)
+    /// together with whether the place itself may be written.
+    ///
+    /// A binding is writable when it is `var`. A field is writable when it is `var` and the value
+    /// holding it is writable, where a `&mut` hop grants and a `&` hop denies write access
+    /// regardless of the binding that holds the reference. Any other expression is a temporary,
+    /// which is writable unless it is reached through a shared reference.
+    fn infer_place(&mut self, expr: &Expr) -> (Type, bool) {
+        match &expr.kind {
+            ExprKind::Ident(name) => {
+                let ty = self.infer_expr(expr);
+                let writable = matches!(
+                    self.env.lookup(name).map(|sym| &sym.kind),
+                    Some(SymbolKind::Variable {
+                        mutability: Mutability::Var,
+                        ..
+                    })
+                );
+                (ty, writable)
+            }
+            ExprKind::MemberAccess {
+                target,
+                member,
+                is_safe_nav,
+            } => {
+                let (base_ty, base_writable) = self.infer_place(target);
+                let (ty, is_var) = self.member_type(&base_ty, member, *is_safe_nav, expr.span);
+                // An enum variant is a fresh temporary rather than a field.
+                let writable = match is_var {
+                    Some(is_var) => is_var && contents_writable(&base_ty, base_writable),
+                    None => true,
+                };
+                (ty, writable)
+            }
+            _ => (self.infer_expr(expr), true),
+        }
+    }
+}
+
+/// Whether the value behind a place of type `ty` may be mutated, given whether the place itself
+/// is writable. The first reference layer decides (`&mut` grants, `&` denies), and every further
+/// reference layer must also be `&mut`. `Heap<T>` owns its contents, so it is transparent.
+fn contents_writable(mut ty: &Type, place_writable: bool) -> bool {
+    let mut writable = place_writable;
+    let mut behind_reference = false;
+    loop {
+        match ty {
+            Type::Reference { mutable, inner } => {
+                writable = if behind_reference {
+                    writable && *mutable
+                } else {
+                    *mutable
+                };
+                behind_reference = true;
+                ty = inner;
+            }
+            Type::Heap(inner) => ty = inner,
+            Type::Nullable(inner) => ty = inner,
+            _ => return writable,
+        }
+    }
+}
+
+/// Makes `ty` nullable. `Error` stays `Error`.
+fn nullable(ty: Type) -> Type {
+    match ty {
+        Type::Error => ty,
+        other => Type::Nullable(Box::new(other)),
     }
 }
 

@@ -89,6 +89,27 @@ impl Type {
             }
         }
 
+        // &T <= &U if T <= U; &mut T <= &mut U only if T and U are mutually assignable,
+        // because a value of type U could be written back through the borrow.
+        if let (
+            Type::Reference {
+                mutable: self_mut,
+                inner: self_inner,
+            },
+            Type::Reference {
+                mutable: exp_mut,
+                inner: exp_inner,
+            },
+        ) = (self, expected)
+        {
+            if self_mut == exp_mut
+                && self_inner.is_assignable_to(exp_inner)
+                && (!*exp_mut || exp_inner.is_assignable_to(self_inner))
+            {
+                return true;
+            }
+        }
+
         // &mut T <= &T
         if let (
             Type::Reference {
