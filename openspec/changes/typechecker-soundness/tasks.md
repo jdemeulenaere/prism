@@ -32,7 +32,7 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 7. Discarded block values (D8)
 
-- [ ] 7.1 Add the `discard` flag for `Unit` function and closure bodies. Reuse the flag if the plain fix for finding 19a has already added one. Verify with tests for every scenario of "Discarded Block Values".
+- [x] 7.1 Add the `discard` flag for `Unit` function and closure bodies. Reuse the flag if the plain fix for finding 19a has already added one. Verify with tests for every scenario of "Discarded Block Values".
 
 ## 8. Structured ABI types (D4)
 

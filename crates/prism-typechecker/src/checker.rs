@@ -871,7 +871,7 @@ impl TypeChecker {
                     let block_ty =
                         self.with_origin(origin, |c| c.check_block(block, declared_ret.as_ref()));
                     if let Some(expected) = &declared_ret {
-                        // For block bodies returning Unit, trailing expressions are discarded.
+                        // A `Unit` block body discards its final value (see `check_block`).
                         if expected != &Type::Unit && !block_ty.is_assignable_to(expected) {
                             self.errors.push(TypeError::ReturnTypeMismatch {
                                 expected: expected.clone(),
@@ -1563,6 +1563,10 @@ impl TypeChecker {
         }
     }
 
+    /// Typechecks a block. With an expected type its final expression is checked against it,
+    /// except that a block expected to produce `Unit` (the body of a `Unit` function or of a
+    /// closure expected to return `Unit`) discards its final value: the expression is
+    /// typechecked as a statement and its type ignored (D8 of `typechecker-soundness`).
     fn check_block(&mut self, block: &BlockExpr, expected: Option<&Type>) -> Type {
         self.env.enter_scope();
         if block.stmts.is_empty() {
@@ -1581,8 +1585,9 @@ impl TypeChecker {
         // produces the block's value, so it keeps the expectation origin.
         let last_stmt = &block.stmts[num_stmts - 1];
         let result_ty = match expected {
-            Some(Type::Unit) if matches!(last_stmt.kind, ExprKind::When { .. }) => {
-                self.with_origin(Origin::Value, |c| c.infer_statement(last_stmt))
+            Some(Type::Unit) => {
+                self.with_origin(Origin::Value, |c| c.infer_statement(last_stmt));
+                Type::Unit
             }
             Some(exp) => self.check_expr(last_stmt, exp),
             None => self.with_origin(Origin::Value, |c| c.infer_expr(last_stmt)),

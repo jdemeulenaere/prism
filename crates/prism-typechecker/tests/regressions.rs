@@ -726,3 +726,31 @@ fn same_module_imported_twice_is_not_ambiguous() {
         &[],
     );
 }
+
+// Discarded block values (typechecker-soundness D8).
+
+#[test]
+fn unit_function_ending_in_a_non_unit_call() {
+    assert_ok("fun g(): Int = 1\nfun f() {\n    g()\n}\n");
+    assert_ok("fun g(): Int = 1\nfun f(): Unit {\n    g()\n}\n");
+}
+
+#[test]
+fn unit_closure_ending_in_a_non_unit_expression() {
+    assert_ok("fun run(f: (Int) -> Unit) { }\nfun g() {\n    run { x -> x + 1 }\n}\n");
+    assert_ok("fun later(f: () -> Unit) { }\nfun g() {\n    later { 42 }\n}\n");
+}
+
+#[test]
+fn errors_in_a_discarded_expression_still_reported() {
+    assert_codes("fun f() {\n    undefinedThing\n}\n", &["E4001"]);
+    assert_codes(
+        "fun run(f: (Int) -> Unit) { }\nfun g() {\n    run { x -> x + \"s\" }\n}\n",
+        &["E4002"],
+    );
+}
+
+#[test]
+fn expression_body_of_a_unit_function_still_checked() {
+    assert_codes("fun g(): Int = 1\nfun f(): Unit = g()\n", &["E4005"]);
+}
