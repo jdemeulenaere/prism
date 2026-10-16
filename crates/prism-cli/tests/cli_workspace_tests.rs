@@ -535,3 +535,91 @@ fn test_cli_binary_unannotated_private_block_function_success() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+fn test_cli_binary_field_access_through_annotated_params_success() {
+    let temp = create_temp_dir("annotated_field_access");
+    let file = temp.join("users.prism");
+    fs::write(
+        &file,
+        "struct User {\n    val id: Int\n    var name: String\n}\nfun byValue(user: User): String = user.name\nfun byRef(user: &User): String = user.name\nfun byMut(user: &mut User, n: String): Unit {\n    user.name = n\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_field_access_on_imported_struct_success() {
+    let temp = create_temp_dir("imported_struct_field_access");
+    let pkg_dir = temp.join("models");
+    fs::create_dir_all(&pkg_dir).unwrap();
+
+    fs::write(
+        pkg_dir.join("user.prism"),
+        "package models\npublic struct User {\n    val id: Int\n    var name: String\n}\n",
+    )
+    .unwrap();
+
+    let service = pkg_dir.join("service.prism");
+    fs::write(
+        &service,
+        "package models\nimport user\npublic fun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\npublic fun nameOf(user: &User): String = user.name\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&service)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ Check passed"));
+    assert!(stdout.contains("Total units: 2"));
+
+    fs::remove_dir_all(&temp).ok();
+}
+
+#[test]
+fn test_cli_binary_missing_return_type_e4011() {
+    let temp = create_temp_dir("missing_return_e4011");
+    let file = temp.join("api.prism");
+    // Block-bodied exported function: passes ABI extraction but omits its return type
+    fs::write(&file, "public fun greet(name: String) {\n}\n").unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr
+        .contains("error[E4011]: exported function 'greet' must declare an explicit return type"));
+    assert!(stderr.contains("help: add an explicit return type such as ': Unit'"));
+    assert!(!stderr.contains("E4004"));
+    assert!(!stderr.contains("verify parameter counts"));
+
+    fs::remove_dir_all(&temp).ok();
+}

@@ -264,6 +264,21 @@ impl ScopeStack {
         None
     }
 
+    /// Looks up a nominal type name (struct or enum declaration) from the innermost scope outwards,
+    /// skipping value symbols (variables, functions) that share the name.
+    pub fn lookup_type(&self, name: &str) -> Option<&Symbol> {
+        self.scopes
+            .iter()
+            .rev()
+            .filter_map(|scope| scope.get(name))
+            .find(|symbol| {
+                matches!(
+                    symbol.kind,
+                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. }
+                )
+            })
+    }
+
     /// Resolves an identifier starting from the innermost scope outwards.
     ///
     /// Returns `Err(TypeError::UnresolvedSymbol)` (`E4001`) if not found in any scope level.
@@ -343,6 +358,34 @@ mod tests {
         // Resolves to outer
         let resolved_outer = env.resolve("x", Span::dummy()).unwrap();
         assert_eq!(resolved_outer.ty(), Type::Int);
+    }
+
+    #[test]
+    fn test_lookup_type_skips_shadowing_value_symbols() {
+        let mut env = ScopeStack::new();
+        let user = Symbol::struct_decl(
+            "User",
+            vec![("name".to_string(), true, Type::String)],
+            Visibility::Private,
+            None,
+            Span::dummy(),
+        );
+        env.define(user).unwrap();
+
+        env.enter_scope();
+        env.define(Symbol::variable(
+            "User",
+            Type::Int,
+            Mutability::Val,
+            Span::dummy(),
+        ))
+        .unwrap();
+
+        // Value lookup finds the shadowing variable; type lookup still finds the struct.
+        assert_eq!(env.lookup("User").unwrap().ty(), Type::Int);
+        let ty_sym = env.lookup_type("User").unwrap();
+        assert!(matches!(ty_sym.kind, SymbolKind::Struct { .. }));
+        assert!(env.lookup_type("Missing").is_none());
     }
 
     #[test]

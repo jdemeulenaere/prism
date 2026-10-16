@@ -228,6 +228,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::InvalidComposeContext { .. } => {
             out.push_str("   = help: add 'compose' modifier to the caller or invoke within a composable function/closure\n");
         }
+        TypeError::MissingReturnType { .. } => {
+            out.push_str("   = help: add an explicit return type such as ': Unit'; public and package functions must declare return types for ABI extraction\n");
+        }
         TypeError::NonExhaustiveWhen { .. } => {
             out.push_str(
                 "   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n",

@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::Span;
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4010`).
+/// Semantic and type checking error categories (`E4001` - `E4011`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -53,6 +53,9 @@ pub enum TypeError {
 
     /// E4010: Declaring a duplicate symbol within the identical lexical scope.
     DuplicateSymbol { name: String, span: Span },
+
+    /// E4011: A `public` or `package` function omits its explicit return type annotation.
+    MissingReturnType { function_name: String, span: Span },
 }
 
 impl TypeError {
@@ -69,6 +72,7 @@ impl TypeError {
             TypeError::InvalidComposeContext { .. } => "E4008",
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
+            TypeError::MissingReturnType { .. } => "E4011",
         }
     }
 
@@ -85,6 +89,7 @@ impl TypeError {
             TypeError::InvalidComposeContext { span, .. } => *span,
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
+            TypeError::MissingReturnType { span, .. } => *span,
         }
     }
 
@@ -136,6 +141,12 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),
             TypeError::DuplicateSymbol { name, .. } => {
                 format!("duplicate symbol declaration '{}' in the same scope", name)
+            }
+            TypeError::MissingReturnType { function_name, .. } => {
+                format!(
+                    "exported function '{}' must declare an explicit return type",
+                    function_name
+                )
             }
         }
     }

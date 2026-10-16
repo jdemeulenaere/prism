@@ -86,6 +86,10 @@ Function calls and closures MUST validate argument count, argument types, defaul
 - **WHEN** a function or closure declared with `compose fun` invokes another `compose fun`
 - **THEN** the call expression typechecks successfully
 
+#### Scenario: Exported function missing return type rejected with dedicated code
+- **WHEN** a `public` or `package` function declaration omits its return type annotation (e.g. `public fun greet(name: String) { }`)
+- **THEN** the type checker emits a missing return type error (`E4011`) naming the function, and does NOT report it as a call signature mismatch (`E4004`)
+
 ### Requirement: Control Flow Type Unification and Return Validation
 Control flow expressions (`if`/`else`, `when`), blocks, and function return statements MUST satisfy type unification and exhaustiveness rules.
 
@@ -127,6 +131,30 @@ The type checker MUST validate struct instantiations, field access expressions, 
 #### Scenario: Accessing unknown field rejected
 - **WHEN** accessing a field not declared on the target struct
 - **THEN** the type checker emits an unknown field error (`E4006`)
+
+#### Scenario: Field access through an annotated struct type
+- **WHEN** a value's type comes from an annotation naming a declared struct (a parameter `user: User`, a local `val p: Point = ...`, or a struct field `val user: User`) and a field of it is read
+- **THEN** the field resolves against the declared struct and the access has the field's declared type, including chained access such as `order.user.name`
+
+#### Scenario: Field access through a borrowed reference
+- **WHEN** a parameter is declared `user: &User` or `user: &mut User` and `user.name` is read
+- **THEN** the reference is peeled and `user.name` has the declared field type of `User`
+
+#### Scenario: Field assignment through a mutable borrow
+- **WHEN** a parameter is declared `user: &mut User` and the body assigns `user.name = n` to a `var` field with a compatible value
+- **THEN** the assignment typechecks successfully, while assigning to a `val` field through the same borrow emits `E4003`
+
+#### Scenario: Safe navigation on an annotated nullable struct
+- **WHEN** a value is declared with type `User?` and `user?.name` is accessed
+- **THEN** the access resolves against `User` and evaluates to the field type made nullable (`String?`)
+
+#### Scenario: Field access on a struct imported from another file
+- **WHEN** a file imports a module exporting `public struct User` and declares a parameter `user: User`
+- **THEN** `user.name` resolves against the imported struct's ABI field list and typechecks with the exported field type
+
+#### Scenario: Unknown nominal type name stays opaque
+- **WHEN** an annotation names a type that is neither a primitive nor a declared or imported struct or enum
+- **THEN** the annotation is accepted as an opaque nominal type, and accessing a member on a value of that type emits `E4006`
 
 ### Requirement: Cross-Module Imported Symbol and Visibility Validation
 Phase 2 body checking MUST typecheck expressions against symbols exported in Phase 1 `FileAbi` from imported modules and enforce visibility boundaries.

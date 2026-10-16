@@ -84,6 +84,22 @@ impl TypeChecker {
         }
     }
 
+    /// Resolves a nominal type reference lowered from an annotation or ABI type string
+    /// (a field-less `Type::Struct { name }`) to the struct or enum declared under that name.
+    ///
+    /// Types that already carry members, and names with no struct/enum declaration in scope
+    /// (opaque or generic type names), are returned unchanged.
+    pub fn resolve_nominal(&self, ty: &Type) -> Type {
+        if let Type::Struct { name, fields } = ty {
+            if fields.is_empty() {
+                if let Some(sym) = self.env.lookup_type(name) {
+                    return sym.ty();
+                }
+            }
+        }
+        ty.clone()
+    }
+
     /// Ingests exported symbols from an imported file's Phase 1 FileAbi.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
         for sym in &abi.symbols {
@@ -369,11 +385,8 @@ impl TypeChecker {
         let ret = if let Some(annot) = &f.return_type {
             Type::from_ast(annot)
         } else if f.visibility != Visibility::Private {
-            self.errors.push(TypeError::CallSignatureMismatch {
-                message: format!(
-                    "exported function '{}' must declare an explicit return type",
-                    f.name
-                ),
+            self.errors.push(TypeError::MissingReturnType {
+                function_name: f.name.clone(),
                 span: f.span,
             });
             Type::Error
@@ -973,8 +986,8 @@ impl TypeChecker {
                         ..
                     } => {
                         let base_ty = self.infer_expr(base);
-                        let peeled = peel_indirection(&base_ty);
-                        if let Type::Struct { fields, .. } = peeled {
+                        let peeled = self.resolve_nominal(peel_indirection(&base_ty));
+                        if let Type::Struct { fields, .. } = &peeled {
                             if let Some((_, is_var, _)) =
                                 fields.iter().find(|(n, _, _)| n == member)
                             {
@@ -1044,8 +1057,8 @@ impl TypeChecker {
                     _ => true,
                 };
 
-                let peeled_ty = peel_indirection(&base_ty);
-                if let Type::Struct { fields, .. } = peeled_ty {
+                let peeled_ty = self.resolve_nominal(peel_indirection(&base_ty));
+                if let Type::Struct { fields, .. } = &peeled_ty {
                     if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
                         if !is_var {
                             self.errors.push(TypeError::ImmutabilityViolation {
@@ -1189,20 +1202,8 @@ impl TypeChecker {
         let is_exhaustive = if has_else {
             true
         } else if let Some(s_ty) = &subject_ty {
-            let peeled = peel_indirection(s_ty);
-            let enum_variants = match peeled {
-                Type::Enum { variants, .. } => Some(variants.clone()),
-                Type::Struct { name, .. } => {
-                    if let Some(sym) = self.env.lookup(name) {
-                        if let SymbolKind::Enum { variants, .. } = &sym.kind {
-                            Some(variants.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
+            let enum_variants = match self.resolve_nominal(peel_indirection(s_ty)) {
+                Type::Enum { variants, .. } => Some(variants),
                 _ => None,
             };
 
@@ -1496,9 +1497,9 @@ impl TypeChecker {
             other => (other, false),
         };
 
-        let peeled_ty = peel_indirection(base_ty);
+        let peeled_ty = self.resolve_nominal(peel_indirection(base_ty));
 
-        match peeled_ty {
+        match &peeled_ty {
             Type::Struct { fields, .. } => {
                 if let Some((_, _, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
                     if is_nullable {
@@ -2626,5 +2627,159 @@ mod tests {
         });
         checker.infer_expr(&bad_index);
         assert!(checker.errors.iter().any(|e| e.code() == "E4002"));
+    }
+
+    /// Parses and fully checks a Prism source file, returning the accumulated errors.
+    fn check_source(src: &str) -> Vec<TypeError> {
+        let file = prism_parser::parse_source(src).expect("source must parse");
+        let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()));
+        checker.check_module(&file);
+        checker.errors
+    }
+
+    fn error_codes(errors: &[TypeError]) -> Vec<&'static str> {
+        errors.iter().map(|e| e.code()).collect()
+    }
+
+    const USER_STRUCT: &str = "struct User {\n    val id: Int\n    var name: String\n}\n";
+
+    #[test]
+    fn test_field_access_on_annotated_param_by_value() {
+        let src = format!(
+            "{}fun byValue(user: User): String = user.name\n",
+            USER_STRUCT
+        );
+        assert!(check_source(&src).is_empty());
+    }
+
+    #[test]
+    fn test_field_access_through_shared_reference() {
+        let src = format!(
+            "{}fun byRef(user: &User): String = user.name\nfun idOf(user: &User): Int = user.id\n",
+            USER_STRUCT
+        );
+        assert!(check_source(&src).is_empty());
+    }
+
+    #[test]
+    fn test_field_assignment_through_mutable_reference() {
+        let ok = format!(
+            "{}fun byMut(user: &mut User, n: String): Unit {{\n    user.name = n\n}}\n",
+            USER_STRUCT
+        );
+        assert!(check_source(&ok).is_empty());
+
+        // Assigning to a `val` field through `&mut` is still an immutability violation.
+        let val_field = format!(
+            "{}fun setId(user: &mut User): Unit {{\n    user.id = 1\n}}\n",
+            USER_STRUCT
+        );
+        assert_eq!(error_codes(&check_source(&val_field)), vec!["E4003"]);
+
+        // Mutable borrow of a `val` field resolves the struct and is rejected.
+        let borrow_val = format!(
+            "{}fun borrowId(user: &mut User): Unit {{\n    val r = &mut user.id\n}}\n",
+            USER_STRUCT
+        );
+        assert_eq!(error_codes(&check_source(&borrow_val)), vec!["E4003"]);
+
+        // Assigning a mismatched value type to a resolved field is rejected.
+        let mismatch = format!(
+            "{}fun setName(user: &mut User): Unit {{\n    user.name = 42\n}}\n",
+            USER_STRUCT
+        );
+        assert_eq!(error_codes(&check_source(&mismatch)), vec!["E4002"]);
+    }
+
+    #[test]
+    fn test_safe_navigation_on_annotated_nullable_struct() {
+        let ok = format!(
+            "{}fun nameOf(user: User?): String? = user?.name\n",
+            USER_STRUCT
+        );
+        assert!(check_source(&ok).is_empty());
+
+        // `user?.name` is `String?`, so it is not assignable to `String`.
+        let not_null = format!(
+            "{}fun nameOf(user: User?): String = user?.name\n",
+            USER_STRUCT
+        );
+        assert_eq!(error_codes(&check_source(&not_null)), vec!["E4002"]);
+    }
+
+    #[test]
+    fn test_field_access_on_annotated_local_val() {
+        let src = "struct Point {\n    val x: Int\n    val y: Int\n}\nfun main(): Int {\n    val p: Point = Point(1, 2)\n    return p.x + p.y\n}\n";
+        assert!(check_source(src).is_empty());
+    }
+
+    #[test]
+    fn test_chained_field_access_through_struct_typed_field() {
+        // `Order` references `User` before it is declared (forward reference in Pass 1).
+        let src = format!(
+            "struct Order {{\n    val user: User\n}}\n{}fun buyer(order: &Order): String = order.user.name\n",
+            USER_STRUCT
+        );
+        assert!(check_source(&src).is_empty());
+    }
+
+    #[test]
+    fn test_enum_typed_param_when_exhaustiveness() {
+        let enum_decl = "enum Status {\n    Active,\n    Inactive\n}\n";
+        let exhaustive = format!(
+            "{}fun describe(s: Status): Int = when (s) {{\n    Active -> 1,\n    Inactive -> 0\n}}\n",
+            enum_decl
+        );
+        assert!(check_source(&exhaustive).is_empty());
+
+        let partial = format!(
+            "{}fun describe(s: Status): Int = when (s) {{\n    Active -> 1\n}}\n",
+            enum_decl
+        );
+        assert_eq!(error_codes(&check_source(&partial)), vec!["E4009"]);
+    }
+
+    #[test]
+    fn test_unknown_nominal_type_stays_opaque() {
+        // The annotation itself is accepted; member access on the opaque type is E4006.
+        assert!(check_source("fun id(x: Missing): Missing = x\n").is_empty());
+        assert_eq!(
+            error_codes(&check_source("fun size(x: Missing): Int = x.size\n")),
+            vec!["E4006"]
+        );
+
+        // Unknown fields on a resolved struct are still rejected.
+        let src = format!("{}fun bad(user: User): Int = user.age\n", USER_STRUCT);
+        assert_eq!(error_codes(&check_source(&src)), vec!["E4006"]);
+    }
+
+    #[test]
+    fn test_field_access_on_struct_imported_from_abi() {
+        let models = prism_parser::parse_source(
+            "package demo.models\npublic struct Address {\n    val city: String\n}\npublic struct User {\n    var name: String\n    val email: String?\n    val home: Address\n}\n",
+        )
+        .expect("models must parse");
+        let abi = FileAbi::extract(&models).expect("models ABI must extract");
+
+        let app = prism_parser::parse_source(
+            "package demo.app\nfun nameOf(user: &User): String = user.name\nfun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\nfun emailOf(user: &User): String? = user.email\nfun cityOf(user: User): String = user.home.city\n",
+        )
+        .expect("app must parse");
+        let mut checker = TypeChecker::new(Some("demo.app".to_string()));
+        checker.ingest_file_abi(&abi);
+        checker.check_module(&app);
+        assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+    }
+
+    #[test]
+    fn test_exported_function_missing_return_type_e4011() {
+        for src in [
+            "public fun greet(name: String) {\n}\n",
+            "package fun helper(x: Int) {\n}\n",
+        ] {
+            assert_eq!(error_codes(&check_source(src)), vec!["E4011"], "{}", src);
+        }
+        // Private functions may still omit the return type.
+        assert!(check_source("fun local(x: Int) {\n}\n").is_empty());
     }
 }
