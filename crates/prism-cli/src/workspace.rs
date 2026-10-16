@@ -183,10 +183,10 @@ pub fn check_path(path: &Path) -> Result<CheckReport, WorkspaceError> {
     } else if path.is_dir() {
         check_directory(path)
     } else {
-        Err(WorkspaceError::InvalidTarget(format!(
-            "Path '{}' does not exist or is not accessible",
-            path.display()
-        )))
+        Err(WorkspaceError::Io {
+            path: path.to_path_buf(),
+            message: "Path does not exist or is not accessible".to_string(),
+        })
     }
 }
 

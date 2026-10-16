@@ -742,3 +742,22 @@ fn test_cli_binary_member_of_unimported_type_e4014() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+fn test_cli_binary_nonexistent_target_e1000() {
+    let temp = create_temp_dir("missing_target_e1000");
+
+    for missing in [temp.join("nowhere.prism"), temp.join("nowhere")] {
+        let output = Command::new(prism_bin())
+            .arg("check")
+            .arg(&missing)
+            .output()
+            .expect("failed to execute prism CLI");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[E1000]"), "stderr: {}", stderr);
+    }
+
+    fs::remove_dir_all(&temp).ok();
+}
