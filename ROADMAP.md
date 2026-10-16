@@ -57,6 +57,11 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 - [ ] Reject recursive struct and enum layouts that lack `Heap<T>` indirection (deferred by `fix-cli-workspace-audit`).
 - [ ] Parser error recovery: report several syntax errors per file instead of stopping at the first, needed for the LSP (deferred by `lexer-parser`, and again by `harden-parser-grammar` until the AST has error nodes).
 - [ ] Traits or interfaces for polymorphism and dynamic dispatch; not designed yet (deferred by `type-checker-core`).
+- [ ] Writing through a `&mut` primitive (`*r = v`, or assignment through a `&mut` binding): `fun bump(r: &mut Int)` can receive the borrow but not write through it. Operators read through references; writes need a design (deferred by `typechecker-soundness`, D1).
+- [ ] `Copy` rules: whether a value may be copied out of a borrow where a `T` is expected (`g(a)` with `a: &Int` is rejected today), for the borrow checker to decide (deferred by `typechecker-soundness`, D1).
+- [ ] Decide whether a top-level declaration may shadow an imported symbol instead of reporting `E4010` (follow-up from `typechecker-soundness`, D7).
+- [ ] Report `E4014`, with the import to add, when an annotation names a type known only through an import's signature; such a name is currently an opaque type, so its first member access reports `E4006` (follow-up from `typechecker-soundness`, D9).
+- [ ] A warnings channel for diagnostics that are not errors, such as `?:` on a non-nullable left side; Prism reports only errors today (non-goal of `typechecker-soundness`).
 
 ---
 

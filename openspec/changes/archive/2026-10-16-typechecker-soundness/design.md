@@ -92,7 +92,7 @@ A new `TypeError::ArgumentTypeMismatch { expected, found, span }` maps to `E4004
 `prism-abi` gains `AbiType`:
 - `Prim(PrimKind)`
 - `Unit`
-- `Nominal { module: Option<String>, name, args: Vec<AbiType> }`
+- `Nominal { kind, module, name, args }` for a bound name, and `Unbound { name, args }` for an unknown or ambiguous one. *As implemented:* the bound form also records `kind` (struct or enum), because D9 needs an importer to type a value whose defining module it does not import, without loading that module.
 - `Nullable(Box<AbiType>)`
 - `Ref { mutable, inner }`
 - `Heap(Box<AbiType>)`
@@ -199,4 +199,5 @@ The plain fix for finding 19a (a statement-position `when` without `else`) needs
 
 ## Open Questions
 
-- **How `E4012` should list candidate modules** (import path, or package plus file). Wording only; it does not affect codes or behavior.
+- **How `E4012` should list candidate modules.** *Resolved during apply:* as root-anchored import paths (`'/a/lib', '/b/lib'`), the form the user writes in `import`.
+- **An annotation naming a type known only through an import's signature** (`x: Item` without `import /model/types`). D9 does not cover this. *Conservative choice during apply:* the name stays unresolved, so it lowers to an opaque type as before, and a member access on it reports `E4006` rather than `E4014`. Reporting `E4014` with the import hint there too is a follow-up in `ROADMAP.md`.

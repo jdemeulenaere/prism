@@ -48,7 +48,7 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 10. Integration
 
-- [ ] 10.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), and `openspec validate --all --strict`. Verify that all pass.
+- [x] 10.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), and `openspec validate --all --strict`. Verify that all pass.
 
 ## Workflow follow-up
 
