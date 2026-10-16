@@ -1,5 +1,6 @@
 //! Semantic type representation and subtyping rules for Prism.
 
+use prism_abi::{AbiType, NominalKind, PrimKind};
 use std::fmt;
 
 /// Module path of the compiler's built-in nominal types (such as `Range`).
@@ -282,59 +283,44 @@ impl Type {
         }
     }
 
-    /// Parses a canonical type string into a semantic `Type`.
-    pub fn parse_str(s: &str) -> Self {
-        let s = s.trim();
-        if let Some(stripped) = s.strip_suffix('?') {
-            let inner = Self::parse_str(stripped);
-            return Type::Nullable(Box::new(inner));
-        }
-        if let Some(stripped) = s.strip_prefix("&mut ") {
-            let inner = Self::parse_str(stripped);
-            return Type::Reference {
-                mutable: true,
-                inner: Box::new(inner),
-            };
-        }
-        if let Some(stripped) = s.strip_prefix('&') {
-            let inner = Self::parse_str(stripped);
-            return Type::Reference {
-                mutable: false,
-                inner: Box::new(inner),
-            };
-        }
-        if s.starts_with("Heap<") && s.ends_with('>') {
-            let inner = Self::parse_str(&s[5..s.len() - 1]);
-            return Type::Heap(Box::new(inner));
-        }
-        if s.starts_with("compose (") || s.starts_with('(') {
-            let is_compose = s.starts_with("compose ");
-            let s_no_comp = if is_compose { &s[8..] } else { s };
-            if let Some(arrow_idx) = s_no_comp.find(") -> ") {
-                let params_str = &s_no_comp[1..arrow_idx];
-                let ret_str = &s_no_comp[arrow_idx + 5..];
-                let params = if params_str.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    params_str.split(',').map(Self::parse_str).collect()
-                };
-                let ret = Self::parse_str(ret_str);
-                return Type::Fn {
-                    is_compose,
-                    params,
-                    ret: Box::new(ret),
-                };
+    /// Converts a type recorded in an imported file's ABI. Phase 1 has already bound each
+    /// nominal name to its defining module; an unbound name stays opaque.
+    pub fn from_abi(ty: &AbiType) -> Self {
+        match ty {
+            AbiType::Prim(prim) => match prim {
+                PrimKind::Int => Type::Int,
+                PrimKind::Float => Type::Float,
+                PrimKind::Bool => Type::Bool,
+                PrimKind::Char => Type::Char,
+                PrimKind::String => Type::String,
+                PrimKind::Nothing => Type::Nothing,
+            },
+            AbiType::Unit => Type::Unit,
+            AbiType::Nominal {
+                kind, module, name, ..
+            } => {
+                let id = NominalId::new(module.clone(), name.clone());
+                match kind {
+                    NominalKind::Struct => Type::Struct(id),
+                    NominalKind::Enum => Type::Enum(id),
+                }
             }
-        }
-        match s {
-            "Int" => Type::Int,
-            "Float" | "Double" => Type::Float,
-            "Bool" => Type::Bool,
-            "Char" => Type::Char,
-            "String" => Type::String,
-            "Unit" | "()" => Type::Unit,
-            "Nothing" => Type::Nothing,
-            other => Type::Opaque(other.to_string()),
+            AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
+            AbiType::Nullable(inner) => Type::Nullable(Box::new(Type::from_abi(inner))),
+            AbiType::Ref { mutable, inner } => Type::Reference {
+                mutable: *mutable,
+                inner: Box::new(Type::from_abi(inner)),
+            },
+            AbiType::Heap(inner) => Type::Heap(Box::new(Type::from_abi(inner))),
+            AbiType::Fn {
+                compose,
+                params,
+                ret,
+            } => Type::Fn {
+                is_compose: *compose,
+                params: params.iter().map(Type::from_abi).collect(),
+                ret: Box::new(Type::from_abi(ret)),
+            },
         }
     }
 }

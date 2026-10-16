@@ -152,7 +152,7 @@ fn run_abi(path: &str) {
         .as_ref()
         .map(|p| format!("{}/{}", p.package_string().replace('.', "/"), stem))
         .unwrap_or_else(|| stem.to_string());
-    let abi = match FileAbi::extract(&ast, &module) {
+    let abi = match FileAbi::extract(&ast, &module, &prism_abi::no_imports) {
         Ok(abi) => abi,
         Err(err) => {
             eprintln!("ABI Error: {}", err);
@@ -217,6 +217,7 @@ fn run_abi(path: &str) {
                         if flds.is_empty() {
                             v.clone()
                         } else {
+                            let flds: Vec<String> = flds.iter().map(ToString::to_string).collect();
                             format!("{}({})", v, flds.join(", "))
                         }
                     })

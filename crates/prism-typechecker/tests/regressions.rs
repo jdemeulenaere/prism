@@ -1,7 +1,8 @@
 //! Regression tests for typechecker bug fixes, driven by real Prism source through the parser,
 //! the ABI extractor and the checker.
 
-use prism_abi::FileAbi;
+use prism_abi::{FileAbi, NominalKind};
+use prism_ast::{Declaration, Visibility};
 use prism_typechecker::{TypeChecker, TypeError};
 
 /// Parses and checks a single source file, returning its diagnostics.
@@ -27,11 +28,49 @@ fn check_with_imports(deps: &[&str], app: &str) -> Vec<TypeError> {
 /// Checks `app` (module `app`) after ingesting the ABI of each `(module path, source)` in
 /// `deps`, as `prism check` does for direct imports.
 fn check_with_modules(deps: &[(&str, &str)], app: &str) -> Vec<TypeError> {
+    let imports: Vec<&str> = deps.iter().map(|(module, _)| *module).collect();
+    check_workspace(deps, &imports, app)
+}
+
+/// Checks `app` (module `app`) in a workspace of `(module path, source)` modules, of which `app`
+/// directly imports those in `app_imports`. Each module's ABI binds type names as if it imported
+/// every other module, as Phase 1 does for its direct imports.
+fn check_workspace(modules: &[(&str, &str)], app_imports: &[&str], app: &str) -> Vec<TypeError> {
+    let parsed: Vec<(&str, prism_ast::SourceFile)> = modules
+        .iter()
+        .map(|(module, src)| {
+            (
+                *module,
+                prism_parser::parse_source(src).expect("module must parse"),
+            )
+        })
+        .collect();
+    let exported = |file: &prism_ast::SourceFile, name: &str| {
+        file.declarations.iter().find_map(|decl| match decl {
+            Declaration::Struct(s) if s.name == name && s.visibility != Visibility::Private => {
+                Some(NominalKind::Struct)
+            }
+            Declaration::Enum(e) if e.name == name && e.visibility != Visibility::Private => {
+                Some(NominalKind::Enum)
+            }
+            _ => None,
+        })
+    };
+
     let file = prism_parser::parse_source(app).expect("app must parse");
     let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");
-    for (module, dep) in deps {
-        let dep_file = prism_parser::parse_source(dep).expect("dependency must parse");
-        checker.ingest_file_abi(&FileAbi::extract(&dep_file, module).expect("ABI must extract"));
+    for (module, dep_file) in &parsed {
+        if !app_imports.contains(module) {
+            continue;
+        }
+        let bind = |name: &str| {
+            parsed
+                .iter()
+                .filter(|(other, _)| other != module)
+                .find_map(|(other, f)| exported(f, name).map(|kind| (kind, other.to_string())))
+        };
+        checker
+            .ingest_file_abi(&FileAbi::extract(dep_file, module, &bind).expect("ABI must extract"));
     }
     checker.check_module(&file);
     checker.errors
@@ -753,4 +792,50 @@ fn errors_in_a_discarded_expression_still_reported() {
 #[test]
 fn expression_body_of_a_unit_function_still_checked() {
     assert_codes("fun g(): Int = 1\nfun f(): Unit = g()\n", &["E4005"]);
+}
+
+// Imported signatures keep their declared types (typechecker-soundness D4).
+
+const HIGHER_ORDER_LIB: (&str, &str) = (
+    "lib/h",
+    "package lib\npublic fun hof(f: ((Int) -> Int) -> Int): Int = f { k -> k + 1 }\npublic fun pick(f: (Int) -> Int?): Int = 1\n",
+);
+
+#[test]
+fn higher_order_parameter_type_across_files() {
+    assert_import_codes(
+        &[HIGHER_ORDER_LIB],
+        "package app\nfun g(): Int = hof { k -> k(1) }\n",
+        &[],
+    );
+    // `k` is a function, so it cannot be used as an `Int`.
+    assert_import_codes(
+        &[HIGHER_ORDER_LIB],
+        "package app\nfun g(): Int = hof { k -> k + 1 }\n",
+        &["E4002"],
+    );
+}
+
+#[test]
+fn function_type_returning_a_nullable_across_files() {
+    assert_import_codes(
+        &[HIGHER_ORDER_LIB],
+        "package app\nfun p(): Int = pick { x -> null }\n",
+        &[],
+    );
+}
+
+#[test]
+fn imported_signature_names_resolve_in_the_exporter() {
+    // `svc` binds `Item` to `model/types`; the importer imports both, so the types match.
+    let model = (
+        "model/types",
+        "package model\npublic struct Item {\n    val price: Int\n}\n",
+    );
+    let svc = ("a/svc", "package a\npublic fun first(): Item = Item(1)\n");
+    assert_import_codes(
+        &[svc, model],
+        "package app\nfun g(): Int = first().price\nfun h(i: Item): Int = i.price\nfun k(): Int = h(first())\n",
+        &[],
+    );
 }

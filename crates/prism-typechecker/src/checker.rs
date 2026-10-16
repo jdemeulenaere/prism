@@ -351,56 +351,32 @@ impl TypeChecker {
 
     /// Ingests exported symbols from an imported file's Phase 1 FileAbi.
     ///
-    /// Each exported struct and enum is identified by the exporter's module path. A type name in
-    /// an exported signature binds to the exporter's own exported types first, then to the types
-    /// already in scope.
+    /// Each exported struct and enum is identified by the exporter's module path. Types in the
+    /// exported signatures are already bound to their defining modules by Phase 1, so they are
+    /// converted as they are.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
-        // Declare the exporter's types first, so its signatures can refer to them in any order.
-        let mut exported_types: HashMap<String, Type> = HashMap::new();
         for sym in &abi.symbols {
-            let (symbol, ty) = match sym {
+            let symbol = match sym {
                 ExportedSymbol::Struct {
                     visibility, name, ..
-                } => {
-                    let id = NominalId::new(abi.module.clone(), name.clone());
-                    (
-                        Symbol::struct_decl(
-                            id.clone(),
-                            *visibility,
-                            abi.package.clone(),
-                            Span::dummy(),
-                        ),
-                        Type::Struct(id),
-                    )
-                }
+                } => Symbol::struct_decl(
+                    NominalId::new(abi.module.clone(), name.clone()),
+                    *visibility,
+                    abi.package.clone(),
+                    Span::dummy(),
+                ),
                 ExportedSymbol::Enum {
                     visibility, name, ..
-                } => {
-                    let id = NominalId::new(abi.module.clone(), name.clone());
-                    (
-                        Symbol::enum_decl(
-                            id.clone(),
-                            *visibility,
-                            abi.package.clone(),
-                            Span::dummy(),
-                        ),
-                        Type::Enum(id),
-                    )
-                }
+                } => Symbol::enum_decl(
+                    NominalId::new(abi.module.clone(), name.clone()),
+                    *visibility,
+                    abi.package.clone(),
+                    Span::dummy(),
+                ),
                 _ => continue,
             };
-            exported_types.insert(symbol.name.clone(), ty);
             self.env.define_import(&abi.module, symbol);
         }
-        let lower = |checker: &Self, ty_str: &str| {
-            Type::parse_str(ty_str).bind_names(&|name| {
-                exported_types
-                    .get(name)
-                    .cloned()
-                    .or_else(|| checker.bind_type_name(name))
-            })
-        };
-
         for sym in &abi.symbols {
             match sym {
                 ExportedSymbol::Function {
@@ -413,14 +389,14 @@ impl TypeChecker {
                 } => {
                     let param_types = params
                         .iter()
-                        .map(|(_, ty_str, _)| lower(self, ty_str))
+                        .map(|(_, ty_str, _)| Type::from_abi(ty_str))
                         .collect();
                     let param_names = params.iter().map(|(n, _, _)| n.clone()).collect();
                     let has_default = params.iter().map(|(_, _, d)| d.is_some()).collect();
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
                         params: param_types,
-                        ret: Box::new(lower(self, return_type)),
+                        ret: Box::new(Type::from_abi(return_type)),
                     };
                     let symbol = Symbol::function_with_defaults(
                         name.clone(),
@@ -436,7 +412,9 @@ impl TypeChecker {
                 ExportedSymbol::Struct { name, fields, .. } => {
                     let fields = fields
                         .iter()
-                        .map(|(f_name, is_var, f_ty)| (f_name.clone(), *is_var, lower(self, f_ty)))
+                        .map(|(f_name, is_var, f_ty)| {
+                            (f_name.clone(), *is_var, Type::from_abi(f_ty))
+                        })
                         .collect();
                     let id = NominalId::new(abi.module.clone(), name.clone());
                     self.types.entry(id).or_insert(TypeDef::Struct { fields });
@@ -450,10 +428,7 @@ impl TypeChecker {
                     let variant_types: Vec<(String, Vec<Type>)> = variants
                         .iter()
                         .map(|(v_name, f_types)| {
-                            (
-                                v_name.clone(),
-                                f_types.iter().map(|s| lower(self, s)).collect(),
-                            )
+                            (v_name.clone(), f_types.iter().map(Type::from_abi).collect())
                         })
                         .collect();
                     let id = NominalId::new(abi.module.clone(), name.clone());
@@ -501,7 +476,7 @@ impl TypeChecker {
                     };
                     let symbol = Symbol::top_level_variable(
                         name.clone(),
-                        lower(self, ty),
+                        Type::from_abi(ty),
                         mutability,
                         *visibility,
                         abi.package.clone(),
@@ -2196,6 +2171,7 @@ fn contents_writable(mut ty: &Type, place_writable: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prism_abi::{AbiType, PrimKind};
 
     /// Declares a struct with the given fields in `checker`'s module, returning its type.
     fn declare_struct(
@@ -2838,10 +2814,10 @@ mod tests {
                     name: "add".to_string(),
                     type_params: Vec::new(),
                     params: vec![
-                        ("a".to_string(), "Int".to_string(), None),
-                        ("b".to_string(), "Int".to_string(), None),
+                        ("a".to_string(), AbiType::Prim(PrimKind::Int), None),
+                        ("b".to_string(), AbiType::Prim(PrimKind::Int), None),
                     ],
-                    return_type: "Int".to_string(),
+                    return_type: AbiType::Prim(PrimKind::Int),
                     generic_body_hash: None,
                 },
                 ExportedSymbol::Function {
@@ -2850,7 +2826,7 @@ mod tests {
                     name: "internal_calc".to_string(),
                     type_params: Vec::new(),
                     params: Vec::new(),
-                    return_type: "Int".to_string(),
+                    return_type: AbiType::Prim(PrimKind::Int),
                     generic_body_hash: None,
                 },
             ],
@@ -3427,7 +3403,8 @@ mod tests {
             "package demo.models\npublic struct Address {\n    val city: String\n}\npublic struct User {\n    var name: String\n    val email: String?\n    val home: Address\n}\n",
         )
         .expect("models must parse");
-        let abi = FileAbi::extract(&models, "demo/models/models").expect("models ABI must extract");
+        let abi = FileAbi::extract(&models, "demo/models/models", &prism_abi::no_imports)
+            .expect("models ABI must extract");
 
         let app = prism_parser::parse_source(
             "package demo.app\nfun nameOf(user: &User): String = user.name\nfun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\nfun emailOf(user: &User): String? = user.email\nfun cityOf(user: User): String = user.home.city\n",

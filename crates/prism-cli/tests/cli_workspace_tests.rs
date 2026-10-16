@@ -663,3 +663,44 @@ fn test_cli_binary_syntax_error_location_and_lexer_message() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+fn test_cli_binary_imported_signatures_keep_their_declared_types() {
+    let temp = create_temp_dir("imported_signature_types");
+    for dir in ["lib", "model", "svc", "app"] {
+        fs::create_dir_all(temp.join(dir)).unwrap();
+    }
+    fs::write(
+        temp.join("lib/h.prism"),
+        "package lib\npublic fun hof(f: ((Int) -> Int) -> Int): Int = f { k -> k + 1 }\npublic fun pick(f: (Int) -> Int?): Int = 1\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.join("model/types.prism"),
+        "package model\npublic struct Item {\n    val price: Int\n}\n",
+    )
+    .unwrap();
+    // `svc/api` binds `Item` to `model/types` in its ABI.
+    fs::write(
+        temp.join("svc/api.prism"),
+        "package svc\nimport /model/types\npublic fun first(): Item = Item(1)\n",
+    )
+    .unwrap();
+    let main = temp.join("app/main.prism");
+    fs::write(
+        &main,
+        "package app\nimport /lib/h\nimport /svc/api\nimport /model/types\nfun g(): Int = hof { k -> k(1) }\nfun p(): Int = pick { x -> null }\nfun q(): Int = first().price\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&main)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{}", stderr);
+
+    fs::remove_dir_all(&temp).ok();
+}

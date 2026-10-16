@@ -3,9 +3,11 @@
 #![allow(clippy::result_large_err)]
 
 use crate::diagnostics;
-use prism_abi::{AbiError, FileAbi};
+use prism_abi::{AbiError, FileAbi, NominalKind};
+use prism_ast::{Declaration, SourceFile, Visibility};
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -268,6 +270,19 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
     Ok(())
 }
 
+/// The structs and enums a file exports (`public` or `package`), with their kinds.
+fn exported_type_names(file: &SourceFile) -> HashMap<&str, NominalKind> {
+    file.declarations
+        .iter()
+        .filter(|decl| decl.visibility() != Visibility::Private)
+        .filter_map(|decl| match decl {
+            Declaration::Struct(s) => Some((s.name.as_str(), NominalKind::Struct)),
+            Declaration::Enum(e) => Some((e.name.as_str(), NominalKind::Enum)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The module path of a source file: its root-relative path without extension, which is also its
 /// root-anchored import path (`a/lib` for `<root>/a/lib.prism`). The package segments are the
 /// file's directory relative to the workspace root.
@@ -287,18 +302,38 @@ fn module_path(node: &SourceNode) -> String {
 
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in topological SCC order.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
-    // Phase 1: Extract surface FileAbi across all reachable files in the dependency graph
-    let mut abis: std::collections::HashMap<PathBuf, FileAbi> = std::collections::HashMap::new();
+    // Phase 1a: the struct and enum names each file exports, read from its AST alone.
+    let exported_types: HashMap<&Path, HashMap<&str, NominalKind>> = graph
+        .nodes
+        .iter()
+        .map(|(path, node)| (path.as_path(), exported_type_names(&node.source_file)))
+        .collect();
 
+    // Phase 1b: extract each file's ABI, binding the type names in its exported signatures to
+    // its own declarations or to the one direct import that exports them. No body is read.
+    let mut abis: HashMap<PathBuf, FileAbi> = HashMap::new();
     for (file_path, node) in &graph.nodes {
-        let abi = FileAbi::extract(&node.source_file, &module_path(node)).map_err(|err| {
-            let source = fs::read_to_string(file_path).unwrap_or_default();
-            WorkspaceError::Abi {
-                path: file_path.clone(),
-                source,
-                error: err,
+        let bind_import = |name: &str| {
+            let mut found = node.direct_imports.iter().filter_map(|dep| {
+                let kind = exported_types.get(dep.as_path())?.get(name)?;
+                Some((*kind, module_path(graph.get_node(dep)?)))
+            });
+            match (found.next(), found.next()) {
+                // A name exported by several imports stays unbound; Phase 2 reports `E4012`.
+                (Some(binding), None) => Some(binding),
+                _ => None,
             }
-        })?;
+        };
+        let abi = FileAbi::extract(&node.source_file, &module_path(node), &bind_import).map_err(
+            |err| {
+                let source = fs::read_to_string(file_path).unwrap_or_default();
+                WorkspaceError::Abi {
+                    path: file_path.clone(),
+                    source,
+                    error: err,
+                }
+            },
+        )?;
         abis.insert(file_path.clone(), abi);
     }
 

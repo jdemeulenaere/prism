@@ -1,8 +1,10 @@
 //! Surface ABI signature extraction and hashing engine.
 
+use crate::abi_type::{AbiType, NameBinder, NominalKind};
 use crate::error::AbiError;
 use crate::hasher::DeterministicHasher;
 use prism_ast::*;
+use std::collections::HashMap;
 
 /// Represents an exported symbol in a file's ABI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,27 +14,27 @@ pub enum ExportedSymbol {
         is_compose: bool,
         name: String,
         type_params: Vec<String>,
-        params: Vec<(String, String, Option<String>)>, // (name, type_str, default_value_expr)
-        return_type: String,
+        params: Vec<(String, AbiType, Option<String>)>, // (name, type, default_value_expr)
+        return_type: AbiType,
         generic_body_hash: Option<u128>,
     },
     Struct {
         visibility: Visibility,
         name: String,
         type_params: Vec<String>,
-        fields: Vec<(String, bool, String)>, // (name, is_var, type_str)
+        fields: Vec<(String, bool, AbiType)>, // (name, is_var, type)
     },
     Enum {
         visibility: Visibility,
         name: String,
         type_params: Vec<String>,
-        variants: Vec<(String, Vec<String>)>, // (name, field_types)
+        variants: Vec<(String, Vec<AbiType>)>, // (name, payload types)
     },
     Var {
         visibility: Visibility,
         name: String,
         is_var: bool,
-        ty: String,
+        ty: AbiType,
     },
 }
 
@@ -64,9 +66,33 @@ pub struct FileAbi {
 impl FileAbi {
     /// Computes the surface ABI and deterministic hash from a parsed [`SourceFile`] whose module
     /// path is `module`.
-    pub fn extract(file: &SourceFile, module: &str) -> Result<Self, AbiError> {
+    ///
+    /// Each nominal type name in an exported signature is bound to its defining module: first to
+    /// the file's own top-level structs and enums (private ones included), then with
+    /// `bind_import`, which looks the name up among the types exported by the file's direct
+    /// imports. Binding never reads a function body. A name neither binds stays unbound.
+    pub fn extract(
+        file: &SourceFile,
+        module: &str,
+        bind_import: &NameBinder,
+    ) -> Result<Self, AbiError> {
         let package = file.package.as_ref().map(|p| p.package_string());
         let mut symbols = Vec::new();
+
+        let own_types: HashMap<&str, NominalKind> = file
+            .declarations
+            .iter()
+            .filter_map(|decl| match decl {
+                Declaration::Struct(s) => Some((s.name.as_str(), NominalKind::Struct)),
+                Declaration::Enum(e) => Some((e.name.as_str(), NominalKind::Enum)),
+                _ => None,
+            })
+            .collect();
+        let bind = |name: &str| match own_types.get(name) {
+            Some(kind) => Some((*kind, module.to_string())),
+            None => bind_import(name),
+        };
+        let lower = |ty: &Type| AbiType::from_ast(ty, &bind);
 
         for decl in &file.declarations {
             // Default visibility is `private`. Private declarations are EXCLUDED from the ABI.
@@ -78,8 +104,8 @@ impl FileAbi {
             match decl {
                 Declaration::Function(f) => {
                     // Check return type rule (single-file compilation unit invariant)
-                    let return_type_str = match &f.return_type {
-                        Some(ty) => ty.to_string(),
+                    let return_type = match &f.return_type {
+                        Some(ty) => lower(ty),
                         None => {
                             // If it's a block body or no body, return type is Unit `()`
                             // If it's an expression body `= expr` without return type, it is an inferred return type
@@ -92,17 +118,17 @@ impl FileAbi {
                                         span: f.span,
                                     });
                                 }
-                                _ => "()".to_string(),
+                                _ => AbiType::Unit,
                             }
                         }
                     };
 
-                    let params: Vec<(String, String, Option<String>)> = f
+                    let params: Vec<(String, AbiType, Option<String>)> = f
                         .params
                         .iter()
                         .map(|p| {
                             let def_str = p.default_value.as_ref().map(|d| d.to_string());
-                            (p.name.clone(), p.ty.to_string(), def_str)
+                            (p.name.clone(), lower(&p.ty), def_str)
                         })
                         .collect();
 
@@ -124,16 +150,16 @@ impl FileAbi {
                         name: f.name.clone(),
                         type_params: f.type_params.clone(),
                         params,
-                        return_type: return_type_str,
+                        return_type,
                         generic_body_hash,
                     });
                 }
 
                 Declaration::Struct(s) => {
-                    let fields: Vec<(String, bool, String)> = s
+                    let fields: Vec<(String, bool, AbiType)> = s
                         .fields
                         .iter()
-                        .map(|fld| (fld.name.clone(), fld.is_var, fld.ty.to_string()))
+                        .map(|fld| (fld.name.clone(), fld.is_var, lower(&fld.ty)))
                         .collect();
 
                     symbols.push(ExportedSymbol::Struct {
@@ -145,13 +171,10 @@ impl FileAbi {
                 }
 
                 Declaration::Enum(e) => {
-                    let variants: Vec<(String, Vec<String>)> = e
+                    let variants: Vec<(String, Vec<AbiType>)> = e
                         .variants
                         .iter()
-                        .map(|v| {
-                            let flds = v.fields.iter().map(|f| f.to_string()).collect();
-                            (v.name.clone(), flds)
-                        })
+                        .map(|v| (v.name.clone(), v.fields.iter().map(lower).collect()))
                         .collect();
 
                     symbols.push(ExportedSymbol::Enum {
@@ -163,8 +186,8 @@ impl FileAbi {
                 }
 
                 Declaration::Var(v) => {
-                    let ty_str = match &v.ty {
-                        Some(t) => t.to_string(),
+                    let ty = match &v.ty {
+                        Some(t) => lower(t),
                         None => {
                             return Err(AbiError::MissingExplicitVarType {
                                 var_name: v.name.clone(),
@@ -178,7 +201,7 @@ impl FileAbi {
                         visibility: vis,
                         name: v.name.clone(),
                         is_var: v.is_var,
-                        ty: ty_str,
+                        ty,
                     });
                 }
             }
@@ -232,7 +255,7 @@ impl FileAbi {
                     hasher.write_u64(params.len() as u64);
                     for (pname, pty, pdef) in params {
                         hasher.write_str(pname);
-                        hasher.write_str(pty);
+                        pty.hash_into(&mut hasher);
                         if let Some(def) = pdef {
                             hasher.write_u8(1);
                             hasher.write_str(def);
@@ -240,7 +263,7 @@ impl FileAbi {
                             hasher.write_u8(0);
                         }
                     }
-                    hasher.write_str(return_type);
+                    return_type.hash_into(&mut hasher);
                     if let Some(gh) = generic_body_hash {
                         hasher.write_u8(1);
                         hasher.write_u128(*gh);
@@ -265,7 +288,7 @@ impl FileAbi {
                     for (fname, is_var, fty) in fields {
                         hasher.write_str(fname);
                         hasher.write_u8(if *is_var { 1 } else { 0 });
-                        hasher.write_str(fty);
+                        fty.hash_into(&mut hasher);
                     }
                 }
                 ExportedSymbol::Enum {
@@ -288,7 +311,7 @@ impl FileAbi {
                         // Write field count for this variant
                         hasher.write_u64(vflds.len() as u64);
                         for fty in vflds {
-                            hasher.write_str(fty);
+                            fty.hash_into(&mut hasher);
                         }
                     }
                 }
@@ -302,7 +325,7 @@ impl FileAbi {
                     hasher.write_str(visibility.as_str());
                     hasher.write_str(name);
                     hasher.write_u8(if *is_var { 1 } else { 0 });
-                    hasher.write_str(ty);
+                    ty.hash_into(&mut hasher);
                 }
             }
         }

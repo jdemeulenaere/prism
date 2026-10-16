@@ -6,10 +6,12 @@
 //! - Exported (`public` and `package`) declarations must declare explicit types.
 //! - Computes deterministic ABI hash for incremental compilation avoidance.
 
+pub mod abi_type;
 pub mod error;
 pub mod hasher;
 pub mod signature;
 
+pub use abi_type::{no_imports, AbiType, NameBinder, NominalKind, PrimKind};
 pub use error::AbiError;
 pub use hasher::DeterministicHasher;
 pub use signature::{ExportedSymbol, FileAbi};

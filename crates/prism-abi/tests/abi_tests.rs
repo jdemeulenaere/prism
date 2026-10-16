@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use prism_abi::{AbiError, FileAbi};
+    use prism_abi::{no_imports, AbiError, AbiType, ExportedSymbol, FileAbi, NominalKind};
     use prism_parser::parse_source;
 
     #[test]
@@ -30,8 +30,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         // The private changes MUST NOT alter the exported ABI hash!
         assert_eq!(abi1.symbols.len(), 1);
@@ -63,8 +63,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         // Public non-generic body edits produce zero ABI change (Compilation avoidance!)
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
@@ -88,8 +88,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         assert_ne!(abi1.abi_hash, abi2.abi_hash);
     }
@@ -104,7 +104,7 @@ mod tests {
         "#;
 
         let ast = parse_source(src).expect("Parse");
-        let err = FileAbi::extract(&ast, "test/file").unwrap_err();
+        let err = FileAbi::extract(&ast, "test/file", &no_imports).unwrap_err();
 
         match err {
             AbiError::MissingExplicitReturnType {
@@ -138,8 +138,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         // The two enums have different memory layouts and variant shapes.
         // Their ABI hashes MUST be distinct!
@@ -166,8 +166,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         // Source Span line/column shifts MUST NOT alter generic body monomorphization hash!
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
@@ -186,8 +186,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         assert_ne!(abi1.abi_hash, abi2.abi_hash);
     }
@@ -207,8 +207,8 @@ mod tests {
         let ast1 = parse_source(src1).expect("Parse 1");
         let ast2 = parse_source(src2).expect("Parse 2");
 
-        let abi1 = FileAbi::extract(&ast1, "test/file").expect("ABI 1");
-        let abi2 = FileAbi::extract(&ast2, "test/file").expect("ABI 2");
+        let abi1 = FileAbi::extract(&ast1, "test/file", &no_imports).expect("ABI 1");
+        let abi2 = FileAbi::extract(&ast2, "test/file", &no_imports).expect("ABI 2");
 
         // Independent symbol reordering within a file should not invalidate the exported ABI
         assert_eq!(abi1.abi_hash, abi2.abi_hash);
@@ -219,15 +219,124 @@ mod tests {
         let compose_src = "public fun Column(content: compose () -> Unit): Unit { }";
         let plain_src = "public fun Column(content: () -> Unit): Unit { }";
 
-        let compose_abi =
-            FileAbi::extract(&parse_source(compose_src).unwrap(), "test/file").unwrap();
-        let plain_abi = FileAbi::extract(&parse_source(plain_src).unwrap(), "test/file").unwrap();
+        let compose_abi = FileAbi::extract(
+            &parse_source(compose_src).unwrap(),
+            "test/file",
+            &no_imports,
+        )
+        .unwrap();
+        let plain_abi =
+            FileAbi::extract(&parse_source(plain_src).unwrap(), "test/file", &no_imports).unwrap();
 
         let prism_abi::ExportedSymbol::Function { params, .. } = &compose_abi.symbols[0] else {
             panic!("Expected exported function");
         };
-        assert_eq!(params[0].1, "compose () -> Unit");
+        assert_eq!(params[0].1.to_string(), "compose () -> Unit");
         // The compose flag is part of the call contract, so it is part of the ABI.
         assert_ne!(compose_abi.abi_hash, plain_abi.abi_hash);
+    }
+
+    fn extract(src: &str) -> FileAbi {
+        FileAbi::extract(&parse_source(src).unwrap(), "test/file", &no_imports).unwrap()
+    }
+
+    fn first_param(abi: &FileAbi) -> &AbiType {
+        let ExportedSymbol::Function { params, .. } = &abi.symbols[0] else {
+            panic!("Expected exported function");
+        };
+        &params[0].1
+    }
+
+    #[test]
+    fn test_higher_order_parameter_type_recorded_structurally() {
+        let abi = extract("public fun hof(f: ((Int) -> Int) -> Int): Int = 1\n");
+        let AbiType::Fn { params, ret, .. } = first_param(&abi) else {
+            panic!("Expected a function type");
+        };
+        assert!(matches!(&params[0], AbiType::Fn { params, .. } if params.len() == 1));
+        assert_eq!(params[0].to_string(), "(Int) -> Int");
+        assert_eq!(ret.to_string(), "Int");
+    }
+
+    #[test]
+    fn test_nullable_return_distinguished_from_nullable_function_type() {
+        let returns_nullable = extract("public fun pick(f: (Int) -> Int?): Int = 1\n");
+        let nullable_fn = extract("public fun pick(f: ((Int) -> Int)?): Int = 1\n");
+        assert!(
+            matches!(first_param(&returns_nullable), AbiType::Fn { ret, .. } if matches!(**ret, AbiType::Nullable(_)))
+        );
+        assert!(
+            matches!(first_param(&nullable_fn), AbiType::Nullable(inner) if matches!(**inner, AbiType::Fn { .. }))
+        );
+        assert_ne!(returns_nullable.abi_hash, nullable_fn.abi_hash);
+    }
+
+    #[test]
+    fn test_locally_declared_type_bound_to_the_file_module() {
+        let abi = FileAbi::extract(
+            &parse_source("package a\npublic struct User {\n    val name: String\n}\npublic struct Order {\n    val user: User\n}\n").unwrap(),
+            "a/lib",
+            &no_imports,
+        )
+        .unwrap();
+        let order = abi
+            .symbols
+            .iter()
+            .find_map(|s| match s {
+                ExportedSymbol::Struct { name, fields, .. } if name == "Order" => Some(fields),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            order[0].2,
+            AbiType::Nominal {
+                kind: NominalKind::Struct,
+                module: "a/lib".to_string(),
+                name: "User".to_string(),
+                args: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_imported_type_bound_to_the_exporting_module() {
+        let file = parse_source("package a\npublic fun first(): Item = Item(1)\n").unwrap();
+        let bind =
+            |name: &str| (name == "Item").then(|| (NominalKind::Struct, "model/types".to_string()));
+        let abi = FileAbi::extract(&file, "a/svc", &bind).unwrap();
+        let ExportedSymbol::Function { return_type, .. } = &abi.symbols[0] else {
+            panic!("Expected exported function");
+        };
+        assert!(matches!(return_type, AbiType::Nominal { module, .. } if module == "model/types"));
+        // Binding to another module changes the ABI, so it changes the hash.
+        let unbound = FileAbi::extract(&file, "a/svc", &no_imports).unwrap();
+        assert!(matches!(
+            &unbound.symbols[0],
+            ExportedSymbol::Function {
+                return_type: AbiType::Unbound { .. },
+                ..
+            }
+        ));
+        assert_ne!(abi.abi_hash, unbound.abi_hash);
+    }
+
+    #[test]
+    fn test_binding_does_not_depend_on_function_bodies() {
+        let file1 = parse_source("package a\npublic fun first(): Item = Item(1)\n").unwrap();
+        let file2 =
+            parse_source("package a\npublic fun first(): Item = Item(2)\nfun helper() = 3\n")
+                .unwrap();
+        let bind =
+            |name: &str| (name == "Item").then(|| (NominalKind::Struct, "model/types".to_string()));
+        assert_eq!(
+            FileAbi::extract(&file1, "a/svc", &bind).unwrap().abi_hash,
+            FileAbi::extract(&file2, "a/svc", &bind).unwrap().abi_hash
+        );
+    }
+
+    #[test]
+    fn test_unknown_type_name_recorded_unbound() {
+        let abi = extract("public fun f(x: Mystery): Int = 1\n");
+        assert!(matches!(first_param(&abi), AbiType::Unbound { name, .. } if name == "Mystery"));
     }
 }

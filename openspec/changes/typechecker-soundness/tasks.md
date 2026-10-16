@@ -36,11 +36,11 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 8. Structured ABI types (D4)
 
-- [ ] 8.1 Add `AbiType` with tagged structural hashing and `FileAbi::extract(file, module, resolver)`. Verify with `prism-abi` tests:
+- [x] 8.1 Add `AbiType` with tagged structural hashing and `FileAbi::extract(file, module, resolver)`. Verify with `prism-abi` tests:
   - the hash differs between `(Int) -> Int?` and `((Int) -> Int)?`;
   - the existing relative-hash tests still pass;
   - the compilation-and-abi scenarios hold.
-- [ ] 8.2 Add Phase 1b binding in the CLI, delete `Type::parse_str` and the interim rule from task 2.3, and convert `AbiType` to `Type` directly. Verify with multi-file tests for "Imported Signatures Keep Their Declared Types".
+- [x] 8.2 Add Phase 1b binding in the CLI, delete `Type::parse_str` and the interim rule from task 2.3, and convert `AbiType` to `Type` directly. Verify with multi-file tests for "Imported Signatures Keep Their Declared Types".
 
 ## 9. Types reachable only through an import (D9)
 
