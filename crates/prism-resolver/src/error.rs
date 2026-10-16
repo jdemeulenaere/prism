@@ -2,6 +2,7 @@
 //!
 //! Codes follow the catalog in the `diagnostics` spec (`openspec/specs/diagnostics/spec.md`).
 
+use prism_parser::ParseError;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -43,8 +44,8 @@ pub enum ResolveError {
     InvalidImportPath { import_path: String, reason: String },
     /// E1000: IO error during resolution.
     Io { path: PathBuf, message: String },
-    /// E2001: Parse error while parsing a file.
-    Parse { path: PathBuf, message: String },
+    /// E2xxx: Lexer or parser error in a file; the code comes from `error`.
+    Parse { path: PathBuf, error: ParseError },
 }
 
 impl ResolveError {
@@ -58,7 +59,7 @@ impl ResolveError {
             ResolveError::WorkspaceBoundaryViolation { .. } => "E1005",
             ResolveError::InvalidImportPath { .. } => "E1006",
             ResolveError::Io { .. } => "E1000",
-            ResolveError::Parse { .. } => "E2001",
+            ResolveError::Parse { error, .. } => error.code,
         }
     }
 
@@ -184,13 +185,15 @@ impl fmt::Display for ResolveError {
                     message
                 )
             }
-            ResolveError::Parse { path, message } => {
+            ResolveError::Parse { path, error } => {
                 write!(
                     f,
-                    "{}: Parse error in '{}': {}",
+                    "{}: Parse error in '{}' at {}:{}: {}",
                     self.code(),
                     path.display(),
-                    message
+                    error.span.line,
+                    error.span.column,
+                    error.message
                 )
             }
         }

@@ -162,6 +162,23 @@ impl Parser {
     // --- Source File Parsing ---
 
     pub fn parse_source_file(&mut self) -> Result<SourceFile, ParseError> {
+        self.parse_source_file_inner()
+            .map_err(|err| self.surface_lexer_error(err))
+    }
+
+    /// The parser never consumes a lexer `Error` token, so a syntax error
+    /// raised while one is current is caused by it: report the lexer's own
+    /// message and span instead of "unexpected token '<Error: ...>'".
+    fn surface_lexer_error(&self, err: ParseError) -> ParseError {
+        match self.peek_kind() {
+            TokenKind::Error(message) if err.code == "E2001" => {
+                ParseError::new(message.clone(), self.peek().span)
+            }
+            _ => err,
+        }
+    }
+
+    fn parse_source_file_inner(&mut self) -> Result<SourceFile, ParseError> {
         let start_span = self.peek().span;
         let mut package = None;
         let mut imports = Vec::new();

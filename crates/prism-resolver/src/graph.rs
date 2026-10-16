@@ -71,7 +71,7 @@ impl DependencyGraph {
         let first_ast =
             prism_parser::parse_source(&first_content).map_err(|e| ResolveError::Parse {
                 path: first_entry.clone(),
-                message: e.to_string(),
+                error: e,
             })?;
         let authoritative_root = discover_root(&first_entry, first_ast.package.as_ref())?;
 
@@ -97,7 +97,7 @@ impl DependencyGraph {
             let source_file =
                 prism_parser::parse_source(&content).map_err(|e| ResolveError::Parse {
                     path: current_path.clone(),
-                    message: e.to_string(),
+                    error: e,
                 })?;
 
             let current_root = discover_root(&current_path, source_file.package.as_ref())?;

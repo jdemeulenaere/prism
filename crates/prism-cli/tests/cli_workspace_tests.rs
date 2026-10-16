@@ -623,3 +623,43 @@ fn test_cli_binary_missing_return_type_e4011() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+fn test_cli_binary_syntax_error_location_and_lexer_message() {
+    let temp = create_temp_dir("syntax_location");
+    let lexer_err = temp.join("lexer.prism");
+    fs::write(&lexer_err, "fun f(): Int = 1\nfun g(): String = \"\\q\"\n").unwrap();
+    let too_deep = temp.join("deep.prism");
+    fs::write(
+        &too_deep,
+        format!("fun f(): Int = {}1{}\n", "(".repeat(300), ")".repeat(300)),
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&lexer_err)
+        .output()
+        .expect("failed to execute prism CLI");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E2001]: syntax error"), "{}", stderr);
+    assert!(stderr.contains("lexer.prism:2:19"), "{}", stderr);
+    assert!(
+        stderr.contains("Unknown escape sequence '\\q'"),
+        "{}",
+        stderr
+    );
+    assert!(!stderr.contains("<Error"), "{}", stderr);
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&too_deep)
+        .output()
+        .expect("failed to execute prism CLI");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E2002]: syntax error"), "{}", stderr);
+
+    fs::remove_dir_all(&temp).ok();
+}

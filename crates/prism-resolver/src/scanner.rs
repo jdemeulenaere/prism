@@ -75,7 +75,7 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<PathBuf>, ResolveError> {
         })?;
         let ast = prism_parser::parse_source(&content).map_err(|e| ResolveError::Parse {
             path: file.clone(),
-            message: e.to_string(),
+            error: e,
         })?;
 
         let declared_pkg = ast

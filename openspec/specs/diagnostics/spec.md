@@ -12,6 +12,10 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 - **WHEN** `prism check` reports an error
 - **THEN** the diagnostic starts with `error[<code>]: <title>`, followed by the source location when one is known
 
+#### Scenario: Syntax error location and lexer message
+- **WHEN** `prism check` reports an `E2xxx` error, including one in an imported file
+- **THEN** the diagnostic points at the error's own line and column, and a lexer error shows the lexer's message (`Unknown escape sequence '\q'`) rather than the parser's view of an error token
+
 #### Scenario: Code range identifies the stage
 - **WHEN** a diagnostic is reported
 - **THEN** its code falls in the range of the stage that produced it: `E1xxx` resolution and I/O, `E2xxx` lexing and parsing, `E3xxx` Phase 1 ABI extraction, `E4xxx` Phase 2 type checking

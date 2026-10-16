@@ -929,4 +929,15 @@ mod tests {
         assert_eq!(text(src, body.span), "-> val y = x }");
         assert_eq!(text(src, block.stmts[0].span), "val y = x");
     }
+
+    #[test]
+    fn test_lexer_error_message_and_span_surfaced() {
+        let src = "fun f() {\n    val s = \"bad \\q\"\n}";
+        let err = parse_source(src).unwrap_err();
+        assert_eq!(err.message, "Unknown escape sequence '\\q'");
+        assert_eq!((err.span.line, err.span.column), (2, 13));
+
+        let err = parse_source("fun f(x: Int) = x | 1").unwrap_err();
+        assert_eq!(err.message, "Unexpected single '|'");
+    }
 }
