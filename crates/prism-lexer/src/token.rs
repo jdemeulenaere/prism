@@ -26,7 +26,10 @@ pub enum TokenKind {
     Mut,
 
     // Literals
-    Int(i64),
+    /// An integer literal's magnitude. It is at most `i64::MAX`, except that
+    /// a decimal `9223372036854775808` is kept so the parser can read
+    /// `-9223372036854775808` as `i64::MIN`.
+    Int(u64),
     Float(f64),
     String(String),
     Char(char),

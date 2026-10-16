@@ -309,4 +309,28 @@ mod tests {
             assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof, "{}", src);
         }
     }
+
+    #[test]
+    fn test_invalid_literals_rejected() {
+        let error = |src: &str| match &Lexer::new(src).tokenize_all()[5].kind {
+            TokenKind::Error(msg) => msg.clone(),
+            other => panic!("{}: expected error, found {:?}", src, other),
+        };
+        assert_eq!(error(r#"fun f() = "\q""#), "Unknown escape sequence '\\q'");
+        assert_eq!(error(r#"fun f() = '\q'"#), "Unknown escape sequence '\\q'");
+        assert!(error(r#"fun f() = "\é""#).starts_with("Unknown escape sequence"));
+        assert_eq!(error("fun f() = ''"), "Empty char literal");
+        assert_eq!(
+            error("fun f() = 1e999"),
+            "Float literal out of range: 1e999"
+        );
+        assert_eq!(
+            error("fun f() = 9223372036854775809"),
+            "Integer literal out of range: 9223372036854775809"
+        );
+
+        // The magnitude of i64::MIN is kept for the parser to negate.
+        let tokens = Lexer::new("fun f() = 9223372036854775808").tokenize_all();
+        assert_eq!(tokens[5].kind, TokenKind::Int(9223372036854775808));
+    }
 }

@@ -251,7 +251,7 @@ impl<'a> Lexer<'a> {
                 }
                 let raw = self.input[start + 2..self.cursor].replace('_', "");
                 return match i64::from_str_radix(&raw, 16) {
-                    Ok(val) => TokenKind::Int(val),
+                    Ok(val) => TokenKind::Int(val as u64),
                     Err(_) => TokenKind::Error(format!("Invalid hex literal: 0x{}", raw)),
                 };
             } else if next == b'b' || next == b'B' {
@@ -266,7 +266,7 @@ impl<'a> Lexer<'a> {
                 }
                 let raw = self.input[start + 2..self.cursor].replace('_', "");
                 return match i64::from_str_radix(&raw, 2) {
-                    Ok(val) => TokenKind::Int(val),
+                    Ok(val) => TokenKind::Int(val as u64),
                     Err(_) => TokenKind::Error(format!("Invalid binary literal: 0b{}", raw)),
                 };
             }
@@ -313,12 +313,16 @@ impl<'a> Lexer<'a> {
         let raw = self.input[start..self.cursor].replace('_', "");
         if is_float {
             match raw.parse::<f64>() {
+                Ok(val) if val.is_infinite() => {
+                    TokenKind::Error(format!("Float literal out of range: {}", raw))
+                }
                 Ok(val) => TokenKind::Float(val),
                 Err(_) => TokenKind::Error(format!("Invalid float literal: {}", raw)),
             }
         } else {
-            match raw.parse::<i64>() {
-                Ok(val) => TokenKind::Int(val),
+            match raw.parse::<u64>() {
+                Ok(val) if val <= i64::MIN.unsigned_abs() => TokenKind::Int(val),
+                Ok(_) => TokenKind::Error(format!("Integer literal out of range: {}", raw)),
                 Err(_) => TokenKind::Error(format!("Invalid integer literal: {}", raw)),
             }
         }
@@ -366,6 +370,10 @@ impl<'a> Lexer<'a> {
         if self.peek_byte() == b'\n' {
             return TokenKind::Error("Unescaped newline in char literal".to_string());
         }
+        if self.peek_byte() == b'\'' {
+            self.bump();
+            return TokenKind::Error("Empty char literal".to_string());
+        }
 
         let ch = if self.peek_byte() == b'\\' {
             self.bump();
@@ -411,7 +419,10 @@ impl<'a> Lexer<'a> {
             '\'' => Ok('\''),
             '0' => Ok('\0'),
             'u' => self.lex_unicode_escape(quote),
-            other => Ok(other),
+            other => Err(format!(
+                "Unknown escape sequence '\\{}'",
+                other.escape_debug()
+            )),
         }
     }
 

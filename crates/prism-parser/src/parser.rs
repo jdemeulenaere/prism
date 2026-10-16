@@ -836,7 +836,15 @@ impl Parser {
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         let tok = self.bump();
         let kind = match tok.kind {
-            TokenKind::Int(v) => ExprKind::Literal(Literal::Int(v)),
+            TokenKind::Int(v) => match i64::try_from(v) {
+                Ok(v) => ExprKind::Literal(Literal::Int(v)),
+                Err(_) => {
+                    return Err(ParseError::new(
+                        format!("Integer literal out of range: {}", v),
+                        tok.span,
+                    ))
+                }
+            },
             TokenKind::Float(v) => ExprKind::Literal(Literal::Float(v)),
             TokenKind::String(s) => ExprKind::Literal(Literal::String(s)),
             TokenKind::Char(c) => ExprKind::Literal(Literal::Char(c)),
@@ -852,6 +860,9 @@ impl Parser {
 
     /// Prefix operators: `-`, `!`, `&` and `&mut`.
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        if let Some(min) = self.try_parse_int_min() {
+            return Ok(min);
+        }
         let tok = self.bump_amp();
         let op = match tok.kind {
             TokenKind::Minus => UnaryOp::Neg,
@@ -871,6 +882,28 @@ impl Parser {
                 expr: Box::new(inner),
             },
             span,
+        ))
+    }
+
+    /// Reads `-9223372036854775808` as the literal `i64::MIN`, whose magnitude
+    /// does not fit an `Int` on its own. Only when nothing postfix follows the
+    /// literal, since `-x.f()` negates `x.f()`.
+    fn try_parse_int_min(&mut self) -> Option<Expr> {
+        if self.peek_kind() != &TokenKind::Minus
+            || self.peek_ahead(1) != &TokenKind::Int(i64::MIN.unsigned_abs())
+        {
+            return None;
+        }
+        let start = self.cursor;
+        let minus = self.bump();
+        let literal = self.bump();
+        if self.current_precedence() >= Precedence::Postfix {
+            self.cursor = start;
+            return None;
+        }
+        Some(Expr::new(
+            ExprKind::Literal(Literal::Int(i64::MIN)),
+            minus.span.merge(literal.span),
         ))
     }
 

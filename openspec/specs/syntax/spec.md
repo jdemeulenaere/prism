@@ -109,6 +109,14 @@ The compiler MUST tokenize source text into a stream of typed tokens with accura
 - **WHEN** a string literal contains a malformed unicode escape (`"\u12"`)
 - **THEN** tokenizer reports an `Error` token without consuming the closing quote
 
+#### Scenario: Unknown escape sequence rejected
+- **WHEN** a string or char literal contains a backslash followed by a character other than `n`, `r`, `t`, `\`, `"`, `'`, `0` or `u` (`"\q"`, `'\é'`)
+- **THEN** tokenizer emits an `Error` token naming the unknown escape, without panicking on multi-byte characters
+
+#### Scenario: Empty char literal rejected
+- **WHEN** a char literal has no character (`''`)
+- **THEN** tokenizer emits an `Error` token
+
 #### Scenario: Unterminated string literal error
 - **WHEN** a string literal is unclosed before end-of-file
 - **THEN** tokenizer emits an `Error` token with the unterminated literal span without panicking
@@ -127,6 +135,14 @@ The lexer MUST parse decimal integers, hexadecimal, binary, floating-point numbe
 #### Scenario: Floating point with scientific notation
 - **WHEN** a float literal is written with exponents (`3.14e-2`)
 - **THEN** the tokenizer emits `Float(0.0314)`
+
+#### Scenario: Out-of-range numeric literals rejected
+- **WHEN** a float literal overflows to infinity (`1e999`) or an integer literal exceeds the `Int` range (`9223372036854775809`)
+- **THEN** tokenizer emits an `Error` token instead of an infinite or wrapped value
+
+#### Scenario: Minimum Int literal
+- **WHEN** unary minus is applied directly to `9223372036854775808` with no postfix operator after it (`-9223372036854775808`)
+- **THEN** the parser produces the `Int` literal `-9223372036854775808`, while `9223372036854775808` alone is rejected as out of range
 
 #### Scenario: Disambiguation between float and range operator
 - **WHEN** integer literal is immediately followed by range operator (`4..10`)

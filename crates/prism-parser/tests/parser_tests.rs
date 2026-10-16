@@ -824,4 +824,39 @@ mod tests {
         assert_eq!(inner.span.start, 35);
         assert_eq!(args[1].value.to_string(), "(a && b)");
     }
+
+    #[test]
+    fn test_int_min_literal() {
+        let body = |src: &str| {
+            let file = parse_source(src).unwrap();
+            let Declaration::Function(f) = &file.declarations[0] else {
+                panic!("Expected function");
+            };
+            let Some(FunctionBody::Expr(e)) = &f.body else {
+                panic!("Expected expression body");
+            };
+            e.clone()
+        };
+        let min = body("fun f(): Int = -9223372036854775808");
+        assert_eq!(min.kind, ExprKind::Literal(Literal::Int(i64::MIN)));
+        assert_eq!((min.span.start, min.span.end), (15, 35));
+        assert_eq!(
+            body("fun f(): Int = -9223372036854775808 + 1").to_string(),
+            "(-9223372036854775808 + 1)"
+        );
+        assert_eq!(
+            body("fun f(): Int = -9223372036854775807").to_string(),
+            "(-9223372036854775807)"
+        );
+
+        // Without the minus, or with a postfix operator binding tighter than
+        // the minus, the magnitude does not fit an Int.
+        for src in [
+            "fun f(): Int = 9223372036854775808",
+            "fun f(): Int = -9223372036854775808.abs()",
+        ] {
+            let err = parse_source(src).unwrap_err();
+            assert!(err.message.contains("out of range"), "{}: {}", src, err);
+        }
+    }
 }
