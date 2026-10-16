@@ -21,14 +21,32 @@ pub enum Precedence {
     Call = 12,      // ()
 }
 
+/// The deepest nesting of expressions and types the parser accepts.
+///
+/// The limit bounds both the parser's own recursion and the height of every
+/// tree it builds, so recursive passes over the AST (drop, clone, the type
+/// checker) cannot overflow the stack either. Deeper source is rejected with
+/// `E2002` instead of aborting the process.
+pub const MAX_NESTING_DEPTH: usize = 256;
+
 pub struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    /// Number of `parse_expr` / `parse_type` calls currently on the stack.
+    depth: usize,
+    /// Deepest tree level reached since the innermost open `parse_expr` or
+    /// `parse_type` started; `peak - depth` is the height of what it parsed.
+    peak: usize,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, cursor: 0 }
+        Self {
+            tokens,
+            cursor: 0,
+            depth: 0,
+            peak: 0,
+        }
     }
 
     pub fn from_source(source: &str) -> Self {
@@ -524,9 +542,38 @@ impl Parser {
         })
     }
 
+    // --- Nesting Depth ---
+
+    /// Enters one nesting level, failing with `E2002` past
+    /// [`MAX_NESTING_DEPTH`]. Returns the outer peak for [`Self::exit`].
+    fn enter(&mut self) -> Result<usize, ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(ParseError::nesting_too_deep(
+                MAX_NESTING_DEPTH,
+                self.peek().span,
+            ));
+        }
+        self.depth += 1;
+        Ok(std::mem::replace(&mut self.peak, self.depth))
+    }
+
+    /// Leaves the level opened by [`Self::enter`]; `self.peak` keeps covering
+    /// the tree just parsed.
+    fn exit(&mut self, outer_peak: usize) {
+        self.peak = self.peak.max(outer_peak);
+        self.depth -= 1;
+    }
+
     // --- Type Parsing ---
 
     pub fn parse_type(&mut self) -> Result<Type, ParseError> {
+        let outer_peak = self.enter()?;
+        let result = self.parse_type_inner();
+        self.exit(outer_peak);
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> Result<Type, ParseError> {
         let start_span = self.peek().span;
 
         // 1. Borrow reference: &T or &mut T
@@ -648,12 +695,29 @@ impl Parser {
     // --- Expression Pratt Parser ---
 
     pub fn parse_expr(&mut self, precedence: Precedence) -> Result<Expr, ParseError> {
+        let outer_peak = self.enter()?;
+        let result = self.parse_expr_inner(precedence);
+        self.exit(outer_peak);
+        result
+    }
+
+    fn parse_expr_inner(&mut self, precedence: Precedence) -> Result<Expr, ParseError> {
         let mut left = self.parse_prefix()?;
+        // The infix loop is iterative but each step wraps `left` in a new
+        // node, so track the tree's height rather than the recursion depth.
+        let mut height = self.peak - self.depth;
 
         while !self.is_eof() && precedence < self.current_precedence() {
+            let op_span = self.peek().span;
+            self.peak = self.depth;
             left = self.parse_infix(left)?;
+            height = (height + 1).max(self.peak - self.depth);
+            if self.depth + height > MAX_NESTING_DEPTH {
+                return Err(ParseError::nesting_too_deep(MAX_NESTING_DEPTH, op_span));
+            }
         }
 
+        self.peak = self.depth + height;
         Ok(left)
     }
 
@@ -679,111 +743,26 @@ impl Parser {
         }
     }
 
+    // Every recursion level of the parser passes through `parse_prefix` or
+    // `parse_infix`, so they only dispatch: each construct gets its own method
+    // and its temporaries stay out of the recursive frames.
     fn parse_prefix(&mut self) -> Result<Expr, ParseError> {
-        let tok = self.peek().clone();
-
-        match &tok.kind {
-            // Literals
-            TokenKind::Int(v) => {
-                let val = *v;
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::Int(val)), tok.span))
-            }
-            TokenKind::Float(v) => {
-                let val = *v;
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::Float(val)), tok.span))
-            }
-            TokenKind::String(s) => {
-                let val = s.clone();
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::String(val)), tok.span))
-            }
-            TokenKind::Char(c) => {
-                let val = *c;
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::Char(val)), tok.span))
-            }
-            TokenKind::True => {
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::Bool(true)), tok.span))
-            }
-            TokenKind::False => {
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::Bool(false)), tok.span))
-            }
-            TokenKind::Null => {
-                self.bump();
-                Ok(Expr::new(ExprKind::Literal(Literal::Null), tok.span))
-            }
-
-            // Identifiers / Variables
-            TokenKind::Ident(s) => {
-                let name = s.clone();
-                self.bump();
-                Ok(Expr::new(ExprKind::Ident(name), tok.span))
-            }
-            TokenKind::Compose => {
-                self.bump();
-                Ok(Expr::new(ExprKind::Ident("compose".to_string()), tok.span))
-            }
+        match self.peek_kind() {
+            TokenKind::Int(_)
+            | TokenKind::Float(_)
+            | TokenKind::String(_)
+            | TokenKind::Char(_)
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::Null
+            | TokenKind::Ident(_)
+            | TokenKind::Compose => self.parse_atom(),
 
             // Unary operators
-            TokenKind::Minus => {
-                self.bump();
-                let inner = self.parse_expr(Precedence::Prefix)?;
-                let span = tok.span.merge(inner.span);
-                Ok(Expr::new(
-                    ExprKind::Unary {
-                        op: UnaryOp::Neg,
-                        expr: Box::new(inner),
-                    },
-                    span,
-                ))
-            }
-            TokenKind::Bang => {
-                self.bump();
-                let inner = self.parse_expr(Precedence::Prefix)?;
-                let span = tok.span.merge(inner.span);
-                Ok(Expr::new(
-                    ExprKind::Unary {
-                        op: UnaryOp::Not,
-                        expr: Box::new(inner),
-                    },
-                    span,
-                ))
-            }
-            TokenKind::Amp => {
-                self.bump();
-                let is_mut = if self.peek_kind() == &TokenKind::Mut {
-                    self.bump();
-                    true
-                } else {
-                    false
-                };
-                let inner = self.parse_expr(Precedence::Prefix)?;
-                let span = tok.span.merge(inner.span);
-                let op = if is_mut {
-                    UnaryOp::BorrowMut
-                } else {
-                    UnaryOp::Borrow
-                };
-                Ok(Expr::new(
-                    ExprKind::Unary {
-                        op,
-                        expr: Box::new(inner),
-                    },
-                    span,
-                ))
-            }
+            TokenKind::Minus | TokenKind::Bang | TokenKind::Amp => self.parse_unary(),
 
             // Grouping: (expr)
-            TokenKind::LParen => {
-                self.bump();
-                let expr = self.parse_expr(Precedence::Lowest)?;
-                let end = self.expect(TokenKind::RParen)?.span;
-                Ok(Expr::new(expr.kind, tok.span.merge(end)))
-            }
+            TokenKind::LParen => self.parse_group(),
 
             // Block or Closure: { ... }
             TokenKind::LBrace => self.parse_lambda_or_block(),
@@ -797,10 +776,59 @@ impl Parser {
             TokenKind::Val | TokenKind::Var => self.parse_local_var(),
 
             _ => Err(ParseError::new(
-                format!("Unexpected token in expression: '{}'", tok.kind),
-                tok.span,
+                format!("Unexpected token in expression: '{}'", self.peek_kind()),
+                self.peek().span,
             )),
         }
+    }
+
+    /// Literals and identifiers.
+    fn parse_atom(&mut self) -> Result<Expr, ParseError> {
+        let tok = self.bump();
+        let kind = match tok.kind {
+            TokenKind::Int(v) => ExprKind::Literal(Literal::Int(v)),
+            TokenKind::Float(v) => ExprKind::Literal(Literal::Float(v)),
+            TokenKind::String(s) => ExprKind::Literal(Literal::String(s)),
+            TokenKind::Char(c) => ExprKind::Literal(Literal::Char(c)),
+            TokenKind::True => ExprKind::Literal(Literal::Bool(true)),
+            TokenKind::False => ExprKind::Literal(Literal::Bool(false)),
+            TokenKind::Null => ExprKind::Literal(Literal::Null),
+            TokenKind::Ident(name) => ExprKind::Ident(name),
+            TokenKind::Compose => ExprKind::Ident("compose".to_string()),
+            _ => unreachable!("parse_prefix only dispatches atoms here"),
+        };
+        Ok(Expr::new(kind, tok.span))
+    }
+
+    /// Prefix operators: `-`, `!`, `&` and `&mut`.
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        let tok = self.bump();
+        let op = match tok.kind {
+            TokenKind::Minus => UnaryOp::Neg,
+            TokenKind::Bang => UnaryOp::Not,
+            TokenKind::Amp if self.peek_kind() == &TokenKind::Mut => {
+                self.bump();
+                UnaryOp::BorrowMut
+            }
+            TokenKind::Amp => UnaryOp::Borrow,
+            _ => unreachable!("parse_prefix only dispatches unary operators here"),
+        };
+        let inner = self.parse_expr(Precedence::Prefix)?;
+        let span = tok.span.merge(inner.span);
+        Ok(Expr::new(
+            ExprKind::Unary {
+                op,
+                expr: Box::new(inner),
+            },
+            span,
+        ))
+    }
+
+    fn parse_group(&mut self) -> Result<Expr, ParseError> {
+        let start = self.expect(TokenKind::LParen)?.span;
+        let expr = self.parse_expr(Precedence::Lowest)?;
+        let end = self.expect(TokenKind::RParen)?.span;
+        Ok(Expr::new(expr.kind, start.merge(end)))
     }
 
     fn parse_lambda_or_block(&mut self) -> Result<Expr, ParseError> {
@@ -849,14 +877,7 @@ impl Parser {
         }
         self.expect(TokenKind::Arrow)?;
 
-        let mut stmts = Vec::new();
-        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
-            let expr = self.parse_expr(Precedence::Lowest)?;
-            stmts.push(expr);
-            if self.peek_kind() == &TokenKind::Semicolon {
-                self.bump();
-            }
-        }
+        let mut stmts = self.parse_stmts()?;
         let end = self.expect(TokenKind::RBrace)?.span;
 
         let body = if stmts.len() == 1 && !matches!(stmts[0].kind, ExprKind::LocalVar { .. }) {
@@ -890,166 +911,159 @@ impl Parser {
     }
 
     fn parse_infix(&mut self, left: Expr) -> Result<Expr, ParseError> {
-        let tok = self.peek().clone();
-
-        match &tok.kind {
-            // Member access: .ident
-            TokenKind::Dot => {
-                self.bump();
-                let (member, m_span) = self.expect_ident()?;
-                let span = left.span.merge(m_span);
-                Ok(Expr::new(
-                    ExprKind::MemberAccess {
-                        target: Box::new(left),
-                        member,
-                        is_safe_nav: false,
-                    },
-                    span,
-                ))
-            }
-
-            // Safe navigation: ?.ident
-            TokenKind::QuestionDot => {
-                self.bump();
-                let (member, m_span) = self.expect_ident()?;
-                let span = left.span.merge(m_span);
-                Ok(Expr::new(
-                    ExprKind::MemberAccess {
-                        target: Box::new(left),
-                        member,
-                        is_safe_nav: true,
-                    },
-                    span,
-                ))
-            }
-
+        match self.peek_kind() {
+            // Member access: .ident, safe navigation: ?.ident
+            TokenKind::Dot | TokenKind::QuestionDot => self.parse_member_access(left),
             // Function Call: (args...)
-            TokenKind::LParen => {
-                self.bump();
-                let mut args = Vec::new();
-                while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-                    let mut name = None;
-                    // Check named argument: ident = expr
-                    if let TokenKind::Ident(n) = self.peek_kind() {
-                        if self.peek_ahead(1) == &TokenKind::Eq {
-                            let n = n.clone();
-                            self.bump(); // ident
-                            self.bump(); // '='
-                            name = Some(n);
-                        }
-                    }
-                    let value = self.parse_expr(Precedence::Lowest)?;
-                    let arg_span = value.span;
-                    args.push(CallArg {
-                        name,
-                        value,
-                        span: arg_span,
-                    });
-                    if self.peek_kind() == &TokenKind::Comma {
-                        self.bump();
-                    } else {
-                        break;
-                    }
-                }
-                let end = self.expect(TokenKind::RParen)?.span;
-                let mut span = left.span.merge(end);
-
-                // Trailing lambda on call with parentheses: callee(args...) { body }
-                if self.peek_kind() == &TokenKind::LBrace && !self.peek().is_preceded_by_newline {
-                    let lambda = self.parse_lambda_or_block()?;
-                    span = span.merge(lambda.span);
-                    args.push(CallArg {
-                        name: None,
-                        value: lambda,
-                        span,
-                    });
-                }
-
-                Ok(Expr::new(
-                    ExprKind::Call {
-                        callee: Box::new(left),
-                        args,
-                    },
-                    span,
-                ))
-            }
-
+            TokenKind::LParen => self.parse_call(left),
             // Trailing lambda call without parentheses: callee { body }
-            TokenKind::LBrace => {
-                let lambda = self.parse_lambda_or_block()?;
-                let span = left.span.merge(lambda.span);
-                Ok(Expr::new(
-                    ExprKind::Call {
-                        callee: Box::new(left),
-                        args: vec![CallArg {
-                            name: None,
-                            value: lambda,
-                            span,
-                        }],
-                    },
-                    span,
-                ))
-            }
-
+            TokenKind::LBrace => self.parse_trailing_lambda_call(left),
             // Indexing: target[index]
-            TokenKind::LBracket => {
-                self.bump();
-                let index = self.parse_expr(Precedence::Lowest)?;
-                let end = self.expect(TokenKind::RBracket)?.span;
-                let span = left.span.merge(end);
-                Ok(Expr::new(
-                    ExprKind::Index {
-                        target: Box::new(left),
-                        index: Box::new(index),
-                    },
-                    span,
-                ))
-            }
-
+            TokenKind::LBracket => self.parse_index(left),
             // Assignment: = (non-associative, disallowing chained assignments)
-            TokenKind::Eq => {
-                let eq_tok = self.bump();
-                let right = self.parse_expr(Precedence::Assign)?;
-                if matches!(right.kind, ExprKind::Assign { .. })
-                    || matches!(left.kind, ExprKind::Assign { .. })
-                {
-                    return Err(ParseError::new(
-                        "Chained assignments are not allowed; use separate statements",
-                        eq_tok.span,
-                    ));
-                }
-                let span = left.span.merge(right.span);
-                Ok(Expr::new(
-                    ExprKind::Assign {
-                        target: Box::new(left),
-                        value: Box::new(right),
-                    },
-                    span,
-                ))
-            }
-
+            TokenKind::Eq => self.parse_assign(left),
             // Binary operators
-            _ => {
-                let op = self.token_to_binary_op(&tok.kind).ok_or_else(|| {
-                    ParseError::new(
-                        format!("Unexpected infix operator: '{}'", tok.kind),
-                        tok.span,
-                    )
-                })?;
-                let prec = self.current_precedence();
+            _ => self.parse_binary(left),
+        }
+    }
+
+    fn parse_member_access(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        let is_safe_nav = self.bump().kind == TokenKind::QuestionDot;
+        let (member, m_span) = self.expect_ident()?;
+        let span = left.span.merge(m_span);
+        Ok(Expr::new(
+            ExprKind::MemberAccess {
+                target: Box::new(left),
+                member,
+                is_safe_nav,
+            },
+            span,
+        ))
+    }
+
+    fn parse_call(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        self.expect(TokenKind::LParen)?;
+        let mut args = Vec::new();
+        while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
+            let mut name = None;
+            // Check named argument: ident = expr
+            if let TokenKind::Ident(n) = self.peek_kind() {
+                if self.peek_ahead(1) == &TokenKind::Eq {
+                    let n = n.clone();
+                    self.bump(); // ident
+                    self.bump(); // '='
+                    name = Some(n);
+                }
+            }
+            let value = self.parse_expr(Precedence::Lowest)?;
+            let arg_span = value.span;
+            args.push(CallArg {
+                name,
+                value,
+                span: arg_span,
+            });
+            if self.peek_kind() == &TokenKind::Comma {
                 self.bump();
-                let right = self.parse_expr(prec)?;
-                let span = left.span.merge(right.span);
-                Ok(Expr::new(
-                    ExprKind::Binary {
-                        op,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    },
-                    span,
-                ))
+            } else {
+                break;
             }
         }
+        let end = self.expect(TokenKind::RParen)?.span;
+        let mut span = left.span.merge(end);
+
+        // Trailing lambda on call with parentheses: callee(args...) { body }
+        if self.peek_kind() == &TokenKind::LBrace && !self.peek().is_preceded_by_newline {
+            let lambda = self.parse_lambda_or_block()?;
+            span = span.merge(lambda.span);
+            args.push(CallArg {
+                name: None,
+                value: lambda,
+                span,
+            });
+        }
+
+        Ok(Expr::new(
+            ExprKind::Call {
+                callee: Box::new(left),
+                args,
+            },
+            span,
+        ))
+    }
+
+    fn parse_trailing_lambda_call(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        let lambda = self.parse_lambda_or_block()?;
+        let span = left.span.merge(lambda.span);
+        Ok(Expr::new(
+            ExprKind::Call {
+                callee: Box::new(left),
+                args: vec![CallArg {
+                    name: None,
+                    value: lambda,
+                    span,
+                }],
+            },
+            span,
+        ))
+    }
+
+    fn parse_index(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        self.expect(TokenKind::LBracket)?;
+        let index = self.parse_expr(Precedence::Lowest)?;
+        let end = self.expect(TokenKind::RBracket)?.span;
+        let span = left.span.merge(end);
+        Ok(Expr::new(
+            ExprKind::Index {
+                target: Box::new(left),
+                index: Box::new(index),
+            },
+            span,
+        ))
+    }
+
+    fn parse_assign(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        let eq_tok = self.bump();
+        let right = self.parse_expr(Precedence::Assign)?;
+        if matches!(right.kind, ExprKind::Assign { .. })
+            || matches!(left.kind, ExprKind::Assign { .. })
+        {
+            return Err(ParseError::new(
+                "Chained assignments are not allowed; use separate statements",
+                eq_tok.span,
+            ));
+        }
+        let span = left.span.merge(right.span);
+        Ok(Expr::new(
+            ExprKind::Assign {
+                target: Box::new(left),
+                value: Box::new(right),
+            },
+            span,
+        ))
+    }
+
+    fn parse_binary(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        let op = match self.token_to_binary_op(self.peek_kind()) {
+            Some(op) => op,
+            None => {
+                return Err(ParseError::new(
+                    format!("Unexpected infix operator: '{}'", self.peek_kind()),
+                    self.peek().span,
+                ))
+            }
+        };
+        let prec = self.current_precedence();
+        self.bump();
+        let right = self.parse_expr(prec)?;
+        let span = left.span.merge(right.span);
+        Ok(Expr::new(
+            ExprKind::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            span,
+        ))
     }
 
     fn token_to_binary_op(&self, kind: &TokenKind) -> Option<BinaryOp> {
@@ -1075,21 +1089,24 @@ impl Parser {
 
     fn parse_block_expr(&mut self) -> Result<BlockExpr, ParseError> {
         let start = self.expect(TokenKind::LBrace)?.span;
-        let mut stmts = Vec::new();
-
-        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
-            let expr = self.parse_expr(Precedence::Lowest)?;
-            stmts.push(expr);
-            if self.peek_kind() == &TokenKind::Semicolon {
-                self.bump();
-            }
-        }
-
+        let stmts = self.parse_stmts()?;
         let end = self.expect(TokenKind::RBrace)?.span;
         Ok(BlockExpr {
             stmts,
             span: start.merge(end),
         })
+    }
+
+    /// Statements up to (not including) the closing `}` of a block or closure.
+    fn parse_stmts(&mut self) -> Result<Vec<Expr>, ParseError> {
+        let mut stmts = Vec::new();
+        while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
+            stmts.push(self.parse_expr(Precedence::Lowest)?);
+            if self.peek_kind() == &TokenKind::Semicolon {
+                self.bump();
+            }
+        }
+        Ok(stmts)
     }
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
@@ -1143,54 +1160,7 @@ impl Parser {
         let mut branches = Vec::new();
 
         while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
-            let mut patterns = Vec::new();
-            let b_start = self.peek().span;
-
-            if self.peek_kind() == &TokenKind::Else {
-                self.bump();
-                patterns.push(WhenPattern::Else);
-            } else {
-                while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
-                    if self.peek_kind() == &TokenKind::In {
-                        self.bump(); // 'in'
-                        let range_expr = self.parse_expr(Precedence::Lowest)?;
-                        if let ExprKind::Binary {
-                            op: BinaryOp::Range,
-                            left,
-                            right,
-                        } = range_expr.kind
-                        {
-                            patterns.push(WhenPattern::InRange {
-                                start: *left,
-                                end: *right,
-                            });
-                        } else {
-                            return Err(ParseError::new(
-                                "Expected range expression 'a..b' after 'in'",
-                                range_expr.span,
-                            ));
-                        }
-                    } else {
-                        patterns.push(WhenPattern::Expr(self.parse_expr(Precedence::Lowest)?));
-                    }
-
-                    if self.peek_kind() == &TokenKind::Comma {
-                        self.bump();
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            self.expect(TokenKind::Arrow)?;
-            let body = self.parse_expr(Precedence::Lowest)?;
-            let b_end = body.span;
-
-            branches.push(WhenBranch {
-                patterns,
-                body,
-                span: b_start.merge(b_end),
-            });
+            branches.push(self.parse_when_branch()?);
 
             if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semicolon {
                 self.bump();
@@ -1203,6 +1173,59 @@ impl Parser {
             ExprKind::When { target, branches },
             start.merge(end),
         ))
+    }
+
+    fn parse_when_branch(&mut self) -> Result<WhenBranch, ParseError> {
+        let mut patterns = Vec::new();
+        let b_start = self.peek().span;
+
+        if self.peek_kind() == &TokenKind::Else {
+            self.bump();
+            patterns.push(WhenPattern::Else);
+        } else {
+            while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
+                patterns.push(self.parse_when_pattern()?);
+                if self.peek_kind() == &TokenKind::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.expect(TokenKind::Arrow)?;
+        let body = self.parse_expr(Precedence::Lowest)?;
+        let b_end = body.span;
+
+        Ok(WhenBranch {
+            patterns,
+            body,
+            span: b_start.merge(b_end),
+        })
+    }
+
+    fn parse_when_pattern(&mut self) -> Result<WhenPattern, ParseError> {
+        if self.peek_kind() != &TokenKind::In {
+            return Ok(WhenPattern::Expr(self.parse_expr(Precedence::Lowest)?));
+        }
+        self.bump(); // 'in'
+        let range_expr = self.parse_expr(Precedence::Lowest)?;
+        if let ExprKind::Binary {
+            op: BinaryOp::Range,
+            left,
+            right,
+        } = range_expr.kind
+        {
+            Ok(WhenPattern::InRange {
+                start: *left,
+                end: *right,
+            })
+        } else {
+            Err(ParseError::new(
+                "Expected range expression 'a..b' after 'in'",
+                range_expr.span,
+            ))
+        }
     }
 
     fn parse_return(&mut self) -> Result<Expr, ParseError> {

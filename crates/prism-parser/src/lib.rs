@@ -4,7 +4,7 @@ pub mod error;
 pub mod parser;
 
 pub use error::ParseError;
-pub use parser::{Parser, Precedence};
+pub use parser::{Parser, Precedence, MAX_NESTING_DEPTH};
 
 /// Convenience function to parse a source string into a [`prism_ast::SourceFile`].
 pub fn parse_source(source: &str) -> Result<prism_ast::SourceFile, ParseError> {

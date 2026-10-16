@@ -40,6 +40,7 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | Code | Name | Meaning |
 |---|---|---|
 | `E2001` | syntax error | The lexer produced an error token or the parser rejected the source. The parser stops at the first error. |
+| `E2002` | `NestingTooDeep` | Expressions or types nest deeper than 256 levels, counting each operator of a left-associative chain such as `a + a + ... + a` as one level. |
 
 ### E3xxx: Phase 1 ABI extraction (`crates/prism-abi`)
 

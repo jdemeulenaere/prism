@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use prism_ast::*;
-    use prism_parser::parse_source;
+    use prism_parser::{parse_source, MAX_NESTING_DEPTH};
 
     #[test]
     fn test_parse_math_sample() {
@@ -603,5 +603,58 @@ mod tests {
         assert!(res5.is_err());
         let err5 = res5.unwrap_err();
         assert!(err5.message.contains("Expected '}'"));
+    }
+
+    /// Runs `f` on a thread with the 8 MiB stack of the `prism` CLI's main
+    /// thread. A debug build needs about 3 MiB to parse up to the nesting
+    /// limit, more than the 2 MiB of a default test thread.
+    fn with_cli_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_deep_nesting_reports_error_instead_of_overflowing() {
+        let n = 100_000;
+        let r = |s: &str| s.repeat(n);
+        let sources = [
+            format!("fun f(): Int = {}1{}", r("{"), r("}")),
+            format!("fun f(): Int = {}1{}", r("("), r(")")),
+            format!("fun f(): Int = {}1", r("- ")),
+            format!("fun f(c: Boolean): Int = {}1", r("if (c) 1 else ")),
+            format!("fun f(x: {}Int): Int = 1", r("& ")),
+            format!("fun f(x: {}Int{}): Int = 1", r("Heap<"), r(">")),
+            format!("fun f(): Int = {}1{}", r("g { x -> "), r(" }")),
+            format!(
+                "fun f(x: Int): Int = {}1{}",
+                r("when (x) { else -> "),
+                r(" }")
+            ),
+            // Left-deep chains parse iteratively but would build a tree too
+            // deep to drop, clone or type-check recursively.
+            format!("fun f(a: Int): Int = {}a", r("a+")),
+            format!("fun f(a: Int): Int = a{}", r(".b")),
+            format!("fun f(): Int = g{}", r("(1)")),
+        ];
+        for src in sources {
+            let err = with_cli_stack(move || parse_source(&src).unwrap_err());
+            assert_eq!(err.code, "E2002", "{}", err);
+        }
+    }
+
+    #[test]
+    fn test_nesting_within_limit_parses() {
+        let n = MAX_NESTING_DEPTH - 10;
+        let sources = [
+            format!("fun f(): Int = {}1{}", "(".repeat(n), ")".repeat(n)),
+            format!("fun f(a: Int): Int = {}a", "a+".repeat(n)),
+        ];
+        for src in sources {
+            with_cli_stack(move || parse_source(&src).unwrap());
+        }
     }
 }

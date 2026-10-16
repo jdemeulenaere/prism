@@ -133,7 +133,7 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
 /// Formats a parser error.
 pub fn format_parse_error(path: &Path, source: Option<&str>, err: &ParseError) -> String {
     let mut out = String::new();
-    out.push_str("error[E2001]: syntax error\n");
+    out.push_str(&format!("error[{}]: syntax error\n", err.code));
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
         path.display(),

@@ -147,6 +147,21 @@ The parser MUST parse expressions according to Pratt operator precedence, correc
 - **WHEN** an expression starting with `(` is on a new line following a call (`cleanup()\n(1 + 2).toString()`)
 - **THEN** the parser treats `(1 + 2)` as a separate statement rather than a call argument to `cleanup()`
 
+### Requirement: Bounded Nesting Depth
+The parser MUST reject source whose expressions or types nest deeper than 256 levels with error `E2002`, and MUST NOT overflow the stack or abort on any input. The limit bounds the height of the syntax tree, so an operator chain counts one level per operator even though it is parsed iteratively.
+
+#### Scenario: Deeply nested expression rejected
+- **WHEN** a function body nests 100,000 parentheses, blocks, unary operators or `else if` branches
+- **THEN** the parser reports `E2002` at the first token past the limit instead of overflowing the stack
+
+#### Scenario: Long operator chain rejected
+- **WHEN** a function body is a chain of 100,000 additions (`a + a + ... + a`)
+- **THEN** the parser reports `E2002` rather than building a tree too deep to drop or type-check
+
+#### Scenario: Nesting within the limit accepted
+- **WHEN** an expression nests 246 parentheses
+- **THEN** it parses without error
+
 ### Requirement: Trailing Lambda and Multi-Statement Closure Syntax
 The parser MUST support trailing lambda syntax for function invocations, and closure blocks MUST support optional parameter lists followed by multi-statement bodies.
 
@@ -215,4 +230,5 @@ Prism chooses Kotlin-like ergonomics combined with value ownership semantics to 
 - **`compose` is a soft keyword.** It is a modifier only directly before `fun`, so common API names such as `pipeline.compose()` stay usable.
 - **Borrowed struct fields are rejected in the parser.** Enforcing the zero-cost memory invariant at AST construction means no struct can ever carry a lifetime dependency.
 - **`package` declaration versus `package` modifier.** A lookahead (`is_package_decl_ahead`) treats `package` followed by a dotted name as a declaration and `package fun` (or `struct`, `enum`, `val`, `var`) as visibility.
+- **A fixed nesting limit (256) instead of a growable stack.** Recursive descent overflowed the stack on deep input and aborted the process. A fixed limit keeps the diagnostic the same for every build of the compiler and bounds the tree for every later recursive pass; growing the stack would need a dependency with a build script.
 - **Fail-fast errors.** The parser stops at the first syntax error with an exact span and never panics. Multi-error recovery is left for LSP support.
