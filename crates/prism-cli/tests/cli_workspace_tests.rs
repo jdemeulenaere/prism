@@ -704,3 +704,41 @@ fn test_cli_binary_imported_signatures_keep_their_declared_types() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+#[test]
+fn test_cli_binary_member_of_unimported_type_e4014() {
+    let temp = create_temp_dir("member_of_unimported_type_e4014");
+    for dir in ["model", "svc", "app"] {
+        fs::create_dir_all(temp.join(dir)).unwrap();
+    }
+    fs::write(
+        temp.join("model/types.prism"),
+        "package model\npublic struct Item {\n    val price: Int\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.join("svc/api.prism"),
+        "package svc\nimport /model/types\npublic fun first(): Item = Item(1)\npublic fun send(i: Item): Unit { }\n",
+    )
+    .unwrap();
+    let main = temp.join("app/main.prism");
+    fs::write(
+        &main,
+        "package app\nimport /svc/api\nfun keep() {\n    send(first())\n}\nfun price(): Int = first().price\n",
+    )
+    .unwrap();
+
+    let output = Command::new(prism_bin())
+        .arg("check")
+        .arg(&main)
+        .output()
+        .expect("failed to execute prism CLI");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4014]"), "{}", stderr);
+    assert!(stderr.contains("add 'import /model/types'"), "{}", stderr);
+    assert_eq!(stderr.matches("error[").count(), 1, "{}", stderr);
+
+    fs::remove_dir_all(&temp).ok();
+}

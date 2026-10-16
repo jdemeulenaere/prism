@@ -2,8 +2,8 @@
 
 use crate::error::TypeError;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
-use crate::types::{NominalId, Type, TypeDef};
-use prism_abi::{ExportedSymbol, FileAbi};
+use crate::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
+use prism_abi::{AbiType, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, TopLevelVarDecl};
 use prism_ast::expr::{
     BinaryOp, BlockExpr, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
@@ -20,6 +20,24 @@ pub fn peel_indirection(mut ty: &Type) -> &Type {
             Type::Heap(inner) => ty = inner,
             _ => return ty,
         }
+    }
+}
+
+/// Every type recorded in an exported symbol's signature or definition.
+fn abi_symbol_types(sym: &ExportedSymbol) -> Vec<&AbiType> {
+    match sym {
+        ExportedSymbol::Function {
+            params,
+            return_type,
+            ..
+        } => params
+            .iter()
+            .map(|(_, ty, _)| ty)
+            .chain(std::iter::once(return_type))
+            .collect(),
+        ExportedSymbol::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
+        ExportedSymbol::Enum { variants, .. } => variants.iter().flat_map(|(_, p)| p).collect(),
+        ExportedSymbol::Var { ty, .. } => vec![ty],
     }
 }
 
@@ -102,6 +120,11 @@ pub struct TypeChecker {
     inference: HashMap<String, Inference>,
     /// Declarations already reported as depending on themselves (`E4013`).
     recursive_inference: HashSet<String>,
+    /// Module paths of the file's direct imports, whose ABIs this checker has ingested.
+    direct_imports: HashSet<String>,
+    /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
+    /// the file does not import, which can be named in an `E4014` hint.
+    seen_nominals: HashMap<String, Vec<NominalId>>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
@@ -141,6 +164,8 @@ impl TypeChecker {
             origin: Origin::Value,
             inference: HashMap::new(),
             recursive_inference: HashSet::new(),
+            direct_imports: HashSet::new(),
+            seen_nominals: HashMap::new(),
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
@@ -219,10 +244,88 @@ impl TypeChecker {
                 self.check_visibility(&sym, span);
                 Some(sym)
             }
+            Err(TypeError::UnresolvedSymbol { .. })
+                if self.unimported_type_named(name).is_some() =>
+            {
+                // The name is a type that reached this file through an import's signature: to
+                // construct it or name its variants, the file must import its module.
+                let id = self.unimported_type_named(name).expect("checked above");
+                self.errors.push(TypeError::MemberOfUnimportedType {
+                    type_name: id.name,
+                    module: id.module,
+                    span,
+                });
+                None
+            }
             Err(err) => {
                 self.errors.push(err);
                 None
             }
+        }
+    }
+
+    /// Records every struct and enum `ty` names, so `E4014` can name types that reached this
+    /// file through an import's signature.
+    fn record_nominals(&mut self, ty: &AbiType) {
+        match ty {
+            AbiType::Nominal {
+                module, name, args, ..
+            } => {
+                let id = NominalId::new(module.clone(), name.clone());
+                let ids = self.seen_nominals.entry(name.clone()).or_default();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+                args.iter().for_each(|a| self.record_nominals(a));
+            }
+            AbiType::Unbound { args, .. } => args.iter().for_each(|a| self.record_nominals(a)),
+            AbiType::Nullable(inner) | AbiType::Heap(inner) | AbiType::Ref { inner, .. } => {
+                self.record_nominals(inner)
+            }
+            AbiType::Fn { params, ret, .. } => {
+                params.iter().for_each(|p| self.record_nominals(p));
+                self.record_nominals(ret);
+            }
+            AbiType::Prim(_) | AbiType::Unit => {}
+        }
+    }
+
+    /// Whether the module defining `id` is out of this file's reach: neither the file itself,
+    /// the built-in module, nor a direct import (D9 of `typechecker-soundness`).
+    fn is_unimported(&self, id: &NominalId) -> bool {
+        id.module != self.module_path
+            && id.module != BUILTIN_MODULE
+            && !self.direct_imports.contains(&id.module)
+    }
+
+    /// The single type named `name` that reached this file through an import's signature but is
+    /// defined in a module the file does not import.
+    fn unimported_type_named(&self, name: &str) -> Option<NominalId> {
+        let ids: Vec<&NominalId> = self
+            .seen_nominals
+            .get(name)?
+            .iter()
+            .filter(|id| self.is_unimported(id))
+            .collect();
+        match ids.as_slice() {
+            [id] => Some((*id).clone()),
+            _ => None,
+        }
+    }
+
+    /// Reports `E4014` and returns `true` if `ty` is a struct or enum whose defining module is
+    /// not a direct import, so its members cannot be used.
+    fn reject_unimported_members(&mut self, ty: &Type, span: Span) -> bool {
+        match ty {
+            Type::Struct(id) | Type::Enum(id) if self.is_unimported(id) => {
+                self.errors.push(TypeError::MemberOfUnimportedType {
+                    type_name: id.name.clone(),
+                    module: id.module.clone(),
+                    span,
+                });
+                true
+            }
+            _ => false,
         }
     }
 
@@ -355,6 +458,10 @@ impl TypeChecker {
     /// exported signatures are already bound to their defining modules by Phase 1, so they are
     /// converted as they are.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
+        self.direct_imports.insert(abi.module.clone());
+        for ty in abi.symbols.iter().flat_map(abi_symbol_types) {
+            self.record_nominals(ty);
+        }
         for sym in &abi.symbols {
             let symbol = match sym {
                 ExportedSymbol::Struct {
@@ -1590,7 +1697,13 @@ impl TypeChecker {
         // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as `Enum`.
         let subject_ty = target.map(|t| {
             let ty = self.infer_expr(t);
-            peel_references(&ty).clone()
+            let ty = peel_references(&ty).clone();
+            // Matching on variants needs the enum's definition, which needs its module.
+            if self.reject_unimported_members(&ty, t.span) {
+                Type::Error
+            } else {
+                ty
+            }
         });
         let subject_variants = match &subject_ty {
             Some(Type::Enum(id)) => self
@@ -1656,8 +1769,10 @@ impl TypeChecker {
             return Type::Unit;
         }
 
-        // Exhaustiveness check: a `when` in value position needs an `else` or every variant
+        // Exhaustiveness check: a `when` in value position needs an `else` or every variant. A
+        // subject whose type is already an error has nothing more to report.
         let is_exhaustive = has_else
+            || subject_ty == Some(Type::Error)
             || subject_variants.is_some_and(|(_, variants)| {
                 !variants.is_empty()
                     && variants
@@ -2051,6 +2166,9 @@ impl TypeChecker {
         let wrap = |ty: Type| if is_nullable { ty.nullable() } else { ty };
 
         let peeled_ty = peel_indirection(base_ty).clone();
+        if self.reject_unimported_members(&peeled_ty, span) {
+            return (Type::Error, None);
+        }
         let def = match &peeled_ty {
             Type::Struct(id) | Type::Enum(id) => self.types.get(id).cloned(),
             _ => None,

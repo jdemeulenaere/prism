@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::Span;
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4013`).
+/// Semantic and type checking error categories (`E4001` - `E4014`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -78,6 +78,14 @@ pub enum TypeError {
     /// E4013: A type cannot be inferred and must be written: a closure parameter with no expected
     /// function type, or a declaration whose inferred type depends on itself.
     CannotInferType { message: String, span: Span },
+
+    /// E4014: A member of a struct or enum (a field, a variant, its constructor) is used, but the
+    /// module defining the type is not a direct import of the file.
+    MemberOfUnimportedType {
+        type_name: String,
+        module: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -99,6 +107,7 @@ impl TypeError {
             TypeError::MissingReturnType { .. } => "E4011",
             TypeError::AmbiguousImport { .. } => "E4012",
             TypeError::CannotInferType { .. } => "E4013",
+            TypeError::MemberOfUnimportedType { .. } => "E4014",
         }
     }
 
@@ -120,6 +129,7 @@ impl TypeError {
             TypeError::MissingReturnType { span, .. } => *span,
             TypeError::AmbiguousImport { span, .. } => *span,
             TypeError::CannotInferType { span, .. } => *span,
+            TypeError::MemberOfUnimportedType { span, .. } => *span,
         }
     }
 
@@ -204,6 +214,12 @@ impl TypeError {
                 )
             }
             TypeError::CannotInferType { message, .. } => message.clone(),
+            TypeError::MemberOfUnimportedType {
+                type_name, module, ..
+            } => format!(
+                "'{}' is defined in module '{}', which this file does not import; add 'import /{}' to use the members of '{}'",
+                type_name, module, module, type_name
+            ),
         }
     }
 }

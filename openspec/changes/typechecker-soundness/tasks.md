@@ -44,7 +44,7 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 9. Types reachable only through an import (D9)
 
-- [ ] 9.1 Add `TypeError::MemberOfUnimportedType` (`E4014`), with its `diagnostics` catalog row and CLI help line. Report it on member access, field assignment, variant matching and construction of a nominal type whose defining module is not a direct import. Verify with multi-file tests for every scenario of "Members of a Type Require Importing Its Module".
+- [x] 9.1 Add `TypeError::MemberOfUnimportedType` (`E4014`), with its `diagnostics` catalog row and CLI help line. Report it on member access, field assignment, variant matching and construction of a nominal type whose defining module is not a direct import. Verify with multi-file tests for every scenario of "Members of a Type Require Importing Its Module".
 
 ## 10. Integration
 

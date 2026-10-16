@@ -839,3 +839,85 @@ fn imported_signature_names_resolve_in_the_exporter() {
         &[],
     );
 }
+
+// Members of a type require importing its module (typechecker-soundness D9).
+
+const SHOP_MODELS: (&str, &str) = (
+    "shop/models",
+    "package shop\npublic struct Order {\n    var price: Int\n}\npublic enum Kind {\n    Retail,\n    Bulk\n}\n",
+);
+const SHOP_API: (&str, &str) = (
+    "shop/api",
+    "package shop\nimport models\npublic fun first(): Order = Order(1)\npublic fun send(o: Order): Unit { }\npublic fun kind(): Kind = Kind.Retail\n",
+);
+
+#[track_caller]
+fn assert_shop_codes(app_imports: &[&str], app: &str, expected: &[&str]) -> Vec<TypeError> {
+    let errors = check_workspace(&[SHOP_MODELS, SHOP_API], app_imports, app);
+    assert_eq!(codes(&errors), expected, "{:?}\n{}", errors, app);
+    errors
+}
+
+#[test]
+fn field_access_on_a_type_from_an_unimported_module() {
+    let errors = assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g(): Int = first().price\n",
+        &["E4014"],
+    );
+    let message = errors[0].message();
+    for part in ["'Order'", "shop/models", "import /shop/models"] {
+        assert!(message.contains(part), "{}", message);
+    }
+}
+
+#[test]
+fn passing_the_value_along_without_touching_its_members() {
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun keep(): Unit {\n    send(first())\n}\nfun copy() {\n    val o = first()\n    send(o)\n}\n",
+        &[],
+    );
+}
+
+#[test]
+fn importing_the_defining_module() {
+    assert_shop_codes(
+        &["shop/api", "shop/models"],
+        "package app\nfun g(): Int = first().price\n",
+        &[],
+    );
+}
+
+#[test]
+fn writing_matching_or_constructing_an_unimported_type() {
+    // Field assignment.
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g() {\n    var o = first()\n    o.price = 2\n}\n",
+        &["E4014"],
+    );
+    // Matching on its variants.
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g(): Int = when (kind()) {\n    else -> 1\n}\n",
+        &["E4014"],
+    );
+    // Constructing it or naming a variant.
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g() {\n    send(Order(1))\n}\n",
+        &["E4014"],
+    );
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g(): Int = 1\nval k = Kind.Bulk\n",
+        &["E4014"],
+    );
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g(): Int = when (kind()) {\n    Kind.Retail -> 1\n    else -> 2\n}\n",
+        // Reported once, at the subject: patterns are not checked against an unusable enum.
+        &["E4014"],
+    );
+}

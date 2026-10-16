@@ -216,6 +216,12 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::AmbiguousImport { .. } => {
             out.push_str("   = help: import only one of the modules that export this name\n");
         }
+        TypeError::MemberOfUnimportedType { module, .. } => {
+            out.push_str(&format!(
+                "   = help: add 'import /{}' to this file\n",
+                module
+            ));
+        }
         TypeError::CannotInferType { .. } => {
             out.push_str("   = help: add an explicit type annotation, or pass the closure where a function type is expected\n");
         }
