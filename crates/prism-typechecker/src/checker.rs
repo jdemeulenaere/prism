@@ -776,6 +776,29 @@ impl TypeChecker {
         self.with_origin(origin, |checker| checker.check_expr(expr, expected))
     }
 
+    /// Infers an operator operand or a condition. Operators read through references (D1 of
+    /// `typechecker-soundness`), so every `&` and `&mut` layer is peeled: with `a: &Int`,
+    /// `a + 1` is an `Int`. `Heap<T>` is not peeled.
+    fn infer_operand(&mut self, expr: &Expr) -> Type {
+        let ty = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
+        peel_references(&ty).clone()
+    }
+
+    /// Checks an operator operand or a condition against `expected`, reading through references
+    /// like [`Self::infer_operand`]. A mismatch is a plain `E4002`.
+    fn check_operand(&mut self, expr: &Expr, expected: &Type) -> Type {
+        let ty = self.infer_operand(expr);
+        if ty.is_assignable_to(expected) {
+            return ty;
+        }
+        if ty != Type::Error {
+            self.with_origin(Origin::Value, |c| {
+                c.report_mismatch(expected, ty, expr.span)
+            });
+        }
+        Type::Error
+    }
+
     /// Reports that `found` is not assignable to `expected`, with the code of the current
     /// expectation origin.
     fn report_mismatch(&mut self, expected: &Type, found: Type, span: Span) {
@@ -878,7 +901,7 @@ impl TypeChecker {
             else_branch,
         } = &expr.kind
         {
-            self.check_expr_at(cond, &Type::Bool, Origin::Value);
+            self.check_operand(cond, &Type::Bool);
             let then_ty = self.check_expr(then_branch, expected);
             if let Some(else_b) = else_branch {
                 let else_ty = self.check_expr(else_b, expected);
@@ -980,7 +1003,7 @@ impl TypeChecker {
                 then_branch,
                 else_branch,
             } => {
-                self.check_expr(cond, &Type::Bool);
+                self.check_operand(cond, &Type::Bool);
                 let then_ty = self.infer_expr(then_branch);
                 if let Some(else_b) = else_branch {
                     let else_ty = self.infer_expr(else_b);
@@ -1092,8 +1115,8 @@ impl TypeChecker {
     fn infer_binary_op(&mut self, op: BinaryOp, left: &Expr, right: &Expr, span: Span) -> Type {
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                let left_ty = self.infer_expr(left);
-                let right_ty = self.infer_expr(right);
+                let left_ty = self.infer_operand(left);
+                let right_ty = self.infer_operand(right);
 
                 if left_ty == Type::Error || right_ty == Type::Error {
                     return Type::Error;
@@ -1121,8 +1144,8 @@ impl TypeChecker {
             }
 
             BinaryOp::Eq | BinaryOp::NotEq => {
-                let left_ty = self.infer_expr(left);
-                let right_ty = self.infer_expr(right);
+                let left_ty = self.infer_operand(left);
+                let right_ty = self.infer_operand(right);
 
                 if left_ty == Type::Error || right_ty == Type::Error {
                     return Type::Bool;
@@ -1141,8 +1164,8 @@ impl TypeChecker {
             }
 
             BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => {
-                let left_ty = self.infer_expr(left);
-                let right_ty = self.infer_expr(right);
+                let left_ty = self.infer_operand(left);
+                let right_ty = self.infer_operand(right);
 
                 if left_ty == Type::Error || right_ty == Type::Error {
                     return Type::Bool;
@@ -1164,8 +1187,8 @@ impl TypeChecker {
             }
 
             BinaryOp::And | BinaryOp::Or => {
-                self.check_expr(left, &Type::Bool);
-                self.check_expr(right, &Type::Bool);
+                self.check_operand(left, &Type::Bool);
+                self.check_operand(right, &Type::Bool);
                 Type::Bool
             }
 
@@ -1198,8 +1221,8 @@ impl TypeChecker {
             }
 
             BinaryOp::Range => {
-                self.check_expr(left, &Type::Int);
-                self.check_expr(right, &Type::Int);
+                self.check_operand(left, &Type::Int);
+                self.check_operand(right, &Type::Int);
                 Type::Struct(NominalId::builtin_range())
             }
         }
@@ -1208,7 +1231,7 @@ impl TypeChecker {
     fn infer_unary_op(&mut self, op: UnaryOp, inner: &Expr, span: Span) -> Type {
         match op {
             UnaryOp::Neg => {
-                let ty = self.infer_expr(inner);
+                let ty = self.infer_operand(inner);
                 if ty == Type::Int || ty == Type::Float || ty == Type::Error {
                     ty
                 } else {
@@ -1221,7 +1244,7 @@ impl TypeChecker {
                 }
             }
             UnaryOp::Not => {
-                self.check_expr(inner, &Type::Bool);
+                self.check_operand(inner, &Type::Bool);
                 Type::Bool
             }
             UnaryOp::Borrow => match self.infer_expr(inner) {
@@ -1451,7 +1474,7 @@ impl TypeChecker {
                         } else if let Some(s_ty) = &subject_ty {
                             self.check_expr(p_expr, s_ty);
                         } else {
-                            self.check_expr(p_expr, &Type::Bool);
+                            self.check_operand(p_expr, &Type::Bool);
                         }
                     }
                     WhenPattern::InRange { start, end } => {

@@ -19,7 +19,7 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 4. Reading through references (D1)
 
-- [ ] 4.1 Peel references for operator operands and conditions. Verify with tests for every scenario of "Operators Read Through References".
+- [x] 4.1 Peel references for operator operands and conditions. Verify with tests for every scenario of "Operators Read Through References".
 
 ## 5. Inference (D5, D6)
 

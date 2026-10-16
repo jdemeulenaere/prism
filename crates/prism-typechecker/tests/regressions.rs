@@ -545,3 +545,40 @@ fn type_name_in_return_position_is_not_a_mismatch() {
         &["E4002"],
     );
 }
+
+// Operators read through references (typechecker-soundness D1).
+
+#[test]
+fn arithmetic_on_a_borrowed_integer() {
+    assert_ok("fun f(a: &Int): Int = a + 1\n");
+    assert_ok("fun f(a: &mut Int, b: &Int): Int = a * b - -a\n");
+    assert_ok("fun f(s: &String): String = s + \"!\"\n");
+}
+
+#[test]
+fn equality_and_comparison_between_a_borrow_and_a_value() {
+    assert_ok("fun f(a: &Int, b: Int): Bool = a == b\n");
+    assert_ok("fun f(a: &Int, b: &mut Int): Bool = a < b && a != 0\n");
+}
+
+#[test]
+fn borrowed_boolean_as_a_condition() {
+    assert_ok("fun f(c: &Bool): Int = if (c) 1 else 2\n");
+    assert_ok("fun f(c: &Bool, d: &mut Bool): Bool = !c || d\n");
+    assert_ok("fun f(c: &Bool): Int = when {\n    c -> 1\n    else -> 2\n}\n");
+}
+
+#[test]
+fn borrow_passed_where_a_value_is_expected() {
+    assert_codes(
+        "fun g(x: Int): Int = x\nfun f(a: &Int): Int = g(a)\n",
+        &["E4004"],
+    );
+    assert_codes("fun f(a: &Int): Int = a\n", &["E4005"]);
+    assert_codes("fun f(a: &Int) {\n    val x: Int = a\n}\n", &["E4002"]);
+}
+
+#[test]
+fn operators_do_not_read_through_heap() {
+    assert_codes("fun f(h: Heap<Int>): Int = h + 1\n", &["E4002"]);
+}
