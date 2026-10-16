@@ -3,7 +3,7 @@ package demo.ui
 // Universal trailing lambda support:
 // - Call with parentheses + trailing lambda: Column(padding = 16) { ... }
 // - Bare call with trailing lambda only: remember { ... }
-public compose fun CounterView(initialCount: Int = 0) {
+public compose fun CounterView(initialCount: Int = 0): Unit {
     val count = remember { mutableStateOf(initialCount) }
 
     Column(padding = 16) {

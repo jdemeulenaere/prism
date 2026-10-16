@@ -14,7 +14,7 @@ public struct User {
 }
 
 // Function borrowing & mutation with explicit call-site borrow
-public fun updateName(user: &mut User, newName: String) {
+public fun updateName(user: &mut User, newName: String): Unit {
     user.name = newName
 }
 
