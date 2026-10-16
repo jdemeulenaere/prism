@@ -196,7 +196,7 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::ImmutabilityViolation { .. } => {
             out.push_str("   = help: use 'var' to declare a mutable binding or field\n");
         }
-        TypeError::CallSignatureMismatch { .. } => {
+        TypeError::CallSignatureMismatch { .. } | TypeError::ArgumentTypeMismatch { .. } => {
             out.push_str(
                 "   = help: verify parameter counts, argument types, or named parameters\n",
             );
@@ -206,6 +206,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         TypeError::InvalidComposeContext { .. } => {
             out.push_str("   = help: add 'compose' modifier to the caller or invoke within a composable function/closure\n");
+        }
+        TypeError::ReturnTypeMismatch { .. } => {
+            out.push_str("   = help: return a value of the declared return type, or change the declared return type\n");
         }
         TypeError::MissingReturnType { .. } => {
             out.push_str("   = help: add an explicit return type such as ': Unit'; public and package functions must declare return types for ABI extraction\n");

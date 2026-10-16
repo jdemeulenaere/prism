@@ -15,7 +15,7 @@ Each task's tests go in `crates/prism-typechecker/tests/regressions.rs`, which r
 
 ## 3. Mismatch codes (D2)
 
-- [ ] 3.1 Add the expectation origin and `TypeError::ArgumentTypeMismatch` (`E4004`). Update the `diagnostics` catalog descriptions of `E4002`, `E4004` and `E4005` and the CLI help lines. Update the existing tests that change code (`mutable_reference_stays_invariant`, `branches_join_with_null_into_nullable_type`, and the `checker.rs` unit tests). Verify with tests for every scenario of "Return and Argument Mismatch Codes".
+- [x] 3.1 Add the expectation origin and `TypeError::ArgumentTypeMismatch` (`E4004`). Update the `diagnostics` catalog descriptions of `E4002`, `E4004` and `E4005` and the CLI help lines. Update the existing tests that change code (`mutable_reference_stays_invariant`, `branches_join_with_null_into_nullable_type`, and the `checker.rs` unit tests). Verify with tests for every scenario of "Return and Argument Mismatch Codes".
 
 ## 4. Reading through references (D1)
 

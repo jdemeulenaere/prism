@@ -31,6 +31,30 @@ fn peel_references(mut ty: &Type) -> &Type {
     ty
 }
 
+/// Where the expected type of the value being checked comes from. It picks the code of an
+/// assignability mismatch: a returned value reports `E4005`, an argument `E4004`, and any other
+/// expectation (annotation, assignment, operand, default value) `E4002`.
+///
+/// The origin is inherited by `if`/`when` branches and a block's final expression, which produce
+/// the checked value, and reset to `Value` by every other nested expectation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Value,
+    Return,
+    Argument,
+}
+
+/// How the value of a `when` is used.
+#[derive(Debug, Clone, Copy)]
+enum WhenUse<'a> {
+    /// The value is discarded: no `else` or common branch type is needed.
+    Statement,
+    /// The value is used, and its type is the join of the branch types.
+    Infer,
+    /// The value is used, and every branch is checked against the expected type.
+    Check(&'a Type),
+}
+
 /// Static type checker and semantic analyzer for Prism source modules.
 pub struct TypeChecker {
     /// Lexical scope environment.
@@ -42,6 +66,8 @@ pub struct TypeChecker {
     pub module_path: String,
     /// Definitions of every nominal type known to this file, keyed by identity.
     types: HashMap<NominalId, TypeDef>,
+    /// Origin of the expected type currently being checked against.
+    origin: Origin,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
@@ -78,6 +104,7 @@ impl TypeChecker {
             current_package,
             module_path: module_path.into(),
             types,
+            origin: Origin::Value,
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
@@ -691,7 +718,13 @@ impl TypeChecker {
         if let Some(body) = &f.body {
             match body {
                 FunctionBody::Block(block) => {
-                    let block_ty = self.check_block(block, declared_ret.as_ref());
+                    // The final expression of a non-`Unit` body is the returned value.
+                    let origin = match &declared_ret {
+                        Some(Type::Unit) | None => Origin::Value,
+                        Some(_) => Origin::Return,
+                    };
+                    let block_ty =
+                        self.with_origin(origin, |c| c.check_block(block, declared_ret.as_ref()));
                     if let Some(expected) = &declared_ret {
                         // For block bodies returning Unit, trailing expressions are discarded.
                         if expected != &Type::Unit && !block_ty.is_assignable_to(expected) {
@@ -705,7 +738,7 @@ impl TypeChecker {
                 }
                 FunctionBody::Expr(expr) => {
                     let expr_ty = if let Some(expected) = &declared_ret {
-                        self.check_expr(expr, expected)
+                        self.check_expr_at(expr, expected, Origin::Return)
                     } else {
                         self.infer_expr(expr)
                     };
@@ -730,6 +763,42 @@ impl TypeChecker {
         self.in_function = prev_in_func;
     }
 
+    /// Runs `f` with the expectation origin set to `origin`, restoring it afterwards.
+    fn with_origin<T>(&mut self, origin: Origin, f: impl FnOnce(&mut Self) -> T) -> T {
+        let prev = std::mem::replace(&mut self.origin, origin);
+        let result = f(self);
+        self.origin = prev;
+        result
+    }
+
+    /// Checks `expr` against `expected` with the expectation origin `origin`.
+    fn check_expr_at(&mut self, expr: &Expr, expected: &Type, origin: Origin) -> Type {
+        self.with_origin(origin, |checker| checker.check_expr(expr, expected))
+    }
+
+    /// Reports that `found` is not assignable to `expected`, with the code of the current
+    /// expectation origin.
+    fn report_mismatch(&mut self, expected: &Type, found: Type, span: Span) {
+        let expected = expected.clone();
+        self.errors.push(match self.origin {
+            Origin::Value => TypeError::TypeMismatch {
+                expected,
+                found,
+                span,
+            },
+            Origin::Return => TypeError::ReturnTypeMismatch {
+                expected,
+                found,
+                span,
+            },
+            Origin::Argument => TypeError::ArgumentTypeMismatch {
+                expected,
+                found,
+                span,
+            },
+        });
+    }
+
     /// Checks an expression against an expected type in bidirectional checking mode.
     pub fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         if expected == &Type::Error {
@@ -741,11 +810,7 @@ impl TypeChecker {
             if let Type::Nullable(_) = expected {
                 return expected.clone();
             } else {
-                self.errors.push(TypeError::TypeMismatch {
-                    expected: expected.clone(),
-                    found: Type::Nullable(Box::new(Type::Nothing)),
-                    span: expr.span,
-                });
+                self.report_mismatch(expected, Type::Nullable(Box::new(Type::Nothing)), expr.span);
                 return Type::Error;
             }
         }
@@ -789,7 +854,9 @@ impl TypeChecker {
                     }
                 }
 
-                let body_ty = self.check_block(body, Some(exp_ret));
+                // The body's value is what the closure returns.
+                let body_ty =
+                    self.with_origin(Origin::Return, |c| c.check_block(body, Some(exp_ret)));
 
                 self.current_expected_return = prev_ret;
                 self.in_function = prev_in_func;
@@ -811,7 +878,7 @@ impl TypeChecker {
             else_branch,
         } = &expr.kind
         {
-            self.check_expr(cond, &Type::Bool);
+            self.check_expr_at(cond, &Type::Bool, Origin::Value);
             let then_ty = self.check_expr(then_branch, expected);
             if let Some(else_b) = else_branch {
                 let else_ty = self.check_expr(else_b, expected);
@@ -823,15 +890,22 @@ impl TypeChecker {
             }
         }
 
-        // Default: infer and verify assignability
-        let inferred = self.infer_expr(expr);
+        // Special handling for when in check mode: each branch produces the checked value
+        if let ExprKind::When { target, branches } = &expr.kind {
+            return self.infer_when_expr(
+                target.as_deref(),
+                branches,
+                WhenUse::Check(expected),
+                expr.span,
+            );
+        }
+
+        // Default: infer and verify assignability. Expectations nested inside the inferred
+        // expression have their own origin.
+        let inferred = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
         if !inferred.is_assignable_to(expected) {
             if inferred != Type::Error && expected != &Type::Error {
-                self.errors.push(TypeError::TypeMismatch {
-                    expected: expected.clone(),
-                    found: inferred.clone(),
-                    span: expr.span,
-                });
+                self.report_mismatch(expected, inferred.clone(), expr.span);
             }
             return Type::Error;
         }
@@ -926,7 +1000,7 @@ impl TypeChecker {
             }
 
             ExprKind::When { target, branches } => {
-                self.infer_when_expr(target.as_deref(), branches, true, expr.span)
+                self.infer_when_expr(target.as_deref(), branches, WhenUse::Infer, expr.span)
             }
 
             ExprKind::Call { callee, args } => self.infer_call_expr(callee, args, expr.span),
@@ -967,7 +1041,7 @@ impl TypeChecker {
                 let expected = self.current_expected_return.clone();
                 if let Some(e) = opt_expr {
                     if let Some(exp) = &expected {
-                        self.check_expr(e, exp);
+                        self.check_expr_at(e, exp, Origin::Return);
                     } else {
                         self.infer_expr(e);
                     }
@@ -1297,7 +1371,7 @@ impl TypeChecker {
     fn infer_statement(&mut self, stmt: &Expr) -> Type {
         match &stmt.kind {
             ExprKind::When { target, branches } => {
-                self.infer_when_expr(target.as_deref(), branches, false, stmt.span)
+                self.infer_when_expr(target.as_deref(), branches, WhenUse::Statement, stmt.span)
             }
             _ => self.infer_expr(stmt),
         }
@@ -1311,34 +1385,42 @@ impl TypeChecker {
         }
 
         let num_stmts = block.stmts.len();
-        for stmt in &block.stmts[..num_stmts - 1] {
-            self.infer_statement(stmt);
-        }
+        self.with_origin(Origin::Value, |checker| {
+            for stmt in &block.stmts[..num_stmts - 1] {
+                checker.infer_statement(stmt);
+            }
+        });
 
-        // The tail of a block whose expected type is `Unit` is a statement too.
+        // The tail of a block whose expected type is `Unit` is a statement too. A checked tail
+        // produces the block's value, so it keeps the expectation origin.
         let last_stmt = &block.stmts[num_stmts - 1];
         let result_ty = match expected {
             Some(Type::Unit) if matches!(last_stmt.kind, ExprKind::When { .. }) => {
-                self.infer_statement(last_stmt)
+                self.with_origin(Origin::Value, |c| c.infer_statement(last_stmt))
             }
             Some(exp) => self.check_expr(last_stmt, exp),
-            None => self.infer_expr(last_stmt),
+            None => self.with_origin(Origin::Value, |c| c.infer_expr(last_stmt)),
         };
 
         self.env.exit_scope();
         result_ty
     }
 
-    /// Typechecks a `when`. In value position (`value_position`) its branches must join to a
-    /// common type and it must be exhaustive (`E4009`); as a statement its value is discarded,
-    /// so neither applies and its type is `Unit`.
+    /// Typechecks a `when`. When its value is used it must be exhaustive (`E4009`), and its
+    /// branches either join to a common type (`WhenUse::Infer`) or are each checked against the
+    /// expected type (`WhenUse::Check`). As a statement its value is discarded, so neither
+    /// applies and its type is `Unit`.
     fn infer_when_expr(
         &mut self,
         target: Option<&Expr>,
         branches: &[WhenBranch],
-        value_position: bool,
+        use_: WhenUse,
         span: Span,
     ) -> Type {
+        let value_position = !matches!(use_, WhenUse::Statement);
+        // The subject and the patterns are operands, so their expectations are plain values.
+        let branch_origin = self.origin;
+        self.origin = Origin::Value;
         // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as `Enum`.
         let subject_ty = target.map(|t| {
             let ty = self.infer_expr(t);
@@ -1381,6 +1463,10 @@ impl TypeChecker {
                 }
             }
 
+            if let WhenUse::Check(expected) = use_ {
+                self.check_expr_at(&branch.body, expected, branch_origin);
+                continue;
+            }
             let branch_ty = self.infer_expr(&branch.body);
             if value_position && branch_ty != Type::Nothing {
                 if let Some(current) = &unified_ty {
@@ -1399,6 +1485,7 @@ impl TypeChecker {
             }
         }
 
+        self.origin = branch_origin;
         if !value_position {
             return Type::Unit;
         }
@@ -1420,7 +1507,10 @@ impl TypeChecker {
             });
         }
 
-        unified_ty.unwrap_or(Type::Unit)
+        match use_ {
+            WhenUse::Check(expected) => expected.clone(),
+            _ => unified_ty.unwrap_or(Type::Unit),
+        }
     }
 
     /// If `pattern` names a payload-free variant of the subject enum `enum_id`, returns that
@@ -1551,7 +1641,7 @@ impl TypeChecker {
                     }
 
                     for (arg, param_ty) in args.iter().zip(params.iter()) {
-                        self.check_expr(&arg.value, param_ty);
+                        self.check_expr_at(&arg.value, param_ty, Origin::Argument);
                     }
                 } else {
                     let mut param_assigned = vec![false; n_params];
@@ -1578,7 +1668,7 @@ impl TypeChecker {
                                     });
                                 }
                                 param_assigned[pos] = true;
-                                self.check_expr(&arg.value, &params[pos]);
+                                self.check_expr_at(&arg.value, &params[pos], Origin::Argument);
                             } else {
                                 self.errors.push(TypeError::CallSignatureMismatch {
                                     message: format!("unknown parameter '{}'", arg_name),
@@ -1600,7 +1690,11 @@ impl TypeChecker {
                                     });
                                 }
                                 param_assigned[positional_idx] = true;
-                                self.check_expr(&arg.value, &params[positional_idx]);
+                                self.check_expr_at(
+                                    &arg.value,
+                                    &params[positional_idx],
+                                    Origin::Argument,
+                                );
                                 positional_idx += 1;
                             } else {
                                 self.errors.push(TypeError::CallSignatureMismatch {
@@ -1649,7 +1743,7 @@ impl TypeChecker {
                         return Type::Struct(id);
                     }
                     for (arg, (_, _, f_ty)) in args.iter().zip(fields.iter()) {
-                        self.check_expr(&arg.value, f_ty);
+                        self.check_expr_at(&arg.value, f_ty, Origin::Argument);
                     }
                 } else {
                     let mut field_assigned = vec![false; fields.len()];
@@ -1679,7 +1773,7 @@ impl TypeChecker {
                                     });
                                 }
                                 field_assigned[idx] = true;
-                                self.check_expr(&arg.value, &fields[idx].2);
+                                self.check_expr_at(&arg.value, &fields[idx].2, Origin::Argument);
                             } else {
                                 self.errors.push(TypeError::UnknownField {
                                     target_type: Type::Struct(id.clone()),
@@ -1699,7 +1793,11 @@ impl TypeChecker {
                                     });
                                 }
                                 field_assigned[pos_idx] = true;
-                                self.check_expr(&arg.value, &fields[pos_idx].2);
+                                self.check_expr_at(
+                                    &arg.value,
+                                    &fields[pos_idx].2,
+                                    Origin::Argument,
+                                );
                                 pos_idx += 1;
                             } else {
                                 self.errors.push(TypeError::CallSignatureMismatch {
@@ -2135,7 +2233,7 @@ mod tests {
         });
         checker.infer_expr(&call_wrong_type);
         assert_eq!(checker.errors.len(), 2);
-        assert_eq!(checker.errors[1].code(), "E4002");
+        assert_eq!(checker.errors[1].code(), "E4004");
     }
 
     #[test]
@@ -2401,7 +2499,7 @@ mod tests {
         let res_some = checker.infer_expr(&some_call);
         assert!(matches!(res_some, Type::Enum(ref id) if id.name == "Option"));
 
-        // Option.Some("bad") -> E4002
+        // Option.Some("bad") -> E4004 (argument type mismatch)
         let some_bad = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::MemberAccess {
                 target: Box::new(expr(ExprKind::Ident("Option".to_string()))),
@@ -2415,7 +2513,7 @@ mod tests {
             }],
         });
         checker.infer_expr(&some_bad);
-        assert!(checker.errors.iter().any(|e| e.code() == "E4002"));
+        assert!(checker.errors.iter().any(|e| e.code() == "E4004"));
     }
 
     #[test]
@@ -3078,12 +3176,12 @@ mod tests {
         );
         assert!(check_source(&ok).is_empty());
 
-        // `user?.name` is `String?`, so it is not assignable to `String`.
+        // `user?.name` is `String?`, so it is not assignable to the `String` return type.
         let not_null = format!(
             "{}fun nameOf(user: User?): String = user?.name\n",
             USER_STRUCT
         );
-        assert_eq!(error_codes(&check_source(&not_null)), vec!["E4002"]);
+        assert_eq!(error_codes(&check_source(&not_null)), vec!["E4005"]);
     }
 
     #[test]

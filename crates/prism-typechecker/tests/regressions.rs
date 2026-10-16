@@ -149,7 +149,7 @@ fn mutable_reference_stays_invariant() {
     // `&mut Int` must not become `&mut Int?`, or `null` could be written through it.
     assert_codes(
         "fun take(r: &mut Int?) {\n}\nfun f() {\n    var x = 1\n    take(&mut x)\n}\n",
-        &["E4002"],
+        &["E4004"],
     );
 }
 
@@ -296,7 +296,7 @@ fn branches_join_with_null_into_nullable_type() {
     // The joined type is nullable, so it is still not an `Int`.
     assert_codes(
         "fun f(c: Bool): Int {\n    val x = if (c) 1 else null\n    return x\n}\n",
-        &["E4002"],
+        &["E4005"],
     );
 }
 
@@ -369,7 +369,7 @@ fn imported_enum_variant_named_like_a_local_variant_accepted() {
 fn trailing_lambda_passed_to_a_non_function_parameter_rejected() {
     assert_codes(
         "fun takesInt(n: Int) { }\nfun f() { takesInt { 42 } }\n",
-        &["E4002"],
+        &["E4004"],
     );
 }
 
@@ -397,7 +397,7 @@ fn composable_content_lambda_may_call_composables() {
 fn composable_function_type_is_not_a_plain_function_type() {
     assert_codes(
         "fun later(f: () -> Unit) { }\ncompose fun P(content: compose () -> Unit) { later(content) }\n",
-        &["E4002"],
+        &["E4004"],
     );
 }
 
@@ -439,7 +439,7 @@ fn struct_and_enum_never_equal() {
             ("n/kinds", "package n\npublic struct Kind {\n    val x: Int\n}\npublic fun takeStruct(v: Kind): Int = v.x\n"),
         ],
         "package app\nfun f(): Int = takeStruct(k())\n",
-        &["E4002"],
+        &["E4004"],
     );
 }
 
@@ -473,5 +473,75 @@ fn same_named_types_are_qualified_in_mismatch_messages() {
     assert_eq!(
         errors[0].message(),
         "type mismatch: expected 'app::Range', found '<builtin>::Range'"
+    );
+}
+
+// Return and argument mismatch codes (typechecker-soundness D2).
+
+#[test]
+fn returned_value_of_the_wrong_type_reports_e4005() {
+    assert_codes("fun f(): Int {\n    return \"s\"\n}\n", &["E4005"]);
+    assert_codes("fun f(): Int = \"s\"\n", &["E4005"]);
+    // The final expression of a non-Unit block body is the returned value.
+    assert_codes("fun f(): Int {\n    \"s\"\n}\n", &["E4005"]);
+    // A closure body is the closure's returned value.
+    assert_codes(
+        "fun run(f: (Int) -> Int): Int = f(1)\nfun g(): Int = run { x -> \"s\" }\n",
+        &["E4005"],
+    );
+}
+
+#[test]
+fn returning_a_value_from_a_unit_function_reports_e4005() {
+    assert_codes("fun f() {\n    return 5\n}\n", &["E4005"]);
+}
+
+#[test]
+fn mismatch_inside_a_returned_branch_reports_e4005() {
+    assert_codes(
+        "fun f(c: Bool): Int {\n    return if (c) \"a\" else 1\n}\n",
+        &["E4005"],
+    );
+    assert_codes(
+        "fun f(c: Bool): Int = when {\n    c -> \"a\"\n    else -> 1\n}\n",
+        &["E4005"],
+    );
+}
+
+#[test]
+fn argument_of_the_wrong_type_reports_e4004() {
+    let f = "fun f(a: Int): Int = a\nstruct P {\n    val x: Int\n}\nenum O {\n    Some(Int)\n}\n";
+    assert_codes(&format!("{f}fun g(): Int = f(\"s\")\n"), &["E4004"]);
+    assert_codes(&format!("{f}fun g(): Int = f(a = \"s\")\n"), &["E4004"]);
+    assert_codes(&format!("{f}fun g(): P = P(\"s\")\n"), &["E4004"]);
+    assert_codes(&format!("{f}fun g(): O = O.Some(\"s\")\n"), &["E4004"]);
+    // A mismatch inside an argument's branch is still an argument mismatch.
+    assert_codes(
+        &format!("{f}fun g(c: Bool): Int = f(if (c) \"s\" else 1)\n"),
+        &["E4004"],
+    );
+}
+
+#[test]
+fn other_expectations_keep_the_generic_mismatch_code() {
+    assert_codes("fun f() {\n    val x: Int = \"s\"\n}\n", &["E4002"]);
+    assert_codes("fun f(a: Int, b: Int = \"s\"): Int = a\n", &["E4002"]);
+    // A local initializer inside a returned block resets the origin.
+    assert_codes(
+        "fun f(): Int {\n    val x: Int = \"s\"\n    return 1\n}\n",
+        &["E4002"],
+    );
+    // An operand inside an argument resets the origin too.
+    assert_codes(
+        "fun f(a: Bool): Int = 1\nfun g(): Int = f(!\"s\")\n",
+        &["E4002"],
+    );
+}
+
+#[test]
+fn type_name_in_return_position_is_not_a_mismatch() {
+    assert_codes(
+        "struct User {\n    val name: String\n}\nfun f(): User = User\n",
+        &["E4002"],
     );
 }

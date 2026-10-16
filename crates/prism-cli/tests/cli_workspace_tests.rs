@@ -306,8 +306,8 @@ fn test_cli_binary_abi_violation_e3001() {
 }
 
 #[test]
-fn test_cli_binary_type_mismatch_e4002() {
-    let temp = create_temp_dir("type_mismatch_e4002");
+fn test_cli_binary_return_type_mismatch_e4005() {
+    let temp = create_temp_dir("return_type_mismatch_e4005");
     let file = temp.join("main.prism");
     fs::write(&file, "fun main(): Int = \"wrong type\"\n").unwrap();
 
@@ -319,7 +319,7 @@ fn test_cli_binary_type_mismatch_e4002() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error[E4002]: type mismatch: expected 'Int', found 'String'"));
+    assert!(stderr.contains("error[E4005]: return type mismatch: expected 'Int', found 'String'"));
     assert!(stderr.contains("main.prism:1:19"));
 
     fs::remove_dir_all(&temp).ok();

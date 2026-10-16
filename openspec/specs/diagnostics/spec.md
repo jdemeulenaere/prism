@@ -57,10 +57,10 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | Code | Name | Meaning |
 |---|---|---|
 | `E4001` | `UnresolvedSymbol` | An identifier is not found in any enclosing scope or imported ABI. |
-| `E4002` | `TypeMismatch` | An expression's type is not assignable to the expected type, including implicit numeric widening and `null` for a non-nullable type. |
+| `E4002` | `TypeMismatch`, `TypeNameAsValue` | An expression's type is not assignable to the type expected by an annotation, assignment, operator operand or default value (return and argument sites have their own codes), including implicit numeric widening and `null` for a non-nullable type; or a struct or enum name is used as a value. |
 | `E4003` | `ImmutabilityViolation` | Reassigning a `val`, assigning a `val` field, mutating a field of a `val` instance, or taking `&mut` of a `val`. |
-| `E4004` | `CallSignatureMismatch` | Wrong argument count or types, a missing or duplicate named argument, or a missing or duplicate struct field in a constructor call. |
-| `E4005` | `ReturnTypeMismatch` | A returned value is incompatible with the declared return type. |
+| `E4004` | `CallSignatureMismatch`, `ArgumentTypeMismatch` | Wrong argument count, an argument whose type is not assignable to its parameter (positional, named or trailing-lambda argument, struct constructor field, enum payload), a missing, duplicate or twice-assigned named argument, or a missing or duplicate struct field in a constructor call. |
+| `E4005` | `ReturnTypeMismatch` | A returned value (a `return` operand, an expression body, the final expression of a non-`Unit` block body, or a closure body) is incompatible with the declared or expected return type, including a value returned from a `Unit` function and a `return` outside a function. |
 | `E4006` | `UnknownField` | A field does not exist on the struct, or member access on a non-struct or opaque type. |
 | `E4007` | `VisibilityViolation` | A `package`-visible symbol is accessed from another package. |
 | `E4008` | `InvalidComposeContext` | A `compose fun` is called outside a composable function or closure. |

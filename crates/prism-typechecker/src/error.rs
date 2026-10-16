@@ -26,6 +26,14 @@ pub enum TypeError {
     /// E4004: Function invocation argument count or parameter type incompatibility.
     CallSignatureMismatch { message: String, span: Span },
 
+    /// E4004: An argument's type is not assignable to its parameter's type (including struct
+    /// constructor fields and enum payloads).
+    ArgumentTypeMismatch {
+        expected: Type,
+        found: Type,
+        span: Span,
+    },
+
     /// E4005: Returned expression type is incompatible with declared function return type.
     ReturnTypeMismatch {
         expected: Type,
@@ -70,6 +78,7 @@ impl TypeError {
             TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
+            TypeError::ArgumentTypeMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
             TypeError::UnknownField { .. } => "E4006",
             TypeError::VisibilityViolation { .. } => "E4007",
@@ -88,6 +97,7 @@ impl TypeError {
             TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
+            TypeError::ArgumentTypeMismatch { span, .. } => *span,
             TypeError::ReturnTypeMismatch { span, .. } => *span,
             TypeError::UnknownField { span, .. } => *span,
             TypeError::VisibilityViolation { span, .. } => *span,
@@ -109,6 +119,15 @@ impl TypeError {
             } => {
                 let (expected, found) = Type::render_pair(expected, found);
                 format!("type mismatch: expected '{}', found '{}'", expected, found)
+            }
+            TypeError::ArgumentTypeMismatch {
+                expected, found, ..
+            } => {
+                let (expected, found) = Type::render_pair(expected, found);
+                format!(
+                    "argument type mismatch: expected '{}', found '{}'",
+                    expected, found
+                )
             }
             TypeError::TypeNameAsValue { name, .. } => {
                 format!(
