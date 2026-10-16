@@ -188,6 +188,10 @@ The parser MUST recognize newlines as expression and statement delimiters, parsi
 - **WHEN** code contains `return 42\n`
 - **THEN** `42` parses as the returned value expression of `return`
 
+#### Scenario: Bare return before a token that cannot start an expression
+- **WHEN** `return` is directly followed by a token that cannot start an expression (`if (c) return else g()`, `when (x) { 0 -> return, else -> 1 }`, `g(return)`)
+- **THEN** `return` parses as returning unit `()` and the following token continues the enclosing construct
+
 #### Scenario: Semicolon-free statement termination
 - **WHEN** statements appear on consecutive lines without semicolons (`val a = 1\nval b = 2`)
 - **THEN** each statement is parsed independently into the enclosing block
@@ -225,7 +229,7 @@ Prism chooses Kotlin-like ergonomics combined with value ownership semantics to 
 - **Elvis between comparison and range.** `?:` binds tighter than comparison and equality but looser than range and arithmetic, so `age ?: 0 >= 18` is `(age ?: 0) >= 18` and `base ?: offset + 10` is `base ?: (offset + 10)`.
 - **Non-associative assignment.** `a = b = c` is rejected to rule out assignment-as-expression bugs.
 - **Mandatory parentheses on `if` and `when`.** Without them, `if isValid { doWork() }` would parse `{ doWork() }` as a trailing lambda on `isValid`. Multi-token lookahead to tell the two apart was rejected as fragile.
-- **Newlines end statements.** A `(` after a newline is not a call, and `return` before a newline, `}` or end of file returns unit. Mandatory semicolons were rejected for ergonomics.
+- **Newlines end statements.** A `(` after a newline is not a call, and `return` before a newline, or before a token that cannot start an expression (`}`, `else`, `,`, `)`, end of file), returns unit. Mandatory semicolons were rejected for ergonomics.
 - **Multi-statement closures.** Closure bodies are blocks, because single-expression closures cannot hold setup logic.
 - **`compose` is a soft keyword.** It is a modifier only directly before `fun`, so common API names such as `pipeline.compose()` stay usable.
 - **Borrowed struct fields are rejected in the parser.** Enforcing the zero-cost memory invariant at AST construction means no struct can ever carry a lifetime dependency.

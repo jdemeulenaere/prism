@@ -669,4 +669,52 @@ mod tests {
         let file = Parser::new(tokens).parse_source_file().unwrap();
         assert_eq!(file.declarations.len(), 1);
     }
+
+    #[test]
+    fn test_bare_return_before_non_expression_token() {
+        let bare_return = |e: &Expr| matches!(e.kind, ExprKind::Return(None));
+
+        let file = parse_source("fun f(c: Boolean) { if (c) return else g() }").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Block(body)) = &f.body else {
+            panic!("Expected block body");
+        };
+        let ExprKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } = &body.stmts[0].kind
+        else {
+            panic!("Expected if");
+        };
+        assert!(bare_return(then_branch));
+        assert!(else_branch.is_some());
+
+        let file = parse_source("fun f(x: Int) = when (x) { 0 -> return, else -> 1 }").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::When { branches, .. } = &e.kind else {
+            panic!("Expected when");
+        };
+        assert_eq!(branches.len(), 2);
+        assert!(bare_return(&branches[0].body));
+
+        let file = parse_source("fun f() = g(return)").unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(e)) = &f.body else {
+            panic!("Expected expression body");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("Expected call");
+        };
+        assert!(bare_return(&args[0].value));
+    }
 }

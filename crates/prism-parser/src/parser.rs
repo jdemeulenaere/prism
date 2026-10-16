@@ -839,6 +839,32 @@ impl Parser {
         Ok(Expr::new(expr.kind, start.merge(end)))
     }
 
+    /// Whether `kind` can begin an expression, i.e. `parse_prefix` accepts it.
+    fn starts_expr(kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::Int(_)
+                | TokenKind::Float(_)
+                | TokenKind::String(_)
+                | TokenKind::Char(_)
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::Null
+                | TokenKind::Ident(_)
+                | TokenKind::Compose
+                | TokenKind::Minus
+                | TokenKind::Bang
+                | TokenKind::Amp
+                | TokenKind::LParen
+                | TokenKind::LBrace
+                | TokenKind::If
+                | TokenKind::When
+                | TokenKind::Return
+                | TokenKind::Val
+                | TokenKind::Var
+        )
+    }
+
     fn parse_lambda_or_block(&mut self) -> Result<Expr, ParseError> {
         if self.is_closure_with_arrow_ahead() {
             self.parse_closure()
@@ -1238,12 +1264,9 @@ impl Parser {
 
     fn parse_return(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect(TokenKind::Return)?.span;
-        // Check if expression follows on the same line or before delimiter
-        let has_value = !self.peek().is_preceded_by_newline
-            && !matches!(
-                self.peek_kind(),
-                TokenKind::RBrace | TokenKind::Semicolon | TokenKind::Eof
-            );
+        // A value must start on the same line; anything else (`}`, `else`,
+        // `,`, `)`, a newline...) ends a bare `return`.
+        let has_value = !self.peek().is_preceded_by_newline && Self::starts_expr(self.peek_kind());
 
         if has_value {
             let val = self.parse_expr(Precedence::Lowest)?;
