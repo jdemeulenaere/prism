@@ -164,6 +164,10 @@ The type checker MUST validate struct instantiations, field access expressions, 
 - **WHEN** a file imports a module exporting `public struct User` and declares a parameter `user: User`
 - **THEN** `user.name` resolves against the imported struct's ABI field list and typechecks with the exported field type
 
+#### Scenario: Type names are not values
+- **WHEN** a struct or enum name is used as a value (`fun f(): User = User`), a field is read from a struct name (`User.name`), or an enum name is called (`A()`)
+- **THEN** the type checker emits `E4002`, `E4006` and `E4004` respectively, while a struct constructor call `User(...)` and an enum variant path `A.X` or `A.Y(1)` still typecheck
+
 #### Scenario: Unknown nominal type name stays opaque
 - **WHEN** an annotation names a type that is neither a primitive nor a declared or imported struct or enum
 - **THEN** the annotation is accepted as an opaque nominal type, and accessing a member on a value of that type emits `E4006`
@@ -178,6 +182,10 @@ Phase 2 body checking MUST typecheck expressions against symbols exported in Pha
 #### Scenario: Accessing package-visibility symbol across packages rejected
 - **WHEN** a file imports a module from a different package and attempts to access a declaration marked with `package` visibility
 - **THEN** the type checker rejects the access with a visibility access violation error (`E4007`)
+
+#### Scenario: Package-visibility type named in an annotation across packages rejected
+- **WHEN** a file in another package names a `package struct` or `package enum` in a parameter, return, field, variant payload or variable annotation (e.g. `fun g(s: Secret): Int`)
+- **THEN** the type checker emits `E4007` at the annotation
 
 #### Scenario: Accessing package-visibility symbol within same package succeeds
 - **WHEN** a file accesses a `package`-visible declaration defined in another file within the identical package directory

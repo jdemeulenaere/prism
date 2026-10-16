@@ -17,6 +17,9 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// E4002: A struct or enum name used where a value is expected (`val u = User`).
+    TypeNameAsValue { name: String, span: Span },
+
     /// E4003: Reassigning to an immutable `val` binding or mutating a `val` struct instance/field.
     ImmutabilityViolation { message: String, span: Span },
 
@@ -64,6 +67,7 @@ impl TypeError {
         match self {
             TypeError::UnresolvedSymbol { .. } => "E4001",
             TypeError::TypeMismatch { .. } => "E4002",
+            TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
@@ -81,6 +85,7 @@ impl TypeError {
         match self {
             TypeError::UnresolvedSymbol { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
+            TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
             TypeError::ReturnTypeMismatch { span, .. } => *span,
@@ -103,6 +108,12 @@ impl TypeError {
                 expected, found, ..
             } => {
                 format!("type mismatch: expected '{}', found '{}'", expected, found)
+            }
+            TypeError::TypeNameAsValue { name, .. } => {
+                format!(
+                    "'{}' is a type, not a value; construct it with '{}(...)' or name an enum variant",
+                    name, name
+                )
             }
             TypeError::ImmutabilityViolation { message, .. } => message.clone(),
             TypeError::CallSignatureMismatch { message, .. } => message.clone(),

@@ -100,6 +100,111 @@ impl TypeChecker {
         ty.clone()
     }
 
+    /// Resolves an identifier, reporting `E4001` when it is unknown and `E4007` when it names a
+    /// `package` symbol of another package.
+    fn resolve_ident(&mut self, name: &str, span: Span) -> Option<Symbol> {
+        match self.env.resolve(name, span) {
+            Ok(sym) => {
+                let sym = sym.clone();
+                self.check_visibility(&sym, span);
+                Some(sym)
+            }
+            Err(err) => {
+                self.errors.push(err);
+                None
+            }
+        }
+    }
+
+    /// Reports `E4007` if `sym` has `package` visibility and is defined in another package
+    /// (single-file compilation unit invariant). Returns whether the symbol is visible.
+    fn check_visibility(&mut self, sym: &Symbol, span: Span) -> bool {
+        if sym.visibility() == Visibility::Package {
+            let def_pkg = sym.defining_package().unwrap_or("");
+            let curr_pkg = self.current_package.as_deref().unwrap_or("");
+            if def_pkg != curr_pkg {
+                self.errors.push(TypeError::VisibilityViolation {
+                    symbol: sym.name.clone(),
+                    defining_package: def_pkg.to_string(),
+                    accessing_package: curr_pkg.to_string(),
+                    span,
+                });
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reports `E4007` for every nominal type name in an annotation that has `package`
+    /// visibility in another package.
+    fn check_annotation_visibility(&mut self, ast_ty: &prism_ast::types::Type) {
+        use prism_ast::types::TypeKind;
+        match &ast_ty.kind {
+            TypeKind::Named { name, type_args } => {
+                if let Some(sym) = self.env.lookup_type(name).cloned() {
+                    self.check_visibility(&sym, ast_ty.span);
+                }
+                for arg in type_args {
+                    self.check_annotation_visibility(arg);
+                }
+            }
+            TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => {
+                self.check_annotation_visibility(inner)
+            }
+            TypeKind::Function {
+                params,
+                return_type,
+            } => {
+                for param in params {
+                    self.check_annotation_visibility(param);
+                }
+                self.check_annotation_visibility(return_type);
+            }
+            TypeKind::Unit => {}
+        }
+    }
+
+    /// Returns the struct or enum symbol `expr` names, if `expr` is an identifier whose innermost
+    /// binding is a type declaration rather than a value.
+    fn type_name_symbol(&self, expr: &Expr) -> Option<Symbol> {
+        if let ExprKind::Ident(name) = &expr.kind {
+            if let Some(sym) = self.env.lookup(name) {
+                if matches!(
+                    sym.kind,
+                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. }
+                ) {
+                    return Some(sym.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Types `member` on `target` when `target` names a type: an enum name gives access to its
+    /// variants, while a struct name has no members (`E4006`). Returns `None` when `target` is
+    /// not a type name.
+    fn type_name_member(
+        &mut self,
+        target: &Expr,
+        member: &str,
+        span: Span,
+    ) -> Option<(Type, Option<bool>)> {
+        let sym = self.type_name_symbol(target)?;
+        if !self.check_visibility(&sym, target.span) {
+            return Some((Type::Error, None));
+        }
+        let ty = sym.ty();
+        if let SymbolKind::Struct { .. } = sym.kind {
+            self.errors.push(TypeError::UnknownField {
+                target_type: ty,
+                field_name: member.to_string(),
+                span,
+            });
+            return Some((Type::Error, None));
+        }
+        Some(self.member_type(&ty, member, false, span))
+    }
+
     /// Ingests exported symbols from an imported file's Phase 1 FileAbi.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
         for sym in &abi.symbols {
@@ -255,6 +360,9 @@ impl TypeChecker {
                             });
                         }
                     }
+                    for f in &s.fields {
+                        self.check_annotation_visibility(&f.ty);
+                    }
                     let fields = s
                         .fields
                         .iter()
@@ -283,6 +391,9 @@ impl TypeChecker {
                                 span: v.span,
                             });
                         }
+                    }
+                    for payload in e.variants.iter().flat_map(|v| &v.fields) {
+                        self.check_annotation_visibility(payload);
                     }
                     let variants: Vec<(String, Vec<Type>)> = e
                         .variants
@@ -344,6 +455,7 @@ impl TypeChecker {
                 }
                 Declaration::Var(v) => {
                     let ty = if let Some(annot) = &v.ty {
+                        self.check_annotation_visibility(annot);
                         Type::from_ast(annot)
                     } else if v.visibility != Visibility::Private {
                         self.errors.push(TypeError::TypeMismatch {
@@ -378,6 +490,9 @@ impl TypeChecker {
     }
 
     fn register_function_decl(&mut self, f: &FunctionDecl) {
+        for annot in f.params.iter().map(|p| &p.ty).chain(&f.return_type) {
+            self.check_annotation_visibility(annot);
+        }
         let params: Vec<Type> = f.params.iter().map(|p| Type::from_ast(&p.ty)).collect();
         let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
         let has_default: Vec<bool> = f.params.iter().map(|p| p.default_value.is_some()).collect();
@@ -634,28 +749,18 @@ impl TypeChecker {
                 Literal::Null => Type::Nullable(Box::new(Type::Nothing)),
             },
 
-            ExprKind::Ident(name) => match self.env.resolve(name, expr.span) {
-                Ok(sym) => {
-                    // Check visibility across packages (single-file compilation unit invariant, E4007)
-                    if sym.visibility() == Visibility::Package {
-                        let def_pkg = sym.defining_package().unwrap_or("");
-                        let curr_pkg = self.current_package.as_deref().unwrap_or("");
-                        if def_pkg != curr_pkg {
-                            self.errors.push(TypeError::VisibilityViolation {
-                                symbol: name.clone(),
-                                defining_package: def_pkg.to_string(),
-                                accessing_package: curr_pkg.to_string(),
-                                span: expr.span,
-                            });
-                            return Type::Error;
-                        }
+            ExprKind::Ident(name) => match self.resolve_ident(name, expr.span) {
+                Some(sym) => match sym.kind {
+                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
+                        self.errors.push(TypeError::TypeNameAsValue {
+                            name: name.clone(),
+                            span: expr.span,
+                        });
+                        Type::Error
                     }
-                    sym.ty()
-                }
-                Err(err) => {
-                    self.errors.push(err);
-                    Type::Error
-                }
+                    _ => sym.ty(),
+                },
+                None => Type::Error,
             },
 
             ExprKind::Binary { op, left, right } => {
@@ -671,6 +776,7 @@ impl TypeChecker {
                 initializer,
             } => {
                 let var_ty = if let Some(a) = annot {
+                    self.check_annotation_visibility(a);
                     let expected = Type::from_ast(a);
                     self.check_expr(initializer, &expected);
                     expected
@@ -1026,8 +1132,16 @@ impl TypeChecker {
                 member,
                 is_safe_nav: false,
             } => {
-                let (base_ty, base_writable) = self.infer_place(base);
-                let (field_ty, is_var) = self.member_type(&base_ty, member, false, target.span);
+                let (base_ty, base_writable, field_ty, is_var) =
+                    match self.type_name_member(base, member, target.span) {
+                        Some((field_ty, is_var)) => (field_ty.clone(), false, field_ty, is_var),
+                        None => {
+                            let (base_ty, base_writable) = self.infer_place(base);
+                            let (field_ty, is_var) =
+                                self.member_type(&base_ty, member, false, target.span);
+                            (base_ty, base_writable, field_ty, is_var)
+                        }
+                    };
                 match is_var {
                     Some(false) => {
                         self.errors.push(TypeError::ImmutabilityViolation {
@@ -1196,7 +1310,26 @@ impl TypeChecker {
     }
 
     fn infer_call_expr(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Type {
-        let callee_ty = self.infer_expr(callee);
+        // A struct name is its constructor; an enum name is only a namespace for its variants.
+        let type_name = self.type_name_symbol(callee);
+        let callee_ty = match &type_name {
+            Some(sym) if !self.check_visibility(sym, callee.span) => Type::Error,
+            Some(sym) => match sym.kind {
+                SymbolKind::Struct { .. } => sym.ty(),
+                _ => {
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!(
+                            "enum '{}' cannot be instantiated directly without a variant",
+                            sym.name
+                        ),
+                        span,
+                    });
+                    Type::Error
+                }
+            },
+            None => self.infer_expr(callee),
+        };
+        let is_constructor = type_name.is_some();
 
         match callee_ty {
             Type::Fn {
@@ -1327,7 +1460,7 @@ impl TypeChecker {
 
                 *ret
             }
-            Type::Struct { name, fields } => {
+            Type::Struct { name, fields } if is_constructor => {
                 let has_named = args.iter().any(|a| a.name.is_some());
                 if !has_named {
                     if args.len() != fields.len() {
@@ -1408,20 +1541,6 @@ impl TypeChecker {
 
                 Type::Struct { name, fields }
             }
-            Type::Enum { name, variants } => {
-                if args.is_empty() {
-                    Type::Enum { name, variants }
-                } else {
-                    self.errors.push(TypeError::CallSignatureMismatch {
-                        message: format!(
-                            "enum '{}' cannot be instantiated directly without a variant",
-                            name
-                        ),
-                        span,
-                    });
-                    Type::Error
-                }
-            }
             Type::Error => Type::Error,
             other => {
                 self.errors.push(TypeError::CallSignatureMismatch {
@@ -1440,6 +1559,9 @@ impl TypeChecker {
         is_safe_nav: bool,
         span: Span,
     ) -> Type {
+        if let Some((ty, _)) = self.type_name_member(target, member, span) {
+            return ty;
+        }
         let target_ty = self.infer_expr(target);
         self.member_type(&target_ty, member, is_safe_nav, span).0
     }
@@ -1552,6 +1674,9 @@ impl TypeChecker {
                 member,
                 is_safe_nav,
             } => {
+                if let Some((ty, _)) = self.type_name_member(target, member, expr.span) {
+                    return (ty, true);
+                }
                 let (base_ty, base_writable) = self.infer_place(target);
                 let (ty, is_var) = self.member_type(&base_ty, member, *is_safe_nav, expr.span);
                 // An enum variant is a fresh temporary rather than a field.

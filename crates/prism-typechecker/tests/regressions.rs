@@ -1,12 +1,26 @@
 //! Regression tests for typechecker bug fixes, driven by real Prism source through the parser,
 //! the ABI extractor and the checker.
 
+use prism_abi::FileAbi;
 use prism_typechecker::{TypeChecker, TypeError};
 
 /// Parses and checks a single source file, returning its diagnostics.
 fn check(src: &str) -> Vec<TypeError> {
     let file = prism_parser::parse_source(src).expect("source must parse");
     let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()));
+    checker.check_module(&file);
+    checker.errors
+}
+
+/// Checks `app` after ingesting the ABI of each source in `deps`, as `prism check` does for
+/// direct imports.
+fn check_with_imports(deps: &[&str], app: &str) -> Vec<TypeError> {
+    let file = prism_parser::parse_source(app).expect("app must parse");
+    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()));
+    for dep in deps {
+        let dep_file = prism_parser::parse_source(dep).expect("dependency must parse");
+        checker.ingest_file_abi(&FileAbi::extract(&dep_file).expect("ABI must extract"));
+    }
     checker.check_module(&file);
     checker.errors
 }
@@ -143,4 +157,73 @@ fn error_inside_safe_navigation_does_not_cascade() {
         "struct A {\n    val name: String\n}\nfun f(a: A?): Int = a?.nope\n",
         &["E4006"],
     );
+}
+
+// Type names are not values.
+
+const USER_AND_ENUM: &str =
+    "struct User {\n    val name: String\n}\nenum A {\n    X,\n    Y(Int)\n}\n";
+
+#[test]
+fn struct_name_as_value_rejected() {
+    assert_codes(
+        &format!("{USER_AND_ENUM}fun f(): User = User\n"),
+        &["E4002"],
+    );
+    assert_codes(
+        &format!("{USER_AND_ENUM}fun f() {{\n    val u = A\n}}\n"),
+        &["E4002"],
+    );
+}
+
+#[test]
+fn field_access_on_struct_name_rejected() {
+    assert_codes(
+        &format!("{USER_AND_ENUM}fun g(): String = User.name\n"),
+        &["E4006"],
+    );
+}
+
+#[test]
+fn enum_name_called_without_variant_rejected() {
+    assert_codes(&format!("{USER_AND_ENUM}fun h(): A = A()\n"), &["E4004"]);
+}
+
+#[test]
+fn calling_a_struct_typed_value_rejected() {
+    assert_codes(
+        &format!(
+            "{USER_AND_ENUM}fun h(): User {{\n    val u = User(\"a\")\n    return u(\"b\")\n}}\n"
+        ),
+        &["E4004"],
+    );
+}
+
+#[test]
+fn constructors_and_variant_paths_still_work() {
+    assert_ok(&format!(
+        "{USER_AND_ENUM}fun f(): User = User(\"a\")\nfun g(): A = A.X\nfun h(): A = A.Y(1)\nfun k(a: A): Int = when (a) {{\n    A.X -> 1,\n    else -> 2\n}}\n"
+    ));
+}
+
+// `package` visibility applies to type names in annotations.
+
+const SECRET_LIB: &str =
+    "package a\npackage struct Secret {\n    val code: Int\n}\npublic struct Open {\n    val code: Int\n}\n";
+
+#[test]
+fn package_type_in_annotation_from_other_package_rejected() {
+    let errors = check_with_imports(
+        &[SECRET_LIB],
+        "package app\nfun g(s: Secret): Int = s.code\nfun h(): Secret? = null\nfun k() {\n    val s: Secret? = null\n}\nstruct Holder {\n    val s: Secret\n}\n",
+    );
+    assert_eq!(codes(&errors), ["E4007"; 4], "{:?}", errors);
+}
+
+#[test]
+fn package_type_in_annotation_within_package_accepted() {
+    let errors = check_with_imports(&[SECRET_LIB], "package a\nfun g(s: Secret): Int = s.code\n");
+    assert!(errors.is_empty(), "{:?}", errors);
+    let errors = check_with_imports(&[SECRET_LIB], "package app\nfun g(s: Open): Int = s.code\n");
+    assert!(errors.is_empty(), "{:?}", errors);
 }
