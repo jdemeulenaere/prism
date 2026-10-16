@@ -47,15 +47,15 @@ Variables MUST be immutable by default using `val`, while mutable variables MUST
 - **THEN** the mutation is valid
 
 ### Requirement: Value Structs and Algebraic Enums
-The language MUST provide value structs that own their fields inline, and algebraic enums supporting payloads and recursive types via `Heap<T>`.
+The grammar MUST accept value struct declarations with owned fields, and algebraic enum declarations whose variants carry payloads, including recursive payloads wrapped in `Heap<T>`. Inline layout is planned (see `docs/architecture.md`).
 
 #### Scenario: Value struct definition
 - **WHEN** a struct is declared with fields (`struct Point { val x: Double, val y: Double }`)
-- **THEN** instances of `Point` are stored inline by value without heap indirection
+- **THEN** the declaration parses into a struct with by-value fields `x` and `y` of type `Double`
 
 #### Scenario: Recursive enum with Heap indirection
 - **WHEN** an enum variant contains recursive instances wrapped in `Heap<T>` (`enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }`)
-- **THEN** the enum layout is finite and accepted by the compiler
+- **THEN** the declaration parses into an enum whose variants carry `Heap<Expr>` payloads, and the compiler accepts it
 
 ### Requirement: Expression-Oriented Control Flow
 Control flow constructs (`if` and `when`) MUST function as first-class expressions producing values.
@@ -66,7 +66,7 @@ Control flow constructs (`if` and `when`) MUST function as first-class expressio
 
 #### Scenario: When pattern matching
 - **WHEN** a `when` expression matches over values or ranges (`when (x) { 0 -> "zero", in 1..10 -> "small", else -> "large" }`)
-- **THEN** the branches are evaluated in order and the matching branch expression is returned
+- **THEN** each branch parses into its pattern (value, comma-separated values, `in` range, or `else`) and branch expression, in source order
 
 ### Requirement: Null Safety and Optional Types
 The language MUST enforce compile-time null safety where nullable types are designated with `T?`.
@@ -77,7 +77,7 @@ The language MUST enforce compile-time null safety where nullable types are desi
 
 #### Scenario: Safe navigation and Elvis operator
 - **WHEN** code accesses a property on a nullable reference using `?.` and provides a fallback with `?:` (`val len = name?.length ?: 0`)
-- **THEN** the expression safely evaluates to 0 when `name` is null
+- **THEN** `?.` parses as safe navigation and `?:` as the Elvis fallback
 
 ### Requirement: First-Class Compose UI Keyword
 The grammar MUST recognize `compose` as a native modifier on function declarations (`compose fun`).

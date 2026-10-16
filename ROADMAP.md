@@ -2,12 +2,15 @@
 
 Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents the high-level milestone tracking memory. Each phase is broken down into small, verifiable, test-driven work packets in `openspec/changes/`.
 
+- [`openspec/specs/`](openspec/specs) describes only what is **implemented**.
+- [`docs/architecture.md`](docs/architecture.md) describes what is **planned** for the unchecked items below. A change that implements a planned item moves its requirements from there into the specs.
+
 ---
 
 ## Phase 0: Foundations & Architecture (Completed)
 - [x] Project Vision & Invariants established ([`README.md`](README.md), [`openspec/specs/system-invariants`](openspec/specs/system-invariants/spec.md)).
-- [x] Compilation & Execution Architecture Specification ([`openspec/specs/compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md)).
-- [x] Zero-Cost Memory Architecture Specification ([`openspec/specs/memory-model`](openspec/specs/memory-model/spec.md)).
+- [x] Compilation & Execution Architecture design ([`docs/architecture.md`](docs/architecture.md) §1–2).
+- [x] Zero-Cost Memory Architecture design ([`docs/architecture.md`](docs/architecture.md) §3).
 - [x] Package Resolution & Root Discovery Specification ([`openspec/specs/package-resolution`](openspec/specs/package-resolution/spec.md)).
 - [x] Syntax & Grammar Specification ([`openspec/specs/syntax`](openspec/specs/syntax/spec.md)).
 - [x] AI Pair-Programming Guide ([`AGENTS.md`](AGENTS.md)).
@@ -33,15 +36,22 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 
 ## Phase 2: Type System, Value Ownership & ABI Invalidation (Current)
 - [x] Type checker with bidirectional type inference, nominal types, scoping, and diagnostics (`crates/prism-typechecker`).
-- [ ] Value ownership transfer, move semantics, borrow checker, and the 4 lifetime elision rules for functions.
-- [ ] ABI interface extraction & ABI hashing engine (`.abi` cache).
+- [x] ABI surface extraction and deterministic ABI hashing (`crates/prism-abi`, [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md)).
+- [ ] Value ownership transfer, move semantics, borrow checker, and the 4 lifetime elision rules for functions ([`docs/architecture.md`](docs/architecture.md) §3).
+- [ ] Decide the authoritative ABI hash algorithm: BLAKE3 (original design) or the current FNV-1a ([`docs/architecture.md`](docs/architecture.md) §1).
+- [ ] `.abi` cache and compilation avoidance ([`docs/architecture.md`](docs/architecture.md) §1).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
+- [ ] Compound assignment (`+=`, `-=`) and bitwise operators (deferred by the `lexer-parser` change).
+- [ ] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`).
+- [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`).
+- [ ] Qualified type paths such as `models.User`; imports currently bring symbols in by bare name (deferred by `resolve-nominal-type-annotations`).
+- [ ] Fix: calling a struct-typed value (`p()` where `p: Point`) goes through the constructor branch of `infer_call_expr` (noted in `resolve-nominal-type-annotations`).
 
 ---
 
 ## Phase 3: Tier 1 Native Execution & Hot Reload (Cranelift JIT)
 - [ ] Intermediate Representation (Prism IR / SSA).
-- [ ] Cranelift JIT native code generator.
+- [ ] Cranelift JIT native code generator ([`docs/architecture.md`](docs/architecture.md) §2, §4).
 - [ ] In-memory native execution via `prism run file.prism` (<15ms startup).
 - [ ] Hot-reload runtime prototype: dynamic function-pointer patching with state preservation.
 - [ ] Integration test suite running executable `.prism` native test fixtures.

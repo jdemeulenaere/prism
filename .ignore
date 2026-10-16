@@ -1,0 +1,3 @@
+# Hide historical OpenSpec change packets from default searches (ripgrep and tools built on it).
+# They are never authoritative; see AGENTS.md section 3. Read them directly only to research past decisions.
+openspec/changes/archive/

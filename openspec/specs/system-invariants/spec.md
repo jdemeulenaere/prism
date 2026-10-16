@@ -1,7 +1,7 @@
 # Prism System Invariants
 
 ## Purpose
-The system invariants define the permanent, non-negotiable architectural rules of the Prism programming language that all compiler components, tooling, and runtime layers must uphold.
+The system invariants define the permanent, non-negotiable architectural rules of the Prism programming language that all compiler components, tooling, and runtime layers must uphold. Unlike the other specs, these are design constraints rather than a description of implemented behavior: several apply to subsystems that do not exist yet (code generation, the build cache, hot reload, the memory model), described in `docs/architecture.md`. Every change, including those building planned subsystems, MUST preserve them.
 
 ## Requirements
 

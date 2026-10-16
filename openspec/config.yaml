@@ -10,6 +10,9 @@ context: |
   - First-class UI primitives: `compose` modifier (`compose fun`) and slot-table state handles (`State<T>`, `NodeId`).
   - File as compilation unit: Phase 1 extracts exported ABI interface hashes; Phase 2 compiles bodies. Body edits must produce zero downstream recompilations.
   - Implementation tasks must follow the Elephant-Goldfish model: clear behavioral requirements/scenarios in specs, technical decisions in design.md, and testable checklist in tasks.md.
+  - The normative invariants are openspec/specs/system-invariants/spec.md; the lines above summarize them.
+  - openspec/specs/ describes only implemented behavior. Planned designs live in docs/architecture.md: a change implementing one copies the relevant requirements into its delta specs and removes them from docs/architecture.md.
+  - openspec/changes/archive/ is history, never a source of truth for current behavior.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
@@ -21,14 +24,13 @@ context: |
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+# Per-operation guidance
+operations:
+  apply:
+    guidance:
+      - Before marking the change complete, run cargo fmt --all -- --check, cargo clippy --workspace --all-targets, cargo test --workspace, and prism check on every file under examples/ (only files needing an unbuilt subsystem, such as examples/demo/ui, may fail).
+  archive:
+    guidance:
+      - Promote key design decisions from design.md into a "## Design Rationale" section of the affected main spec, so agents never need to read the archive.
+      - Add every non-goal, deferral or follow-up from proposal.md and design.md to ROADMAP.md as an unchecked item, naming the change it came from.
+      - Remove from docs/architecture.md any planned requirement that this change implemented, and tick the matching ROADMAP.md item.

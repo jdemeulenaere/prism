@@ -24,47 +24,32 @@ This project strictly follows the **Elephant-Goldfish model** (see [Rensin, 2024
 
 ---
 
-## 2. Architectural Invariants Quick-Sheet (Non-Negotiable)
+## 2. Architectural Invariants (Non-Negotiable)
 
-Any proposed code, grammar, or compiler change must uphold these rules (detailed in [`openspec/specs/system-invariants/spec.md`](openspec/specs/system-invariants/spec.md)):
+Every code, grammar, or compiler change must uphold these. The normative text, with scenarios, is [`openspec/specs/system-invariants/spec.md`](openspec/specs/system-invariants/spec.md); keep this list as a one-line summary of it.
 
-1. **File Extension**: Canonical extension is `.prism`.
-2. **Default Visibility is `private`**:
-   - No modifier $\implies$ private to the file.
-   - `package` $\implies$ visible to files in the exact same package directory.
-   - `public` $\implies$ visible across packages.
-   - All `public` and `package` declarations **must** declare explicit parameter and return types for independent ABI extraction.
-3. **Zero-Config, Zero-Marker Root Discovery**:
-   - No build configuration files and **no marker files** (`.prism-root`, `.git`, etc.).
-   - The workspace root is discovered by matching the source file's directory path with its `package` declaration (e.g. `/path/to/project/foo/bar/file.prism` with `package foo.bar` $\implies$ workspace root is `/path/to/project`).
-   - Root-anchored imports use a leading slash: `import /core/fmt`.
-   - Sibling imports use standard identifiers: `import doo`.
-4. **Memory Architecture: Zero GC, Zero Hidden ARC, No Lifetime Annotations (`'a`)**:
-   - Memory is freed deterministically with single-owner value semantics.
-   - No tracing garbage collector and no implicit atomic retain/release counter overhead.
-   - Structs own their fields by value; recursive types use `Heap<T>`.
-   - Borrows (`&T`, `&mut T`) are strictly function/stack-scoped with automatic lifetime elision.
-   - Graphs, peer relationships, and UI nodes use typed ID handles (Data-Oriented Design).
-5. **First-Class UI Primitives**:
-   - `compose` is a native language modifier (`compose fun`).
-   - Slot-table state handles (`State<T>`, `NodeId`) are lightweight `Copy` IDs.
-6. **File as Compilation Unit**:
-   - Phase 1 extracts declaration ABI hashes; Phase 2 typechecks bodies.
-   - Modifying non-generic function bodies produces zero downstream recompilations.
+1. **File extension**: `.prism`; each file is its own compilation unit.
+2. **Default visibility is `private`**: `package` is visible within the package directory, `public` across packages; `public` and `package` declarations must declare explicit parameter and return types.
+3. **Zero-config, zero-marker root discovery**: no build or marker files; the workspace root comes from matching the file's path to its `package` declaration. Root-anchored imports use a leading slash (`import /core/fmt`), sibling imports a plain name (`import doo`).
+4. **Zero GC, zero hidden ARC, no lifetime annotations**: single-owner values, `Heap<T>` for recursion, stack-scoped borrows with elision, typed handles for graphs.
+5. **First-class UI**: `compose fun` is a native modifier; slot-table handles (`State<T>`, `NodeId`) are `Copy` IDs.
+6. **Compilation avoidance**: Phase 1 extracts ABI hashes, Phase 2 checks bodies; editing a non-generic body causes zero downstream recompilation.
 
 ---
 
 ## 3. Key Reference Documents ("The Elephant")
 
-- [`README.md`](README.md): High-level vision, principles, and two-tier execution model.
-- [`ROADMAP.md`](ROADMAP.md): Current phase, progress, and milestone tracking.
-- **Living Subsystem Specifications (`openspec/specs/`)**:
+What is implemented and what is planned live in different places. Never treat a planned design as a description of the code.
+
+- **Implemented behavior: [`openspec/specs/`](openspec/specs)**, the source of truth for what the compiler does today:
   - [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
-  - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, keyword list, and syntax examples.
-  - [`memory-model`](openspec/specs/memory-model/spec.md): Zero-cost memory, `Heap<T>`, borrow checking, lifetime elision, and UI slot handles.
-  - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): 2-tier execution, compilation avoidance, ABI hashing, and monomorphization.
+  - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
   - [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, nominal types, and diagnostic error catalog.
-  - [`system-invariants`](openspec/specs/system-invariants/spec.md): Formal requirements and scenarios for all 6 non-negotiable invariants.
+  - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): Phase 1 ABI extraction, deterministic ABI hashing, and monomorphization hashes.
+  - [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable invariants. These are design constraints, so they also cover subsystems not built yet.
+- **Planned design: [`docs/architecture.md`](docs/architecture.md)**: code generation, compilation avoidance, execution tiers, the memory model and borrow checker, and the compose engine. A change that implements an item moves its requirements into `openspec/specs/` as delta specs and removes them from this document.
+- **Progress: [`ROADMAP.md`](ROADMAP.md)**: current phase and milestones. [`README.md`](README.md) is the high-level vision.
+- **History: `openspec/changes/archive/`**: completed change packets. Historical only and never authoritative: their delta specs and task lists are snapshots that may since have been superseded. Do not read them for current behavior. Consult them only to research why a past decision was made.
 
 ---
 

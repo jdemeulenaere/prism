@@ -1,61 +1,59 @@
-# Prism Compilation Pipeline, ABI Hashing & Execution Tiers
+# Prism Compilation Pipeline & ABI Extraction
 
 ## Purpose
-The compilation and ABI specification defines the file-level compilation boundaries, two-phase compilation pipeline, BLAKE3 ABI hashing for compilation avoidance, generic monomorphization rules, and two-tier native execution backends.
+The compilation and ABI specification defines Phase 1 of the two-phase pipeline as implemented in `crates/prism-abi`: extracting each file's exported declaration surface and computing a deterministic ABI hash that ignores private symbols and non-generic function bodies. Code generation, the `.abi` cache, compilation avoidance and the execution tiers are planned and described in [`docs/architecture.md`](../../../docs/architecture.md).
 
 ## Requirements
 
-### Requirement: Single File as Compilation Unit
-Every `.prism` source file MUST be compiled into native machine code independently, with interface boundaries defined strictly by exported declarations.
-
-#### Scenario: Compiling independent source files
-- **WHEN** compiling multiple source files in a package
-- **THEN** each file is lowered and code-generated as a standalone compilation unit
-
-### Requirement: Two-Phase Compilation Pipeline
-The compiler MUST separate compilation into Phase 1 (declaration and ABI extraction) and Phase 2 (body lowering and machine code generation).
+### Requirement: Phase 1 Exported Surface Extraction
+The compiler MUST extract each source file's exported ABI surface (`public` and `package` structs, enums and function signatures) from its AST without typechecking function bodies.
 
 #### Scenario: Phase 1 surface extraction
-- **WHEN** the compiler scans source files
-- **THEN** it extracts public and package struct definitions, enums, and function signatures to produce the exported ABI without typechecking function bodies
+- **WHEN** the compiler extracts the ABI of a source file
+- **THEN** it records the file's package and the signatures of its `public` and `package` structs, enums and functions, without typechecking function bodies
 
-#### Scenario: Phase 2 body lowering
-- **WHEN** Phase 1 completes
-- **THEN** function bodies are typechecked and compiled in parallel against the imported ABI interface hashes
+#### Scenario: Private symbols excluded from the ABI
+- **WHEN** a source file declares functions, structs or enums without a visibility modifier
+- **THEN** those declarations are absent from the extracted ABI
 
-### Requirement: BLAKE3 ABI Hash Computation and Compilation Avoidance
-The compiler MUST compute an authoritative cryptographic hash (BLAKE3) of exported declarations, excluding private symbols and non-generic function bodies.
+#### Scenario: Exported function without explicit return type rejected
+- **WHEN** a `public` or `package` function omits its return type (`public fun add(a: Int, b: Int) = a + b`)
+- **THEN** ABI extraction fails with a missing explicit return type error naming the function and its visibility
+
+### Requirement: Deterministic ABI Hash
+The compiler MUST compute a deterministic 128-bit hash of each file's exported ABI that covers exported signatures, enum variant shapes and default parameter values, and excludes private symbols, non-generic function bodies and source positions.
 
 #### Scenario: Modifying non-generic function body
 - **WHEN** a developer modifies the internal implementation of a public function without changing its signature
-- **THEN** the file's exported ABI hash remains unchanged, and zero downstream files that import it are recompiled
+- **THEN** the file's exported ABI hash remains unchanged
 
 #### Scenario: Modifying public function signature
 - **WHEN** a developer changes the parameter types or return type of a public function
-- **THEN** the file's exported ABI hash changes, triggering recompilation of direct downstream importers
+- **THEN** the file's exported ABI hash changes
 
 #### Scenario: Modifying private helper function
 - **WHEN** a private helper function is added, removed, or modified in a source file
-- **THEN** the exported ABI hash is unaffected and downstream files remain cached
+- **THEN** the exported ABI hash is unaffected
 
-### Requirement: Monomorphization Invalidation for Generics
-Exported generic functions MUST record a Monomorphization Hash of their normalized AST in their ABI signature.
+#### Scenario: Changing a default parameter value
+- **WHEN** the default value of a parameter of an exported function changes
+- **THEN** the exported ABI hash changes
+
+#### Scenario: Distinct enum variant shapes
+- **WHEN** two exported enums with the same name have different variant payload shapes
+- **THEN** their ABI hashes differ
+
+#### Scenario: Reordering exported declarations
+- **WHEN** exported declarations are reordered within a file without other changes
+- **THEN** the exported ABI hash remains unchanged
+
+### Requirement: Monomorphization Hash for Generics
+Exported generic functions MUST record a Monomorphization Hash of their body in their ABI signature, computed independently of source positions, comments and whitespace.
 
 #### Scenario: Changing generic function body
 - **WHEN** the body of an exported generic function changes
-- **THEN** its Monomorphization Hash changes, triggering re-monomorphization only in downstream call sites that instantiate that generic
+- **THEN** its Monomorphization Hash and the file's ABI hash change
 
-### Requirement: Two-Tier Native Execution Engine
-The compiler MUST support two distinct native execution backends: Tier 1 (Cranelift JIT) for development and Tier 2 (LLVM AOT) for release.
-
-#### Scenario: Tier 1 instant script execution
-- **WHEN** the user runs `prism run <file.prism>`
-- **THEN** the compiler compiles the file into memory using Cranelift JIT in under 15ms without invoking an external toolchain
-
-#### Scenario: Tier 1 hot reload with disabled cross-file inlining
-- **WHEN** code is running in development mode under Tier 1
-- **THEN** cross-file inlining across compilation units is disabled, allowing function-pointer tables to be dynamically patched during hot reload
-
-#### Scenario: Tier 2 release optimization
-- **WHEN** the user builds with `prism build --release`
-- **THEN** the compiler invokes the LLVM backend with whole-program optimization and Link-Time Optimization (LTO)
+#### Scenario: Generic body hash ignores formatting
+- **WHEN** comments or blank lines are added to an exported generic function without changing its code
+- **THEN** its Monomorphization Hash and the file's ABI hash remain unchanged
