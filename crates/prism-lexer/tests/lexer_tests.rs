@@ -295,4 +295,18 @@ mod tests {
         let plus_tok = tokens.iter().find(|t| t.kind == TokenKind::Plus).unwrap();
         assert!(!plus_tok.is_preceded_by_newline);
     }
+
+    #[test]
+    fn test_escape_followed_by_multibyte_char_does_not_panic() {
+        // A backslash before a non-ASCII char used to read one byte of the
+        // UTF-8 sequence and panic on the next char boundary check.
+        for src in [
+            r#"fun f() = "\é""#,
+            r#"fun f() = '\é'"#,
+            r#"fun f() = "a\🚀""#,
+        ] {
+            let tokens = Lexer::new(src).tokenize_all();
+            assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof, "{}", src);
+        }
+    }
 }
