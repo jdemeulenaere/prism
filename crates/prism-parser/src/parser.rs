@@ -40,7 +40,15 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(mut tokens: Vec<Token>) -> Self {
+        // Lookahead clamps to the last token, so the stream must end in Eof.
+        if tokens.last().is_none_or(|t| t.kind != TokenKind::Eof) {
+            let eof_span = tokens.last().map_or(Span::new(0, 0, 1, 1), |t| {
+                let width = (t.span.end - t.span.start) as u32;
+                Span::new(t.span.end, t.span.end, t.span.line, t.span.column + width)
+            });
+            tokens.push(Token::new(TokenKind::Eof, eof_span));
+        }
         Self {
             tokens,
             cursor: 0,

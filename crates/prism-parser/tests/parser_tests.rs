@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
     use prism_ast::*;
-    use prism_parser::{parse_source, MAX_NESTING_DEPTH};
+    use prism_lexer::{Lexer, TokenKind};
+    use prism_parser::{parse_source, Parser, MAX_NESTING_DEPTH};
 
     #[test]
     fn test_parse_math_sample() {
@@ -656,5 +657,16 @@ mod tests {
         for src in sources {
             with_cli_stack(move || parse_source(&src).unwrap());
         }
+    }
+
+    #[test]
+    fn test_token_stream_without_eof() {
+        let file = Parser::new(vec![]).parse_source_file().unwrap();
+        assert!(file.declarations.is_empty());
+
+        let mut tokens = Lexer::new("fun f(): Int = 1").tokenize_all();
+        assert_eq!(tokens.pop().unwrap().kind, TokenKind::Eof);
+        let file = Parser::new(tokens).parse_source_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
     }
 }
