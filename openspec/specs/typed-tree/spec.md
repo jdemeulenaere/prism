@@ -203,6 +203,13 @@ A closure MUST record its parameters as bindings, whether it is composable, and 
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int): Int = run { run { a } }` is checked
 - **THEN** both closures capture `a`
 
+### Requirement: The Typed Tree Records Its File's Types
+The typed tree MUST record every struct and enum known to its file (its own declarations, those its direct imports export, and the built-in `Range`) with its `Copy` or `Clone` marker and, when the file knows them, its fields or variants in declaration order. The text dump MUST list the imported ones.
+
+#### Scenario: Imported types are recorded
+- **WHEN** `models/user.prism` declares `public struct User : Clone { val name: String }` and a file importing `/models/user` declares `fun f(u: &User): Int = 1`
+- **THEN** the file's typed tree records `models/user::User` as a `Clone` struct whose field 0 is `name` of type `String`, and `prism dump-typed-tree` lists it as an imported struct
+
 ### Requirement: Typed Tree Text Dump
 `prism dump-typed-tree <file.prism>` MUST print the file's typed tree, checked against its direct imports' ABIs, as deterministic text: one node per line, children indented under their parent, each line giving the node's kind, its resolved names, its type and its line and column. With type errors it MUST print the tree, report the diagnostics, and exit with a failure status.
 
@@ -234,3 +241,4 @@ Decisions from `typed-tree` (the shape agreed with the user in the borrow-checke
 - **Error nodes keep what was checked and have the error type everywhere.** The builder reports nothing and checks nothing the checker would not, so diagnostics are unchanged; failures that used to keep a recovered type (a mismatched call had its return type) now have the error type, which suppresses follow-on mismatches. An error-free file has no error node and no error type.
 - **A file's tree depends only on the file and its imports' ABIs**, by the deterministic hermetic builds invariant: `prism dump-typed-tree` runs Phase 1 over the import graph and Phase 2 for the entry only, so a dependency's bodies and their errors cannot affect it.
 - **A stable text dump and a validator.** The dump (one node per line, role labels, types after `:`, `@line:column`) drives snapshot fixtures, re-blessed with `PRISM_BLESS=1`, and `TypedFile::validate` checks the structural invariants of the tree of every fixture and example: single parents, places under moves, copies, borrows and assignments, payloads only inside chains, jumps inside their loops, slot types (arguments, fields, branches, tails, returns, closure bodies, patterns, operands, coercions), discarded blocks without values, exact capture lists, and calls and constructions repeating the file's own signatures. JSON output and a `--dump-typed-tree` flag on `prism check` were rejected.
+- **The tree carries its file's type table** (`mir-lowering`). `TypedFile::types` holds what the checker knew about each struct and enum: its own declarations, those its direct imports export (from their ABIs), the markers of types an imported signature mentions, and the built-in `Range`, with `is_copy` and `is_clone` moved from the checker unchanged (the error type still counts as `Copy`). So MIR lowering, the borrow checker and the backend need neither the checker nor the ABIs to know whether a type is `Copy` or what its fields are. The dump lists the imported entries after the `module` line, since own declarations already print as items. Rejected: asking the checker (gone once the tree exists) and field types stored in each MIR projection (which still leaves markers to find).

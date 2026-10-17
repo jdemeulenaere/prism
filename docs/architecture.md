@@ -11,7 +11,7 @@ This document holds the **planned** design of Prism subsystems that are **not im
 
 ## 1. Compilation Pipeline & Compilation Avoidance
 
-Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, and recording a hash of each generic function's body. Everything below is planned.
+Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, recording a hash of each generic function's body, and the first two stages of the Phase 2 semantic pipeline, the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)) and MIR ([`mir`](../openspec/specs/mir/spec.md)). Everything below is planned.
 
 ### Requirement: Single File as Compilation Unit
 Every `.prism` source file MUST be compiled into native machine code independently, with interface boundaries defined strictly by exported declarations.
@@ -50,11 +50,7 @@ Downstream call sites that instantiate an exported generic function MUST be re-m
 - **THEN** re-monomorphization is triggered only in downstream call sites that instantiate that generic
 
 ### Requirement: Semantic Pipeline After Type Checking
-Phase 2 MUST lower each file's typed tree (implemented: the [`typed-tree`](../openspec/specs/typed-tree/spec.md) spec, and "Phase 2 Produces a Typed Tree per File" in [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)) to a control-flow graph before ownership checking and code generation, each stage produced from the previous one and the direct imports' ABIs only.
-
-#### Scenario: Lowering to MIR
-- **WHEN** a file has no type errors
-- **THEN** each function and closure body is lowered (`prism-mir` crate) to a place-based control-flow graph of basic blocks: statements assign rvalues to places (a local plus field and deref projections) and mark storage, terminators branch, call, return and drop, and `&&`, `||`, `?.`, `?:`, `when` and `for` become explicit branches; a stable text dump (`prism dump-mir <file.prism>`) drives snapshot tests
+Phase 2 MUST check each file's MIR for ownership before code generation, from the MIR and the direct imports' ABIs only. The typed tree and the MIR lowered from it are implemented: the [`typed-tree`](../openspec/specs/typed-tree/spec.md) and [`mir`](../openspec/specs/mir/spec.md) specs, and "Phase 2 Produces a Typed Tree per File" and "Phase 2 Lowers Each Typed File to MIR" in [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md).
 
 #### Scenario: Borrow checking on MIR
 - **WHEN** a file's MIR has been built
@@ -214,7 +210,7 @@ Why the requirements above were chosen; each change's `design.md` repeats the de
 
 ## 4. Runtime Semantics Awaiting Code Generation
 
-The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs a backend.
+The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs a backend. The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement); the scenarios below are what the backend must make observable at run time.
 
 ### Requirement: Inline Value Struct Layout
 Struct instances MUST be stored inline by value without heap indirection, and recursive enums MUST have a finite layout through `Heap<T>`.
