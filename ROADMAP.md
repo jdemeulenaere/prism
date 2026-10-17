@@ -49,7 +49,7 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 - [ ] Decide whether safe-navigation assignment (`a?.b = c`, allowed in Kotlin) is valid; it is currently rejected (from the parser plain fixes, `ecc5da3`).
 - [ ] Revisit the parser's 256-level nesting limit (E2002) before the LSP: a debug build needs about 2.75 MB of stack at the limit, more than a default 2 MB worker thread (from `8f1f932`).
 - [ ] Typed IR before the borrow checker: node IDs, resolved names, binding-site spans and typed closure parameters (deferred by `harden-parser-grammar`).
-- [ ] A `Stmt` AST type separating statements from expressions; `LocalVar` currently lives in `BlockExpr.stmts` by parser invariant (deferred by `harden-parser-grammar`).
+- [ ] A `Statement` AST type separating statements from expressions; `LocalVar` currently lives in `BlockExpr.stmts` by parser invariant (deferred by `harden-parser-grammar`).
 - [ ] Methods and receivers (`this`), and loops (`for`, `while`, `break`, `continue`) (deferred by `harden-parser-grammar`).
 - [ ] Implicit `it` parameter for single-parameter closures (deferred by `harden-parser-grammar`).
 - [ ] Lint for `fun f() = { … }`, which returns a closure as in Kotlin (follow-up from `harden-parser-grammar`).

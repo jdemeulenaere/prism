@@ -66,3 +66,5 @@ What is implemented and what is planned live in different places. Never treat a 
 - **Milestone 3**: Self-hosting compiler written in Prism itself.
 
 When writing or reviewing code, always ensure existing tests pass and new language features include executable test fixtures.
+
+Naming: spell out new identifiers in full words (`Statement`, not `Stmt`); don't abbreviate for brevity's sake. Existing abbreviated names (`Expr`, `BlockExpr`, ...) stay until a change deliberately renames them.
