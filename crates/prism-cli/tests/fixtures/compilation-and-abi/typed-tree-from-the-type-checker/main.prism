@@ -1,0 +1,15 @@
+// expect: ok
+struct User { val name: String, var age: Int }
+fun greet(u: &User, greeting: String = "Hello"): String = greeting + u.name
+mut fun User.birthday() { age = age + 1 }
+fun age_of(r: &Int): Int = r
+fun touch(u: &mut User) {}
+fun main(): Int {
+    var u = User("Ada", 36)
+    val text = greet(u)
+    val again = greet(&u, greeting = text)
+    val m = &mut u
+    m.birthday()
+    touch(m)
+    return age_of(&u.age)
+}

@@ -6,6 +6,7 @@ use crate::diagnostics;
 use prism_abi::{declared_types, AbiError, FileAbi, NominalHeader};
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
+use prism_typechecker::TypedFile;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,6 +97,17 @@ impl From<ResolveError> for WorkspaceError {
 /// Follows import-directed compilation isolation: unimported sibling files
 /// in the same directory are completely excluded from parsing and checking.
 pub fn check_file(entry_file: &Path) -> Result<CheckReport, WorkspaceError> {
+    validate_entry_file(entry_file)?;
+    let graph = DependencyGraph::from_entry(entry_file)?;
+
+    // Assert that all reachable files reside inside the discovered workspace root
+    assert_workspace_boundary(&graph)?;
+
+    validate_and_extract_abi(&graph)
+}
+
+/// Rejects an entry that is not an existing `.prism` file.
+fn validate_entry_file(entry_file: &Path) -> Result<(), WorkspaceError> {
     if !entry_file.exists() {
         return Err(WorkspaceError::Io {
             path: entry_file.to_path_buf(),
@@ -120,13 +132,7 @@ pub fn check_file(entry_file: &Path) -> Result<CheckReport, WorkspaceError> {
             entry_file.display()
         )));
     }
-
-    let graph = DependencyGraph::from_entry(entry_file)?;
-
-    // Assert that all reachable files reside inside the discovered workspace root
-    assert_workspace_boundary(&graph)?;
-
-    validate_and_extract_abi(&graph)
+    Ok(())
 }
 
 /// Checks a directory (either a package directory or workspace root), recursively
@@ -286,8 +292,52 @@ fn module_path(node: &SourceNode) -> String {
         .join("/")
 }
 
-/// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in topological SCC order.
+/// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in
+/// topological SCC order, stopping at the first file with type errors.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
+    let abis = extract_abis(graph)?;
+
+    // Phase 2: Typecheck function bodies and expressions in topological SCC order
+    let mut checked_files = Vec::new();
+
+    for cluster in graph.topological_order() {
+        for file_path in &cluster.files {
+            let node = graph.get_node(file_path).expect("node must exist in graph");
+            let (_, errors) = typecheck_file(graph, &abis, file_path);
+            if !errors.is_empty() {
+                let source = fs::read_to_string(file_path).unwrap_or_default();
+                return Err(WorkspaceError::Type {
+                    path: file_path.clone(),
+                    source,
+                    errors,
+                });
+            }
+
+            let abi = abis.get(file_path).expect("abi must exist");
+            let package_str = if node.package.is_empty() {
+                "<root>".to_string()
+            } else {
+                node.package.join(".")
+            };
+
+            checked_files.push(CheckedFile {
+                path: file_path.clone(),
+                package: package_str,
+                exported_symbols: abi.symbols.len(),
+                abi_hash: abi.abi_hash_hex(),
+            });
+        }
+    }
+
+    Ok(CheckReport {
+        workspace_root: graph.workspace_root.clone(),
+        total_files: checked_files.len(),
+        checked_files,
+    })
+}
+
+/// Phase 1: extracts the ABI of every file of `graph` from its AST alone. No body is read.
+fn extract_abis(graph: &DependencyGraph) -> Result<HashMap<PathBuf, FileAbi>, WorkspaceError> {
     // Phase 1a: the structs and enums each file exports, with their kinds and markers, read from
     // its AST alone.
     let exported_types: HashMap<&Path, HashMap<&str, NominalHeader>> = graph
@@ -297,7 +347,7 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
         .collect();
 
     // Phase 1b: extract each file's ABI, binding the type names in its exported signatures to
-    // its own declarations or to the one direct import that exports them. No body is read.
+    // its own declarations or to the one direct import that exports them.
     let mut abis: HashMap<PathBuf, FileAbi> = HashMap::new();
     for (file_path, node) in &graph.nodes {
         let bind_import = |name: &str| {
@@ -323,60 +373,81 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
         )?;
         abis.insert(file_path.clone(), abi);
     }
+    Ok(abis)
+}
 
-    // Phase 2: Typecheck function bodies and expressions in topological SCC order
-    let mut checked_files = Vec::new();
+/// Phase 2 of one file: checks the file at `file_path` of `graph` against the ABIs of its direct
+/// imports only, never another file's body or typed tree (the deterministic hermetic builds
+/// invariant), returning its typed tree and its type errors.
+fn typecheck_file(
+    graph: &DependencyGraph,
+    abis: &HashMap<PathBuf, FileAbi>,
+    file_path: &Path,
+) -> (TypedFile, Vec<prism_typechecker::TypeError>) {
+    let node = graph.get_node(file_path).expect("node must exist in graph");
+    let package_name = if node.package.is_empty() {
+        None
+    } else {
+        Some(node.package.join("."))
+    };
 
-    for cluster in graph.topological_order() {
-        for file_path in &cluster.files {
-            let node = graph.get_node(file_path).expect("node must exist in graph");
-            let package_name = if node.package.is_empty() {
-                None
-            } else {
-                Some(node.package.join("."))
-            };
+    let mut checker = prism_typechecker::TypeChecker::new(package_name, module_path(node));
 
-            let mut checker = prism_typechecker::TypeChecker::new(package_name, module_path(node));
-
-            // Ingest FileAbi of all direct dependencies
-            for dep_path in &node.direct_imports {
-                if let Some(dep_abi) = abis.get(dep_path) {
-                    checker.ingest_file_abi(dep_abi);
-                }
-            }
-
-            // Pass 1 (file-level forward declarations) and Pass 2 (function body checks)
-            checker.check_module(&node.source_file);
-
-            if !checker.errors.is_empty() {
-                let source = fs::read_to_string(file_path).unwrap_or_default();
-                return Err(WorkspaceError::Type {
-                    path: file_path.clone(),
-                    source,
-                    errors: checker.errors,
-                });
-            }
-
-            let abi = abis.get(file_path).expect("abi must exist");
-            let package_str = if node.package.is_empty() {
-                "<root>".to_string()
-            } else {
-                node.package.join(".")
-            };
-
-            checked_files.push(CheckedFile {
-                path: file_path.clone(),
-                package: package_str,
-                exported_symbols: abi.symbols.len(),
-                abi_hash: abi.abi_hash_hex(),
-            });
+    // Ingest FileAbi of all direct dependencies
+    for dep_path in &node.direct_imports {
+        if let Some(dep_abi) = abis.get(dep_path) {
+            checker.ingest_file_abi(dep_abi);
         }
     }
 
-    Ok(CheckReport {
-        workspace_root: graph.workspace_root.clone(),
-        total_files: checked_files.len(),
-        checked_files,
+    // Pass 1 (file-level forward declarations) and Pass 2 (function body checks)
+    let tree = checker.check_module(&node.source_file);
+    (tree, checker.errors)
+}
+
+/// The typed tree of one file, as `prism dump-typed-tree` prints it.
+#[derive(Debug)]
+pub struct TypedTreeDump {
+    /// The tree's text (`TypedFile::dump`).
+    pub text: String,
+    /// The file's type errors, if it has any.
+    pub type_errors: Option<WorkspaceError>,
+    /// The tree itself.
+    pub tree: TypedFile,
+}
+
+/// Builds the typed tree of the entry file `entry`: runs Phase 1 over its import graph, then
+/// Phase 2 for the entry only, so the bodies of its dependencies (and their errors) cannot
+/// affect it (D15 of `typed-tree`). Resolve, parse and ABI errors are returned as by
+/// [`check_file`], with no tree; type errors come with the tree.
+pub fn dump_typed_tree(entry: &Path) -> Result<TypedTreeDump, WorkspaceError> {
+    validate_entry_file(entry)?;
+    let graph = DependencyGraph::from_entry(entry)?;
+    assert_workspace_boundary(&graph)?;
+    let abis = extract_abis(&graph)?;
+    let canonical_entry = entry.canonicalize().map_err(|e| WorkspaceError::Io {
+        path: entry.to_path_buf(),
+        message: e.to_string(),
+    })?;
+    let entry_path = graph
+        .nodes
+        .keys()
+        .find(|path| path.canonicalize().ok().as_ref() == Some(&canonical_entry))
+        .cloned()
+        .ok_or_else(|| WorkspaceError::Io {
+            path: entry.to_path_buf(),
+            message: "the entry file is not in its own dependency graph".to_string(),
+        })?;
+    let (tree, errors) = typecheck_file(&graph, &abis, &entry_path);
+    let type_errors = (!errors.is_empty()).then(|| WorkspaceError::Type {
+        path: entry_path.clone(),
+        source: fs::read_to_string(&entry_path).unwrap_or_default(),
+        errors,
+    });
+    Ok(TypedTreeDump {
+        text: tree.dump(),
+        type_errors,
+        tree,
     })
 }
 

@@ -1,0 +1,7 @@
+module main
+fun main::g(): Int @2:1
+  literal 1: Int @2:16
+fun main::f(): Unit @3:1
+  block: Unit @3:9
+    expression @3:11
+      call main::g: Int @3:11

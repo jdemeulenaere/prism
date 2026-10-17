@@ -15,6 +15,7 @@ pub mod types;
 
 pub use checker::TypeChecker;
 pub use error::TypeError;
+pub use prism_typed_tree::TypedFile;
 pub use scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 pub use types::{
     type_from_abi, type_from_ast, NominalId, Type, TypeDef, TypeRelations, BUILTIN_MODULE,

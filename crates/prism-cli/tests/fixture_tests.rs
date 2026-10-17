@@ -30,6 +30,15 @@
 //! the scenarios they exercise. The scenarios of an active change's delta spec count too, so a
 //! change's fixtures can land before it is archived.
 //!
+//! ## Typed-tree snapshots
+//!
+//! A case may also hold `typed-tree.snap` beside its `.prism` files: the expected output of
+//! `prism dump-typed-tree` on its entry (`prism_cli::dump_typed_tree`), which the runner
+//! compares with the actual dump. Every case of the `typed-tree` spec, and every case whose name
+//! starts with `typed-tree`, must hold one. `PRISM_BLESS=1 cargo test -p prism-cli --test
+//! fixture_tests` writes the actual dumps instead; read each against its scenario's THEN before
+//! committing it.
+//!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
 //! catalog in `openspec/specs/diagnostics/spec.md`: every expected code must be a live catalog
@@ -201,13 +210,55 @@ fn run(case: &Case) -> Result<(), String> {
             (codes, rendered)
         }
     };
-    if actual == case.expected {
+    if actual != case.expected {
+        return Err(format!(
+            "{}: expected {:?}, got {:?}\n{}",
+            case.name, case.expected, actual, rendered
+        ));
+    }
+    check_snapshot(case, &entry)
+}
+
+const SNAPSHOT: &str = "typed-tree.snap";
+
+/// Whether `case` must hold a typed-tree snapshot.
+fn needs_snapshot(case: &Case) -> bool {
+    let (spec, dir) = case.name.split_once('/').unwrap();
+    spec == "typed-tree" || dir.starts_with("typed-tree")
+}
+
+/// Compares the typed tree of `entry` with the case's snapshot, or writes it with `PRISM_BLESS`.
+fn check_snapshot(case: &Case, entry: &Path) -> Result<(), String> {
+    let path = case.dir.join(SNAPSHOT);
+    if !path.exists() && !needs_snapshot(case) {
         return Ok(());
     }
-    Err(format!(
-        "{}: expected {:?}, got {:?}\n{}",
-        case.name, case.expected, actual, rendered
-    ))
+    let actual = match prism_cli::dump_typed_tree(entry) {
+        Ok(dump) => dump.text,
+        Err(err) => {
+            return Err(format!(
+                "{}: no typed tree to compare with {}:\n{}",
+                case.name,
+                SNAPSHOT,
+                err.render()
+            ))
+        }
+    };
+    if std::env::var_os("PRISM_BLESS").is_some() {
+        fs::write(&path, &actual).unwrap();
+        return Ok(());
+    }
+    match fs::read_to_string(&path) {
+        Ok(expected) if expected == actual => Ok(()),
+        Ok(expected) => Err(format!(
+            "{}: stale {} (re-bless with PRISM_BLESS=1):\n--- expected\n{}--- actual\n{}",
+            case.name, SNAPSHOT, expected, actual
+        )),
+        Err(_) => Err(format!(
+            "{}: missing {} (write it with PRISM_BLESS=1):\n{}",
+            case.name, SNAPSHOT, actual
+        )),
+    }
 }
 
 #[test]

@@ -1,0 +1,11 @@
+module main
+fun main::f(a: Int): Int @2:1
+  local %0 a: Int (parameter)
+  local %1 a: Int (val)
+  block: Int @2:20
+    let %1 a @3:5
+      literal 2: Int @3:13
+    tail: coerce diverge: Int @4:5
+      return: Nothing @4:5
+        copy: Int @4:12
+          local %1 a: Int @4:12

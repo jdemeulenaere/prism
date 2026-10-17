@@ -798,3 +798,57 @@ fn test_cli_binary_symlinked_directory_entry_rejected_e1005() {
     fs::remove_dir_all(&temp).ok();
     fs::remove_dir_all(&outside).ok();
 }
+
+/// Runs `prism dump-typed-tree` on a single-file workspace holding `source`.
+fn dump_typed_tree(test_name: &str, source: &str) -> std::process::Output {
+    let temp = create_temp_dir(test_name);
+    let file = temp.join("main.prism");
+    fs::write(&file, source).unwrap();
+    let output = Command::new(prism_bin())
+        .arg("dump-typed-tree")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+    fs::remove_dir_all(&temp).ok();
+    output
+}
+
+/// typed-tree: "Dumping a file".
+#[test]
+fn test_cli_binary_dump_typed_tree_is_deterministic() {
+    let source = "fun f(a: Int): Int = a + 1\n";
+    let first = dump_typed_tree("dump_first", source);
+    let second = dump_typed_tree("dump_second", source);
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let text = String::from_utf8_lossy(&first.stdout);
+    assert!(text.contains("fun main::f(a: Int): Int @1:1"), "{}", text);
+    assert!(text.contains("binary +: Int @1:22"), "{}", text);
+    assert_eq!(first.stdout, second.stdout);
+}
+
+/// typed-tree: "Dumping a file with type errors".
+#[test]
+fn test_cli_binary_dump_typed_tree_with_type_errors() {
+    let output = dump_typed_tree("dump_type_error", "fun f(): Int = nope + 1\n");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("fun main::f(): Int @1:1"), "{}", stdout);
+    assert!(stdout.contains("error: <error> @1:16"), "{}", stdout);
+    assert!(stderr.contains("error[E4001]"), "{}", stderr);
+}
+
+/// typed-tree: "Dumping a file with a syntax error".
+#[test]
+fn test_cli_binary_dump_typed_tree_with_a_syntax_error() {
+    let output = dump_typed_tree("dump_syntax_error", "fun f(: Int = 1\n");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(stderr.contains("error[E2"), "{}", stderr);
+}

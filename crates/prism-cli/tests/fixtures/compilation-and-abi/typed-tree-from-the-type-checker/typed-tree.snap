@@ -1,0 +1,73 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+  field 1 var age: Int
+fun main::greet(u: &User, greeting: String): String @3:1
+  local %0 u: &User (parameter)
+  local %1 greeting: String (parameter)
+  default greeting: literal "Hello": String @3:40
+  binary +: String @3:59
+    local %1 greeting: String @3:59
+    field 0 name: String @3:70
+      deref: User @3:70
+        local %0 u: &User @3:70
+fun main::User.birthday(mut this): Unit @4:1
+  local %0 this: &mut User (receiver)
+  block: Unit @4:25
+    assign @4:27
+      target: field 1 age: Int @4:27
+        deref: User @4:27
+          local %0 this: &mut User @4:27
+      value: binary +: Int @4:33
+        field 1 age: Int @4:33
+          deref: User @4:33
+            local %0 this: &mut User @4:33
+        literal 1: Int @4:39
+fun main::age_of(r: &Int): Int @5:1
+  local %0 r: &Int (parameter)
+  copy: Int @5:28
+    deref: Int @5:28
+      local %0 r: &Int @5:28
+fun main::touch(u: &mut User): Unit @6:1
+  local %0 u: &mut User (parameter)
+  block: Unit @6:25
+fun main::main(): Int @7:1
+  local %0 u: User (var)
+  local %1 text: String (val)
+  local %2 again: String (val)
+  local %3 m: &mut User (val)
+  block: Int @7:17
+    let %0 u @8:5
+      construct main::User: User @8:13
+        field name: literal "Ada": String @8:18
+        field age: literal 36: Int @8:25
+    let %1 text @9:5
+      call main::greet: String @9:16
+        argument u: borrow (argument): &User @9:22
+          local %0 u: User @9:22
+        argument greeting: default
+    let %2 again @10:5
+      call main::greet: String @10:17
+        argument u: borrow (written): &User @10:23
+          local %0 u: User @10:24
+        argument greeting: move: String @10:38
+          local %1 text: String @10:38
+    let %3 m @11:5
+      borrow mut (written): &mut User @11:13
+        local %0 u: User @11:18
+    expression @12:5
+      call main::User.birthday: Unit @12:5
+        receiver: borrow mut (receiver): &mut User @12:5
+          deref: User @12:5
+            local %3 m: &mut User @12:5
+    expression @13:5
+      call main::touch: Unit @13:5
+        argument u: borrow mut (argument): &mut User @13:11
+          deref: User @13:11
+            local %3 m: &mut User @13:11
+    tail: coerce diverge: Int @14:5
+      return: Nothing @14:5
+        call main::age_of: Int @14:12
+          argument r: borrow (written): &Int @14:19
+            field 1 age: Int @14:20
+              local %0 u: User @14:20

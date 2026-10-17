@@ -1,0 +1,2 @@
+package lib
+public fun shout(s: &String): String = nope

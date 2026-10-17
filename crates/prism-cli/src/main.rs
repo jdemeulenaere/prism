@@ -19,6 +19,9 @@ USAGE:
 COMMANDS:
     check <path>           Lex, parse, and validate source file or directory and ABI
     dump-ast <file.prism>  Print the Abstract Syntax Tree for a source file
+    dump-typed-tree <file.prism>
+                           Print the typed tree of a source file, checked against the ABIs of
+                           its imports
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
     tokens <file.prism>    Tokenize source file and print stream of tokens
     version                Show version information
@@ -60,6 +63,13 @@ fn main() {
                 process::exit(1);
             }
             run_dump_ast(&args[2]);
+        }
+        "dump-typed-tree" => {
+            if args.len() < 3 {
+                eprintln!("Error: 'dump-typed-tree' command requires a file path argument");
+                process::exit(1);
+            }
+            run_dump_typed_tree(&args[2]);
         }
         "abi" => {
             if args.len() < 3 {
@@ -130,6 +140,24 @@ fn run_dump_ast(path: &str) {
         }
     };
     println!("{:#?}", ast);
+}
+
+/// Prints the typed tree of `path`, then its type errors, if any, with a failure status.
+/// Resolve, parse and ABI errors are reported as by `check`, with no tree.
+fn run_dump_typed_tree(path: &str) {
+    match prism_cli::dump_typed_tree(std::path::Path::new(path)) {
+        Ok(dump) => {
+            print!("{}", dump.text);
+            if let Some(errors) = dump.type_errors {
+                eprint!("{}", errors.render());
+                process::exit(1);
+            }
+        }
+        Err(err) => {
+            eprint!("{}", err.render());
+            process::exit(1);
+        }
+    }
 }
 
 fn run_abi(path: &str) {

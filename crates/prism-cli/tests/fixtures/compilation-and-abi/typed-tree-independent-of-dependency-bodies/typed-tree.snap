@@ -1,0 +1,7 @@
+module app/main
+package app
+fun app/main::f(s: String): String @5:1
+  local %0 s: String (parameter)
+  call lib/text::shout: String @5:28
+    argument s: borrow (argument): &String @5:34
+      local %0 s: String @5:34
