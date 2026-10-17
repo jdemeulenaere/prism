@@ -50,11 +50,7 @@ Downstream call sites that instantiate an exported generic function MUST be re-m
 - **THEN** re-monomorphization is triggered only in downstream call sites that instantiate that generic
 
 ### Requirement: Semantic Pipeline After Type Checking
-Phase 2 MUST lower each file through a typed, resolved tree and a control-flow graph before ownership checking and code generation, each produced from the previous stage and the direct imports' ABIs only.
-
-#### Scenario: Typed tree from the type checker
-- **WHEN** the type checker checks a file
-- **THEN** it produces a typed tree (`prism-typed-tree` crate) in which every node carries its type and span, names are resolved to bindings or declaration identities, calls are normalized to positional order with explicit default slots, and every implicit copy, move, borrow, copy-out and reborrow is an explicit node; the tree is produced even when the file has type errors
+Phase 2 MUST lower each file's typed tree (implemented: the [`typed-tree`](../openspec/specs/typed-tree/spec.md) spec, and "Phase 2 Produces a Typed Tree per File" in [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)) to a control-flow graph before ownership checking and code generation, each stage produced from the previous one and the direct imports' ABIs only.
 
 #### Scenario: Lowering to MIR
 - **WHEN** a file has no type errors
