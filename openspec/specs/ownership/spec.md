@@ -1,7 +1,7 @@
 # Ownership Specification
 
 ## Purpose
-The ownership specification defines Prism's single-owner value model as the type checker enforces it: which types are `Copy` or `Clone`, how `: Copy` and `: Clone` declarations are checked, explicit cloning, what a move may take its value from, and why top-level declarations are immutable. Flow-sensitive rules such as use after move belong to the borrow checker and are added here when it exists.
+The ownership specification defines Prism's single-owner value model as the type checker enforces it: which types are `Copy` or `Clone`, how `: Copy` and `: Clone` declarations are checked, explicit cloning, what a move may take its value from, and why top-level declarations are immutable. It also holds the flow-sensitive rules that the borrow checker enforces on MIR: no use of a moved or uninitialized value, and reinitialization by assignment. Borrow conflicts are the `references` spec's.
 
 ## Requirements
 
@@ -186,6 +186,13 @@ A non-`Copy` value in a consuming position MUST be a whole owned local or by-val
 - **WHEN** `shop/models` exports `public struct Money : Copy { val cents: Int }` and `public struct Note : Clone { val text: String }`, `shop/api` exports `public struct Order { val price: Money, val note: Note }`, and a file that imports only `/shop/api` declares `fun f(o: Order) { val p = o.price; val c = o.note.clone(); val n = o.note }`
 - **THEN** the type checker accepts `o.price` and `o.note.clone()` and emits `E4017` for `val n = o.note`, without reporting `E4014`
 
+### Requirement: A Default Value Does Not Move Earlier Parameters
+Inside a parameter's default value, an earlier parameter or `this` MUST NOT be moved, because the default only borrows them. Such a move MUST be rejected with `CannotMoveOut` (`E4017`) naming the parameter, with help suggesting `.clone()` for a `Clone` type.
+
+#### Scenario: Moving an earlier parameter in a default value
+- **WHEN** `struct User : Clone { val name: String }` is declared and `fun f(a: String, b: String = a): Int = 1`, `fun User.g(u: User = this): Int = 1`, `fun h(a: String, b: String = a.clone()): Int = 1` and `fun k(a: Int, b: Int = a): Int = b` are checked
+- **THEN** the type checker emits `E4017` for `a` in `f`, naming the parameter `a` and suggesting `a.clone()`, and for `this` in `g`, and accepts `h` and `k`
+
 ### Requirement: No Mutable Top-Level State
 Top-level declarations MUST be immutable: a top-level `var` MUST be rejected by the parser with `E2001`, whatever its visibility, with a message saying that mutable state belongs in locals and parameters (and, in UI code, in state handles). Top-level `val` declarations and local `var` declarations MUST be unaffected.
 
@@ -235,6 +242,98 @@ The receiver of a `consuming fun` call MUST be checked as a consuming position. 
 - **WHEN** `consuming fun User.toAccount(): Account` and `struct Team { val lead: User? }` are declared, and `fun f(u: User?): Account? = u?.toAccount()` and `fun g(t: Team): Account? = t.lead?.toAccount()` are checked
 - **THEN** the type checker accepts `f`, which moves `u`, and emits `E4017` for `g`, because `t.lead` is a field
 
+### Requirement: Use After Move Is Rejected
+A non-`Copy` value moved out of a local or parameter (by any consuming position) MUST NOT be used on a path on which it was moved, until it is assigned again. Reading, copying, moving, borrowing, calling or capturing it, or assigning one of its fields, MUST be rejected by the borrow checker with `UseAfterMove` (`E5001`). A value of a `Copy` type MUST be copied, never moved.
+
+#### Scenario: Value move on assignment
+- **WHEN** `fun take(s: String) {}` and `struct Tag { val s: String }` are declared, and a body of `fun f(a: String)` moves `a` by `val b = a`, by `take(a)` or by `val t = Tag(a)`, and then runs `take(a)`
+- **THEN** the borrow checker emits `E5001` at `a` in the last `take(a)`
+
+#### Scenario: Every use after a move is rejected
+- **WHEN** `fun take(s: String) {}`, `fun greet(s: &String): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared, and after `take(s)` a body of `fun f(s: String)` compares `s == "a"`, passes `greet(s)` (an implicit borrow), declares `val r = &s`, calls `s.clone()`, discards `s` as a statement, or runs `run { greet(s) }`, whose closure captures `s`
+- **THEN** the borrow checker emits `E5001` at each of these uses of `s`
+
+#### Scenario: Copy values are copied, not moved
+- **WHEN** `struct Point : Copy { val x: Int }`, `fun g(p: Point) {}` and `fun h(n: Int) {}` are declared and `fun f(p: Point, n: Int) { g(p); g(p); val m = n; h(n); h(m) }` is checked
+- **THEN** the file passes `prism check`
+
+#### Scenario: Use after a consuming method call
+- **WHEN** `struct User { val name: String }`, `struct Account { val owner: User }`, `consuming fun User.toAccount(): Account = Account(this)` and `fun greet(n: &String): Int = 1` are declared, and `fun f(u: User): Int { val a = u.toAccount(); return greet(u.name) }` or `fun g(u: User?) { val a = u?.toAccount(); val b = u?.toAccount() }` is checked
+- **THEN** the borrow checker emits `E5001` at `u` in `u.name`, and at `u` in the second `u?.toAccount()`, which uses a possibly moved value
+
+#### Scenario: A consuming receiver is moved before the arguments
+- **WHEN** `struct Stack { var count: Int }`, `consuming fun Stack.into(n: Int): Int = n`, `fun bump(s: &mut Stack): Int = 1`, `mut fun Stack.push(n: Int) {}` and `fun Stack.size(): Int = count` are declared, and a body runs `var s = Stack(0); val k = s.into(bump(&mut s))`, or `var v = Stack(0); v.push(v.size())`
+- **THEN** the borrow checker emits `E5001` at `&mut s`, because `s` moved into the receiver before `bump` was called, and accepts `v.push(v.size())`, whose receiver is borrowed after the arguments
+
+#### Scenario: Conditional move
+- **WHEN** `fun take(s: String) {}`, `fun check(s: String): Bool = true` and `fun g() {}` are declared, and a body of `fun f(c: Bool, n: Int, s: String)` moves `s` on one path only, by `if (c) take(s)`, by `when (n) { 1 -> take(s); else -> g() }` or by `val ok = c && check(s)`, and then runs `take(s)`
+- **THEN** the borrow checker emits `E5001` at the last `take(s)`, saying that `s` is possibly moved
+
+#### Scenario: Moves on separate paths are accepted
+- **WHEN** `fun take(s: String) {}` is declared and a body of `fun f(c: Bool, s: String)` runs `if (c) take(s) else take(s)`, or `if (c) { take(s); return }` followed by `take(s)`
+- **THEN** the file passes `prism check`, because no path moves `s` twice
+
+#### Scenario: Loop move
+- **WHEN** `fun take(s: String) {}` is declared and a body of `fun f(c: Bool, s: String)` runs `while (c) take(s)`, `for (i in 0..3) take(s)` or `do { take(s) } while (c)`
+- **THEN** the borrow checker emits `E5001` at `s` in `take(s)`, whose related location is the same `take(s)` labelled as a move in a previous iteration of the loop
+
+#### Scenario: A move followed by break is not repeated
+- **WHEN** `fun take(s: String) {}` is declared and `fun f(c: Bool, s: String) { while (c) { take(s); break } }` is checked
+- **THEN** the file passes `prism check`, because no iteration follows the move
+
+#### Scenario: Plain enum is move-only without the marker
+- **WHEN** `enum Color { Red, Green }` and `fun paint(c: Color) {}` are declared and `fun f(c: Color) { paint(c); paint(c) }` is checked, or the same with `enum Color : Copy { Red, Green }`
+- **THEN** the borrow checker emits `E5001` at the second `c`, with help suggesting `: Copy` on the declaration of `Color` and no `.clone()`, and with the marker the file passes `prism check`
+
+#### Scenario: Use of a String after it moved
+- **WHEN** `fun take(s: String) {}` is declared and `fun f(a: String) { val b = a; take(a) }` and `fun g() { take("x"); take("x") }` are checked
+- **THEN** the borrow checker emits `E5001` for `f`, with help suggesting `a.clone()` and no `: Copy`, and accepts `g`, because each string literal evaluates to a fresh owned `String`
+
+### Requirement: Assignment Reinitializes a Moved Variable
+Assigning a whole new value to a moved `var` MUST make it usable again from that assignment on, on the paths that pass through the assignment. Assigning one of its fields MUST NOT reinitialize it, and is a use after move.
+
+#### Scenario: Reinitialization by assignment
+- **WHEN** `fun take(s: String) {}` is declared and `fun f(a: String, b: String) { var s = a; take(s); s = b; take(s) }` is checked
+- **THEN** the file passes `prism check`
+
+#### Scenario: Reinitialization before the next iteration
+- **WHEN** `fun take(s: String) {}` is declared and a body of `fun f(c: Bool, d: Bool)` runs `var s = "a"; while (c) { take(s); s = "b" }`, or `var t = "a"; while (c) { take(t); if (d) t = "b" }`
+- **THEN** the borrow checker accepts the first loop and emits `E5001` at `t` in `take(t)`, which a previous iteration may have moved without reassigning it
+
+#### Scenario: Assigning a field of a moved value
+- **WHEN** `struct User { var name: String }` and `fun take(u: User) {}` are declared and a body runs `var u = User("a"); take(u); u.name = "b"`, or `var v = User("a"); take(v); v = User("b"); take(v)`
+- **THEN** the borrow checker emits `E5001` at `u.name`, and accepts the assignment of the whole `v`
+
+### Requirement: Use-After-Move Diagnostics Show the Moves
+An `E5001` diagnostic MUST point at the use and name the value, and MUST list as related locations the moves that reach the use, each labelled "value moved here", with ", in previous iteration of loop" when only a loop's back edge leads from the move to the use. It MUST note the value's type, and help MUST suggest `.clone()` for a `Clone` type and `: Copy` for a struct or enum that could be `Copy`.
+
+#### Scenario: Use after move points at the move
+- **WHEN** `fun take(s: String) {}` is declared and `prism check` runs on `fun f(s: String) { take(s); take(s) }`
+- **THEN** it reports `error[E5001]: use of moved value 's'` at the second `s`, labelled "value used here after move", with a related location at the first `s` labelled "value moved here", a note that `'s'` has type `'String'`, which is not `'Copy'`, and help suggesting `s.clone()`
+
+#### Scenario: Possibly moved value
+- **WHEN** `fun take(s: String) {}` is declared and `prism check` runs on `fun f(c: Bool, s: String) { if (c) take(s); take(s) }`
+- **THEN** it reports `error[E5001]: use of possibly moved value 's'` at the second `s`, with a related location at the first `s`
+
+#### Scenario: Labels point at the operands
+- **WHEN** `struct Pair { val a: String, val b: String }`, `struct User { var name: String }` and `fun take(u: User) {}` are declared, and `fun f(s: String): Pair = Pair(s, s)`, `fun g(s: String): Bool { val t = s; return s == "a" }` or `fun h() { var u = User("a"); take(u); u.name = "b" }` is checked
+- **THEN** the borrow checker emits `E5001` labelled at the operand that uses the value (the second `s`, the compared `s`, `u.name`), with its related location at the operand that moved it (the first `s`, the `s` of `val t = s`, the `u` passed to `take`), not at the whole construction, comparison or assignment
+
+#### Scenario: Copy suggestion for a type whose members are all Copy
+- **WHEN** `struct Point { val x: Int, val y: Int }`, `struct Name { val text: String }`, `fun g(p: Point) {}` and `fun h(n: Name) {}` are declared and `fun f(p: Point, n: Name) { g(p); g(p); h(n); h(n) }` is checked
+- **THEN** the borrow checker emits `E5001` twice: for `p` with help suggesting `: Copy` on `Point`, and for `n` with neither a `: Copy` nor a `.clone()` suggestion
+
+### Requirement: Reading an Uninitialized Value Is Rejected
+A local MUST NOT be read on a path on which it has not been assigned. Such a read MUST be rejected by the borrow checker with `UseOfUninitialized` (`E5002`), with a related location at the jump that skips the local's declaration. Today the only such path is a `continue` in a `do`/`while` body whose condition reads a body local declared after the `continue`.
+
+#### Scenario: Continue skips a declaration that the condition reads
+- **WHEN** `fun next(): Int = 0` is declared and `fun f(c: Bool) { do { val s = "a"; if (c) continue; val x = next() } while (x > 0) }` is checked
+- **THEN** the borrow checker emits `E5002` at `x` in the condition, saying that `x` is possibly uninitialized, with a related location at the `continue` labelled as skipping the declaration of `x`
+
+#### Scenario: Condition reading only locals declared before the continue
+- **WHEN** `fun next(): Int = 0` is declared and `fun f(c: Bool) { do { val x = next(); if (c) continue; val y = "b" } while (x > 0) }` is checked
+- **THEN** the file passes `prism check`
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -258,3 +357,16 @@ Decisions from `extension-methods`:
 
 - **A `consuming fun` receiver is one more consuming position** (user, from `value-semantics`). It is checked exactly like a by-value argument, so `E4017`'s help stays the same for every consuming site: borrow, clone, or take the whole value. Through a reference, a `Copy` receiver is copied out and any other is a move out of the borrow. Moving out of a `Heap<T>` waits for the `Heap<T>` change. Because moves take whole values, a `consuming fun` can pass `this` on but not take its fields apart, until destructuring or partial moves exist.
 - **An extension named `clone` is called only on a type that is not `Clone`.** On a `Clone` type the built-in always wins, so such an extension is rejected (see `extension-functions`).
+
+Decisions from `borrowck-moves`:
+
+- **Flow-sensitive rules are the borrow checker's, and live here** (user for the split). Whether a value still holds a value depends on the path taken through branches and loops, so use after move is a borrow-checker error (`E5xxx`) on MIR, while a rule decided by an expression's shape and type stays a type error (`E4xxx`). The rules join this spec rather than a `borrow-checking` capability, so each concept stays in one spec whatever stage enforces it.
+- **Move paths are a local plus fields; a payload counts as its nullable.** Moving `(u as payload)`, as `u?.toAccount()` and `?:` do, moves `u`: a `T?` owns nothing but its payload, so no partial-move state is needed and drops stay exact. So `u == null` after a conditional payload move is a use of a possibly moved value, as in Rust, until smart casts exist. A dereference or an index ends a path; a `Copy` value never moves. Field child paths are kept for later partial moves and disjoint borrows.
+- **Two forward analyses over one dataflow framework.** `MaybeInitialized` (paths that may hold a value) and `ReachingUninitializations` (the moves and storage starts that reach a point unreinitialized) together tell definitely, possibly and never initialized apart, and the reaching events are what the diagnostic labels. The framework is generic, forward and backward, so `borrowck-exclusivity` adds liveness and borrows on it.
+- **What a use is.** Reads, copies, moves, borrows, discriminant reads, calls of a function value, closure captures and field writes use their place; a whole-local assignment reinitializes it. Drops are not uses: whether a drop of a moved value runs is exactly what elaboration decides.
+- **Two codes, because the fixes differ.** `E5001` (clone, copy or reassign the value) and `E5002` (move the declaration before the jump that skips it), as Rust's E0382 and E0381. A use reached by the same moves as an already reported use of the same value is not reported again. Today only a `continue` in a `do`/`while` can reach an uninitialized read; deferred `val` initialization will reuse `E5002`.
+- **"In previous iteration of loop" comes from back edges.** A move is labelled so when it reaches the use only through a back edge (an edge to a dominator of its source), computed without back edges in a second solution.
+- **Labels point at operands.** Each MIR operand records the span of the source that reads it, so both moves of `Pair(s, s)` and the compared `s` of `s == "a"` are labelled where they are written, not at their statement.
+- **Help suggests `: Copy` only when it would compile.** A struct or enum without the marker whose every field or payload is `Copy` gets the `: Copy` suggestion (naming its module when imported), a `Clone` type gets `.clone()`, and a `var` moved in a loop the reassignment. Rust's "consider borrowing here" was rejected: a parameter is often by-value on purpose, and the callee may be in another file.
+- **A default value may not move an earlier parameter.** Its generator only borrows the earlier arguments and `this`, so moving one would move out of a borrow; this depends only on the expression's shape, so it is `E4017` in the type checker, not a borrow-checker code.
+- **Closures.** Building a closure uses its captures; a closure's body is checked on its own, its captures initialized on entry. Whether a closure may move a capture, and moving a variable while a closure capturing it is live, are left to `borrowck-exclusivity`.

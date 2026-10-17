@@ -1,7 +1,7 @@
 # Prism Diagnostic Codes
 
 ## Purpose
-The diagnostics specification is the single catalog of compiler error codes. Each code identifies one kind of error across all stages (resolution, parsing, ABI extraction and type checking), so tools and tests can key on codes instead of message text. The other specs reference these codes in their scenarios; this spec lists them all in one place.
+The diagnostics specification is the single catalog of compiler error codes. Each code identifies one kind of error across all stages (resolution, parsing, ABI extraction, type checking and borrow checking), so tools and tests can key on codes instead of message text. The other specs reference these codes in their scenarios; this spec lists them all in one place.
 
 ## Requirements
 
@@ -18,11 +18,18 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 
 #### Scenario: Code range identifies the stage
 - **WHEN** a diagnostic is reported
-- **THEN** its code falls in the range of the stage that produced it: `E1xxx` resolution and I/O, `E2xxx` lexing and parsing, `E3xxx` Phase 1 ABI extraction, `E4xxx` Phase 2 type checking
+- **THEN** its code falls in the range of the stage that produced it: `E1xxx` resolution and I/O, `E2xxx` lexing and parsing, `E3xxx` Phase 1 ABI extraction, `E4xxx` Phase 2 type checking, `E5xxx` Phase 2 borrow checking
 
 #### Scenario: New error kind gets a new code
 - **WHEN** a change introduces a new kind of error
 - **THEN** it takes the next unused code in its stage's range, adds it to this catalog, and does not reuse a retired code
+
+### Requirement: Diagnostics Show Related Locations
+When a diagnostic has a label for its primary location or related locations, such as where a used value was moved, the CLI MUST render the primary location's snippet with its label, then each related location in source order with its own location line, snippet and label, then the diagnostic's notes and help lines.
+
+#### Scenario: Rendered related location
+- **WHEN** `prism check` reports an `E5001` for `fun take(s: String) {}` and `fun f(s: String) { take(s); take(s) }`
+- **THEN** after the header, the location and snippet of the second `s` labelled "value used here after move", it prints the location and snippet of the first `s` labelled "value moved here", then a `note` line and a `help` line
 
 ## Catalog
 
@@ -91,3 +98,5 @@ A `public` or `package` function without a return type is reported as `E3001` wh
 - **`E1007` retired, not reused** (`fix-cli-workspace-audit`): mutually recursive imports are valid because exported declarations carry explicit types, so Phase 1 can extract every file in a cycle without reading any body.
 - **Site-specific mismatch codes** (`typechecker-soundness`): `E4002`, `E4004` and `E4005` all report a value whose type is not assignable, distinguished by where the expected type came from (an annotation or operand, a parameter, a return type), so tools can suggest the right fix.
 - **`E4012`, `E4013` and `E4014` are new kinds, not reuses** (`typechecker-soundness`): an ambiguous import is not an unresolved symbol (`E4001`), a type that cannot be inferred is not a mismatch, and a member of a type whose module is not imported is not an unknown field (`E4006`), so each needs its own code and its own help line.
+- **`E5xxx` for the borrow checker** (`borrowck-moves`, user for the range). A flow-sensitive error is the borrow checker's and takes the next `E5xxx` code; later borrow-checker errors (conflicting borrows, escaping closures, dangling returned borrows) continue the range.
+- **Borrow errors are structured and show related locations** (`borrowck-moves`). A borrow error has a primary label, related labels (where the value moved), notes and help lines, so a use after move can say where the value went, which a single span and help line cannot. The CLI renders each location with its own snippet and label, related ones in source order.

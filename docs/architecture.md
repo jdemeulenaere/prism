@@ -11,7 +11,7 @@ This document holds the **planned** design of Prism subsystems that are **not im
 
 ## 1. Compilation Pipeline & Compilation Avoidance
 
-Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, recording a hash of each generic function's body, and the first two stages of the Phase 2 semantic pipeline, the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)) and MIR ([`mir`](../openspec/specs/mir/spec.md)). Everything below is planned.
+Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)). Borrow conflicts and returned borrows are planned in section 3. Everything below is planned.
 
 ### Requirement: Single File as Compilation Unit
 Every `.prism` source file MUST be compiled into native machine code independently, with interface boundaries defined strictly by exported declarations.
@@ -49,13 +49,6 @@ Downstream call sites that instantiate an exported generic function MUST be re-m
 - **WHEN** the body of an exported generic function changes
 - **THEN** re-monomorphization is triggered only in downstream call sites that instantiate that generic
 
-### Requirement: Semantic Pipeline After Type Checking
-Phase 2 MUST check each file's MIR for ownership before code generation, from the MIR and the direct imports' ABIs only. The typed tree and the MIR lowered from it are implemented: the [`typed-tree`](../openspec/specs/typed-tree/spec.md) and [`mir`](../openspec/specs/mir/spec.md) specs, and "Phase 2 Produces a Typed Tree per File" and "Phase 2 Lowers Each Typed File to MIR" in [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md).
-
-#### Scenario: Borrow checking on MIR
-- **WHEN** a file's MIR has been built
-- **THEN** the borrow checker (`prism-borrowck` crate) checks it using only the MIR and imported ABIs, reporting `E5xxx` diagnostics, and the same MIR later feeds the Cranelift backend
-
 ### Open decision: ABI hash algorithm
 The original design called for a BLAKE3 cryptographic hash of exported declarations. `crates/prism-abi` currently uses a deterministic 128-bit FNV-1a hash. Decide which algorithm is authoritative before building the `.abi` cache.
 
@@ -84,40 +77,9 @@ The compiler MUST support two distinct native execution backends: Tier 1 (Cranel
 
 Compile-time memory safety: zero runtime garbage collection, zero hidden automatic reference counting (ARC), single-owner value semantics, stack-confined borrows with automatic lifetime elision, and data-oriented handles.
 
-Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)). Everything below is planned.
+Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)); and, from `borrowck-moves`, single-owner values checked by the borrow checker: use after move (`E5001`) through branches, loops, consuming receivers and closure captures, reinitialization by assignment, uninitialized reads (`E5002`), and drops elaborated so that each value is dropped exactly once where its owner's scope ends ([`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)). Everything below is planned.
 
-The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `borrowck-moves`, `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
-
-### Requirement: Single-Owner Value Semantics and RAII
-Every non-`Copy` value MUST have a single owning binding, and resources MUST be dropped deterministically when their owner leaves lexical scope.
-
-#### Scenario: Value move on assignment
-- **WHEN** an owned non-`Copy` value is passed to a function by value, returned, or assigned to a new variable
-- **THEN** ownership moves to the target, and subsequent access through the original binding is rejected at compile time (use after move, `E5xxx`)
-
-#### Scenario: Conditional and loop moves
-- **WHEN** a value is moved in only one branch of an `if` or `when`, or inside a loop body without being reassigned before the next iteration
-- **THEN** a later use (or the next iteration's use) is rejected as a use after move
-
-#### Scenario: Reinitialization by assignment
-- **WHEN** a moved `var` is assigned a new value (`var s = a; take(s); s = b; take(s)`)
-- **THEN** it is usable again after the assignment
-
-#### Scenario: Consuming method moves the receiver
-- **WHEN** `consuming fun User.toAccount(): Account` is called as `u.toAccount()` and `u` is used afterwards
-- **THEN** the later use is rejected as a use after move (the type checker already treats the receiver as a consuming position; see `ownership`)
-
-#### Scenario: Plain enum is move-only without the marker
-- **WHEN** `enum Color { Red, Green }` is declared without a marker and a value is passed by value twice
-- **THEN** the second use is a use after move whose help suggests adding `: Copy` to `Color`
-
-#### Scenario: String is move-only
-- **WHEN** `val b = a` is declared for `a: String` and `a` is used afterwards
-- **THEN** the use is rejected as a use after move, with help suggesting `a.clone()`; a string literal evaluates to a fresh owned `String`
-
-#### Scenario: Deterministic scope exit cleanup
-- **WHEN** an owning variable leaves its enclosing block scope
-- **THEN** its destructor is executed immediately and deterministically, dropping owned fields and heap allocations without garbage collector intervention
+The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
 
 ### Requirement: Recursive Heap Indirection via Heap<T>
 Self-referential or recursive structures MUST use the standard `Heap<T>` primitive to provide single-owner heap allocation. Constructing a `Heap<T>` and moving its contents out are not designed yet (see `ROADMAP.md`).
@@ -210,7 +172,7 @@ Why the requirements above were chosen; each change's `design.md` repeats the de
 
 ## 4. Runtime Semantics Awaiting Code Generation
 
-The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs a backend. The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement); the scenarios below are what the backend must make observable at run time.
+The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs a backend. The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement), and its elaborated form which drops run, some under a drop flag; the scenarios below are what the backend must make observable at run time.
 
 ### Requirement: Inline Value Struct Layout
 Struct instances MUST be stored inline by value without heap indirection, and recursive enums MUST have a finite layout through `Heap<T>`.
@@ -295,6 +257,17 @@ The type checker decides every implicit operation on a reference ([`references`]
 - **WHEN** `*r = v` runs for `r: &mut String`
 - **THEN** the `String` that `r` referred to is dropped and `v` is moved into its place, so the owner of that place sees `v`
 
+### Requirement: Scope Exit Cleanup
+At runtime, each drop that the elaborated MIR runs MUST execute the value's drop glue at that point, deterministically and without a garbage collector or reference counting: dropping a struct or an enum drops its owned fields or payload, and dropping a `String` or a `Heap<T>` frees its allocation. A drop guarded by a drop flag MUST run exactly when the flag is set. Which drops run is decided by the borrow checker's drop elaboration ([`mir`](../openspec/specs/mir/spec.md)); what a drop does is `runtime-strings-and-drops`'.
+
+#### Scenario: Deterministic scope exit cleanup
+- **WHEN** an owning variable that still holds a value leaves its enclosing block scope
+- **THEN** its destructor runs immediately and deterministically, dropping owned fields and heap allocations without garbage collector intervention
+
+#### Scenario: A conditionally moved value is dropped only if present
+- **WHEN** `if (c) take(s)` runs for an owned `s: String` and the scope of `s` ends
+- **THEN** the `String` is freed once: by `take` when `c` is true, and at the end of the scope otherwise
+
 ### Requirement: Method Call Evaluation Semantics
 The type checker decides how each extension call passes its receiver (the `extension-functions` spec, from `extension-methods`). At runtime, a call `recv.name(args)` MUST evaluate `recv` first: a receiver the call takes by value (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, before the arguments, and a receiver the call borrows has its place evaluated then and is borrowed after the arguments. The arguments MUST be evaluated left to right, and then the call made. A temporary receiver MUST be dropped at the end of the statement. A `?.` call MUST evaluate its receiver once, and MUST evaluate no argument and give `null` when it is `null`.
 
@@ -308,7 +281,7 @@ The type checker decides how each extension call passes its receiver (the `exten
 
 #### Scenario: A consuming receiver is moved before the arguments
 - **WHEN** `s.into(next())` runs for `consuming fun Stack.into(n: Int): Int` and `fun next(): Int`
-- **THEN** `s` is moved before `next()` is called, so an argument that uses `s` after it moved is rejected (`E5001`)
+- **THEN** `s` is moved before `next()` is called
 
 #### Scenario: A safe call on null evaluates no argument
 - **WHEN** `u?.greet(next())` runs with `u` equal to `null`
