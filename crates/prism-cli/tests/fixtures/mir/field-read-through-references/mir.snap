@@ -1,0 +1,7 @@
+module main
+fun main::f(_1: &&User): Int @3:1
+  local _0: Int (return)
+  local _1 u: &&User (argument)
+  bb0:
+    _0 = copy (*(*_1)).id @3:25
+    return @3:1

@@ -1,0 +1,10 @@
+module main
+fun main::f(_1: &mut String): Unit @2:1
+  local _0: Unit (return)
+  local _1 r: &mut String (argument)
+  bb0:
+    drop (*_1) -> bb1 @2:25
+  bb1:
+    (*_1) = const "b" @2:25
+    _0 = const () @2:23
+    return @2:1

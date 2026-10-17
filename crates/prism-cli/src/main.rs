@@ -22,6 +22,7 @@ COMMANDS:
     dump-typed-tree <file.prism>
                            Print the typed tree of a source file, checked against the ABIs of
                            its imports
+    dump-mir <file.prism>  Print the MIR of a source file that typechecks
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
     tokens <file.prism>    Tokenize source file and print stream of tokens
     version                Show version information
@@ -70,6 +71,13 @@ fn main() {
                 process::exit(1);
             }
             run_dump_typed_tree(&args[2]);
+        }
+        "dump-mir" => {
+            if args.len() < 3 {
+                eprintln!("Error: 'dump-mir' command requires a file path argument");
+                process::exit(1);
+            }
+            run_dump_mir(&args[2]);
         }
         "abi" => {
             if args.len() < 3 {
@@ -153,6 +161,18 @@ fn run_dump_typed_tree(path: &str) {
                 process::exit(1);
             }
         }
+        Err(err) => {
+            eprint!("{}", err.render());
+            process::exit(1);
+        }
+    }
+}
+
+/// Prints the MIR of `path`. A file with type errors, or with errors before type checking, is
+/// not lowered: its errors are reported with a failure status.
+fn run_dump_mir(path: &str) {
+    match prism_cli::dump_mir(std::path::Path::new(path)) {
+        Ok(dump) => print!("{}", dump.text),
         Err(err) => {
             eprint!("{}", err.render());
             process::exit(1);

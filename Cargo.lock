@@ -21,6 +21,7 @@ dependencies = [
  "prism-abi",
  "prism-ast",
  "prism-lexer",
+ "prism-mir",
  "prism-parser",
  "prism-resolver",
  "prism-typechecker",

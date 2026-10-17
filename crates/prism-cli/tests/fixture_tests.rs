@@ -39,6 +39,13 @@
 //! fixture_tests` writes the actual dumps instead; read each against its scenario's THEN before
 //! committing it.
 //!
+//! ## MIR snapshots
+//!
+//! Likewise, a case may hold `mir.snap`: the expected output of `prism dump-mir` on its entry
+//! (`prism_cli::dump_mir`), which needs an entry without type errors. Every case of the `mir`
+//! spec, and every case whose name starts with `mir`, must hold one; `PRISM_BLESS=1` writes
+//! both kinds of snapshot.
+//!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
 //! catalog in `openspec/specs/diagnostics/spec.md`: every expected code must be a live catalog
@@ -219,27 +226,53 @@ fn run(case: &Case) -> Result<(), String> {
     check_snapshot(case, &entry)
 }
 
-const SNAPSHOT: &str = "typed-tree.snap";
-
-/// Whether `case` must hold a typed-tree snapshot.
-fn needs_snapshot(case: &Case) -> bool {
-    let (spec, dir) = case.name.split_once('/').unwrap();
-    spec == "typed-tree" || dir.starts_with("typed-tree")
+/// A text snapshot a case may hold: its file name, and the dump it records.
+struct Snapshot {
+    file: &'static str,
+    /// The spec, or the case-name prefix, whose cases must hold one.
+    required_for: &'static str,
+    dump: fn(&Path) -> Result<String, prism_cli::WorkspaceError>,
 }
 
-/// Compares the typed tree of `entry` with the case's snapshot, or writes it with `PRISM_BLESS`.
+const SNAPSHOTS: &[Snapshot] = &[
+    Snapshot {
+        file: "typed-tree.snap",
+        required_for: "typed-tree",
+        dump: |entry| prism_cli::dump_typed_tree(entry).map(|dump| dump.text),
+    },
+    Snapshot {
+        file: "mir.snap",
+        required_for: "mir",
+        dump: |entry| prism_cli::dump_mir(entry).map(|dump| dump.text),
+    },
+];
+
+/// Whether `case` must hold `snapshot`.
+fn needs_snapshot(case: &Case, snapshot: &Snapshot) -> bool {
+    let (spec, dir) = case.name.split_once('/').unwrap();
+    spec == snapshot.required_for || dir.starts_with(snapshot.required_for)
+}
+
+/// Compares each dump of `entry` with the case's snapshot, or writes it with `PRISM_BLESS`.
 fn check_snapshot(case: &Case, entry: &Path) -> Result<(), String> {
-    let path = case.dir.join(SNAPSHOT);
-    if !path.exists() && !needs_snapshot(case) {
+    for snapshot in SNAPSHOTS {
+        check_one_snapshot(case, entry, snapshot)?;
+    }
+    Ok(())
+}
+
+fn check_one_snapshot(case: &Case, entry: &Path, snapshot: &Snapshot) -> Result<(), String> {
+    let path = case.dir.join(snapshot.file);
+    if !path.exists() && !needs_snapshot(case, snapshot) {
         return Ok(());
     }
-    let actual = match prism_cli::dump_typed_tree(entry) {
-        Ok(dump) => dump.text,
+    let actual = match (snapshot.dump)(entry) {
+        Ok(text) => text,
         Err(err) => {
             return Err(format!(
-                "{}: no typed tree to compare with {}:\n{}",
+                "{}: nothing to compare with {}:\n{}",
                 case.name,
-                SNAPSHOT,
+                snapshot.file,
                 err.render()
             ))
         }
@@ -252,11 +285,11 @@ fn check_snapshot(case: &Case, entry: &Path) -> Result<(), String> {
         Ok(expected) if expected == actual => Ok(()),
         Ok(expected) => Err(format!(
             "{}: stale {} (re-bless with PRISM_BLESS=1):\n--- expected\n{}--- actual\n{}",
-            case.name, SNAPSHOT, expected, actual
+            case.name, snapshot.file, expected, actual
         )),
         Err(_) => Err(format!(
             "{}: missing {} (write it with PRISM_BLESS=1):\n{}",
-            case.name, SNAPSHOT, actual
+            case.name, snapshot.file, actual
         )),
     }
 }

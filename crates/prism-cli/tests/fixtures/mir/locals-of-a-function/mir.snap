@@ -1,0 +1,14 @@
+module main
+fun main::f(_1: Int, _2: String): Int @2:1
+  local _0: Int (return)
+  local _1 a: Int (argument)
+  local _2 s: String (argument)
+  local _3 n: Int (user)
+  bb0:
+    storage_live _3 @2:33
+    _3 = copy _1 @2:41
+    _0 = copy _3 @2:51
+    storage_dead _3 @2:31
+    drop _2 -> bb1 @2:1
+  bb1:
+    return @2:1

@@ -852,3 +852,45 @@ fn test_cli_binary_dump_typed_tree_with_a_syntax_error() {
     );
     assert!(stderr.contains("error[E2"), "{}", stderr);
 }
+
+/// Runs `prism dump-mir` on a single-file workspace holding `source`.
+fn dump_mir(test_name: &str, source: &str) -> std::process::Output {
+    let temp = create_temp_dir(test_name);
+    let file = temp.join("main.prism");
+    fs::write(&file, source).unwrap();
+    let output = Command::new(prism_bin())
+        .arg("dump-mir")
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+    fs::remove_dir_all(&temp).ok();
+    output
+}
+
+/// mir: "Dumping a file".
+#[test]
+fn test_cli_binary_dump_mir_is_deterministic() {
+    let source = "fun f(a: Int): Int = a + 1\n";
+    let first = dump_mir("dump_mir_first", source);
+    let second = dump_mir("dump_mir_second", source);
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let text = String::from_utf8_lossy(&first.stdout);
+    assert!(text.contains("fun main::f(_1: Int): Int @1:1"), "{}", text);
+    assert!(text.contains("_0 = copy _1 + const 1 @1:22"), "{}", text);
+    assert_eq!(first.stdout, second.stdout);
+}
+
+/// mir: "Dumping a file with type errors".
+#[test]
+fn test_cli_binary_dump_mir_with_type_errors() {
+    let output = dump_mir("dump_mir_type_error", "fun f(): Int = nope + 1\n");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(stderr.contains("error[E4001]"), "{}", stderr);
+}

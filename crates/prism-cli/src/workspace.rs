@@ -4,6 +4,7 @@
 
 use crate::diagnostics;
 use prism_abi::{declared_types, AbiError, FileAbi, NominalHeader};
+use prism_mir::MirFile;
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
 use prism_typechecker::TypedFile;
@@ -421,6 +422,18 @@ pub struct TypedTreeDump {
 /// affect it (D15 of `typed-tree`). Resolve, parse and ABI errors are returned as by
 /// [`check_file`], with no tree; type errors come with the tree.
 pub fn dump_typed_tree(entry: &Path) -> Result<TypedTreeDump, WorkspaceError> {
+    let (tree, type_errors) = typecheck_entry(entry)?;
+    Ok(TypedTreeDump {
+        text: tree.dump(),
+        type_errors,
+        tree,
+    })
+}
+
+/// Phase 1 over the import graph of the entry file `entry`, then Phase 2 for the entry only:
+/// its typed tree, and its type errors if it has any. Resolve, parse and ABI errors are
+/// returned as by [`check_file`].
+fn typecheck_entry(entry: &Path) -> Result<(TypedFile, Option<WorkspaceError>), WorkspaceError> {
     validate_entry_file(entry)?;
     let graph = DependencyGraph::from_entry(entry)?;
     assert_workspace_boundary(&graph)?;
@@ -444,10 +457,30 @@ pub fn dump_typed_tree(entry: &Path) -> Result<TypedTreeDump, WorkspaceError> {
         source: fs::read_to_string(&entry_path).unwrap_or_default(),
         errors,
     });
-    Ok(TypedTreeDump {
-        text: tree.dump(),
-        type_errors,
-        tree,
+    Ok((tree, type_errors))
+}
+
+/// The MIR of one file, as `prism dump-mir` prints it.
+#[derive(Debug)]
+pub struct MirDump {
+    /// The MIR's text (`MirFile::dump`).
+    pub text: String,
+    /// The MIR itself.
+    pub mir: MirFile,
+}
+
+/// Builds the MIR of the entry file `entry`, checked against the ABIs of its direct imports as
+/// by [`dump_typed_tree`] (D15 of `mir-lowering`). A file with type errors is not lowered: its
+/// errors are returned instead (D1).
+pub fn dump_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
+    let (tree, type_errors) = typecheck_entry(entry)?;
+    if let Some(errors) = type_errors {
+        return Err(errors);
+    }
+    let mir = prism_mir::lower_file(&tree);
+    Ok(MirDump {
+        text: mir.dump(),
+        mir,
     })
 }
 

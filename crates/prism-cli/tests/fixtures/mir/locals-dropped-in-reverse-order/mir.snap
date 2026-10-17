@@ -1,0 +1,18 @@
+module main
+fun main::f(): Unit @2:1
+  local _0: Unit (return)
+  local _1 a: String (user)
+  local _2 b: String (user)
+  bb0:
+    storage_live _1 @2:11
+    _1 = const "a" @2:19
+    storage_live _2 @2:24
+    _2 = const "b" @2:32
+    _0 = const () @2:9
+    drop _2 -> bb1 @2:9
+  bb1:
+    storage_dead _2 @2:9
+    drop _1 -> bb2 @2:9
+  bb2:
+    storage_dead _1 @2:9
+    return @2:1
