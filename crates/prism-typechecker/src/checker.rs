@@ -3614,8 +3614,11 @@ impl TypeChecker {
                 field_name: member.to_string(),
                 span,
                 help: Some(format!(
-                    "'{}' is an extension function, not a field: call it with '{}.{}()'",
-                    member, target, member
+                    "'{}' is an extension function, not a field: call it with '{}{}{}()'",
+                    member,
+                    target,
+                    if is_safe_nav { "?." } else { "." },
+                    member
                 )),
             });
             return Type::Error;

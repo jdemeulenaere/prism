@@ -1036,3 +1036,21 @@ fn a_receiver_field_through_implicit_this() {
     assert!(!message.contains("immutable 'val' binding"), "{message}");
     assert!(help.is_none(), "no 'var name' help for a field: {help:?}");
 }
+
+#[test]
+fn an_extension_is_not_a_value() {
+    // Spec "An extension is not a value": the help keeps the `?.` of a safe navigation.
+    let errors = check(
+        "struct User {\n    val name: String\n}\nfun User.greet(): String = \"Hi\"\nfun f(u: User, v: User?) {\n    val g = u.greet\n    val h = v?.greet\n}\n",
+    );
+    let helps: Vec<String> = errors
+        .iter()
+        .map(|e| match e {
+            TypeError::UnknownField { help, .. } => help.clone().unwrap_or_default(),
+            other => panic!("expected E4006, got {:?}", other),
+        })
+        .collect();
+    assert_eq!(helps.len(), 2, "{:?}", errors);
+    assert!(helps[0].contains("'u.greet()'"), "{}", helps[0]);
+    assert!(helps[1].contains("'v?.greet()'"), "{}", helps[1]);
+}
