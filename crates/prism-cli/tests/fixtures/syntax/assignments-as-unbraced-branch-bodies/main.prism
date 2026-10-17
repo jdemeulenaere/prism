@@ -1,0 +1,7 @@
+// expect: ok
+fun f(c: Bool, n: Int): Int {
+    var x = 0
+    if (c) x = 1 else x = 2
+    when (n) { 0 -> x = 3, else -> x = 4 }
+    return x
+}

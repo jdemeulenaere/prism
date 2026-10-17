@@ -1,0 +1,2 @@
+// expect: ok
+fun f(x: Int): String = when (x) { in 0..<10 -> "small", else -> "large" }

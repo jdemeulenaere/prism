@@ -1,0 +1,8 @@
+// expect: ok
+fun g(x: Int) { }
+fun f() {
+    for (i in 0..10) {
+        if (i == 3) continue
+        g(i)
+    }
+}

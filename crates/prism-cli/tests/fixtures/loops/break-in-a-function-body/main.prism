@@ -1,0 +1,2 @@
+// expect: E4015
+fun f() { break }

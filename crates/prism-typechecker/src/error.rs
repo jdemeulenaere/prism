@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::Span;
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4014`).
+/// Semantic and type checking error categories (`E4001` - `E4015`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -86,6 +86,9 @@ pub enum TypeError {
         module: String,
         span: Span,
     },
+
+    /// E4015: A `break` or `continue` has no enclosing loop in its function or closure body.
+    BreakOutsideLoop { keyword: &'static str, span: Span },
 }
 
 impl TypeError {
@@ -108,6 +111,7 @@ impl TypeError {
             TypeError::AmbiguousImport { .. } => "E4012",
             TypeError::CannotInferType { .. } => "E4013",
             TypeError::MemberOfUnimportedType { .. } => "E4014",
+            TypeError::BreakOutsideLoop { .. } => "E4015",
         }
     }
 
@@ -130,6 +134,7 @@ impl TypeError {
             TypeError::AmbiguousImport { span, .. } => *span,
             TypeError::CannotInferType { span, .. } => *span,
             TypeError::MemberOfUnimportedType { span, .. } => *span,
+            TypeError::BreakOutsideLoop { span, .. } => *span,
         }
     }
 
@@ -219,6 +224,10 @@ impl TypeError {
             } => format!(
                 "'{}' is defined in module '{}', which this file does not import; add 'import /{}' to use the members of '{}'",
                 type_name, module, module, type_name
+            ),
+            TypeError::BreakOutsideLoop { keyword, .. } => format!(
+                "'{}' is only allowed inside a loop, and cannot leave a closure",
+                keyword
             ),
         }
     }

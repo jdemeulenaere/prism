@@ -1,0 +1,7 @@
+// expect: ok
+fun next(): Int = 0
+fun f() {
+    do {
+        val x = next()
+    } while (x > 0)
+}

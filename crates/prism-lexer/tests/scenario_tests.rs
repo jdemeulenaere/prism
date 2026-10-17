@@ -135,3 +135,42 @@ fn out_of_range_numeric_literals_are_error_tokens() {
         TokenKind::Int(i64::MAX as u64)
     );
 }
+
+// --- Half-Open Range Operator (`statements-and-loops`)
+
+#[test]
+fn half_open_range_tokens() {
+    assert_eq!(
+        kinds("4..<10 4..10 4.10 a..<b"),
+        vec![
+            TokenKind::Int(4),
+            TokenKind::DotDotLess,
+            TokenKind::Int(10),
+            TokenKind::Int(4),
+            TokenKind::DotDot,
+            TokenKind::Int(10),
+            TokenKind::Float(4.10),
+            TokenKind::Ident("a".to_string()),
+            TokenKind::DotDotLess,
+            TokenKind::Ident("b".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+}
+
+// --- Reserved Loop Keywords (`statements-and-loops`)
+
+#[test]
+fn loop_keywords_are_reserved() {
+    assert_eq!(
+        kinds("while do for break continue"),
+        vec![
+            TokenKind::While,
+            TokenKind::Do,
+            TokenKind::For,
+            TokenKind::Break,
+            TokenKind::Continue,
+            TokenKind::Eof,
+        ]
+    );
+}

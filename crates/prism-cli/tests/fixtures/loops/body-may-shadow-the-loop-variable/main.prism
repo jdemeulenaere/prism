@@ -1,0 +1,2 @@
+// expect: ok
+fun f() { for (i in 0..10) { val i = "s" } }

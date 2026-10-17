@@ -1,0 +1,3 @@
+// expect: ok
+fun run(f: () -> Unit) { }
+fun g() { run { while (true) { break } } }

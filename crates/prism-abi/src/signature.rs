@@ -348,10 +348,74 @@ fn hash_body_span_free(body: &FunctionBody, hasher: &mut DeterministicHasher) {
         }
         FunctionBody::Block(b) => {
             hasher.write_u8(2);
-            hasher.write_u64(b.stmts.len() as u64);
-            for s in &b.stmts {
-                hash_expr_span_free(s, hasher);
+            hash_block_span_free(b, hasher);
+        }
+    }
+}
+
+/// Hashes a block's statements and tail, ignoring all `Span` metadata.
+fn hash_block_span_free(block: &Block, hasher: &mut DeterministicHasher) {
+    hasher.write_u64(block.statements.len() as u64);
+    for statement in &block.statements {
+        hash_statement_span_free(statement, hasher);
+    }
+    if let Some(tail) = &block.tail {
+        hasher.write_u8(1);
+        hash_expr_span_free(tail, hasher);
+    } else {
+        hasher.write_u8(0);
+    }
+}
+
+/// Hashes a statement's syntax structure, ignoring all `Span` metadata.
+fn hash_statement_span_free(statement: &Statement, hasher: &mut DeterministicHasher) {
+    match &statement.kind {
+        StatementKind::Assign { target, value } => {
+            hasher.write_u8(21);
+            hash_expr_span_free(target, hasher);
+            hash_expr_span_free(value, hasher);
+        }
+        StatementKind::Local {
+            is_var,
+            name,
+            ty,
+            initializer,
+        } => {
+            hasher.write_u8(22);
+            hasher.write_u8(if *is_var { 1 } else { 0 });
+            hasher.write_str(name);
+            if let Some(t) = ty {
+                hasher.write_u8(1);
+                hasher.write_str(&t.to_string());
+            } else {
+                hasher.write_u8(0);
             }
+            hash_expr_span_free(initializer, hasher);
+        }
+        StatementKind::Expression(expr) => {
+            hasher.write_u8(24);
+            hash_expr_span_free(expr, hasher);
+        }
+        StatementKind::While { condition, body } => {
+            hasher.write_u8(25);
+            hash_expr_span_free(condition, hasher);
+            hash_block_span_free(body, hasher);
+        }
+        StatementKind::DoWhile { body, condition } => {
+            hasher.write_u8(26);
+            hash_block_span_free(body, hasher);
+            hash_expr_span_free(condition, hasher);
+        }
+        StatementKind::For {
+            variable,
+            iterable,
+            body,
+            ..
+        } => {
+            hasher.write_u8(27);
+            hasher.write_str(variable);
+            hash_expr_span_free(iterable, hasher);
+            hash_block_span_free(body, hasher);
         }
     }
 }
@@ -433,10 +497,7 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
         }
         ExprKind::Block(b) => {
             hasher.write_u8(17);
-            hasher.write_u64(b.stmts.len() as u64);
-            for s in &b.stmts {
-                hash_expr_span_free(s, hasher);
-            }
+            hash_block_span_free(b, hasher);
         }
         ExprKind::If {
             cond,
@@ -470,10 +531,15 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
                             hasher.write_u8(1);
                             hash_expr_span_free(e, hasher);
                         }
-                        WhenPattern::InRange { start, end } => {
+                        WhenPattern::InRange {
+                            start,
+                            end,
+                            end_inclusive,
+                        } => {
                             hasher.write_u8(2);
                             hash_expr_span_free(start, hasher);
                             hash_expr_span_free(end, hasher);
+                            hasher.write_u8(if *end_inclusive { 1 } else { 0 });
                         }
                         WhenPattern::Else => {
                             hasher.write_u8(3);
@@ -492,38 +558,15 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
                 hasher.write_u8(0);
             }
         }
-        ExprKind::Assign { target, value } => {
-            hasher.write_u8(21);
-            hash_expr_span_free(target, hasher);
-            hash_expr_span_free(value, hasher);
-        }
-        ExprKind::LocalVar {
-            is_var,
-            name,
-            ty,
-            initializer,
-        } => {
-            hasher.write_u8(22);
-            hasher.write_u8(if *is_var { 1 } else { 0 });
-            hasher.write_str(name);
-            if let Some(t) = ty {
-                hasher.write_u8(1);
-                hasher.write_str(&t.to_string());
-            } else {
-                hasher.write_u8(0);
-            }
-            hash_expr_span_free(initializer, hasher);
-        }
+        ExprKind::Break => hasher.write_u8(28),
+        ExprKind::Continue => hasher.write_u8(29),
         ExprKind::Closure { params, body } => {
             hasher.write_u8(23);
             hasher.write_u64(params.len() as u64);
             for p in params {
                 hasher.write_str(p);
             }
-            hasher.write_u64(body.stmts.len() as u64);
-            for stmt in &body.stmts {
-                hash_expr_span_free(stmt, hasher);
-            }
+            hash_block_span_free(body, hasher);
         }
     }
 }

@@ -149,7 +149,12 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 if self.peek_byte() == b'.' {
                     self.bump();
-                    TokenKind::DotDot
+                    if self.peek_byte() == b'<' {
+                        self.bump();
+                        TokenKind::DotDotLess
+                    } else {
+                        TokenKind::DotDot
+                    }
                 } else {
                     TokenKind::Dot
                 }

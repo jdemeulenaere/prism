@@ -1,0 +1,4 @@
+// expect: ok
+fun f(n: Int) {
+    val r = 0..<n - 1
+}

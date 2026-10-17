@@ -70,6 +70,7 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | `E4012` | `AmbiguousImport` | A name the file uses (as a value, callee or type) is exported by more than one of its imports. Importing both without using the name is accepted. |
 | `E4013` | `CannotInferType` | A type cannot be inferred and must be written: a closure parameter with no expected function type, or an unannotated private declaration whose inferred type depends on itself (such as a recursive function without a return type). |
 | `E4014` | `MemberOfUnimportedType` | A member of a struct or enum is used (a field read or written, its variants matched, the type constructed or a variant named) but the module defining the type is not a direct import; the message names the import to add. Receiving and passing along such a value is accepted. |
+| `E4015` | `BreakOutsideLoop` | A `break` or `continue` has no enclosing loop in its function or closure body, including one inside a closure that sits in a loop. |
 
 A `public` or `package` function without a return type is reported as `E3001` when it has an expression body (Phase 1 rejects it first) and as `E4011` when it has a block body (Phase 1 accepts it as returning `Unit`). Unifying these is tracked in `ROADMAP.md`.
 

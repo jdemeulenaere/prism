@@ -1,0 +1,3 @@
+// expect: E2001
+fun g(a: Unit) { }
+fun f() { var x = 0; g((x = 1)) }

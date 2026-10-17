@@ -1,0 +1,6 @@
+// expect: ok
+fun f(n: Int) {
+    val r = 0..<n
+    val s = 0..n
+    val t: Range = r
+}

@@ -239,24 +239,24 @@ mod tests {
         match &file.declarations[0] {
             Declaration::Function(f) => {
                 if let Some(FunctionBody::Block(b)) = &f.body {
-                    assert_eq!(b.stmts.len(), 4);
+                    assert_eq!(items(b).len(), 4);
 
                     // 1. Column(padding = 16) { Text("Hello") }
-                    if let ExprKind::Call { callee, args } = &b.stmts[0].kind {
+                    if let ExprKind::Call { callee, args } = &expr_of(&items(b)[0]).kind {
                         assert_eq!(callee.to_string(), "Column");
                         assert_eq!(args.len(), 2);
                         assert_eq!(args[0].name.as_deref(), Some("padding"));
                         // A parameterless trailing lambda is a closure, not a block.
                         assert!(matches!(
                             &args[1].value.kind,
-                            ExprKind::Closure { params, body } if params.is_empty() && body.stmts.len() == 1
+                            ExprKind::Closure { params, body } if params.is_empty() && items(body).len() == 1
                         ));
                     } else {
                         panic!("Expected Call expr for Column");
                     }
 
                     // 2. val state = remember { mutableStateOf(0) }
-                    if let ExprKind::LocalVar { initializer, .. } = &b.stmts[1].kind {
+                    if let StatementKind::Local { initializer, .. } = &items(b)[1].kind {
                         if let ExprKind::Call { callee, args } = &initializer.kind {
                             assert_eq!(callee.to_string(), "remember");
                             assert_eq!(args.len(), 1);
@@ -268,7 +268,7 @@ mod tests {
                     }
 
                     // 4. items.forEach { item -> val s = item * item; println(s) }
-                    if let ExprKind::Call { callee, args } = &b.stmts[3].kind {
+                    if let ExprKind::Call { callee, args } = &expr_of(&items(b)[3]).kind {
                         if let ExprKind::MemberAccess { member, .. } = &callee.kind {
                             assert_eq!(member, "forEach");
                         } else {
@@ -277,7 +277,7 @@ mod tests {
                         assert_eq!(args.len(), 1);
                         if let ExprKind::Closure { params, body } = &args[0].value.kind {
                             assert_eq!(params, &vec!["item".to_string()]);
-                            assert_eq!(body.stmts.len(), 2);
+                            assert_eq!(items(body).len(), 2);
                         } else {
                             panic!("Expected Closure in trailing lambda");
                         }
@@ -390,7 +390,7 @@ mod tests {
         let file = parse_source(src).expect("Failed to parse indexing");
         if let Declaration::Function(f) = &file.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
-                if let ExprKind::Return(Some(val)) = &b.stmts[0].kind {
+                if let ExprKind::Return(Some(val)) = &expr_of(&items(b)[0]).kind {
                     if let ExprKind::Index { target, index } = &val.kind {
                         assert_eq!(target.to_string(), "list");
                         assert_eq!(index.to_string(), "0");
@@ -414,9 +414,9 @@ mod tests {
         let file1 = parse_source(src1).expect("Failed to parse newline return");
         if let Declaration::Function(f) = &file1.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
-                assert_eq!(b.stmts.len(), 2);
-                assert!(matches!(b.stmts[0].kind, ExprKind::Return(None)));
-                assert!(matches!(b.stmts[1].kind, ExprKind::Call { .. }));
+                assert_eq!(items(b).len(), 2);
+                assert!(matches!(expr_of(&items(b)[0]).kind, ExprKind::Return(None)));
+                assert!(matches!(expr_of(&items(b)[1]).kind, ExprKind::Call { .. }));
             }
         }
 
@@ -429,8 +429,8 @@ mod tests {
         let file2 = parse_source(src2).expect("Failed to parse return with expr");
         if let Declaration::Function(f) = &file2.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
-                assert_eq!(b.stmts.len(), 1);
-                if let ExprKind::Return(Some(val)) = &b.stmts[0].kind {
+                assert_eq!(items(b).len(), 1);
+                if let ExprKind::Return(Some(val)) = &expr_of(&items(b)[0]).kind {
                     assert_eq!(val.to_string(), "42");
                 } else {
                     panic!("Expected Return(Some(42))");
@@ -449,7 +449,7 @@ mod tests {
         let file3 = parse_source(src3).expect("Failed to parse semicolon-free statements");
         if let Declaration::Function(f) = &file3.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
-                assert_eq!(b.stmts.len(), 3);
+                assert_eq!(items(b).len(), 3);
             }
         }
     }
@@ -466,16 +466,16 @@ mod tests {
         let file = parse_source(src).expect("Failed to parse newline separated call and grouping");
         if let Declaration::Function(f) = &file.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
-                assert_eq!(b.stmts.len(), 2);
+                assert_eq!(items(b).len(), 2);
                 // First stmt is cleanup()
-                if let ExprKind::Call { callee, args } = &b.stmts[0].kind {
+                if let ExprKind::Call { callee, args } = &expr_of(&items(b)[0]).kind {
                     assert_eq!(callee.to_string(), "cleanup");
                     assert_eq!(args.len(), 0);
                 } else {
                     panic!("Expected cleanup() call");
                 }
                 // Second stmt is (1 + 2).toString()
-                if let ExprKind::Call { callee, .. } = &b.stmts[1].kind {
+                if let ExprKind::Call { callee, .. } = &expr_of(&items(b)[1]).kind {
                     if let ExprKind::MemberAccess { target, member, .. } = &callee.kind {
                         assert_eq!(member, "toString");
                         assert!(matches!(target.kind, ExprKind::Binary { .. }));
@@ -526,7 +526,7 @@ mod tests {
             assert_eq!(f.params.len(), 2);
             assert_eq!(f.params[1].name, "compose");
             if let Some(FunctionBody::Block(b)) = &f.body {
-                if let ExprKind::Return(Some(val)) = &b.stmts[0].kind {
+                if let ExprKind::Return(Some(val)) = &expr_of(&items(b)[0]).kind {
                     if let ExprKind::Call { callee, args } = &val.kind {
                         if let ExprKind::MemberAccess { member, .. } = &callee.kind {
                             assert_eq!(member, "compose");
@@ -681,11 +681,12 @@ mod tests {
         let Some(FunctionBody::Block(body)) = &f.body else {
             panic!("Expected block body");
         };
+        let body_items = items(body);
         let ExprKind::If {
             then_branch,
             else_branch,
             ..
-        } = &body.stmts[0].kind
+        } = &expr_of(&body_items[0]).kind
         else {
             panic!("Expected if");
         };
@@ -797,7 +798,8 @@ mod tests {
         let Some(FunctionBody::Block(body)) = &f.body else {
             panic!("Expected block body");
         };
-        let ExprKind::LocalVar { ty, .. } = &body.stmts[0].kind else {
+        let body_items = items(body);
+        let StatementKind::Local { ty, .. } = &body_items[0].kind else {
             panic!("Expected local var");
         };
         assert_eq!(ty.as_ref().unwrap().to_string(), "Heap<Heap<Int>>");
@@ -924,7 +926,7 @@ mod tests {
             panic!("Expected closure");
         };
         assert_eq!(text(src, body.span), "-> val y = x }");
-        assert_eq!(text(src, body.stmts[0].span), "val y = x");
+        assert_eq!(text(src, items(body)[0].span), "val y = x");
     }
 
     #[test]
@@ -940,8 +942,29 @@ mod tests {
 
     // --- harden-parser-grammar: braces, declarations, function types, newlines ---
 
-    /// The statements of the first function's block body.
-    fn block_stmts(src: &str) -> Vec<Expr> {
+    /// A block's items in source order as statements, the tail last.
+    fn items(b: &Block) -> Vec<Statement> {
+        let mut items = b.statements.clone();
+        if let Some(tail) = &b.tail {
+            items.push(Statement::new(
+                StatementKind::Expression((**tail).clone()),
+                tail.span,
+            ));
+        }
+        items
+    }
+
+    /// The expression of an expression statement.
+    #[track_caller]
+    fn expr_of(item: &Statement) -> &Expr {
+        match &item.kind {
+            StatementKind::Expression(e) => e,
+            other => panic!("Expected an expression statement, found {:?}", other),
+        }
+    }
+
+    /// The items of the first function's block body, the tail last.
+    fn block_stmts(src: &str) -> Vec<Statement> {
         let file = parse_source(src).unwrap_or_else(|e| panic!("{}\n{}", e, src));
         let Declaration::Function(f) = &file.declarations[0] else {
             panic!("Expected function");
@@ -949,7 +972,7 @@ mod tests {
         let Some(FunctionBody::Block(b)) = &f.body else {
             panic!("Expected block body");
         };
-        b.stmts.clone()
+        items(b)
     }
 
     /// The first function's expression body.
@@ -990,7 +1013,7 @@ mod tests {
     #[track_caller]
     fn parameterless_closure_len(e: &Expr) -> usize {
         match &e.kind {
-            ExprKind::Closure { params, body } if params.is_empty() => body.stmts.len(),
+            ExprKind::Closure { params, body } if params.is_empty() => items(body).len(),
             other => panic!("Expected a parameterless closure, found {:?}", other),
         }
     }
@@ -1007,8 +1030,11 @@ mod tests {
         let stmts = block_stmts(
             "fun f() {\n    Column { Item() }\n    Button(onClick = handler) { Text(\"Click\") }\n}",
         );
-        assert_eq!(parameterless_closure_len(&call_args(&stmts[0])[0].value), 1);
-        let args = call_args(&stmts[1]);
+        assert_eq!(
+            parameterless_closure_len(&call_args(expr_of(&stmts[0]))[0].value),
+            1
+        );
+        let args = call_args(expr_of(&stmts[1]));
         assert_eq!(args.len(), 2);
         assert_eq!(parameterless_closure_len(&args[1].value), 1);
     }
@@ -1018,9 +1044,15 @@ mod tests {
         let stmts = block_stmts(
             "fun f() {\n    g({ 1 })\n    Button(onClick = { count = 1 })\n    val f = { 1 }\n}",
         );
-        assert_eq!(parameterless_closure_len(&call_args(&stmts[0])[0].value), 1);
-        assert_eq!(parameterless_closure_len(&call_args(&stmts[1])[0].value), 1);
-        let ExprKind::LocalVar { initializer, .. } = &stmts[2].kind else {
+        assert_eq!(
+            parameterless_closure_len(&call_args(expr_of(&stmts[0]))[0].value),
+            1
+        );
+        assert_eq!(
+            parameterless_closure_len(&call_args(expr_of(&stmts[1]))[0].value),
+            1
+        );
+        let StatementKind::Local { initializer, .. } = &stmts[2].kind else {
             panic!("Expected declaration");
         };
         assert_eq!(parameterless_closure_len(initializer), 1);
@@ -1033,8 +1065,8 @@ mod tests {
             panic!("Expected closure");
         };
         assert_eq!(params, &vec!["x".to_string()]);
-        assert_eq!(body.stmts.len(), 1);
-        assert_eq!(body.stmts[0].to_string(), "(x + 1)");
+        assert_eq!(items(body).len(), 1);
+        assert_eq!(items(body)[0].to_string(), "(x + 1)");
     }
 
     #[test]
@@ -1046,7 +1078,7 @@ mod tests {
             then_branch,
             else_branch,
             ..
-        } = &stmts[0].kind
+        } = &expr_of(&stmts[0]).kind
         else {
             panic!("Expected if");
         };
@@ -1055,13 +1087,13 @@ mod tests {
             else_branch.as_ref().unwrap().kind,
             ExprKind::Block(_)
         ));
-        let ExprKind::When { branches, .. } = &stmts[1].kind else {
+        let ExprKind::When { branches, .. } = &expr_of(&stmts[1]).kind else {
             panic!("Expected when");
         };
         assert!(branches
             .iter()
             .all(|b| matches!(b.body.kind, ExprKind::Block(_))));
-        assert!(matches!(stmts[2].kind, ExprKind::Block(_)));
+        assert!(matches!(expr_of(&stmts[2]).kind, ExprKind::Block(_)));
     }
 
     #[test]
@@ -1080,7 +1112,7 @@ mod tests {
         let text = |span: Span| &src[span.start..span.end];
         assert_eq!(text(closure.span), "{ val y = 1 }");
         assert_eq!(text(body.span), "val y = 1 }");
-        assert_eq!(text(body.stmts[0].span), "val y = 1");
+        assert_eq!(text(items(body)[0].span), "val y = 1");
     }
 
     #[test]
@@ -1151,13 +1183,13 @@ mod tests {
             assert_parse_error(src, "only allowed as a statement");
         }
         let stmts = block_stmts("fun f(c: Bool) { if (c) { val x = 1 } }");
-        let ExprKind::If { then_branch, .. } = &stmts[0].kind else {
+        let ExprKind::If { then_branch, .. } = &expr_of(&stmts[0]).kind else {
             panic!("Expected if");
         };
         let ExprKind::Block(b) = &then_branch.kind else {
             panic!("Expected block");
         };
-        assert!(matches!(b.stmts[0].kind, ExprKind::LocalVar { .. }));
+        assert!(matches!(items(b)[0].kind, StatementKind::Local { .. }));
     }
 
     #[test]
@@ -1222,7 +1254,10 @@ mod tests {
     #[test]
     fn braces_inside_parentheses_restore_newline_sensitivity() {
         let stmts = block_stmts("fun f() {\n    g({ a\n        -1 })\n}");
-        assert_eq!(parameterless_closure_len(&call_args(&stmts[0])[0].value), 2);
+        assert_eq!(
+            parameterless_closure_len(&call_args(expr_of(&stmts[0]))[0].value),
+            2
+        );
     }
 
     #[test]

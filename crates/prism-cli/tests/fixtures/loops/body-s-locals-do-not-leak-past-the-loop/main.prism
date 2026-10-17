@@ -1,0 +1,5 @@
+// expect: E4001
+fun f() {
+    do { val x = 1 } while (x > 0)
+    val y = x
+}

@@ -21,15 +21,41 @@ fn expr_body(src: &str) -> Expr {
     }
 }
 
-/// The statements of the only function's block body in `src`.
-fn block_stmts(src: &str) -> Vec<Expr> {
+/// The block body of the only function in `src`.
+fn block_body(src: &str) -> Block {
     let file = parse(src);
     match &file.declarations[0] {
         Declaration::Function(f) => match f.body.as_ref().expect("function has a body") {
-            FunctionBody::Block(b) => b.stmts.clone(),
+            FunctionBody::Block(b) => b.clone(),
             FunctionBody::Expr(_) => panic!("expected a block body"),
         },
         other => panic!("expected a function, got {:?}", other),
+    }
+}
+
+/// A block's items in source order as statements, the tail last.
+fn items(b: &Block) -> Vec<Statement> {
+    let mut items = b.statements.clone();
+    if let Some(tail) = &b.tail {
+        items.push(Statement::new(
+            StatementKind::Expression((**tail).clone()),
+            tail.span,
+        ));
+    }
+    items
+}
+
+/// The items of the only function's block body in `src`, the tail last.
+fn block_stmts(src: &str) -> Vec<Statement> {
+    items(&block_body(src))
+}
+
+/// The expression of an expression statement.
+#[track_caller]
+fn expr_of(item: &Statement) -> &Expr {
+    match &item.kind {
+        StatementKind::Expression(e) => e,
+        other => panic!("expected an expression statement, got {:?}", other),
     }
 }
 
@@ -129,7 +155,7 @@ fn recursive_enum_variants_carry_heap_payloads_in_both_layouts() {
 #[test]
 fn if_else_assigned_to_a_variable_parses_condition_and_both_branches() {
     let stmts = block_stmts("fun f(condition: Bool): Int {\n    val result = if (condition) 10 else 20\n    return result\n}\n");
-    let ExprKind::LocalVar {
+    let StatementKind::Local {
         name, initializer, ..
     } = &stmts[0].kind
     else {
@@ -174,7 +200,11 @@ fn when_branches_parse_into_value_list_range_and_else_patterns_in_source_order()
         .collect();
     assert_eq!(few_values, vec![1, 2, 3]);
     match &small.patterns[..] {
-        [WhenPattern::InRange { start, end }] => assert_eq!((int(start), int(end)), (4, 10)),
+        [WhenPattern::InRange {
+            start,
+            end,
+            end_inclusive: true,
+        }] => assert_eq!((int(start), int(end)), (4, 10)),
         other => panic!("expected a range pattern, got {:?}", other),
     }
     assert!(matches!(&large.patterns[..], [WhenPattern::Else]));
@@ -230,11 +260,13 @@ fn plain_member_access_is_not_safe_navigation() {
 fn val_and_var_declarations_and_reassignment_parse() {
     let stmts = block_stmts("fun f() {\n    val a = 10\n    var b = 10\n    b = 20\n}\n");
     assert!(
-        matches!(&stmts[0].kind, ExprKind::LocalVar { is_var: false, name, .. } if name == "a")
+        matches!(&stmts[0].kind, StatementKind::Local { is_var: false, name, .. } if name == "a")
     );
-    assert!(matches!(&stmts[1].kind, ExprKind::LocalVar { is_var: true, name, .. } if name == "b"));
+    assert!(
+        matches!(&stmts[1].kind, StatementKind::Local { is_var: true, name, .. } if name == "b")
+    );
     match &stmts[2].kind {
-        ExprKind::Assign { target, value } => {
+        StatementKind::Assign { target, value } => {
             assert_eq!(ident(target), "b");
             assert_eq!(int(value), 20);
         }
@@ -251,7 +283,7 @@ fn parenthesised_if_parses_condition_and_then_block() {
         cond,
         then_branch,
         else_branch,
-    } = &stmts[0].kind
+    } = &expr_of(&stmts[0]).kind
     else {
         panic!("expected an if, got {:?}", stmts[0].kind);
     };
@@ -259,9 +291,9 @@ fn parenthesised_if_parses_condition_and_then_block() {
     assert!(else_branch.is_none());
     match &then_branch.kind {
         ExprKind::Block(b) => {
-            assert_eq!(b.stmts.len(), 1);
+            assert_eq!(items(b).len(), 1);
             assert!(
-                matches!(&b.stmts[0].kind, ExprKind::Call { callee, .. } if ident(callee) == "doWork")
+                matches!(&expr_of(&items(b)[0]).kind, ExprKind::Call { callee, .. } if ident(callee) == "doWork")
             );
         }
         other => panic!("expected a block then-branch, got {:?}", other),
@@ -365,4 +397,193 @@ fn elvis_groups_around_its_operands_exactly_as_specified() {
     };
     assert_eq!(*op, BinaryOp::Add);
     assert_eq!((ident(offset), int(ten)), ("offset", 10));
+}
+
+// --- Blocks Hold Statements and an Optional Tail
+
+#[test]
+fn block_ending_in_an_expression_has_that_tail() {
+    let body = block_body("fun f(): Int { val a = 1; a + 1 }");
+    assert_eq!(body.statements.len(), 1);
+    assert!(matches!(&body.statements[0].kind, StatementKind::Local { name, .. } if name == "a"));
+    assert_eq!(body.tail.expect("tail").to_string(), "(a + 1)");
+}
+
+#[test]
+fn block_ending_in_an_assignment_has_no_tail() {
+    let body = block_body("fun f() { var x = 0; x = 1 }");
+    assert_eq!(body.statements.len(), 2);
+    assert!(matches!(
+        &body.statements[1].kind,
+        StatementKind::Assign { .. }
+    ));
+    assert!(body.tail.is_none());
+}
+
+#[test]
+fn trailing_semicolon_keeps_the_tail() {
+    let body = block_body("fun f(): Int { 1; }");
+    assert!(body.statements.is_empty());
+    assert_eq!(int(&body.tail.expect("tail")), 1);
+}
+
+// --- Assignment Is a Statement
+
+#[test]
+fn assignments_as_unbraced_branch_bodies_are_blocks_without_tail() {
+    let stmts = block_stmts(
+        "fun f(c: Bool, n: Int) {\n    if (c) x = 1 else x = 2\n    when (n) { 0 -> x = 3, else -> x = 4 }\n}\n",
+    );
+    let assignment_block = |e: &Expr| match &e.kind {
+        ExprKind::Block(b) => {
+            b.tail.is_none()
+                && b.statements.len() == 1
+                && matches!(b.statements[0].kind, StatementKind::Assign { .. })
+        }
+        _ => false,
+    };
+    let ExprKind::If {
+        then_branch,
+        else_branch,
+        ..
+    } = &expr_of(&stmts[0]).kind
+    else {
+        panic!("expected an if, got {:?}", stmts[0].kind);
+    };
+    assert!(assignment_block(then_branch));
+    assert!(assignment_block(else_branch.as_ref().expect("else branch")));
+    let ExprKind::When { branches, .. } = &expr_of(&stmts[1]).kind else {
+        panic!("expected a when, got {:?}", stmts[1].kind);
+    };
+    assert!(branches.iter().all(|b| assignment_block(&b.body)));
+}
+
+#[test]
+fn parenthesized_assignment_as_a_value_rejected() {
+    for src in [
+        "fun f() { var x = 0; val y = (x = 1) }",
+        "fun f() { var x = 0; g((x = 1)) }",
+        "fun f() = x = 1",
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains("assignment is a statement"), "{}", err);
+    }
+    let file = parse("fun f() { g(x = 1) }");
+    assert_eq!(file.declarations.len(), 1);
+}
+
+// --- Half-Open Range Operator
+
+#[test]
+fn half_open_range_precedence() {
+    assert_eq!(
+        expr_body("fun f(n: Int) = 0..<n - 1").to_string(),
+        "(0 ..< (n - 1))"
+    );
+}
+
+#[test]
+fn half_open_range_in_a_when_pattern() {
+    let ExprKind::When { branches, .. } =
+        expr_body("fun f(x: Int) = when (x) { in 0..<10 -> \"small\", else -> \"large\" }").kind
+    else {
+        panic!("expected a when");
+    };
+    match branches[0].patterns.as_slice() {
+        [WhenPattern::InRange {
+            start,
+            end,
+            end_inclusive: false,
+        }] => assert_eq!((int(start), int(end)), (0, 10)),
+        other => panic!("expected a half-open range pattern, got {:?}", other),
+    }
+}
+
+#[test]
+fn newline_before_half_open_range_ends_the_expression() {
+    let err = parse_source("fun f() {\n    val r = 0\n    ..<10\n}")
+        .expect_err("..< starts no statement");
+    assert_eq!(err.code, "E2001");
+}
+
+// --- Loops (`loops` spec): AST shapes
+
+#[test]
+fn while_do_and_for_loops_are_statements() {
+    let body = block_body(
+        "fun f(n: Int) {\n    while (n > 0) { g() }\n    do { val x = 1 } while (x > 0)\n    for (i in 0..<n) g(i)\n}\n",
+    );
+    assert!(body.tail.is_none(), "a block ending in a loop has no tail");
+    assert_eq!(body.statements.len(), 3);
+    match &body.statements[0].kind {
+        StatementKind::While { condition, body } => {
+            assert_eq!(condition.to_string(), "(n > 0)");
+            assert!(body.tail.is_some());
+        }
+        other => panic!("expected a while loop, got {:?}", other),
+    }
+    match &body.statements[1].kind {
+        StatementKind::DoWhile { body, condition } => {
+            assert!(matches!(
+                body.statements[0].kind,
+                StatementKind::Local { .. }
+            ));
+            assert_eq!(condition.to_string(), "(x > 0)");
+        }
+        other => panic!("expected a do-while loop, got {:?}", other),
+    }
+    match &body.statements[2].kind {
+        StatementKind::For {
+            variable,
+            iterable,
+            body,
+            ..
+        } => {
+            assert_eq!(variable, "i");
+            assert_eq!(iterable.to_string(), "(0 ..< n)");
+            // An unbraced expression body is the block's tail.
+            assert!(body.statements.is_empty());
+            assert_eq!(body.tail.as_ref().expect("tail").to_string(), "g(i)");
+        }
+        other => panic!("expected a for loop, got {:?}", other),
+    }
+}
+
+#[test]
+fn unbraced_assignment_loop_body_is_a_statement() {
+    let body = block_body("fun f(n: Int) { var i = 0; while (i < n) i = i + 1 }");
+    let StatementKind::While { body, .. } = &body.statements[1].kind else {
+        panic!("expected a while loop");
+    };
+    assert!(body.tail.is_none());
+    assert!(matches!(
+        body.statements[0].kind,
+        StatementKind::Assign { .. }
+    ));
+}
+
+#[test]
+fn do_loop_body_must_be_braced() {
+    let err = parse_source("fun f(c: Bool) { do c = false while (c) }").expect_err("unbraced do");
+    assert_eq!(err.code, "E2001");
+    assert!(err.message.contains("must be braced"), "{}", err);
+}
+
+#[test]
+fn break_and_continue_are_expressions() {
+    let body = block_body(
+        "fun f(xs: Int?) {\n    while (true) {\n        val x = xs ?: break\n        if (x > 0) continue\n    }\n}\n",
+    );
+    let StatementKind::While { body, .. } = &body.statements[0].kind else {
+        panic!("expected a while loop");
+    };
+    let StatementKind::Local { initializer, .. } = &body.statements[0].kind else {
+        panic!("expected a declaration");
+    };
+    assert_eq!(initializer.to_string(), "(xs ?: break)");
+    let ExprKind::If { then_branch, .. } = &body.tail.as_ref().expect("tail").kind else {
+        panic!("expected an if");
+    };
+    assert!(matches!(then_branch.kind, ExprKind::Continue));
 }

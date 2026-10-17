@@ -1,0 +1,7 @@
+// expect: ok
+fun f(xs: Int?) {
+    while (true) {
+        val x = xs ?: break
+        val y: Int = x
+    }
+}

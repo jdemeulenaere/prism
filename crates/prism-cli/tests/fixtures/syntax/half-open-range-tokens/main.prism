@@ -1,0 +1,7 @@
+// expect: ok
+fun f(): Int {
+    val a = 4..<10
+    val b = 4..10
+    val c = 4.10
+    return 0
+}

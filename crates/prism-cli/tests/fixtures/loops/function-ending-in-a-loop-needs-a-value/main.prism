@@ -1,0 +1,2 @@
+// expect: E4005
+fun f(): Int { while (true) { return 1 } }

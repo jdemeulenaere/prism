@@ -230,6 +230,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 "   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n",
             );
         }
+        TypeError::BreakOutsideLoop { .. } => {
+            out.push_str("   = help: move it into a 'while', 'do' or 'for' loop body; inside a closure, return from the closure instead\n");
+        }
         _ => {}
     }
 

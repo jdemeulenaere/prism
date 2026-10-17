@@ -27,7 +27,8 @@
 //!
 //! Every case name must start with the slug of an existing `#### Scenario:` heading of its spec
 //! (lower-cased, runs of non-alphanumerics replaced by `-`), which keeps the fixtures traceable to
-//! the scenarios they exercise.
+//! the scenarios they exercise. The scenarios of an active change's delta spec count too, so a
+//! change's fixtures can land before it is archived.
 //!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
@@ -297,16 +298,46 @@ fn slug(title: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+/// The texts of capability `spec`: its main spec, and the delta spec of every active (not yet
+/// archived) change that touches it, so a change's fixtures can name its new scenarios before
+/// the change is archived into the main specs.
+fn spec_texts(spec: &str) -> Vec<String> {
+    let openspec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../openspec");
+    let mut paths = vec![openspec.join("specs").join(spec).join("spec.md")];
+    if let Ok(changes) = fs::read_dir(openspec.join("changes")) {
+        let mut changes: Vec<_> = changes
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != "archive"))
+            .collect();
+        changes.sort();
+        paths.extend(
+            changes
+                .into_iter()
+                .map(|c| c.join("specs").join(spec).join("spec.md")),
+        );
+    }
+    paths
+        .iter()
+        .filter_map(|p| fs::read_to_string(p).ok())
+        .collect()
+}
+
 #[test]
 fn fixture_names_match_spec_scenarios() {
-    let specs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../openspec/specs");
     let mut unknown = Vec::new();
     for case in load_cases() {
         let (spec, dir) = case.name.split_once('/').unwrap();
-        let text = fs::read_to_string(specs.join(spec).join("spec.md"))
-            .unwrap_or_else(|_| panic!("no spec named '{}' for fixture {}", spec, case.name));
-        let slugs: BTreeSet<_> = text
-            .lines()
+        let texts = spec_texts(spec);
+        assert!(
+            !texts.is_empty(),
+            "no spec named '{}' for fixture {}",
+            spec,
+            case.name
+        );
+        let slugs: BTreeSet<_> = texts
+            .iter()
+            .flat_map(|text| text.lines())
             .filter_map(|l| l.strip_prefix("#### Scenario:"))
             .map(|t| slug(t.trim()))
             .collect();

@@ -6,9 +6,10 @@ use crate::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
 use prism_abi::{AbiType, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, TopLevelVarDecl};
 use prism_ast::expr::{
-    BinaryOp, BlockExpr, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
+    BinaryOp, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
 };
 use prism_ast::module::SourceFile;
+use prism_ast::statement::{Block, Statement, StatementKind};
 use prism_ast::{Span, Visibility};
 use std::collections::{HashMap, HashSet};
 
@@ -89,6 +90,7 @@ struct BodyContext {
     in_compose_stack: Vec<bool>,
     current_expected_return: Option<Type>,
     in_function: bool,
+    loop_depth: usize,
     origin: Origin,
 }
 
@@ -135,6 +137,9 @@ pub struct TypeChecker {
     pub unannotated_private_fns: Vec<String>,
     /// Whether the checker is currently evaluating within a function body.
     pub in_function: bool,
+    /// Number of loops enclosing the current point of the current function or closure body; a
+    /// `break` or `continue` at depth zero reports `E4015`. A closure body starts at zero.
+    loop_depth: usize,
     /// The enum that owns each module-level bare variant name (`Red` for `Color.Red`).
     variant_owners: HashMap<String, String>,
     /// Bare variant names declared by more than one enum. They are not bound at module level and
@@ -171,6 +176,7 @@ impl TypeChecker {
             current_expected_return: None,
             unannotated_private_fns: Vec::new(),
             in_function: false,
+            loop_depth: 0,
             variant_owners: HashMap::new(),
             ambiguous_variants: HashSet::new(),
         }
@@ -878,6 +884,7 @@ impl TypeChecker {
             in_compose_stack: std::mem::replace(&mut self.in_compose_stack, vec![false]),
             current_expected_return: self.current_expected_return.take(),
             in_function: std::mem::replace(&mut self.in_function, false),
+            loop_depth: std::mem::replace(&mut self.loop_depth, 0),
             origin: std::mem::replace(&mut self.origin, Origin::Value),
         };
         match pending.as_ref() {
@@ -888,6 +895,7 @@ impl TypeChecker {
         self.in_compose_stack = saved.in_compose_stack;
         self.current_expected_return = saved.current_expected_return;
         self.in_function = saved.in_function;
+        self.loop_depth = saved.loop_depth;
         self.origin = saved.origin;
 
         self.inference.insert(name.to_string(), Inference::Done);
@@ -1093,6 +1101,8 @@ impl TypeChecker {
                 self.push_compose_context(*is_compose);
                 let prev_in_func = self.in_function;
                 self.in_function = true;
+                // A jump cannot leave the closure for a loop around it.
+                let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
                 let prev_ret = self.current_expected_return.take();
                 self.current_expected_return = Some((**exp_ret).clone());
 
@@ -1112,6 +1122,7 @@ impl TypeChecker {
                 let body_ty =
                     self.with_origin(Origin::Return, |c| c.check_block(body, Some(exp_ret)));
 
+                self.loop_depth = prev_loop_depth;
                 self.current_expected_return = prev_ret;
                 self.in_function = prev_in_func;
                 self.pop_compose_context();
@@ -1206,35 +1217,6 @@ impl TypeChecker {
 
             ExprKind::Unary { op, expr: inner } => self.infer_unary_op(*op, inner, expr.span),
 
-            ExprKind::LocalVar {
-                is_var,
-                name,
-                ty: annot,
-                initializer,
-            } => {
-                let var_ty = if let Some(a) = annot {
-                    self.check_annotation_names(a);
-                    let expected = self.lower_type(a);
-                    self.check_expr(initializer, &expected);
-                    expected
-                } else {
-                    self.infer_expr(initializer)
-                };
-
-                let mutability = if *is_var {
-                    Mutability::Var
-                } else {
-                    Mutability::Val
-                };
-                let sym = Symbol::variable(name.clone(), var_ty, mutability, expr.span);
-                if let Err(err) = self.env.define(sym) {
-                    self.errors.push(err);
-                }
-                Type::Unit
-            }
-
-            ExprKind::Assign { target, value } => self.check_assignment(target, value, expr.span),
-
             ExprKind::Block(block) => self.check_block(block, None),
 
             ExprKind::If {
@@ -1319,11 +1301,27 @@ impl TypeChecker {
                 Type::Nothing
             }
 
+            ExprKind::Break | ExprKind::Continue => {
+                if self.loop_depth == 0 {
+                    let keyword = match expr.kind {
+                        ExprKind::Break => "break",
+                        _ => "continue",
+                    };
+                    self.errors.push(TypeError::BreakOutsideLoop {
+                        keyword,
+                        span: expr.span,
+                    });
+                }
+                Type::Nothing
+            }
+
             ExprKind::Closure { params, body } => {
                 self.env.enter_scope();
                 self.push_compose_context(false);
                 let prev_in_func = self.in_function;
                 self.in_function = true;
+                // A jump cannot leave the closure for a loop around it.
+                let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
                 let prev_ret = self.current_expected_return.take();
 
                 // Without an expected function type, nothing gives the parameters a type (D6 of
@@ -1347,6 +1345,7 @@ impl TypeChecker {
                 }
                 let body_ty = self.check_block(body, None);
 
+                self.loop_depth = prev_loop_depth;
                 self.current_expected_return = prev_ret;
                 self.in_function = prev_in_func;
                 self.pop_compose_context();
@@ -1469,7 +1468,9 @@ impl TypeChecker {
                 }
             }
 
-            BinaryOp::Range => {
+            // A half-open range has the same type; whether it excludes its end is a property
+            // of the runtime value.
+            BinaryOp::Range | BinaryOp::HalfOpenRange => {
                 self.check_operand(left, &Type::Int);
                 self.check_operand(right, &Type::Int);
                 Type::Struct(NominalId::builtin_range())
@@ -1547,7 +1548,7 @@ impl TypeChecker {
         }
     }
 
-    fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) -> Type {
+    fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) {
         let (target_ty, is_mutable) = match &target.kind {
             ExprKind::Ident(name) => match self.env.resolve(name, target.span) {
                 Ok(sym) => match &sym.kind {
@@ -1635,17 +1636,106 @@ impl TypeChecker {
         }
 
         self.check_expr(value, &target_ty);
-        Type::Unit
+    }
+
+    /// Typechecks a local declaration and binds it in the current scope.
+    fn check_local(
+        &mut self,
+        is_var: bool,
+        name: &str,
+        annotation: Option<&prism_ast::types::Type>,
+        initializer: &Expr,
+        span: Span,
+    ) {
+        let var_ty = if let Some(a) = annotation {
+            self.check_annotation_names(a);
+            let expected = self.lower_type(a);
+            self.check_expr(initializer, &expected);
+            expected
+        } else {
+            self.infer_expr(initializer)
+        };
+
+        let mutability = if is_var {
+            Mutability::Var
+        } else {
+            Mutability::Val
+        };
+        let sym = Symbol::variable(name.to_string(), var_ty, mutability, span);
+        if let Err(err) = self.env.define(sym) {
+            self.errors.push(err);
+        }
+    }
+
+    /// Typechecks a statement of a block.
+    fn check_statement(&mut self, statement: &Statement) {
+        match &statement.kind {
+            StatementKind::Local {
+                is_var,
+                name,
+                ty,
+                initializer,
+            } => self.check_local(*is_var, name, ty.as_ref(), initializer, statement.span),
+            StatementKind::Assign { target, value } => {
+                self.check_assignment(target, value, statement.span)
+            }
+            StatementKind::Expression(expr) => {
+                self.infer_discarded_expr(expr);
+            }
+            StatementKind::While { condition, body } => {
+                self.check_operand(condition, &Type::Bool);
+                self.check_loop_body(body);
+            }
+            StatementKind::DoWhile { body, condition } => {
+                // The condition is checked in the body's scope, so it sees the body's locals.
+                self.env.enter_scope();
+                self.loop_depth += 1;
+                for statement in &body.statements {
+                    self.check_statement(statement);
+                }
+                if let Some(tail) = &body.tail {
+                    self.infer_discarded_expr(tail);
+                }
+                self.loop_depth -= 1;
+                self.check_operand(condition, &Type::Bool);
+                self.env.exit_scope();
+            }
+            StatementKind::For {
+                variable,
+                variable_span,
+                iterable,
+                body,
+            } => {
+                self.check_operand(iterable, &Type::Struct(NominalId::builtin_range()));
+                // The loop variable sits in a scope level above the body, so the body may
+                // shadow it, as a function body may shadow a parameter.
+                self.env.enter_scope();
+                let sym =
+                    Symbol::variable(variable.clone(), Type::Int, Mutability::Val, *variable_span);
+                if let Err(err) = self.env.define(sym) {
+                    self.errors.push(err);
+                }
+                self.check_loop_body(body);
+                self.env.exit_scope();
+            }
+        }
+    }
+
+    /// Typechecks the body of a `while` or `for` loop, whose value is discarded.
+    fn check_loop_body(&mut self, body: &Block) {
+        self.loop_depth += 1;
+        self.check_block(body, Some(&Type::Unit));
+        self.loop_depth -= 1;
     }
 
     /// Typechecks an expression whose value is discarded. Only `when` differs from value
     /// position: it needs neither an `else` nor a common branch type.
-    fn infer_statement(&mut self, stmt: &Expr) -> Type {
-        match &stmt.kind {
+    fn infer_discarded_expr(&mut self, expr: &Expr) -> Type {
+        match &expr.kind {
             ExprKind::When { target, branches } => {
-                self.infer_when_expr(target.as_deref(), branches, WhenUse::Statement, stmt.span)
+                self.infer_when_expr(target.as_deref(), branches, WhenUse::Statement, expr.span)
             }
-            _ => self.infer_expr(stmt),
+            _ => self.infer_expr(expr),
         }
     }
 
@@ -1653,30 +1743,35 @@ impl TypeChecker {
     /// except that a block expected to produce `Unit` (the body of a `Unit` function or of a
     /// closure expected to return `Unit`) discards its final value: the expression is
     /// typechecked as a statement and its type ignored (D8 of `typechecker-soundness`).
-    fn check_block(&mut self, block: &BlockExpr, expected: Option<&Type>) -> Type {
+    fn check_block(&mut self, block: &Block, expected: Option<&Type>) -> Type {
         self.env.enter_scope();
-        if block.stmts.is_empty() {
-            self.env.exit_scope();
-            return Type::Unit;
-        }
-
-        let num_stmts = block.stmts.len();
         self.with_origin(Origin::Value, |checker| {
-            for stmt in &block.stmts[..num_stmts - 1] {
-                checker.infer_statement(stmt);
+            for statement in &block.statements {
+                checker.check_statement(statement);
             }
         });
 
         // The tail of a block whose expected type is `Unit` is a statement too. A checked tail
         // produces the block's value, so it keeps the expectation origin.
-        let last_stmt = &block.stmts[num_stmts - 1];
-        let result_ty = match expected {
-            Some(Type::Unit) => {
-                self.with_origin(Origin::Value, |c| c.infer_statement(last_stmt));
+        let result_ty = match (&block.tail, expected) {
+            (Some(tail), Some(Type::Unit)) => {
+                self.with_origin(Origin::Value, |c| c.infer_discarded_expr(tail));
                 Type::Unit
             }
-            Some(exp) => self.check_expr(last_stmt, exp),
-            None => self.with_origin(Origin::Value, |c| c.infer_expr(last_stmt)),
+            (Some(tail), Some(exp)) => self.check_expr(tail, exp),
+            (Some(tail), None) => self.with_origin(Origin::Value, |c| c.infer_expr(tail)),
+            // A block without a tail is `Unit`. When a value was expected, the mismatch is
+            // reported at the last statement, which is where the value is missing.
+            (None, Some(exp)) if exp != &Type::Unit && exp != &Type::Error => {
+                match block.statements.last() {
+                    Some(last) => {
+                        self.report_mismatch(exp, Type::Unit, last.span);
+                        Type::Error
+                    }
+                    None => Type::Unit,
+                }
+            }
+            (None, _) => Type::Unit,
         };
 
         self.env.exit_scope();
@@ -1737,7 +1832,8 @@ impl TypeChecker {
                             self.check_operand(p_expr, &Type::Bool);
                         }
                     }
-                    WhenPattern::InRange { start, end } => {
+                    // Whether the end is included only matters at runtime.
+                    WhenPattern::InRange { start, end, .. } => {
                         if let Some(s_ty) = &subject_ty {
                             self.check_expr(start, s_ty);
                             self.check_expr(end, s_ty);
@@ -2335,6 +2431,10 @@ mod tests {
         Type::Enum(id)
     }
 
+    fn statement(kind: StatementKind) -> Statement {
+        Statement::new(kind, Span::dummy())
+    }
+
     // Helper to wrap expression in Expr
     fn expr(kind: ExprKind) -> Expr {
         Expr::new(kind, Span::dummy())
@@ -2373,19 +2473,19 @@ mod tests {
     #[test]
     fn test_val_reassignment_rejected_e4003() {
         let mut checker = TypeChecker::new(None, "<test>");
-        let init = expr(ExprKind::LocalVar {
+        let init = statement(StatementKind::Local {
             is_var: false,
             name: "x".to_string(),
             ty: Some(prism_ast::types::Type::named("Int", Span::dummy())),
-            initializer: Box::new(expr(ExprKind::Literal(Literal::Int(42)))),
+            initializer: expr(ExprKind::Literal(Literal::Int(42))),
         });
-        checker.infer_expr(&init);
+        checker.check_statement(&init);
 
-        let reassign = expr(ExprKind::Assign {
-            target: Box::new(expr(ExprKind::Ident("x".to_string()))),
-            value: Box::new(expr(ExprKind::Literal(Literal::Int(100)))),
+        let reassign = statement(StatementKind::Assign {
+            target: expr(ExprKind::Ident("x".to_string())),
+            value: expr(ExprKind::Literal(Literal::Int(100))),
         });
-        checker.infer_expr(&reassign);
+        checker.check_statement(&reassign);
 
         assert_eq!(checker.errors.len(), 1);
         assert_eq!(checker.errors[0].code(), "E4003");
@@ -2454,22 +2554,21 @@ mod tests {
     #[test]
     fn test_block_unit_and_trailing_expr() {
         let mut checker = TypeChecker::new(None, "<test>");
-        let block_empty = expr(ExprKind::Block(BlockExpr {
-            stmts: Vec::new(),
+        let block_empty = expr(ExprKind::Block(Block {
+            statements: Vec::new(),
+            tail: None,
             span: Span::dummy(),
         }));
         assert_eq!(checker.infer_expr(&block_empty), Type::Unit);
 
-        let block_trailing = expr(ExprKind::Block(BlockExpr {
-            stmts: vec![
-                expr(ExprKind::LocalVar {
-                    is_var: false,
-                    name: "a".to_string(),
-                    ty: None,
-                    initializer: Box::new(expr(ExprKind::Literal(Literal::Int(10)))),
-                }),
-                expr(ExprKind::Ident("a".to_string())),
-            ],
+        let block_trailing = expr(ExprKind::Block(Block {
+            statements: vec![statement(StatementKind::Local {
+                is_var: false,
+                name: "a".to_string(),
+                ty: None,
+                initializer: expr(ExprKind::Literal(Literal::Int(10))),
+            })],
+            tail: Some(Box::new(expr(ExprKind::Ident("a".to_string())))),
             span: Span::dummy(),
         }));
         assert_eq!(checker.infer_expr(&block_trailing), Type::Int);
@@ -2530,12 +2629,13 @@ mod tests {
         let mut checker = TypeChecker::new(None, "<test>");
         let closure = expr(ExprKind::Closure {
             params: vec!["n".to_string()],
-            body: BlockExpr {
-                stmts: vec![expr(ExprKind::Binary {
+            body: Block {
+                statements: Vec::new(),
+                tail: Some(Box::new(expr(ExprKind::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(expr(ExprKind::Ident("n".to_string()))),
                     right: Box::new(expr(ExprKind::Literal(Literal::Int(1)))),
-                })],
+                }))),
                 span: Span::dummy(),
             },
         });
@@ -2661,11 +2761,11 @@ mod tests {
         );
 
         // val u = User(1, 20)
-        let init_val = expr(ExprKind::LocalVar {
+        let init_val = statement(StatementKind::Local {
             is_var: false,
             name: "u".to_string(),
             ty: None,
-            initializer: Box::new(expr(ExprKind::Call {
+            initializer: expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Ident("User".to_string()))),
                 args: vec![
                     CallArg {
@@ -2679,32 +2779,32 @@ mod tests {
                         span: Span::dummy(),
                     },
                 ],
-            })),
+            }),
         });
-        checker.infer_expr(&init_val);
+        checker.check_statement(&init_val);
 
         // u.id = 2 -> E4003 (immutable field)
-        let assign_val_field = expr(ExprKind::Assign {
-            target: Box::new(expr(ExprKind::MemberAccess {
+        let assign_val_field = statement(StatementKind::Assign {
+            target: expr(ExprKind::MemberAccess {
                 target: Box::new(expr(ExprKind::Ident("u".to_string()))),
                 member: "id".to_string(),
                 is_safe_nav: false,
-            })),
-            value: Box::new(expr(ExprKind::Literal(Literal::Int(2)))),
+            }),
+            value: expr(ExprKind::Literal(Literal::Int(2))),
         });
-        checker.infer_expr(&assign_val_field);
+        checker.check_statement(&assign_val_field);
         assert!(checker.errors.iter().any(|e| e.code() == "E4003"));
 
         // u.age = 21 -> E4003 (immutable binding 'u')
-        let assign_val_binding = expr(ExprKind::Assign {
-            target: Box::new(expr(ExprKind::MemberAccess {
+        let assign_val_binding = statement(StatementKind::Assign {
+            target: expr(ExprKind::MemberAccess {
                 target: Box::new(expr(ExprKind::Ident("u".to_string()))),
                 member: "age".to_string(),
                 is_safe_nav: false,
-            })),
-            value: Box::new(expr(ExprKind::Literal(Literal::Int(21)))),
+            }),
+            value: expr(ExprKind::Literal(Literal::Int(21))),
         });
-        checker.infer_expr(&assign_val_binding);
+        checker.check_statement(&assign_val_binding);
         assert_eq!(
             checker
                 .errors
@@ -2715,11 +2815,11 @@ mod tests {
         );
 
         // var u2 = User(2, 30)
-        let init_var = expr(ExprKind::LocalVar {
+        let init_var = statement(StatementKind::Local {
             is_var: true,
             name: "u2".to_string(),
             ty: None,
-            initializer: Box::new(expr(ExprKind::Call {
+            initializer: expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Ident("User".to_string()))),
                 args: vec![
                     CallArg {
@@ -2733,21 +2833,21 @@ mod tests {
                         span: Span::dummy(),
                     },
                 ],
-            })),
+            }),
         });
-        checker.infer_expr(&init_var);
+        checker.check_statement(&init_var);
 
         // u2.age = 31 -> OK (mutable field on mutable var binding)
         let initial_err_count = checker.errors.len();
-        let assign_var = expr(ExprKind::Assign {
-            target: Box::new(expr(ExprKind::MemberAccess {
+        let assign_var = statement(StatementKind::Assign {
+            target: expr(ExprKind::MemberAccess {
                 target: Box::new(expr(ExprKind::Ident("u2".to_string()))),
                 member: "age".to_string(),
                 is_safe_nav: false,
-            })),
-            value: Box::new(expr(ExprKind::Literal(Literal::Int(31)))),
+            }),
+            value: expr(ExprKind::Literal(Literal::Int(31))),
         });
-        checker.infer_expr(&assign_var);
+        checker.check_statement(&assign_var);
         assert_eq!(checker.errors.len(), initial_err_count);
     }
 
@@ -2808,13 +2908,13 @@ mod tests {
     #[test]
     fn test_reference_and_borrow_typing() {
         let mut checker = TypeChecker::new(None, "<test>");
-        let init_val = expr(ExprKind::LocalVar {
+        let init_val = statement(StatementKind::Local {
             is_var: false,
             name: "x".to_string(),
             ty: None,
-            initializer: Box::new(expr(ExprKind::Literal(Literal::Int(42)))),
+            initializer: expr(ExprKind::Literal(Literal::Int(42))),
         });
-        checker.infer_expr(&init_val);
+        checker.check_statement(&init_val);
 
         // Shared borrow: &x -> &Int
         let shared_borrow = expr(ExprKind::Unary {
@@ -2838,13 +2938,13 @@ mod tests {
         assert!(checker.errors.iter().any(|e| e.code() == "E4003"));
 
         // Mutable borrow on var: &mut y -> &mut Int
-        let init_var = expr(ExprKind::LocalVar {
+        let init_var = statement(StatementKind::Local {
             is_var: true,
             name: "y".to_string(),
             ty: None,
-            initializer: Box::new(expr(ExprKind::Literal(Literal::Int(100)))),
+            initializer: expr(ExprKind::Literal(Literal::Int(100))),
         });
-        checker.infer_expr(&init_var);
+        checker.check_statement(&init_var);
         let mut_borrow_var = expr(ExprKind::Unary {
             op: UnaryOp::BorrowMut,
             expr: Box::new(expr(ExprKind::Ident("y".to_string()))),
@@ -2867,13 +2967,13 @@ mod tests {
             vec![("x".to_string(), false, Type::Int)],
         );
         let opt_point_ty = Type::Nullable(Box::new(point_ty));
-        let init_opt = expr(ExprKind::LocalVar {
+        let init_opt = statement(StatementKind::Local {
             is_var: false,
             name: "opt".to_string(),
             ty: None,
-            initializer: Box::new(expr(ExprKind::Literal(Literal::Null))),
+            initializer: expr(ExprKind::Literal(Literal::Null)),
         });
-        checker.infer_expr(&init_opt);
+        checker.check_statement(&init_opt);
         checker.env.update_type("opt", opt_point_ty);
 
         // Safe nav: opt?.x -> Int?
@@ -3276,11 +3376,12 @@ mod tests {
         // A standard (non-composable) closure: { MyView() }
         let closure = expr(ExprKind::Closure {
             params: Vec::new(),
-            body: BlockExpr {
-                stmts: vec![expr(ExprKind::Call {
+            body: Block {
+                statements: Vec::new(),
+                tail: Some(Box::new(expr(ExprKind::Call {
                     callee: Box::new(expr(ExprKind::Ident("MyView".to_string()))),
                     args: Vec::new(),
-                })],
+                }))),
                 span: Span::dummy(),
             },
         });

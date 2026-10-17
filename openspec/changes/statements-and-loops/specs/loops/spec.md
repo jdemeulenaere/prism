@@ -37,7 +37,7 @@ The grammar MUST accept `do body while (condition)` as a statement whose body is
 - **THEN** the type checker emits `E4001` for the `x` in `val y = x`
 
 ### Requirement: For Loops Over Ranges
-The grammar MUST accept `for (name in iterable) body` as a statement. The iterable MUST have the built-in `Range` type, otherwise `E4002` is reported. It is evaluated once, before the first iteration. The loop variable MUST be a fresh immutable `Int` binding in each iteration, in a scope enclosing the body, so the body may shadow it.
+The grammar MUST accept `for (name in iterable) body` as a statement. The iterable MUST have the built-in `Range` type after peeling `&` and `&mut` layers, as conditions do, otherwise `E4002` is reported. It is evaluated once, before the first iteration. The loop variable MUST be a fresh immutable `Int` binding in each iteration, in a scope enclosing the body, so the body may shadow it.
 
 #### Scenario: Counting loop over a half-open range
 - **WHEN** `fun f(n: Int): Int { var sum = 0; for (i in 0..<n) { sum = sum + i }; return sum }` is checked

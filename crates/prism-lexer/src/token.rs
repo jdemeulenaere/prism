@@ -22,6 +22,11 @@ pub enum TokenKind {
     Else,
     When,
     In,
+    While,
+    Do,
+    For,
+    Break,
+    Continue,
     This,
     Mut,
 
@@ -59,6 +64,7 @@ pub enum TokenKind {
     Amp,           // &
     Dot,           // .
     DotDot,        // ..
+    DotDotLess,    // ..<
     QuestionDot,   // ?.
     QuestionColon, // ?:
     Question,      // ?
@@ -96,6 +102,11 @@ impl TokenKind {
             "else" => Some(TokenKind::Else),
             "when" => Some(TokenKind::When),
             "in" => Some(TokenKind::In),
+            "while" => Some(TokenKind::While),
+            "do" => Some(TokenKind::Do),
+            "for" => Some(TokenKind::For),
+            "break" => Some(TokenKind::Break),
+            "continue" => Some(TokenKind::Continue),
             "this" => Some(TokenKind::This),
             "mut" => Some(TokenKind::Mut),
             "true" => Some(TokenKind::True),
@@ -124,6 +135,11 @@ impl fmt::Display for TokenKind {
             TokenKind::Else => write!(f, "else"),
             TokenKind::When => write!(f, "when"),
             TokenKind::In => write!(f, "in"),
+            TokenKind::While => write!(f, "while"),
+            TokenKind::Do => write!(f, "do"),
+            TokenKind::For => write!(f, "for"),
+            TokenKind::Break => write!(f, "break"),
+            TokenKind::Continue => write!(f, "continue"),
             TokenKind::This => write!(f, "this"),
             TokenKind::Mut => write!(f, "mut"),
             TokenKind::Int(v) => write!(f, "{}", v),
@@ -152,6 +168,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Amp => write!(f, "&"),
             TokenKind::Dot => write!(f, "."),
             TokenKind::DotDot => write!(f, ".."),
+            TokenKind::DotDotLess => write!(f, "..<"),
             TokenKind::QuestionDot => write!(f, "?."),
             TokenKind::QuestionColon => write!(f, "?:"),
             TokenKind::Question => write!(f, "?"),

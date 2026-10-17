@@ -1,7 +1,7 @@
 //! Expression syntax trees for Prism.
 
 use crate::span::Span;
-use crate::types::Type;
+use crate::statement::Block;
 use std::fmt;
 
 /// Literal values in Prism source code.
@@ -67,8 +67,9 @@ pub enum BinaryOp {
     And,
     Or,
     // Prism specifics
-    Elvis, // ?:
-    Range, // ..
+    Elvis,         // ?:
+    Range,         // ..
+    HalfOpenRange, // ..<
 }
 
 impl BinaryOp {
@@ -89,6 +90,7 @@ impl BinaryOp {
             BinaryOp::Or => "||",
             BinaryOp::Elvis => "?:",
             BinaryOp::Range => "..",
+            BinaryOp::HalfOpenRange => "..<",
         }
     }
 }
@@ -126,8 +128,12 @@ pub struct CallArg {
 pub enum WhenPattern {
     /// Single expression or constant match, e.g. `0` or `1, 2, 3`.
     Expr(Expr),
-    /// Range pattern: `in start..end`.
-    InRange { start: Expr, end: Expr },
+    /// Range pattern: `in start..end`, or `in start..<end`, which excludes `end`.
+    InRange {
+        start: Expr,
+        end: Expr,
+        end_inclusive: bool,
+    },
     /// Fallback `else` branch.
     Else,
 }
@@ -137,13 +143,6 @@ pub enum WhenPattern {
 pub struct WhenBranch {
     pub patterns: Vec<WhenPattern>,
     pub body: Expr,
-    pub span: Span,
-}
-
-/// A block expression containing statements and an optional trailing expression.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BlockExpr {
-    pub stmts: Vec<Expr>,
     pub span: Span,
 }
 
@@ -170,7 +169,9 @@ pub enum ExprKind {
         member: String,
         is_safe_nav: bool, // true for `?.`, false for `.`
     },
-    Block(BlockExpr),
+    /// A block in block position: a function body, a branch body, or a statement-position
+    /// scope. Its value is its tail expression.
+    Block(Block),
     If {
         cond: Box<Expr>,
         then_branch: Box<Expr>,
@@ -181,23 +182,16 @@ pub enum ExprKind {
         branches: Vec<WhenBranch>,
     },
     Return(Option<Box<Expr>>),
-    Assign {
-        target: Box<Expr>,
-        value: Box<Expr>,
-    },
-    /// A local `val`/`var` declaration. The parser produces it only as a direct
-    /// element of [`BlockExpr::stmts`]; it is never an operand.
-    LocalVar {
-        is_var: bool,
-        name: String,
-        ty: Option<Type>,
-        initializer: Box<Expr>,
-    },
+    /// `break`: leaves the innermost enclosing loop. It has type `Nothing`.
+    Break,
+    /// `continue`: starts the next iteration of the innermost enclosing loop. It has type
+    /// `Nothing`.
+    Continue,
     /// A closure `{ a, b -> ... }`, or `{ ... }` with no parameters. The body is
     /// always a block, whatever the number of statements.
     Closure {
         params: Vec<String>,
-        body: BlockExpr,
+        body: Block,
     },
     Index {
         target: Box<Expr>,
@@ -253,9 +247,7 @@ impl fmt::Display for Expr {
                 let sep = if *is_safe_nav { "?." } else { "." };
                 write!(f, "{}{}{}", target, sep, member)
             }
-            ExprKind::Block(block) => {
-                write!(f, "{{ ... }} ({} stmts)", block.stmmts_len())
-            }
+            ExprKind::Block(block) => write!(f, "{}", block),
             ExprKind::If {
                 cond,
                 then_branch,
@@ -276,36 +268,18 @@ impl fmt::Display for Expr {
             }
             ExprKind::Return(Some(val)) => write!(f, "return {}", val),
             ExprKind::Return(None) => write!(f, "return"),
-            ExprKind::Assign { target, value } => write!(f, "{} = {}", target, value),
-            ExprKind::LocalVar {
-                is_var,
-                name,
-                ty,
-                initializer,
-            } => {
-                let kw = if *is_var { "var" } else { "val" };
-                if let Some(t) = ty {
-                    write!(f, "{} {}: {} = {}", kw, name, t, initializer)
-                } else {
-                    write!(f, "{} {} = {}", kw, name, initializer)
-                }
-            }
+            ExprKind::Break => write!(f, "break"),
+            ExprKind::Continue => write!(f, "continue"),
             ExprKind::Closure { params, body } => {
                 write!(f, "{{ ")?;
                 if !params.is_empty() {
                     write!(f, "{} -> ", params.join(", "))?;
                 }
-                write!(f, "... ({} stmts) }}", body.stmmts_len())
+                write!(f, "{} }}", body.summary())
             }
             ExprKind::Index { target, index } => {
                 write!(f, "{}[{}]", target, index)
             }
         }
-    }
-}
-
-impl BlockExpr {
-    pub fn stmmts_len(&self) -> usize {
-        self.stmts.len()
     }
 }

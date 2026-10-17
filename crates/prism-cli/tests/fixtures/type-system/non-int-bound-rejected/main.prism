@@ -1,0 +1,4 @@
+// expect: E4002
+fun f() {
+    val r = 0..<"s"
+}

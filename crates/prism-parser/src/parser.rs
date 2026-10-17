@@ -919,7 +919,7 @@ impl Parser {
                 Precedence::Comparison
             }
             TokenKind::QuestionColon => Precedence::Elvis,
-            TokenKind::DotDot => Precedence::Range,
+            TokenKind::DotDot | TokenKind::DotDotLess => Precedence::Range,
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::Dot | TokenKind::QuestionDot => Precedence::Postfix,
@@ -959,6 +959,15 @@ impl Parser {
             TokenKind::If => self.parse_if(),
             TokenKind::When => self.parse_when(),
             TokenKind::Return => self.parse_return(),
+            TokenKind::Break | TokenKind::Continue => Ok(self.parse_jump()),
+
+            TokenKind::While | TokenKind::Do | TokenKind::For => Err(ParseError::new(
+                format!(
+                    "A '{}' loop is a statement and cannot be used as a value",
+                    self.peek_kind()
+                ),
+                self.peek().span,
+            )),
 
             TokenKind::Val | TokenKind::Var => Err(ParseError::new(
                 format!(
@@ -1079,6 +1088,8 @@ impl Parser {
                 | TokenKind::If
                 | TokenKind::When
                 | TokenKind::Return
+                | TokenKind::Break
+                | TokenKind::Continue
         )
     }
 
@@ -1123,17 +1134,22 @@ impl Parser {
             arrow = Some(self.expect(TokenKind::Arrow)?.span);
         }
 
-        let stmts = self.with_newlines(true, Self::parse_stmts)?;
+        let (statements, tail) = self.with_newlines(true, Self::parse_block_contents)?;
         let end = self.expect(TokenKind::RBrace)?.span;
 
-        // The body block runs from `->` (or its first statement) to `}`, so it
-        // never shares a span with the closure or with its own first statement.
-        let body_start = arrow.unwrap_or_else(|| stmts.first().map_or(end, |s| s.span));
+        // The body block runs from `->` (or its first item) to `}`, so it never
+        // shares a span with the closure or with its own first item.
+        let first_item = statements
+            .first()
+            .map(|s| s.span)
+            .or(tail.as_ref().map(|t| t.span));
+        let body_start = arrow.or(first_item).unwrap_or(end);
         Ok(Expr::new(
             ExprKind::Closure {
                 params,
-                body: BlockExpr {
-                    stmts,
+                body: Block {
+                    statements,
+                    tail,
                     span: body_start.merge(end),
                 },
             },
@@ -1151,8 +1167,11 @@ impl Parser {
             TokenKind::LBrace => self.parse_trailing_lambda_call(left),
             // Indexing: target[index]
             TokenKind::LBracket => self.parse_index(left),
-            // Assignment: = (non-associative, disallowing chained assignments)
-            TokenKind::Eq => self.parse_assign(left),
+            // Assignments are statements, parsed by `parse_statement_or_expression`.
+            TokenKind::Eq => Err(ParseError::new(
+                "An assignment is a statement, not an expression; it cannot be used as a value",
+                self.peek().span,
+            )),
             // Binary operators
             _ => self.parse_binary(left),
         }
@@ -1259,38 +1278,6 @@ impl Parser {
         ))
     }
 
-    fn parse_assign(&mut self, left: Expr) -> Result<Expr, ParseError> {
-        let eq_tok = self.bump();
-        let right = self.parse_expr(Precedence::Assign)?;
-        if matches!(right.kind, ExprKind::Assign { .. })
-            || matches!(left.kind, ExprKind::Assign { .. })
-        {
-            return Err(ParseError::new(
-                "Chained assignments are not allowed; use separate statements",
-                eq_tok.span,
-            ));
-        }
-        let is_place = match &left.kind {
-            ExprKind::Ident(_) | ExprKind::Index { .. } => true,
-            ExprKind::MemberAccess { is_safe_nav, .. } => !is_safe_nav,
-            _ => false,
-        };
-        if !is_place {
-            return Err(ParseError::new(
-                "Invalid assignment target; expected a variable, field access or index expression",
-                left.span,
-            ));
-        }
-        let span = left.span.merge(right.span);
-        Ok(Expr::new(
-            ExprKind::Assign {
-                target: Box::new(left),
-                value: Box::new(right),
-            },
-            span,
-        ))
-    }
-
     fn parse_binary(&mut self, left: Expr) -> Result<Expr, ParseError> {
         let op = match self.token_to_binary_op(self.peek_kind()) {
             Some(op) => op,
@@ -1332,24 +1319,27 @@ impl Parser {
             TokenKind::PipePipe => Some(BinaryOp::Or),
             TokenKind::QuestionColon => Some(BinaryOp::Elvis),
             TokenKind::DotDot => Some(BinaryOp::Range),
+            TokenKind::DotDotLess => Some(BinaryOp::HalfOpenRange),
             _ => None,
         }
     }
 
-    fn parse_block_expr(&mut self) -> Result<BlockExpr, ParseError> {
+    fn parse_block_expr(&mut self) -> Result<Block, ParseError> {
         let start = self.expect(TokenKind::LBrace)?.span;
-        let stmts = self.with_newlines(true, Self::parse_stmts)?;
+        let (statements, tail) = self.with_newlines(true, Self::parse_block_contents)?;
         let end = self.expect(TokenKind::RBrace)?.span;
-        Ok(BlockExpr {
-            stmts,
+        Ok(Block {
+            statements,
+            tail,
             span: start.merge(end),
         })
     }
 
-    /// Statements up to (not including) the closing `}` of a block or closure.
-    /// Two statements on one line must be separated by `;`.
-    fn parse_stmts(&mut self) -> Result<Vec<Expr>, ParseError> {
-        let mut stmts = Vec::new();
+    /// The items of a block or closure body up to (not including) the closing
+    /// `}`. Two items on one line must be separated by `;`. A final expression
+    /// statement becomes the tail, whether or not a `;` follows it.
+    fn parse_block_contents(&mut self) -> Result<(Vec<Statement>, Option<Box<Expr>>), ParseError> {
+        let mut statements = Vec::new();
         loop {
             while self.peek_kind() == &TokenKind::Semicolon {
                 self.bump();
@@ -1357,32 +1347,200 @@ impl Parser {
             if self.peek_kind() == &TokenKind::RBrace || self.is_eof() {
                 break;
             }
-            stmts.push(self.parse_statement()?);
+            statements.push(self.parse_statement()?);
             if self.peek_kind() != &TokenKind::Semicolon {
                 self.expect_separated("statements", "a newline or ';'")?;
             }
         }
-        Ok(stmts)
+        let tail = match statements.last().map(|s| &s.kind) {
+            Some(StatementKind::Expression(_)) => match statements.pop().map(|s| s.kind) {
+                Some(StatementKind::Expression(expr)) => Some(Box::new(expr)),
+                _ => unreachable!("the last statement is an expression statement"),
+            },
+            _ => None,
+        };
+        Ok((statements, tail))
     }
 
-    /// One statement: a declaration, a nested scope block, or an expression.
-    fn parse_statement(&mut self) -> Result<Expr, ParseError> {
+    /// One statement: a declaration, a nested scope block, an assignment or an
+    /// expression.
+    fn parse_statement(&mut self) -> Result<Statement, ParseError> {
         match self.peek_kind() {
             TokenKind::Val | TokenKind::Var => self.nested(Self::parse_local_var),
+            TokenKind::While => self.nested(Self::parse_while),
+            TokenKind::Do => self.nested(Self::parse_do_while),
+            TokenKind::For => self.nested(Self::parse_for),
             // A brace at the start of a statement opens a scope, not a closure.
-            TokenKind::LBrace => self.nested(Self::parse_block),
-            _ => self.parse_expr(Precedence::Lowest),
+            TokenKind::LBrace => {
+                let block = self.nested(Self::parse_block)?;
+                let span = block.span;
+                Ok(Statement::new(StatementKind::Expression(block), span))
+            }
+            _ => self.parse_assignment_or_expression(),
         }
+    }
+
+    /// An assignment `target = value`, or an expression statement. The target
+    /// is parsed above assignment precedence so that `=` ends it; assignments
+    /// are non-associative, so `a = b = c` is rejected.
+    fn parse_assignment_or_expression(&mut self) -> Result<Statement, ParseError> {
+        let target = self.parse_expr(Precedence::Assign)?;
+        if self.peek_kind() != &TokenKind::Eq || self.at_line_break() {
+            let span = target.span;
+            return Ok(Statement::new(StatementKind::Expression(target), span));
+        }
+        self.bump(); // '='
+        let value = self.parse_expr(Precedence::Assign)?;
+        if self.peek_kind() == &TokenKind::Eq && !self.at_line_break() {
+            return Err(ParseError::new(
+                "Chained assignments are not allowed; use separate statements",
+                self.peek().span,
+            ));
+        }
+        let is_place = match &target.kind {
+            ExprKind::Ident(_) | ExprKind::Index { .. } => true,
+            ExprKind::MemberAccess { is_safe_nav, .. } => !is_safe_nav,
+            _ => false,
+        };
+        if !is_place {
+            return Err(ParseError::new(
+                "Invalid assignment target; expected a variable, field access or index expression",
+                target.span,
+            ));
+        }
+        let span = target.span.merge(value.span);
+        Ok(Statement::new(
+            StatementKind::Assign { target, value },
+            span,
+        ))
     }
 
     /// The body of an `if`/`else` or `when` branch: a block when braced,
-    /// otherwise a single expression.
+    /// otherwise a single expression, or an assignment wrapped in a block with
+    /// no tail.
     fn parse_branch_body(&mut self) -> Result<Expr, ParseError> {
         if self.peek_kind() == &TokenKind::LBrace {
-            self.nested(Self::parse_block)
-        } else {
-            self.parse_expr(Precedence::Lowest)
+            return self.nested(Self::parse_block);
         }
+        let statement = self.parse_assignment_or_expression()?;
+        Ok(Self::statement_as_branch(statement))
+    }
+
+    /// An unbraced branch body as an expression: an expression statement is the
+    /// expression itself, and anything else becomes a block with no tail.
+    fn statement_as_branch(statement: Statement) -> Expr {
+        match statement.kind {
+            StatementKind::Expression(expr) => expr,
+            kind => {
+                let span = statement.span;
+                Expr::new(
+                    ExprKind::Block(Block {
+                        statements: vec![Statement::new(kind, span)],
+                        tail: None,
+                        span,
+                    }),
+                    span,
+                )
+            }
+        }
+    }
+
+    /// A parenthesized loop condition: `(condition)`.
+    fn parse_loop_condition(&mut self) -> Result<Expr, ParseError> {
+        self.expect(TokenKind::LParen)?;
+        let condition = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
+        self.expect(TokenKind::RParen)?;
+        Ok(condition)
+    }
+
+    /// The body of a `while` or `for` loop: a block when braced, otherwise a
+    /// single expression or assignment, as the block's only item.
+    fn parse_loop_body(&mut self) -> Result<Block, ParseError> {
+        if self.peek_kind() == &TokenKind::LBrace {
+            return self.nested(Self::parse_block_expr);
+        }
+        let statement = self.parse_assignment_or_expression()?;
+        let span = statement.span;
+        Ok(match statement.kind {
+            StatementKind::Expression(expr) => Block {
+                statements: Vec::new(),
+                tail: Some(Box::new(expr)),
+                span,
+            },
+            kind => Block {
+                statements: vec![Statement::new(kind, span)],
+                tail: None,
+                span,
+            },
+        })
+    }
+
+    /// `while (condition) body`.
+    fn parse_while(&mut self) -> Result<Statement, ParseError> {
+        let start = self.expect(TokenKind::While)?.span;
+        let condition = self.parse_loop_condition()?;
+        let body = self.parse_loop_body()?;
+        let span = start.merge(body.span);
+        Ok(Statement::new(
+            StatementKind::While { condition, body },
+            span,
+        ))
+    }
+
+    /// `do { body } while (condition)`. The body must be braced.
+    fn parse_do_while(&mut self) -> Result<Statement, ParseError> {
+        let start = self.expect(TokenKind::Do)?.span;
+        if self.peek_kind() != &TokenKind::LBrace {
+            return Err(ParseError::new(
+                format!(
+                    "Expected '{{' after 'do'; a 'do' loop body must be braced, found '{}'",
+                    self.peek_kind()
+                ),
+                self.peek().span,
+            ));
+        }
+        let body = self.nested(Self::parse_block_expr)?;
+        self.expect(TokenKind::While)?;
+        let condition = self.parse_loop_condition()?;
+        // The statement ends at the closing parenthesis, the last token consumed.
+        let span = start.merge(self.tokens[self.cursor - 1].span);
+        Ok(Statement::new(
+            StatementKind::DoWhile { body, condition },
+            span,
+        ))
+    }
+
+    /// `for (variable in iterable) body`.
+    fn parse_for(&mut self) -> Result<Statement, ParseError> {
+        let start = self.expect(TokenKind::For)?.span;
+        self.expect(TokenKind::LParen)?;
+        let (variable, variable_span) = self.expect_ident()?;
+        self.expect(TokenKind::In)?;
+        let iterable = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
+        self.expect(TokenKind::RParen)?;
+        let body = self.parse_loop_body()?;
+        let span = start.merge(body.span);
+        Ok(Statement::new(
+            StatementKind::For {
+                variable,
+                variable_span,
+                iterable,
+                body,
+            },
+            span,
+        ))
+    }
+
+    /// `break` or `continue`. Neither takes an operand, so anything after it on
+    /// the same line needs a separator.
+    fn parse_jump(&mut self) -> Expr {
+        let token = self.bump();
+        let kind = match token.kind {
+            TokenKind::Break => ExprKind::Break,
+            TokenKind::Continue => ExprKind::Continue,
+            _ => unreachable!("parse_prefix only dispatches jumps here"),
+        };
+        Expr::new(kind, token.span)
     }
 
     /// A block in block position, as an expression.
@@ -1505,21 +1663,20 @@ impl Parser {
         }
         self.bump(); // 'in'
         let range_expr = self.parse_expr(Precedence::Lowest)?;
-        if let ExprKind::Binary {
-            op: BinaryOp::Range,
-            left,
-            right,
-        } = range_expr.kind
-        {
-            Ok(WhenPattern::InRange {
+        match range_expr.kind {
+            ExprKind::Binary {
+                op: op @ (BinaryOp::Range | BinaryOp::HalfOpenRange),
+                left,
+                right,
+            } => Ok(WhenPattern::InRange {
                 start: *left,
                 end: *right,
-            })
-        } else {
-            Err(ParseError::new(
-                "Expected range expression 'a..b' after 'in'",
+                end_inclusive: op == BinaryOp::Range,
+            }),
+            _ => Err(ParseError::new(
+                "Expected range expression 'a..b' or 'a..<b' after 'in'",
                 range_expr.span,
-            ))
+            )),
         }
     }
 
@@ -1538,7 +1695,7 @@ impl Parser {
         }
     }
 
-    fn parse_local_var(&mut self) -> Result<Expr, ParseError> {
+    fn parse_local_var(&mut self) -> Result<Statement, ParseError> {
         let start = self.peek().span;
         let is_var = match self.peek_kind() {
             TokenKind::Var => {
@@ -1563,12 +1720,12 @@ impl Parser {
         let initializer = self.parse_initializer()?;
         let span = start.merge(initializer.span);
 
-        Ok(Expr::new(
-            ExprKind::LocalVar {
+        Ok(Statement::new(
+            StatementKind::Local {
                 is_var,
                 name,
                 ty,
-                initializer: Box::new(initializer),
+                initializer,
             },
             span,
         ))

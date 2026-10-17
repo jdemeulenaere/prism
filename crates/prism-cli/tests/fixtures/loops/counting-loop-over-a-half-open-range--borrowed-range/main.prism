@@ -1,0 +1,4 @@
+// expect: ok
+fun f(r: &Range) {
+    for (i in r) { }
+}

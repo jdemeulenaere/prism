@@ -1,0 +1,2 @@
+// expect: E4005
+fun f(): Int { var x = 0; x = 1 }

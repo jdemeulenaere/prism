@@ -1,0 +1,2 @@
+// expect: E4002
+fun f(x: Int): String = when (x) { in 0..<"z" -> "small", else -> "large" }

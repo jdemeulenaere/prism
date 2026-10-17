@@ -1,0 +1,2 @@
+// expect: E4002
+fun f(n: Int) { while (n) { } }

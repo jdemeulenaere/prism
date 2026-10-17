@@ -1,7 +1,8 @@
 //! Declarations in Prism AST.
 
-use crate::expr::{BlockExpr, Expr};
+use crate::expr::Expr;
 use crate::span::Span;
+use crate::statement::Block;
 use crate::types::Type;
 use std::fmt;
 
@@ -80,7 +81,7 @@ pub struct Param {
 /// A function body: either a block `{ ... }` or single expression `= expr`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FunctionBody {
-    Block(BlockExpr),
+    Block(Block),
     Expr(Expr),
 }
 

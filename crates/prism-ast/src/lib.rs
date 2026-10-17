@@ -7,10 +7,12 @@ pub mod decl;
 pub mod expr;
 pub mod module;
 pub mod span;
+pub mod statement;
 pub mod types;
 
 pub use decl::*;
 pub use expr::*;
 pub use module::*;
 pub use span::*;
+pub use statement::*;
 pub use types::*;

@@ -1,0 +1,3 @@
+// expect: E4015
+fun run(f: () -> Unit) { }
+fun g() { while (true) { run { continue } } }

@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(n: Int) {
+    val r: Int = 0..<n
+}

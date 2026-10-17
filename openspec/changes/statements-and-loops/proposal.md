@@ -31,7 +31,7 @@ Prism has no loops, so iteration can only be written as recursion. The borrow ch
 - `crates/prism-ast`: new `Statement` and `Block` types replacing `BlockExpr.stmts: Vec<Expr>`. `ExprKind::LocalVar` and `ExprKind::Assign` move to `Statement`. New `ExprKind::Break` and `ExprKind::Continue`, and an end-exclusive form for ranges and `when`'s `in` patterns.
 - `crates/prism-parser`: statement parsing, loop parsing, `break`/`continue` (bare, like `return` before a token that cannot start an expression), and `..<` in the precedence table.
 - `crates/prism-typechecker`: block checking over statements plus tail, loop typing, a loop-depth stack that resets at closure boundaries for `E4015`, and `Range` for `..<`.
-- `crates/prism-abi`: unaffected. Loops live in bodies, which never reach the ABI.
+- `crates/prism-abi`: exported signatures and ABI hashes are unaffected, since loops live in bodies. Only the span-free body hash of generic functions walks the new statement kinds.
 - `crates/prism-cli`: renders `E4015`. New `.prism` fixtures under `tests/fixtures/loops/`.
 - `openspec/specs/diagnostics/spec.md`: `E4015` (`BreakOutsideLoop`) is added to the catalog, which is not a requirement and is edited directly, as past changes did.
 - `docs/architecture.md` §4: the runtime meaning of loops, `break`, `continue` and `..<` is recorded as planned semantics awaiting code generation.

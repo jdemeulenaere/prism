@@ -1,0 +1,4 @@
+// expect: E2001
+fun f(c: Bool) {
+    while (c) val x = 1
+}
