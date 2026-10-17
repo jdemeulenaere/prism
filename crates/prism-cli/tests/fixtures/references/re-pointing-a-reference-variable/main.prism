@@ -1,0 +1,8 @@
+// expect: ok
+fun f(): Int {
+    val a = 1
+    val b = 2
+    var r: &Int = &a
+    r = &b
+    return r
+}

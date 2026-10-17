@@ -1,0 +1,5 @@
+// expect: E4017
+fun f(m: &mut String) {
+    var b = "x"
+    b = m
+}

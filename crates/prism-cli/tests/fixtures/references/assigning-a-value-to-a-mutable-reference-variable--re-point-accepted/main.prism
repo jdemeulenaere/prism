@@ -1,0 +1,7 @@
+// expect: ok
+fun f() {
+    var x = 1
+    var y = 2
+    var r: &mut Int = &mut x
+    r = &mut y
+}

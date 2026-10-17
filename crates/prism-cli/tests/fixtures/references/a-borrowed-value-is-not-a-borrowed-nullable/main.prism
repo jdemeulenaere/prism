@@ -1,0 +1,5 @@
+// expect: E4004
+fun g(r: &Int?) {}
+fun f(a: &Int) {
+    g(a)
+}

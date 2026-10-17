@@ -770,6 +770,7 @@ mod tests {
             "fun f() { a = 1 }",
             "fun f() { a.b = 1 }",
             "fun f() { a[0] = 1 }",
+            "fun f() { *a = 1 }",
         ] {
             parse_source(src).unwrap();
         }

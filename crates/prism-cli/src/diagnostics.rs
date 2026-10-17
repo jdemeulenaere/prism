@@ -193,6 +193,20 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
     }
 
     match err {
+        TypeError::ImmutabilityViolation {
+            help: Some(help), ..
+        }
+        | TypeError::TypeMismatch {
+            help: Some(help), ..
+        }
+        | TypeError::ArgumentTypeMismatch {
+            help: Some(help), ..
+        }
+        | TypeError::ReturnTypeMismatch {
+            help: Some(help), ..
+        } => {
+            out.push_str(&format!("   = help: {}\n", help));
+        }
         TypeError::ImmutabilityViolation { .. } => {
             out.push_str("   = help: use 'var' to declare a mutable binding or field\n");
         }
@@ -249,11 +263,30 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 ));
             }
         }
-        TypeError::CannotMoveOut { borrow, clone, .. } => {
-            out.push_str(&format!("   = help: borrow it instead: '{}'\n", borrow));
-            if let Some(clone) = clone {
-                out.push_str(&format!("   = help: or clone it: '{}'\n", clone));
+        TypeError::CannotMoveOut {
+            borrow, clone, ty, ..
+        } => match borrow {
+            Some(borrow) => {
+                out.push_str(&format!("   = help: borrow it instead: '{}'\n", borrow));
+                if let Some(clone) = clone {
+                    out.push_str(&format!("   = help: or clone it: '{}'\n", clone));
+                }
             }
+            // The source is already a borrow: clone it, or keep borrowing where it is used.
+            None => {
+                if let Some(clone) = clone {
+                    out.push_str(&format!("   = help: clone it: '{}'\n", clone));
+                }
+                out.push_str(&format!(
+                    "   = help: {}take a '&{}' where the value is used, instead of a '{}'\n",
+                    if clone.is_some() { "or " } else { "" },
+                    ty,
+                    ty
+                ));
+            }
+        },
+        TypeError::NotAReference { .. } => {
+            out.push_str("   = help: '*r = v' writes through a reference 'r'; assign a variable or field directly with 'x = v'\n");
         }
         TypeError::NotCloneable { ty, .. } => {
             let help = match ty {
@@ -323,6 +356,7 @@ mod tests {
             expected: prism_typechecker::Type::Int,
             found: prism_typechecker::Type::String,
             span: prism_ast::Span::new(15, 21, 2, 11),
+            help: None,
         };
         let src = "fun main() {\n    val x: Int = \"hello\"\n}";
         let formatted = format_type_error(Path::new("main.prism"), Some(src), &err);
@@ -367,5 +401,85 @@ mod tests {
         );
         assert!(out.contains("help: borrow it instead: '&s.token'"), "{out}");
         assert!(!out.contains("clone"), "{out}");
+    }
+
+    #[test]
+    fn test_cannot_move_out_of_a_borrow_help() {
+        let out = render_type_errors(
+            "struct User : Clone { val name: String }\nfun take(u: User) {}\nfun f(u: &User) {\n    take(u)\n}\n",
+        );
+        assert!(
+            out.contains("error[E4017]: cannot move out of borrow 'u'"),
+            "{out}"
+        );
+        assert!(out.contains("help: clone it: 'u.clone()'"), "{out}");
+        assert!(
+            out.contains("help: or take a '&User' where the value is used"),
+            "{out}"
+        );
+        assert!(!out.contains("borrow it instead"), "{out}");
+    }
+
+    #[test]
+    fn test_cannot_move_out_of_a_borrow_help_without_clone() {
+        let out = render_type_errors("struct Token { val id: Int }\nfun f(t: &Token): Token = t\n");
+        assert!(
+            out.contains("error[E4017]: cannot move out of borrow 't'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("help: take a '&Token' where the value is used"),
+            "{out}"
+        );
+        assert!(!out.contains("clone"), "{out}");
+    }
+
+    #[test]
+    fn test_borrow_help_lines() {
+        let out = render_type_errors(
+            "struct User { val name: String }\nfun bump(r: &mut Int) {}\nfun f(name: String, u: &User): &String {\n    var x = 1\n    bump(x)\n    val r: &String = name\n    return u.name\n}\n",
+        );
+        assert!(
+            out.contains("help: pass a mutable borrow: '&mut x'"),
+            "{out}"
+        );
+        assert!(out.contains("help: borrow it: '&name'"), "{out}");
+        assert!(out.contains("help: borrow it: '&u.name'"), "{out}");
+        assert!(!out.contains("E4017"), "{out}");
+    }
+
+    #[test]
+    fn test_mutable_borrow_of_a_val_reference_binding_help() {
+        let out = render_type_errors("fun f(r: &mut Int) {\n    val m = &mut r\n}\n");
+        assert!(out.contains("error[E4003]"), "{out}");
+        assert!(
+            out.contains("help: 'r' is already a mutable borrow: pass 'r' itself"),
+            "{out}"
+        );
+        assert!(!out.contains("use 'var'"), "{out}");
+    }
+
+    #[test]
+    fn test_write_through_help_lines() {
+        let out = render_type_errors(
+            "fun f(r: &mut Int, s: &Int) {\n    r = 5\n    var x = 1\n    var m: &mut Int = &mut x\n    m = 6\n    *x = 2\n    *s = 3\n}\n",
+        );
+        assert!(
+            out.contains(
+                "help: to write through the reference instead of re-pointing it, use '*r = 5'"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("use '*m = 6'"), "{out}");
+        assert!(
+            out.contains("error[E4019]: cannot write through a value of type 'Int'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("error[E4003]: cannot write through 's'"),
+            "{out}"
+        );
+        // Each statement reports one error.
+        assert_eq!(out.matches("error[").count(), 4, "{out}");
     }
 }

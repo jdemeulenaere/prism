@@ -1,0 +1,9 @@
+// expect: ok
+fun f(c: Bool, n: Int, r: &mut Int) {
+    if (c) *r = 1 else *r = 2
+    when (n) {
+        0 -> *r = 1
+        else -> {}
+    }
+    while (c) *r = 0
+}

@@ -29,6 +29,9 @@ pub enum Precedence {
 /// `E2002` instead of aborting the process.
 pub const MAX_NESTING_DEPTH: usize = 256;
 
+/// The error for a prefix `*` anywhere but at the start of an assignment target.
+const DEREF_OUTSIDE_TARGET: &str = "A prefix '*' writes through a reference and is only allowed on the left of '=', as in '*r = v'; reads through references are implicit";
+
 pub struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
@@ -962,6 +965,10 @@ impl Parser {
                 self.parse_unary()
             }
 
+            // `*` only writes through a reference, as an assignment target, which
+            // `parse_assignment_or_expression` parses before reaching here.
+            TokenKind::Star => Err(ParseError::new(DEREF_OUTSIDE_TARGET, self.peek().span)),
+
             // Grouping: (expr)
             TokenKind::LParen => self.parse_group(),
 
@@ -1097,6 +1104,7 @@ impl Parser {
                 | TokenKind::Bang
                 | TokenKind::Amp
                 | TokenKind::AmpAmp
+                | TokenKind::Star
                 | TokenKind::LParen
                 | TokenKind::LBrace
                 | TokenKind::If
@@ -1398,8 +1406,17 @@ impl Parser {
     /// is parsed above assignment precedence so that `=` ends it; assignments
     /// are non-associative, so `a = b = c` is rejected.
     fn parse_assignment_or_expression(&mut self) -> Result<Statement, ParseError> {
-        let target = self.parse_expr(Precedence::Assign)?;
+        let is_write_through = self.peek_kind() == &TokenKind::Star;
+        let start_span = self.peek().span;
+        let target = if is_write_through {
+            self.nested(Self::parse_deref_target)?
+        } else {
+            self.parse_expr(Precedence::Assign)?
+        };
         if self.peek_kind() != &TokenKind::Eq || self.at_line_break() {
+            if is_write_through {
+                return Err(ParseError::new(DEREF_OUTSIDE_TARGET, start_span));
+            }
             let span = target.span;
             return Ok(Statement::new(StatementKind::Expression(target), span));
         }
@@ -1412,7 +1429,11 @@ impl Parser {
             ));
         }
         let is_place = match &target.kind {
-            ExprKind::Ident(_) | ExprKind::Index { .. } => true,
+            ExprKind::Ident(_)
+            | ExprKind::Index { .. }
+            | ExprKind::Unary {
+                op: UnaryOp::Deref, ..
+            } => true,
             ExprKind::MemberAccess { is_safe_nav, .. } => !is_safe_nav,
             _ => false,
         };
@@ -1425,6 +1446,26 @@ impl Parser {
         let span = target.span.merge(value.span);
         Ok(Statement::new(
             StatementKind::Assign { target, value },
+            span,
+        ))
+    }
+
+    /// A write-through target `*e`, `**e`, ...: one `Deref` per `*` around an operand parsed
+    /// at prefix precedence, so postfix operators bind tighter (`*r.x` is `*(r.x)`). Each `*`
+    /// is one nesting level.
+    fn parse_deref_target(&mut self) -> Result<Expr, ParseError> {
+        let star = self.expect(TokenKind::Star)?.span;
+        let inner = if self.peek_kind() == &TokenKind::Star {
+            self.nested(Self::parse_deref_target)?
+        } else {
+            self.parse_expr(Precedence::Prefix)?
+        };
+        let span = star.merge(inner.span);
+        Ok(Expr::new(
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                expr: Box::new(inner),
+            },
             span,
         ))
     }

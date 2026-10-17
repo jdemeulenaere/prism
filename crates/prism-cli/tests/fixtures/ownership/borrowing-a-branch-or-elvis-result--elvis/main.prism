@@ -1,0 +1,7 @@
+// expect: E4017
+struct User {
+    val nick: String?
+}
+fun f(u: User) {
+    val s = &(u.nick ?: "x")
+}

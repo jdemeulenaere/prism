@@ -1,0 +1,5 @@
+// expect: ok
+fun greet(name: &String) {}
+fun g(c: Bool) {
+    greet(if (c) "a" else "b")
+}

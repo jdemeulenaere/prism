@@ -1,0 +1,5 @@
+// expect: ok
+fun f(r: &mut Int, b: Int) {
+    val a = b
+    *r = 5
+}

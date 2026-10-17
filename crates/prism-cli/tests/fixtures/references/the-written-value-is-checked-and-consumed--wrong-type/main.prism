@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(n: &mut Int) {
+    *n = "x"
+}

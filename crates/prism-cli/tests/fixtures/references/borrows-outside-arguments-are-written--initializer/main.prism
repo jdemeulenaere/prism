@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(name: String) {
+    val r: &String = name
+}

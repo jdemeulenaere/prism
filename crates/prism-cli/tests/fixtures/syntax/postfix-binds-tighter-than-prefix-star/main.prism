@@ -1,0 +1,7 @@
+// expect: E4019
+struct P {
+    var x: Int
+}
+fun f(r: &mut P) {
+    *r.x = 1
+}

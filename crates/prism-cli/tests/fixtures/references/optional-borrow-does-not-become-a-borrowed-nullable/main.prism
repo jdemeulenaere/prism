@@ -1,0 +1,5 @@
+// expect: E4004
+fun g(r: &String?) {}
+fun f(r: (&String)?) {
+    g(r)
+}

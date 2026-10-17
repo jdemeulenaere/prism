@@ -1,0 +1,5 @@
+// expect: ok
+struct User {
+    val id: Int
+}
+fun f(n: &User?): Int? = n?.id

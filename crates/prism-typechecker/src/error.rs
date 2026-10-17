@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::{Span, TypeMarker};
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4015`).
+/// Semantic and type checking error categories (`E4001` - `E4019`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -15,13 +15,20 @@ pub enum TypeError {
         expected: Type,
         found: Type,
         span: Span,
+        /// A fix to suggest, such as borrowing the value.
+        help: Option<String>,
     },
 
     /// E4002: A struct or enum name used where a value is expected (`val u = User`).
     TypeNameAsValue { name: String, span: Span },
 
     /// E4003: Reassigning to an immutable `val` binding or mutating a `val` struct instance/field.
-    ImmutabilityViolation { message: String, span: Span },
+    ImmutabilityViolation {
+        message: String,
+        span: Span,
+        /// A fix to suggest instead of the generic one (declaring a `var`).
+        help: Option<String>,
+    },
 
     /// E4004: Function invocation argument count or parameter type incompatibility.
     CallSignatureMismatch { message: String, span: Span },
@@ -32,6 +39,8 @@ pub enum TypeError {
         expected: Type,
         found: Type,
         span: Span,
+        /// A fix to suggest, such as borrowing the value.
+        help: Option<String>,
     },
 
     /// E4005: Returned expression type is incompatible with declared function return type.
@@ -39,6 +48,8 @@ pub enum TypeError {
         expected: Type,
         found: Type,
         span: Span,
+        /// A fix to suggest, such as borrowing the value.
+        help: Option<String>,
     },
 
     /// E4006: Struct field not found or field access attempted on a non-struct type.
@@ -105,16 +116,20 @@ pub enum TypeError {
     /// `clone()` is called on a value whose type is not `Clone`.
     NotCloneable { ty: Type, span: Span },
 
-    /// A non-`Copy` value is moved out of a field, a safe navigation, an index or a top-level
-    /// `val`. `source` describes it ("field 'name' of 'u'"); `borrow` and `clone` are the fixes
-    /// to suggest, `clone` only when the type is `Clone`.
+    /// E4017: A non-`Copy` value is moved out of a field, a safe navigation, an index, a top-level
+    /// `val` or a borrow. `source` describes it ("field 'name' of 'u'", "borrow 'u'"); `borrow`
+    /// and `clone` are the fixes to suggest, `borrow` only when the source is not already a borrow
+    /// and `clone` only when the type is `Clone`.
     CannotMoveOut {
         source: String,
         ty: Type,
-        borrow: String,
+        borrow: Option<String>,
         clone: Option<String>,
         span: Span,
     },
+
+    /// E4019: `*` writes through a value that is not a reference (`*x = 1` for `x: Int`).
+    NotAReference { ty: Type, span: Span },
 }
 
 impl TypeError {
@@ -141,6 +156,7 @@ impl TypeError {
             TypeError::InvalidMarkerDeclaration { .. } => "E4016",
             TypeError::CannotMoveOut { .. } => "E4017",
             TypeError::NotCloneable { .. } => "E4018",
+            TypeError::NotAReference { .. } => "E4019",
         }
     }
 
@@ -167,6 +183,7 @@ impl TypeError {
             TypeError::InvalidMarkerDeclaration { span, .. } => *span,
             TypeError::NotCloneable { span, .. } => *span,
             TypeError::CannotMoveOut { span, .. } => *span,
+            TypeError::NotAReference { span, .. } => *span,
         }
     }
 
@@ -278,9 +295,22 @@ impl TypeError {
             TypeError::NotCloneable { ty, .. } => {
                 format!("'{}' is not 'Clone', so it cannot be cloned", ty)
             }
+            TypeError::CannotMoveOut {
+                source,
+                ty,
+                borrow: None,
+                ..
+            } => format!(
+                "cannot move out of {}: its type '{}' is not 'Copy', so it cannot be copied out of the borrow",
+                source, ty
+            ),
             TypeError::CannotMoveOut { source, ty, .. } => format!(
                 "cannot move out of {}: its type '{}' is not 'Copy', and a move takes a whole value",
                 source, ty
+            ),
+            TypeError::NotAReference { ty, .. } => format!(
+                "cannot write through a value of type '{}': '*' needs a reference",
+                ty
             ),
         }
     }

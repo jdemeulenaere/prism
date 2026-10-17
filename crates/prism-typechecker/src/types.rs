@@ -85,7 +85,8 @@ impl Type {
     /// - `Error` unifies with any type (suppresses cascade errors)
     /// - `Nothing <= T` for all `T` (divergent expressions can be placed in any value branch)
     /// - `T <= T?` for all `T` (non-null value is assignable to nullable)
-    /// - `&mut T <= &T` (mutable borrow can coerce to shared borrow at call sites)
+    /// - `&mut T <= &T` (mutable borrow can coerce to shared borrow at call sites); references are
+    ///   otherwise invariant in their referent
     /// - Structs and Enums are nominal (matched by [`NominalId`])
     /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Float`)
     pub fn is_assignable_to(&self, expected: &Type) -> bool {
@@ -122,8 +123,9 @@ impl Type {
             }
         }
 
-        // &T <= &U if T <= U; &mut T <= &mut U only if T and U are mutually assignable,
-        // because a value of type U could be written back through the borrow.
+        // References are invariant: a reference points at existing storage, so it cannot change
+        // the representation of its referent (`&Int` is not a `&(Int?)`). `&mut` may weaken to
+        // `&` at the outer layer, and behind shared borrows.
         if let (
             Type::Reference {
                 mutable: self_mut,
@@ -135,29 +137,11 @@ impl Type {
             },
         ) = (self, expected)
         {
-            if self_mut == exp_mut
-                && self_inner.is_assignable_to(exp_inner)
-                && (!*exp_mut || exp_inner.is_assignable_to(self_inner))
-            {
-                return true;
-            }
-        }
-
-        // &mut T <= &T
-        if let (
-            Type::Reference {
-                mutable: true,
-                inner: self_inner,
-            },
-            Type::Reference {
-                mutable: false,
-                inner: exp_inner,
-            },
-        ) = (self, expected)
-        {
-            if self_inner.is_assignable_to(exp_inner) {
-                return true;
-            }
+            return if *exp_mut {
+                *self_mut && (self_inner == exp_inner || is_error_pair(self_inner, exp_inner))
+            } else {
+                self_inner.is_shared_view_of(exp_inner)
+            };
         }
 
         // Function subtyping: matching compose flag, contravariant params, covariant return
@@ -187,6 +171,24 @@ impl Type {
         }
 
         false
+    }
+
+    /// Whether a shared borrow of `self` can be read as a shared borrow of `target`: the two are
+    /// the same type, except that a reference inside `self` may be `&mut` where `target` has `&`.
+    fn is_shared_view_of(&self, target: &Type) -> bool {
+        if self == target || is_error_pair(self, target) {
+            return true;
+        }
+        match (self, target) {
+            (
+                Type::Reference { inner, .. },
+                Type::Reference {
+                    mutable: false,
+                    inner: target_inner,
+                },
+            ) => inner.is_shared_view_of(target_inner),
+            _ => false,
+        }
     }
 
     /// Joins the types of two branches (`if`/`else`, `when`) into the least type both are
@@ -413,6 +415,11 @@ impl fmt::Display for Type {
     }
 }
 
+/// Whether either type is the error type, which is compatible with everything.
+fn is_error_pair(a: &Type, b: &Type) -> bool {
+    a == &Type::Error || b == &Type::Error
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +486,36 @@ mod tests {
         assert!(Type::Error.is_assignable_to(&Type::Int));
         assert!(Type::Int.is_assignable_to(&Type::Error));
         assert!(Type::Error.is_assignable_to(&Type::Error));
+    }
+
+    #[test]
+    fn references_are_invariant_in_their_referent() {
+        let shared = |t: Type| Type::Reference {
+            mutable: false,
+            inner: Box::new(t),
+        };
+        let mutable = |t: Type| Type::Reference {
+            mutable: true,
+            inner: Box::new(t),
+        };
+        let nullable_int = Type::Nullable(Box::new(Type::Int));
+        // A reference cannot change its referent's representation.
+        assert!(!shared(Type::Int).is_assignable_to(&shared(nullable_int.clone())));
+        assert!(!mutable(Type::Int).is_assignable_to(&mutable(nullable_int.clone())));
+        assert!(!mutable(Type::Int).is_assignable_to(&shared(nullable_int.clone())));
+        assert!(!shared(Type::Nothing).is_assignable_to(&shared(Type::Int)));
+        // `&mut` weakens to `&`, at the top and behind shared borrows only.
+        assert!(mutable(Type::Int).is_assignable_to(&shared(Type::Int)));
+        assert!(shared(mutable(Type::Int)).is_assignable_to(&shared(shared(Type::Int))));
+        assert!(mutable(mutable(Type::Int)).is_assignable_to(&shared(shared(Type::Int))));
+        assert!(!mutable(mutable(Type::Int)).is_assignable_to(&mutable(shared(Type::Int))));
+        assert!(!shared(Type::Int).is_assignable_to(&mutable(Type::Int)));
+        // Nullable references keep the nullable rules.
+        assert!(shared(Type::Int).is_assignable_to(&Type::Nullable(Box::new(shared(Type::Int)))));
+        assert!(Type::Nullable(Box::new(mutable(Type::Int)))
+            .is_assignable_to(&Type::Nullable(Box::new(shared(Type::Int)))));
+        // The error type is still absorbed behind a reference.
+        assert!(shared(Type::Error).is_assignable_to(&shared(Type::Int)));
+        assert!(mutable(Type::Int).is_assignable_to(&mutable(Type::Error)));
     }
 }

@@ -1,0 +1,14 @@
+// expect: ok
+struct Point : Copy {
+    val x: Int
+}
+struct Line {
+    val start: Point
+}
+fun f(a: &Int, p: &mut Point): Point {
+    val x: Int = a
+    var y = 0
+    y = a
+    val l = Line(p)
+    return p
+}

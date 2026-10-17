@@ -1,0 +1,7 @@
+// expect: E4017
+struct Tag {
+    val s: String
+}
+fun f(r: &String) {
+    val t = Tag(r)
+}

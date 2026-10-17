@@ -1,0 +1,5 @@
+// expect: ok
+fun greet(n: &String) {}
+fun f(n: &String?) {
+    greet(n ?: &"anon")
+}

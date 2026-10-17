@@ -606,14 +606,23 @@ fn borrowed_boolean_as_a_condition() {
     assert_ok("fun f(c: &Bool): Int = when {\n    c -> 1\n    else -> 2\n}\n");
 }
 
+// A `Copy` value is copied out of a borrow where a value is expected (`references`, "Copy-out of
+// a borrowed primitive"); a non-`Copy` one is a move out of the borrow (`type-system`, "Borrow
+// passed where a value is expected").
 #[test]
 fn borrow_passed_where_a_value_is_expected() {
+    assert_ok("fun g(x: Int): Int = x\nfun f(a: &Int): Int = g(a)\n");
+    assert_ok("fun f(a: &Int): Int = a\n");
+    assert_ok("fun f(a: &Int) {\n    val x: Int = a\n}\n");
     assert_codes(
-        "fun g(x: Int): Int = x\nfun f(a: &Int): Int = g(a)\n",
-        &["E4004"],
+        "fun g(s: String): Int = 1\nfun f(a: &String): Int = g(a)\n",
+        &["E4017"],
     );
-    assert_codes("fun f(a: &Int): Int = a\n", &["E4005"]);
-    assert_codes("fun f(a: &Int) {\n    val x: Int = a\n}\n", &["E4002"]);
+    assert_codes("fun f(a: &String): String = a\n", &["E4017"]);
+    assert_codes(
+        "fun f(a: &String) {\n    val x: String = a\n}\n",
+        &["E4017"],
+    );
 }
 
 #[test]

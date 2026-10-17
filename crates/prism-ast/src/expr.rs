@@ -102,6 +102,9 @@ pub enum UnaryOp {
     Not,       // !
     Borrow,    // &
     BorrowMut, // &mut
+    /// `*`: names the referent of a reference. The parser produces it only at the top of an
+    /// assignment target (`*r = v`), since reads through references are implicit.
+    Deref,
 }
 
 impl UnaryOp {
@@ -111,6 +114,7 @@ impl UnaryOp {
             UnaryOp::Not => "!",
             UnaryOp::Borrow => "&",
             UnaryOp::BorrowMut => "&mut ",
+            UnaryOp::Deref => "*",
         }
     }
 }

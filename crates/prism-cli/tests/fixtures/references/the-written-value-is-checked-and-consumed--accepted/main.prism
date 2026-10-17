@@ -1,0 +1,5 @@
+// expect: ok
+fun f(r: &mut String, a: &Int, n: &mut Int, s: String) {
+    *n = a
+    *r = s
+}

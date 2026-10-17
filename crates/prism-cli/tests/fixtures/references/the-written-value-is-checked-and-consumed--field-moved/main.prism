@@ -1,0 +1,7 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+fun f(r: &mut String, u: User) {
+    *r = u.name
+}

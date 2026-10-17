@@ -1,0 +1,5 @@
+// expect: E4019
+fun f() {
+    var x = 1
+    *x = 5
+}

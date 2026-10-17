@@ -1,0 +1,6 @@
+// expect: ok
+fun bump(r: &mut Int) {}
+fun f() {
+    var x = 1
+    bump(&mut x)
+}

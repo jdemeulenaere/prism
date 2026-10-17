@@ -1,0 +1,7 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+fun f(c: Bool, u: User, v: User) {
+    val r = &(if (c) u.name else v.name)
+}

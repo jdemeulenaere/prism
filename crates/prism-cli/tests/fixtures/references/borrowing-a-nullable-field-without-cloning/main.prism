@@ -1,0 +1,11 @@
+// expect: ok
+struct User {
+    val nick: String?
+}
+fun greet(n: &String) {}
+fun show(n: (&String)?) {}
+fun f(u: &User) {
+    show(u.nick)
+    greet(&u.nick ?: &"anon")
+    val a: (&String)? = &u.nick
+}

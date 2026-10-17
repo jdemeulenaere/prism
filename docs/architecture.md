@@ -313,6 +313,25 @@ A `while` loop MUST evaluate its condition before each iteration and a `do`/`whi
 - **WHEN** `p.clone()` runs for `p: Point` where `struct Point : Copy { val x: Int }`
 - **THEN** the result is a bitwise copy of `p`, with no allocation
 
+### Requirement: Reference Evaluation Semantics
+The type checker decides every implicit operation on a reference (the `references` spec, from `reference-access`). At runtime, a borrow MUST point at the borrowed place itself, never at a copy of it. A temporary created for a borrow MUST be dropped at the end of the statement that created it. A copy-out MUST be a bitwise copy that runs no user code.
+
+#### Scenario: Implicitly borrowed place is not copied
+- **WHEN** `greet(u.name)` runs for `fun greet(n: &String)`
+- **THEN** `greet` receives a pointer to `u.name`'s storage, and nothing is copied or allocated
+
+#### Scenario: Argument temporary dropped at the end of the statement
+- **WHEN** `greet(make())` runs for `fun greet(n: &String)` and `fun make(): String`
+- **THEN** the `String` returned by `make()` lives until `greet` returns and the statement ends, and is then dropped
+
+#### Scenario: Viewing a borrowed nullable
+- **WHEN** `&u.nick`, of type `&(String?)`, is read as a `(&String)?`
+- **THEN** the tag of `u.nick` is read once, giving `null` when it is `null` and otherwise a pointer to its `String` payload, without copying or allocating
+
+#### Scenario: Writing through a reference drops the old referent
+- **WHEN** `*r = v` runs for `r: &mut String`
+- **THEN** the `String` that `r` referred to is dropped and `v` is moved into its place, so the owner of that place sees `v`
+
 ---
 
 ## 5. Compose UI Engine

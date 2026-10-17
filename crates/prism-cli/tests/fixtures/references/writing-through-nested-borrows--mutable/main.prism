@@ -1,0 +1,4 @@
+// expect: ok
+fun f(rr: &mut &mut Int) {
+    **rr = 0
+}

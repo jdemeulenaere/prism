@@ -58,7 +58,7 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 |---|---|---|
 | `E4001` | `UnresolvedSymbol` | An identifier is not found in any enclosing scope or imported ABI. |
 | `E4002` | `TypeMismatch`, `TypeNameAsValue` | An expression's type is not assignable to the type expected by an annotation, assignment, operator operand or default value (return and argument sites have their own codes), including implicit numeric widening and `null` for a non-nullable type; or a struct or enum name is used as a value. |
-| `E4003` | `ImmutabilityViolation` | Reassigning a `val`, assigning a `val` field, mutating a field of a `val` instance, or taking `&mut` of a `val`. |
+| `E4003` | `ImmutabilityViolation` | Reassigning a `val`, assigning a `val` field, mutating a field of a `val` instance, taking `&mut` of a `val` (also one holding a `&mut T`, which is reborrowed by passing it instead), or writing through a shared `&` borrow (`*r = v`). |
 | `E4004` | `CallSignatureMismatch`, `ArgumentTypeMismatch` | Wrong argument count, an argument whose type is not assignable to its parameter (positional, named or trailing-lambda argument, struct constructor field, enum payload), a missing, duplicate or twice-assigned named argument, or a missing or duplicate struct field in a constructor call. |
 | `E4005` | `ReturnTypeMismatch` | A returned value (a `return` operand, an expression body, the final expression of a non-`Unit` block body, or a closure body) is incompatible with the declared or expected return type, including a value returned from a `Unit` function and a `return` outside a function. |
 | `E4006` | `UnknownField` | A field does not exist on the struct, or member access on a non-struct or opaque type. |
@@ -72,8 +72,9 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | `E4014` | `MemberOfUnimportedType` | A member of a struct or enum is used (a field read or written, its variants matched, the type constructed or a variant named) but the module defining the type is not a direct import; the message names the import to add. Receiving and passing along such a value is accepted. |
 | `E4015` | `BreakOutsideLoop` | A `break` or `continue` has no enclosing loop in its function or closure body, including one inside a closure that sits in a loop. |
 | `E4016` | `InvalidMarkerDeclaration` | A `: Copy` struct or enum has a field or variant payload that is not `Copy`, or a `: Clone` one has a member that is not `Clone`. Reported once per offending member. |
-| `E4017` | `CannotMoveOut` | A non-`Copy` value in a consuming position (an initializer, an assigned value, a by-value argument, a returned value) is taken from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation, an index or a top-level `val`. A move must take a whole local, parameter or temporary. |
+| `E4017` | `CannotMoveOut` | A non-`Copy` value in a consuming position (an initializer, an assigned value, a by-value argument, a returned value) is taken from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation, an index or a top-level `val`, or out of a borrow given where a value is expected (`take(u)` for `u: &User`). A move must take a whole local, parameter or temporary; only a `Copy` value is copied out of a borrow. |
 | `E4018` | `NotCloneable` | `clone()` is called on a value whose type is not `Clone`: a struct or enum without `: Clone` or `: Copy`, a function value, a type parameter or an unknown type. |
+| `E4019` | `NotAReference` | Prefix `*` writes through a value that is not a reference (`*x = 1` for `x: Int`). `*` is only allowed on the left of `=`; reads through references are implicit. |
 
 A `public` or `package` function without a return type is reported as `E3001` when it has an expression body (Phase 1 rejects it first) and as `E4011` when it has a block body (Phase 1 accepts it as returning `Unit`). Unifying these is tracked in `ROADMAP.md`.
 

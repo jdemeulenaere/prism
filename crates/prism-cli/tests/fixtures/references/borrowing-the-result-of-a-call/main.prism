@@ -1,0 +1,6 @@
+// expect: ok
+fun make(): String = "a"
+fun greet(name: &String) {}
+fun f() {
+    greet(make())
+}

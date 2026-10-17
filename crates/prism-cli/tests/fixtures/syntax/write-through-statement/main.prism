@@ -1,0 +1,9 @@
+// expect: ok
+fun pick(a: &mut Int, b: &mut Int): &mut Int = a
+fun f(r: &mut Int, rr: &mut &mut Int) {
+    var a = 1
+    var b = 2
+    *r = 5
+    **rr = 0
+    *pick(&mut a, &mut b) = 1
+}

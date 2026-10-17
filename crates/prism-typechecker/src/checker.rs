@@ -63,6 +63,55 @@ enum Origin {
     Argument,
 }
 
+/// How a value is made to fit the type expected where it is used, when its own type is not
+/// assignable as it is (the `references` spec). The typed tree will record it on the expression;
+/// until then the checker only decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // The fields are for the typed tree, which does not exist yet.
+enum Adjustment {
+    /// The value is used as it is: moved, or copied when it is `Copy`.
+    None,
+    /// A `Copy` value read out of `layers` references, inside a `?` when `through_nullable`
+    /// (`(&Int)?` used as an `Int?`).
+    CopyOut {
+        layers: usize,
+        through_nullable: bool,
+    },
+    /// An argument place borrowed where it lives (`greet(name)`).
+    Borrow,
+    /// An argument that is not a place, evaluated into a temporary that is borrowed until the end
+    /// of the statement (`greet("Ada")`).
+    BorrowTemporary,
+    /// An argument place of type `T?` borrowed as a `(&T)?` (`show(u.nick)`).
+    BorrowContents,
+    /// An argument place of type `&mut T` reborrowed for the call instead of moved.
+    Reborrow,
+    /// A borrowed nullable `&(T?)` read as an optional borrow `(&T)?`.
+    NullableView,
+}
+
+/// Where a value is checked against an expected type, which decides the implicit borrows
+/// allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Site {
+    /// Any value position other than an argument: no implicit borrow.
+    Value,
+    /// A call argument whose parameter is a reference, and whether the argument is a place.
+    Argument { is_place: bool },
+}
+
+/// The outcome of [`TypeChecker::coerce`].
+#[derive(Debug, Clone, PartialEq)]
+enum Coercion {
+    /// The value fits after the adjustment.
+    Fits(Adjustment),
+    /// The value fits only by moving `ty` out of a borrow, which is not `Copy` (`E4017`).
+    /// `nullable` is true when the borrow is inside a `?`.
+    MovesOutOfBorrow { ty: Type, nullable: bool },
+    /// The value does not fit.
+    NoFit,
+}
+
 /// Inference state of an unannotated private top-level declaration, whose type comes from its
 /// body or initializer. Such a declaration is inferred on demand, the first time it is used, so
 /// its type does not depend on declaration order (D5 of `typechecker-soundness`).
@@ -849,6 +898,7 @@ impl TypeChecker {
                             expected: Type::Error,
                             found: Type::Error,
                             span: v.span,
+                            help: None,
                         });
                         Type::Error
                     } else {
@@ -974,6 +1024,7 @@ impl TypeChecker {
                     expected,
                     found: inferred.clone(),
                     span: v.span,
+                    help: None,
                 });
             }
         } else if v.visibility == Visibility::Private {
@@ -1050,8 +1101,9 @@ impl TypeChecker {
         // before the parameter is bound, so it may refer to earlier parameters only.
         for p in &f.params {
             let p_ty = self.lower_type(&p.ty);
+            // A default value is evaluated as the call's argument, so it is borrowed like one.
             if let Some(default) = &p.default_value {
-                self.with_consuming(true, |c| c.check_expr(default, &p_ty));
+                self.check_argument(default, &p_ty, Origin::Value);
             }
             let sym = Symbol::variable(p.name.clone(), p_ty, Mutability::Val, p.span);
             if let Err(err) = self.env.define(sym) {
@@ -1087,6 +1139,7 @@ impl TypeChecker {
                                 expected: expected.clone(),
                                 found: block_ty,
                                 span: block.span,
+                                help: None,
                             });
                         }
                     }
@@ -1136,6 +1189,47 @@ impl TypeChecker {
         })
     }
 
+    /// Checks a call argument (or a default value, which becomes one) against its parameter type.
+    /// A by-value parameter consumes the argument. A reference parameter borrows it implicitly
+    /// when it is not a reference already (D1 and D2 of `reference-access`): a place is borrowed
+    /// where it lives and is not consumed, and anything else is evaluated into a consumed
+    /// temporary. The argument is inferred rather than checked, because it may already be a
+    /// reference (`greet(longest(&a, &b))`) or be a value to borrow.
+    fn check_argument(&mut self, expr: &Expr, param_ty: &Type, origin: Origin) -> Type {
+        if !is_reference_parameter(param_ty) {
+            return self.check_expr_at(expr, param_ty, origin);
+        }
+        let is_place = self.is_place(expr);
+        let found = self.with_origin(Origin::Value, |c| {
+            c.with_consuming(!is_place, |c| c.infer_expr(expr))
+        });
+        self.with_origin(origin, |c| {
+            c.fit(expr, found, param_ty, Site::Argument { is_place }, false)
+        })
+    }
+
+    /// Whether `expr` is a place, which a borrow refers to where it lives: a variable (local,
+    /// parameter or top-level `val`), a `.` field access from any root, or an index. Anything else
+    /// (a literal, call, safe navigation, branch, block or `?:`) is a temporary (D2 of
+    /// `reference-access`).
+    fn is_place(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Ident(name) => {
+                matches!(
+                    self.env.lookup(name).map(|sym| &sym.kind),
+                    Some(SymbolKind::Variable { .. })
+                ) && !self.variant_owners.contains_key(name)
+            }
+            ExprKind::MemberAccess {
+                target,
+                is_safe_nav: false,
+                ..
+            } => self.type_name_symbol(target).is_none(),
+            ExprKind::Index { .. } => true,
+            _ => false,
+        }
+    }
+
     /// Runs `f` on an expression in a consuming position (`consuming` is true) or a reading one.
     fn with_consuming<T>(&mut self, consuming: bool, f: impl FnOnce(&mut Self) -> T) -> T {
         self.consuming = consuming;
@@ -1170,22 +1264,36 @@ impl TypeChecker {
     /// Reports that `found` is not assignable to `expected`, with the code of the current
     /// expectation origin.
     fn report_mismatch(&mut self, expected: &Type, found: Type, span: Span) {
+        self.report_mismatch_with_help(expected, found, span, None);
+    }
+
+    /// Like [`Self::report_mismatch`], with a fix to suggest.
+    fn report_mismatch_with_help(
+        &mut self,
+        expected: &Type,
+        found: Type,
+        span: Span,
+        help: Option<String>,
+    ) {
         let expected = expected.clone();
         self.errors.push(match self.origin {
             Origin::Value => TypeError::TypeMismatch {
                 expected,
                 found,
                 span,
+                help: help.clone(),
             },
             Origin::Return => TypeError::ReturnTypeMismatch {
                 expected,
                 found,
                 span,
+                help: help.clone(),
             },
             Origin::Argument => TypeError::ArgumentTypeMismatch {
                 expected,
                 found,
                 span,
+                help: help.clone(),
             },
         });
     }
@@ -1306,19 +1414,15 @@ impl TypeChecker {
             );
         }
 
-        // Default: infer and verify assignability. Expectations nested inside the inferred
-        // expression have their own origin.
+        // Default: infer, then fit the value to the expected type (copying out of a borrow if
+        // needed). Expectations nested inside the inferred expression have their own origin. A
+        // leaf's move check waits for the fit, which decides whether anything moves.
         let consuming = self.parent_consuming;
+        let deferred_move = consuming && is_move_leaf(expr);
         let inferred = self.with_origin(Origin::Value, |c| {
-            c.with_consuming(consuming, |c| c.infer_expr(expr))
+            c.with_consuming(consuming && !deferred_move, |c| c.infer_expr(expr))
         });
-        if !inferred.is_assignable_to(expected) {
-            if inferred != Type::Error && expected != &Type::Error {
-                self.report_mismatch(expected, inferred.clone(), expr.span);
-            }
-            return Type::Error;
-        }
-        inferred
+        self.fit(expr, inferred, expected, Site::Value, deferred_move)
     }
 
     /// Types an identifier read as a value.
@@ -1394,6 +1498,7 @@ impl TypeChecker {
                             expected: then_ty.clone(),
                             found: else_ty,
                             span: expr.span,
+                            help: None,
                         });
                         Type::Error
                     }
@@ -1426,6 +1531,7 @@ impl TypeChecker {
                             expected: Type::String,
                             found: other.clone(),
                             span: expr.span,
+                            help: None,
                         });
                         Type::Error
                     }
@@ -1438,6 +1544,7 @@ impl TypeChecker {
                         expected: Type::Unit,
                         found: Type::Error,
                         span: expr.span,
+                        help: None,
                     });
                     return Type::Nothing;
                 }
@@ -1454,6 +1561,7 @@ impl TypeChecker {
                             expected: exp.clone(),
                             found: Type::Unit,
                             span: expr.span,
+                            help: None,
                         });
                     }
                 }
@@ -1547,6 +1655,7 @@ impl TypeChecker {
                     expected: left_ty,
                     found: right_ty,
                     span,
+                    help: None,
                 });
                 Type::Error
             }
@@ -1566,6 +1675,7 @@ impl TypeChecker {
                         expected: left_ty,
                         found: right_ty,
                         span,
+                        help: None,
                     });
                     Type::Error
                 }
@@ -1589,6 +1699,7 @@ impl TypeChecker {
                         expected: left_ty,
                         found: right_ty,
                         span,
+                        help: None,
                     });
                     Type::Error
                 }
@@ -1604,7 +1715,9 @@ impl TypeChecker {
                 // Both sides produce the result, so both are consumed when it is.
                 let consuming = self.parent_consuming;
                 let left_ty = self.with_consuming(consuming, |c| c.infer_expr(left));
-                // The right side is checked even when the left side cannot be null.
+                // The right side is checked even when the left side cannot be null. A borrowed
+                // nullable `&(T?)` is read as `(&T)?` (D8 of `reference-access`).
+                let left_ty = nullable_view(&left_ty).unwrap_or(left_ty);
                 let inner = match left_ty {
                     Type::Nullable(inner) => *inner,
                     other => other,
@@ -1625,6 +1738,7 @@ impl TypeChecker {
                         expected: inner.clone(),
                         found: right_ty,
                         span,
+                        help: None,
                     });
                     inner
                 }
@@ -1651,6 +1765,7 @@ impl TypeChecker {
                         expected: Type::Int,
                         found: ty,
                         span,
+                        help: None,
                     });
                     Type::Error
                 }
@@ -1659,21 +1774,34 @@ impl TypeChecker {
                 self.check_operand(inner, &Type::Bool);
                 Type::Bool
             }
-            UnaryOp::Borrow => match self.infer_expr(inner) {
-                Type::Error => Type::Error,
-                ty => Type::Reference {
-                    mutable: false,
-                    inner: Box::new(ty),
-                },
-            },
+            // The parser produces `*` only at the top of an assignment target, which
+            // `check_assignment` handles; reads through references are implicit.
+            UnaryOp::Deref => {
+                debug_assert!(false, "'*' outside an assignment target: {}", inner);
+                Type::Error
+            }
+            // A place is borrowed where it lives; anything else is a temporary, which is
+            // consumed (D2 of `reference-access`).
+            UnaryOp::Borrow => {
+                match self.with_consuming(!self.is_place(inner), |c| c.infer_expr(inner)) {
+                    Type::Error => Type::Error,
+                    ty => Type::Reference {
+                        mutable: false,
+                        inner: Box::new(ty),
+                    },
+                }
+            }
             UnaryOp::BorrowMut => {
-                let (ty, writable) = self.infer_place(inner);
+                let (ty, writable) = if self.is_place(inner) {
+                    self.infer_place(inner)
+                } else {
+                    (self.with_consuming(true, |c| c.infer_expr(inner)), true)
+                };
                 if ty == Type::Error {
                     return Type::Error;
                 }
                 match &inner.kind {
                     ExprKind::Ident(name) => {
-                        // A `val` holding `&mut T` may be reborrowed mutably.
                         let is_val = matches!(
                             self.env.lookup(name).map(|sym| &sym.kind),
                             Some(SymbolKind::Variable {
@@ -1681,13 +1809,21 @@ impl TypeChecker {
                                 ..
                             })
                         );
-                        if is_val && !matches!(ty, Type::Reference { mutable: true, .. }) {
+                        if is_val {
+                            // `&mut r` borrows the binding itself, even when it holds a `&mut T`.
+                            let help = matches!(ty, Type::Reference { mutable: true, .. }).then(|| {
+                                format!(
+                                    "'{}' is already a mutable borrow: pass '{}' itself, which reborrows it",
+                                    name, name
+                                )
+                            });
                             self.errors.push(TypeError::ImmutabilityViolation {
                                 message: format!(
                                     "cannot take mutable borrow '&mut' of immutable 'val' binding '{}'",
                                     name
                                 ),
                                 span,
+                                help,
                             });
                         }
                     }
@@ -1698,6 +1834,7 @@ impl TypeChecker {
                                 member
                             ),
                             span,
+                            help: None,
                         });
                     }
                     _ => {}
@@ -1721,6 +1858,7 @@ impl TypeChecker {
                         self.errors.push(TypeError::ImmutabilityViolation {
                             message: format!("cannot assign to non-variable '{}'", name),
                             span,
+                            help: None,
                         });
                         (Type::Error, false)
                     }
@@ -1753,6 +1891,7 @@ impl TypeChecker {
                                 member
                             ),
                             span,
+                            help: None,
                         });
                         (field_ty, false)
                     }
@@ -1763,6 +1902,7 @@ impl TypeChecker {
                                 member
                             ),
                             span,
+                            help: None,
                         });
                         (field_ty, false)
                     }
@@ -1779,25 +1919,151 @@ impl TypeChecker {
                     }
                 }
             }
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                expr: reference,
+            } => {
+                let (referent, _) = self.write_through(reference, span);
+                (referent, true)
+            }
             _ => {
                 self.errors.push(TypeError::ImmutabilityViolation {
                     message: "invalid assignment target".to_string(),
                     span,
+                    help: None,
                 });
                 (Type::Error, false)
             }
         };
+
+        if let (ExprKind::Ident(name), Type::Reference { mutable, inner }) =
+            (&target.kind, &target_ty)
+        {
+            self.check_repoint(name, is_mutable, *mutable, inner, &target_ty, value, span);
+            return;
+        }
 
         if !is_mutable && target_ty != Type::Error {
             if let ExprKind::Ident(name) = &target.kind {
                 self.errors.push(TypeError::ImmutabilityViolation {
                     message: format!("cannot reassign to immutable 'val' binding '{}'", name),
                     span,
+                    help: None,
                 });
             }
         }
 
         self.with_consuming(true, |c| c.check_expr(value, &target_ty));
+    }
+
+    /// Types the referent written by `*reference = ...` (D5 of `reference-access`): `reference`
+    /// is read in place and must be a reference, and every reference layer written through must
+    /// be `&mut`. Returns the referent type and whether the write is allowed; a refusal is
+    /// reported once, at the first layer that refuses it.
+    fn write_through(&mut self, reference: &Expr, span: Span) -> (Type, bool) {
+        let (ty, writable) = match &reference.kind {
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                expr: inner,
+            } => self.write_through(inner, span),
+            _ => (self.infer_expr(reference), true),
+        };
+        match ty {
+            Type::Error => (Type::Error, false),
+            Type::Reference { mutable, inner } => {
+                if writable && !mutable {
+                    self.errors.push(TypeError::ImmutabilityViolation {
+                        message: format!(
+                            "cannot write through '{}': it is a shared '&' borrow, which cannot be written through",
+                            reference
+                        ),
+                        span,
+                        help: Some(
+                            "take a mutable borrow '&mut' where the reference is created"
+                                .to_string(),
+                        ),
+                    });
+                }
+                (*inner, writable && mutable)
+            }
+            // A refusal at an inner layer was reported there.
+            other if !writable => (other, false),
+            other => {
+                self.errors.push(TypeError::NotAReference {
+                    ty: other,
+                    span: reference.span,
+                });
+                (Type::Error, false)
+            }
+        }
+    }
+
+    /// Checks `name = value` for a binding of reference type `target_ty` (D6 of
+    /// `reference-access`). Assigning a reference re-points the binding. Assigning a value of the
+    /// referent's type is rejected with help pointing at `*name = value`: a `val` reports only
+    /// `E4003`, a `var` `E4002`.
+    #[allow(clippy::too_many_arguments)]
+    fn check_repoint(
+        &mut self,
+        name: &str,
+        is_var: bool,
+        is_mutable_reference: bool,
+        referent: &Type,
+        target_ty: &Type,
+        value: &Expr,
+        span: Span,
+    ) {
+        let deferred_move = is_move_leaf(value);
+        let found = self.with_consuming(!deferred_move, |c| c.infer_expr(value));
+        if found == Type::Error
+            || matches!(
+                self.coerce(&found, target_ty, Site::Value),
+                Coercion::Fits(_)
+            )
+            || !matches!(
+                self.coerce(&found, referent, Site::Value),
+                Coercion::Fits(_)
+            )
+        {
+            // A re-point, or a value that fits neither: the usual checks apply.
+            if !is_var && found != Type::Error {
+                self.errors.push(TypeError::ImmutabilityViolation {
+                    message: format!("cannot reassign to immutable 'val' binding '{}'", name),
+                    span,
+                    help: None,
+                });
+            }
+            self.fit(value, found, target_ty, Site::Value, deferred_move);
+            return;
+        }
+        let help = Some(if is_mutable_reference {
+            format!(
+                "to write through the reference instead of re-pointing it, use '*{} = {}'",
+                name, value
+            )
+        } else {
+            format!(
+                "'{}' is a shared '&' borrow, which cannot be written through; assign a reference to re-point it",
+                name
+            )
+        });
+        self.errors.push(if is_var {
+            TypeError::TypeMismatch {
+                expected: target_ty.clone(),
+                found,
+                span: value.span,
+                help,
+            }
+        } else {
+            TypeError::ImmutabilityViolation {
+                message: format!(
+                    "cannot reassign to immutable 'val' binding '{}' of reference type",
+                    name
+                ),
+                span,
+                help,
+            }
+        });
     }
 
     /// Typechecks a local declaration and binds it in the current scope.
@@ -2030,6 +2296,7 @@ impl TypeChecker {
                             expected: current.clone(),
                             found: branch_ty.clone(),
                             span: branch.span,
+                            help: None,
                         });
                     }
                 } else {
@@ -2211,7 +2478,7 @@ impl TypeChecker {
                     }
 
                     for (arg, param_ty) in args.iter().zip(params.iter()) {
-                        self.check_expr_at(&arg.value, param_ty, Origin::Argument);
+                        self.check_argument(&arg.value, param_ty, Origin::Argument);
                     }
                 } else {
                     let mut param_assigned = vec![false; n_params];
@@ -2238,7 +2505,7 @@ impl TypeChecker {
                                     });
                                 }
                                 param_assigned[pos] = true;
-                                self.check_expr_at(&arg.value, &params[pos], Origin::Argument);
+                                self.check_argument(&arg.value, &params[pos], Origin::Argument);
                             } else {
                                 self.errors.push(TypeError::CallSignatureMismatch {
                                     message: format!("unknown parameter '{}'", arg_name),
@@ -2260,7 +2527,7 @@ impl TypeChecker {
                                     });
                                 }
                                 param_assigned[positional_idx] = true;
-                                self.check_expr_at(
+                                self.check_argument(
                                     &arg.value,
                                     &params[positional_idx],
                                     Origin::Argument,
@@ -2408,6 +2675,109 @@ impl TypeChecker {
         }
     }
 
+    /// Decides how a value of type `found` fits `expected` at `site`, in the order of D10 of
+    /// `reference-access`: as it is, by an implicit borrow or reborrow (arguments only), by the
+    /// nullable view, or by copying a `Copy` value out of borrows. Reports nothing.
+    fn coerce(&self, found: &Type, expected: &Type, site: Site) -> Coercion {
+        let is_place = matches!(site, Site::Argument { is_place: true });
+        if found.is_assignable_to(expected) {
+            return Coercion::Fits(
+                if is_place && matches!(found, Type::Reference { mutable: true, .. }) {
+                    Adjustment::Reborrow
+                } else {
+                    Adjustment::None
+                },
+            );
+        }
+        if let Site::Argument { is_place } = site {
+            if let Some(adjustment) = implicit_borrow(found, expected, is_place) {
+                return Coercion::Fits(adjustment);
+            }
+        }
+        if nullable_view(found).is_some_and(|view| view.is_assignable_to(expected)) {
+            return Coercion::Fits(Adjustment::NullableView);
+        }
+        self.copy_out(found, expected)
+    }
+
+    /// Copies a `Copy` value out of the references around `found` until it fits `expected`,
+    /// directly or inside a `?` (`(&T)?` as a `T?`).
+    fn copy_out(&self, found: &Type, expected: &Type) -> Coercion {
+        let (found, expected, through_nullable) = match (found, expected) {
+            (Type::Nullable(found), Type::Nullable(expected))
+                if matches!(**found, Type::Reference { .. }) =>
+            {
+                (found.as_ref(), expected.as_ref(), true)
+            }
+            _ => (found, expected, false),
+        };
+        let mut referent = found;
+        let mut layers = 0;
+        while let Type::Reference { inner, .. } = referent {
+            referent = inner;
+            layers += 1;
+            if !referent.is_assignable_to(expected) {
+                continue;
+            }
+            return if self.is_copy(referent) {
+                Coercion::Fits(Adjustment::CopyOut {
+                    layers,
+                    through_nullable,
+                })
+            } else {
+                Coercion::MovesOutOfBorrow {
+                    ty: referent.clone(),
+                    nullable: through_nullable,
+                }
+            };
+        }
+        Coercion::NoFit
+    }
+
+    /// Checks `expr`, already inferred as `found`, against `expected` at `site`, reporting what
+    /// does not fit. `deferred_move` is set when `expr` is a place whose move check was held back
+    /// until the coercion is known: a borrow or copy-out moves nothing, and a value that does not
+    /// fit reports only the mismatch.
+    fn fit(
+        &mut self,
+        expr: &Expr,
+        found: Type,
+        expected: &Type,
+        site: Site,
+        deferred_move: bool,
+    ) -> Type {
+        match self.coerce(&found, expected, site) {
+            Coercion::Fits(Adjustment::None) => {
+                if deferred_move {
+                    self.check_move_source(expr, &found);
+                }
+                found
+            }
+            Coercion::Fits(_) => expected.clone(),
+            Coercion::MovesOutOfBorrow { ty, nullable } => {
+                let clone = self.is_clone(&ty).then(|| match nullable {
+                    true => format!("{}?.clone()", expr),
+                    false => format!("{}.clone()", expr),
+                });
+                self.errors.push(TypeError::CannotMoveOut {
+                    source: format!("borrow '{}'", expr),
+                    ty: if nullable { ty.nullable() } else { ty },
+                    borrow: None,
+                    clone,
+                    span: expr.span,
+                });
+                expected.clone()
+            }
+            Coercion::NoFit => {
+                if found != Type::Error {
+                    let help = borrow_help(expr, &found, expected, site);
+                    self.report_mismatch_with_help(expected, found, expr.span, help);
+                }
+                Type::Error
+            }
+        }
+    }
+
     /// Rejects moving `expr`, of type `ty`, out of where it lives (the `ownership` spec, "Moves
     /// Take Whole Values Only"). Only leaves are checked: a non-`Copy` value may be consumed from
     /// a whole local or parameter, or as a temporary, but not from a field, a safe navigation, an
@@ -2435,10 +2805,18 @@ impl TypeChecker {
             Type::Nullable(_) => format!("{}?.clone()", expr),
             _ => format!("{}.clone()", expr),
         });
+        // A safe navigation is not a place, so borrowing it would move the field too.
+        let is_safe_nav = matches!(
+            expr.kind,
+            ExprKind::MemberAccess {
+                is_safe_nav: true,
+                ..
+            }
+        );
         self.errors.push(TypeError::CannotMoveOut {
             source,
             ty: ty.clone(),
-            borrow: format!("&{}", expr),
+            borrow: (!is_safe_nav).then(|| format!("&{}", expr)),
             clone,
             span: expr.span,
         });
@@ -2540,6 +2918,12 @@ impl TypeChecker {
         if target_ty == &Type::Error {
             return (Type::Error, None);
         }
+        // Safe navigation reads through references to a nullable, as through `(&T)?` (D8 of
+        // `reference-access`).
+        let target_ty = match peel_references(target_ty) {
+            nullable @ Type::Nullable(_) if is_safe_nav => nullable,
+            _ => target_ty,
+        };
 
         let (base_ty, is_nullable) = match target_ty {
             Type::Nullable(inner) => {
@@ -2653,6 +3037,113 @@ impl TypeChecker {
             _ => (self.infer_expr(expr), true),
         }
     }
+}
+
+/// The implicit borrow that passes an argument of type `found` to a reference parameter of type
+/// `expected` (D1, D2 and D8 of `reference-access`): a place is borrowed where it lives and must
+/// have exactly the referent's type, while any other argument is a temporary of a type
+/// assignable to it. `&mut` is never borrowed implicitly.
+fn implicit_borrow(found: &Type, expected: &Type, is_place: bool) -> Option<Adjustment> {
+    if matches!(found, Type::Reference { .. }) {
+        return None;
+    }
+    let shared = |ty: &Type| Type::Reference {
+        mutable: false,
+        inner: Box::new(ty.clone()),
+    };
+    match expected {
+        Type::Reference {
+            mutable: false,
+            inner,
+        } => {
+            let fits = if is_place {
+                shared(found).is_assignable_to(expected)
+            } else {
+                found.is_assignable_to(inner)
+            };
+            fits.then_some(if is_place {
+                Adjustment::Borrow
+            } else {
+                Adjustment::BorrowTemporary
+            })
+        }
+        // `(&T)?`: a `T?` place lends its contents; a temporary is converted, then borrowed.
+        Type::Nullable(inner) => match inner.as_ref() {
+            Type::Reference {
+                mutable: false,
+                inner: referent,
+            } => {
+                if is_place {
+                    match found {
+                        Type::Nullable(contents) => shared(contents)
+                            .is_assignable_to(inner)
+                            .then_some(Adjustment::BorrowContents),
+                        other => shared(other)
+                            .is_assignable_to(inner)
+                            .then_some(Adjustment::Borrow),
+                    }
+                } else {
+                    found
+                        .is_assignable_to(&referent.clone().nullable())
+                        .then_some(Adjustment::BorrowTemporary)
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The borrow to suggest when `expr`, of type `found`, does not fit the reference `expected`
+/// but its referent would: a written `&` outside arguments (D1 of `reference-access`), and a
+/// written `&mut` everywhere, since a mutable borrow is never implicit.
+fn borrow_help(expr: &Expr, found: &Type, expected: &Type, site: Site) -> Option<String> {
+    let Type::Reference { mutable, inner } = expected else {
+        return None;
+    };
+    if matches!(found, Type::Reference { .. }) || !found.is_assignable_to(inner) {
+        return None;
+    }
+    match (mutable, site) {
+        (true, _) => Some(format!("pass a mutable borrow: '&mut {}'", expr)),
+        (false, Site::Value) => Some(format!("borrow it: '&{}'", expr)),
+        (false, Site::Argument { .. }) => None,
+    }
+}
+
+/// Whether a parameter of type `ty` takes a reference: `&T`, `&mut T`, `(&T)?` or `(&mut T)?`.
+fn is_reference_parameter(ty: &Type) -> bool {
+    match ty {
+        Type::Nullable(inner) => matches!(**inner, Type::Reference { .. }),
+        other => matches!(other, Type::Reference { .. }),
+    }
+}
+
+/// The optional borrow `(&T)?` (or `(&mut T)?`) that a borrowed nullable `&(T?)` (or
+/// `&mut (T?)`) can be read as, or `None` for any other type.
+fn nullable_view(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Reference { mutable, inner } => match inner.as_ref() {
+            Type::Nullable(contents) => Some(
+                Type::Reference {
+                    mutable: *mutable,
+                    inner: contents.clone(),
+                }
+                .nullable(),
+            ),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `expr` is a leaf whose move [`TypeChecker::check_move_source`] checks: a name, a field
+/// access (safe or not) or an index.
+fn is_move_leaf(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Ident(_) | ExprKind::MemberAccess { .. } | ExprKind::Index { .. }
+    )
 }
 
 /// Whether the value behind a place of type `ty` may be mutated, given whether the place itself

@@ -1,0 +1,5 @@
+// expect: ok
+fun greet(name: &String = "guest") {}
+fun f() {
+    greet()
+}

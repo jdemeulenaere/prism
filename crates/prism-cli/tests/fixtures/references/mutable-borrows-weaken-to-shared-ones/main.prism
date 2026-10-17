@@ -1,0 +1,6 @@
+// expect: ok
+fun read(r: &Int): Int = 1
+fun peek(rr: &&Int): Int = 2
+fun f(r: &mut Int, rr: &(&mut Int)): Int {
+    return read(r) + peek(rr)
+}

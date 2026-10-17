@@ -1,0 +1,4 @@
+// expect: E4003
+fun g(rr: &(&mut Int)) {
+    **rr = 0
+}

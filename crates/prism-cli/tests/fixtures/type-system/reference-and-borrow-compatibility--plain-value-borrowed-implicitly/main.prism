@@ -1,4 +1,4 @@
-// expect: E4004
+// expect: ok
 fun read(r: &Int): Int = 1
 fun f(): Int {
     val x = 1

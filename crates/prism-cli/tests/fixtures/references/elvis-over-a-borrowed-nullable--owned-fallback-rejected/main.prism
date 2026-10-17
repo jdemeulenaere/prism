@@ -1,0 +1,5 @@
+// expect: E4002
+fun greet(n: &String) {}
+fun g(n: &String?) {
+    greet(n ?: "anon")
+}

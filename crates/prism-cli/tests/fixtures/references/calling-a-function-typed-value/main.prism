@@ -1,0 +1,4 @@
+// expect: ok
+fun f(g: (&String) -> Unit, s: String) {
+    g(s)
+}

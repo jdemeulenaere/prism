@@ -1,0 +1,4 @@
+// expect: E2001
+fun f(r: &Int) {
+    val x = *r
+}

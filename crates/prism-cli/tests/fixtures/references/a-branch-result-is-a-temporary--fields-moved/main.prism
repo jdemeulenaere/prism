@@ -1,0 +1,8 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+fun greet(name: &String) {}
+fun f(c: Bool, u: User, v: User) {
+    greet(if (c) u.name else v.name)
+}

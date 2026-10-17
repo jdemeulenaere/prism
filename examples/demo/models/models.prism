@@ -18,6 +18,20 @@ public fun updateName(user: &mut User, newName: String): Unit {
     user.name = newName
 }
 
+// Shared borrows are implicit at call sites, and passing a `&mut` borrow reborrows it
+public fun rename(user: &mut User, newName: &String): Unit {
+    user.name = newName.clone()
+}
+
+fun renameToAda(user: &mut User): Unit {
+    rename(user, "Ada")
+}
+
+// Writing a whole value through a mutable borrow uses prefix `*`
+public fun resetCount(count: &mut Int): Unit {
+    *count = 0
+}
+
 // Algebraic Data Types (Enums) & Recursive Types via Heap<T>
 public enum Expr {
     Literal(Int)

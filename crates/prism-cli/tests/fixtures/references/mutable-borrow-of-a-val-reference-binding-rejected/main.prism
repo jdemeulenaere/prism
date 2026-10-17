@@ -1,0 +1,4 @@
+// expect: E4003
+fun f(r: &mut Int) {
+    val m = &mut r
+}

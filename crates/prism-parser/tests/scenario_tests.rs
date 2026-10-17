@@ -669,3 +669,143 @@ fn marker_names_remain_identifiers() {
         parse("fun f(Copy: Int, Clone: Int): Int = Copy + Clone\nstruct Clone { val x: Int }\n");
     assert_eq!(file.declarations.len(), 2);
 }
+
+// --- Writing Through a Reference
+
+/// The number of `*` around an assignment target, and the operand under them.
+fn deref_target(target: &Expr) -> (usize, &Expr) {
+    let mut depth = 0;
+    let mut expr = target;
+    while let ExprKind::Unary {
+        op: UnaryOp::Deref,
+        expr: inner,
+    } = &expr.kind
+    {
+        depth += 1;
+        expr = inner;
+    }
+    (depth, expr)
+}
+
+#[track_caller]
+fn assign_parts(item: &Statement) -> (&Expr, &Expr) {
+    match &item.kind {
+        StatementKind::Assign { target, value } => (target, value),
+        other => panic!("expected an assignment, got {:?}", other),
+    }
+}
+
+#[test]
+fn write_through_statement() {
+    let stmts =
+        block_stmts("fun f() {\n    *r = 5\n    **rr = 0\n    *pick(&mut a, &mut b) = 1\n}\n");
+    let (target, value) = assign_parts(&stmts[0]);
+    let (depth, operand) = deref_target(target);
+    assert_eq!((depth, ident(operand), int(value)), (1, "r", 5));
+    let (depth, operand) = deref_target(assign_parts(&stmts[1]).0);
+    assert_eq!((depth, ident(operand)), (2, "rr"));
+    let (depth, operand) = deref_target(assign_parts(&stmts[2]).0);
+    assert_eq!(depth, 1);
+    assert!(
+        matches!(operand.kind, ExprKind::Call { .. }),
+        "{:?}",
+        operand
+    );
+}
+
+#[test]
+fn postfix_binds_tighter_than_prefix_star() {
+    let stmts = block_stmts("fun f() {\n    *r.x = 1\n}\n");
+    let (depth, operand) = deref_target(assign_parts(&stmts[0]).0);
+    assert_eq!(depth, 1);
+    let ExprKind::MemberAccess { target, member, .. } = &operand.kind else {
+        panic!("expected '*' around 'r.x', got {:?}", operand);
+    };
+    assert_eq!((ident(target), member.as_str()), ("r", "x"));
+}
+
+#[test]
+fn prefix_star_is_not_a_binary_operator_after_a_newline() {
+    let stmts = block_stmts("fun f() {\n    val a = b\n    *r = 5\n}\n");
+    assert_eq!(stmts.len(), 2);
+    let StatementKind::Local { initializer, .. } = &stmts[0].kind else {
+        panic!("expected a local, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(ident(initializer), "b");
+    assert_eq!(deref_target(assign_parts(&stmts[1]).0).0, 1);
+}
+
+#[test]
+fn write_through_in_an_unbraced_branch_or_loop_body() {
+    let stmts = block_stmts(
+        "fun f(c: Bool, n: Int) {\n    if (c) *r = 1 else *r = 2\n    when (n) { 0 -> *r = 1, else -> {} }\n    while (c) *r = 0\n}\n",
+    );
+    let write = |e: &Expr| match &e.kind {
+        ExprKind::Block(b) => {
+            b.statements.len() == 1 && deref_target(assign_parts(&b.statements[0]).0).0 == 1
+        }
+        _ => false,
+    };
+    let ExprKind::If {
+        then_branch,
+        else_branch,
+        ..
+    } = &expr_of(&stmts[0]).kind
+    else {
+        panic!("expected an if, got {:?}", stmts[0].kind);
+    };
+    assert!(write(then_branch));
+    assert!(write(else_branch.as_ref().expect("else branch")));
+    let ExprKind::When { branches, .. } = &expr_of(&stmts[1]).kind else {
+        panic!("expected a when, got {:?}", stmts[1].kind);
+    };
+    assert!(write(&branches[0].body));
+    let StatementKind::While { body, .. } = &stmts[2].kind else {
+        panic!("expected a while, got {:?}", stmts[2].kind);
+    };
+    assert_eq!(deref_target(assign_parts(&body.statements[0]).0).0, 1);
+}
+
+#[test]
+fn prefix_star_outside_an_assignment_target_rejected() {
+    for (src, column) in [
+        ("fun f() { val x = *r }", 19),
+        ("fun f() { g(*r) }", 13),
+        ("fun f() { return *r }", 18),
+        ("fun f() { (*r).x = 1 }", 12),
+        ("fun f() { *r }", 11),
+        ("fun f() { *r == 1 }", 11),
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(
+            err.message.contains("only allowed on the left of '='")
+                && err
+                    .message
+                    .contains("reads through references are implicit"),
+            "{}: {}",
+            src,
+            err
+        );
+        assert_eq!(err.span.column, column, "{}", src);
+    }
+}
+
+#[test]
+fn multiplication_unchanged() {
+    for src in [
+        "fun f(a: Int, b: Int) = a * b",
+        "fun f(a: Int, b: Int) = a *b",
+    ] {
+        let ExprKind::Binary { op, .. } = expr_body(src).kind else {
+            panic!("expected a multiplication: {}", src);
+        };
+        assert_eq!(op, BinaryOp::Mul, "{}", src);
+    }
+}
+
+#[test]
+fn deeply_nested_write_through_rejected() {
+    let src = format!("fun f() {{ {}r = 1 }}", "*".repeat(100_000));
+    assert_eq!(parse_source(&src).expect_err("too deep").code, "E2002");
+}

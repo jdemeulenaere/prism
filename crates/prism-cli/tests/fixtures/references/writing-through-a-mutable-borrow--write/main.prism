@@ -1,0 +1,4 @@
+// expect: ok
+fun bump(r: &mut Int) {
+    *r = r + 1
+}

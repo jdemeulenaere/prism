@@ -1,0 +1,7 @@
+// expect: ok
+fun set(r: (&mut Int)?) {}
+fun read(r: (&Int)?) {}
+fun f(m: &mut Int?) {
+    set(m)
+    read(m)
+}
