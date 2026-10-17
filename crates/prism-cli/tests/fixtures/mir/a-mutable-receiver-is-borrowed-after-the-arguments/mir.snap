@@ -37,7 +37,7 @@ fun main::f(): Unit @5:1
     storage_dead _3 @5:29
     storage_dead _2 @5:29
     _0 = const () @5:9
-    drop _1 -> bb3 @5:9
+    drop _1 -> bb3 @5:46
   bb3:
-    storage_dead _1 @5:9
+    storage_dead _1 @5:46
     return @5:1

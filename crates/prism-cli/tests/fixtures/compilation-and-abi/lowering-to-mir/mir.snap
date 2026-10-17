@@ -79,7 +79,7 @@ fun main::f(_1: User?, _2: Color, _3: Bool): Int @4:1
     storage_dead _10 @7:5
     storage_dead _9 @7:5
     _0 = copy _4 @10:12
-    storage_dead _4 @4:42
+    storage_dead _4 @10:5
     drop _2 -> bb23 @4:1
   bb16:
     storage_live _13 @7:5
@@ -100,7 +100,7 @@ fun main::f(_1: User?, _2: Color, _3: Bool): Int @4:1
     _4 = copy _4 + move _14 @8:17
     storage_dead _15 @8:9
     storage_dead _14 @8:9
-    storage_dead _13 @7:22
+    storage_dead _13 @9:5
     _12 = copy _10 == copy _11 @7:5
     switch copy _12 [0 -> bb22, otherwise -> bb21] @7:5
   bb21:

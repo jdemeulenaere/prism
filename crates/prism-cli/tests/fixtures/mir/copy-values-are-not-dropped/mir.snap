@@ -8,5 +8,5 @@ fun main::f(_1: Int, _2: &mut Int): Unit @2:1
     storage_live _3 @2:30
     _3 = copy _1 @2:38
     _0 = const () @2:28
-    storage_dead _3 @2:28
+    storage_dead _3 @2:40
     return @2:1

@@ -37,10 +37,10 @@ fun main::f(_1: Int, _2: String): Int @1:1
     storage_live _4 @1:48
     _4 = move _2 @1:56
     _0 = copy _3 @1:59
-    drop _4 -> bb1 @1:31
+    drop _4 -> bb1 @1:61
   bb1:
-    storage_dead _4 @1:31
-    storage_dead _3 @1:31
+    storage_dead _4 @1:61
+    storage_dead _3 @1:61
     drop _2 -> bb2 @1:1
   bb2:
     return @1:1

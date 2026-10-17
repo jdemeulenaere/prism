@@ -30,5 +30,5 @@ fun main::g(): Pair @4:1
     storage_dead _4 @4:28
     storage_dead _3 @4:28
     storage_dead _2 @4:28
-    storage_dead _1 @4:15
+    storage_dead _1 @4:28
     return @4:1

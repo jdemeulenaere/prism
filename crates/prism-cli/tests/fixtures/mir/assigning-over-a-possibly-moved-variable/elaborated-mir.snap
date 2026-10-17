@@ -40,10 +40,10 @@ fun main::f(_1: Bool): Unit @3:1
     _2 = const "b" @3:47
     _5 = const true @3:47
     _0 = const () @3:16
-    drop _2 -> bb6 @3:16
+    drop _2 -> bb6 @3:55
   bb6:
-    storage_dead _2 @3:16
-    _5 = const false @3:16
+    storage_dead _2 @3:55
+    _5 = const false @3:55
     return @3:1
   bb7:
     drop _2 -> bb5 @3:47

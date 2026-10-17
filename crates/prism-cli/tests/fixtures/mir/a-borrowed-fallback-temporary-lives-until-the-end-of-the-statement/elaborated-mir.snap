@@ -1,0 +1,68 @@
+module main
+phase elaborated
+fun main::greet(_1: &String): Int @2:1
+  local _0: Int (return)
+  local _1 n: &String (argument)
+  bb0:
+    _0 = const 1 @2:30
+    return @2:1
+fun main::f(_1: String?): Int @3:1
+  local _0: Int (return)
+  local _1 n: String? (argument)
+  local _2: &String (temporary)
+  local _3: String (temporary)
+  local _4: (&String)? (temporary)
+  local _5: &String (temporary)
+  local _6: &String? (temporary)
+  local _7: Int (temporary)
+  local _8: Int (temporary)
+  local _9: Bool (drop flag)
+  bb0:
+    _9 = const false @3:1
+    storage_live _2 @3:32
+    storage_live _3 @3:39
+    _9 = const false @3:39
+    storage_live _4 @3:32
+    storage_live _5 @3:32
+    storage_live _6 @3:32
+    _6 = &_1 (written) @3:32
+    storage_live _7 @3:32
+    _7 = discriminant (*_6) @3:32
+    switch move _7 [0 -> bb2, otherwise -> bb1] @3:32
+  bb1:
+    _5 = &((*_6) as payload) (conversion) @3:32
+    _4 = wrap move _5 @3:32
+    goto -> bb3 @3:32
+  bb2:
+    _4 = const null @3:32
+    goto -> bb3 @3:32
+  bb3:
+    storage_live _8 @3:32
+    _8 = discriminant _4 @3:32
+    switch move _8 [0 -> bb5, otherwise -> bb4] @3:32
+  bb4:
+    _2 = copy (_4 as payload) @3:32
+    goto -> bb6 @3:32
+  bb5:
+    _3 = const "anon" @3:39
+    _9 = const true @3:39
+    _2 = &_3 (written) @3:38
+    goto -> bb6 @3:32
+  bb6:
+    _0 = call main::greet(move _2) -> bb7 @3:26
+  bb7:
+    storage_dead _8 @3:26
+    storage_dead _7 @3:26
+    storage_dead _6 @3:26
+    storage_dead _5 @3:26
+    storage_dead _4 @3:26
+    switch copy _9 [0 -> bb8, otherwise -> bb10] @3:26
+  bb8:
+    storage_dead _3 @3:26
+    _9 = const false @3:26
+    storage_dead _2 @3:26
+    drop _1 -> bb9 @3:1
+  bb9:
+    return @3:1
+  bb10:
+    drop _3 -> bb8 @3:26

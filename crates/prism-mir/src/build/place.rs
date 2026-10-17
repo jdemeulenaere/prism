@@ -23,6 +23,17 @@ impl Builder<'_> {
         let expression = self.expression(id);
         let span = expression.span;
         let ty = expression.ty.clone();
+        if destination.is_some()
+            && matches!(
+                expression.kind,
+                ExpressionKind::If { .. }
+                    | ExpressionKind::When { .. }
+                    | ExpressionKind::Elvis { .. }
+                    | ExpressionKind::Block { .. }
+            )
+        {
+            self.preallocate_extended_temporaries(id);
+        }
         match &expression.kind {
             ExpressionKind::Error { .. } => {
                 panic!("internal error: an error node in a tree without type errors")
@@ -135,9 +146,11 @@ impl Builder<'_> {
                 let destination = self.destination_or_temporary(destination, &ty, span);
                 self.assign(destination, Rvalue::Unary(operator, operand), span);
             }
-            ExpressionKind::Block { statements, tail } => {
-                self.lower_block(destination, statements, *tail, span)
-            }
+            ExpressionKind::Block {
+                statements,
+                tail,
+                close_brace,
+            } => self.lower_block(destination, statements, *tail, *close_brace, span),
             ExpressionKind::Return { value } => self.lower_return(*value, span),
             ExpressionKind::Call(call) => self.lower_call(destination, call, &ty, span),
             ExpressionKind::SafeNavigation { chain, .. } => {
@@ -338,9 +351,9 @@ impl Builder<'_> {
         let any = |ids: &[ExpressionId]| ids.iter().any(|&child| self.may_write(child));
         match &self.expression(id).kind {
             ExpressionKind::Call(_) => true,
-            ExpressionKind::Block { statements, tail } => {
-                !statements.is_empty() || tail.is_some_and(|tail| self.may_write(tail))
-            }
+            ExpressionKind::Block {
+                statements, tail, ..
+            } => !statements.is_empty() || tail.is_some_and(|tail| self.may_write(tail)),
             ExpressionKind::Literal(_)
             | ExpressionKind::Local(_)
             | ExpressionKind::TopLevelValue(_)
@@ -470,15 +483,16 @@ impl Builder<'_> {
     }
 
     /// A block: its statements in a block scope, then its tail in its own temporary scope, which
-    /// ends before the block's locals are dropped (D7).
+    /// ends before the block's locals are dropped (D7), at its closing brace `close_brace`.
     pub(super) fn lower_block(
         &mut self,
         destination: Option<&Place>,
         statements: &[StatementId],
         tail: Option<ExpressionId>,
+        close_brace: Span,
         span: Span,
     ) {
-        self.push_scope(span);
+        self.push_block_scope(close_brace);
         for &statement in statements {
             if self.current.is_none() {
                 break;
@@ -519,7 +533,7 @@ impl Builder<'_> {
         if self.current.is_none() {
             return;
         }
-        self.exit_scopes_to(1);
+        self.exit_scopes_to(1, Some(span));
         let mut block = self.return_block.take();
         self.goto_lazy(&mut block, span);
         self.return_block = block;
@@ -587,43 +601,73 @@ impl Builder<'_> {
     }
 
     /// `val x = e`: the binding belongs to the block, the initializer is evaluated into it in
-    /// the statement's temporary scope. When the initializer is a written borrow of a place
-    /// rooted at a temporary, that temporary belongs to the block too, created just before the
-    /// binding (D7).
+    /// the statement's temporary scope. The temporaries whose written borrow the initializer's
+    /// value may be (see [`Self::extended_temporaries`]) belong to the block too, created just
+    /// before the binding (D7 of `mir-lowering`, D20 of `borrowck-exclusivity`).
     fn lower_let(
         &mut self,
         binding: prism_typed_tree::LocalId,
         initializer: ExpressionId,
         span: Span,
     ) {
-        if let Some(temporary) = self.extended_temporary(initializer) {
-            let expression = self.expression(temporary);
-            let local = self.new_temporary(expression.ty.clone(), expression.span);
-            self.preallocated
-                .insert(temporary, Preallocated::Local(local));
-        }
+        self.preallocate_extended_temporaries(initializer);
         let local = self.declare_binding(binding, span);
         self.push_scope(span);
         self.expression_into(Some(&Place::local(local)), initializer);
         self.pop_scope();
     }
 
-    /// The temporary at the root of the place `initializer` borrows, when the initializer is (up
-    /// to coercions) a written borrow of a place rooted at a temporary (D7).
-    fn extended_temporary(&self, initializer: ExpressionId) -> Option<ExpressionId> {
-        let mut id = initializer;
-        while let ExpressionKind::Coerce { value, .. } = self.expression(id).kind {
-            id = value;
+    /// Creates in the innermost scope, before `value` is evaluated, each temporary whose written
+    /// borrow may be `value`'s value and that has no local yet, so that the temporary lives as
+    /// long as the value instead of ending with the branch that creates it (D20 of
+    /// `borrowck-exclusivity`). Lowering the `Temporary` node assigns that local.
+    pub(super) fn preallocate_extended_temporaries(&mut self, value: ExpressionId) {
+        for temporary in self.extended_temporaries(value) {
+            if self.preallocated.contains_key(&temporary) {
+                continue;
+            }
+            let expression = self.expression(temporary);
+            let local = self.new_temporary(expression.ty.clone(), expression.span);
+            self.preallocated
+                .insert(temporary, Preallocated::Local(local));
         }
-        let ExpressionKind::Borrow {
-            origin: prism_typed_tree::BorrowOrigin::Written,
-            place,
-            ..
-        } = self.expression(id).kind
-        else {
-            return None;
-        };
-        self.temporary_root(place)
+    }
+
+    /// The `Temporary` nodes at the root of the places of the written borrows that may be the
+    /// value of `value`: `value` itself, or, through coercions, a branch of an `if` with `else`
+    /// or of a `when` with a value, the fallback of a `?:` and the tail of a block, at any
+    /// depth.
+    pub(super) fn extended_temporaries(&self, value: ExpressionId) -> Vec<ExpressionId> {
+        let mut temporaries = Vec::new();
+        let mut pending = vec![value];
+        while let Some(id) = pending.pop() {
+            let expression = self.expression(id);
+            match &expression.kind {
+                ExpressionKind::Coerce { value, .. } => pending.push(*value),
+                ExpressionKind::Borrow {
+                    origin: prism_typed_tree::BorrowOrigin::Written,
+                    place,
+                    ..
+                } => temporaries.extend(self.temporary_root(*place)),
+                ExpressionKind::If {
+                    then_branch,
+                    else_branch: Some(else_branch),
+                    ..
+                } => {
+                    pending.push(*else_branch);
+                    pending.push(*then_branch);
+                }
+                ExpressionKind::When { branches, .. } if expression.ty != Type::Unit => {
+                    pending.extend(branches.iter().rev().map(|branch| branch.body));
+                }
+                ExpressionKind::Elvis { fallback, .. } => pending.push(*fallback),
+                ExpressionKind::Block {
+                    tail: Some(tail), ..
+                } => pending.push(*tail),
+                _ => {}
+            }
+        }
+        temporaries
     }
 
     /// The `Temporary` node at the root of the place `id`, reached through fields and indices.

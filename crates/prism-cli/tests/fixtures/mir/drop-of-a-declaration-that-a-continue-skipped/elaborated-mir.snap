@@ -27,25 +27,25 @@ fun main::f(_1: Bool, _2: Bool): Unit @2:1
   bb4:
     switch copy _2 [0 -> bb6, otherwise -> bb5] @2:83
   bb5:
-    switch copy _5 [0 -> bb7, otherwise -> bb11] @2:30
+    switch copy _5 [0 -> bb7, otherwise -> bb11] @2:74
   bb6:
-    switch copy _5 [0 -> bb9, otherwise -> bb12] @2:30
+    switch copy _5 [0 -> bb9, otherwise -> bb12] @2:74
   bb7:
-    storage_dead _4 @2:30
-    _5 = const false @2:30
-    drop _3 -> bb8 @2:30
+    storage_dead _4 @2:74
+    _5 = const false @2:74
+    drop _3 -> bb8 @2:74
   bb8:
-    storage_dead _3 @2:30
+    storage_dead _3 @2:74
     goto -> bb1 @2:27
   bb9:
-    storage_dead _4 @2:30
-    _5 = const false @2:30
-    drop _3 -> bb10 @2:30
+    storage_dead _4 @2:74
+    _5 = const false @2:74
+    drop _3 -> bb10 @2:74
   bb10:
-    storage_dead _3 @2:30
+    storage_dead _3 @2:74
     _0 = const () @2:25
     return @2:1
   bb11:
-    drop _4 -> bb7 @2:30
+    drop _4 -> bb7 @2:74
   bb12:
-    drop _4 -> bb9 @2:30
+    drop _4 -> bb9 @2:74

@@ -114,7 +114,8 @@ fn assigning_over_a_possibly_moved_variable() {
         "{}",
         f
     );
-    assert!(f.contains("    drop _2 -> bb6 @2:16\n  bb6:"), "{}", f);
+    // At the closing brace of the body.
+    assert!(f.contains("    drop _2 -> bb6 @2:55\n  bb6:"), "{}", f);
     assert_eq!(f.matches("switch copy _5").count(), 1, "{}", f);
 }
 

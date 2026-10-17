@@ -13,7 +13,7 @@ fun main::f(): Unit @2:1
     _1 = move _2 @4:5
     storage_dead _2 @4:5
     _0 = const () @2:9
-    drop _1 -> bb2 @2:9
+    drop _1 -> bb2 @5:1
   bb2:
-    storage_dead _1 @2:9
+    storage_dead _1 @5:1
     return @2:1

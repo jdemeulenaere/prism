@@ -290,7 +290,7 @@ impl Builder<'_> {
         }
         self.current = Some(absent);
         let scope = self.chains[index].scope;
-        self.exit_scopes_to(scope);
+        self.exit_scopes_to(scope, None);
         let mut null_block = self.chains[index].null_block.take();
         self.goto_lazy(&mut null_block, span);
         self.chains[index].null_block = null_block;
@@ -598,6 +598,16 @@ impl Builder<'_> {
 
     // Loops.
 
+    /// Where control leaves the loop body `body` when it falls through: its closing brace, or
+    /// its span when it is not a block.
+    fn block_exit_span(&self, body: ExpressionId) -> Span {
+        let expression = self.expression(body);
+        match expression.kind {
+            ExpressionKind::Block { close_brace, .. } => close_brace,
+            _ => expression.span,
+        }
+    }
+
     /// The index of the open loop `target` names.
     fn loop_index(&self, target: Option<StatementId>) -> usize {
         let target = target.expect("internal error: a jump that names no loop");
@@ -633,7 +643,7 @@ impl Builder<'_> {
 
     pub(super) fn lower_break(&mut self, target: Option<StatementId>, span: Span) {
         let index = self.loop_index(target);
-        self.exit_scopes_to(self.loops[index].break_depth);
+        self.exit_scopes_to(self.loops[index].break_depth, Some(span));
         if self.current.is_some() {
             let exit = self.loop_exit(index);
             self.goto(exit, span);
@@ -647,7 +657,7 @@ impl Builder<'_> {
     /// checker's initialization analysis can reject the condition's read of one of them.
     pub(super) fn lower_continue(&mut self, target: Option<StatementId>, span: Span) {
         let index = self.loop_index(target);
-        self.exit_scopes_to(self.loops[index].continue_depth);
+        self.exit_scopes_to(self.loops[index].continue_depth, Some(span));
         if self.current.is_none() {
             return;
         }
@@ -718,8 +728,8 @@ impl Builder<'_> {
         self.goto(start, span);
         self.current = Some(start);
         let break_depth = self.scope_depth();
-        let body_span = self.expression(body).span;
-        self.push_scope(body_span);
+        let body_exit = self.block_exit_span(body);
+        self.push_block_scope(body_exit);
         let body_scope = self.scope_depth() - 1;
         self.loops.push(LoopContext {
             statement: id,
@@ -731,7 +741,9 @@ impl Builder<'_> {
             continues: Vec::new(),
         });
         match &self.expression(body).kind {
-            ExpressionKind::Block { statements, tail } => {
+            ExpressionKind::Block {
+                statements, tail, ..
+            } => {
                 for &statement in statements {
                     if self.current.is_none() {
                         break;
@@ -762,10 +774,10 @@ impl Builder<'_> {
             self.current = Some(next);
             if let Some((on_true, on_false)) = self.branch_on_expression(condition) {
                 self.current = Some(on_true);
-                self.exit_scope(body_scope);
+                self.exit_scope(body_scope, None);
                 self.goto(start, span);
                 self.current = Some(on_false);
-                self.exit_scope(body_scope);
+                self.exit_scope(body_scope, None);
                 let exit = self.loop_exit(index);
                 self.goto(exit, span);
             }
@@ -841,8 +853,8 @@ impl Builder<'_> {
         let iteration = self.new_block();
         self.goto(iteration, span);
         self.current = Some(iteration);
-        let body_span = self.expression(body).span;
-        self.push_scope(body_span);
+        let body_exit = self.block_exit_span(body);
+        self.push_block_scope(body_exit);
         let variable_local = self.declare_binding(variable, span);
         self.assign(
             Place::local(variable_local),

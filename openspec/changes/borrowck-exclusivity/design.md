@@ -236,3 +236,8 @@ No external users. Programs with borrow conflicts, escaping capturing closures o
 
 - Whether `E5003`'s read-while-mutably-borrowed case deserves its own code once tooling wants to tell it apart (kept with borrows here, D6).
 - Whether escapes through a reference into the body's own locals (`*p = { x }` where `p` borrows a local `var g`) should be accepted once step 9 can tell the body's storage from the caller's.
+
+## Implementation Notes
+
+- D15: an unbraced block (a branch or loop body written without braces, or a block the type checker synthesizes) has no closing brace; its `close_brace` is its whole span, so its scope exits keep the span they had. A `do`/`while` body's locals, which the condition still sees, are dropped at the body's closing brace on both edges of the condition.
+- D20: the walk is `Builder::extended_temporaries`; it runs where a `val` or `var` is declared and where an `if`, `when`, `?:` or block is lowered into a destination, and a temporary already given a local by an enclosing expression is not given another.

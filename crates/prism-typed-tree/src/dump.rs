@@ -406,7 +406,9 @@ impl Printer<'_> {
                 self.expression(*nullable, depth, "nullable");
                 self.expression(*fallback, depth, "fallback");
             }
-            ExpressionKind::Block { statements, tail } => {
+            ExpressionKind::Block {
+                statements, tail, ..
+            } => {
                 for statement in statements {
                     self.statement(*statement, depth);
                 }

@@ -13,6 +13,9 @@ pub struct Block {
     pub statements: Vec<Statement>,
     pub tail: Option<Box<Expr>>,
     pub span: Span,
+    /// The span of the block's closing `}`, where control leaves it when it falls through. An
+    /// unbraced block (a branch or loop body written without braces) has its whole span.
+    pub close_brace: Span,
 }
 
 impl Block {

@@ -30,5 +30,5 @@ fun main::f(): Int @3:1
     storage_dead _4 @3:27
     storage_dead _3 @3:27
     storage_dead _2 @3:27
-    storage_dead _1 @3:14
+    storage_dead _1 @3:27
     return @3:1

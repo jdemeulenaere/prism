@@ -3098,6 +3098,7 @@ impl TypeChecker {
                 let kind = ExpressionKind::Block {
                     statements,
                     tail: None,
+                    close_brace: body.close_brace,
                 };
                 let body_id = self.add(kind, Type::Unit, body.span);
                 let condition = self.check_operand(condition, &Type::Bool);
@@ -3220,7 +3221,11 @@ impl TypeChecker {
 
         self.env.exit_scope();
         self.parent_consuming = saved_parent;
-        let kind = ExpressionKind::Block { statements, tail };
+        let kind = ExpressionKind::Block {
+            statements,
+            tail,
+            close_brace: block.close_brace,
+        };
         self.add(kind, result_ty, block.span)
     }
 
@@ -4910,6 +4915,7 @@ impl TypeChecker {
         if let ExpressionKind::Block {
             statements,
             tail: Some(tail),
+            close_brace,
         } = self.builder.kind(id).clone()
         {
             let span = self.builder.span_of(tail);
@@ -4922,6 +4928,7 @@ impl TypeChecker {
             expression.kind = ExpressionKind::Block {
                 statements,
                 tail: None,
+                close_brace,
             };
             expression.ty = Type::Unit;
         }
@@ -4938,6 +4945,7 @@ impl TypeChecker {
         let kind = ExpressionKind::Block {
             statements: vec![statement],
             tail: Some(value),
+            close_brace: value_span,
         };
         self.add(kind, ty, value_span)
     }
@@ -5512,6 +5520,7 @@ mod tests {
             statements: Vec::new(),
             tail: None,
             span: Span::dummy(),
+            close_brace: Span::dummy(),
         }));
         assert_eq!(infer(&mut checker, &block_empty), Type::Unit);
 
@@ -5524,6 +5533,7 @@ mod tests {
             })],
             tail: Some(Box::new(expr(ExprKind::Ident("a".to_string())))),
             span: Span::dummy(),
+            close_brace: Span::dummy(),
         }));
         assert_eq!(infer(&mut checker, &block_trailing), Type::Int);
     }
@@ -5591,6 +5601,7 @@ mod tests {
                     right: Box::new(expr(ExprKind::Literal(Literal::Int(1)))),
                 }))),
                 span: Span::dummy(),
+                close_brace: Span::dummy(),
             },
         });
 
@@ -6339,6 +6350,7 @@ mod tests {
                     args: Vec::new(),
                 }))),
                 span: Span::dummy(),
+                close_brace: Span::dummy(),
             },
         });
 

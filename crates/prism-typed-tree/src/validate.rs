@@ -547,7 +547,9 @@ impl Validator<'_> {
                     }
                 }
             }
-            ExpressionKind::Block { statements, tail } => {
+            ExpressionKind::Block {
+                statements, tail, ..
+            } => {
                 for statement in statements.clone() {
                     self.statement(statement);
                 }
@@ -894,6 +896,7 @@ fn children(kind: &ExpressionKind, statements: &mut Vec<StatementId>) -> Vec<Exp
         ExpressionKind::Block {
             statements: s,
             tail,
+            ..
         } => {
             statements.extend(s.iter().copied());
             tail.iter().copied().collect()
@@ -1043,6 +1046,7 @@ mod tests {
             ExpressionKind::Block {
                 statements: vec![statement],
                 tail: Some(tail),
+                close_brace: Span::dummy(),
             },
             Type::Int,
         );
@@ -1079,6 +1083,7 @@ mod tests {
             ExpressionKind::Block {
                 statements: statements.to_vec(),
                 tail: Some(tail),
+                close_brace: Span::dummy(),
             },
             Type::Int,
         );
@@ -1122,6 +1127,7 @@ mod tests {
             ExpressionKind::Block {
                 statements: vec![statement],
                 tail: Some(sum),
+                close_brace: Span::dummy(),
             },
             Type::String,
         );
@@ -1205,6 +1211,7 @@ mod tests {
             ExpressionKind::Block {
                 statements: vec![],
                 tail: Some(sum),
+                close_brace: Span::dummy(),
             },
             Type::Int,
         );
@@ -1244,6 +1251,7 @@ mod tests {
             ExpressionKind::Block {
                 statements: vec![statement],
                 tail: Some(diverge),
+                close_brace: Span::dummy(),
             },
             Type::Int,
         );
@@ -1287,6 +1295,7 @@ mod tests {
             ExpressionKind::Block {
                 statements: vec![statement],
                 tail: Some(call),
+                close_brace: Span::dummy(),
             },
             Type::Int,
         );

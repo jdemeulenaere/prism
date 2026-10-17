@@ -5,7 +5,9 @@
 //! temporary scope (a statement, a block's tail, a body's value, or a part evaluated
 //! conditionally or repeatedly). Where a scope ends, by falling through or by a jump out of it,
 //! each of its locals is dropped, in reverse order of creation, when its type needs a drop, then
-//! marked dead.
+//! marked dead. Those drops and storage ends carry the span of where control leaves the scope
+//! (D15 of `borrowck-exclusivity`): a braced block's closing brace when it falls through, the
+//! jump's span for a `return`, `break` or `continue`, and otherwise the scope's own span.
 
 use super::Builder;
 use crate::mir::{
@@ -24,17 +26,19 @@ struct ScopedLocal {
     marked: bool,
 }
 
-/// A scope: the locals it owns, in creation order, and the span its exit statements carry.
+/// A scope: the locals it owns, in creation order, and the span its exit statements carry when
+/// control falls through its end.
 #[derive(Debug, Clone)]
 pub(super) struct Scope {
-    span: Span,
+    exit: Span,
     locals: Vec<ScopedLocal>,
 }
 
 impl Scope {
-    pub(super) fn new(span: Span) -> Self {
+    /// A scope whose exit statements carry `exit` when it falls through.
+    pub(super) fn new(exit: Span) -> Self {
         Self {
-            span,
+            exit,
             locals: Vec::new(),
         }
     }
@@ -50,14 +54,21 @@ impl Scope {
 }
 
 impl Builder<'_> {
+    /// Opens a scope that is not a braced block: its exit statements carry `span`.
     pub(super) fn push_scope(&mut self, span: Span) {
         self.scopes.push(Scope::new(span));
+    }
+
+    /// Opens the scope of a braced block, whose exit statements carry the span of its closing
+    /// brace `close_brace` when it falls through.
+    pub(super) fn push_block_scope(&mut self, close_brace: Span) {
+        self.scopes.push(Scope::new(close_brace));
     }
 
     /// Ends the innermost scope: drops and marks dead its locals on the current path.
     pub(super) fn pop_scope(&mut self) {
         let index = self.scopes.len() - 1;
-        self.exit_scope(index);
+        self.exit_scope(index, None);
         self.scopes.pop();
     }
 
@@ -74,16 +85,18 @@ impl Builder<'_> {
 
     /// Emits, on the current path, the drops and storage markers of every scope from the
     /// innermost down to the one at index `depth`, leaving them open: the exit of a jump to a
-    /// point where only `depth` scopes are open.
-    pub(super) fn exit_scopes_to(&mut self, depth: usize) {
+    /// point where only `depth` scopes are open. They carry the span of the jump `jump`, or
+    /// each scope's own exit span without one.
+    pub(super) fn exit_scopes_to(&mut self, depth: usize, jump: Option<Span>) {
         for index in (depth..self.scopes.len()).rev() {
-            self.exit_scope(index);
+            self.exit_scope(index, jump);
         }
     }
 
-    /// Emits the drops and storage markers of the scope at `index`, in reverse creation order.
-    pub(super) fn exit_scope(&mut self, index: usize) {
-        let span = self.scopes[index].span;
+    /// Emits the drops and storage markers of the scope at `index`, in reverse creation order,
+    /// at the span of the jump `jump` that leaves it, or at its exit span without one.
+    pub(super) fn exit_scope(&mut self, index: usize, jump: Option<Span>) {
+        let span = jump.unwrap_or(self.scopes[index].exit);
         let locals = self.scopes[index].locals.clone();
         for scoped in locals.iter().rev() {
             if !scoped.moved {

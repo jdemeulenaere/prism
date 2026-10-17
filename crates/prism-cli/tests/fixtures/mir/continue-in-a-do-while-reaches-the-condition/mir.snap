@@ -30,16 +30,16 @@ fun main::f(_1: Bool): Unit @3:1
     switch move _4 [0 -> bb7, otherwise -> bb6] @3:77
   bb6:
     storage_dead _4 @3:77
-    storage_dead _3 @3:21
-    drop _2 -> bb8 @3:21
+    storage_dead _3 @3:68
+    drop _2 -> bb8 @3:68
   bb7:
     storage_dead _4 @3:77
-    storage_dead _3 @3:21
-    drop _2 -> bb9 @3:21
+    storage_dead _3 @3:68
+    drop _2 -> bb9 @3:68
   bb8:
-    storage_dead _2 @3:21
+    storage_dead _2 @3:68
     goto -> bb1 @3:18
   bb9:
-    storage_dead _2 @3:21
+    storage_dead _2 @3:68
     _0 = const () @3:16
     return @3:1

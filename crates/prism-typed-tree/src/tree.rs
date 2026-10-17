@@ -310,10 +310,13 @@ pub enum ExpressionKind {
 
     // Control flow (D9).
     /// A block: its statements, and its tail, which is the block's value. A block whose value is
-    /// discarded has no tail.
+    /// discarded has no tail. `close_brace` is the span of its closing `}` (the whole block's
+    /// for an unbraced or synthesized block), where the MIR of a block that falls through drops
+    /// its locals (D15 of `borrowck-exclusivity`).
     Block {
         statements: Vec<StatementId>,
         tail: Option<ExpressionId>,
+        close_brace: Span,
     },
     If {
         condition: ExpressionId,

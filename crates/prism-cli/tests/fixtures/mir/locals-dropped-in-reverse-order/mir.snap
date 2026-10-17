@@ -9,10 +9,10 @@ fun main::f(): Unit @2:1
     storage_live _2 @2:24
     _2 = const "b" @2:32
     _0 = const () @2:9
-    drop _2 -> bb1 @2:9
+    drop _2 -> bb1 @2:36
   bb1:
-    storage_dead _2 @2:9
-    drop _1 -> bb2 @2:9
+    storage_dead _2 @2:36
+    drop _1 -> bb2 @2:36
   bb2:
-    storage_dead _1 @2:9
+    storage_dead _1 @2:36
     return @2:1

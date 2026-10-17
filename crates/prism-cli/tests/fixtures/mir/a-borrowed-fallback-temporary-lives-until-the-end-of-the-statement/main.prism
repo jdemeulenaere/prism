@@ -1,0 +1,3 @@
+// expect: ok
+fun greet(n: &String): Int = 1
+fun f(n: String?): Int = greet(&n ?: &"anon")

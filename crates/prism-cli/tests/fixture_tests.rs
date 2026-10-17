@@ -241,7 +241,7 @@ struct Snapshot {
 }
 
 /// The scenarios of the `mir` spec whose cases must hold an `elaborated-mir.snap`: those of
-/// "Drops Are Elaborated After Borrow Checking".
+/// "Drops Are Elaborated After Borrow Checking", and those whose THEN describes elaborated MIR.
 const ELABORATED_SCENARIOS: &[&str] = &[
     "a-moved-value-is-not-dropped",
     "a-conditionally-moved-value-is-dropped-under-a-flag",
@@ -249,6 +249,8 @@ const ELABORATED_SCENARIOS: &[&str] = &[
     "reinitialization-after-a-move-drops-nothing",
     "deterministic-scope-exit-cleanup",
     "drop-of-a-declaration-that-a-continue-skipped",
+    "a-borrowed-fallback-temporary-lives-until-the-end-of-the-statement",
+    "borrowed-temporaries-in-the-branches-of-a-val-initializer",
 ];
 
 const SNAPSHOTS: &[Snapshot] = &[

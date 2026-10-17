@@ -405,7 +405,7 @@ impl<'a> Builder<'a> {
 
     /// Drops the arguments and returns.
     fn emit_return(&mut self) {
-        self.exit_scope(0);
+        self.exit_scope(0, None);
         self.terminate(TerminatorKind::Return, self.span);
     }
 

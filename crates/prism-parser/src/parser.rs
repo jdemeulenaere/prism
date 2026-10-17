@@ -1280,6 +1280,7 @@ impl Parser {
                     statements,
                     tail,
                     span: body_start.merge(end),
+                    close_brace: end,
                 },
             },
             start.merge(end),
@@ -1461,6 +1462,7 @@ impl Parser {
             statements,
             tail,
             span: start.merge(end),
+            close_brace: end,
         })
     }
 
@@ -1601,6 +1603,7 @@ impl Parser {
                         statements: vec![Statement::new(kind, span)],
                         tail: None,
                         span,
+                        close_brace: span,
                     }),
                     span,
                 )
@@ -1629,11 +1632,13 @@ impl Parser {
                 statements: Vec::new(),
                 tail: Some(Box::new(expr)),
                 span,
+                close_brace: span,
             },
             kind => Block {
                 statements: vec![Statement::new(kind, span)],
                 tail: None,
                 span,
+                close_brace: span,
             },
         })
     }

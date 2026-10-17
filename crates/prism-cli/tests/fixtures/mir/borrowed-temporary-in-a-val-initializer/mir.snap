@@ -26,8 +26,8 @@ fun main::f(): Int @4:1
     _0 = call main::greet(move _3) -> bb2 @4:40
   bb2:
     storage_dead _3 @4:33
-    storage_dead _2 @4:14
-    drop _1 -> bb3 @4:14
+    storage_dead _2 @4:33
+    drop _1 -> bb3 @4:33
   bb3:
-    storage_dead _1 @4:14
+    storage_dead _1 @4:33
     return @4:1

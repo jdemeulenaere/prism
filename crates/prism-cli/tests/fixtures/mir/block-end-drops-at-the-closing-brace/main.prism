@@ -1,0 +1,12 @@
+// expect: ok
+fun f(c: Bool) {
+    if (c) {
+        val s = "a"
+    }
+}
+fun g(c: Bool) {
+    while (c) {
+        val s = "a"
+        if (c) break
+    }
+}

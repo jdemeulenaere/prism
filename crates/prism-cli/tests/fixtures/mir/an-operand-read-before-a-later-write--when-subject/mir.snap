@@ -42,5 +42,5 @@ fun main::k(): Int @3:1
     goto -> bb4 @3:34
   bb4:
     storage_dead _2 @3:27
-    storage_dead _1 @3:14
+    storage_dead _1 @3:27
     return @3:1

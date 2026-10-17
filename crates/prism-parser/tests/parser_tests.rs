@@ -1138,6 +1138,21 @@ mod tests {
     }
 
     #[test]
+    fn a_block_records_its_closing_brace() {
+        let src = "fun f() = if (true) {\n    val y = 1\n  } else 2";
+        let e = expr_body(src);
+        let ExprKind::If { then_branch, .. } = &e.kind else {
+            panic!("Expected if, found {:?}", e.kind);
+        };
+        let ExprKind::Block(block) = &then_branch.kind else {
+            panic!("Expected block");
+        };
+        assert_eq!(&src[block.close_brace.start..block.close_brace.end], "}");
+        assert_eq!((block.close_brace.line, block.close_brace.column), (3, 3));
+        assert_eq!(block.span.end, block.close_brace.end);
+    }
+
+    #[test]
     fn function_type_syntax() {
         let types = param_types(
             "fun f(onClick: () -> Unit, content: compose () -> Unit, item: compose (Int) -> Unit, g: (Int) -> (Int) -> Int, a: (() -> Unit)?, b: () -> Unit?, u: ()) { }",
