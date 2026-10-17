@@ -1,0 +1,5 @@
+module main
+fun main::f(): Int @2:1
+  binary +: <error> @2:16
+    error: <error> @2:16
+    literal 1: Int @2:23

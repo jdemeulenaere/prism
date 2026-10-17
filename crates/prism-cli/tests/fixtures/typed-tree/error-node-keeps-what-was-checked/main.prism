@@ -1,0 +1,3 @@
+// expect: E4004
+fun g(a: Int): Int = a
+fun f(): Int = g(1, 2)

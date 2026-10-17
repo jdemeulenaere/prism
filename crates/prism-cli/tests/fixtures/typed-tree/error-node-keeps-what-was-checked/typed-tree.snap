@@ -1,0 +1,8 @@
+module main
+fun main::g(a: Int): Int @2:1
+  local %0 a: Int (parameter)
+  copy: Int @2:22
+    local %0 a: Int @2:22
+fun main::f(): Int @3:1
+  error: <error> @3:16
+    function main::g: (Int) -> Int @3:16

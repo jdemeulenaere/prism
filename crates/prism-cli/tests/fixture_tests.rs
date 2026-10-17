@@ -440,3 +440,38 @@ fn fixture_typed_trees_are_well_formed() {
         violations.join("\n")
     );
 }
+
+/// typed-tree: "Error-free trees", over `examples/`. Every example builds a well-formed typed
+/// tree; one that needs an unbuilt subsystem (`examples/demo/ui`) has type errors, so only the
+/// invariants of an erroneous tree are checked for it.
+#[test]
+fn example_typed_trees_are_well_formed() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut files = Vec::new();
+    prism_files(&examples, &mut files);
+    assert!(!files.is_empty(), "no examples found");
+    let mut violations = Vec::new();
+    for file in &files {
+        let dump = match prism_cli::dump_typed_tree(file) {
+            Ok(dump) => dump,
+            Err(err) => panic!("{}: no typed tree:\n{}", file.display(), err.render()),
+        };
+        let needs_unbuilt_subsystem = file.components().any(|c| c.as_os_str() == "ui");
+        let error_free = dump.type_errors.is_none();
+        assert!(
+            error_free || needs_unbuilt_subsystem,
+            "{}: type errors:\n{}",
+            file.display(),
+            dump.type_errors.map(|e| e.render()).unwrap_or_default()
+        );
+        for violation in dump.tree.validate(error_free) {
+            violations.push(format!("{}: {}", file.display(), violation));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} typed-tree violations:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}

@@ -45,8 +45,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 9. Errors and validation (D12, D14)
 
-- [ ] 9.1 Replace every remaining placeholder with a real node, and build `Error { children }` wherever checking gives up (unresolved names, type names as values, `this` outside an extension, mismatched or ambiguous calls, unknown members, invalid assignment targets), keeping the nodes of the subexpressions already checked and checking nothing more. Verify with fixtures for "Tree for a file with type errors" and "Error node keeps what was checked".
-- [ ] 9.2 In `fixture_tests.rs`, add a test that builds and validates (`validate(true)`) the typed tree of the entry file of every `// expect: ok` case whose entry is a file, and `validate(false)` for every other case that reaches Phase 2, reporting all violations at once. Verify that it passes, which covers "Error-free trees".
+- [x] 9.1 Replace every remaining placeholder with a real node, and build `Error { children }` wherever checking gives up (unresolved names, type names as values, `this` outside an extension, mismatched or ambiguous calls, unknown members, invalid assignment targets), keeping the nodes of the subexpressions already checked and checking nothing more. Verify with fixtures for "Tree for a file with type errors" and "Error node keeps what was checked".
+- [x] 9.2 In `fixture_tests.rs`, add a test that builds and validates (`validate(true)`) the typed tree of the entry file of every `// expect: ok` case whose entry is a file, and `validate(false)` for every other case that reaches Phase 2, reporting all violations at once. Verify that it passes, which covers "Error-free trees".
 
 ## 10. Integration
 
