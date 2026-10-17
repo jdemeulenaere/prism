@@ -1,0 +1,9 @@
+// expect: E5001
+struct User { val name: String }
+struct Account { val owner: User }
+consuming fun User.toAccount(): Account = Account(this)
+fun greet(n: &String): Int = 1
+fun g(u: User?) {
+    val a = u?.toAccount()
+    val b = u?.toAccount()
+}

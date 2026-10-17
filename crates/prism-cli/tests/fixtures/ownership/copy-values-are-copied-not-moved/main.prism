@@ -1,0 +1,11 @@
+// expect: ok
+struct Point : Copy { val x: Int }
+fun g(p: Point) {}
+fun h(n: Int) {}
+fun f(p: Point, n: Int) {
+    g(p)
+    g(p)
+    val m = n
+    h(n)
+    h(m)
+}

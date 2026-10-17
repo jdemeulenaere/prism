@@ -1,4 +1,6 @@
 use prism_abi::AbiError;
+use prism_ast::Span;
+use prism_borrowck::{BorrowError, Label};
 use prism_parser::ParseError;
 use prism_resolver::ResolveError;
 use prism_typechecker::{Type, TypeError};
@@ -15,6 +17,30 @@ fn render_code_snippet(source: &str, line: u32, col: u32) -> Option<String> {
     let col_idx = if col > 0 { (col - 1) as usize } else { 0 };
     let pointer = format!("{}^", " ".repeat(col_idx));
     Some(format!(" {:4} | {}\n      | {}", line, src_line, pointer))
+}
+
+/// Formats the snippet of `span`'s first line, underlined from its column to the end of the span
+/// or of the line (at least one `^`), followed by `label`.
+fn render_labelled_snippet(source: &str, span: Span, label: &str) -> Option<String> {
+    let line = source.lines().nth((span.line as usize).checked_sub(1)?)?;
+    let column = (span.column.max(1) - 1) as usize;
+    let spanned = source
+        .get(span.start..span.end.max(span.start))
+        .unwrap_or_default();
+    let width = spanned
+        .chars()
+        .take_while(|c| *c != '\n')
+        .count()
+        .min(line.chars().count().saturating_sub(column))
+        .max(1);
+    Some(format!(
+        " {:4} | {}\n      | {}{} {}",
+        span.line,
+        line,
+        " ".repeat(column),
+        "^".repeat(width),
+        label
+    ))
 }
 
 /// Formats a [`ResolveError`] as a human-readable compiler diagnostic.
@@ -312,6 +338,45 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
     out
 }
 
+/// Formats the borrow checker's errors in one file.
+pub fn format_borrow_errors(path: &Path, source: Option<&str>, errors: &[BorrowError]) -> String {
+    errors
+        .iter()
+        .map(|error| format_borrow_error(path, source, error))
+        .collect()
+}
+
+/// Formats one borrow checker error: its header, its primary location with its label, each
+/// related location with its own, then its notes and help lines (the `diagnostics` spec,
+/// "Diagnostics Show Related Locations").
+pub fn format_borrow_error(path: &Path, source: Option<&str>, error: &BorrowError) -> String {
+    let mut out = format!("error[{}]: {}\n", error.code(), error.message());
+    let mut location = |label: &Label| {
+        out.push_str(&format!(
+            "  --> {}:{}:{}\n",
+            path.display(),
+            label.span.line,
+            label.span.column
+        ));
+        if let Some(snippet) =
+            source.and_then(|src| render_labelled_snippet(src, label.span, &label.message))
+        {
+            out.push_str(&format!("{}\n", snippet));
+        }
+    };
+    location(&error.primary);
+    for label in &error.related {
+        location(label);
+    }
+    for note in &error.notes {
+        out.push_str(&format!("   = note: {}\n", note));
+    }
+    for help in &error.helps {
+        out.push_str(&format!("   = help: {}\n", help));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,5 +574,74 @@ mod tests {
         );
         // Each statement reports one error.
         assert_eq!(out.matches("error[").count(), 4, "{out}");
+    }
+
+    /// Renders the borrow errors of `src`, checked as a single file `main.prism`.
+    fn render_borrow_errors(src: &str) -> String {
+        let file = prism_parser::parse_source(src).expect("source must parse");
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+        let tree = checker.check_module(&file);
+        assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+        let mir = prism_mir::lower_file(&tree);
+        let errors = prism_borrowck::check_file(&mir).expect_err("expected borrow errors");
+        format_borrow_errors(Path::new("main.prism"), Some(src), &errors)
+    }
+
+    /// ownership: "Use after move points at the move"; diagnostics: "Rendered related location".
+    #[test]
+    fn test_use_after_move_points_at_the_move() {
+        let out =
+            render_borrow_errors("fun take(s: String) {}\nfun f(s: String) { take(s); take(s) }\n");
+        let expected = "\
+error[E5001]: use of moved value 's'
+  --> main.prism:2:34
+    2 | fun f(s: String) { take(s); take(s) }
+      |                                  ^ value used here after move
+  --> main.prism:2:25
+    2 | fun f(s: String) { take(s); take(s) }
+      |                         ^ value moved here
+   = note: 's' has type 'String', which is not 'Copy'
+   = help: clone it where it moves: 's.clone()'
+";
+        assert_eq!(out, expected);
+    }
+
+    /// ownership: "Possibly moved value".
+    #[test]
+    fn test_possibly_moved_value() {
+        let out = render_borrow_errors(
+            "fun take(s: String) {}\nfun f(c: Bool, s: String) { if (c) take(s); take(s) }\n",
+        );
+        let expected = "\
+error[E5001]: use of possibly moved value 's'
+  --> main.prism:2:50
+    2 | fun f(c: Bool, s: String) { if (c) take(s); take(s) }
+      |                                                  ^ value used here after move
+  --> main.prism:2:41
+    2 | fun f(c: Bool, s: String) { if (c) take(s); take(s) }
+      |                                         ^ value moved here
+   = note: 's' has type 'String', which is not 'Copy'
+   = help: clone it where it moves: 's.clone()'
+";
+        assert_eq!(out, expected);
+    }
+
+    /// ownership: "Continue skips a declaration that the condition reads".
+    #[test]
+    fn test_uninitialized_read_points_at_the_skipping_jump() {
+        let out = render_borrow_errors(
+            "fun next(): Int = 0\nfun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }\n",
+        );
+        let expected = "\
+error[E5002]: use of possibly uninitialized value 'x'
+  --> main.prism:2:77
+    2 | fun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }
+      |                                                                             ^^^^^ 'x' used here, but it is not initialized on every path
+  --> main.prism:2:43
+    2 | fun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }
+      |                                           ^^^^^^^^ the declaration of 'x' is skipped here
+   = help: declare 'x' before the jump that skips it
+";
+        assert_eq!(out, expected);
     }
 }

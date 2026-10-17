@@ -1,0 +1,7 @@
+// expect: E5001
+fun take(s: String) {}
+struct Tag { val s: String }
+fun f(a: String) {
+    val b = a
+    take(a)
+}

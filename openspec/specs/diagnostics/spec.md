@@ -78,6 +78,13 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 
 A `public` or `package` function without a return type is reported as `E3001` when it has an expression body (Phase 1 rejects it first) and as `E4011` when it has a block body (Phase 1 accepts it as returning `Unit`). Unifying these is tracked in `ROADMAP.md`.
 
+### E5xxx: Phase 2 borrow checking (`crates/prism-borrowck`)
+
+| Code | Name | Meaning |
+|---|---|---|
+| `E5001` | `UseAfterMove` | A non-`Copy` value is used (read, copied, moved, borrowed, called, captured by a closure, or one of its fields assigned) on a path on which it was moved and not assigned again: after a move into a binding, an argument, a constructor or the receiver of a `consuming fun`, in one branch of an `if`, `when`, `&&`, `||` or `?.` ("possibly moved"), or in an earlier iteration of a loop. The diagnostic labels each move that reaches the use. |
+| `E5002` | `UseOfUninitialized` | A local is read on a path on which it was never assigned: today only a `do`/`while` condition reading a body local whose declaration a `continue` skipped. The diagnostic labels the jump that skips the declaration. |
+
 ## Design Rationale
 - **One code per error kind, separate from message text.** Tooling and tests match on codes, so messages can improve without breaking them.
 - **`E4011` instead of reusing `E4004`** (`resolve-nominal-type-annotations`): a missing return type is not a call error, and the type checker also runs without the ABI stage (unit tests, a future LSP), so it needs its own diagnostic rather than relying on `E3001`.

@@ -1,0 +1,9 @@
+// expect: E5002
+fun next(): Int = 0
+fun f(c: Bool) {
+    do {
+        val s = "a"
+        if (c) continue
+        val x = next()
+    } while (x > 0)
+}

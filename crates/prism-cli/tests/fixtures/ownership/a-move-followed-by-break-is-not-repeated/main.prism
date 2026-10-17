@@ -1,0 +1,8 @@
+// expect: ok
+fun take(s: String) {}
+fun f(c: Bool, s: String) {
+    while (c) {
+        take(s)
+        break
+    }
+}

@@ -1,0 +1,7 @@
+// expect: E5001
+enum Color { Red, Green }
+fun paint(c: Color) {}
+fun f(c: Color) {
+    paint(c)
+    paint(c)
+}

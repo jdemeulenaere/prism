@@ -225,6 +225,8 @@ Every passing fixture and example was written before uses after move were checke
 ### Implementation notes
 
 - **D11: a default value is now a consuming position.** The type checker checked a default value with `check_argument(.., Origin::Value)`, which did not mark it consumed, so `fun f(a: String, b: String = a)` produced a typed tree whose default read `a` in place, and lowering it panicked ("a String place read in place is used as a value"). The default is now checked in a consuming position, as the argument it stands for, which makes `check_move_source` see the move and report `E4017`. For a shared receiver, `fun User.g(u: User = this)` was already `E4017` ("cannot move out of borrow 'this'", since `this` is `&User` there); the new source wording applies to an earlier by-value parameter and to a `consuming` receiver.
+- **D14: no incidental rewrite was needed.** With the checker wired into `prism check`, the only `// expect: ok` fixture it rejects is `mir/continue-in-a-do-while-reaches-the-condition`, which now expects `E5002` and keeps its `mir.snap`. No other fixture and no file under `examples/` used a value after moving it.
+- **D9: labels at a statement's span.** An operand that a statement moves or borrows in place, without a temporary of its own, is labelled at the statement's span: both moves of `Pair(s, s)` point at the whole construction, and a use by `s == "a"` at the whole comparison. Arguments and receivers have their own temporaries and spans, as D9 expects. Refining these spans is a lowering change that needs no change to the checker.
 
 ## Risks / Trade-offs
 

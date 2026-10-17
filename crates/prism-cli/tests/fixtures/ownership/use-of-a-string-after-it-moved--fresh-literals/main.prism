@@ -1,0 +1,6 @@
+// expect: ok
+fun take(s: String) {}
+fun g() {
+    take("x")
+    take("x")
+}

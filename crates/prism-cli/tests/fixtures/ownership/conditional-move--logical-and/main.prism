@@ -1,0 +1,8 @@
+// expect: E5001
+fun take(s: String) {}
+fun check(s: String): Bool = true
+fun g() {}
+fun f(c: Bool, n: Int, s: String) {
+    val ok = c && check(s)
+    take(s)
+}

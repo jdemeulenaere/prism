@@ -1,0 +1,11 @@
+// expect: E5001
+struct Point { val x: Int, val y: Int }
+struct Name { val text: String }
+fun g(p: Point) {}
+fun h(n: Name) {}
+fun f(p: Point, n: Name) {
+    g(p)
+    g(p)
+    h(n)
+    h(n)
+}

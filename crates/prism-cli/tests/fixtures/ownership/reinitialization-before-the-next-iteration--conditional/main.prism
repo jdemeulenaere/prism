@@ -1,0 +1,9 @@
+// expect: E5001
+fun take(s: String) {}
+fun f(c: Bool, d: Bool) {
+    var t = "a"
+    while (c) {
+        take(t)
+        if (d) t = "b"
+    }
+}

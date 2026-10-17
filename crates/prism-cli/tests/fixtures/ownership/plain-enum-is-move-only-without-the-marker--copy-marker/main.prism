@@ -1,0 +1,7 @@
+// expect: ok
+enum Color : Copy { Red, Green }
+fun paint(c: Color) {}
+fun f(c: Color) {
+    paint(c)
+    paint(c)
+}

@@ -48,6 +48,12 @@ pub enum WorkspaceError {
         source: String,
         errors: Vec<prism_typechecker::TypeError>,
     },
+    /// The borrow checker's errors in one file, which typechecks.
+    Borrow {
+        path: PathBuf,
+        source: String,
+        errors: Vec<prism_borrowck::BorrowError>,
+    },
     Io {
         path: PathBuf,
         message: String,
@@ -75,6 +81,11 @@ impl WorkspaceError {
                 source,
                 errors,
             } => diagnostics::format_type_errors(path, Some(source), errors),
+            WorkspaceError::Borrow {
+                path,
+                source,
+                errors,
+            } => diagnostics::format_borrow_errors(path, Some(source), errors),
             WorkspaceError::Io { path, message } => {
                 format!(
                     "error[E1000]: IO error at '{}': {}\n",
@@ -294,8 +305,8 @@ fn module_path(node: &SourceNode) -> String {
 }
 
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 in topological SCC
-/// order: typechecking each file, stopping at the first file with type errors, and lowering each
-/// file that typechecks to MIR.
+/// order: typechecking each file, lowering each file that typechecks to MIR and borrow-checking
+/// that MIR, stopping at the first file with type or borrow errors.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
     let abis = extract_abis(graph)?;
 
@@ -315,8 +326,17 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
                 });
             }
             // Phase 2 lowers each file that typechecks to MIR from its typed tree alone (D1 of
-            // `mir-lowering`). Nothing consumes it yet: the borrow checker will.
-            let _mir = prism_mir::lower_file(&tree);
+            // `mir-lowering`), and borrow-checks that MIR alone, never another file's (D1 of
+            // `borrowck-moves`). Nothing consumes the elaborated MIR yet: the backend will.
+            let mir = prism_mir::lower_file(&tree);
+            if let Err(errors) = prism_borrowck::check_file(&mir) {
+                let source = fs::read_to_string(file_path).unwrap_or_default();
+                return Err(WorkspaceError::Borrow {
+                    path: file_path.clone(),
+                    source,
+                    errors,
+                });
+            }
 
             let abi = abis.get(file_path).expect("abi must exist");
             let package_str = if node.package.is_empty() {

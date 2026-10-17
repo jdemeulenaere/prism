@@ -1,0 +1,11 @@
+// expect: E5001
+fun take(s: String) {}
+fun check(s: String): Bool = true
+fun g() {}
+fun f(c: Bool, n: Int, s: String) {
+    when (n) {
+        1 -> take(s)
+        else -> g()
+    }
+    take(s)
+}

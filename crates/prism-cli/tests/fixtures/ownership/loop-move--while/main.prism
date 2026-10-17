@@ -1,0 +1,5 @@
+// expect: E5001
+fun take(s: String) {}
+fun f(c: Bool, s: String) {
+    while (c) take(s)
+}

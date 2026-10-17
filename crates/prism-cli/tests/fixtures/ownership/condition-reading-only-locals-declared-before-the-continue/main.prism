@@ -1,0 +1,9 @@
+// expect: ok
+fun next(): Int = 0
+fun f(c: Bool) {
+    do {
+        val x = next()
+        if (c) continue
+        val y = "b"
+    } while (x > 0)
+}

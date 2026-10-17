@@ -1,0 +1,10 @@
+// expect: E5001
+struct Stack { var count: Int }
+consuming fun Stack.into(n: Int): Int = n
+fun bump(s: &mut Stack): Int = 1
+mut fun Stack.push(n: Int) {}
+fun Stack.size(): Int = count
+fun f() {
+    var s = Stack(0)
+    val k = s.into(bump(&mut s))
+}

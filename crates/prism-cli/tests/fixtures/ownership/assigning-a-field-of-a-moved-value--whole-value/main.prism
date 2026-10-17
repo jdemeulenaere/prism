@@ -1,0 +1,9 @@
+// expect: ok
+struct User { var name: String }
+fun take(u: User) {}
+fun f() {
+    var v = User("a")
+    take(v)
+    v = User("b")
+    take(v)
+}

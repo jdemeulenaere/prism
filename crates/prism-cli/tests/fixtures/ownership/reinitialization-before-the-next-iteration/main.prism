@@ -1,0 +1,9 @@
+// expect: ok
+fun take(s: String) {}
+fun f(c: Bool, d: Bool) {
+    var s = "a"
+    while (c) {
+        take(s)
+        s = "b"
+    }
+}
