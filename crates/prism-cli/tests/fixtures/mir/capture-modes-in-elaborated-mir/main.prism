@@ -1,0 +1,7 @@
+// expect: ok
+struct User { var name: String }
+fun run(f: () -> Int): Int = f()
+fun f(n: Int) {
+    var u = User("a")
+    run { u.name = "z"; n }
+}

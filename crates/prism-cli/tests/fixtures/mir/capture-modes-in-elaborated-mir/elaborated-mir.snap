@@ -1,0 +1,42 @@
+module main
+phase elaborated
+fun main::run(_1: () -> Int): Int @3:1
+  local _0: Int (return)
+  local _1 f: () -> Int (argument)
+  bb0:
+    _0 = call _1() -> bb1 @3:30
+  bb1:
+    drop _1 -> bb2 @3:1
+  bb2:
+    return @3:1
+fun main::f(_1: Int): Unit @4:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  local _2 u: User (user, var)
+  local _3: () -> Int (temporary)
+  local _4: Int (temporary)
+  bb0:
+    storage_live _2 @5:5
+    _2 = struct main::User(const "a") @5:13
+    storage_live _3 @6:9
+    _3 = closure main::f#closure0 [&mut _2, &_1] @6:9
+    storage_live _4 @6:5
+    _4 = call main::run(move _3) -> bb1 @6:5
+  bb1:
+    storage_dead _4 @6:5
+    storage_dead _3 @6:5
+    _0 = const () @4:15
+    drop _2 -> bb2 @7:1
+  bb2:
+    storage_dead _2 @7:1
+    return @4:1
+closure main::f#closure0(): Int @6:9
+  local _0: Int (return)
+  local _1 u: User (capture, var)
+  local _2 n: Int (capture)
+  bb0:
+    drop _1.name -> bb1 @6:11
+  bb1:
+    _1.name = const "z" @6:11
+    _0 = copy _2 @6:25
+    return @6:9

@@ -174,6 +174,7 @@ mod tests {
             locals,
             argument_count: 1,
             capture_count: 0,
+            capture_modes: Vec::new(),
             blocks: Arena::new(),
             span: Span::dummy(),
         }

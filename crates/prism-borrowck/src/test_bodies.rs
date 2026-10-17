@@ -48,6 +48,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         locals,
         argument_count: 0,
         capture_count: 0,
+        capture_modes: Vec::new(),
         blocks,
         span: Span::dummy(),
     }

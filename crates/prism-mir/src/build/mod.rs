@@ -431,6 +431,7 @@ impl<'a> Builder<'a> {
             locals: self.locals,
             argument_count: self.argument_count,
             capture_count: self.capture_count,
+            capture_modes: Vec::new(),
             blocks,
             span: self.span,
         }

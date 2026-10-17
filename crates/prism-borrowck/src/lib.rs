@@ -16,6 +16,7 @@
 //! borrows. Their errors join [`BorrowErrorKind`] with the next `E5xxx` codes.
 
 pub mod analyses;
+pub mod captures;
 mod check;
 pub mod dataflow;
 pub mod dominators;
@@ -60,12 +61,17 @@ pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
         sort_errors(&mut errors);
         return Err(errors);
     }
-    Ok(MirFile {
+    let mut elaborated = MirFile {
         module: file.module.clone(),
         phase: MirPhase::Elaborated,
         types: file.types.clone(),
         bodies: elaborated,
-    })
+    };
+    let captures = captures::infer_capture_modes(&elaborated);
+    for (id, modes) in captures.modes {
+        elaborated.bodies[id].capture_modes = modes;
+    }
+    Ok(elaborated)
 }
 
 /// Checks the drops of an elaborated file (D15 of `borrowck-moves`): every drop of a whole local

@@ -251,6 +251,7 @@ const ELABORATED_SCENARIOS: &[&str] = &[
     "drop-of-a-declaration-that-a-continue-skipped",
     "a-borrowed-fallback-temporary-lives-until-the-end-of-the-statement",
     "borrowed-temporaries-in-the-branches-of-a-val-initializer",
+    "capture-modes-in-elaborated-mir",
 ];
 
 const SNAPSHOTS: &[Snapshot] = &[

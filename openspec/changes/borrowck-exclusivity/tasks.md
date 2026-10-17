@@ -16,7 +16,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 3. MIR: capture modes and the capture-move rule (D10, D11)
 
-- [ ] 3.1 In `crates/prism-mir/src/mir.rs`, add `pub enum CaptureMode { Shared, Mutable }` and `pub capture_modes: Vec<CaptureMode>` on `Body` (empty from `lower_file`), and export `CaptureMode` from `lib.rs`. In `src/dump.rs`, print the captures of an `Rvalue::Closure` as `&_1` or `&mut _1` when the file is `MirPhase::Elaborated`, from the closure body's `capture_modes`. In `src/validate.rs`, report a `capture_modes` length different from `capture_count` in an elaborated closure body, any mode in built MIR, and an `Operand::Move` of a place rooted at a capture local. Verify with unit tests in `validate.rs` that each violation is reported on a hand-built body and with a dump test of an elaborated closure value, and that `fixture_mir_is_well_formed` and `example_mir_is_well_formed` still pass.
+- [x] 3.1 In `crates/prism-mir/src/mir.rs`, add `pub enum CaptureMode { Shared, Mutable }` and `pub capture_modes: Vec<CaptureMode>` on `Body` (empty from `lower_file`), and export `CaptureMode` from `lib.rs`. In `src/dump.rs`, print the captures of an `Rvalue::Closure` as `&_1` or `&mut _1` when the file is `MirPhase::Elaborated`, from the closure body's `capture_modes`. In `src/validate.rs`, report a `capture_modes` length different from `capture_count` in an elaborated closure body, any mode in built MIR, and an `Operand::Move` of a place rooted at a capture local. Verify with unit tests in `validate.rs` that each violation is reported on a hand-built body and with a dump test of an elaborated closure value, and that `fixture_mir_is_well_formed` and `example_mir_is_well_formed` still pass.
 
 ## 4. Places and loans (D3, D6, D13)
 
@@ -25,7 +25,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 5. Capture modes (D10)
 
-- [ ] 5.1 Add `src/captures.rs`: `infer_capture_modes(file: &MirFile) -> HashMap<BodyId, Vec<CaptureMode>>`, deciding each capture local of each closure body as D10 says (an assignment of the local or a place rooted at it, a write through it, a mutable `Rvalue::Borrow` of a place rooted at it, or a nested `Rvalue::Closure` capturing a place rooted at it whose own mode is mutable), innermost closures first (a closure's nested closures are the bodies whose owner is `BodyOwner::Closure { parent }` naming it). Verify with unit tests: `{ greet(u.name) }` shared, `{ u.name = "z"; 1 }`, `{ *r = 2; 1 }` for `r: &mut Int`, `{ bump(r); 1 }` and `{ run { x = 2; 1 } }` mutable, and `{ n + 1 }` shared.
+- [x] 5.1 Add `src/captures.rs`: `infer_capture_modes(file: &MirFile) -> HashMap<BodyId, Vec<CaptureMode>>`, deciding each capture local of each closure body as D10 says (an assignment of the local or a place rooted at it, a write through it, a mutable `Rvalue::Borrow` of a place rooted at it, or a nested `Rvalue::Closure` capturing a place rooted at it whose own mode is mutable), innermost closures first (a closure's nested closures are the bodies whose owner is `BodyOwner::Closure { parent }` naming it). Verify with unit tests: `{ greet(u.name) }` shared, `{ u.name = "z"; 1 }`, `{ *r = 2; 1 }` for `r: &mut Int`, `{ bump(r); 1 }` and `{ run { x = 2; 1 } }` mutable, and `{ n + 1 }` shared.
 
 ## 6. Liveness (D5)
 

@@ -16,7 +16,8 @@
 //!   twice; only values whose type needs a drop ([`crate::needs_drop`]) are dropped.
 //! - **Phase**. Lowering builds [`MirPhase::Built`] MIR; the borrow checker returns
 //!   [`MirPhase::Elaborated`] MIR, whose drops are refined by moves and may be guarded by drop
-//!   flags ([`LocalKind::DropFlag`]), which only elaborated MIR has.
+//!   flags ([`LocalKind::DropFlag`]), and whose closure bodies record how they borrow each
+//!   capture ([`Body::capture_modes`]), which only elaborated MIR has.
 
 use prism_ast::Span;
 use prism_typed_tree::{
@@ -98,6 +99,10 @@ pub struct Body {
     pub argument_count: usize,
     /// The number of capture locals, which follow the arguments. Zero outside closures.
     pub capture_count: usize,
+    /// How the closure borrows each capture local, in capture order: empty in MIR as lowered,
+    /// which leaves the decision to the borrow checker, and one mode per capture local in
+    /// elaborated MIR (D10 of `borrowck-exclusivity`).
+    pub capture_modes: Vec<CaptureMode>,
     /// The blocks; `bb0` is the entry.
     pub blocks: Arena<BlockId, BasicBlock>,
     pub span: Span,
@@ -124,6 +129,17 @@ impl Body {
             )
         })
     }
+}
+
+/// How a closure borrows one of its captures, as the borrow checker infers it (D10 of
+/// `borrowck-exclusivity`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CaptureMode {
+    /// A shared borrow: the closure only reads the binding.
+    Shared,
+    /// A mutable borrow: the closure writes the binding, writes through it, borrows it
+    /// mutably, or holds a nested closure that captures it mutably.
+    Mutable,
 }
 
 /// A local of a body.

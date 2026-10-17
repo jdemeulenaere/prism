@@ -5,11 +5,12 @@
 //! locals (a drop flag as `(drop flag)`), then its blocks, one statement or terminator per line with the
 //! line and column of the source it comes from. Places print as `_1.name` for a field (named
 //! from the type table), `(*_1)` for a dereference, `(_1 as payload)` for a nullable's payload
-//! and `_1[_2]` for an index; operands as `move _1`, `copy _1` or `const …`.
+//! and `_1[_2]` for an index; operands as `move _1`, `copy _1` or `const …`. In elaborated MIR,
+//! a closure value's captures print with how the closure borrows them: `[&mut _1, &_2]`.
 
 use crate::mir::{
-    AggregateKind, Body, BodyId, BodyOwner, Callee, Constant, LocalKind, MirFile, MirPhase,
-    Operand, Place, Projection, Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, Body, BodyId, BodyOwner, Callee, CaptureMode, Constant, LocalKind, MirFile,
+    MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TerminatorKind,
 };
 use crate::types::projection_type;
 use prism_ast::Span;
@@ -230,7 +231,26 @@ impl Printer<'_> {
             Rvalue::WrapNullable(operand) => format!("wrap {}", self.operand(operand)),
             Rvalue::Subtype(operand) => format!("subtype {}", self.operand(operand)),
             Rvalue::Closure { body, captures } => {
-                let captures: Vec<String> = captures.iter().map(|p| self.place(p)).collect();
+                // Elaborated MIR prints how the closure borrows each capture (D10 of
+                // `borrowck-exclusivity`).
+                let modes = match self.file.phase {
+                    MirPhase::Elaborated => self
+                        .file
+                        .bodies
+                        .get(*body)
+                        .map(|closure| closure.capture_modes.as_slice())
+                        .unwrap_or_default(),
+                    MirPhase::Built => &[],
+                };
+                let captures: Vec<String> = captures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, place)| match modes.get(index) {
+                        Some(CaptureMode::Shared) => format!("&{}", self.place(place)),
+                        Some(CaptureMode::Mutable) => format!("&mut {}", self.place(place)),
+                        None => self.place(place),
+                    })
+                    .collect();
                 format!(
                     "closure {} [{}]",
                     self.file.body_name(*body),
@@ -400,6 +420,7 @@ pub(crate) mod tests {
             locals,
             argument_count: 1,
             capture_count: 0,
+            capture_modes: Vec::new(),
             blocks,
             span: span(1, 1),
         };

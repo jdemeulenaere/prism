@@ -18,8 +18,9 @@ impl MirFile {
     /// conversion, whose operand's type differs from it; copied operands are `Copy`; aggregates
     /// match their fields; a call's operands have its parameter types and it has no successor
     /// exactly when its destination is `Nothing`; a switch reads a `Bool` or an `Int`; no
-    /// operand moves a place through a dereference; only values needing a drop are dropped;
-    /// captures appear only in closures and are never marked or dropped; drop flags appear only
+    /// operand moves a place through a dereference or rooted at a capture; only values needing
+    /// a drop are dropped; captures appear only in closures and are never marked or dropped,
+    /// and have one capture mode each in elaborated MIR and none as lowered; drop flags appear only
     /// in elaborated MIR, are `Bool`, are assigned only constants and read only by a switch; and
     /// every other local is storage-live wherever it is used, never marked live twice, and dead
     /// on every path to the return.
@@ -138,6 +139,23 @@ impl Validator<'_> {
         if body.locals.len() <= body.argument_count + body.capture_count {
             self.report("fewer locals than arguments and captures".to_string());
         }
+        // Capture modes are the borrow checker's: none as lowered, one per capture local once
+        // elaborated (D10 of `borrowck-exclusivity`).
+        let expected_modes = match self.file.phase {
+            MirPhase::Built => 0,
+            MirPhase::Elaborated => body.capture_count,
+        };
+        if body.capture_modes.len() != expected_modes {
+            self.report(format!(
+                "{} capture modes for {} captures in {} MIR",
+                body.capture_modes.len(),
+                body.capture_count,
+                match self.file.phase {
+                    MirPhase::Built => "built",
+                    MirPhase::Elaborated => "elaborated",
+                }
+            ));
+        }
         for (local, declaration) in body.locals.iter() {
             if declaration.kind != LocalKind::DropFlag {
                 continue;
@@ -240,6 +258,19 @@ impl Validator<'_> {
             Operand::Move(place, _) => {
                 if place.projections.contains(&Projection::Deref) {
                     self.report(format!("{} moves out of a dereference", at));
+                }
+                // A closure borrows its captures, so it cannot move out of one (D11 of
+                // `borrowck-exclusivity`).
+                if self
+                    .body
+                    .locals
+                    .get(place.local)
+                    .is_some_and(|local| local.kind == LocalKind::Capture)
+                {
+                    self.report(format!(
+                        "{} moves out of the capture _{}",
+                        at, place.local.0
+                    ));
                 }
                 self.place_type(place, at)
             }
@@ -351,8 +382,12 @@ impl Validator<'_> {
                         self.report(format!("{} drops a {}, which needs no drop", at, ty));
                     }
                 }
+                // The captured binding itself is never dropped by the closure; the old value of
+                // a field of it is, when the closure assigns the field.
                 let local = place.local;
-                if self.body.locals.get(local).map(|l| l.kind) == Some(LocalKind::Capture) {
+                if place.projections.is_empty()
+                    && self.body.locals.get(local).map(|l| l.kind) == Some(LocalKind::Capture)
+                {
                     self.report(format!("{} drops the capture _{}", at, local.0));
                 }
             }
@@ -974,6 +1009,80 @@ mod tests {
         assert_reports(
             &file,
             "bb2[terminator] uses the drop flag _3 outside a switch",
+        );
+    }
+
+    /// `g` building a closure that captures `n`, lowered from source.
+    fn closure_file() -> MirFile {
+        let source = "fun run(f: () -> Int): Int = f()\nfun g(n: Int): Int = run { n }\n";
+        let file = prism_parser::parse_source(source).expect("the source parses");
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+        let tree = checker.check_module(&file);
+        assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+        crate::lower_file(&tree)
+    }
+
+    fn closure_body(file: &mut MirFile) -> &mut Body {
+        let (id, _) = file
+            .bodies
+            .iter()
+            .find(|(_, body)| matches!(body.owner, BodyOwner::Closure { .. }))
+            .expect("a closure body");
+        &mut file.bodies[id]
+    }
+
+    #[test]
+    fn capture_modes_are_checked_by_phase() {
+        let mut file = closure_file();
+        assert_eq!(violations(&file), "");
+        closure_body(&mut file).capture_modes = vec![CaptureMode::Shared];
+        assert_reports(&file, "1 capture modes for 1 captures in built MIR");
+        let mut file = closure_file();
+        file.phase = MirPhase::Elaborated;
+        assert_reports(&file, "0 capture modes for 1 captures in elaborated MIR");
+        closure_body(&mut file).capture_modes = vec![CaptureMode::Mutable];
+        assert_eq!(violations(&file), "");
+        closure_body(&mut file).capture_modes = vec![CaptureMode::Mutable, CaptureMode::Shared];
+        assert_reports(&file, "2 capture modes for 1 captures in elaborated MIR");
+    }
+
+    #[test]
+    fn moves_of_a_capture_are_reported() {
+        let mut file = closure_file();
+        let closure = closure_body(&mut file);
+        let capture = LocalId((closure.argument_count + 1) as u32);
+        closure.blocks[BlockId(0)]
+            .statements
+            .push(statement(StatementKind::assign(
+                Place::return_place(),
+                Rvalue::Use(Operand::Move(
+                    Place::local(capture),
+                    prism_ast::Span::default(),
+                )),
+            )));
+        assert_reports(&file, "moves out of the capture _1");
+    }
+
+    #[test]
+    fn elaborated_closure_values_print_their_capture_modes() {
+        let mut file = closure_file();
+        assert!(
+            file.dump().contains("closure main::g#closure0 [_1]"),
+            "{}",
+            file.dump()
+        );
+        file.phase = MirPhase::Elaborated;
+        closure_body(&mut file).capture_modes = vec![CaptureMode::Shared];
+        assert!(
+            file.dump().contains("closure main::g#closure0 [&_1]"),
+            "{}",
+            file.dump()
+        );
+        closure_body(&mut file).capture_modes = vec![CaptureMode::Mutable];
+        assert!(
+            file.dump().contains("closure main::g#closure0 [&mut _1]"),
+            "{}",
+            file.dump()
         );
     }
 }
