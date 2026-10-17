@@ -1,0 +1,4 @@
+// expect: ok
+import /models
+import /ui
+fun f(u: User): String = u.shout()

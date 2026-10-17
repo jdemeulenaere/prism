@@ -1,0 +1,5 @@
+// expect: E2001
+struct User {
+    val name: String
+}
+fun Heap<User>.size(): Int = 0

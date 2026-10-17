@@ -155,6 +155,8 @@ pub struct WhenBranch {
 pub enum ExprKind {
     Literal(Literal),
     Ident(String),
+    /// `this`: the receiver inside an extension function.
+    This,
     Binary {
         op: BinaryOp,
         left: Box<Expr>,
@@ -226,6 +228,7 @@ impl fmt::Display for Expr {
             ExprKind::Literal(Literal::Bool(v)) => write!(f, "{}", v),
             ExprKind::Literal(Literal::Null) => write!(f, "null"),
             ExprKind::Ident(id) => write!(f, "{}", id),
+            ExprKind::This => write!(f, "this"),
             ExprKind::Binary { op, left, right } => {
                 write!(f, "({} {} {})", left, op.as_str(), right)
             }

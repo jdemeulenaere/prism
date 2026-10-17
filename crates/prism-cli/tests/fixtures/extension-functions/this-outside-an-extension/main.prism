@@ -1,0 +1,4 @@
+// expect: E4001
+fun f() {
+    val t = this
+}

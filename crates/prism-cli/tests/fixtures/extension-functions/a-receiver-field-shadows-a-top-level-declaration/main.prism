@@ -1,0 +1,6 @@
+// expect: ok
+val id = "global"
+struct User {
+    val id: Int
+}
+fun User.key(): Int = id

@@ -256,7 +256,12 @@ impl Parser {
     fn is_package_decl_ahead(&self) -> bool {
         // package <ident> ... is a package decl.
         // package fun / package struct / package enum / package val is a package visibility modifier.
-        matches!(self.peek_ahead(1), TokenKind::Ident(_))
+        // `package consuming fun T.name()` is the visibility modifier followed by the receiver
+        // modifier: a package declaration never continues with `fun` on its own line.
+        let consuming_modifier = matches!(self.peek_ahead(1), TokenKind::Ident(name) if name == "consuming")
+            && self.peek_ahead(2) == &TokenKind::Fun
+            && !self.tokens[(self.cursor + 2).min(self.tokens.len() - 1)].is_preceded_by_newline;
+        matches!(self.peek_ahead(1), TokenKind::Ident(_)) && !consuming_modifier
     }
 
     fn parse_package_decl(&mut self) -> Result<PackageDecl, ParseError> {
@@ -361,9 +366,35 @@ impl Parser {
             is_compose = true;
         }
 
+        // Receiver mode modifier (`mut fun T.name()`, `consuming fun T.name()`), always last.
+        let mut mode = None;
+        // An identifier never starts a declaration, so `consuming` is read as the modifier even
+        // when `fun` does not follow, for a better error.
+        let at_consuming =
+            matches!(self.peek_kind(), TokenKind::Ident(name) if name == "consuming");
+        if self.peek_kind() == &TokenKind::Mut || at_consuming {
+            let tok = self.bump();
+            let receiver_mode = if tok.kind == TokenKind::Mut {
+                ReceiverMode::Mutable
+            } else {
+                ReceiverMode::Consuming
+            };
+            if self.peek_kind() != &TokenKind::Fun {
+                return Err(ParseError::new(
+                    format!(
+                        "Expected 'fun' after '{}'; modifiers go in the order visibility, 'compose', then 'mut' or 'consuming', as in 'public {} fun T.name()'",
+                        receiver_mode.as_str(),
+                        receiver_mode.as_str()
+                    ),
+                    self.peek().span,
+                ));
+            }
+            mode = Some((receiver_mode, tok.span));
+        }
+
         match self.peek_kind() {
             TokenKind::Fun => {
-                let func = self.parse_function(visibility, is_compose, start_span)?;
+                let func = self.parse_function(visibility, is_compose, mode, start_span)?;
                 Ok(Declaration::Function(func))
             }
             TokenKind::Struct => {
@@ -410,17 +441,74 @@ impl Parser {
         }
     }
 
+    /// A function declaration from `fun` on. `mode` is the receiver modifier read before `fun`
+    /// (`mut` or `consuming`), with its span; it requires a receiver.
     fn parse_function(
         &mut self,
         visibility: Visibility,
         is_compose: bool,
+        mode: Option<(ReceiverMode, Span)>,
         start_span: Span,
     ) -> Result<FunctionDecl, ParseError> {
         self.expect(TokenKind::Fun)?;
-        let (name, _) = self.expect_ident()?;
+        self.reject_unsupported_receiver_start()?;
+        let (first_name, first_span) = self.expect_ident()?;
 
         // Generic type parameters: <T, U>
-        let type_params = self.parse_optional_type_params()?;
+        let mut type_params = self.parse_optional_type_params()?;
+
+        // Extension receiver: `fun User.greet()`.
+        let mut receiver = None;
+        let name = if self.peek_kind() == &TokenKind::Dot {
+            if !type_params.is_empty() {
+                return Err(ParseError::new(
+                    format!(
+                        "A receiver type with type arguments ('{}<...>') is not supported yet; an extension receiver is a single type name, as in 'fun User.greet()'",
+                        first_name
+                    ),
+                    first_span,
+                ));
+            }
+            self.bump(); // '.'
+            let (name, name_span) = self.expect_ident()?;
+            if self.peek_kind() == &TokenKind::Dot {
+                return Err(ParseError::new(
+                    "Type names are not qualified: an extension receiver is a single type name, as in 'fun User.greet()'",
+                    first_span.merge(name_span),
+                ));
+            }
+            type_params = self.parse_optional_type_params()?;
+            receiver = Some(Receiver {
+                ty: Type::named(first_name, first_span),
+                mode: mode.map_or(ReceiverMode::Shared, |(mode, _)| mode),
+                span: mode.map_or(first_span, |(_, span)| span.merge(first_span)),
+            });
+            name
+        } else if matches!(
+            self.peek_kind(),
+            TokenKind::Question | TokenKind::QuestionDot
+        ) {
+            return Err(ParseError::new(
+                format!(
+                    "An extension receiver cannot be nullable; declare it on '{}' and call it with '?.'",
+                    first_name
+                ),
+                first_span.merge(self.peek().span),
+            ));
+        } else {
+            if let Some((mode, span)) = mode {
+                return Err(ParseError::new(
+                    format!(
+                        "'{}' modifies the receiver of an extension function ('{} fun T.name()'); '{}' has no receiver",
+                        mode.as_str(),
+                        mode.as_str(),
+                        first_name
+                    ),
+                    span,
+                ));
+            }
+            first_name
+        };
 
         // Parameters: (a: Int, b: Double = 0.0)
         self.expect(TokenKind::LParen)?;
@@ -452,6 +540,7 @@ impl Parser {
         Ok(FunctionDecl {
             visibility,
             is_compose,
+            receiver,
             name,
             type_params,
             params,
@@ -459,6 +548,21 @@ impl Parser {
             body,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// Rejects a receiver that starts with `&` or `(`: a receiver is a single type name, and the
+    /// receiver mode decides how it is borrowed.
+    fn reject_unsupported_receiver_start(&self) -> Result<(), ParseError> {
+        let message = match self.peek_kind() {
+            TokenKind::Amp | TokenKind::AmpAmp => {
+                "An extension receiver cannot be a reference: the receiver mode ('fun', 'mut fun', 'consuming fun') decides how the receiver is borrowed"
+            }
+            TokenKind::LParen => {
+                "An extension receiver must be a single type name, not a parenthesized or function type"
+            }
+            _ => return Ok(()),
+        };
+        Err(ParseError::new(message, self.peek().span))
     }
 
     /// Function parameters up to (not including) the closing `)`.
@@ -958,6 +1062,7 @@ impl Parser {
             | TokenKind::False
             | TokenKind::Null
             | TokenKind::Ident(_)
+            | TokenKind::This
             | TokenKind::Compose => self.parse_atom(),
 
             // Unary operators
@@ -1026,6 +1131,7 @@ impl Parser {
             TokenKind::Null => ExprKind::Literal(Literal::Null),
             TokenKind::Ident(name) => ExprKind::Ident(name),
             TokenKind::Compose => ExprKind::Ident("compose".to_string()),
+            TokenKind::This => ExprKind::This,
             _ => unreachable!("parse_prefix only dispatches atoms here"),
         };
         Ok(Expr::new(kind, tok.span))
@@ -1099,6 +1205,7 @@ impl Parser {
                 | TokenKind::False
                 | TokenKind::Null
                 | TokenKind::Ident(_)
+                | TokenKind::This
                 | TokenKind::Compose
                 | TokenKind::Minus
                 | TokenKind::Bang
@@ -1430,6 +1537,7 @@ impl Parser {
         }
         let is_place = match &target.kind {
             ExprKind::Ident(_)
+            | ExprKind::This
             | ExprKind::Index { .. }
             | ExprKind::Unary {
                 op: UnaryOp::Deref, ..

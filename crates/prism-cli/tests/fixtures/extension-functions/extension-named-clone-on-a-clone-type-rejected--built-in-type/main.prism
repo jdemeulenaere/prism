@@ -1,0 +1,2 @@
+// expect: E4010
+fun String.clone(): String = "x"

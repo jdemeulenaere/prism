@@ -1,0 +1,7 @@
+// expect: ok
+struct User {
+    var name: String
+}
+fun User.me(): &User = this
+mut fun User.reset() { this.name = "" }
+consuming fun User.take(): User = this

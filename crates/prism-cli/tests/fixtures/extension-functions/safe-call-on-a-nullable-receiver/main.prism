@@ -1,0 +1,8 @@
+// expect: ok
+struct User {
+    val name: String
+}
+fun User.greet(): String = "Hi"
+fun User.age(): Int? = null
+fun f(u: User?): String? = u?.greet()
+fun g(u: User?): Int? = u?.age()

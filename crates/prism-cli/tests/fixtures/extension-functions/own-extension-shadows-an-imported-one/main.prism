@@ -1,0 +1,7 @@
+// expect: ok
+import /models
+import /a/lib
+fun User.tag(): Int = 1
+fun f(u: User) {
+    val t: Int = u.tag()
+}

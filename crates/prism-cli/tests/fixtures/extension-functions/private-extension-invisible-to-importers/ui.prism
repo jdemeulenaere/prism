@@ -1,0 +1,3 @@
+import /models
+fun User.secret(): Int = 1
+public fun visible(): Int = 1

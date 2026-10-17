@@ -809,3 +809,175 @@ fn deeply_nested_write_through_rejected() {
     let src = format!("fun f() {{ {}r = 1 }}", "*".repeat(100_000));
     assert_eq!(parse_source(&src).expect_err("too deep").code, "E2002");
 }
+
+// --- Extension Function Declarations, Receiver Mode Modifiers and the this Expression
+
+/// The functions declared in `src`, in order.
+fn functions(src: &str) -> Vec<FunctionDecl> {
+    parse(src)
+        .declarations
+        .into_iter()
+        .filter_map(|d| match d {
+            Declaration::Function(f) => Some(f),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The receiver type name and mode of extension `f`.
+#[track_caller]
+fn receiver_of(f: &FunctionDecl) -> (String, ReceiverMode) {
+    let receiver = f.receiver.as_ref().expect("an extension has a receiver");
+    (receiver.ty.to_string(), receiver.mode)
+}
+
+#[test]
+fn extension_declarations() {
+    let fns = functions(
+        "fun User.greet(): String = \"Hi \" + name\npublic fun Int.squared(): Int = this * this\npublic compose fun User.Avatar(): Unit { }\n",
+    );
+    let shapes: Vec<(&str, (String, ReceiverMode))> = fns
+        .iter()
+        .map(|f| (f.name.as_str(), receiver_of(f)))
+        .collect();
+    assert_eq!(
+        shapes,
+        vec![
+            ("greet", ("User".to_string(), ReceiverMode::Shared)),
+            ("squared", ("Int".to_string(), ReceiverMode::Shared)),
+            ("Avatar", ("User".to_string(), ReceiverMode::Shared)),
+        ]
+    );
+    assert!(fns[2].is_compose && fns[2].visibility == Visibility::Public);
+    assert!(functions("fun greet(): String = \"x\"")[0]
+        .receiver
+        .is_none());
+}
+
+#[test]
+fn unsupported_receivers_rejected() {
+    for (src, expected) in [
+        ("fun Heap<User>.size(): Int = 0", "type arguments"),
+        ("fun User?.greet(): String = \"x\"", "call it with '?.'"),
+        ("fun &User.greet(): String = \"x\"", "receiver mode"),
+        ("fun &mut User.rename() { }", "receiver mode"),
+        ("fun (User).greet() { }", "single type name"),
+        ("fun models.User.greet(): String = \"x\"", "not qualified"),
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains(expected), "{}: {}", src, err);
+    }
+}
+
+#[test]
+fn mutating_and_consuming_extensions() {
+    let fns = functions(
+        "mut fun User.rename(n: String) { name = n }\npublic consuming fun User.toAccount(): Account = Account(this)\npackage compose mut fun Counter.Increment(): Unit { }\n",
+    );
+    let modes: Vec<ReceiverMode> = fns.iter().map(|f| receiver_of(f).1).collect();
+    assert_eq!(
+        modes,
+        vec![
+            ReceiverMode::Mutable,
+            ReceiverMode::Consuming,
+            ReceiverMode::Mutable
+        ]
+    );
+    assert_eq!(fns[1].visibility, Visibility::Public);
+    assert!(fns[2].is_compose && fns[2].visibility == Visibility::Package);
+    // `package consuming fun` at the top of a file is a visibility, not a package declaration.
+    let file = parse("package consuming fun User.take(): User = this\n");
+    assert!(file.package.is_none());
+    assert_eq!(
+        receiver_of(&functions("package consuming fun User.take(): User = this")[0]).1,
+        ReceiverMode::Consuming
+    );
+}
+
+#[test]
+fn receiver_modifier_without_a_receiver_rejected() {
+    for src in ["mut fun f() { }", "consuming fun g(): Int = 1"] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(
+            err.message
+                .contains("modifies the receiver of an extension function"),
+            "{}: {}",
+            src,
+            err
+        );
+    }
+}
+
+#[test]
+fn modifiers_in_the_wrong_order_rejected() {
+    for src in [
+        "mut public fun User.a() { }",
+        "consuming compose fun User.b() { }",
+        "mut consuming fun User.c() { }",
+        "mut mut fun User.d() { }",
+        "mut struct S { val x: Int }",
+    ] {
+        assert_eq!(parse_source(src).expect_err(src).code, "E2001", "{}", src);
+    }
+}
+
+#[test]
+fn this_in_expressions() {
+    assert!(matches!(
+        expr_body("fun Int.squared(): Int = this * this").kind,
+        ExprKind::Binary { ref left, ref right, .. }
+            if left.kind == ExprKind::This && right.kind == ExprKind::This
+    ));
+    assert!(matches!(
+        expr_body("fun User.n(): String = this.name").kind,
+        ExprKind::MemberAccess { ref target, .. } if target.kind == ExprKind::This
+    ));
+    let ExprKind::Call { callee, .. } = expr_body("fun User.g(): String = this.greet()").kind
+    else {
+        panic!("expected a call");
+    };
+    assert!(matches!(
+        callee.kind,
+        ExprKind::MemberAccess { ref target, .. } if target.kind == ExprKind::This
+    ));
+    let ExprKind::Call { args, .. } = expr_body("fun User.u() = use(&this)").kind else {
+        panic!("expected a call");
+    };
+    assert!(matches!(
+        args[0].value.kind,
+        ExprKind::Unary { op: UnaryOp::Borrow, ref expr } if expr.kind == ExprKind::This
+    ));
+}
+
+#[test]
+fn this_as_a_name_rejected() {
+    for src in [
+        "fun f() { val this = 1 }",
+        "fun g(this: Int) { }",
+        "fun this() { }",
+        "fun f() { g(this = 1) }",
+        "struct S { val this: Int }",
+    ] {
+        assert_eq!(parse_source(src).expect_err(src).code, "E2001", "{}", src);
+    }
+}
+
+#[test]
+fn consuming_as_an_identifier() {
+    let fns = functions(
+        "fun consuming(consuming: Int): Int = consuming\nfun f() { val consuming = 1; g(consuming = consuming) }\nfun h(x: Int) = x.consuming()\n",
+    );
+    assert_eq!(fns[0].name, "consuming");
+    assert!(fns[0].receiver.is_none());
+    assert_eq!(fns[0].params[0].name, "consuming");
+    let FunctionBody::Expr(call) = fns[2].body.as_ref().expect("body") else {
+        panic!("expected an expression body");
+    };
+    assert!(matches!(
+        &call.kind,
+        ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::MemberAccess { member, .. } if member == "consuming")
+    ));
+}

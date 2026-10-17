@@ -1,0 +1,16 @@
+// expect: ok
+struct User {
+    var name: String
+}
+struct Team {
+    var lead: User
+    val owner: User
+}
+mut fun User.rename(n: String) { name = n }
+fun f(t: Team) {
+    var team = t
+    team.lead.rename("x")
+}
+fun h(p: &mut Team) {
+    p.lead.rename("z")
+}

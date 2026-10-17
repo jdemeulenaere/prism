@@ -1,0 +1,10 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+struct Account {
+    val owner: User
+}
+val GUEST = User("guest")
+consuming fun User.toAccount(): Account = Account(this)
+fun f(): Account = GUEST.toAccount()

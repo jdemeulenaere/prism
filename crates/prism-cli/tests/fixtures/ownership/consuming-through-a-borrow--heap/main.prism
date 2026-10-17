@@ -1,0 +1,9 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+struct Account {
+    val owner: User
+}
+consuming fun User.toAccount(): Account = Account(this)
+fun g(h: Heap<User>): Account = h.toAccount()

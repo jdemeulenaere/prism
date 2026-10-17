@@ -1,0 +1,4 @@
+// expect: E4006
+import /models
+import /ui
+fun f(u: User): Int = u.secret()

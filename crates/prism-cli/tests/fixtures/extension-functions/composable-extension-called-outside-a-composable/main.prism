@@ -1,0 +1,8 @@
+// expect: E4008
+struct User {
+    val name: String
+}
+compose fun User.Avatar() { }
+fun f(u: User) {
+    u.Avatar()
+}

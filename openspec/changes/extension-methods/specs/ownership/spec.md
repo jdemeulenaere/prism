@@ -6,7 +6,7 @@
 The receiver of a `consuming fun` call MUST be checked as a consuming position. A whole local, parameter or temporary MUST be moved into the call. A field, a top-level `val`, an index or a safe navigation of a field MUST be rejected with `E4017`, as for any move. Through a reference or `Heap<T>`, a `Copy` receiver MUST be copied out and any other MUST be rejected with `E4017`.
 
 #### Scenario: Consuming method moves the receiver
-- **WHEN** `struct User { val name: String }`, `struct Account { val owner: String }`, `consuming fun User.toAccount(): Account` and `fun make(): User` are declared and a body of `fun f(u: User)` runs `val a = u.toAccount()` and `val b = make().toAccount()`
+- **WHEN** `struct User { val name: String }`, `struct Account { val owner: User }`, `consuming fun User.toAccount(): Account = Account(this)` and `fun make(): User` are declared and a body of `fun f(u: User)` runs `val a = u.toAccount()` and `val b = make().toAccount()`
 - **THEN** the body typechecks successfully; a later use of `u` is a use after move, which the borrow checker reports, not the type checker
 
 #### Scenario: Consuming a field receiver rejected

@@ -1,0 +1,6 @@
+// expect: E4017
+fun String.shout(): String = "!"
+struct User {
+    val name: String
+}
+fun f(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).shout()

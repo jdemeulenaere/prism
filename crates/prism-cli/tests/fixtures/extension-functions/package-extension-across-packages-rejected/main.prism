@@ -1,0 +1,4 @@
+// expect: E4007
+import /models
+import /ui/ui
+fun f(u: User): Int = u.internal()

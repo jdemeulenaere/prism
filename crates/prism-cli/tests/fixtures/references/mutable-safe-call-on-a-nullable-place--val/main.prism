@@ -1,0 +1,9 @@
+// expect: E4003
+struct User {
+    var name: String
+}
+mut fun User.rename(n: String) { name = n }
+fun f() {
+    val v: User? = null
+    v?.rename("y")
+}

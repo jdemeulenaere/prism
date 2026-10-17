@@ -1,0 +1,3 @@
+// expect: ok
+import /ui
+fun f(): String = first().shout()

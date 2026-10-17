@@ -6,12 +6,22 @@ use crate::hasher::DeterministicHasher;
 use prism_ast::*;
 use std::collections::HashMap;
 
+/// The receiver of an exported extension function: its mode and its type, bound like any
+/// signature type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbiReceiver {
+    pub mode: ReceiverMode,
+    pub ty: AbiType,
+}
+
 /// Represents an exported symbol in a file's ABI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportedSymbol {
     Function {
         visibility: Visibility,
         is_compose: bool,
+        /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
+        receiver: Option<AbiReceiver>,
         name: String,
         type_params: Vec<String>,
         params: Vec<(String, AbiType, Option<String>)>, // (name, type, default_value_expr)
@@ -41,13 +51,38 @@ pub enum ExportedSymbol {
 }
 
 impl ExportedSymbol {
-    fn sort_key(&self) -> (u8, &str) {
+    /// The key symbols are sorted by: kind, name, then a function's receiver type, qualified by
+    /// its module (empty for a plain function), so extensions sharing a name keep a fixed order.
+    fn sort_key(&self) -> (u8, &str, String) {
         match self {
-            ExportedSymbol::Var { name, .. } => (0, name.as_str()),
-            ExportedSymbol::Struct { name, .. } => (1, name.as_str()),
-            ExportedSymbol::Enum { name, .. } => (2, name.as_str()),
-            ExportedSymbol::Function { name, .. } => (3, name.as_str()),
+            ExportedSymbol::Var { name, .. } => (0, name.as_str(), String::new()),
+            ExportedSymbol::Struct { name, .. } => (1, name.as_str(), String::new()),
+            ExportedSymbol::Enum { name, .. } => (2, name.as_str(), String::new()),
+            ExportedSymbol::Function { name, receiver, .. } => (
+                3,
+                name.as_str(),
+                receiver
+                    .as_ref()
+                    .map_or_else(String::new, |r| qualified_type_text(&r.ty)),
+            ),
         }
+    }
+}
+
+/// The text of `ty` with every nominal name qualified by its defining module (`models/user.User`).
+fn qualified_type_text(ty: &AbiType) -> String {
+    match ty {
+        AbiType::Nominal {
+            module, name, args, ..
+        } => {
+            let mut text = format!("{}.{}", module, name);
+            if !args.is_empty() {
+                let args: Vec<String> = args.iter().map(qualified_type_text).collect();
+                text.push_str(&format!("<{}>", args.join(", ")));
+            }
+            text
+        }
+        other => other.to_string(),
     }
 }
 
@@ -164,9 +199,15 @@ impl FileAbi {
                         None
                     };
 
+                    let receiver = f.receiver.as_ref().map(|r| AbiReceiver {
+                        mode: r.mode,
+                        ty: lower(&r.ty),
+                    });
+
                     symbols.push(ExportedSymbol::Function {
                         visibility: vis,
                         is_compose: f.is_compose,
+                        receiver,
                         name: f.name.clone(),
                         type_params: f.type_params.clone(),
                         params,
@@ -259,6 +300,7 @@ impl FileAbi {
                 ExportedSymbol::Function {
                     visibility,
                     is_compose,
+                    receiver,
                     name,
                     type_params,
                     params,
@@ -268,6 +310,18 @@ impl FileAbi {
                     hasher.write_str("fun");
                     hasher.write_str(visibility.as_str());
                     hasher.write_u8(if *is_compose { 1 } else { 0 });
+                    match receiver {
+                        Some(receiver) => {
+                            hasher.write_u8(1);
+                            hasher.write_u8(match receiver.mode {
+                                ReceiverMode::Shared => 0,
+                                ReceiverMode::Mutable => 1,
+                                ReceiverMode::Consuming => 2,
+                            });
+                            receiver.ty.hash_into(&mut hasher);
+                        }
+                        None => hasher.write_u8(0),
+                    }
                     hasher.write_str(name);
                     hasher.write_u64(type_params.len() as u64);
                     for tp in type_params {
@@ -581,6 +635,7 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
                 hasher.write_u8(0);
             }
         }
+        ExprKind::This => hasher.write_u8(30),
         ExprKind::Break => hasher.write_u8(28),
         ExprKind::Continue => hasher.write_u8(29),
         ExprKind::Closure { params, body } => {

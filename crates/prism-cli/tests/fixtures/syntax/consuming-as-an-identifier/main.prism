@@ -1,0 +1,9 @@
+// expect: ok
+fun consuming(consuming: Int): Int = consuming
+fun g(consuming: Int) { }
+fun f() {
+    val consuming = 1
+    g(consuming = consuming)
+}
+fun Int.consuming(): Int = this
+fun h(x: Int): Int = x.consuming()

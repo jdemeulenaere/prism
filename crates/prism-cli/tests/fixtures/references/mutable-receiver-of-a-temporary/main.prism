@@ -1,0 +1,9 @@
+// expect: ok
+struct User {
+    var name: String
+}
+fun make(): User = User("a")
+mut fun User.rename(n: String) { name = n }
+fun f() {
+    make().rename("x")
+}

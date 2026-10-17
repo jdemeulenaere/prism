@@ -3,7 +3,7 @@
 //! data-driven fixtures of `prism-cli`, because they compare two extractions.
 
 use prism_abi::{declared_types, no_imports, AbiError, AbiType, ExportedSymbol, FileAbi};
-use prism_ast::{TypeMarker, Visibility};
+use prism_ast::{ReceiverMode, TypeMarker, Visibility};
 use prism_parser::parse_source;
 
 fn extract(src: &str) -> FileAbi {
@@ -499,4 +499,171 @@ fn built_in_range_in_an_exported_signature() {
         unreachable!()
     };
     assert!(matches!(return_type, AbiType::Nominal { name, .. } if name == "Range"));
+}
+
+// --- Extension Functions in the ABI
+
+const USER: &str = "public struct User { var name: String }\npublic struct Team { val id: Int }\n";
+
+/// Extracts `src` as module `models/user`.
+fn extract_user_module(src: &str) -> FileAbi {
+    FileAbi::extract(
+        &parse_source(src).expect("source must parse"),
+        "models/user",
+        &no_imports,
+    )
+    .expect("ABI must extract")
+}
+
+/// Extracts `ui` (module `ui/ui`), binding type names to the types `models/user` exports.
+fn extract_ui(ui: &str) -> FileAbi {
+    let models = parse_source(USER).expect("models must parse");
+    let exported = declared_types(&models, true);
+    let bind = |name: &str| {
+        exported
+            .get(name)
+            .map(|header| (*header, "models/user".to_string()))
+    };
+    FileAbi::extract(&parse_source(ui).expect("ui must parse"), "ui/ui", &bind)
+        .expect("ABI must extract")
+}
+
+fn user_record(abi: &FileAbi) -> &ExportedSymbol {
+    abi.symbols
+        .iter()
+        .find(|s| matches!(s, ExportedSymbol::Struct { name, .. } if name == "User"))
+        .expect("User is exported")
+}
+
+#[test]
+fn exported_extension_recorded_with_its_receiver() {
+    let abi = extract_user_module(
+        "public struct User { var name: String }\npublic mut fun User.rename(n: String): Unit\n",
+    );
+    let Some(ExportedSymbol::Function {
+        receiver: Some(receiver),
+        name,
+        params,
+        return_type,
+        ..
+    }) = abi
+        .symbols
+        .iter()
+        .find(|s| matches!(s, ExportedSymbol::Function { .. }))
+    else {
+        panic!("expected an exported extension: {:?}", abi.symbols);
+    };
+    assert_eq!(name, "rename");
+    assert_eq!(params.len(), 1);
+    assert_eq!(
+        (params[0].0.as_str(), params[0].1.to_string()),
+        ("n", "String".to_string())
+    );
+    assert_eq!(return_type, &AbiType::Unit);
+    assert_eq!(receiver.mode, ReceiverMode::Mutable);
+    assert!(
+        matches!(&receiver.ty, AbiType::Nominal { module, name, .. } if module == "models/user" && name == "User"),
+        "{:?}",
+        receiver.ty
+    );
+}
+
+#[test]
+fn adding_an_extension_in_another_file() {
+    let models_before = extract_user_module(USER);
+    let ui_before = extract_ui("import /models/user\npublic fun ping(): Int = 1\n");
+    let ui_after = extract_ui(
+        "import /models/user\npublic fun ping(): Int = 1\npublic fun User.shout(): String = name\n",
+    );
+    // The receiver type's file is extracted from its own source alone.
+    assert_eq!(models_before.abi_hash, extract_user_module(USER).abi_hash);
+    assert_ne!(ui_before.abi_hash, ui_after.abi_hash);
+}
+
+#[test]
+fn adding_an_extension_in_the_receiver_type_s_file() {
+    let before = extract_user_module(USER);
+    let after = extract_user_module(&format!("{}public fun User.shout(): String = name\n", USER));
+    assert_ne!(before.abi_hash, after.abi_hash);
+    assert_eq!(user_record(&before), user_record(&after));
+}
+
+#[test]
+fn changing_a_receiver_mode_or_type_changes_the_abi_hash() {
+    assert_hash_differs(
+        &format!("{}public fun User.reset(): Unit {{ }}\n", USER),
+        &format!("{}public mut fun User.reset(): Unit {{ }}\n", USER),
+        "making a receiver mutable",
+    );
+    assert_hash_differs(
+        &format!("{}public fun User.reset(): Unit {{ }}\n", USER),
+        &format!("{}public consuming fun User.reset(): Unit {{ }}\n", USER),
+        "making a receiver consuming",
+    );
+    assert_hash_differs(
+        &format!("{}public fun User.size(): Int = 1\n", USER),
+        &format!("{}public fun Team.size(): Int = 1\n", USER),
+        "changing the receiver type",
+    );
+    assert_hash_differs(
+        &format!("{}public fun size(): Int = 1\n", USER),
+        &format!("{}public fun User.size(): Int = 1\n", USER),
+        "adding a receiver",
+    );
+}
+
+#[test]
+fn extensions_sharing_a_name() {
+    let plain = "public fun describe(): String = \"a\"\n";
+    let user = "public fun User.describe(): String = \"b\"\n";
+    let team = "public fun Team.describe(): String = \"c\"\n";
+    let orders = [
+        [plain, user, team],
+        [plain, team, user],
+        [user, plain, team],
+        [user, team, plain],
+        [team, plain, user],
+        [team, user, plain],
+    ];
+    let hashes: Vec<u128> = orders
+        .iter()
+        .map(|order| extract(&format!("{}{}", USER, order.concat())).abi_hash)
+        .collect();
+    assert!(hashes.iter().all(|h| *h == hashes[0]), "{:?}", hashes);
+
+    let abi = extract(&format!("{}{}", USER, orders[0].concat()));
+    let receivers: Vec<Option<String>> = abi
+        .symbols
+        .iter()
+        .filter_map(|s| match s {
+            ExportedSymbol::Function { name, receiver, .. } if name == "describe" => {
+                Some(receiver.as_ref().map(|r| r.ty.to_string()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        receivers,
+        vec![None, Some("Team".to_string()), Some("User".to_string())],
+        "three distinct functions, sorted by receiver"
+    );
+}
+
+#[test]
+fn extension_body_or_private_extension_edits() {
+    assert_hash_equal(
+        &format!("{}public fun User.shout(): String = name\n", USER),
+        &format!("{}public fun User.shout(): String = name + \"!\"\n", USER),
+        "editing a non-generic extension body",
+    );
+    assert_hash_equal(
+        USER,
+        &format!("{}fun User.secret(): Int = 1\n", USER),
+        "adding a private extension",
+    );
+    assert_hash_equal(
+        &format!("{}fun User.secret(): Int = 1\n", USER),
+        &format!("{}fun User.secret(x: Int): String = \"x\"\n", USER),
+        "modifying a private extension",
+    );
 }

@@ -13,18 +13,30 @@ public struct User {
     val email: String?   // Nullable type
 }
 
-// Function borrowing & mutation with explicit call-site borrow
+// Methods are extension functions. A `mut fun` borrows its receiver mutably, with nothing
+// written at the call site, and names in its body resolve to fields of `this`
+public mut fun User.rename(newName: &String): Unit {
+    name = newName.clone()
+}
+
+// A plain `fun` borrows its receiver shared
+public fun User.greet(): String = "Hello, " + name
+
+// Shared borrows are implicit at call sites, and calling a `mut fun` on a `&mut` reborrows it
+fun renameToAda(user: &mut User): Unit {
+    user.rename("Ada")
+}
+
+// A free function taking `&mut` still needs an explicit `&mut` at the call site
 public fun updateName(user: &mut User, newName: String): Unit {
     user.name = newName
 }
 
-// Shared borrows are implicit at call sites, and passing a `&mut` borrow reborrows it
-public fun rename(user: &mut User, newName: &String): Unit {
-    user.name = newName.clone()
-}
-
-fun renameToAda(user: &mut User): Unit {
-    rename(user, "Ada")
+fun renameLocal(original: User): String {
+    var user = original
+    updateName(&mut user, "Ada")
+    user.rename("Lin")
+    return user.greet()
 }
 
 // Writing a whole value through a mutable borrow uses prefix `*`

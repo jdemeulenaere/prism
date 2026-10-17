@@ -1,0 +1,12 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+struct Account {
+    val owner: User
+}
+struct Team {
+    val lead: User?
+}
+consuming fun User.toAccount(): Account = Account(this)
+fun g(t: Team): Account? = t.lead?.toAccount()

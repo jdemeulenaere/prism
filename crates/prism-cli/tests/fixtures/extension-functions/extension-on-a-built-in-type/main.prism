@@ -1,0 +1,4 @@
+// expect: ok
+fun Int.squared(): Int = this * this
+fun Range.size(): Int = end - start
+fun f(): Int = 3.squared() + (0..<5).size()

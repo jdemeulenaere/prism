@@ -1,0 +1,5 @@
+// expect: E4010
+struct User : Clone {
+    val name: String
+}
+fun User.clone(): User = User("x")

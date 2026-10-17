@@ -1,0 +1,13 @@
+// expect: ok
+struct User {
+    var name: String
+}
+struct Account {
+    val owner: User
+}
+struct Counter {
+    var count: Int
+}
+mut fun User.rename(n: String) { name = n }
+public consuming fun User.toAccount(): Account = Account(this)
+package compose mut fun Counter.Increment(): Unit { }

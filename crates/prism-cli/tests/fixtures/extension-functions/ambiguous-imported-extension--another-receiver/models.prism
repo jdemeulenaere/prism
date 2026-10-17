@@ -1,0 +1,6 @@
+public struct User {
+    var name: String
+}
+public struct Team {
+    val id: Int
+}

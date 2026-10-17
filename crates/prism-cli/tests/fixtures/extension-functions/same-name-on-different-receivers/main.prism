@@ -1,0 +1,15 @@
+// expect: ok
+struct User {
+    val id: Int
+}
+struct Team {
+    val id: Int
+}
+fun User.describe(): String = "user"
+fun Team.describe(): Int = 1
+fun describe(): Bool = true
+fun f(u: User, t: Team) {
+    val a: String = u.describe()
+    val b: Int = t.describe()
+    val c: Bool = describe()
+}

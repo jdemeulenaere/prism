@@ -1,0 +1,5 @@
+// expect: E4010
+struct User {
+    val name: String
+}
+fun User.name(): String = "x"

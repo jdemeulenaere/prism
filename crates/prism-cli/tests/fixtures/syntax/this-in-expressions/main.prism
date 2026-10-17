@@ -1,0 +1,10 @@
+// expect: ok
+struct User {
+    val name: String
+}
+fun use(u: &User) { }
+fun Int.squared(): Int = this * this
+fun User.isAda(): Bool = this.name == "Ada"
+fun User.greet(): String = "Hi"
+fun User.shout(): String = this.greet()
+consuming fun User.lend() { use(&this) }

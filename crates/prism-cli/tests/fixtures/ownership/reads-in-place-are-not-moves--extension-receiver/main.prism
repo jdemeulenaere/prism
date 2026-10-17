@@ -1,0 +1,12 @@
+// expect: ok
+struct User {
+    var name: String
+}
+fun String.shout(): String = "!"
+mut fun String.clear() { }
+fun f(u: User): Bool {
+    val s = u.name.shout()
+    var v = u
+    v.name.clear()
+    return true
+}

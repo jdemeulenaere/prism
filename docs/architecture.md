@@ -303,6 +303,21 @@ The type checker decides every implicit operation on a reference ([`references`]
 - **WHEN** `*r = v` runs for `r: &mut String`
 - **THEN** the `String` that `r` referred to is dropped and `v` is moved into its place, so the owner of that place sees `v`
 
+### Requirement: Method Call Evaluation Semantics
+The type checker decides how each extension call passes its receiver (the `extension-functions` spec, from `extension-methods`). At runtime, a call `recv.name(args)` MUST evaluate `recv` first, then the arguments left to right, then borrow or move the receiver by the extension's mode and make the call. A temporary receiver MUST be dropped at the end of the statement. A `?.` call MUST evaluate its receiver once, and MUST evaluate no argument and give `null` when it is `null`.
+
+#### Scenario: Receiver evaluated before the arguments
+- **WHEN** `make().greet(next())` runs for `fun make(): User`, `fun next(): Int` and `fun User.greet(n: Int)`
+- **THEN** `make()` is called before `next()`, and the `User` it returned lives until the statement ends, when it is dropped
+
+#### Scenario: A mutable receiver is borrowed after the arguments
+- **WHEN** `v.push(v.size())` runs for `mut fun Stack.push(n: Int)` and `fun Stack.size(): Int`
+- **THEN** `v.size()` runs before `v` is borrowed mutably for `push`, which is what lets two-phase borrows accept it
+
+#### Scenario: A safe call on null evaluates no argument
+- **WHEN** `u?.greet(next())` runs with `u` equal to `null`
+- **THEN** `next()` is not called and the expression is `null`
+
 ---
 
 ## 5. Compose UI Engine

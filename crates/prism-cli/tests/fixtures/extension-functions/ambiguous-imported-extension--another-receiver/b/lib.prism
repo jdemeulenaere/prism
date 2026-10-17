@@ -1,0 +1,3 @@
+package b
+import /models
+public fun Team.tag(): String = "b"

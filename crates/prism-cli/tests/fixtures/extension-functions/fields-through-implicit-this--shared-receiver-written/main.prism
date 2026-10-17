@@ -1,0 +1,5 @@
+// expect: E4003
+struct User {
+    var name: String
+}
+fun User.clear() { name = "" }

@@ -85,12 +85,46 @@ pub enum FunctionBody {
     Expr(Expr),
 }
 
+/// How an extension function receives its receiver, written as a modifier before `fun`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ReceiverMode {
+    /// `fun T.name()`: the receiver is borrowed shared, and `this` is a `&T`.
+    #[default]
+    Shared,
+    /// `mut fun T.name()`: the receiver is borrowed mutably, and `this` is a `&mut T`.
+    Mutable,
+    /// `consuming fun T.name()`: the receiver is moved in, and `this` is a `T`.
+    Consuming,
+}
+
+impl ReceiverMode {
+    /// The modifier written before `fun`, empty for the shared mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReceiverMode::Shared => "",
+            ReceiverMode::Mutable => "mut",
+            ReceiverMode::Consuming => "consuming",
+        }
+    }
+}
+
+/// The receiver of an extension function (`User` and its mode in `mut fun User.rename()`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Receiver {
+    pub ty: Type,
+    pub mode: ReceiverMode,
+    pub span: Span,
+}
+
 /// Function declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub visibility: Visibility,
     /// Native `compose` modifier (`compose fun`) per the first-class compose invariant.
     pub is_compose: bool,
+    /// The receiver of an extension function (`fun T.name()`), the only kind of method; `None`
+    /// for a plain function.
+    pub receiver: Option<Receiver>,
     pub name: String,
     pub type_params: Vec<String>,
     pub params: Vec<Param>,

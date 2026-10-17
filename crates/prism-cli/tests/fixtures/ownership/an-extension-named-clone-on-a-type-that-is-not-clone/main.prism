@@ -1,0 +1,6 @@
+// expect: ok
+struct Token {
+    val id: Int
+}
+fun Token.clone(): Token = Token(id)
+fun f(t: &Token): Token = t.clone()

@@ -32,3 +32,4 @@ Entries are appended per change, in the order the changes are proposed.
 | extension-methods | D12 | ABI: extensions are `ExportedSymbol::Function` with `receiver: Option<{mode, type}>`; the sort key includes the receiver. | A separate `Extension` symbol kind; extensions listed on the receiver's record. | low |
 | extension-methods | D14 | No new error codes: `E4001`, `E4003`, `E4006`, `E4010`, `E4012`, `E4017` are widened. | New codes for shadowed extensions or `this` misuse. | low |
 | extension-methods | D15 | Methods get a new `extension-functions` capability spec. | Put the rules in `type-system`. | low |
+| extension-methods | D16 | Every `recv.name(...)` receiver is classified (place read in place, else consumed temporary) before its member is resolved, so field calls and `clone()` on a branch over fields now move them (`E4017`). | Speculative inference of the receiver; in-place reads for fields and `clone()` only. | low |

@@ -1,0 +1,6 @@
+// expect: ok
+struct Point : Copy {
+    val x: Int
+}
+consuming fun Point.moved(): Point = this
+fun k(p: &Point): Point = p.moved()

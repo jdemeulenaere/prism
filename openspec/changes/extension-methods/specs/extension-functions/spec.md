@@ -71,9 +71,9 @@ A call `value.name(...)` MUST resolve to an extension named `name` whose receive
 ### Requirement: Members Take Precedence Over Extensions
 A call `value.name(...)` MUST invoke a field named `name` of the receiver's struct when it has one, and the built-in `clone()` when `name` is `clone` and the receiver's type is `Clone`, whatever extensions are visible. An extension MUST be considered only when no such member exists.
 
-#### Scenario: A field wins over an imported extension
-- **WHEN** `models` exports `public struct Button { val onClick: () -> String }`, `ui` exports `public fun Button.onClick(): Int`, and a file importing both runs `val s: String = b.onClick()` for `b: Button`
-- **THEN** the file typechecks successfully, because the call invokes the field
+#### Scenario: A field wins over an extension
+- **WHEN** a file declares `struct Button { val onClick: () -> String }` and `fun Button.onClick(): Int = 1`, and `fun f(b: Button) { val s: String = b.onClick() }`
+- **THEN** the type checker emits `E4010` for the extension and nothing for `f`, because the call invokes the field
 
 ### Requirement: The Receiver in Extension Bodies
 Inside an extension body, `this` MUST be the receiver, a `val` binding of type `&T` in a `fun`, `&mut T` in a `mut fun` and `T` in a `consuming fun`, in scope in the body and in parameter defaults. A bare name that is not a local or parameter MUST resolve to `this.name` when the receiver's struct has that field, and, when called, to `this.name(...)` when an extension on the receiver type matches, before top-level declarations and imports. `this` elsewhere MUST be `E4001`.

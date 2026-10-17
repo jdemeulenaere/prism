@@ -1,0 +1,7 @@
+// expect: ok
+enum Color {
+    Red,
+    Green
+}
+fun Color.next(): Color = Color.Green
+fun f(c: Color): Color = c.next()

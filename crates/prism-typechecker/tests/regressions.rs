@@ -967,3 +967,56 @@ fn writing_matching_or_constructing_an_unimported_type() {
         &["E4014"],
     );
 }
+
+// --- Extension functions (`extension-methods`)
+
+const EXTENSION_MODELS: &str = "public struct User {\n    val name: String\n}\n";
+const EXTENSION_UI: &str = "public fun User.shout(): String = \"!\"\n";
+
+#[test]
+fn an_imported_extension_is_not_a_bare_function() {
+    let deps = [("models", EXTENSION_MODELS), ("ui", EXTENSION_UI)];
+    // Spec "Extension Calls Resolve Through the File and Its Imports": an extension is reached
+    // through its receiver only.
+    assert_eq!(
+        codes(&check_with_modules(
+            &deps,
+            "fun f(u: User): String = shout()\n"
+        )),
+        vec!["E4001"]
+    );
+    assert!(check_with_modules(&deps, "fun f(u: User): String = u.shout()\n").is_empty());
+}
+
+#[test]
+fn a_recursive_unannotated_extension_cannot_be_inferred() {
+    assert_codes(
+        "struct User {\n    val n: Int\n}\nfun User.count() = count()\n",
+        &["E4013"],
+    );
+}
+
+#[test]
+fn unannotated_extensions_are_inferred_per_receiver() {
+    assert_ok(
+        "struct User {\n    val n: Int\n}\nstruct Team {\n    val n: Int\n}\nfun f(u: User, t: Team) {\n    val a: Int = u.size()\n    val b: String = t.size()\n}\nfun User.size() = 1\nfun Team.size() = \"x\"\n",
+    );
+}
+
+#[test]
+fn a_field_through_implicit_this_is_not_a_top_level_value() {
+    // The field `id` hides the top-level `val id`, so returning it moves a field of `this`.
+    assert_codes(
+        "val id = \"global\"\nstruct User {\n    val id: String\n}\nfun User.key(): String = id\n",
+        &["E4017"],
+    );
+    assert_ok("val id = \"global\"\nstruct User {\n    val id: String\n}\nfun User.key(): &String = &id\n");
+}
+
+#[test]
+fn this_cannot_be_reassigned() {
+    assert_codes(
+        "struct User {\n    val n: Int\n}\nmut fun User.f(other: &mut User) {\n    this = other\n}\n",
+        &["E4003"],
+    );
+}

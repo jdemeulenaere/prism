@@ -1,0 +1,3 @@
+// expect: E4014
+import /ui
+fun f(): String = first().name

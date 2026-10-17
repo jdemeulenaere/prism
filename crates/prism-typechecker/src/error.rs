@@ -10,6 +10,9 @@ pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
     UnresolvedSymbol { name: String, span: Span },
 
+    /// E4001: `this` used outside an extension function, where nothing binds it.
+    ThisOutsideExtension { span: Span },
+
     /// E4002: Expression type is not assignable to the expected type.
     TypeMismatch {
         expected: Type,
@@ -52,11 +55,14 @@ pub enum TypeError {
         help: Option<String>,
     },
 
-    /// E4006: Struct field not found or field access attempted on a non-struct type.
+    /// E4006: Struct field not found or field access attempted on a non-struct type, or a method
+    /// call `x.name()` with neither a field nor a visible extension function `name`.
     UnknownField {
         target_type: Type,
         field_name: String,
         span: Span,
+        /// A fix to suggest, such as calling an extension with `?.` or `()`.
+        help: Option<String>,
     },
 
     /// E4007: Attempting to access a `package`-visible symbol from an external package.
@@ -75,6 +81,11 @@ pub enum TypeError {
 
     /// E4010: Declaring a duplicate symbol within the identical lexical scope.
     DuplicateSymbol { name: String, span: Span },
+
+    /// E4010: An extension function that could never be called, because a member of its
+    /// receiver type of the same name always takes precedence (a field, or the built-in
+    /// `clone()` of a `Clone` type).
+    UncallableExtension { message: String, span: Span },
 
     /// E4011: A `public` or `package` function omits its explicit return type annotation.
     MissingReturnType { function_name: String, span: Span },
@@ -137,6 +148,7 @@ impl TypeError {
     pub fn code(&self) -> &'static str {
         match self {
             TypeError::UnresolvedSymbol { .. } => "E4001",
+            TypeError::ThisOutsideExtension { .. } => "E4001",
             TypeError::TypeMismatch { .. } => "E4002",
             TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
@@ -148,6 +160,7 @@ impl TypeError {
             TypeError::InvalidComposeContext { .. } => "E4008",
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
+            TypeError::UncallableExtension { .. } => "E4010",
             TypeError::MissingReturnType { .. } => "E4011",
             TypeError::AmbiguousImport { .. } => "E4012",
             TypeError::CannotInferType { .. } => "E4013",
@@ -164,6 +177,7 @@ impl TypeError {
     pub fn span(&self) -> Span {
         match self {
             TypeError::UnresolvedSymbol { span, .. } => *span,
+            TypeError::ThisOutsideExtension { span } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
             TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
@@ -175,6 +189,7 @@ impl TypeError {
             TypeError::InvalidComposeContext { span, .. } => *span,
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
+            TypeError::UncallableExtension { span, .. } => *span,
             TypeError::MissingReturnType { span, .. } => *span,
             TypeError::AmbiguousImport { span, .. } => *span,
             TypeError::CannotInferType { span, .. } => *span,
@@ -192,6 +207,9 @@ impl TypeError {
         match self {
             TypeError::UnresolvedSymbol { name, .. } => {
                 format!("unresolved symbol '{}'", name)
+            }
+            TypeError::ThisOutsideExtension { .. } => {
+                "'this' is only available in an extension function ('fun T.name()')".to_string()
             }
             TypeError::TypeMismatch {
                 expected, found, ..
@@ -250,6 +268,7 @@ impl TypeError {
                 )
             }
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),
+            TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::DuplicateSymbol { name, .. } => {
                 format!("duplicate symbol declaration '{}' in the same scope", name)
             }

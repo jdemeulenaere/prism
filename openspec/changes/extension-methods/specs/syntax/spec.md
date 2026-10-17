@@ -6,7 +6,7 @@
 A function declaration MAY name a receiver type before its name, `fun T.name(...)`, which declares an extension function on `T`. The receiver MUST be a single type name. A receiver with type arguments, a `?`, a `&` or `&mut`, or a parenthesized or function type MUST be rejected with `E2001`, with a message saying what receivers may be.
 
 #### Scenario: Extension declarations
-- **WHEN** parsing `fun User.greet(): String = name`, `public fun Int.squared(): Int = this * this` and `public compose fun User.Avatar() { }`
+- **WHEN** parsing `fun User.greet(): String = "Hi " + name`, `public fun Int.squared(): Int = this * this` and `public compose fun User.Avatar(): Unit { }`
 - **THEN** each parses as a function named `greet`, `squared` or `Avatar` with the receiver type `User`, `Int` or `User` and the shared receiver mode
 
 #### Scenario: Receiver with type arguments rejected
@@ -25,7 +25,7 @@ A function declaration MAY name a receiver type before its name, `fun T.name(...
 `mut` or `consuming` MAY appear directly before `fun` in a declaration that has a receiver, after any visibility and `compose` modifiers, to declare the receiver mode. On a declaration without a receiver, before a visibility or `compose` modifier, or twice, they MUST be rejected with `E2001`.
 
 #### Scenario: Mutating and consuming extensions
-- **WHEN** parsing `mut fun User.rename(n: String) { name = n }`, `public consuming fun User.toAccount(): Account = Account(name)` and `package compose mut fun Counter.Increment() { }`
+- **WHEN** parsing `mut fun User.rename(n: String) { name = n }`, `public consuming fun User.toAccount(): Account = Account(this)` and `package compose mut fun Counter.Increment(): Unit { }`
 - **THEN** the declarations parse with the receiver modes mutable, consuming and mutable
 
 #### Scenario: Receiver modifier without a receiver rejected

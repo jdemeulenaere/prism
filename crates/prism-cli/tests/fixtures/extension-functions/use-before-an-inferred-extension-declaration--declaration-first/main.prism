@@ -1,0 +1,9 @@
+// expect: E4002
+struct User {
+    val name: String
+}
+fun User.size() = 42
+fun g(u: User): String {
+    val s: String = u.size()
+    return s
+}

@@ -1,0 +1,3 @@
+// expect: E4006
+import /models
+fun f(u: User): String = u.shout()

@@ -1,0 +1,5 @@
+// expect: E4017
+struct User {
+    val name: String
+}
+fun g(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).clone()

@@ -1,0 +1,6 @@
+// expect: E4010
+struct User {
+    val name: String
+}
+fun User.greet(): String = "a"
+fun User.greet(x: Int): String = "b"

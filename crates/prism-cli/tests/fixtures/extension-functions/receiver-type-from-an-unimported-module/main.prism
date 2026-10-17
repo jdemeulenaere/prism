@@ -1,0 +1,3 @@
+// expect: E4014
+import /shop/api
+fun Order.total(): Int = 0

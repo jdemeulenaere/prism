@@ -1,0 +1,2 @@
+// expect: E2001
+mut consuming fun User.c() { }

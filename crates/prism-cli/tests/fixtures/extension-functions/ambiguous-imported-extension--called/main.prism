@@ -1,0 +1,5 @@
+// expect: E4012
+import /models
+import /a/lib
+import /b/lib
+fun f(u: User): String = u.tag()

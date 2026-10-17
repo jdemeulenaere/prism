@@ -168,12 +168,18 @@ fn run_abi(path: &str) {
             prism_abi::ExportedSymbol::Function {
                 visibility,
                 is_compose,
+                receiver,
                 name,
                 params,
                 return_type,
                 ..
             } => {
                 let comp = if *is_compose { "compose " } else { "" };
+                let (mode, receiver) = match receiver {
+                    Some(r) if r.mode.as_str().is_empty() => (String::new(), format!("{}.", r.ty)),
+                    Some(r) => (format!("{} ", r.mode.as_str()), format!("{}.", r.ty)),
+                    None => (String::new(), String::new()),
+                };
                 let param_str = params
                     .iter()
                     .map(|(p, t, def)| {
@@ -186,8 +192,8 @@ fn run_abi(path: &str) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "  {} {}fun {}({}): {}",
-                    visibility, comp, name, param_str, return_type
+                    "  {} {}{}fun {}{}({}): {}",
+                    visibility, comp, mode, receiver, name, param_str, return_type
                 );
             }
             prism_abi::ExportedSymbol::Struct {

@@ -1,0 +1,13 @@
+// expect: ok
+struct User {
+    val name: String
+}
+struct Account {
+    val owner: User
+}
+consuming fun User.toAccount(): Account = Account(this)
+fun make(): User = User("a")
+fun f(u: User) {
+    val a = u.toAccount()
+    val b = make().toAccount()
+}

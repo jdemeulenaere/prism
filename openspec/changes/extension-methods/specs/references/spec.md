@@ -13,6 +13,13 @@ The receiver of an extension call MUST be passed by the extension's receiver mod
 - **WHEN** `fun String.shout(): String` and `struct User { val name: String }` are declared and `fun f(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).shout()` is checked
 - **THEN** the type checker emits `E4017` for `u.name` and for `v.name`
 
+### Requirement: Method-Call Receivers Are Classified Before Resolution
+The receiver of every call `value.name(...)` MUST be classified before the member it calls is resolved, since that depends on the receiver's type: a place, or a `?.` chain of fields over one, is read in place, and anything else is a temporary in a consuming position. This applies to a function-typed field call and to the built-in `clone()` as to an extension call.
+
+#### Scenario: A branch receiver of clone is a temporary
+- **WHEN** `struct User { val name: String }` is declared and `fun g(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).clone()` is checked
+- **THEN** the type checker emits `E4017` for `u.name` and for `v.name`
+
 ### Requirement: Mutable Receivers Must Be Mutable Places
 The receiver of a `mut fun` call MUST be borrowed mutably without `&mut`. It MUST be a `var` binding, a field path whose every hop is mutable, a place reached through `&mut` (a `val` binding holding a `&mut T` is reborrowed), or a temporary. A `val` binding, a `val` field, or a place reached through a shared `&` MUST be rejected with `E4003`.
 

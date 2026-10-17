@@ -204,6 +204,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         | TypeError::ReturnTypeMismatch {
             help: Some(help), ..
+        }
+        | TypeError::UnknownField {
+            help: Some(help), ..
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }

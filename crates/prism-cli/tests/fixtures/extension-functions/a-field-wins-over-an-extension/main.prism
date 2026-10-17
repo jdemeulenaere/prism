@@ -1,0 +1,8 @@
+// expect: E4010
+struct Button {
+    val onClick: () -> String
+}
+fun Button.onClick(): Int = 1
+fun f(b: Button) {
+    val s: String = b.onClick()
+}

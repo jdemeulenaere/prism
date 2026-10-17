@@ -142,6 +142,18 @@ Each is the same kind of error its code already names, and the catalog rows are 
 
 Declaration, resolution, implicit `this`, declaration checks and safe-navigation calls are about one subject and will grow with traits, static functions and extension properties, so they get their own spec, as `reference-access` created `references`. The modes' call-site effects stay with the specs that own those rules: borrows in `references`, moves in `ownership`, grammar in `syntax` and the ABI in `compilation-and-abi`. Rejected: putting it all in `type-system`, already the largest spec.
 
+### D16. Every method-call receiver is classified before its member is resolved (autonomous, found while implementing)
+
+D8 classifies the receiver of an extension call like an argument: a place is read in place, anything else is a consumed temporary. Which member a call `recv.name(...)` reaches (a field, the built-in `clone()` or an extension, D6) depends on the receiver's type, which is only known once the receiver has been inferred, and inferring it in a consuming position or not is what the classification decides. So the classification applies to every call `recv.name(...)` whose receiver is a value, whatever it resolves to: a function-typed field call or a built-in `clone()` whose receiver is a branch or `?:` over fields now moves them too (`(if (c) u.name else v.name).clone()` is `E4017`, where it was accepted before), exactly like `(if (c) u.name else v.name).shout()` (the `references` scenario "A branch receiver is a temporary"; the requirement "Method-Call Receivers Are Classified Before Resolution" pins it for `clone()`). Places, including `?.` chains over places (D10), still read in place, so every existing fixture keeps its expectation, and the fix is the usual one (`if (c) u.name.clone() else v.name.clone()`). This also matches the `ownership` rule that a borrowed receiver that is not a place is consumed, and Rust, which evaluates such a receiver into a temporary.
+
+Rejected: resolving the member from a speculative inference of the receiver, whose errors would have to be discarded, including those of declarations inferred on demand along the way; and keeping the old in-place reading for fields and `clone()`, which needs the type before the classification.
+
+### Implementation notes
+
+- The receiver of the extension being checked is the `this` binding itself: its type gives the receiver type for implicit `this` (D5), and it is saved and restored with the other locals by on-demand inference (D13), so the checker needs no separate receiver state (task 4.1 planned one).
+- The new kinds of errors are new `TypeError` variants with existing codes: `ThisOutsideExtension` (`E4001`) and `UncallableExtension` (`E4010`, for an extension shadowed by a field or by the built-in `clone()`); a duplicate extension is a `DuplicateSymbol` named `User.greet`. The catalog's name column lists them.
+- Scenario fixes: the `extension-functions` scenario "A field wins over an imported extension" could not hold, because the importing file's dependency `ui` is itself rejected with `E4010` (D7) and a workspace check stops there; it became "A field wins over an extension", a single file where only the extension's `E4010` is reported and the call typechecks against the field. The `syntax` scenarios now declare `: Unit` on their exported block-bodied functions, which `E4011` requires, and `fun User.greet(): String = "Hi " + name`, since returning `name` moves a field of `this` (`E4017`). The consuming scenarios declare `struct Account { val owner: User }` and `Account(this)`: a `consuming fun` cannot move a field out of `this` (moves take whole values), so `Account(name)` is `E4017`. Moving fields out of an owned receiver (partial moves or destructuring) is a follow-up.
+
 ## Risks / Trade-offs
 
 - [Implicit `this` lets a receiver field or method hide a top-level declaration of the same name inside extension bodies] → this is Kotlin's and Swift's rule. A top-level declaration hidden this way is still reachable outside extension bodies, and qualified paths, when they exist, will reach it inside.
@@ -150,6 +162,7 @@ Declaration, resolution, implicit `this`, declaration checks and safe-navigation
 - [Any-depth auto-deref through `Heap<T>` lets a `consuming` call look like it could move out of a `Heap`] → it is `E4017` until the `Heap<T>` change decides whether contents can be moved out.
 - [`mut fun` on a temporary is accepted, though the mutation is lost when the temporary is dropped] → it matches `&mut make()` today and Rust's `String::new().push('a')`; it is useful once mutating methods return values (builders).
 - [One extension per receiver and name] → overloading by parameter types is not part of Prism's function model either; default and named parameters cover most uses.
+- [A `consuming fun` can pass `this` on whole but cannot take its fields apart] → moves take whole values everywhere today; partial moves or destructuring, which would make consuming methods useful for conversions such as `Account(name)`, are a follow-up.
 
 ## Migration Plan
 

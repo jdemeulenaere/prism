@@ -4,7 +4,7 @@ use crate::error::TypeError;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
 use prism_abi::{AbiType, ExportedSymbol, FileAbi};
-use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, TopLevelVarDecl};
+use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
     BinaryOp, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
 };
@@ -12,6 +12,10 @@ use prism_ast::module::SourceFile;
 use prism_ast::statement::{Block, Statement, StatementKind};
 use prism_ast::{Span, TypeMarker, Visibility};
 use std::collections::{HashMap, HashSet};
+
+/// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
+/// user declaration can use it.
+const THIS: &str = "this";
 
 /// Helper to peel reference (`&T`, `&mut T`) and `Heap<T>` indirection layers to access the underlying nominal type.
 pub fn peel_indirection(mut ty: &Type) -> &Type {
@@ -28,12 +32,14 @@ pub fn peel_indirection(mut ty: &Type) -> &Type {
 fn abi_symbol_types(sym: &ExportedSymbol) -> Vec<&AbiType> {
     match sym {
         ExportedSymbol::Function {
+            receiver,
             params,
             return_type,
             ..
-        } => params
+        } => receiver
             .iter()
-            .map(|(_, ty, _)| ty)
+            .map(|r| &r.ty)
+            .chain(params.iter().map(|(_, ty, _)| ty))
             .chain(std::iter::once(return_type))
             .collect(),
         ExportedSymbol::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
@@ -112,6 +118,92 @@ enum Coercion {
     NoFit,
 }
 
+/// An extension function known to the file (the `extension-functions` spec): declared in it, or
+/// exported by a direct import. Extensions live in their own tables, keyed by receiver type and
+/// name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist.
+#[derive(Debug, Clone)]
+struct Extension {
+    mode: ReceiverMode,
+    /// The function's signature, parameter names, defaults and visibility. Its name is the
+    /// method's name.
+    symbol: Symbol,
+}
+
+/// The result of looking an extension up by receiver type and name.
+enum ExtensionLookup {
+    /// No visible extension matches.
+    None,
+    /// The file's own extension, or the single import exporting one.
+    Found {
+        extension: Extension,
+        /// Whether the extension is the file's own, whose type may be inferred on demand.
+        own: bool,
+    },
+    /// Several imports export a matching extension; holds their module paths (`E4012`).
+    Ambiguous(Vec<String>),
+}
+
+/// How the receiver of an extension call is passed (D8 of `extension-methods`). The typed tree
+/// will record it on the call; until then the checker only decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // The fields are for the typed tree, which does not exist yet.
+struct ReceiverAdjustment {
+    /// The number of `&`, `&mut` and `Heap<T>` layers looked through to reach the extension's
+    /// receiver type.
+    dereferences: usize,
+    /// Whether the receiver is the payload of a nullable reached by a `?.` call.
+    through_nullable: bool,
+    pass: ReceiverPass,
+    /// Whether the receiver is a temporary, which lives until the end of the statement, rather
+    /// than a place.
+    temporary: bool,
+}
+
+/// What a call does with the receiver reached by [`ReceiverAdjustment::dereferences`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReceiverPass {
+    /// `fun`: a shared borrow, or a reborrow through the looked-through references.
+    SharedBorrow,
+    /// `mut fun`: a mutable borrow, or a reborrow of a `&mut`.
+    MutableBorrow,
+    /// `consuming fun`: the receiver is moved in (or copied, when it is `Copy`).
+    Move,
+    /// `consuming fun` through references: a `Copy` receiver is copied out.
+    CopyOut,
+}
+
+/// A layer looked through to reach an extension's receiver type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Layer {
+    Reference { mutable: bool },
+    Heap,
+}
+
+/// The receiver of an extension call, as [`TypeChecker::pass_receiver`] sees it.
+struct ReceiverSite<'a> {
+    expr: &'a Expr,
+    /// The receiver's type, before any layer is looked through.
+    ty: &'a Type,
+    /// Whether the receiver is a place (or an optional place), rather than a temporary.
+    is_place: bool,
+    /// Whether the place itself may be written (a `var` binding, a mutable field path); a
+    /// temporary is writable.
+    writable: bool,
+    /// The layers looked through to reach the extension's receiver type, outermost first.
+    layers: &'a [Layer],
+    /// Whether the extension is called on the payload of a nullable (`u?.greet()`).
+    through_nullable: bool,
+}
+
+/// Identifies an unannotated private declaration whose type is inferred on demand.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum InferenceKey {
+    /// A top-level function or `val`, by name.
+    Declaration(String),
+    /// An extension function, by receiver type and name.
+    Extension { receiver: Type, name: String },
+}
+
 /// Inference state of an unannotated private top-level declaration, whose type comes from its
 /// body or initializer. Such a declaration is inferred on demand, the first time it is used, so
 /// its type does not depend on declaration order (D5 of `typechecker-soundness`).
@@ -179,10 +271,15 @@ pub struct TypeChecker {
     /// Whether the expression currently being typed is consumed. Its pass-through children
     /// (`if`/`when` branches, a block tail, `?:` operands) are consumed too.
     parent_consuming: bool,
-    /// Unannotated private top-level declarations, by name, and how far their inference is.
-    inference: HashMap<String, Inference>,
+    /// Unannotated private top-level declarations and extensions, and how far their inference is.
+    inference: HashMap<InferenceKey, Inference>,
     /// Declarations already reported as depending on themselves (`E4013`).
-    recursive_inference: HashSet<String>,
+    recursive_inference: HashSet<InferenceKey>,
+    /// The file's own extension functions, by receiver type and name.
+    own_extensions: HashMap<(Type, String), Extension>,
+    /// Extension functions exported by direct imports, by receiver type and name, with one
+    /// candidate per exporting module.
+    imported_extensions: HashMap<(Type, String), Vec<(String, Extension)>>,
     /// Module paths of the file's direct imports, whose ABIs this checker has ingested.
     direct_imports: HashSet<String>,
     /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
@@ -234,6 +331,8 @@ impl TypeChecker {
             parent_consuming: false,
             inference: HashMap::new(),
             recursive_inference: HashSet::new(),
+            own_extensions: HashMap::new(),
+            imported_extensions: HashMap::new(),
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
             errors: Vec::new(),
@@ -601,6 +700,7 @@ impl TypeChecker {
                 target_type: ty,
                 field_name: member.to_string(),
                 span,
+                help: None,
             });
             return Some((Type::Error, None));
         }
@@ -675,6 +775,7 @@ impl TypeChecker {
                 ExportedSymbol::Function {
                     visibility,
                     is_compose,
+                    receiver,
                     name,
                     params,
                     return_type,
@@ -700,7 +801,21 @@ impl TypeChecker {
                         abi.package.clone(),
                         Span::dummy(),
                     );
-                    self.env.define_import(&abi.module, symbol);
+                    match receiver {
+                        // An extension is reached through its receiver, never by its bare name.
+                        Some(receiver) => {
+                            let key = (Type::from_abi(&receiver.ty), name.clone());
+                            let candidates = self.imported_extensions.entry(key).or_default();
+                            if !candidates.iter().any(|(m, _)| m == &abi.module) {
+                                let extension = Extension {
+                                    mode: receiver.mode,
+                                    symbol,
+                                };
+                                candidates.push((abi.module.clone(), extension));
+                            }
+                        }
+                        None => self.env.define_import(&abi.module, symbol),
+                    }
                 }
                 ExportedSymbol::Struct { name, fields, .. } => {
                     let fields = fields
@@ -886,6 +1001,8 @@ impl TypeChecker {
                         }
                     }
                 }
+                // Extensions are registered once every struct's fields are known (below).
+                Declaration::Function(f) if f.receiver.is_some() => {}
                 Declaration::Function(f) => {
                     self.register_function_decl(f);
                 }
@@ -917,6 +1034,14 @@ impl TypeChecker {
                 }
             }
         }
+
+        for decl in &source_file.declarations {
+            if let Declaration::Function(f) = decl {
+                if f.receiver.is_some() {
+                    self.register_extension_decl(f);
+                }
+            }
+        }
     }
 
     /// Defines a top-level declaration in module scope. A declaration with the same name as an
@@ -928,6 +1053,13 @@ impl TypeChecker {
     }
 
     fn register_function_decl(&mut self, f: &FunctionDecl) {
+        let sym = self.function_symbol(f);
+        self.define_top_level(sym);
+    }
+
+    /// The symbol of function `f`: its signature, parameter names, defaults and visibility. An
+    /// unannotated private expression body gets the error type as a provisional return type.
+    fn function_symbol(&mut self, f: &FunctionDecl) -> Symbol {
         for annot in f.params.iter().map(|p| &p.ty).chain(&f.return_type) {
             self.check_annotation_names(annot);
         }
@@ -956,7 +1088,7 @@ impl TypeChecker {
             ret: Box::new(ret),
         };
 
-        let sym = Symbol::function_with_defaults(
+        Symbol::function_with_defaults(
             f.name.clone(),
             fn_ty,
             param_names,
@@ -964,8 +1096,58 @@ impl TypeChecker {
             f.visibility,
             self.current_package.clone(),
             f.span,
-        );
-        self.define_top_level(sym);
+        )
+    }
+
+    /// Registers the extension function `f` in the file's extension table (D7 of
+    /// `extension-methods`). Its receiver type follows the rules of annotations. Two extensions
+    /// with the same receiver and name, an extension named like a field of its receiver struct,
+    /// and an extension named `clone` on a `Clone` type are rejected with `E4010`: the last two
+    /// could never be called, because members take precedence.
+    fn register_extension_decl(&mut self, f: &FunctionDecl) {
+        let receiver = f.receiver.as_ref().expect("an extension has a receiver");
+        self.check_annotation_names(&receiver.ty);
+        let receiver_ty = self.lower_type(&receiver.ty);
+        let symbol = self.function_symbol(f);
+        if receiver_ty == Type::Error {
+            return;
+        }
+        let key = (receiver_ty.clone(), f.name.clone());
+        let field_clash = match &receiver_ty {
+            Type::Struct(id) => self
+                .struct_fields(id)
+                .is_some_and(|fields| fields.iter().any(|(name, _, _)| name == &f.name)),
+            _ => false,
+        };
+        if self.own_extensions.contains_key(&key) {
+            self.errors.push(TypeError::DuplicateSymbol {
+                name: format!("{}.{}", receiver_ty, f.name),
+                span: f.span,
+            });
+            return;
+        }
+        if field_clash {
+            self.errors.push(TypeError::UncallableExtension {
+                message: format!(
+                    "extension '{}.{}' can never be called: the field '{}' of '{}' always takes precedence",
+                    receiver_ty, f.name, f.name, receiver_ty
+                ),
+                span: f.span,
+            });
+        } else if f.name == "clone" && self.is_clone(&receiver_ty) {
+            self.errors.push(TypeError::UncallableExtension {
+                message: format!(
+                    "extension '{}.clone' can never be called: '{}' is 'Clone', and the built-in 'clone()' always takes precedence",
+                    receiver_ty, receiver_ty
+                ),
+                span: f.span,
+            });
+        }
+        let extension = Extension {
+            mode: receiver.mode,
+            symbol,
+        };
+        self.own_extensions.insert(key, extension);
     }
 
     /// Pass 2: Typechecks the bodies of all top-level declarations in the module.
@@ -974,33 +1156,41 @@ impl TypeChecker {
         self.check_marker_declarations(source_file);
 
         // Unannotated private declarations get their type from their body, inferred on demand.
-        let mut inferred_spans = HashSet::new();
+        let mut inferred = HashMap::new();
         for decl in &source_file.declarations {
-            let pending = match decl {
+            let (key, pending) = match decl {
                 Declaration::Function(f)
                     if f.visibility == Visibility::Private
                         && f.return_type.is_none()
                         && matches!(f.body, Some(FunctionBody::Expr(_))) =>
                 {
-                    Box::new(PendingDecl::Function(f.clone()))
+                    let key = match &f.receiver {
+                        Some(receiver) => InferenceKey::Extension {
+                            receiver: self.lower_type(&receiver.ty),
+                            name: f.name.clone(),
+                        },
+                        None => InferenceKey::Declaration(f.name.clone()),
+                    };
+                    (key, Box::new(PendingDecl::Function(f.clone())))
                 }
-                Declaration::Var(v) if v.visibility == Visibility::Private && v.ty.is_none() => {
-                    Box::new(PendingDecl::Var(v.clone()))
-                }
+                Declaration::Var(v) if v.visibility == Visibility::Private && v.ty.is_none() => (
+                    InferenceKey::Declaration(v.name.clone()),
+                    Box::new(PendingDecl::Var(v.clone())),
+                ),
                 _ => continue,
             };
             // A duplicate declaration (`E4010`) keeps the first one's inference.
-            if !self.inference.contains_key(decl.name()) {
+            if !self.inference.contains_key(&key) {
                 self.inference
-                    .insert(decl.name().to_string(), Inference::Pending(pending));
-                inferred_spans.insert(decl.span());
+                    .insert(key.clone(), Inference::Pending(pending));
+                inferred.insert(decl.span(), key);
             }
         }
 
         for decl in &source_file.declarations {
-            if inferred_spans.contains(&decl.span()) {
+            if let Some(key) = inferred.get(&decl.span()) {
                 // Inferred on first use, or here if never used before.
-                self.infer_declaration(decl.name());
+                self.infer_declaration(key);
                 continue;
             }
             match decl {
@@ -1035,13 +1225,12 @@ impl TypeChecker {
     /// Infers the unannotated private declaration `name` if it is still pending. Its body is
     /// checked in a fresh body context (module scope only), so the body being checked when the
     /// declaration is first used does not leak into it.
-    fn infer_declaration(&mut self, name: &str) {
-        let pending = match self.inference.get(name) {
+    fn infer_declaration(&mut self, key: &InferenceKey) {
+        let pending = match self.inference.get(key) {
             Some(Inference::Pending(pending)) => pending.clone(),
             _ => return,
         };
-        self.inference
-            .insert(name.to_string(), Inference::InProgress);
+        self.inference.insert(key.clone(), Inference::InProgress);
 
         let saved = BodyContext {
             locals: self.env.take_locals(),
@@ -1064,7 +1253,7 @@ impl TypeChecker {
         self.origin = saved.origin;
         self.parent_consuming = saved.consuming;
 
-        self.inference.insert(name.to_string(), Inference::Done);
+        self.inference.insert(key.clone(), Inference::Done);
     }
 
     /// Before `name` is read at `span`, infers it if it is a pending unannotated declaration.
@@ -1075,9 +1264,18 @@ impl TypeChecker {
         if !self.env.resolves_at_module_level(name) {
             return;
         }
-        match self.inference.get(name) {
-            Some(Inference::Pending(_)) => self.infer_declaration(name),
-            Some(Inference::InProgress) if self.recursive_inference.insert(name.to_string()) => {
+        self.ensure_key_inferred(&InferenceKey::Declaration(name.to_string()), span);
+    }
+
+    /// Like [`Self::ensure_inferred`], for the declaration or own extension `key`.
+    fn ensure_key_inferred(&mut self, key: &InferenceKey, span: Span) {
+        match self.inference.get(key) {
+            Some(Inference::Pending(_)) => self.infer_declaration(key),
+            Some(Inference::InProgress) if self.recursive_inference.insert(key.clone()) => {
+                let name = match key {
+                    InferenceKey::Declaration(name) => name.clone(),
+                    InferenceKey::Extension { receiver, name } => format!("{}.{}", receiver, name),
+                };
                 self.errors.push(TypeError::CannotInferType {
                     message: format!(
                         "cannot infer the type of '{}' because it depends on itself; add an explicit type",
@@ -1096,6 +1294,28 @@ impl TypeChecker {
         self.in_function = true;
         self.env.enter_scope();
         self.push_compose_context(f.is_compose);
+
+        // An extension binds its receiver as the `val` named `this`, before the parameters, so
+        // defaults may read it (D4 of `extension-methods`). No user name can collide with it,
+        // because `this` is a keyword.
+        let receiver_ty = f.receiver.as_ref().map(|r| self.lower_type(&r.ty));
+        if let (Some(receiver), Some(receiver_ty)) = (&f.receiver, &receiver_ty) {
+            let this_ty = match receiver.mode {
+                ReceiverMode::Shared => Type::Reference {
+                    mutable: false,
+                    inner: Box::new(receiver_ty.clone()),
+                },
+                ReceiverMode::Mutable => Type::Reference {
+                    mutable: true,
+                    inner: Box::new(receiver_ty.clone()),
+                },
+                ReceiverMode::Consuming => receiver_ty.clone(),
+            };
+            let sym = Symbol::variable(THIS, this_ty, Mutability::Val, receiver.span);
+            if let Err(err) = self.env.define(sym) {
+                self.errors.push(err);
+            }
+        }
 
         // Bind parameters in local scope. A default value is checked against its parameter type
         // before the parameter is bound, so it may refer to earlier parameters only.
@@ -1152,14 +1372,26 @@ impl TypeChecker {
                     };
 
                     if declared_ret.is_none() {
-                        self.env.update_type(
-                            &f.name,
-                            Type::Fn {
-                                is_compose: f.is_compose,
-                                params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
-                                ret: Box::new(expr_ty),
-                            },
-                        );
+                        let inferred = Type::Fn {
+                            is_compose: f.is_compose,
+                            params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
+                            ret: Box::new(expr_ty),
+                        };
+                        match receiver_ty {
+                            Some(receiver_ty) => {
+                                let key = (receiver_ty, f.name.clone());
+                                if let Some(extension) = self.own_extensions.get_mut(&key) {
+                                    if let SymbolKind::Function { fn_type, .. } =
+                                        &mut extension.symbol.kind
+                                    {
+                                        *fn_type = inferred;
+                                    }
+                                }
+                            }
+                            None => {
+                                self.env.update_type(&f.name, inferred);
+                            }
+                        }
                     }
                 }
             }
@@ -1213,7 +1445,11 @@ impl TypeChecker {
     /// (a literal, call, safe navigation, branch, block or `?:`) is a temporary (D2 of
     /// `reference-access`).
     fn is_place(&self, expr: &Expr) -> bool {
+        if let Some(field) = self.implicit_this_field(expr) {
+            return self.is_place(&field);
+        }
         match &expr.kind {
+            ExprKind::This => self.env.lookup(THIS).is_some(),
             ExprKind::Ident(name) => {
                 matches!(
                     self.env.lookup(name).map(|sym| &sym.kind),
@@ -1300,6 +1536,9 @@ impl TypeChecker {
 
     /// Checks an expression against an expected type in bidirectional checking mode.
     pub fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        if let Some(field) = self.implicit_this_field(expr) {
+            return self.check_expr(&field, expected);
+        }
         let consuming = std::mem::replace(&mut self.consuming, false);
         let saved = std::mem::replace(&mut self.parent_consuming, consuming);
         let ty = self.check_expr_kind(expr, expected);
@@ -1444,6 +1683,9 @@ impl TypeChecker {
 
     /// Infers the type of an expression in inference mode.
     pub fn infer_expr(&mut self, expr: &Expr) -> Type {
+        if let Some(field) = self.implicit_this_field(expr) {
+            return self.infer_expr(&field);
+        }
         let consuming = std::mem::replace(&mut self.consuming, false);
         let saved = std::mem::replace(&mut self.parent_consuming, consuming);
         let ty = self.infer_expr_kind(expr);
@@ -1469,6 +1711,15 @@ impl TypeChecker {
                 self.ensure_inferred(name, expr.span);
                 self.infer_ident(name, expr.span)
             }
+
+            ExprKind::This => match self.env.lookup(THIS) {
+                Some(sym) => sym.ty(),
+                None => {
+                    self.errors
+                        .push(TypeError::ThisOutsideExtension { span: expr.span });
+                    Type::Error
+                }
+            },
 
             ExprKind::Binary { op, left, right } => {
                 self.infer_binary_op(*op, left, right, expr.span)
@@ -1755,6 +2006,9 @@ impl TypeChecker {
     }
 
     fn infer_unary_op(&mut self, op: UnaryOp, inner: &Expr, span: Span) -> Type {
+        if let Some(field) = self.implicit_this_field(inner) {
+            return self.infer_unary_op(op, &field, span);
+        }
         match op {
             UnaryOp::Neg => {
                 let ty = self.infer_operand(inner);
@@ -1800,8 +2054,8 @@ impl TypeChecker {
                 if ty == Type::Error {
                     return Type::Error;
                 }
-                match &inner.kind {
-                    ExprKind::Ident(name) => {
+                match (binding_name(inner), &inner.kind) {
+                    (Some(name), _) => {
                         let is_val = matches!(
                             self.env.lookup(name).map(|sym| &sym.kind),
                             Some(SymbolKind::Variable {
@@ -1827,7 +2081,7 @@ impl TypeChecker {
                             });
                         }
                     }
-                    ExprKind::MemberAccess { member, .. } if !writable => {
+                    (None, ExprKind::MemberAccess { member, .. }) if !writable => {
                         self.errors.push(TypeError::ImmutabilityViolation {
                             message: format!(
                                 "cannot take mutable borrow '&mut' of field '{}': it is a 'val' field or is reached through a 'val' binding, 'val' field or shared '&' borrow",
@@ -1848,8 +2102,16 @@ impl TypeChecker {
     }
 
     fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) {
-        let (target_ty, is_mutable) = match &target.kind {
-            ExprKind::Ident(name) => match self.env.resolve(name, target.span) {
+        if let Some(field) = self.implicit_this_field(target) {
+            return self.check_assignment(&field, value, span);
+        }
+        let (target_ty, is_mutable) = match (&target.kind, binding_name(target)) {
+            (ExprKind::This, _) if self.env.lookup(THIS).is_none() => {
+                self.errors
+                    .push(TypeError::ThisOutsideExtension { span: target.span });
+                (Type::Error, false)
+            }
+            (_, Some(name)) => match self.env.resolve(name, target.span) {
                 Ok(sym) => match &sym.kind {
                     SymbolKind::Variable { ty, mutability, .. } => {
                         (ty.clone(), *mutability == Mutability::Var)
@@ -1868,11 +2130,14 @@ impl TypeChecker {
                     (Type::Error, false)
                 }
             },
-            ExprKind::MemberAccess {
-                target: base,
-                member,
-                is_safe_nav: false,
-            } => {
+            (
+                ExprKind::MemberAccess {
+                    target: base,
+                    member,
+                    is_safe_nav: false,
+                },
+                _,
+            ) => {
                 let (base_ty, base_writable, field_ty, is_var) =
                     match self.type_name_member(base, member, target.span) {
                         Some((field_ty, is_var)) => (field_ty.clone(), false, field_ty, is_var),
@@ -1913,16 +2178,20 @@ impl TypeChecker {
                                 target_type: base_ty.clone(),
                                 field_name: member.clone(),
                                 span,
+                                help: None,
                             });
                         }
                         (Type::Error, false)
                     }
                 }
             }
-            ExprKind::Unary {
-                op: UnaryOp::Deref,
-                expr: reference,
-            } => {
+            (
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    expr: reference,
+                },
+                _,
+            ) => {
                 let (referent, _) = self.write_through(reference, span);
                 (referent, true)
             }
@@ -1936,15 +2205,14 @@ impl TypeChecker {
             }
         };
 
-        if let (ExprKind::Ident(name), Type::Reference { mutable, inner }) =
-            (&target.kind, &target_ty)
+        if let (Some(name), Type::Reference { mutable, inner }) = (binding_name(target), &target_ty)
         {
             self.check_repoint(name, is_mutable, *mutable, inner, &target_ty, value, span);
             return;
         }
 
         if !is_mutable && target_ty != Type::Error {
-            if let ExprKind::Ident(name) = &target.kind {
+            if let Some(name) = binding_name(target) {
                 self.errors.push(TypeError::ImmutabilityViolation {
                     message: format!("cannot reassign to immutable 'val' binding '{}'", name),
                     span,
@@ -2372,6 +2640,21 @@ impl TypeChecker {
     }
 
     fn infer_call_expr(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Type {
+        // In an extension body, `name(...)` may call a field or another extension of `this`.
+        if let Some(member) = self.implicit_this_callee(callee) {
+            return self.infer_call_expr(&member, args, span);
+        }
+        // `recv.name(...)`: a field, the built-in `clone()` or an extension function.
+        if let ExprKind::MemberAccess {
+            target,
+            member,
+            is_safe_nav,
+        } = &callee.kind
+        {
+            if self.type_name_symbol(target).is_none() {
+                return self.infer_method_call(callee, target, member, *is_safe_nav, args, span);
+            }
+        }
         // A struct name is its constructor; an enum name is only a namespace for its variants.
         let type_name = self.type_name_symbol(callee);
         let callee_ty = match &type_name {
@@ -2389,25 +2672,21 @@ impl TypeChecker {
                     Type::Error
                 }
             },
-            None => match &callee.kind {
-                ExprKind::MemberAccess {
-                    target,
-                    member,
-                    is_safe_nav,
-                } if member == "clone" && self.type_name_symbol(target).is_none() => {
-                    let receiver_ty = self.infer_expr(target);
-                    if !self.has_field(&receiver_ty, "clone") {
-                        return self.infer_clone_call(&receiver_ty, *is_safe_nav, args, span);
-                    }
-                    // A field named `clone` takes precedence over the built-in member.
-                    self.member_type(&receiver_ty, member, *is_safe_nav, callee.span)
-                        .0
-                }
-                _ => self.infer_expr(callee),
-            },
+            None => self.infer_expr(callee),
         };
-        let is_constructor = type_name.is_some();
+        self.call_with_type(callee, callee_ty, type_name.is_some(), args, span)
+    }
 
+    /// Checks a call of `callee`, of type `callee_ty`, with `args`: a function or function-typed
+    /// value, or a struct constructor when `is_constructor`.
+    fn call_with_type(
+        &mut self,
+        callee: &Expr,
+        callee_ty: Type,
+        is_constructor: bool,
+        args: &[CallArg],
+        span: Span,
+    ) -> Type {
         match callee_ty {
             Type::Fn {
                 is_compose,
@@ -2447,119 +2726,7 @@ impl TypeChecker {
                     (Vec::new(), Vec::new())
                 };
 
-                let n_params = params.len();
-                let min_args = if has_default.len() == n_params {
-                    has_default.iter().filter(|&&d| !d).count()
-                } else {
-                    n_params
-                };
-
-                let has_named_args = args.iter().any(|a| a.name.is_some());
-
-                if !has_named_args {
-                    if args.len() < min_args || args.len() > n_params {
-                        let msg = if min_args == n_params {
-                            format!(
-                                "function expected {} arguments, found {}",
-                                n_params,
-                                args.len()
-                            )
-                        } else {
-                            format!(
-                                "function expected between {} and {} arguments, found {}",
-                                min_args,
-                                n_params,
-                                args.len()
-                            )
-                        };
-                        self.errors
-                            .push(TypeError::CallSignatureMismatch { message: msg, span });
-                        return *ret;
-                    }
-
-                    for (arg, param_ty) in args.iter().zip(params.iter()) {
-                        self.check_argument(&arg.value, param_ty, Origin::Argument);
-                    }
-                } else {
-                    let mut param_assigned = vec![false; n_params];
-                    let mut seen_names = HashSet::new();
-                    let mut positional_idx = 0;
-
-                    for arg in args {
-                        if let Some(arg_name) = &arg.name {
-                            if !seen_names.insert(arg_name.clone()) {
-                                self.errors.push(TypeError::CallSignatureMismatch {
-                                    message: format!("duplicate argument '{}' provided", arg_name),
-                                    span: arg.span,
-                                });
-                                continue;
-                            }
-                            if let Some(pos) = param_names.iter().position(|pn| pn == arg_name) {
-                                if param_assigned[pos] {
-                                    self.errors.push(TypeError::CallSignatureMismatch {
-                                        message: format!(
-                                            "parameter '{}' is already given a positional argument",
-                                            arg_name
-                                        ),
-                                        span: arg.span,
-                                    });
-                                }
-                                param_assigned[pos] = true;
-                                self.check_argument(&arg.value, &params[pos], Origin::Argument);
-                            } else {
-                                self.errors.push(TypeError::CallSignatureMismatch {
-                                    message: format!("unknown parameter '{}'", arg_name),
-                                    span: arg.span,
-                                });
-                            }
-                        } else {
-                            if positional_idx < n_params {
-                                if param_assigned[positional_idx] {
-                                    self.errors.push(TypeError::CallSignatureMismatch {
-                                        message: format!(
-                                            "positional argument assigns parameter '{}', which is already given by name",
-                                            param_names
-                                                .get(positional_idx)
-                                                .map(String::as_str)
-                                                .unwrap_or("parameter")
-                                        ),
-                                        span: arg.span,
-                                    });
-                                }
-                                param_assigned[positional_idx] = true;
-                                self.check_argument(
-                                    &arg.value,
-                                    &params[positional_idx],
-                                    Origin::Argument,
-                                );
-                                positional_idx += 1;
-                            } else {
-                                self.errors.push(TypeError::CallSignatureMismatch {
-                                    message: format!(
-                                        "too many positional arguments (expected at most {})",
-                                        n_params
-                                    ),
-                                    span: arg.span,
-                                });
-                            }
-                        }
-                    }
-
-                    for (i, &assigned) in param_assigned.iter().enumerate().take(n_params) {
-                        let has_def = has_default.get(i).copied().unwrap_or(false);
-                        if !has_def && !assigned {
-                            let p_name = param_names
-                                .get(i)
-                                .map(|s| s.as_str())
-                                .unwrap_or("parameter");
-                            self.errors.push(TypeError::CallSignatureMismatch {
-                                message: format!("missing required argument '{}'", p_name),
-                                span,
-                            });
-                        }
-                    }
-                }
-
+                self.check_call_arguments(&params, &param_names, &has_default, args, span);
                 *ret
             }
             Type::Struct(id) if is_constructor => {
@@ -2616,6 +2783,7 @@ impl TypeChecker {
                                     target_type: Type::Struct(id.clone()),
                                     field_name: arg_name.clone(),
                                     span: arg.span,
+                                    help: None,
                                 });
                             }
                         } else {
@@ -2671,6 +2839,532 @@ impl TypeChecker {
                     span,
                 });
                 Type::Error
+            }
+        }
+    }
+
+    /// Checks a call `target.member(args)` (or `target?.member(args)`) whose target is a value,
+    /// resolving `member` in the order of D6 of `extension-methods`: a field of the receiver's
+    /// struct, the built-in `clone()` of a `Clone` type, the file's own extension, the single
+    /// import exporting one, and otherwise the built-in `clone()` (`E4018`) or an unknown member
+    /// (`E4006`).
+    ///
+    /// The receiver is classified like an argument before its type is known: a place, or a `?.`
+    /// chain of fields over one, is read in place, and anything else is evaluated into a consumed
+    /// temporary.
+    #[allow(clippy::too_many_arguments)]
+    fn infer_method_call(
+        &mut self,
+        callee: &Expr,
+        target: &Expr,
+        member: &str,
+        is_safe_nav: bool,
+        args: &[CallArg],
+        span: Span,
+    ) -> Type {
+        let is_place = self.is_place(target) || self.is_optional_place(target);
+        let (receiver_ty, writable) = self.with_origin(Origin::Value, |c| {
+            if is_place {
+                c.infer_place(target)
+            } else {
+                (c.with_consuming(true, |c| c.infer_expr(target)), true)
+            }
+        });
+        if receiver_ty == Type::Error {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+
+        // 1. A field takes precedence over everything else.
+        if self.has_field(&receiver_ty, member) {
+            let (field_ty, _) = self.member_type(&receiver_ty, member, is_safe_nav, callee.span);
+            return self.call_with_type(callee, field_ty, false, args, span);
+        }
+
+        // 2. The built-in `clone()` of a `Clone` type.
+        if member == "clone" && self.is_clone(&clone_target(&receiver_ty, is_safe_nav).0) {
+            return self.infer_clone_call(&receiver_ty, is_safe_nav, args, span);
+        }
+
+        // 3. An extension on the receiver's type, behind any `&`, `&mut` and `Heap<T>`.
+        let (payload, through_nullable) = match peel_references(&receiver_ty) {
+            Type::Nullable(inner) => (inner.as_ref().clone(), true),
+            other => (other.clone(), false),
+        };
+        let mut layers = Vec::new();
+        let mut reached = if through_nullable {
+            // The references around the nullable are looked through too.
+            let mut outer = &receiver_ty;
+            while let Type::Reference { mutable, inner } = outer {
+                layers.push(Layer::Reference { mutable: *mutable });
+                outer = inner;
+            }
+            payload
+        } else {
+            receiver_ty.clone()
+        };
+        let lookup = loop {
+            match self.find_extension(&reached, member) {
+                ExtensionLookup::None => {}
+                found => break found,
+            }
+            match reached {
+                Type::Reference { mutable, inner } => {
+                    layers.push(Layer::Reference { mutable });
+                    reached = *inner;
+                }
+                Type::Heap(inner) => {
+                    layers.push(Layer::Heap);
+                    reached = *inner;
+                }
+                _ => break ExtensionLookup::None,
+            }
+        };
+        match lookup {
+            ExtensionLookup::Ambiguous(modules) => {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                self.errors.push(TypeError::AmbiguousImport {
+                    name: format!("{}.{}", reached, member),
+                    modules,
+                    span: callee.span,
+                });
+                Type::Error
+            }
+            ExtensionLookup::Found { .. } if through_nullable && !is_safe_nav => {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                self.errors.push(TypeError::UnknownField {
+                    target_type: receiver_ty.clone(),
+                    field_name: member.to_string(),
+                    span: callee.span,
+                    help: Some(format!(
+                        "'{}' may be null: call the extension with a safe call, '{}?.{}()'",
+                        target, target, member
+                    )),
+                });
+                Type::Error
+            }
+            ExtensionLookup::Found { extension, own } => {
+                let extension = if own {
+                    let key = InferenceKey::Extension {
+                        receiver: reached.clone(),
+                        name: member.to_string(),
+                    };
+                    self.ensure_key_inferred(&key, callee.span);
+                    // Inference may have refined the return type.
+                    match self.find_extension(&reached, member) {
+                        ExtensionLookup::Found { extension, .. } => extension,
+                        _ => extension,
+                    }
+                } else {
+                    extension
+                };
+                if !self.check_visibility(&extension.symbol, callee.span) {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                let receiver = ReceiverSite {
+                    expr: target,
+                    ty: &receiver_ty,
+                    is_place,
+                    writable,
+                    layers: &layers,
+                    through_nullable,
+                };
+                self.pass_receiver(&receiver, &extension, member);
+                let ret = self.call_extension(callee, &extension, args, span);
+                if through_nullable {
+                    ret.nullable()
+                } else {
+                    ret
+                }
+            }
+            // 4. Nothing matched.
+            ExtensionLookup::None if member == "clone" => {
+                self.infer_clone_call(&receiver_ty, is_safe_nav, args, span)
+            }
+            ExtensionLookup::None => {
+                let errors_before = self.errors.len();
+                let (member_ty, _) =
+                    self.member_type(&receiver_ty, member, is_safe_nav, callee.span);
+                if self.errors.len() > errors_before {
+                    if let Some(TypeError::UnknownField {
+                        help: help @ None, ..
+                    }) = self.errors.last_mut()
+                    {
+                        *help = Some(format!(
+                            "no field or extension function '{}' is declared on '{}' in this file or exported by its imports",
+                            member,
+                            peel_indirection(&reached)
+                        ));
+                    }
+                }
+                self.call_with_type(callee, member_ty, false, args, span)
+            }
+        }
+    }
+
+    /// Checks the arguments of a call of `extension` against its parameters, and its compose
+    /// context (`E4008`). Returns its return type.
+    fn call_extension(
+        &mut self,
+        callee: &Expr,
+        extension: &Extension,
+        args: &[CallArg],
+        span: Span,
+    ) -> Type {
+        let SymbolKind::Function {
+            fn_type:
+                Type::Fn {
+                    is_compose,
+                    params,
+                    ret,
+                },
+            param_names,
+            has_default,
+            ..
+        } = &extension.symbol.kind
+        else {
+            return Type::Error;
+        };
+        if *is_compose && !self.is_in_compose() {
+            self.errors.push(TypeError::InvalidComposeContext {
+                callee: callee.to_string(),
+                span,
+            });
+        }
+        let (params, param_names, has_default) =
+            (params.clone(), param_names.clone(), has_default.clone());
+        self.check_call_arguments(&params, &param_names, &has_default, args, span);
+        (**ret).clone()
+    }
+
+    /// The extension named `name` on receiver type `receiver` visible in this file: its own one,
+    /// which shadows imported ones, else the single import exporting one.
+    fn find_extension(&self, receiver: &Type, name: &str) -> ExtensionLookup {
+        let key = (receiver.clone(), name.to_string());
+        if let Some(extension) = self.own_extensions.get(&key) {
+            return ExtensionLookup::Found {
+                extension: extension.clone(),
+                own: true,
+            };
+        }
+        match self.imported_extensions.get(&key).map(Vec::as_slice) {
+            None | Some([]) => ExtensionLookup::None,
+            Some([(_, extension)]) => ExtensionLookup::Found {
+                extension: extension.clone(),
+                own: false,
+            },
+            Some(many) => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.clone()).collect()),
+        }
+    }
+
+    /// Passes the receiver of a call of `extension` by its mode (D8 and D9 of
+    /// `extension-methods`), reporting a `mut fun` receiver that is not a mutable place (`E4003`)
+    /// and a `consuming fun` receiver that cannot be moved (`E4017`).
+    fn pass_receiver(
+        &mut self,
+        receiver: &ReceiverSite,
+        extension: &Extension,
+        method: &str,
+    ) -> ReceiverAdjustment {
+        let expr = receiver.expr;
+        let pass = match extension.mode {
+            ReceiverMode::Shared => ReceiverPass::SharedBorrow,
+            ReceiverMode::Mutable => {
+                // A temporary may be mutated unless it is reached through a shared borrow.
+                if !contents_writable(receiver.ty, receiver.writable) {
+                    self.report_immutable_receiver(receiver, method);
+                }
+                ReceiverPass::MutableBorrow
+            }
+            ReceiverMode::Consuming if receiver.layers.is_empty() => {
+                // A temporary was consumed when it was inferred.
+                if receiver.is_place {
+                    self.check_move_source(expr, receiver.ty);
+                }
+                ReceiverPass::Move
+            }
+            ReceiverMode::Consuming => {
+                let reached = peel_indirection(match peel_references(receiver.ty) {
+                    Type::Nullable(inner) if receiver.through_nullable => inner,
+                    other => other,
+                })
+                .clone();
+                if !self.is_copy(&reached) {
+                    let through_heap = receiver.layers.contains(&Layer::Heap);
+                    let source = if through_heap {
+                        format!(
+                            "the contents of 'Heap' '{}' (moving out of a 'Heap' is not supported yet)",
+                            expr
+                        )
+                    } else {
+                        format!("borrow '{}'", expr)
+                    };
+                    let clone = (!through_heap && self.is_clone(&reached)).then(|| {
+                        if receiver.through_nullable {
+                            format!("{}?.clone()", expr)
+                        } else {
+                            format!("{}.clone()", expr)
+                        }
+                    });
+                    self.errors.push(TypeError::CannotMoveOut {
+                        source,
+                        ty: reached,
+                        borrow: None,
+                        clone,
+                        span: expr.span,
+                    });
+                }
+                ReceiverPass::CopyOut
+            }
+        };
+        ReceiverAdjustment {
+            dereferences: receiver.layers.len(),
+            through_nullable: receiver.through_nullable,
+            pass,
+            temporary: !receiver.is_place,
+        }
+    }
+
+    /// Reports `E4003` for the receiver of a call of `mut fun` `method` that is not a mutable
+    /// place.
+    fn report_immutable_receiver(&mut self, receiver: &ReceiverSite, method: &str) {
+        let expr = receiver.expr;
+        let shared_borrow = receiver
+            .layers
+            .iter()
+            .any(|layer| layer == &Layer::Reference { mutable: false });
+        let (message, help) = match (&expr.kind, binding_name(expr)) {
+            (ExprKind::This, _) if shared_borrow => (
+                format!(
+                    "cannot call 'mut fun' '{}' on 'this': in a 'fun' extension, 'this' is a shared '&' borrow",
+                    method
+                ),
+                Some("declare the enclosing extension 'mut fun' to mutate its receiver".to_string()),
+            ),
+            (ExprKind::This, _) => (
+                format!(
+                    "cannot call 'mut fun' '{}' on 'this': in a 'consuming fun', 'this' is an immutable 'val'",
+                    method
+                ),
+                Some("move it into a mutable binding first: 'var value = this'".to_string()),
+            ),
+            (_, Some(name)) if shared_borrow => (
+                format!(
+                    "cannot call 'mut fun' '{}' on '{}': it is a shared '&' borrow",
+                    method, name
+                ),
+                Some("take a mutable borrow '&mut' where the reference is created".to_string()),
+            ),
+            (_, Some(name)) => (
+                format!(
+                    "cannot call 'mut fun' '{}' on '{}': it is an immutable 'val' binding",
+                    method, name
+                ),
+                Some(format!("declare it with 'var {}' to call a 'mut fun' on it", name)),
+            ),
+            _ => (
+                format!(
+                    "cannot call 'mut fun' '{}' on '{}': it is a 'val' field or is reached through a 'val' binding, 'val' field or shared '&' borrow",
+                    method, expr
+                ),
+                None,
+            ),
+        };
+        self.errors.push(TypeError::ImmutabilityViolation {
+            message,
+            span: expr.span,
+            help,
+        });
+    }
+
+    /// Whether `expr` is an optional place: a chain of `?.` (or `.`) field accesses whose root is
+    /// a place and which has at least one `?.` (`t?.lead` in `t?.lead?.greet()`). As the receiver
+    /// of a call it is borrowed where it lives when every link is present (D10 of
+    /// `extension-methods`).
+    fn is_optional_place(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::MemberAccess {
+                target,
+                is_safe_nav,
+                ..
+            } => {
+                self.type_name_symbol(target).is_none()
+                    && ((*is_safe_nav && self.is_place(target)) || self.is_optional_place(target))
+            }
+            _ => false,
+        }
+    }
+
+    /// In an extension body, the member access `this.name` that a bare name `name` stands for:
+    /// a name that is no local or parameter, and that names a field of the receiver's struct (D5
+    /// of `extension-methods`).
+    fn implicit_this_field(&self, expr: &Expr) -> Option<Expr> {
+        let ExprKind::Ident(name) = &expr.kind else {
+            return None;
+        };
+        if self.env.resolves_to_local(name) {
+            return None;
+        }
+        let receiver = self.current_receiver()?;
+        self.has_field(&receiver, name)
+            .then(|| this_member(name, expr.span))
+    }
+
+    /// In an extension body, the member access `this.name` that the callee `name` of a call
+    /// stands for: a name that is no local or parameter, and that names a field of the
+    /// receiver's struct or an extension on the receiver's type (D5 of `extension-methods`).
+    fn implicit_this_callee(&self, callee: &Expr) -> Option<Expr> {
+        if let Some(field) = self.implicit_this_field(callee) {
+            return Some(field);
+        }
+        let ExprKind::Ident(name) = &callee.kind else {
+            return None;
+        };
+        if self.env.resolves_to_local(name) {
+            return None;
+        }
+        let receiver = self.current_receiver()?;
+        match self.find_extension(&receiver, name) {
+            ExtensionLookup::None => None,
+            _ => Some(this_member(name, callee.span)),
+        }
+    }
+
+    /// The receiver type `T` of the extension whose body is being checked, where `this` is a
+    /// `&T`, `&mut T` or `T`.
+    fn current_receiver(&self) -> Option<Type> {
+        match &self.env.lookup(THIS)?.kind {
+            SymbolKind::Variable { ty, .. } => Some(peel_references(ty).clone()),
+            _ => None,
+        }
+    }
+
+    /// Checks the arguments of a call against the parameters of a function, positional, named
+    /// or omitted for a parameter with a default. `param_names` and `has_default` are empty when
+    /// the callee is not a declared function (a function-typed value), which allows neither.
+    fn check_call_arguments(
+        &mut self,
+        params: &[Type],
+        param_names: &[String],
+        has_default: &[bool],
+        args: &[CallArg],
+        span: Span,
+    ) {
+        let n_params = params.len();
+        let min_args = if has_default.len() == n_params {
+            has_default.iter().filter(|&&d| !d).count()
+        } else {
+            n_params
+        };
+
+        let has_named_args = args.iter().any(|a| a.name.is_some());
+
+        if !has_named_args {
+            if args.len() < min_args || args.len() > n_params {
+                let msg = if min_args == n_params {
+                    format!(
+                        "function expected {} arguments, found {}",
+                        n_params,
+                        args.len()
+                    )
+                } else {
+                    format!(
+                        "function expected between {} and {} arguments, found {}",
+                        min_args,
+                        n_params,
+                        args.len()
+                    )
+                };
+                self.errors
+                    .push(TypeError::CallSignatureMismatch { message: msg, span });
+                return;
+            }
+
+            for (arg, param_ty) in args.iter().zip(params.iter()) {
+                self.check_argument(&arg.value, param_ty, Origin::Argument);
+            }
+        } else {
+            let mut param_assigned = vec![false; n_params];
+            let mut seen_names = HashSet::new();
+            let mut positional_idx = 0;
+
+            for arg in args {
+                if let Some(arg_name) = &arg.name {
+                    if !seen_names.insert(arg_name.clone()) {
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!("duplicate argument '{}' provided", arg_name),
+                            span: arg.span,
+                        });
+                        continue;
+                    }
+                    if let Some(pos) = param_names.iter().position(|pn| pn == arg_name) {
+                        if param_assigned[pos] {
+                            self.errors.push(TypeError::CallSignatureMismatch {
+                                message: format!(
+                                    "parameter '{}' is already given a positional argument",
+                                    arg_name
+                                ),
+                                span: arg.span,
+                            });
+                        }
+                        param_assigned[pos] = true;
+                        self.check_argument(&arg.value, &params[pos], Origin::Argument);
+                    } else {
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!("unknown parameter '{}'", arg_name),
+                            span: arg.span,
+                        });
+                    }
+                } else {
+                    if positional_idx < n_params {
+                        if param_assigned[positional_idx] {
+                            self.errors.push(TypeError::CallSignatureMismatch {
+                                message: format!(
+                                    "positional argument assigns parameter '{}', which is already given by name",
+                                    param_names
+                                        .get(positional_idx)
+                                        .map(String::as_str)
+                                        .unwrap_or("parameter")
+                                ),
+                                span: arg.span,
+                            });
+                        }
+                        param_assigned[positional_idx] = true;
+                        self.check_argument(&arg.value, &params[positional_idx], Origin::Argument);
+                        positional_idx += 1;
+                    } else {
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!(
+                                "too many positional arguments (expected at most {})",
+                                n_params
+                            ),
+                            span: arg.span,
+                        });
+                    }
+                }
+            }
+
+            for (i, &assigned) in param_assigned.iter().enumerate().take(n_params) {
+                let has_def = has_default.get(i).copied().unwrap_or(false);
+                if !has_def && !assigned {
+                    let p_name = param_names
+                        .get(i)
+                        .map(|s| s.as_str())
+                        .unwrap_or("parameter");
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!("missing required argument '{}'", p_name),
+                        span,
+                    });
+                }
             }
         }
     }
@@ -2787,6 +3481,9 @@ impl TypeChecker {
         if self.is_copy(ty) {
             return;
         }
+        if let Some(field) = self.implicit_this_field(expr) {
+            return self.check_move_source(&field, ty);
+        }
         let source = match &expr.kind {
             ExprKind::Ident(name) if self.is_top_level_value(name) => {
                 format!("top-level value '{}'", name)
@@ -2870,11 +3567,7 @@ impl TypeChecker {
                 span,
             });
         }
-        let receiver = peel_references(receiver_ty);
-        let (cloned, nullable) = match receiver {
-            Type::Nullable(inner) if is_safe_nav => (peel_references(inner).clone(), true),
-            other => (other.clone(), false),
-        };
+        let (cloned, nullable) = clone_target(receiver_ty, is_safe_nav);
         if cloned == Type::Error {
             return Type::Error;
         }
@@ -2901,7 +3594,54 @@ impl TypeChecker {
             return ty;
         }
         let target_ty = self.infer_expr(target);
+        if !self.has_member(&target_ty, member) && self.extension_named(&target_ty, member) {
+            // An extension is not a value: only a call reaches it.
+            self.errors.push(TypeError::UnknownField {
+                target_type: peel_indirection(&target_ty).clone(),
+                field_name: member.to_string(),
+                span,
+                help: Some(format!(
+                    "'{}' is an extension function, not a field: call it with '{}.{}()'",
+                    member, target, member
+                )),
+            });
+            return Type::Error;
+        }
         self.member_type(&target_ty, member, is_safe_nav, span).0
+    }
+
+    /// Whether the struct or enum behind `ty` has a field or variant named `name`.
+    fn has_member(&self, ty: &Type, name: &str) -> bool {
+        if self.has_field(ty, name) {
+            return true;
+        }
+        let mut ty = ty;
+        while let Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) = ty {
+            ty = inner;
+        }
+        match ty {
+            Type::Enum(id) => self
+                .enum_variants(id)
+                .is_some_and(|variants| variants.iter().any(|(v, _)| v == name)),
+            _ => false,
+        }
+    }
+
+    /// Whether an extension named `name` is visible on the type behind `ty`, at any layer of
+    /// references, `Heap<T>` and `?`.
+    fn extension_named(&self, ty: &Type, name: &str) -> bool {
+        let mut ty = ty;
+        loop {
+            if !matches!(self.find_extension(ty, name), ExtensionLookup::None) {
+                return true;
+            }
+            match ty {
+                Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
+                    ty = inner
+                }
+                _ => return false,
+            }
+        }
     }
 
     /// Types `member` accessed on a value of type `target_ty`, reporting unknown members.
@@ -2934,6 +3674,7 @@ impl TypeChecker {
                         target_type: target_ty.clone(),
                         field_name: member.to_string(),
                         span,
+                        help: None,
                     });
                     return (Type::Error, None);
                 }
@@ -2960,6 +3701,7 @@ impl TypeChecker {
                         target_type: peeled_ty.clone(),
                         field_name: member.to_string(),
                         span,
+                        help: None,
                     });
                     (Type::Error, None)
                 }
@@ -2982,6 +3724,7 @@ impl TypeChecker {
                         target_type: peeled_ty.clone(),
                         field_name: member.to_string(),
                         span,
+                        help: None,
                     });
                     (Type::Error, None)
                 }
@@ -2991,6 +3734,7 @@ impl TypeChecker {
                     target_type: other.clone(),
                     field_name: member.to_string(),
                     span,
+                    help: None,
                 });
                 (Type::Error, None)
             }
@@ -3005,7 +3749,12 @@ impl TypeChecker {
     /// regardless of the binding that holds the reference. Any other expression is a temporary,
     /// which is writable unless it is reached through a shared reference.
     fn infer_place(&mut self, expr: &Expr) -> (Type, bool) {
+        if let Some(field) = self.implicit_this_field(expr) {
+            return self.infer_place(&field);
+        }
         match &expr.kind {
+            // `this` is a `val`: a `mut fun` writes through it, never to it.
+            ExprKind::This => (self.infer_expr(expr), false),
             ExprKind::Ident(name) => {
                 let ty = self.infer_expr(expr);
                 let writable = matches!(
@@ -3135,6 +3884,37 @@ fn nullable_view(ty: &Type) -> Option<Type> {
         },
         _ => None,
     }
+}
+
+/// The type the built-in `clone()` copies when called on a receiver of type `receiver_ty`, and
+/// whether the call is a safe call on a nullable: the receiver behind its references, or for
+/// `?.` on a nullable, its payload behind references.
+fn clone_target(receiver_ty: &Type, is_safe_nav: bool) -> (Type, bool) {
+    match peel_references(receiver_ty) {
+        Type::Nullable(inner) if is_safe_nav => (peel_references(inner).clone(), true),
+        other => (other.clone(), false),
+    }
+}
+
+/// The binding `expr` names: a variable for an identifier, the receiver for `this`.
+fn binding_name(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Ident(name) => Some(name),
+        ExprKind::This => Some(THIS),
+        _ => None,
+    }
+}
+
+/// `this.member`, the member access an implicit `this` stands for (D5 of `extension-methods`).
+fn this_member(member: &str, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::MemberAccess {
+            target: Box::new(Expr::new(ExprKind::This, span)),
+            member: member.to_string(),
+            is_safe_nav: false,
+        },
+        span,
+    )
 }
 
 /// Whether `expr` is a leaf whose move [`TypeChecker::check_move_source`] checks: a name, a field
@@ -3817,6 +4597,7 @@ mod tests {
                 ExportedSymbol::Function {
                     visibility: Visibility::Public,
                     is_compose: false,
+                    receiver: None,
                     name: "add".to_string(),
                     type_params: Vec::new(),
                     params: vec![
@@ -3829,6 +4610,7 @@ mod tests {
                 ExportedSymbol::Function {
                     visibility: Visibility::Package,
                     is_compose: false,
+                    receiver: None,
                     name: "internal_calc".to_string(),
                     type_params: Vec::new(),
                     params: Vec::new(),

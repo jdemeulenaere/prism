@@ -1,0 +1,6 @@
+// expect: E4003
+struct User {
+    var name: String
+}
+mut fun User.rename(n: String) { name = n }
+fun User.peek() { rename("") }
