@@ -1,0 +1,5 @@
+// expect: ok
+fun f() {
+    var s = "a"
+    s = s
+}

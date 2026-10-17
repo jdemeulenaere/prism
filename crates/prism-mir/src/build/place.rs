@@ -639,8 +639,9 @@ impl Builder<'_> {
     }
 
     /// `target = value`: the value, then a drop of the target's old value when its type needs
-    /// one, then the write (D6). A target that needs no drop and whose place evaluates nothing
-    /// is written directly.
+    /// one, then the write (D6). A value that moves a place the source names is moved into a
+    /// temporary before the drop, so that the drop cannot destroy it (`s = s`). A target that
+    /// needs no drop and whose place evaluates nothing is written directly.
     fn lower_assign(&mut self, target: ExpressionId, value: ExpressionId, span: Span) {
         let target_ty = self.expression(target).ty.clone();
         if !self.needs_drop(&target_ty) && self.is_plain_place(target) {
@@ -648,9 +649,12 @@ impl Builder<'_> {
             self.expression_into(Some(&place), value);
             return;
         }
-        let operand = self.operand(value);
+        let mut operand = self.operand(value);
         let place = self.place(target);
         if self.needs_drop(&target_ty) {
+            let value = self.expression(value);
+            let (value_ty, value_span) = (value.ty.clone(), value.span);
+            operand = self.stabilize(operand, value_ty, value_span);
             self.emit_drop(place.clone(), span);
         }
         self.assign(place, Rvalue::Use(operand), span);

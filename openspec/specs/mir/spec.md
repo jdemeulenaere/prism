@@ -64,6 +64,10 @@ An assignment to a place whose type needs a drop MUST evaluate the new value fir
 - **WHEN** `fun f(r: &mut String) { *r = "b" }` is lowered
 - **THEN** the dereference of `r` is dropped and then assigned the string `"b"`
 
+#### Scenario: Assigning a variable to itself
+- **WHEN** `fun f() { var s = "a"; s = s }` is lowered
+- **THEN** `s` is moved into a temporary before its old value is dropped, and the temporary is then moved into `s`; in the elaborated MIR that drop is removed, because `s` has moved
+
 ### Requirement: Temporaries Live Until the End of Their Scope
 A temporary MUST be dropped at the end of the innermost enclosing statement, block tail or body value, or of the innermost part that is evaluated conditionally or repeatedly: a condition, a `when` pattern test, a `for` range, a branch of `if` or `when`, the right operand of `&&` or `||`, the fallback of `?:`, or the rest of a `?.` chain after its first test.
 
