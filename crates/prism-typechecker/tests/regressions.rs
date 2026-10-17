@@ -1064,3 +1064,12 @@ fn if_without_else_where_a_value_is_expected() {
         &["E4001", "E4002"],
     );
 }
+
+/// type-system: "Range pattern without a subject rejected". It used to be accepted unchecked.
+#[test]
+fn range_pattern_without_a_subject_rejected() {
+    assert_codes(
+        "fun f(x: Int): Int = when { in 0..<10 -> 1; else -> 2 }\n",
+        &["E4002"],
+    );
+}

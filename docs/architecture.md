@@ -58,7 +58,7 @@ Phase 2 MUST lower each file through a typed, resolved tree and a control-flow g
 
 #### Scenario: Lowering to MIR
 - **WHEN** a file has no type errors
-- **THEN** each function and closure body is lowered (`prism-mir` crate) to a place-based control-flow graph of basic blocks: statements assign rvalues to places (a local plus field and deref projections) and mark storage, terminators branch, call, return and drop, and `&&`, `||`, `?.`, `?:`, `when` and `for` become explicit branches; a stable text dump (`--dump-mir`) drives snapshot tests
+- **THEN** each function and closure body is lowered (`prism-mir` crate) to a place-based control-flow graph of basic blocks: statements assign rvalues to places (a local plus field and deref projections) and mark storage, terminators branch, call, return and drop, and `&&`, `||`, `?.`, `?:`, `when` and `for` become explicit branches; a stable text dump (`prism dump-mir <file.prism>`) drives snapshot tests
 
 #### Scenario: Borrow checking on MIR
 - **WHEN** a file's MIR has been built

@@ -236,5 +236,33 @@ No external users. `prism_typechecker::Type` and friends stay importable through
 
 ## Open Questions
 
-- The dump's exact layout (labels, how locals are listed) is settled by the first snapshots.
+- ~~The dump's exact layout (labels, how locals are listed) is settled by the first snapshots.~~ Settled during implementation: the layout of the D13 example, with locals listed after the item's header as `local %n name: Type (kind)`, defaults as `default name:` lines, loops numbered `#n` for their jumps, and a call's or construction's evaluation order printed as `(order: c, a)` only when it differs from parameter order.
 - Whether `prism dump-typed-tree` should also accept a directory, dumping every file of a package, can wait for a need.
+
+## Implementation Notes
+
+Decisions and corrections made while implementing, beyond the decisions above.
+
+### D17. Error nodes have the error type everywhere (autonomous)
+
+D12 gives every error node the error type, and the scenario "Error node keeps what was checked" requires it for a call whose arguments do not match. Before this change some failures kept a recovered type: a call with mismatched arguments had its callee's return type, a construction with missing or unknown fields its struct's type, `clone()` with arguments the cloned type, a value moved out of a borrow (`E4017`) its expected type, and a `return` outside a function `Nothing`. They now have the error type, which suppresses follow-on mismatches on the same value (`val x: String = g(1, 2)` reports `E4004` but no longer also `E4002`). No fixture's codes changed, and the rendered diagnostics of every fixture and example are identical except for the rendering fix of D21. Rejected: an error node carrying the recovered type, which keeps more information for hover but makes cascades depend on which failure occurred.
+
+### D18. Calls and constructions record their slots' types (autonomous)
+
+`Call` records its `parameters` (each name, `None` for a function-typed value, and the type its argument has, `this` first for an extension) and `Construct` records each field's name and declared type (`ConstructField`). The validator checks D6's slot rule for arguments and fields from these, and MIR lowering reads a default's parameter or a field's layout without looking up the callee's signature, which for an imported function lives only in the ABI. Rejected: recovering the signature from the declaration path, which needs the import tables in every consumer.
+
+### D19. A call takes over its callee's node (autonomous)
+
+The callee of `f(x)` is checked like any expression first, which builds a `FunctionReference` (or a `VariantConstructor` for `Shape.Circle(1)`). When it turns out to be a declared function or a payload variant, the call (or construction) replaces that node in place rather than leaving it unreachable, so every node of an error-free tree is reached from exactly one parent (D14). Rejected: resolving a callee name without building a node, which would duplicate the name-resolution paths (on-demand inference, visibility, unimported types) of `infer_expr`.
+
+### D20. Comparison operands at one type, and shared borrows passed on are copies (autonomous)
+
+D6 is extended to `==` and `!=`: the operand whose type is assignable to the other's is coerced to it (`Int?` compared with `Int` coerces the `Int`), so MIR lowering compares two values of one type. And an argument place that already is a shared borrow (or another `Copy` value) passed to a reference parameter is an explicit `Copy`, as consumed places are (D5); a non-`Copy` one, such as an optional mutable borrow lent as an optional shared borrow, stays read in place, since the checker does not check it as a move. Rejected: leaving comparison operands at their own types, which pushes subtyping back into MIR lowering.
+
+### D21. Plain fixes and corrections
+
+- **Rendering of optional borrows.** A nullable reference or function type renders as written in source, `(&T)?` and `(() -> T)?`, rather than as `&T?`, which is how a borrowed nullable `&(T?)` renders. This affects the dump and diagnostics alike (one fixture's message changes from "expected '&String?', found '&String?'" to "found '(&String)?'").
+- **A range pattern without a subject.** `when { in 0..<10 -> ... }` was accepted with its range unchecked, which left nothing for the tree to hold. Without a subject a pattern is a condition, so the range is now rejected with `E4002` (a plain fix: the scenario "Subjectless when expression condition checking" requires conditions to be `Bool`); `type-system` gains the scenario "Range pattern without a subject rejected" and a regression test.
+- **The nested-closure scenario** wrote `{ { a } }`, which is a closure whose body is a block, not two closures; it now uses `run { run { a } }`.
+- **Names.** The per-file Phase 2 function of D15 is `typecheck_file`, since `check_file` is already the public entry of `prism check <file>`. Each function and top-level `val` is built in a body builder of its own by `check_function_body` and `check_top_level_var`, which restore the enclosing one; `infer_declaration` also saves it in `BodyContext`, as D1 describes.
+- **Variants read through a value** (`h.Green`, accepted by the `type-system` scenario "Only a variant name covers that variant") are a block that evaluates the value as a statement and has the variant as its tail, so the value's node stays reachable.

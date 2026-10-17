@@ -149,6 +149,10 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 - **WHEN** evaluating `when { c1 -> e1, c2 -> e2, else -> e3 }`
 - **THEN** conditions `c1` and `c2` must each evaluate to `Bool`
 
+#### Scenario: Range pattern without a subject rejected
+- **WHEN** `fun f(x: Int): Int = when { in 0..<10 -> 1; else -> 2 }` is checked
+- **THEN** the type checker emits `E4002`, because without a subject a pattern is a condition, which a range is not
+
 #### Scenario: Non-exhaustive when expression rejected
 - **WHEN** a `when` expression is used in value position and fails to cover all possible enum variants or omit an `else` branch
 - **THEN** the type checker rejects the expression with a non-exhaustive pattern match error (`E4009`)

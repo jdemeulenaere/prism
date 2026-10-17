@@ -3334,9 +3334,18 @@ impl TypeChecker {
                                 end_inclusive: *end_inclusive,
                             });
                         } else {
-                            // A range pattern needs a subject; it is not checked without one.
-                            let missing = self.error_node(Vec::new(), branch.span);
-                            patterns.push(Pattern::Condition(missing));
+                            // Without a subject, a pattern is a condition, which a range is
+                            // not: its ends are checked as a range's, and the range rejected.
+                            let start = self.check_operand(start, &Type::Int);
+                            let end = self.check_operand(end, &Type::Int);
+                            let span = self.builder.span_of(start).merge(self.builder.span_of(end));
+                            self.report_mismatch(
+                                &Type::Bool,
+                                Type::Struct(NominalId::builtin_range()),
+                                span,
+                            );
+                            let condition = self.error_node(vec![start, end], span);
+                            patterns.push(Pattern::Condition(condition));
                         }
                     }
                 }

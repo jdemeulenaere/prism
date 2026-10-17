@@ -50,7 +50,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 10. Integration
 
-- [ ] 10.1 Run `prism dump-typed-tree` on every file under `examples/` (except `examples/demo/ui`, which needs an unbuilt subsystem) and validate their trees in the test of 9.2 or a sibling test. In `docs/architecture.md` §1, change the MIR scenario's `--dump-mir` to `prism dump-mir <file.prism>` (D13). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/`, and `openspec validate --all --strict`. Verify all pass.
+- [x] 10.1 Run `prism dump-typed-tree` on every file under `examples/` (except `examples/demo/ui`, which needs an unbuilt subsystem) and validate their trees in the test of 9.2 or a sibling test. In `docs/architecture.md` §1, change the MIR scenario's `--dump-mir` to `prism dump-mir <file.prism>` (D13). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/`, and `openspec validate --all --strict`. Verify all pass.
 
 ## Workflow follow-up
 
