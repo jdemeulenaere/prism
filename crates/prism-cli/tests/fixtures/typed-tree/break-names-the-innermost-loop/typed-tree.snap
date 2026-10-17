@@ -1,0 +1,14 @@
+module main
+fun main::f(): Unit @2:1
+  local %0 i: Int (for)
+  block: Unit @2:9
+    for #0 %0 i @3:5
+      range: range ..<: Range @3:15
+        start: literal 0: Int @3:15
+        end: literal 3: Int @3:19
+      body: block: Unit @3:22
+        while #1 @4:9
+          condition: literal true: Bool @4:16
+          body: block: Unit @4:22
+            expression @5:13
+              break #1: Nothing @5:13

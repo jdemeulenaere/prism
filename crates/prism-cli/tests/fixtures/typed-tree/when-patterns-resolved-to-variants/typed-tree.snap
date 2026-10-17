@@ -1,0 +1,14 @@
+module main
+enum main::Color @2:1
+  variant 0 Red
+  variant 1 Green
+fun main::f(c: Color): Int @3:1
+  local %0 c: Color (parameter)
+  when exhaustive: Int @3:24
+    subject: local %0 c: Color @3:30
+    branch @3:35
+      pattern variant main::Color 0 Red
+      body: literal 1: Int @3:42
+    branch @3:45
+      pattern variant main::Color 1 Green
+      body: literal 2: Int @3:54

@@ -196,7 +196,7 @@ A closure MUST record its parameters as bindings, whether it is composable, and 
 - **THEN** the closure captures `b` then `a`, each once
 
 #### Scenario: Nested closures capture through their parent
-- **WHEN** a body of `fun g(a: Int)` runs `val f: () -> () -> Int = { { a } }`
+- **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int): Int = run { run { a } }` is checked
 - **THEN** both closures capture `a`
 
 ### Requirement: Typed Tree Text Dump

@@ -129,6 +129,10 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 - **WHEN** an `if (cond) e1 else e2` expression is evaluated
 - **THEN** the condition must typecheck as `Bool`, and both branches must unify to a common type
 
+#### Scenario: If without else where a value is expected
+- **WHEN** `fun f(c: Bool) { val x: Int = if (c) nope }` is checked
+- **THEN** the type checker emits `E4001` once, for `nope`, and `E4002` once, because an `if` without `else` has type `Unit`
+
 #### Scenario: Branches join with null into a nullable type
 - **WHEN** one branch of an `if`/`else` or `when` has type `T` and another is `null` or has type `T?` (e.g. `val x = if (c) 1 else null`)
 - **THEN** the branches join to `T?`

@@ -1,0 +1,4 @@
+// expect: ok
+fun f(n: Int) {
+    for (i in 0..<n) {}
+}

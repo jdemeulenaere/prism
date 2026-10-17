@@ -1054,3 +1054,13 @@ fn an_extension_is_not_a_value() {
     assert!(helps[0].contains("'u.greet()'"), "{}", helps[0]);
     assert!(helps[1].contains("'v?.greet()'"), "{}", helps[1]);
 }
+
+/// type-system: "If without else where a value is expected". The branch is checked once, so an
+/// error inside it is reported once.
+#[test]
+fn if_without_else_where_a_value_is_expected() {
+    assert_codes(
+        "fun f(c: Bool) {\n    val x: Int = if (c) nope\n}\n",
+        &["E4001", "E4002"],
+    );
+}

@@ -1,0 +1,3 @@
+// expect: ok
+enum Color { Red, Green }
+fun f(c: Color): Int = when (c) { Red -> 1; Green -> 2 }

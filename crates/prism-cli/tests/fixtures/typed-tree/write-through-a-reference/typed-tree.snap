@@ -1,0 +1,8 @@
+module main
+fun main::f(r: &mut Int): Unit @2:1
+  local %0 r: &mut Int (parameter)
+  block: Unit @2:20
+    assign @3:5
+      target: deref: Int @3:6
+        local %0 r: &mut Int @3:6
+      value: literal 5: Int @3:10

@@ -1,0 +1,19 @@
+module main
+fun main::run(f: () -> Int): Int @2:1
+  local %0 f: () -> Int (parameter)
+  call value: Int @2:30
+    callee: local %0 f: () -> Int @2:30
+fun main::g(a: Int, b: Int): Int @3:1
+  local %0 a: Int (parameter)
+  local %1 b: Int (parameter)
+  block: Int @3:28
+    tail: coerce diverge: Int @4:5
+      return: Nothing @4:5
+        call main::run: Int @4:12
+          argument f: closure () captures %1 b, %0 a: () -> Int @4:16
+            block: Int @4:18
+              tail: binary +: Int @4:18
+                binary +: Int @4:18
+                  local %1 b: Int @4:18
+                  local %0 a: Int @4:22
+                local %1 b: Int @4:26

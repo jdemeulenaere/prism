@@ -1,0 +1,10 @@
+module main
+fun main::f(n: Int): Unit @2:1
+  local %0 n: Int (parameter)
+  local %1 i: Int (for)
+  block: Unit @2:15
+    for #0 %1 i @3:5
+      range: range ..<: Range @3:15
+        start: literal 0: Int @3:15
+        end: local %0 n: Int @3:19
+      body: block: Unit @3:22

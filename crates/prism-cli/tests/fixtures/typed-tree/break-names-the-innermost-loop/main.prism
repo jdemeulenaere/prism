@@ -1,0 +1,8 @@
+// expect: ok
+fun f() {
+    for (i in 0..<3) {
+        while (true) {
+            break
+        }
+    }
+}

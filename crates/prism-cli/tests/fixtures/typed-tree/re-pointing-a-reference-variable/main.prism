@@ -1,0 +1,5 @@
+// expect: ok
+fun f(a: Int, b: Int) {
+    var r = &a
+    r = &b
+}

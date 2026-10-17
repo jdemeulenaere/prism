@@ -1,0 +1,4 @@
+// expect: ok
+fun f(r: &mut Int) {
+    *r = 5
+}

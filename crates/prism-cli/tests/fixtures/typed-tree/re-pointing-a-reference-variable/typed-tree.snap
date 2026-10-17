@@ -1,0 +1,13 @@
+module main
+fun main::f(a: Int, b: Int): Unit @2:1
+  local %0 a: Int (parameter)
+  local %1 b: Int (parameter)
+  local %2 r: &Int (var)
+  block: Unit @2:23
+    let %2 r @3:5
+      borrow (written): &Int @3:13
+        local %0 a: Int @3:14
+    assign @4:5
+      target: local %2 r: &Int @4:5
+      value: borrow (written): &Int @4:9
+        local %1 b: Int @4:10
