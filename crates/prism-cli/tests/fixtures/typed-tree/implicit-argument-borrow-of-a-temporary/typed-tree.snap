@@ -1,0 +1,11 @@
+module main
+fun main::greet(n: &String): Int @2:1
+  local %0 n: &String (parameter)
+  literal 1: Int @2:30
+fun main::make(): String @3:1
+  literal "x": String @3:22
+fun main::f(): Int @4:1
+  call main::greet: Int @4:16
+    argument n: borrow (argument): &String @4:22
+      temporary: String @4:22
+        call main::make: String @4:22

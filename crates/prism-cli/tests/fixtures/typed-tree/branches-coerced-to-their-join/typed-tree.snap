@@ -1,0 +1,24 @@
+module main
+fun main::f(c: Bool): Int @2:1
+  local %0 c: Bool (parameter)
+  local %1 y: Int? (val)
+  local %2 z: Int (val)
+  block: Int @2:21
+    let %1 y @3:5
+      if: Int? @3:13
+        condition: local %0 c: Bool @3:17
+        then: coerce wrap nullable: Int? @3:20
+          literal 1: Int @3:20
+        else: coerce subtype: Int? @3:27
+          literal null: Nothing? @3:27
+    let %2 z @4:5
+      if: Int @4:18
+        condition: local %0 c: Bool @4:22
+        then: literal 1: Int @4:25
+        else: coerce diverge: Int @4:32
+          return: Nothing @4:32
+            literal 0: Int @4:39
+    tail: coerce diverge: Int @5:5
+      return: Nothing @5:5
+        copy: Int @5:12
+          local %2 z: Int @5:12

@@ -1,0 +1,8 @@
+module main
+fun main::f(r: (&Int)?): Int? @2:1
+  local %0 r: (&Int)? (parameter)
+  chain (copy out): Int? @2:27
+    copy: Int @2:27
+      deref: Int @2:27
+        payload: &Int @2:27
+          local %0 r: (&Int)? @2:27

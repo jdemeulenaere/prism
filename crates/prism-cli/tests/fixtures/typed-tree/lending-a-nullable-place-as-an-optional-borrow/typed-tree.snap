@@ -1,0 +1,14 @@
+module main
+struct main::User @2:1
+  field 0 val nick: String?
+fun main::show(n: (&String)?): Int @3:1
+  local %0 n: (&String)? (parameter)
+  literal 1: Int @3:32
+fun main::f(u: User): Int @4:1
+  local %0 u: User (parameter)
+  call main::show: Int @4:23
+    argument n: chain (borrow contents): (&String)? @4:28
+      borrow (argument): &String @4:28
+        payload: String @4:28
+          field 0 nick: String? @4:28
+            local %0 u: User @4:28

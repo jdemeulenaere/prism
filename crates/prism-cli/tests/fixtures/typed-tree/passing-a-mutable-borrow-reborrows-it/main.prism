@@ -1,0 +1,7 @@
+// expect: ok
+struct User { var name: String }
+fun touch(u: &mut User) {}
+fun f(m: &mut User) {
+    touch(m)
+    touch(m)
+}

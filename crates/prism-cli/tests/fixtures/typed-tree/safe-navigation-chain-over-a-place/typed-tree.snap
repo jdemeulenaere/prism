@@ -1,0 +1,17 @@
+module main
+struct main::Team @2:1
+  field 0 val lead: User?
+struct main::User @3:1
+  field 0 val name: String
+fun main::User.greet(this): Int @4:1
+  local %0 this: &User (receiver)
+  literal 1: Int @4:25
+fun main::f(t: Team?): Int? @5:1
+  local %0 t: Team? (parameter)
+  chain: Int? @5:25
+    call main::User.greet: Int @5:25
+      receiver: borrow (receiver): &User @5:25
+        payload: User @5:25
+          field 0 lead: User? @5:25
+            payload: Team @5:25
+              local %0 t: Team? @5:25

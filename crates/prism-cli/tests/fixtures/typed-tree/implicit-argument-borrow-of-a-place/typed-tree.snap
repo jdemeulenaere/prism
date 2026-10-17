@@ -1,0 +1,9 @@
+module main
+fun main::greet(n: &String): Int @2:1
+  local %0 n: &String (parameter)
+  literal 1: Int @2:30
+fun main::f(name: String): Int @3:1
+  local %0 name: String (parameter)
+  call main::greet: Int @3:28
+    argument n: borrow (argument): &String @3:34
+      local %0 name: String @3:34

@@ -1,0 +1,4 @@
+// expect: ok
+struct User { val nick: String? }
+fun show(n: (&String)?): Int = 1
+fun f(u: User): Int = show(u.nick)

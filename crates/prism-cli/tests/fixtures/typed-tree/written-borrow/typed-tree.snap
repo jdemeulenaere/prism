@@ -1,0 +1,11 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+fun main::f(u: User): Unit @3:1
+  local %0 u: User (parameter)
+  local %1 r: &String (val)
+  block: Unit @3:16
+    let %1 r @4:5
+      borrow (written): &String @4:13
+        field 0 name: String @4:14
+          local %0 u: User @4:14

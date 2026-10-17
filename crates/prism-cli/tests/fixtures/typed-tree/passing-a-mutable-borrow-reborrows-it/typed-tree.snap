@@ -1,0 +1,19 @@
+module main
+struct main::User @2:1
+  field 0 var name: String
+fun main::touch(u: &mut User): Unit @3:1
+  local %0 u: &mut User (parameter)
+  block: Unit @3:25
+fun main::f(m: &mut User): Unit @4:1
+  local %0 m: &mut User (parameter)
+  block: Unit @4:21
+    expression @5:5
+      call main::touch: Unit @5:5
+        argument u: borrow mut (argument): &mut User @5:11
+          deref: User @5:11
+            local %0 m: &mut User @5:11
+    expression @6:5
+      call main::touch: Unit @6:5
+        argument u: borrow mut (argument): &mut User @6:11
+          deref: User @6:11
+            local %0 m: &mut User @6:11

@@ -1,0 +1,4 @@
+// expect: ok
+fun greet(n: &String): Int = 1
+fun make(): String = "x"
+fun f(): Int = greet(make())

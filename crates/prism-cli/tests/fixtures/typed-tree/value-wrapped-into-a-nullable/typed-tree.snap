@@ -1,0 +1,7 @@
+module main
+fun main::f(): Unit @2:1
+  local %0 x: Int? (val)
+  block: Unit @2:9
+    let %0 x @3:5
+      coerce wrap nullable: Int? @3:19
+        literal 5: Int @3:19
