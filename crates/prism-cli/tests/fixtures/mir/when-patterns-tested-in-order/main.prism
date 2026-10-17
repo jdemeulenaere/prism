@@ -1,0 +1,2 @@
+// expect: ok
+fun f(x: Int): Int = when (x) { 0 -> 1; in 1..10 -> 2; else -> 3 }

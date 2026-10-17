@@ -1,0 +1,23 @@
+module main
+fun main::f(_1: String): Bool @2:1
+  local _0: Bool (return)
+  local _1 s: String (argument)
+  local _2: &String (temporary)
+  local _3: String (temporary)
+  local _4: &String (temporary)
+  bb0:
+    storage_live _2 @2:26
+    _2 = &_1 (operator) @2:26
+    storage_live _3 @2:31
+    _3 = const "a" @2:31
+    storage_live _4 @2:26
+    _4 = &_3 (operator) @2:26
+    _0 = move _2 == move _4 @2:26
+    storage_dead _4 @2:26
+    drop _3 -> bb1 @2:26
+  bb1:
+    storage_dead _3 @2:26
+    storage_dead _2 @2:26
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1

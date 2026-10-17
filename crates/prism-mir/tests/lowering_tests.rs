@@ -108,3 +108,48 @@ fn discarded_places_are_read_and_unit_bodies_return_unit() {
         assert!(actual.contains(line), "missing {:?} in\n{}", line, actual);
     }
 }
+
+#[test]
+fn empty_ranges_and_do_while_loops_are_well_formed() {
+    let actual = mir("\
+fun g(i: Int) {}
+fun f(c: Bool) {
+    for (i in 0..<0) g(i)
+    do { val s = \"x\"; if (c) continue } while (c)
+}
+");
+    // A half-open range is empty when its start is not below its end, and its last element is
+    // computed only once it is known not to be empty.
+    assert!(
+        actual.contains("copy _2.start >= copy _2.end"),
+        "{}",
+        actual
+    );
+    assert!(actual.contains("copy _2.end - const 1"), "{}", actual);
+}
+
+#[test]
+fn loops_over_a_range_value_read_its_end_inclusive_field() {
+    let actual = mir("\
+fun g(i: Int) {}
+fun f(r: Range, c: Bool) { for (i in r) { if (c) continue; g(i) } }
+");
+    assert!(actual.contains("switch copy _3.endInclusive"), "{}", actual);
+}
+
+#[test]
+fn string_subjects_and_chains_are_compared_through_borrows() {
+    let actual = mir("\
+struct User { val name: String }
+fun f(s: String): Int = when (s) { \"a\" -> 1; else -> 2 }
+fun g(u: User?): Bool = u?.name == \"a\"
+fun h(a: String, b: String): String = a + b
+");
+    assert!(actual.contains("= &_1 (operator)"), "{}", actual);
+    assert!(
+        actual.contains("= &(_1 as payload).name (operator)"),
+        "{}",
+        actual
+    );
+    assert!(actual.contains("_0 = move _3 + move _4"), "{}", actual);
+}

@@ -1,0 +1,3 @@
+// expect: ok
+fun g() {}
+fun f() { return; g() }

@@ -1,0 +1,20 @@
+module main
+fun main::g(): Bool @2:1
+  local _0: Bool (return)
+  bb0:
+    _0 = const true @2:17
+    return @2:1
+fun main::f(_1: Bool): Bool @3:1
+  local _0: Bool (return)
+  local _1 a: Bool (argument)
+  bb0:
+    switch copy _1 [0 -> bb2, otherwise -> bb1] @3:24
+  bb1:
+    _0 = call main::g() -> bb3 @3:29
+  bb2:
+    _0 = const false @3:24
+    goto -> bb4 @3:24
+  bb3:
+    goto -> bb4 @3:24
+  bb4:
+    return @3:1

@@ -231,19 +231,28 @@ struct Snapshot {
     file: &'static str,
     /// The spec, or the case-name prefix, whose cases must hold one.
     required_for: &'static str,
-    dump: fn(&Path) -> Result<String, prism_cli::WorkspaceError>,
+    /// The dump of an entry, or its rendered errors.
+    dump: fn(&Path) -> Result<String, String>,
 }
 
 const SNAPSHOTS: &[Snapshot] = &[
     Snapshot {
         file: "typed-tree.snap",
         required_for: "typed-tree",
-        dump: |entry| prism_cli::dump_typed_tree(entry).map(|dump| dump.text),
+        dump: |entry| {
+            prism_cli::dump_typed_tree(entry)
+                .map(|dump| dump.text)
+                .map_err(|err| err.render())
+        },
     },
     Snapshot {
         file: "mir.snap",
         required_for: "mir",
-        dump: |entry| prism_cli::dump_mir(entry).map(|dump| dump.text),
+        dump: |entry| {
+            prism_cli::dump_mir(entry)
+                .map(|dump| dump.text)
+                .map_err(|err| err.render())
+        },
     },
 ];
 
@@ -271,9 +280,7 @@ fn check_one_snapshot(case: &Case, entry: &Path, snapshot: &Snapshot) -> Result<
         Err(err) => {
             return Err(format!(
                 "{}: nothing to compare with {}:\n{}",
-                case.name,
-                snapshot.file,
-                err.render()
+                case.name, snapshot.file, err
             ))
         }
     };
@@ -507,4 +514,83 @@ fn example_typed_trees_are_well_formed() {
         violations.len(),
         violations.join("\n")
     );
+}
+
+/// mir: "Error-free MIR". Lowers the entry file of every case whose entry typechecks and checks
+/// the MIR's structural invariants (`MirFile::validate`), reporting every violation and every
+/// lowering crash at once.
+#[test]
+fn fixture_mir_is_well_formed() {
+    let mut violations = Vec::new();
+    let mut validated = 0;
+    for case in load_cases() {
+        let entry = entry_of(&case);
+        if !entry.is_file() {
+            continue;
+        }
+        let Ok(dump) = prism_cli::dump_typed_tree(&entry) else {
+            continue;
+        };
+        if dump.type_errors.is_some() {
+            continue;
+        }
+        validated += 1;
+        match std::panic::catch_unwind(|| prism_mir::lower_file(&dump.tree)) {
+            Ok(mir) => {
+                for violation in mir.validate() {
+                    violations.push(format!("{}: {}", case.name, violation));
+                }
+            }
+            Err(panic) => violations.push(format!(
+                "{}: lowering panicked: {:?}",
+                case.name,
+                panic_message(&panic)
+            )),
+        }
+    }
+    assert!(validated > 300, "only {} files lowered", validated);
+    assert!(
+        violations.is_empty(),
+        "{} MIR violations:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// mir: "Error-free MIR", over `examples/`: every example that typechecks lowers to well-formed
+/// MIR (`examples/demo/ui` needs an unbuilt subsystem).
+#[test]
+fn example_mir_is_well_formed() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut files = Vec::new();
+    prism_files(&examples, &mut files);
+    let mut violations = Vec::new();
+    for file in &files {
+        if file.components().any(|c| c.as_os_str() == "ui") {
+            continue;
+        }
+        let mir = match prism_cli::dump_mir(file) {
+            Ok(dump) => dump.mir,
+            Err(err) => panic!("{}: no MIR:\n{}", file.display(), err.render()),
+        };
+        for violation in mir.validate() {
+            violations.push(format!("{}: {}", file.display(), violation));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} MIR violations:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = panic.downcast_ref::<&str>() {
+        message.to_string()
+    } else {
+        "<panic>".to_string()
+    }
 }

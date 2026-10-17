@@ -345,7 +345,14 @@ impl Validator<'_> {
                     | BinaryOperator::Subtract
                     | BinaryOperator::Multiply
                     | BinaryOperator::Divide
-                    | BinaryOperator::Remainder => left,
+                    | BinaryOperator::Remainder => match left {
+                        // Concatenation reads its non-`Copy` operands through borrows (D14).
+                        Some(Type::Reference {
+                            mutable: false,
+                            inner,
+                        }) => Some(*inner),
+                        other => other,
+                    },
                     _ => Some(Type::Bool),
                 };
                 self.expect(result, ty, &what);

@@ -373,8 +373,9 @@ pub enum BorrowOrigin {
     Receiver,
     /// Made by a nullable conversion (`&(T?)` read as `(&T)?`).
     Conversion,
-    /// An operand of `==` or `!=` over a type that is not `Copy` (D14).
-    Comparison,
+    /// An operand of an operator over a type that is not `Copy`, which reads it in place
+    /// (D14): `==`, `!=` or string concatenation.
+    Operator,
     /// An input of a default value's generator, or the slot it may fill (D11).
     Default,
 }
@@ -397,7 +398,7 @@ impl BorrowOrigin {
             BorrowOrigin::Argument => "argument",
             BorrowOrigin::Receiver => "receiver",
             BorrowOrigin::Conversion => "conversion",
-            BorrowOrigin::Comparison => "comparison",
+            BorrowOrigin::Operator => "operator",
             BorrowOrigin::Default => "default",
         }
     }

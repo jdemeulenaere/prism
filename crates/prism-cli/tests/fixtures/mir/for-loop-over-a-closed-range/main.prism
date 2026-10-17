@@ -1,0 +1,3 @@
+// expect: ok
+fun g(i: Int) {}
+fun f(n: Int) { for (i in 0..n) g(i) }

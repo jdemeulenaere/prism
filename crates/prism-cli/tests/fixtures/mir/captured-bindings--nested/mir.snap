@@ -1,0 +1,38 @@
+module main
+fun main::run(_1: () -> Int): Int @2:1
+  local _0: Int (return)
+  local _1 f: () -> Int (argument)
+  bb0:
+    _0 = call _1() -> bb1 @2:30
+  bb1:
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1
+fun main::g(_1: Int): Int @3:1
+  local _0: Int (return)
+  local _1 a: Int (argument)
+  local _2: () -> Int (temporary)
+  bb0:
+    storage_live _2 @3:26
+    _2 = closure main::g#closure0 [_1] @3:26
+    _0 = call main::run(move _2) -> bb1 @3:22
+  bb1:
+    storage_dead _2 @3:22
+    return @3:1
+closure main::g#closure0(): Int @3:26
+  local _0: Int (return)
+  local _1 a: Int (capture)
+  local _2: () -> Int (temporary)
+  bb0:
+    storage_live _2 @3:32
+    _2 = closure main::g#closure0#closure0 [_1] @3:32
+    _0 = call main::run(move _2) -> bb1 @3:28
+  bb1:
+    storage_dead _2 @3:28
+    return @3:26
+closure main::g#closure0#closure0(): Int @3:32
+  local _0: Int (return)
+  local _1 a: Int (capture)
+  bb0:
+    _0 = copy _1 @3:34
+    return @3:32

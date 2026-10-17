@@ -1,0 +1,24 @@
+module main
+fun main::f(_1: String?): String @2:1
+  local _0: String (return)
+  local _1 n: String? (argument)
+  local _2: String? (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _2 @2:29
+    _2 = move _1 @2:29
+    storage_live _3 @2:29
+    _3 = discriminant _2 @2:29
+    switch move _3 [0 -> bb2, otherwise -> bb1] @2:29
+  bb1:
+    _0 = move (_2 as payload) @2:29
+    goto -> bb3 @2:29
+  bb2:
+    _0 = const "anon" @2:34
+    goto -> bb3 @2:29
+  bb3:
+    storage_dead _3 @2:29
+    storage_dead _2 @2:29
+    drop _1 -> bb4 @2:1
+  bb4:
+    return @2:1

@@ -1,0 +1,4 @@
+// expect: ok
+fun run(g: () -> Int): Int = g()
+fun f(a: Int, b: Int = a + 1): Int = run { a + b }
+val LIMIT = 3

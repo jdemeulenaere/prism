@@ -1,0 +1,5 @@
+// expect: ok
+fun check(s: &String): Bool = true
+fun make(): String = "x"
+fun g() {}
+fun f() { if (check(make())) g() }

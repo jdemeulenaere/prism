@@ -1,0 +1,114 @@
+module main
+fun main::f(_1: User?, _2: Color, _3: Bool): Int @4:1
+  local _0: Int (return)
+  local _1 u: User? (argument)
+  local _2 c: Color (argument)
+  local _3 ok: Bool (argument)
+  local _4 total: Int (user, var)
+  local _5: Int? (temporary)
+  local _6: Int (temporary)
+  local _7: Int (temporary)
+  local _8: Bool (temporary)
+  local _9: Range (temporary)
+  local _10: Int (temporary)
+  local _11: Int (temporary)
+  local _12: Bool (temporary)
+  local _13 i: Int (user)
+  local _14: Int (temporary)
+  local _15: Int (temporary)
+  bb0:
+    storage_live _4 @5:5
+    storage_live _5 @5:17
+    storage_live _6 @5:17
+    _6 = discriminant _1 @5:17
+    switch move _6 [0 -> bb2, otherwise -> bb1] @5:17
+  bb1:
+    _5 = copy (_1 as payload).age @5:17
+    goto -> bb3 @5:17
+  bb2:
+    _5 = const null @5:17
+    goto -> bb3 @5:17
+  bb3:
+    storage_live _7 @5:17
+    _7 = discriminant _5 @5:17
+    switch move _7 [0 -> bb5, otherwise -> bb4] @5:17
+  bb4:
+    _4 = copy (_5 as payload) @5:17
+    goto -> bb6 @5:17
+  bb5:
+    _4 = const 0 @5:27
+    goto -> bb6 @5:17
+  bb6:
+    storage_dead _7 @5:5
+    storage_dead _6 @5:5
+    storage_dead _5 @5:5
+    storage_live _8 @6:9
+    switch copy _3 [0 -> bb8, otherwise -> bb7] @6:9
+  bb7:
+    _8 = copy _4 > const 0 @6:15
+    goto -> bb9 @6:9
+  bb8:
+    _8 = const false @6:9
+    goto -> bb9 @6:9
+  bb9:
+    switch move _8 [0 -> bb11, otherwise -> bb10] @6:9
+  bb10:
+    storage_dead _8 @6:9
+    _4 = copy _4 + const 1 @6:34
+    goto -> bb12 @6:5
+  bb11:
+    storage_dead _8 @6:9
+    goto -> bb12 @6:5
+  bb12:
+    storage_live _9 @7:5
+    _9 = struct <builtin>::Range(const 0, const 3, const false) @7:15
+    storage_live _10 @7:5
+    storage_live _11 @7:5
+    storage_live _12 @7:5
+    _10 = copy _9.start @7:5
+    _12 = copy _9.start >= copy _9.end @7:5
+    switch copy _12 [0 -> bb14, otherwise -> bb13] @7:5
+  bb13:
+    goto -> bb15 @7:5
+  bb14:
+    _11 = copy _9.end - const 1 @7:5
+    goto -> bb16 @7:5
+  bb15:
+    storage_dead _12 @7:5
+    storage_dead _11 @7:5
+    storage_dead _10 @7:5
+    storage_dead _9 @7:5
+    _0 = copy _4 @10:12
+    storage_dead _4 @4:42
+    drop _2 -> bb23 @4:1
+  bb16:
+    storage_live _13 @7:5
+    _13 = copy _10 @7:5
+    storage_live _14 @8:25
+    storage_live _15 @8:25
+    _15 = discriminant _2 @8:25
+    switch move _15 [0 -> bb17, 1 -> bb18, otherwise -> bb19] @8:25
+  bb17:
+    _14 = copy _13 @8:43
+    goto -> bb20 @8:25
+  bb18:
+    _14 = const 0 @8:55
+    goto -> bb20 @8:25
+  bb19:
+    unreachable @8:25
+  bb20:
+    _4 = copy _4 + move _14 @8:17
+    storage_dead _15 @8:9
+    storage_dead _14 @8:9
+    storage_dead _13 @7:22
+    _12 = copy _10 == copy _11 @7:5
+    switch copy _12 [0 -> bb22, otherwise -> bb21] @7:5
+  bb21:
+    goto -> bb15 @7:5
+  bb22:
+    _10 = copy _10 + const 1 @7:5
+    goto -> bb16 @7:5
+  bb23:
+    drop _1 -> bb24 @4:1
+  bb24:
+    return @4:1

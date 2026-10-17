@@ -1,0 +1,2 @@
+// expect: ok
+fun f(c: Bool) { if (c) { val x = 1 } }

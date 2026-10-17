@@ -1,0 +1,46 @@
+module main
+fun main::User.greet(_1: &User): Int @4:1
+  local _0: Int (return)
+  local _1 this: &User (argument)
+  bb0:
+    _0 = const 1 @4:25
+    return @4:1
+fun main::f(_1: Team?): Int? @5:1
+  local _0: Int? (return)
+  local _1 t: Team? (argument)
+  local _2: Int (temporary)
+  local _3: Int (temporary)
+  local _4: Int (temporary)
+  local _5: &User (temporary)
+  bb0:
+    storage_live _2 @5:25
+    storage_live _3 @5:25
+    _3 = discriminant _1 @5:25
+    switch move _3 [0 -> bb2, otherwise -> bb1] @5:25
+  bb1:
+    storage_live _4 @5:25
+    _4 = discriminant (_1 as payload).lead @5:25
+    switch move _4 [0 -> bb5, otherwise -> bb4] @5:25
+  bb2:
+    goto -> bb3 @5:25
+  bb3:
+    _0 = const null @5:25
+    goto -> bb7 @5:25
+  bb4:
+    storage_live _5 @5:25
+    _5 = &((_1 as payload).lead as payload) (receiver) @5:25
+    _2 = call main::User.greet(move _5) -> bb6 @5:25
+  bb5:
+    storage_dead _4 @5:25
+    goto -> bb3 @5:25
+  bb6:
+    _0 = wrap move _2 @5:25
+    storage_dead _5 @5:25
+    storage_dead _4 @5:25
+    goto -> bb7 @5:25
+  bb7:
+    storage_dead _3 @5:25
+    storage_dead _2 @5:25
+    drop _1 -> bb8 @5:1
+  bb8:
+    return @5:1

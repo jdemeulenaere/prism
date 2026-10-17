@@ -1,0 +1,37 @@
+module main
+fun main::greet(_1: &String): Int @2:1
+  local _0: Int (return)
+  local _1 n: &String (argument)
+  bb0:
+    _0 = const 1 @2:30
+    return @2:1
+fun main::make(): String @3:1
+  local _0: String (return)
+  bb0:
+    _0 = const "x" @3:22
+    return @3:1
+fun main::f(_1: Bool): Int @4:1
+  local _0: Int (return)
+  local _1 c: Bool (argument)
+  local _2: &String (temporary)
+  local _3: String (temporary)
+  bb0:
+    switch copy _1 [0 -> bb2, otherwise -> bb1] @4:27
+  bb1:
+    storage_live _2 @4:36
+    storage_live _3 @4:36
+    _3 = call main::make() -> bb3 @4:36
+  bb2:
+    _0 = const 0 @4:49
+    goto -> bb6 @4:23
+  bb3:
+    _2 = &_3 (argument) @4:36
+    _0 = call main::greet(move _2) -> bb4 @4:30
+  bb4:
+    drop _3 -> bb5 @4:30
+  bb5:
+    storage_dead _3 @4:30
+    storage_dead _2 @4:30
+    goto -> bb6 @4:23
+  bb6:
+    return @4:1

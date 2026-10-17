@@ -12,6 +12,7 @@
 
 mod call;
 mod closure;
+mod comparison;
 mod control_flow;
 mod place;
 mod scope;

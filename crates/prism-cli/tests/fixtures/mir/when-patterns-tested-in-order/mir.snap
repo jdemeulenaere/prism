@@ -1,0 +1,40 @@
+module main
+fun main::f(_1: Int): Int @2:1
+  local _0: Int (return)
+  local _1 x: Int (argument)
+  local _2: Bool (temporary)
+  local _3: Bool (temporary)
+  local _4: Bool (temporary)
+  bb0:
+    storage_live _2 @2:33
+    _2 = copy _1 == const 0 @2:33
+    switch move _2 [0 -> bb2, otherwise -> bb1] @2:33
+  bb1:
+    storage_dead _2 @2:33
+    _0 = const 1 @2:38
+    goto -> bb8 @2:22
+  bb2:
+    storage_dead _2 @2:33
+    storage_live _3 @2:44
+    _3 = const 1 <= copy _1 @2:44
+    switch move _3 [0 -> bb4, otherwise -> bb3] @2:44
+  bb3:
+    storage_dead _3 @2:44
+    storage_live _4 @2:47
+    _4 = copy _1 <= const 10 @2:47
+    switch move _4 [0 -> bb6, otherwise -> bb5] @2:47
+  bb4:
+    storage_dead _3 @2:44
+    goto -> bb7 @2:22
+  bb5:
+    storage_dead _4 @2:47
+    _0 = const 2 @2:53
+    goto -> bb8 @2:22
+  bb6:
+    storage_dead _4 @2:47
+    goto -> bb7 @2:22
+  bb7:
+    _0 = const 3 @2:64
+    goto -> bb8 @2:22
+  bb8:
+    return @2:1

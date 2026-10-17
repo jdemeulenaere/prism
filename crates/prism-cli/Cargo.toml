@@ -19,3 +19,6 @@ prism-abi = { path = "../prism-abi" }
 prism-resolver = { path = "../prism-resolver" }
 prism-typechecker = { path = "../prism-typechecker" }
 prism-mir = { path = "../prism-mir" }
+
+[dev-dependencies]
+prism-mir = { path = "../prism-mir" }

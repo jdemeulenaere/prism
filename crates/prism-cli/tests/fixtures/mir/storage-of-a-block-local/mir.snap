@@ -1,0 +1,17 @@
+module main
+fun main::f(_1: Bool): Unit @2:1
+  local _0: Unit (return)
+  local _1 c: Bool (argument)
+  local _2 x: Int (user)
+  bb0:
+    switch copy _1 [0 -> bb2, otherwise -> bb1] @2:22
+  bb1:
+    storage_live _2 @2:27
+    _2 = const 1 @2:35
+    storage_dead _2 @2:25
+    goto -> bb3 @2:18
+  bb2:
+    goto -> bb3 @2:18
+  bb3:
+    _0 = const () @2:16
+    return @2:1

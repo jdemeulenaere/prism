@@ -1,0 +1,3 @@
+// expect: ok
+fun run(f: () -> Int): Int = f()
+fun g(a: Int, b: Int): Int = run { b + a + b }

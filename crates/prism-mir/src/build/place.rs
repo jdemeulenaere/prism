@@ -8,8 +8,8 @@ use crate::mir::{
 };
 use prism_ast::{Literal, Span};
 use prism_typed_tree::{
-    BinaryOperator, CoercionKind, ConstructKind, ExpressionId, ExpressionKind, NominalId,
-    StatementId, StatementKind as TreeStatementKind, Type,
+    CoercionKind, ConstructKind, ExpressionId, ExpressionKind, NominalId, StatementId,
+    StatementKind as TreeStatementKind, Type,
 };
 
 impl Builder<'_> {
@@ -127,14 +127,7 @@ impl Builder<'_> {
                 right,
             } => {
                 let (operator, left, right) = (*operator, *left, *right);
-                if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) {
-                    self.lower_equality(destination, operator, left, right, span);
-                } else {
-                    let left = self.operand(left);
-                    let right = self.operand(right);
-                    let destination = self.destination_or_temporary(destination, &ty, span);
-                    self.assign(destination, Rvalue::Binary(operator, left, right), span);
-                }
+                self.lower_binary(destination, operator, left, right, &ty, span);
             }
             ExpressionKind::Unary { operator, operand } => {
                 let operator = *operator;

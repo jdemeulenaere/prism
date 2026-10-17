@@ -1,0 +1,3 @@
+// expect: ok
+fun g(): Bool = true
+fun f(a: Bool): Bool = a && g()

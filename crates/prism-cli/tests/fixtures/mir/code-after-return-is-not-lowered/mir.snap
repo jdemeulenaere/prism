@@ -1,0 +1,11 @@
+module main
+fun main::g(): Unit @2:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @2:9
+    return @2:1
+fun main::f(): Unit @3:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @3:11
+    return @3:1

@@ -1,0 +1,4 @@
+// expect: ok
+struct User { var name: String }
+fun show(n: (&User)?): Int = 1
+fun f(m: (&mut User)?) { show(m); show(m) }
