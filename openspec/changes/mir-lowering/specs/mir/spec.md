@@ -192,11 +192,15 @@ Each closure MUST be lowered to its own body whose captured bindings are capture
 - **THEN** the closure's body has the capture locals `b` and `a` and adds them, and the body of `g` builds the closure value from its arguments `b` and `a` and passes it to `run`
 
 ### Requirement: Comparisons Borrow Non-Copy Operands
-`==` and `!=` over a type that is not `Copy` MUST compare shared borrows of their operands, nullable operands as optional borrows, without moving or copying them. A comparison with `null` MUST read the tag.
+`==` and `!=` over a type that is not `Copy` MUST compare shared borrows of their operands, nullable operands as optional borrows, without moving or copying them. Any other operator over a type that is not `Copy` (string concatenation) MUST likewise read shared borrows of its operands. A comparison with `null` MUST read the tag.
 
 #### Scenario: String equality borrows its operands
 - **WHEN** `fun f(s: String): Bool = s == "a"` is lowered
 - **THEN** the comparison is between a shared borrow of `s` and a shared borrow of a temporary holding `"a"`, and `s` is not moved
+
+#### Scenario: String concatenation borrows its operands
+- **WHEN** `fun f(a: String, b: String): String = a + b` is lowered
+- **THEN** the return place is assigned the sum of a shared borrow of `a` and a shared borrow of `b`, and neither is moved
 
 #### Scenario: Comparison with null reads the tag
 - **WHEN** `fun f(s: String?): Bool = s == null` is lowered

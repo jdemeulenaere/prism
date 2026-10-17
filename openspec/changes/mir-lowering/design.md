@@ -97,7 +97,7 @@ pub enum Rvalue {
     Closure { body: BodyId, captures: Vec<Place> },
 }
 pub enum Callee { Function(DeclarationPath), Builtin(BuiltinFunction), Value(Place), Default { function: DeclarationPath, parameter: usize } }
-pub enum BorrowOrigin { Written, Argument, Receiver, Conversion, Comparison, Default }
+pub enum BorrowOrigin { Written, Argument, Receiver, Conversion, Operator, Default } // `Operator` was `Comparison`, see N1
 ```
 
 Every statement and terminator carries the `Span` of the typed-tree node it comes from; storage-dead markers and drops at a scope's end carry the span of that scope (block, statement or branch). Operators, `BuiltinFunction`, `DeclarationPath`, `NominalId` and `Type` are the typed tree's.
@@ -220,7 +220,7 @@ So the MIR says exactly what each closure does with each capture without decidin
 
 ### D14. Comparisons of non-`Copy` values borrow them (autonomous)
 
-Operators read their operands in place (typed-tree D5), and arithmetic, ordering and logic operands are `Copy`. `==` and `!=` may compare a `String`, a struct or a nullable of a non-`Copy` type; moving or copying those is wrong. So `==` and `!=` over a non-`Copy` type compare shared borrows (`Comparison` origin) of their operands: a place is borrowed where it lives, a value is evaluated into a temporary and borrowed. For nullable operands both sides are optional borrows `(&T)?`: a nullable place is viewed through a tag test and a borrow of its payload, and a `?.` chain read in place whose final node is a place is borrowed inside the chain (`u?.name == "a"` compares the `(&String)?` of `u`'s `name` with a view of the temporary `"a"`), so no field is moved. A `when` whose subject is a non-`Copy` value compared by value patterns evaluates the borrow once. Comparing with the `null` literal (after its coercion) reads the discriminant instead (`Discriminant(p) == 0`), so `s == null` reads only the tag. The backend implements equality over `&T` and `(&T)?` by type.
+Operators read their operands in place (typed-tree D5), and arithmetic, ordering and logic operands are `Copy`. `==` and `!=` may compare a `String`, a struct or a nullable of a non-`Copy` type; moving or copying those is wrong. So `==` and `!=` over a non-`Copy` type compare shared borrows (`Operator` origin, see N1) of their operands: a place is borrowed where it lives, a value is evaluated into a temporary and borrowed. For nullable operands both sides are optional borrows `(&T)?`: a nullable place is viewed through a tag test and a borrow of its payload, and a `?.` chain read in place whose final node is a place is borrowed inside the chain (`u?.name == "a"` compares the `(&String)?` of `u`'s `name` with a view of the temporary `"a"`), so no field is moved. A `when` whose subject is a non-`Copy` value compared by value patterns evaluates the borrow once. Comparing with the `null` literal (after its coercion) reads the discriminant instead (`Discriminant(p) == 0`), so `s == null` reads only the tag. The backend implements equality over `&T` and `(&T)?` by type.
 
 ### D15. A stable text dump and `prism dump-mir` (follows from typed-tree D13; layout autonomous)
 
@@ -269,6 +269,15 @@ Places print as `_1.name` for fields (names from the type table), `(*_1)` for de
 ### D17. A new `mir` capability; the pipeline step in `compilation-and-abi`; the type table in `typed-tree` (autonomous)
 
 What the MIR holds is one subject that the borrow checker, drop elaboration, closure conversion and the backend will extend, so it gets its own spec, as `typed-tree` did. The pipeline step ("Phase 2 lowers each file that typechecks to MIR from its typed tree alone") belongs with "Phase 2 Produces a Typed Tree per File" in `compilation-and-abi`, which takes the scenario "Lowering to MIR" from `docs/architecture.md`; the scenario "Borrow checking on MIR" stays planned there. The type table is a property of the typed tree, so its requirement goes to `typed-tree`.
+
+### Implementation notes
+
+Found while implementing; D2, D14 and D15 are refined by them, and the decisions marked **(autonomous)** are logged in `docs/decisions-for-review.md`.
+
+- **N1. Every operator over non-`Copy` operands borrows them (autonomous).** D14 assumed only `==`/`!=` read non-`Copy` operands, but string concatenation (`a + b`) does too, and the typed tree reads its operands in place. Any binary operator over a type that is not `Copy` now reads shared borrows of its operands (optional borrows for nullables), so the borrow origin is named `Operator` instead of `Comparison`; the validator types arithmetic over `&T` operands as `T`. The `mir` delta gains the scenario "String concatenation borrows its operands". Rejected: a separate rvalue or built-in call for concatenation, which the backend can still choose by operand type; moving the operands, which the typed tree does not allow.
+- **N2. A condition's result has its own scope, dissolved by the branch (autonomous).** The `Bool` that a condition or pattern test evaluates must outlive the condition's temporary scope (which ends before the branch, D7) but not survive into the branches. It lives in a scope of its own that a jump out of the condition exits normally, and that the branch dissolves by marking it dead at the start of both successors, as Rust does. A condition that is a binding is switched on directly.
+- **N3. `Unit` destinations are written (autonomous).** A block without tail, an `if` without `else` and a `Unit` `when` lowered into a destination assign it `const ()`, so `_0` and every `Unit` binding is initialized on every path, which `borrowck-moves`' initialization analysis needs. Discarded values (expression statements, branches of a discarded `if`) have no destination at all.
+- **N4. Data-model and dump details.** `StatementKind::Assign` boxes its rvalue (the rvalue is large); `BodyOwner::Default` and `Callee::Default` also carry the parameter's name, so a dump names a generator at a call site in another file. Blocks that a `goto` is the only way into are merged into their predecessor once a body is lowered, so joins and returns reached by one path add no block. A `for` over a `Range` construction reads its end-inclusiveness from the construction; over any other range value it switches on `endInclusive`. A `when` branch whose variants all match earlier branches gets no block, and ordered tests stop after `else`, so every block stays reachable. A written argument goes into a temporary unless it is a constant that no default generator borrows (D10). A chain whose body is wrapped evaluates the body into a temporary created before its first test, in the enclosing scope.
 
 ## Risks / Trade-offs
 

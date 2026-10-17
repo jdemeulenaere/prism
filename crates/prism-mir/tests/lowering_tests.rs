@@ -153,3 +153,21 @@ fun h(a: String, b: String): String = a + b
     );
     assert!(actual.contains("_0 = move _3 + move _4"), "{}", actual);
 }
+
+#[test]
+fn repeated_variants_nullable_subjects_and_jumps_are_well_formed() {
+    let actual = mir("\
+enum Color { Red, Green }
+fun f(c: Color): Int = when (c) { Red -> 1; Red -> 2; Green -> 3 }
+fun g(c: Color): Int = when (c) { Red, Green -> 1; else -> 2 }
+fun h(s: String?): Int = when (s) { null -> 0; \"a\" -> 1; else -> 2 }
+fun k(x: Int) { var i = 0; while (i < x) { i = i + 1; if (i == 2) continue; if (i == 5) break } }
+");
+    // The second `Red` branch is never taken, so it has no block.
+    assert!(!actual.contains("const 2 @2:"), "{}", actual);
+    assert!(
+        actual.contains("[0 -> bb1, 1 -> bb1, otherwise -> bb2]"),
+        "{}",
+        actual
+    );
+}

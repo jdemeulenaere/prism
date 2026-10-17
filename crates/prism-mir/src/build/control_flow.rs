@@ -364,30 +364,26 @@ impl Builder<'_> {
             if otherwise.is_some() {
                 break;
             }
-            let block = self.new_block();
-            let mut reached = false;
+            // A branch whose variants all match earlier branches is never taken: it gets no
+            // block, so every block stays reachable.
+            let mut block = None;
             for pattern in &branch.patterns {
                 match pattern {
                     Pattern::Variant { index, .. } => {
                         let value = *index as u64;
                         if !targets.iter().any(|(v, _)| *v == value) {
-                            targets.push((value, block));
-                            reached = true;
+                            let target = *block.get_or_insert_with(|| self.new_block());
+                            targets.push((value, target));
                         }
                     }
                     Pattern::Else => {
-                        otherwise = Some(block);
-                        reached = true;
+                        otherwise = Some(*block.get_or_insert_with(|| self.new_block()));
                     }
                     _ => unreachable!("a variant switch has only variants and else"),
                 }
             }
-            if reached {
+            if let Some(block) = block {
                 bodies.push((block, branch.body));
-            } else {
-                // Every variant of the branch is matched earlier: the branch is never taken.
-                self.current = Some(block);
-                self.terminate(TerminatorKind::Unreachable, span);
             }
         }
         let mut ends = Vec::new();
