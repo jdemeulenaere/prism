@@ -252,7 +252,7 @@ impl Parser {
 
     fn is_package_decl_ahead(&self) -> bool {
         // package <ident> ... is a package decl.
-        // package fun / package struct / package val / package var is a package visibility modifier!
+        // package fun / package struct / package enum / package val is a package visibility modifier.
         matches!(self.peek_ahead(1), TokenKind::Ident(_))
     }
 
@@ -383,7 +383,11 @@ impl Parser {
                 let en = self.parse_enum(visibility, start_span)?;
                 Ok(Declaration::Enum(en))
             }
-            TokenKind::Val | TokenKind::Var => {
+            TokenKind::Var => Err(ParseError::new(
+                "Top-level 'var' is not allowed: top-level declarations are immutable; keep mutable state in locals and parameters, or in a state handle in UI code",
+                self.peek().span,
+            )),
+            TokenKind::Val => {
                 if is_compose {
                     return Err(ParseError::new(
                         "'compose' modifier is only valid on functions ('compose fun')",
@@ -395,7 +399,7 @@ impl Parser {
             }
             _ => Err(ParseError::new(
                 format!(
-                    "Expected declaration (fun, struct, enum, val, var), found '{}'",
+                    "Expected declaration (fun, struct, enum, val), found '{}'",
                     self.peek_kind()
                 ),
                 self.peek().span,
@@ -493,6 +497,7 @@ impl Parser {
         let type_params = self.parse_optional_type_params()?;
 
         let mut fields = Vec::new();
+        let marker;
 
         let end_span = if self.peek_kind() == &TokenKind::LParen {
             // Shorthand struct constructor: struct EmployeeId(val id: UInt32)
@@ -532,9 +537,13 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(TokenKind::RParen)?.span
+            let rparen_span = self.expect(TokenKind::RParen)?.span;
+            let parsed = self.parse_optional_marker()?;
+            marker = parsed.map(|(parsed, _)| parsed);
+            parsed.map_or(rparen_span, |(_, marker_span)| marker_span)
         } else {
-            // Block struct: struct Point { val x: Double, val y: Double }
+            // Block struct: struct Point : Copy { val x: Double, val y: Double }
+            marker = self.parse_optional_marker()?.map(|(parsed, _)| parsed);
             self.expect(TokenKind::LBrace)?;
             while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
                 let f_start = self.peek().span;
@@ -588,6 +597,7 @@ impl Parser {
             visibility,
             name,
             type_params,
+            marker,
             fields,
             span: start_span.merge(end_span),
         })
@@ -601,6 +611,7 @@ impl Parser {
         self.expect(TokenKind::Enum)?;
         let (name, _) = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
+        let marker = self.parse_optional_marker()?.map(|(parsed, _)| parsed);
 
         self.expect(TokenKind::LBrace)?;
         let mut variants = Vec::new();
@@ -642,6 +653,7 @@ impl Parser {
             visibility,
             name,
             type_params,
+            marker,
             variants,
             span: start_span.merge(end_span),
         })
@@ -652,17 +664,7 @@ impl Parser {
         visibility: Visibility,
         start_span: Span,
     ) -> Result<TopLevelVarDecl, ParseError> {
-        let is_var = match self.peek_kind() {
-            TokenKind::Var => {
-                self.bump();
-                true
-            }
-            TokenKind::Val => {
-                self.bump();
-                false
-            }
-            _ => unreachable!(),
-        };
+        self.expect(TokenKind::Val)?;
 
         let (name, _) = self.expect_ident()?;
         let mut ty = None;
@@ -677,7 +679,6 @@ impl Parser {
 
         Ok(TopLevelVarDecl {
             visibility,
-            is_var,
             name,
             ty,
             initializer,
@@ -845,6 +846,27 @@ impl Parser {
         } else {
             Ok(base)
         }
+    }
+
+    /// Parses an optional `: Copy` or `: Clone` marker after a struct or enum's name, type
+    /// parameters or shorthand parameter list. Exactly one marker name may follow the colon.
+    fn parse_optional_marker(&mut self) -> Result<Option<(TypeMarker, Span)>, ParseError> {
+        const ONE_MARKER: &str = "Exactly one of 'Copy' or 'Clone' may follow ':' in a struct or enum declaration ('Copy' already implies 'Clone')";
+        if self.peek_kind() != &TokenKind::Colon {
+            return Ok(None);
+        }
+        self.bump();
+        let tok = self.peek().clone();
+        let marker = match &tok.kind {
+            TokenKind::Ident(name) if name == "Copy" => TypeMarker::Copy,
+            TokenKind::Ident(name) if name == "Clone" => TypeMarker::Clone,
+            _ => return Err(ParseError::new(ONE_MARKER, tok.span)),
+        };
+        self.bump();
+        if self.peek_kind() == &TokenKind::Comma {
+            return Err(ParseError::new(ONE_MARKER, self.peek().span));
+        }
+        Ok(Some((marker, tok.span)))
     }
 
     fn parse_optional_type_params(&mut self) -> Result<Vec<String>, ParseError> {

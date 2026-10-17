@@ -1,0 +1,2 @@
+// expect: E4016
+enum Event : Copy { Click(Int, Int), Text(String) }

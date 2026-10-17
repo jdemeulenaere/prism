@@ -1,6 +1,6 @@
 //! Surface ABI signature extraction and hashing engine.
 
-use crate::abi_type::{AbiType, NameBinder, NominalKind};
+use crate::abi_type::{hash_marker, AbiType, NameBinder, NominalHeader, NominalKind};
 use crate::error::AbiError;
 use crate::hasher::DeterministicHasher;
 use prism_ast::*;
@@ -22,18 +22,20 @@ pub enum ExportedSymbol {
         visibility: Visibility,
         name: String,
         type_params: Vec<String>,
+        marker: Option<TypeMarker>,
         fields: Vec<(String, bool, AbiType)>, // (name, is_var, type)
     },
     Enum {
         visibility: Visibility,
         name: String,
         type_params: Vec<String>,
+        marker: Option<TypeMarker>,
         variants: Vec<(String, Vec<AbiType>)>, // (name, payload types)
     },
+    /// An exported top-level `val` (top-level declarations are always immutable).
     Var {
         visibility: Visibility,
         name: String,
-        is_var: bool,
         ty: AbiType,
     },
 }
@@ -47,6 +49,32 @@ impl ExportedSymbol {
             ExportedSymbol::Function { name, .. } => (3, name.as_str()),
         }
     }
+}
+
+/// The structs and enums a file declares, with their headers, read from its AST alone (Phase 1a).
+/// With `exported_only`, private declarations are left out: those are what importers can bind.
+pub fn declared_types(file: &SourceFile, exported_only: bool) -> HashMap<&str, NominalHeader> {
+    file.declarations
+        .iter()
+        .filter(|decl| !exported_only || decl.visibility() != Visibility::Private)
+        .filter_map(|decl| match decl {
+            Declaration::Struct(s) => Some((
+                s.name.as_str(),
+                NominalHeader {
+                    kind: NominalKind::Struct,
+                    marker: s.marker,
+                },
+            )),
+            Declaration::Enum(e) => Some((
+                e.name.as_str(),
+                NominalHeader {
+                    kind: NominalKind::Enum,
+                    marker: e.marker,
+                },
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The exported ABI boundary of a Prism source file.
@@ -79,17 +107,9 @@ impl FileAbi {
         let package = file.package.as_ref().map(|p| p.package_string());
         let mut symbols = Vec::new();
 
-        let own_types: HashMap<&str, NominalKind> = file
-            .declarations
-            .iter()
-            .filter_map(|decl| match decl {
-                Declaration::Struct(s) => Some((s.name.as_str(), NominalKind::Struct)),
-                Declaration::Enum(e) => Some((e.name.as_str(), NominalKind::Enum)),
-                _ => None,
-            })
-            .collect();
+        let own_types = declared_types(file, false);
         let bind = |name: &str| match own_types.get(name) {
-            Some(kind) => Some((*kind, module.to_string())),
+            Some(header) => Some((*header, module.to_string())),
             None => bind_import(name),
         };
         let lower = |ty: &Type| AbiType::from_ast(ty, &bind);
@@ -166,6 +186,7 @@ impl FileAbi {
                         visibility: vis,
                         name: s.name.clone(),
                         type_params: s.type_params.clone(),
+                        marker: s.marker,
                         fields,
                     });
                 }
@@ -181,6 +202,7 @@ impl FileAbi {
                         visibility: vis,
                         name: e.name.clone(),
                         type_params: e.type_params.clone(),
+                        marker: e.marker,
                         variants,
                     });
                 }
@@ -200,7 +222,6 @@ impl FileAbi {
                     symbols.push(ExportedSymbol::Var {
                         visibility: vis,
                         name: v.name.clone(),
-                        is_var: v.is_var,
                         ty,
                     });
                 }
@@ -275,11 +296,13 @@ impl FileAbi {
                     visibility,
                     name,
                     type_params,
+                    marker,
                     fields,
                 } => {
                     hasher.write_str("struct");
                     hasher.write_str(visibility.as_str());
                     hasher.write_str(name);
+                    hash_marker(*marker, &mut hasher);
                     hasher.write_u64(type_params.len() as u64);
                     for tp in type_params {
                         hasher.write_str(tp);
@@ -295,11 +318,13 @@ impl FileAbi {
                     visibility,
                     name,
                     type_params,
+                    marker,
                     variants,
                 } => {
                     hasher.write_str("enum");
                     hasher.write_str(visibility.as_str());
                     hasher.write_str(name);
+                    hash_marker(*marker, &mut hasher);
                     hasher.write_u64(type_params.len() as u64);
                     for tp in type_params {
                         hasher.write_str(tp);
@@ -318,13 +343,11 @@ impl FileAbi {
                 ExportedSymbol::Var {
                     visibility,
                     name,
-                    is_var,
                     ty,
                 } => {
-                    hasher.write_str("var");
+                    hasher.write_str("val");
                     hasher.write_str(visibility.as_str());
                     hasher.write_str(name);
-                    hasher.write_u8(if *is_var { 1 } else { 0 });
                     ty.hash_into(&mut hasher);
                 }
             }

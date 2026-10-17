@@ -1,0 +1,4 @@
+// expect: ok
+struct Point : Copy { val x: Double, val y: Double }
+struct Line { val start: Point, val end: Point }
+fun f(l: Line): Point = l.start

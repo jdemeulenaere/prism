@@ -108,12 +108,32 @@ pub struct StructField {
     pub span: Span,
 }
 
+/// The marker written after a struct or enum's name (`struct Point : Copy`): how its values may
+/// be duplicated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeMarker {
+    /// Duplicated implicitly by a bitwise copy. Implies `Clone`.
+    Copy,
+    /// Duplicated only by an explicit `.clone()`.
+    Clone,
+}
+
+impl TypeMarker {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TypeMarker::Copy => "Copy",
+            TypeMarker::Clone => "Clone",
+        }
+    }
+}
+
 /// Struct declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructDecl {
     pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<String>,
+    pub marker: Option<TypeMarker>,
     pub fields: Vec<StructField>,
     pub span: Span,
 }
@@ -132,15 +152,16 @@ pub struct EnumDecl {
     pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<String>,
+    pub marker: Option<TypeMarker>,
     pub variants: Vec<EnumVariant>,
     pub span: Span,
 }
 
-/// Top-level variable declaration (`val` or `var`).
+/// Top-level variable declaration. It is always a read-only `val`: a top-level `var` is rejected
+/// by the parser, because top-level state is immutable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TopLevelVarDecl {
     pub visibility: Visibility,
-    pub is_var: bool,
     pub name: String,
     pub ty: Option<Type>,
     pub initializer: Expr,

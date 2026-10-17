@@ -1,0 +1,3 @@
+// expect: ok
+fun f(Copy: Int, Clone: Int): Int = Copy + Clone
+struct Clone { val x: Int }

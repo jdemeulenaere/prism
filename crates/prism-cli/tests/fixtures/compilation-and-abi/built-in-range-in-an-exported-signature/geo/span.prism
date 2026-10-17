@@ -1,0 +1,2 @@
+package geo
+public struct Span : Copy { val r: Range }

@@ -1,0 +1,2 @@
+// expect: E2001
+var counter = 0

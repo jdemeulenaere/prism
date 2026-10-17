@@ -5,4 +5,4 @@ struct User {
 struct Order {
     val user: User
 }
-fun f(o: &mut Order): String = o.user.name
+fun f(o: &mut Order): String = o.user.name.clone()

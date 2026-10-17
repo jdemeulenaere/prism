@@ -1,0 +1,6 @@
+// expect: E4017
+struct User { val id: Int, val name: String }
+fun f(u: User) {
+    val i = u.id
+    val n = u.name
+}

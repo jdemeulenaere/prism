@@ -3,8 +3,7 @@
 #![allow(clippy::result_large_err)]
 
 use crate::diagnostics;
-use prism_abi::{AbiError, FileAbi, NominalKind};
-use prism_ast::{Declaration, SourceFile, Visibility};
+use prism_abi::{declared_types, AbiError, FileAbi, NominalHeader};
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
 use std::collections::HashMap;
@@ -270,19 +269,6 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
     Ok(())
 }
 
-/// The structs and enums a file exports (`public` or `package`), with their kinds.
-fn exported_type_names(file: &SourceFile) -> HashMap<&str, NominalKind> {
-    file.declarations
-        .iter()
-        .filter(|decl| decl.visibility() != Visibility::Private)
-        .filter_map(|decl| match decl {
-            Declaration::Struct(s) => Some((s.name.as_str(), NominalKind::Struct)),
-            Declaration::Enum(e) => Some((e.name.as_str(), NominalKind::Enum)),
-            _ => None,
-        })
-        .collect()
-}
-
 /// The module path of a source file: its root-relative path without extension, which is also its
 /// root-anchored import path (`a/lib` for `<root>/a/lib.prism`). The package segments are the
 /// file's directory relative to the workspace root.
@@ -302,11 +288,12 @@ fn module_path(node: &SourceNode) -> String {
 
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in topological SCC order.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
-    // Phase 1a: the struct and enum names each file exports, read from its AST alone.
-    let exported_types: HashMap<&Path, HashMap<&str, NominalKind>> = graph
+    // Phase 1a: the structs and enums each file exports, with their kinds and markers, read from
+    // its AST alone.
+    let exported_types: HashMap<&Path, HashMap<&str, NominalHeader>> = graph
         .nodes
         .iter()
-        .map(|(path, node)| (path.as_path(), exported_type_names(&node.source_file)))
+        .map(|(path, node)| (path.as_path(), declared_types(&node.source_file, true)))
         .collect();
 
     // Phase 1b: extract each file's ABI, binding the type names in its exported signatures to
@@ -315,8 +302,8 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
     for (file_path, node) in &graph.nodes {
         let bind_import = |name: &str| {
             let mut found = node.direct_imports.iter().filter_map(|dep| {
-                let kind = exported_types.get(dep.as_path())?.get(name)?;
-                Some((*kind, module_path(graph.get_node(dep)?)))
+                let header = exported_types.get(dep.as_path())?.get(name)?;
+                Some((*header, module_path(graph.get_node(dep)?)))
             });
             match (found.next(), found.next()) {
                 // A name exported by several imports stays unbound; Phase 2 reports `E4012`.

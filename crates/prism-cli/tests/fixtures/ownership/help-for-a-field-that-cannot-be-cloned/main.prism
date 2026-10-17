@@ -1,0 +1,4 @@
+// expect: E4017
+struct Token { val id: Int }
+struct Session { val token: Token }
+fun f(s: Session): Token = s.token

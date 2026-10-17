@@ -1,0 +1,4 @@
+// expect: ok
+struct User { val id: Int, val name: String }
+fun g(u: User?): Int? = u?.id
+fun h(u: User?): String? = u?.name?.clone()

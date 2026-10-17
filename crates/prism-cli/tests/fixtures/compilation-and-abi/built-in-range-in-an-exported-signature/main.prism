@@ -1,0 +1,3 @@
+// expect: ok
+import /geo/span
+fun f(s: Span): Range = s.r

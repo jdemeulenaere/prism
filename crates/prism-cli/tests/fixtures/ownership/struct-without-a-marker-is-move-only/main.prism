@@ -1,0 +1,4 @@
+// expect: E4017
+struct Point { val x: Int, val y: Int }
+struct Line { val start: Point }
+fun f(l: Line): Point = l.start

@@ -587,3 +587,85 @@ fn break_and_continue_are_expressions() {
     };
     assert!(matches!(then_branch.kind, ExprKind::Continue));
 }
+
+fn markers(src: &str) -> Vec<Option<TypeMarker>> {
+    parse(src)
+        .declarations
+        .iter()
+        .map(|d| match d {
+            Declaration::Struct(s) => s.marker,
+            Declaration::Enum(e) => e.marker,
+            _ => panic!("expected a struct or enum"),
+        })
+        .collect()
+}
+
+#[test]
+fn markers_on_a_block_struct_and_an_enum() {
+    assert_eq!(
+        markers(
+            "struct Point : Copy { val x: Int, val y: Int }\nstruct User : Clone { val name: String }\nenum Color : Copy { Red, Green }\n"
+        ),
+        vec![
+            Some(TypeMarker::Copy),
+            Some(TypeMarker::Clone),
+            Some(TypeMarker::Copy)
+        ]
+    );
+}
+
+#[test]
+fn marker_after_type_parameters_and_a_shorthand_parameter_list() {
+    let file =
+        parse("struct Tagged<T> : Copy { val id: Int }\nstruct Name(val v: String) : Clone\n");
+    let Declaration::Struct(tagged) = &file.declarations[0] else {
+        panic!("expected a struct");
+    };
+    assert_eq!(tagged.type_params, vec!["T"]);
+    assert_eq!(tagged.marker, Some(TypeMarker::Copy));
+    let Declaration::Struct(name) = &file.declarations[1] else {
+        panic!("expected a struct");
+    };
+    assert_eq!(name.fields.len(), 1);
+    assert_eq!(name.marker, Some(TypeMarker::Clone));
+}
+
+#[test]
+fn declaration_without_a_marker() {
+    assert_eq!(markers("struct Point { val x: Int }"), vec![None]);
+}
+
+#[test]
+fn other_names_after_the_colon_rejected() {
+    for src in [
+        "struct P : Eq { val x: Int }",
+        "struct P : Copy, Clone { val x: Int }",
+        "struct P : Copy, Copy { val x: Int }",
+        "struct P : { val x: Int }",
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(
+            err.message.contains("Exactly one of 'Copy' or 'Clone'"),
+            "{}",
+            err
+        );
+    }
+}
+
+#[test]
+fn marker_in_the_wrong_place_rejected() {
+    for src in [
+        "struct P : Copy <T> { val x: T }",
+        "struct Id : Copy (val v: Int)",
+    ] {
+        assert_eq!(parse_source(src).expect_err(src).code, "E2001", "{}", src);
+    }
+}
+
+#[test]
+fn marker_names_remain_identifiers() {
+    let file =
+        parse("fun f(Copy: Int, Clone: Int): Int = Copy + Clone\nstruct Clone { val x: Int }\n");
+    assert_eq!(file.declarations.len(), 2);
+}

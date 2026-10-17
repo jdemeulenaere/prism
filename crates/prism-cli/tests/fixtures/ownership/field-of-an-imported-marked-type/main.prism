@@ -1,0 +1,5 @@
+// expect: E4016
+import /geo/types
+struct Seg : Copy { val a: Point }
+struct Pin : Clone { val l: Label }
+struct Bad : Copy { val l: Label }

@@ -1,0 +1,4 @@
+// expect: E4018
+fun f(g: () -> Unit) {
+    val h = g.clone()
+}

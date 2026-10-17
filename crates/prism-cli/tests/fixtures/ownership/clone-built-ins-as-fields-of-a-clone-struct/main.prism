@@ -1,0 +1,2 @@
+// expect: ok
+struct Doc : Clone { val title: String, val note: String?, val body: Heap<Int>, val size: Int }

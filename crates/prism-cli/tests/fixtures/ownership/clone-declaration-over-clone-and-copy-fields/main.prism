@@ -1,0 +1,6 @@
+// expect: E4016
+struct Point : Copy { val x: Int }
+struct User : Clone { val name: String }
+struct Team : Clone { val lead: User, val at: Point }
+struct Raw { val n: Int }
+struct Bad : Clone { val p: Raw }

@@ -1,0 +1,3 @@
+// expect: ok
+struct Tagged<T> : Copy { val id: Int }
+struct Name(val v: String) : Clone

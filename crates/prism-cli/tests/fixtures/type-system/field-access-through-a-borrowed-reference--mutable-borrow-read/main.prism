@@ -2,4 +2,4 @@
 struct User {
     var name: String
 }
-fun f(u: &mut User): String = u.name
+fun f(u: &mut User): String = u.name.clone()

@@ -71,6 +71,9 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | `E4013` | `CannotInferType` | A type cannot be inferred and must be written: a closure parameter with no expected function type, or an unannotated private declaration whose inferred type depends on itself (such as a recursive function without a return type). |
 | `E4014` | `MemberOfUnimportedType` | A member of a struct or enum is used (a field read or written, its variants matched, the type constructed or a variant named) but the module defining the type is not a direct import; the message names the import to add. Receiving and passing along such a value is accepted. |
 | `E4015` | `BreakOutsideLoop` | A `break` or `continue` has no enclosing loop in its function or closure body, including one inside a closure that sits in a loop. |
+| `E4016` | `InvalidMarkerDeclaration` | A `: Copy` struct or enum has a field or variant payload that is not `Copy`, or a `: Clone` one has a member that is not `Clone`. Reported once per offending member. |
+| `E4017` | `CannotMoveOut` | A non-`Copy` value in a consuming position (an initializer, an assigned value, a by-value argument, a returned value) is taken from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation, an index or a top-level `val`. A move must take a whole local, parameter or temporary. |
+| `E4018` | `NotCloneable` | `clone()` is called on a value whose type is not `Clone`: a struct or enum without `: Clone` or `: Copy`, a function value, a type parameter or an unknown type. |
 
 A `public` or `package` function without a return type is reported as `E3001` when it has an expression body (Phase 1 rejects it first) and as `E4011` when it has a block body (Phase 1 accepts it as returning `Unit`). Unifying these is tracked in `ROADMAP.md`.
 

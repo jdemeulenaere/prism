@@ -542,7 +542,7 @@ fn test_cli_binary_field_access_through_annotated_params_success() {
     let file = temp.join("users.prism");
     fs::write(
         &file,
-        "struct User {\n    val id: Int\n    var name: String\n}\nfun byValue(user: User): String = user.name\nfun byRef(user: &User): String = user.name\nfun byMut(user: &mut User, n: String): Unit {\n    user.name = n\n}\n",
+        "struct User {\n    val id: Int\n    var name: String\n}\nfun byValue(user: User): String = user.name.clone()\nfun byRef(user: &User): String = user.name.clone()\nfun byMut(user: &mut User, n: String): Unit {\n    user.name = n\n}\n",
     )
     .unwrap();
 
@@ -578,7 +578,7 @@ fn test_cli_binary_field_access_on_imported_struct_success() {
     let service = pkg_dir.join("service.prism");
     fs::write(
         &service,
-        "package models\nimport user\npublic fun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\npublic fun nameOf(user: &User): String = user.name\n",
+        "package models\nimport user\npublic fun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\npublic fun nameOf(user: &User): String = user.name.clone()\n",
     )
     .unwrap();
 

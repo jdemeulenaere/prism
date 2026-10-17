@@ -324,6 +324,21 @@ A `while` loop MUST evaluate its condition before each iteration and a `do`/`whi
 - **WHEN** `for (i in 0..<next())` runs, where `next()` returns 3
 - **THEN** `next()` is called once, before the first iteration
 
+### Requirement: Clone Evaluation Semantics
+`x.clone()` MUST produce a value that owns no storage shared with `x`, and MUST run no user code. A `Copy` value is copied bitwise. A `String` clone allocates a new buffer with the same contents. A `Heap<T>` clone allocates a new box holding a clone of its contents. A `T?` clone is `null` when `x` is, and otherwise a clone of its contents. A user struct or enum clones each field or payload in declaration order.
+
+#### Scenario: String clone is independent
+- **WHEN** `var a = "hi"` is cloned into `b`, and `a` is then reassigned
+- **THEN** `b` still holds `"hi"`, and dropping `b` frees only `b`'s buffer
+
+#### Scenario: Struct clone clones each field
+- **WHEN** `struct User : Clone { val name: String, val tags: Heap<Int> }` is cloned
+- **THEN** the clone holds a new `String` buffer and a new `Heap` box with equal contents
+
+#### Scenario: Copy value clone is a copy
+- **WHEN** `p.clone()` runs for `p: Point` where `struct Point : Copy { val x: Int }`
+- **THEN** the result is a bitwise copy of `p`, with no allocation
+
 ---
 
 ## 5. Compose UI Engine

@@ -1,0 +1,3 @@
+package shop
+import models
+public struct Order { val price: Money, val note: Note }

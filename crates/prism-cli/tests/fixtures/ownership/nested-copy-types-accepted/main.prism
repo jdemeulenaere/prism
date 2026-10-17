@@ -1,0 +1,3 @@
+// expect: ok
+struct Point : Copy { val x: Int, val y: Int }
+struct Rect : Copy { val origin: Point, val size: Point? }

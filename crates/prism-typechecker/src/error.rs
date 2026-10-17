@@ -1,7 +1,7 @@
 //! Semantic analysis and type checker diagnostic error representations.
 
 use crate::types::Type;
-use prism_ast::Span;
+use prism_ast::{Span, TypeMarker};
 use std::fmt;
 
 /// Semantic and type checking error categories (`E4001` - `E4015`).
@@ -89,6 +89,32 @@ pub enum TypeError {
 
     /// E4015: A `break` or `continue` has no enclosing loop in its function or closure body.
     BreakOutsideLoop { keyword: &'static str, span: Span },
+
+    /// A `: Copy` or `: Clone` declaration has a field or payload whose type is not `Copy` (or
+    /// not `Clone`). `member` describes it: "field 'name'" or "payload 1 of variant 'Text'".
+    InvalidMarkerDeclaration {
+        marker: TypeMarker,
+        type_name: String,
+        member: String,
+        member_type: Type,
+        /// Whether the member's type is `Clone`, so `: Clone` would be accepted instead of `: Copy`.
+        member_is_clone: bool,
+        span: Span,
+    },
+
+    /// `clone()` is called on a value whose type is not `Clone`.
+    NotCloneable { ty: Type, span: Span },
+
+    /// A non-`Copy` value is moved out of a field, a safe navigation, an index or a top-level
+    /// `val`. `source` describes it ("field 'name' of 'u'"); `borrow` and `clone` are the fixes
+    /// to suggest, `clone` only when the type is `Clone`.
+    CannotMoveOut {
+        source: String,
+        ty: Type,
+        borrow: String,
+        clone: Option<String>,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -112,6 +138,9 @@ impl TypeError {
             TypeError::CannotInferType { .. } => "E4013",
             TypeError::MemberOfUnimportedType { .. } => "E4014",
             TypeError::BreakOutsideLoop { .. } => "E4015",
+            TypeError::InvalidMarkerDeclaration { .. } => "E4016",
+            TypeError::CannotMoveOut { .. } => "E4017",
+            TypeError::NotCloneable { .. } => "E4018",
         }
     }
 
@@ -135,6 +164,9 @@ impl TypeError {
             TypeError::CannotInferType { span, .. } => *span,
             TypeError::MemberOfUnimportedType { span, .. } => *span,
             TypeError::BreakOutsideLoop { span, .. } => *span,
+            TypeError::InvalidMarkerDeclaration { span, .. } => *span,
+            TypeError::NotCloneable { span, .. } => *span,
+            TypeError::CannotMoveOut { span, .. } => *span,
         }
     }
 
@@ -228,6 +260,27 @@ impl TypeError {
             TypeError::BreakOutsideLoop { keyword, .. } => format!(
                 "'{}' is only allowed inside a loop, and cannot leave a closure",
                 keyword
+            ),
+            TypeError::InvalidMarkerDeclaration {
+                marker,
+                type_name,
+                member,
+                member_type,
+                ..
+            } => format!(
+                "'{}' cannot be '{}': its {} has type '{}', which is not '{}'",
+                type_name,
+                marker.as_str(),
+                member,
+                member_type,
+                marker.as_str()
+            ),
+            TypeError::NotCloneable { ty, .. } => {
+                format!("'{}' is not 'Clone', so it cannot be cloned", ty)
+            }
+            TypeError::CannotMoveOut { source, ty, .. } => format!(
+                "cannot move out of {}: its type '{}' is not 'Copy', and a move takes a whole value",
+                source, ty
             ),
         }
     }

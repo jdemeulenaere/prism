@@ -1,0 +1,4 @@
+// expect: E4017
+struct User : Clone { val name: String }
+struct Team { val lead: User }
+fun g(t: &Team): User = t.lead

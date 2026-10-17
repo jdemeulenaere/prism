@@ -305,6 +305,7 @@ impl Type {
                     NominalKind::Enum => Type::Enum(id),
                 }
             }
+            AbiType::Range => Type::Struct(NominalId::builtin_range()),
             AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
             AbiType::Nullable(inner) => Type::Nullable(Box::new(Type::from_abi(inner))),
             AbiType::Ref { mutable, inner } => Type::Reference {

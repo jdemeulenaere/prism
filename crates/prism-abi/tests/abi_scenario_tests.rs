@@ -2,8 +2,8 @@
 //! that `abi_tests.rs` does not already pin down. Hash scenarios live here, not in the
 //! data-driven fixtures of `prism-cli`, because they compare two extractions.
 
-use prism_abi::{no_imports, AbiError, ExportedSymbol, FileAbi};
-use prism_ast::Visibility;
+use prism_abi::{declared_types, no_imports, AbiError, AbiType, ExportedSymbol, FileAbi};
+use prism_ast::{TypeMarker, Visibility};
 use prism_parser::parse_source;
 
 fn extract(src: &str) -> FileAbi {
@@ -375,4 +375,128 @@ fn generic_body_hash_ignores_comments_blank_lines_and_indentation() {
         "\n\n// leading comment\npublic fun id<T>(x: T): T {\n\n        /* inner */\n        return    x\n\n}\n",
         "comments, blank lines and whitespace in a generic body",
     );
+}
+
+// --- Copy and Clone markers
+
+/// Extracts `api` (module `shop/api`), binding type names to the types `models` (module
+/// `shop/models`) exports, as Phase 1 does for a direct import.
+fn extract_importing(models: &str, api: &str) -> FileAbi {
+    let models = parse_source(models).expect("models must parse");
+    let exported = declared_types(&models, true);
+    let bind = |name: &str| {
+        exported
+            .get(name)
+            .map(|header| (*header, "shop/models".to_string()))
+    };
+    FileAbi::extract(
+        &parse_source(api).expect("api must parse"),
+        "shop/api",
+        &bind,
+    )
+    .expect("ABI must extract")
+}
+
+fn struct_field_type<'a>(abi: &'a FileAbi, struct_name: &str, field: &str) -> &'a AbiType {
+    abi.symbols
+        .iter()
+        .find_map(|s| match s {
+            ExportedSymbol::Struct { name, fields, .. } if name == struct_name => fields
+                .iter()
+                .find(|(f, _, _)| f == field)
+                .map(|(_, _, ty)| ty),
+            _ => None,
+        })
+        .expect("field must exist")
+}
+
+#[test]
+fn adding_or_changing_a_marker_changes_the_abi_hash() {
+    let plain = "public struct Point { val x: Int }\n";
+    let clone = "public struct Point : Clone { val x: Int }\n";
+    let copy = "public struct Point : Copy { val x: Int }\n";
+    assert_hash_differs(plain, clone, "adding ': Clone'");
+    assert_hash_differs(clone, copy, "changing ': Clone' to ': Copy'");
+    assert_hash_differs(
+        "public enum Color { Red }\n",
+        "public enum Color : Copy { Red }\n",
+        "adding ': Copy' to an enum",
+    );
+    assert!(matches!(
+        &extract(copy).symbols[0],
+        ExportedSymbol::Struct {
+            marker: Some(TypeMarker::Copy),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &extract("public enum Color : Clone { Red }\n").symbols[0],
+        ExportedSymbol::Enum {
+            marker: Some(TypeMarker::Clone),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn marker_on_a_private_type() {
+    let export = "public fun f(): Int = 1\n";
+    assert_hash_equal(
+        &format!("{export}struct Secret {{ val x: Int }}\n"),
+        &format!("{export}struct Secret : Copy {{ val x: Int }}\n"),
+        "a marker on an unmentioned private struct",
+    );
+    // A private type that an exported signature mentions carries its marker in that reference.
+    assert_hash_differs(
+        "struct Secret { val x: Int }\npublic fun f(s: Secret): Int = 1\n",
+        "struct Secret : Copy { val x: Int }\npublic fun f(s: Secret): Int = 1\n",
+        "a marker on a private struct named by an exported signature",
+    );
+}
+
+const MODELS: &str = "package shop\npublic struct Money : Copy { val cents: Int }\npublic struct Note : Clone { val text: String }\n";
+const API: &str =
+    "package shop\nimport models\npublic struct Order { val price: Money, val note: Note }\n";
+
+#[test]
+fn referenced_type_records_its_marker() {
+    let abi = extract_importing(MODELS, API);
+    assert!(matches!(
+        struct_field_type(&abi, "Order", "price"),
+        AbiType::Nominal { marker: Some(TypeMarker::Copy), module, name, .. }
+            if module == "shop/models" && name == "Money"
+    ));
+    assert!(matches!(
+        struct_field_type(&abi, "Order", "note"),
+        AbiType::Nominal { marker: Some(TypeMarker::Clone), name, .. } if name == "Note"
+    ));
+}
+
+#[test]
+fn changing_a_referenced_types_marker() {
+    let models_without_copy = MODELS.replace("Money : Copy", "Money");
+    assert_hash_differs(MODELS, &models_without_copy, "removing ': Copy' from Money");
+    assert_ne!(
+        extract_importing(MODELS, API).abi_hash,
+        extract_importing(&models_without_copy, API).abi_hash,
+        "the importer's ABI hash must change with a referenced type's marker"
+    );
+}
+
+#[test]
+fn built_in_range_in_an_exported_signature() {
+    let abi =
+        extract("public struct Span : Copy { val r: Range }\npublic fun f(r: Range): Range = r\n");
+    assert_eq!(struct_field_type(&abi, "Span", "r"), &AbiType::Range);
+    let user_range =
+        extract("public struct Range { val a: Int }\npublic fun f(r: Range): Range = r\n");
+    let ExportedSymbol::Function { return_type, .. } = user_range
+        .symbols
+        .iter()
+        .find(|s| matches!(s, ExportedSymbol::Function { .. }))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(matches!(return_type, AbiType::Nominal { name, .. } if name == "Range"));
 }

@@ -1,0 +1,6 @@
+// expect: E4017
+struct User { val name: String }
+fun f(u: User, c: Int): String = when (c) {
+    0 -> u.name
+    else -> "x"
+}

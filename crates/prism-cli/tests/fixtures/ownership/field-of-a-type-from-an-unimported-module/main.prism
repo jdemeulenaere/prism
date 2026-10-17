@@ -1,0 +1,5 @@
+// expect: E4017
+import /shop/api
+fun f(o: Order) {
+    val n = o.note
+}

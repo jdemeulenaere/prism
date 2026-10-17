@@ -1,0 +1,13 @@
+// expect: ok
+struct User { val id: Int, val name: String }
+fun make(): User = User(1, "a")
+fun helper(): Int = 1
+fun take(u: User) {
+}
+fun f(u: User) {
+    val v = u
+    take(v)
+    take(User(1, "a"))
+    take(make())
+    val h = helper
+}

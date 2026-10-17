@@ -1,0 +1,4 @@
+// expect: E4017
+struct User { val id: Int, val name: String }
+fun make(): User = User(1, "a")
+fun f(): String = make().name

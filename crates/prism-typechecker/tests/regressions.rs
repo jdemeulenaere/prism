@@ -1,8 +1,7 @@
 //! Regression tests for typechecker bug fixes, driven by real Prism source through the parser,
 //! the ABI extractor and the checker.
 
-use prism_abi::{FileAbi, NominalKind};
-use prism_ast::{Declaration, Visibility};
+use prism_abi::{declared_types, FileAbi};
 use prism_typechecker::{TypeChecker, TypeError};
 
 /// Parses and checks a single source file, returning its diagnostics.
@@ -45,17 +44,8 @@ fn check_workspace(modules: &[(&str, &str)], app_imports: &[&str], app: &str) ->
             )
         })
         .collect();
-    let exported = |file: &prism_ast::SourceFile, name: &str| {
-        file.declarations.iter().find_map(|decl| match decl {
-            Declaration::Struct(s) if s.name == name && s.visibility != Visibility::Private => {
-                Some(NominalKind::Struct)
-            }
-            Declaration::Enum(e) if e.name == name && e.visibility != Visibility::Private => {
-                Some(NominalKind::Enum)
-            }
-            _ => None,
-        })
-    };
+    let exported =
+        |file: &prism_ast::SourceFile, name: &str| declared_types(file, true).get(name).copied();
 
     let file = prism_parser::parse_source(app).expect("app must parse");
     let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");
@@ -67,7 +57,7 @@ fn check_workspace(modules: &[(&str, &str)], app_imports: &[&str], app: &str) ->
             parsed
                 .iter()
                 .filter(|(other, _)| other != module)
-                .find_map(|(other, f)| exported(f, name).map(|kind| (kind, other.to_string())))
+                .find_map(|(other, f)| exported(f, name).map(|header| (header, other.to_string())))
         };
         checker
             .ingest_file_abi(&FileAbi::extract(dep_file, module, &bind).expect("ABI must extract"));
@@ -172,7 +162,7 @@ fn mutable_borrow_of_field_of_mutable_place_accepted() {
 #[test]
 fn borrow_of_constructed_struct_matches_annotated_reference() {
     assert_ok(
-        "struct User {\n    var name: String\n}\nfun read(u: &User): String = u.name\nfun write(u: &mut User) {\n    u.name = \"b\"\n}\nfun f(): String {\n    var u = User(\"a\")\n    write(&mut u)\n    return read(&u)\n}\n",
+        "struct User {\n    var name: String\n}\nfun read(u: &User): String = u.name.clone()\nfun write(u: &mut User) {\n    u.name = \"b\"\n}\nfun f(): String {\n    var u = User(\"a\")\n    write(&mut u)\n    return read(&u)\n}\n",
     );
 }
 
@@ -332,7 +322,7 @@ fn parameter_assigned_twice_by_named_and_positional_arguments_rejected() {
 #[test]
 fn safe_navigation_chain_through_nullable_field_flattens() {
     assert_ok(
-        "struct A {\n    val name: String\n}\nstruct B {\n    val a: A?\n}\nfun f(b: B?): String? = b?.a?.name\nfun g(b: B?): A? = b?.a\n",
+        "struct A : Clone {\n    val name: String\n}\nstruct B {\n    val a: A?\n}\nfun f(b: B?): String? = b?.a?.name?.clone()\nfun g(b: B?): A? = b?.a?.clone()\n",
     );
 }
 
@@ -467,7 +457,7 @@ fn assert_import_codes(deps: &[(&str, &str)], app: &str, expected: &[&str]) {
 #[test]
 fn builtin_range_distinct_from_a_user_struct_named_range() {
     assert_codes(
-        "struct Range {\n    val a: Int\n    val b: String\n}\nfun f(): String {\n    val r: Range = 1..10\n    return r.b\n}\n",
+        "struct Range {\n    val a: Int\n    val b: String\n}\nfun f(): String {\n    val r: Range = 1..10\n    return r.b.clone()\n}\n",
         &["E4002"],
     );
     // Without a user declaration, `Range` names the built-in type.
@@ -494,7 +484,7 @@ fn struct_and_enum_never_equal() {
 #[test]
 fn annotation_and_constructor_denote_the_same_type() {
     assert_ok(
-        "struct User {\n    val name: String\n}\nfun read(u: User): String = u.name\nfun f(): String {\n    val a: User = User(\"x\")\n    return read(a)\n}\n",
+        "struct User {\n    val name: String\n}\nfun read(u: User): String = u.name.clone()\nfun f(): String {\n    val a: User = User(\"x\")\n    return read(a)\n}\n",
     );
 }
 
@@ -509,7 +499,7 @@ fn same_named_structs_from_different_modules_stay_distinct() {
     );
     assert_import_codes(
         &[("b/lib", b), ("a/lib", a)],
-        "package app\nfun g(o: Order): String = o.user.name\n",
+        "package app\nfun g(o: Order): String = o.user.name.clone()\n",
         &[],
     );
 }

@@ -1,0 +1,3 @@
+// expect: ok
+struct User { val nick: String? }
+fun f(u: &User): String = u.nick?.clone() ?: "anonymous"

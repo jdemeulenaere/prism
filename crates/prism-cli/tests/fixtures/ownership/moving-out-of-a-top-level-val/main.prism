@@ -1,0 +1,3 @@
+// expect: E4017
+val GREETING = "hi"
+fun f(): String = GREETING

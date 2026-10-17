@@ -1,7 +1,7 @@
 use prism_abi::AbiError;
 use prism_parser::ParseError;
 use prism_resolver::ResolveError;
-use prism_typechecker::TypeError;
+use prism_typechecker::{Type, TypeError};
 use std::path::Path;
 
 /// Formats a snippet with a line pointer when source text is provided.
@@ -233,6 +233,43 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::BreakOutsideLoop { .. } => {
             out.push_str("   = help: move it into a 'while', 'do' or 'for' loop body; inside a closure, return from the closure instead\n");
         }
+        TypeError::InvalidMarkerDeclaration {
+            marker,
+            type_name,
+            member_is_clone,
+            ..
+        } => {
+            let marker = marker.as_str();
+            out.push_str(&format!(
+                "   = help: a '{marker}' type can only contain '{marker}' types; change the member's type or remove ': {marker}'\n"
+            ));
+            if marker == "Copy" && *member_is_clone {
+                out.push_str(&format!(
+                    "   = help: declare '{type_name} : Clone' instead to allow explicit '.clone()'\n"
+                ));
+            }
+        }
+        TypeError::CannotMoveOut { borrow, clone, .. } => {
+            out.push_str(&format!("   = help: borrow it instead: '{}'\n", borrow));
+            if let Some(clone) = clone {
+                out.push_str(&format!("   = help: or clone it: '{}'\n", clone));
+            }
+        }
+        TypeError::NotCloneable { ty, .. } => {
+            let help = match ty {
+                Type::Struct(id) | Type::Enum(id) => {
+                    format!("add ': Clone' to the declaration of '{}'", id.name)
+                }
+                Type::Fn { .. } => {
+                    "function values cannot be cloned, because a closure holds borrows of what it captures".to_string()
+                }
+                Type::TypeParam(_) => {
+                    "type parameters cannot be cloned until 'Clone' bounds exist".to_string()
+                }
+                _ => "only 'Copy' and 'Clone' types, 'String', and nullables and 'Heap' of them can be cloned".to_string(),
+            };
+            out.push_str(&format!("   = help: {}\n", help));
+        }
         _ => {}
     }
 
@@ -292,5 +329,43 @@ mod tests {
         assert!(formatted.contains("error[E4002]: type mismatch: expected 'Int', found 'String'"));
         assert!(formatted.contains("main.prism:2:11"));
         assert!(formatted.contains("val x: Int = \"hello\""));
+    }
+
+    /// Renders the type errors of `src`, checked as a single file.
+    fn render_type_errors(src: &str) -> String {
+        let file = prism_parser::parse_source(src).expect("source must parse");
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+        checker.check_module(&file);
+        checker
+            .errors
+            .iter()
+            .map(|err| format_type_error(Path::new("main.prism"), Some(src), err))
+            .collect()
+    }
+
+    #[test]
+    fn test_cannot_move_out_help_suggests_borrow_and_clone() {
+        let out = render_type_errors(
+            "struct User { val name: String, val nick: String? }\nfun f(u: User) {\n    val n = u.name\n    val k = u.nick\n}\n",
+        );
+        assert!(
+            out.contains("error[E4017]: cannot move out of field 'name' of 'u'"),
+            "{out}"
+        );
+        assert!(out.contains("help: borrow it instead: '&u.name'"), "{out}");
+        assert!(out.contains("help: or clone it: 'u.name.clone()'"), "{out}");
+        assert!(
+            out.contains("help: or clone it: 'u.nick?.clone()'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn test_cannot_move_out_help_for_a_non_clone_field() {
+        let out = render_type_errors(
+            "struct Token { val id: Int }\nstruct Session { val token: Token }\nfun f(s: Session): Token = s.token\n",
+        );
+        assert!(out.contains("help: borrow it instead: '&s.token'"), "{out}");
+        assert!(!out.contains("clone"), "{out}");
     }
 }

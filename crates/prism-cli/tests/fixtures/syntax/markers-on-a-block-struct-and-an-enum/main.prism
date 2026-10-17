@@ -1,0 +1,4 @@
+// expect: ok
+struct Point : Copy { val x: Int, val y: Int }
+struct User : Clone { val name: String }
+enum Color : Copy { Red, Green }

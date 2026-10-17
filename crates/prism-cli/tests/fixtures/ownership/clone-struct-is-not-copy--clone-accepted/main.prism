@@ -1,0 +1,4 @@
+// expect: ok
+struct User : Clone { val name: String }
+struct Team { val lead: User }
+fun f(t: &Team): User = t.lead.clone()

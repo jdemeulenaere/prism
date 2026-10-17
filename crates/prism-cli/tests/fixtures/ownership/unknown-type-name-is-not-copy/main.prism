@@ -1,0 +1,2 @@
+// expect: E4016
+struct Id : Copy { val v: UInt64 }

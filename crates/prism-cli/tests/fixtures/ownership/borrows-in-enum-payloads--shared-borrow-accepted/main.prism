@@ -1,0 +1,2 @@
+// expect: ok
+enum A : Copy { X(&Int) }

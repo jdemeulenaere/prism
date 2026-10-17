@@ -1,0 +1,6 @@
+// expect: ok
+struct User { val name: String }
+fun f(u: User): Bool {
+    val s = u.name + "!"
+    return u.name == "a"
+}

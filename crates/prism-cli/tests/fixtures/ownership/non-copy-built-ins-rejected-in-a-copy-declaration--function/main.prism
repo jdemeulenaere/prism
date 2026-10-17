@@ -1,0 +1,2 @@
+// expect: E4016
+struct S : Copy { val f: () -> Unit }

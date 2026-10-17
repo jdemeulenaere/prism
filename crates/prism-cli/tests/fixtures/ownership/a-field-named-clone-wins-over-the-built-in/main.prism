@@ -1,0 +1,3 @@
+// expect: ok
+struct S { val clone: () -> Int }
+fun f(s: &S): Int = s.clone()

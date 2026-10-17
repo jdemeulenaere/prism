@@ -1,0 +1,4 @@
+// expect: ok
+struct Point : Copy { val x: Int }
+struct User : Clone { val name: String }
+struct Team : Clone { val lead: User, val at: Point }

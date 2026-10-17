@@ -1,0 +1,3 @@
+package shop
+public struct Money : Copy { val cents: Int }
+public struct Note : Clone { val text: String }

@@ -193,6 +193,7 @@ fn run_abi(path: &str) {
             prism_abi::ExportedSymbol::Struct {
                 visibility,
                 name,
+                marker,
                 fields,
                 ..
             } => {
@@ -203,11 +204,18 @@ fn run_abi(path: &str) {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                println!("  {} struct {} {{ {} }}", visibility, name, f_str);
+                println!(
+                    "  {} struct {}{} {{ {} }}",
+                    visibility,
+                    name,
+                    marker_suffix(*marker),
+                    f_str
+                );
             }
             prism_abi::ExportedSymbol::Enum {
                 visibility,
                 name,
+                marker,
                 variants,
                 ..
             } => {
@@ -223,21 +231,20 @@ fn run_abi(path: &str) {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                println!("  {} enum {} {{ {} }}", visibility, name, v_str);
+                println!(
+                    "  {} enum {}{} {{ {} }}",
+                    visibility,
+                    name,
+                    marker_suffix(*marker),
+                    v_str
+                );
             }
             prism_abi::ExportedSymbol::Var {
                 visibility,
                 name,
-                is_var,
                 ty,
             } => {
-                println!(
-                    "  {} {} {}: {}",
-                    visibility,
-                    if *is_var { "var" } else { "val" },
-                    name,
-                    ty
-                );
+                println!("  {} val {}: {}", visibility, name, ty);
             }
         }
     }
@@ -249,4 +256,9 @@ fn run_tokens(path: &str) {
     for tok in tokens {
         println!("{:?} at {}", tok.kind, tok.span);
     }
+}
+
+/// The ` : Copy` or ` : Clone` suffix of a struct or enum in the ABI dump.
+fn marker_suffix(marker: Option<prism_ast::TypeMarker>) -> String {
+    marker.map_or(String::new(), |m| format!(" : {}", m.as_str()))
 }

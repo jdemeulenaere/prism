@@ -1,0 +1,4 @@
+package geo
+public struct Point : Copy { val x: Int }
+public struct Label : Clone { val text: String }
+public struct Path { val name: String }

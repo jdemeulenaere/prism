@@ -1,7 +1,7 @@
 //! Structured, module-qualified types recorded in a file's ABI.
 
 use crate::hasher::DeterministicHasher;
-use prism_ast::{Type as AstType, TypeKind};
+use prism_ast::{Type as AstType, TypeKind, TypeMarker};
 use std::fmt;
 
 /// A built-in primitive type.
@@ -48,6 +48,24 @@ pub enum NominalKind {
     Enum,
 }
 
+/// What a struct or enum's declaration says about it, read from the AST alone: its kind and its
+/// marker (`Copy`, `Clone` or none). Every reference to the type in an ABI carries it, so an
+/// importer knows how values of the type may be duplicated without importing its module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NominalHeader {
+    pub kind: NominalKind,
+    pub marker: Option<TypeMarker>,
+}
+
+/// Feeds a marker into `hasher` as one byte.
+pub(crate) fn hash_marker(marker: Option<TypeMarker>, hasher: &mut DeterministicHasher) {
+    hasher.write_u8(match marker {
+        None => 0,
+        Some(TypeMarker::Clone) => 1,
+        Some(TypeMarker::Copy) => 2,
+    });
+}
+
 /// A type in an exported signature, recorded as a tree so importers never re-parse it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AbiType {
@@ -55,13 +73,17 @@ pub enum AbiType {
     Prim(PrimKind),
     /// The unit type, written `Unit` or `()`.
     Unit,
-    /// A struct or enum bound to its defining module (a root-relative path without extension).
+    /// A struct or enum bound to its defining module (a root-relative path without extension),
+    /// with the marker its declaration carries.
     Nominal {
         kind: NominalKind,
+        marker: Option<TypeMarker>,
         module: String,
         name: String,
         args: Vec<AbiType>,
     },
+    /// The built-in `Range` type, written `Range` where no struct or enum of that name is in scope.
+    Range,
     /// A type name bound to no module: unknown, ambiguous between imports, or a type parameter.
     Unbound { name: String, args: Vec<AbiType> },
     /// A nullable type `T?`.
@@ -78,12 +100,12 @@ pub enum AbiType {
     },
 }
 
-/// Binds a nominal type name to the kind and defining module of the struct or enum it denotes,
+/// Binds a nominal type name to the header and defining module of the struct or enum it denotes,
 /// or returns `None` when the name is unknown or ambiguous.
-pub type NameBinder<'a> = dyn Fn(&str) -> Option<(NominalKind, String)> + 'a;
+pub type NameBinder<'a> = dyn Fn(&str) -> Option<(NominalHeader, String)> + 'a;
 
 /// A binder for files with no imports: every name not declared in the file stays unbound.
-pub fn no_imports(_name: &str) -> Option<(NominalKind, String)> {
+pub fn no_imports(_name: &str) -> Option<(NominalHeader, String)> {
     None
 }
 
@@ -105,12 +127,15 @@ impl AbiType {
                 }
                 let args = type_args.iter().map(|a| Self::from_ast(a, bind)).collect();
                 match bind(name) {
-                    Some((kind, module)) => AbiType::Nominal {
-                        kind,
+                    Some((header, module)) => AbiType::Nominal {
+                        kind: header.kind,
+                        marker: header.marker,
                         module,
                         name: name.clone(),
                         args,
                     },
+                    // A user `Range` binds above; otherwise the name is the built-in type.
+                    None if name == "Range" && args.is_empty() => AbiType::Range,
                     None => AbiType::Unbound {
                         name: name.clone(),
                         args,
@@ -145,6 +170,7 @@ impl AbiType {
             AbiType::Unit => hasher.write_u8(2),
             AbiType::Nominal {
                 kind,
+                marker,
                 module,
                 name,
                 args,
@@ -154,6 +180,7 @@ impl AbiType {
                     NominalKind::Struct => 0,
                     NominalKind::Enum => 1,
                 });
+                hash_marker(*marker, hasher);
                 hasher.write_str(module);
                 hasher.write_str(name);
                 Self::hash_list(args, hasher);
@@ -186,6 +213,7 @@ impl AbiType {
                 Self::hash_list(params, hasher);
                 ret.hash_into(hasher);
             }
+            AbiType::Range => hasher.write_u8(9),
         }
     }
 
@@ -202,6 +230,7 @@ impl fmt::Display for AbiType {
         match self {
             AbiType::Prim(prim) => write!(f, "{}", prim.as_str()),
             AbiType::Unit => write!(f, "Unit"),
+            AbiType::Range => write!(f, "Range"),
             AbiType::Nominal { name, args, .. } | AbiType::Unbound { name, args } => {
                 write!(f, "{}", name)?;
                 if !args.is_empty() {

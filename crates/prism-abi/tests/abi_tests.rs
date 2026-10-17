@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use prism_abi::{no_imports, AbiError, AbiType, ExportedSymbol, FileAbi, NominalKind};
+    use prism_abi::{
+        no_imports, AbiError, AbiType, ExportedSymbol, FileAbi, NominalHeader, NominalKind,
+    };
     use prism_parser::parse_source;
 
     #[test]
@@ -291,6 +293,7 @@ mod tests {
             order[0].2,
             AbiType::Nominal {
                 kind: NominalKind::Struct,
+                marker: None,
                 module: "a/lib".to_string(),
                 name: "User".to_string(),
                 args: Vec::new(),
@@ -301,8 +304,7 @@ mod tests {
     #[test]
     fn test_imported_type_bound_to_the_exporting_module() {
         let file = parse_source("package a\npublic fun first(): Item = Item(1)\n").unwrap();
-        let bind =
-            |name: &str| (name == "Item").then(|| (NominalKind::Struct, "model/types".to_string()));
+        let bind = |name: &str| (name == "Item").then(|| (STRUCT, "model/types".to_string()));
         let abi = FileAbi::extract(&file, "a/svc", &bind).unwrap();
         let ExportedSymbol::Function { return_type, .. } = &abi.symbols[0] else {
             panic!("Expected exported function");
@@ -326,8 +328,7 @@ mod tests {
         let file2 =
             parse_source("package a\npublic fun first(): Item = Item(2)\nfun helper() = 3\n")
                 .unwrap();
-        let bind =
-            |name: &str| (name == "Item").then(|| (NominalKind::Struct, "model/types".to_string()));
+        let bind = |name: &str| (name == "Item").then(|| (STRUCT, "model/types".to_string()));
         assert_eq!(
             FileAbi::extract(&file1, "a/svc", &bind).unwrap().abi_hash,
             FileAbi::extract(&file2, "a/svc", &bind).unwrap().abi_hash
@@ -339,4 +340,9 @@ mod tests {
         let abi = extract("public fun f(x: Mystery): Int = 1\n");
         assert!(matches!(first_param(&abi), AbiType::Unbound { name, .. } if name == "Mystery"));
     }
+
+    const STRUCT: NominalHeader = NominalHeader {
+        kind: NominalKind::Struct,
+        marker: None,
+    };
 }

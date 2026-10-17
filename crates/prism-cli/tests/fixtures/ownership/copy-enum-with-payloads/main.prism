@@ -1,0 +1,4 @@
+// expect: ok
+enum Shape : Copy { Circle(Float), Square(Float), Empty }
+struct Slot { val shape: Shape }
+fun f(s: Slot): Shape = s.shape

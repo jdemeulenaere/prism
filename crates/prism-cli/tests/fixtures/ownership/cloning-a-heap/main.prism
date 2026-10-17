@@ -1,0 +1,3 @@
+// expect: ok
+struct User : Clone { val name: String }
+fun f(h: &Heap<User>): Heap<User> = h.clone()

@@ -10,7 +10,7 @@ use prism_ast::expr::{
 };
 use prism_ast::module::SourceFile;
 use prism_ast::statement::{Block, Statement, StatementKind};
-use prism_ast::{Span, Visibility};
+use prism_ast::{Span, TypeMarker, Visibility};
 use std::collections::{HashMap, HashSet};
 
 /// Helper to peel reference (`&T`, `&mut T`) and `Heap<T>` indirection layers to access the underlying nominal type.
@@ -92,6 +92,7 @@ struct BodyContext {
     in_function: bool,
     loop_depth: usize,
     origin: Origin,
+    consuming: bool,
 }
 
 /// How the value of a `when` is used.
@@ -116,8 +117,19 @@ pub struct TypeChecker {
     pub module_path: String,
     /// Definitions of every nominal type known to this file, keyed by identity.
     types: HashMap<NominalId, TypeDef>,
+    /// The marker (`Copy`, `Clone` or none) of every nominal type known to this file: its own
+    /// declarations, the structs and enums its imports export, and every type an imported
+    /// signature references, even from a module the file does not import.
+    markers: HashMap<NominalId, Option<TypeMarker>>,
     /// Origin of the expected type currently being checked against.
     origin: Origin,
+    /// Set just before checking an expression whose value is consumed (moved into a binding, an
+    /// argument or a return), and taken by the next `infer_expr`/`check_expr` or `check_block`.
+    /// See the `ownership` spec, "Consuming Positions".
+    consuming: bool,
+    /// Whether the expression currently being typed is consumed. Its pass-through children
+    /// (`if`/`when` branches, a block tail, `?:` operands) are consumed too.
+    parent_consuming: bool,
     /// Unannotated private top-level declarations, by name, and how far their inference is.
     inference: HashMap<String, Inference>,
     /// Declarations already reported as depending on themselves (`E4013`).
@@ -161,12 +173,16 @@ impl TypeChecker {
                 ],
             },
         );
+        let markers = HashMap::from([(NominalId::builtin_range(), Some(TypeMarker::Copy))]);
         Self {
             env: ScopeStack::new(),
             current_package,
             module_path: module_path.into(),
             types,
+            markers,
             origin: Origin::Value,
+            consuming: false,
+            parent_consuming: false,
             inference: HashMap::new(),
             recursive_inference: HashSet::new(),
             direct_imports: HashSet::new(),
@@ -202,6 +218,99 @@ impl TypeChecker {
     /// The definition of the nominal type `id`, if this file knows it.
     pub fn type_def(&self, id: &NominalId) -> Option<&TypeDef> {
         self.types.get(id)
+    }
+
+    /// The marker of nominal type `id`, or `None` when it has none or is unknown.
+    fn marker_of(&self, id: &NominalId) -> Option<TypeMarker> {
+        self.markers.get(id).copied().flatten()
+    }
+
+    /// Whether values of `ty` are duplicated implicitly by a bitwise copy (the `ownership` spec,
+    /// "Built-In Copy Types"). The error type counts as `Copy`, so an earlier error is not
+    /// reported again as a move.
+    pub fn is_copy(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::Char
+            | Type::Unit
+            | Type::Nothing
+            | Type::Error => true,
+            Type::Reference { mutable, .. } => !mutable,
+            Type::Nullable(inner) => self.is_copy(inner),
+            Type::Struct(id) | Type::Enum(id) => self.marker_of(id) == Some(TypeMarker::Copy),
+            Type::String
+            | Type::Heap(_)
+            | Type::Fn { .. }
+            | Type::TypeParam(_)
+            | Type::Opaque(_) => false,
+        }
+    }
+
+    /// Whether values of `ty` can be duplicated by an explicit `.clone()` (the `ownership` spec,
+    /// "Built-In Clone Types"). Every `Copy` type is `Clone`.
+    pub fn is_clone(&self, ty: &Type) -> bool {
+        match ty {
+            Type::String => true,
+            Type::Nullable(inner) | Type::Heap(inner) => self.is_clone(inner),
+            Type::Struct(id) | Type::Enum(id) => self.marker_of(id).is_some(),
+            _ => self.is_copy(ty),
+        }
+    }
+
+    /// Checks every `: Copy` and `: Clone` declaration of the file structurally: each field or
+    /// variant payload must itself be `Copy` (or `Clone`), else `E4016` is reported once per
+    /// offending member. Markers are shallow, so this needs no recursion or cycle guard.
+    fn check_marker_declarations(&mut self, source_file: &SourceFile) {
+        for decl in &source_file.declarations {
+            let (marker, type_name, members) = match decl {
+                Declaration::Struct(s) => (
+                    s.marker,
+                    &s.name,
+                    s.fields
+                        .iter()
+                        .map(|f| (format!("field '{}'", f.name), &f.ty, f.span))
+                        .collect::<Vec<_>>(),
+                ),
+                Declaration::Enum(e) => (
+                    e.marker,
+                    &e.name,
+                    e.variants
+                        .iter()
+                        .flat_map(|v| {
+                            v.fields.iter().enumerate().map(|(i, ty)| {
+                                (
+                                    format!("payload {} of variant '{}'", i + 1, v.name),
+                                    ty,
+                                    ty.span,
+                                )
+                            })
+                        })
+                        .collect(),
+                ),
+                _ => continue,
+            };
+            let Some(marker) = marker else { continue };
+            for (member, ast_ty, span) in members {
+                let member_type = self.lower_type(ast_ty);
+                let accepted = match marker {
+                    TypeMarker::Copy => self.is_copy(&member_type),
+                    TypeMarker::Clone => self.is_clone(&member_type),
+                };
+                if !accepted {
+                    let member_is_clone = self.is_clone(&member_type);
+                    self.errors.push(TypeError::InvalidMarkerDeclaration {
+                        marker,
+                        type_name: type_name.clone(),
+                        member,
+                        member_type,
+                        member_is_clone,
+                        span,
+                    });
+                }
+            }
+        }
     }
 
     /// The fields of struct `id`, if its definition is known.
@@ -277,9 +386,14 @@ impl TypeChecker {
     fn record_nominals(&mut self, ty: &AbiType) {
         match ty {
             AbiType::Nominal {
-                module, name, args, ..
+                module,
+                name,
+                args,
+                marker,
+                ..
             } => {
                 let id = NominalId::new(module.clone(), name.clone());
+                self.markers.entry(id.clone()).or_insert(*marker);
                 let ids = self.seen_nominals.entry(name.clone()).or_default();
                 if !ids.contains(&id) {
                     ids.push(id);
@@ -294,7 +408,7 @@ impl TypeChecker {
                 params.iter().for_each(|p| self.record_nominals(p));
                 self.record_nominals(ret);
             }
-            AbiType::Prim(_) | AbiType::Unit => {}
+            AbiType::Prim(_) | AbiType::Unit | AbiType::Range => {}
         }
     }
 
@@ -479,6 +593,13 @@ impl TypeChecker {
             self.record_nominals(ty);
         }
         for sym in &abi.symbols {
+            if let ExportedSymbol::Struct { name, marker, .. }
+            | ExportedSymbol::Enum { name, marker, .. } = sym
+            {
+                self.markers
+                    .entry(NominalId::new(abi.module.clone(), name.clone()))
+                    .or_insert(*marker);
+            }
             let symbol = match sym {
                 ExportedSymbol::Struct {
                     visibility, name, ..
@@ -589,18 +710,12 @@ impl TypeChecker {
                 ExportedSymbol::Var {
                     visibility,
                     name,
-                    is_var,
                     ty,
                 } => {
-                    let mutability = if *is_var {
-                        Mutability::Var
-                    } else {
-                        Mutability::Val
-                    };
                     let symbol = Symbol::top_level_variable(
                         name.clone(),
                         Type::from_abi(ty),
-                        mutability,
+                        Mutability::Val,
                         *visibility,
                         abi.package.clone(),
                         Span::dummy(),
@@ -633,6 +748,7 @@ impl TypeChecker {
                         }
                     }
                     let id = NominalId::new(self.module_path.clone(), s.name.clone());
+                    self.markers.entry(id.clone()).or_insert(s.marker);
                     Symbol::struct_decl(id, s.visibility, self.current_package.clone(), s.span)
                 }
                 Declaration::Enum(e) => {
@@ -649,6 +765,7 @@ impl TypeChecker {
                         }
                     }
                     let id = NominalId::new(self.module_path.clone(), e.name.clone());
+                    self.markers.entry(id.clone()).or_insert(e.marker);
                     Symbol::enum_decl(id, e.visibility, self.current_package.clone(), e.span)
                 }
                 _ => continue,
@@ -738,15 +855,10 @@ impl TypeChecker {
                         Type::Error
                     };
 
-                    let mutability = if v.is_var {
-                        Mutability::Var
-                    } else {
-                        Mutability::Val
-                    };
                     let sym = Symbol::top_level_variable(
                         v.name.clone(),
                         ty,
-                        mutability,
+                        Mutability::Val,
                         v.visibility,
                         self.current_package.clone(),
                         v.span,
@@ -809,6 +921,7 @@ impl TypeChecker {
     /// Pass 2: Typechecks the bodies of all top-level declarations in the module.
     pub fn check_module(&mut self, source_file: &SourceFile) {
         self.register_module_declarations(source_file);
+        self.check_marker_declarations(source_file);
 
         // Unannotated private declarations get their type from their body, inferred on demand.
         let mut inferred_spans = HashSet::new();
@@ -853,7 +966,7 @@ impl TypeChecker {
     /// Checks a top-level variable's initializer. An unannotated private variable takes the
     /// initializer's type.
     fn check_top_level_var(&mut self, v: &TopLevelVarDecl) {
-        let inferred = self.infer_expr(&v.initializer);
+        let inferred = self.with_consuming(true, |c| c.infer_expr(&v.initializer));
         if let Some(annot) = &v.ty {
             let expected = self.lower_type(annot);
             if !inferred.is_assignable_to(&expected) {
@@ -886,6 +999,7 @@ impl TypeChecker {
             in_function: std::mem::replace(&mut self.in_function, false),
             loop_depth: std::mem::replace(&mut self.loop_depth, 0),
             origin: std::mem::replace(&mut self.origin, Origin::Value),
+            consuming: std::mem::replace(&mut self.parent_consuming, false),
         };
         match pending.as_ref() {
             PendingDecl::Function(f) => self.check_function_body(f),
@@ -897,6 +1011,7 @@ impl TypeChecker {
         self.in_function = saved.in_function;
         self.loop_depth = saved.loop_depth;
         self.origin = saved.origin;
+        self.parent_consuming = saved.consuming;
 
         self.inference.insert(name.to_string(), Inference::Done);
     }
@@ -936,7 +1051,7 @@ impl TypeChecker {
         for p in &f.params {
             let p_ty = self.lower_type(&p.ty);
             if let Some(default) = &p.default_value {
-                self.check_expr(default, &p_ty);
+                self.with_consuming(true, |c| c.check_expr(default, &p_ty));
             }
             let sym = Symbol::variable(p.name.clone(), p_ty, Mutability::Val, p.span);
             if let Err(err) = self.env.define(sym) {
@@ -962,8 +1077,9 @@ impl TypeChecker {
                         Some(Type::Unit) | None => Origin::Value,
                         Some(_) => Origin::Return,
                     };
-                    let block_ty =
-                        self.with_origin(origin, |c| c.check_block(block, declared_ret.as_ref()));
+                    let block_ty = self.with_origin(origin, |c| {
+                        c.with_consuming(true, |c| c.check_block(block, declared_ret.as_ref()))
+                    });
                     if let Some(expected) = &declared_ret {
                         // A `Unit` block body discards its final value (see `check_block`).
                         if expected != &Type::Unit && !block_ty.is_assignable_to(expected) {
@@ -979,7 +1095,7 @@ impl TypeChecker {
                     let expr_ty = if let Some(expected) = &declared_ret {
                         self.check_expr_at(expr, expected, Origin::Return)
                     } else {
-                        self.infer_expr(expr)
+                        self.with_consuming(true, |c| c.infer_expr(expr))
                     };
 
                     if declared_ret.is_none() {
@@ -1012,7 +1128,20 @@ impl TypeChecker {
 
     /// Checks `expr` against `expected` with the expectation origin `origin`.
     fn check_expr_at(&mut self, expr: &Expr, expected: &Type, origin: Origin) -> Type {
-        self.with_origin(origin, |checker| checker.check_expr(expr, expected))
+        // A returned value and an argument are consumed.
+        let consuming = origin != Origin::Value || self.consuming;
+        self.with_origin(origin, |checker| {
+            checker.consuming = consuming;
+            checker.check_expr(expr, expected)
+        })
+    }
+
+    /// Runs `f` on an expression in a consuming position (`consuming` is true) or a reading one.
+    fn with_consuming<T>(&mut self, consuming: bool, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.consuming = consuming;
+        let result = f(self);
+        self.consuming = false;
+        result
     }
 
     /// Infers an operator operand or a condition. Operators read through references (D1 of
@@ -1063,6 +1192,14 @@ impl TypeChecker {
 
     /// Checks an expression against an expected type in bidirectional checking mode.
     pub fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        let consuming = std::mem::replace(&mut self.consuming, false);
+        let saved = std::mem::replace(&mut self.parent_consuming, consuming);
+        let ty = self.check_expr_kind(expr, expected);
+        self.parent_consuming = saved;
+        ty
+    }
+
+    fn check_expr_kind(&mut self, expr: &Expr, expected: &Type) -> Type {
         if expected == &Type::Error {
             return Type::Error;
         }
@@ -1119,8 +1256,9 @@ impl TypeChecker {
                 }
 
                 // The body's value is what the closure returns.
-                let body_ty =
-                    self.with_origin(Origin::Return, |c| c.check_block(body, Some(exp_ret)));
+                let body_ty = self.with_origin(Origin::Return, |c| {
+                    c.with_consuming(true, |c| c.check_block(body, Some(exp_ret)))
+                });
 
                 self.loop_depth = prev_loop_depth;
                 self.current_expected_return = prev_ret;
@@ -1144,15 +1282,18 @@ impl TypeChecker {
         } = &expr.kind
         {
             self.check_operand(cond, &Type::Bool);
-            let then_ty = self.check_expr(then_branch, expected);
+            let consuming = self.parent_consuming;
+            let then_ty = self.with_consuming(consuming, |c| c.check_expr(then_branch, expected));
             if let Some(else_b) = else_branch {
-                let else_ty = self.check_expr(else_b, expected);
+                let else_ty = self.with_consuming(consuming, |c| c.check_expr(else_b, expected));
                 if then_ty.is_assignable_to(expected) && else_ty.is_assignable_to(expected) {
                     return expected.clone();
                 }
             } else if expected == &Type::Unit {
                 return Type::Unit;
             }
+            // The branches were checked for moves already; the inference below only types them.
+            self.parent_consuming = false;
         }
 
         // Special handling for when in check mode: each branch produces the checked value
@@ -1167,7 +1308,10 @@ impl TypeChecker {
 
         // Default: infer and verify assignability. Expectations nested inside the inferred
         // expression have their own origin.
-        let inferred = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
+        let consuming = self.parent_consuming;
+        let inferred = self.with_origin(Origin::Value, |c| {
+            c.with_consuming(consuming, |c| c.infer_expr(expr))
+        });
         if !inferred.is_assignable_to(expected) {
             if inferred != Type::Error && expected != &Type::Error {
                 self.report_mismatch(expected, inferred.clone(), expr.span);
@@ -1196,6 +1340,17 @@ impl TypeChecker {
 
     /// Infers the type of an expression in inference mode.
     pub fn infer_expr(&mut self, expr: &Expr) -> Type {
+        let consuming = std::mem::replace(&mut self.consuming, false);
+        let saved = std::mem::replace(&mut self.parent_consuming, consuming);
+        let ty = self.infer_expr_kind(expr);
+        self.parent_consuming = saved;
+        if consuming {
+            self.check_move_source(expr, &ty);
+        }
+        ty
+    }
+
+    fn infer_expr_kind(&mut self, expr: &Expr) -> Type {
         match &expr.kind {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => Type::Int,
@@ -1217,7 +1372,10 @@ impl TypeChecker {
 
             ExprKind::Unary { op, expr: inner } => self.infer_unary_op(*op, inner, expr.span),
 
-            ExprKind::Block(block) => self.check_block(block, None),
+            ExprKind::Block(block) => {
+                let consuming = self.parent_consuming;
+                self.with_consuming(consuming, |c| c.check_block(block, None))
+            }
 
             ExprKind::If {
                 cond,
@@ -1225,9 +1383,10 @@ impl TypeChecker {
                 else_branch,
             } => {
                 self.check_operand(cond, &Type::Bool);
-                let then_ty = self.infer_expr(then_branch);
+                let consuming = self.parent_consuming;
+                let then_ty = self.with_consuming(consuming, |c| c.infer_expr(then_branch));
                 if let Some(else_b) = else_branch {
-                    let else_ty = self.infer_expr(else_b);
+                    let else_ty = self.with_consuming(consuming, |c| c.infer_expr(else_b));
                     if let Some(joined) = then_ty.join(&else_ty) {
                         joined
                     } else {
@@ -1287,7 +1446,7 @@ impl TypeChecker {
                     if let Some(exp) = &expected {
                         self.check_expr_at(e, exp, Origin::Return);
                     } else {
-                        self.infer_expr(e);
+                        self.with_consuming(true, |c| c.infer_expr(e));
                     }
                 } else if let Some(exp) = &expected {
                     if exp != &Type::Unit && exp != &Type::Error {
@@ -1343,7 +1502,8 @@ impl TypeChecker {
                     }
                     param_types.push(Type::Error);
                 }
-                let body_ty = self.check_block(body, None);
+                // The body's value is what the closure returns.
+                let body_ty = self.with_consuming(true, |c| c.check_block(body, None));
 
                 self.loop_depth = prev_loop_depth;
                 self.current_expected_return = prev_ret;
@@ -1441,13 +1601,15 @@ impl TypeChecker {
             }
 
             BinaryOp::Elvis => {
-                let left_ty = self.infer_expr(left);
+                // Both sides produce the result, so both are consumed when it is.
+                let consuming = self.parent_consuming;
+                let left_ty = self.with_consuming(consuming, |c| c.infer_expr(left));
                 // The right side is checked even when the left side cannot be null.
                 let inner = match left_ty {
                     Type::Nullable(inner) => *inner,
                     other => other,
                 };
-                let right_ty = self.infer_expr(right);
+                let right_ty = self.with_consuming(consuming, |c| c.infer_expr(right));
                 if inner == Type::Error || right_ty == Type::Error {
                     Type::Error
                 } else if right_ty == Type::Nothing {
@@ -1635,7 +1797,7 @@ impl TypeChecker {
             }
         }
 
-        self.check_expr(value, &target_ty);
+        self.with_consuming(true, |c| c.check_expr(value, &target_ty));
     }
 
     /// Typechecks a local declaration and binds it in the current scope.
@@ -1650,10 +1812,10 @@ impl TypeChecker {
         let var_ty = if let Some(a) = annotation {
             self.check_annotation_names(a);
             let expected = self.lower_type(a);
-            self.check_expr(initializer, &expected);
+            self.with_consuming(true, |c| c.check_expr(initializer, &expected));
             expected
         } else {
-            self.infer_expr(initializer)
+            self.with_consuming(true, |c| c.infer_expr(initializer))
         };
 
         let mutability = if is_var {
@@ -1744,6 +1906,9 @@ impl TypeChecker {
     /// closure expected to return `Unit`) discards its final value: the expression is
     /// typechecked as a statement and its type ignored (D8 of `typechecker-soundness`).
     fn check_block(&mut self, block: &Block, expected: Option<&Type>) -> Type {
+        // The tail produces the block's value, so it is consumed when the block is.
+        let tail_consuming = std::mem::replace(&mut self.consuming, false);
+        let saved_parent = std::mem::replace(&mut self.parent_consuming, false);
         self.env.enter_scope();
         self.with_origin(Origin::Value, |checker| {
             for statement in &block.statements {
@@ -1758,8 +1923,12 @@ impl TypeChecker {
                 self.with_origin(Origin::Value, |c| c.infer_discarded_expr(tail));
                 Type::Unit
             }
-            (Some(tail), Some(exp)) => self.check_expr(tail, exp),
-            (Some(tail), None) => self.with_origin(Origin::Value, |c| c.infer_expr(tail)),
+            (Some(tail), Some(exp)) => {
+                self.with_consuming(tail_consuming, |c| c.check_expr(tail, exp))
+            }
+            (Some(tail), None) => self.with_origin(Origin::Value, |c| {
+                c.with_consuming(tail_consuming, |c| c.infer_expr(tail))
+            }),
             // A block without a tail is `Unit`. When a value was expected, the mismatch is
             // reported at the last statement, which is where the value is missing.
             (None, Some(exp)) if exp != &Type::Unit && exp != &Type::Error => {
@@ -1775,6 +1944,7 @@ impl TypeChecker {
         };
 
         self.env.exit_scope();
+        self.parent_consuming = saved_parent;
         result_ty
     }
 
@@ -1790,6 +1960,8 @@ impl TypeChecker {
         span: Span,
     ) -> Type {
         let value_position = !matches!(use_, WhenUse::Statement);
+        // The branches produce the value, so they are consumed when it is.
+        let branch_consuming = value_position && self.parent_consuming;
         // The subject and the patterns are operands, so their expectations are plain values.
         let branch_origin = self.origin;
         self.origin = Origin::Value;
@@ -1843,10 +2015,12 @@ impl TypeChecker {
             }
 
             if let WhenUse::Check(expected) = use_ {
-                self.check_expr_at(&branch.body, expected, branch_origin);
+                self.with_consuming(branch_consuming, |c| {
+                    c.check_expr_at(&branch.body, expected, branch_origin)
+                });
                 continue;
             }
-            let branch_ty = self.infer_expr(&branch.body);
+            let branch_ty = self.with_consuming(branch_consuming, |c| c.infer_expr(&branch.body));
             if value_position && branch_ty != Type::Nothing {
                 if let Some(current) = &unified_ty {
                     if let Some(joined) = current.join(&branch_ty) {
@@ -1948,7 +2122,22 @@ impl TypeChecker {
                     Type::Error
                 }
             },
-            None => self.infer_expr(callee),
+            None => match &callee.kind {
+                ExprKind::MemberAccess {
+                    target,
+                    member,
+                    is_safe_nav,
+                } if member == "clone" && self.type_name_symbol(target).is_none() => {
+                    let receiver_ty = self.infer_expr(target);
+                    if !self.has_field(&receiver_ty, "clone") {
+                        return self.infer_clone_call(&receiver_ty, *is_safe_nav, args, span);
+                    }
+                    // A field named `clone` takes precedence over the built-in member.
+                    self.member_type(&receiver_ty, member, *is_safe_nav, callee.span)
+                        .0
+                }
+                _ => self.infer_expr(callee),
+            },
         };
         let is_constructor = type_name.is_some();
 
@@ -2216,6 +2405,110 @@ impl TypeChecker {
                 });
                 Type::Error
             }
+        }
+    }
+
+    /// Rejects moving `expr`, of type `ty`, out of where it lives (the `ownership` spec, "Moves
+    /// Take Whole Values Only"). Only leaves are checked: a non-`Copy` value may be consumed from
+    /// a whole local or parameter, or as a temporary, but not from a field, a safe navigation, an
+    /// index or a top-level `val`. Pass-through forms (`if`, `when`, blocks, `?:`) mark their
+    /// children as consumed instead.
+    fn check_move_source(&mut self, expr: &Expr, ty: &Type) {
+        if self.is_copy(ty) {
+            return;
+        }
+        let source = match &expr.kind {
+            ExprKind::Ident(name) if self.is_top_level_value(name) => {
+                format!("top-level value '{}'", name)
+            }
+            // `Color.Red` names a variant: a fresh value, not a field.
+            ExprKind::MemberAccess { target, .. } if self.type_name_symbol(target).is_some() => {
+                return
+            }
+            ExprKind::MemberAccess { target, member, .. } => {
+                format!("field '{}' of '{}'", member, target)
+            }
+            ExprKind::Index { target, .. } => format!("an element of '{}'", target),
+            _ => return,
+        };
+        let clone = self.is_clone(ty).then(|| match ty {
+            Type::Nullable(_) => format!("{}?.clone()", expr),
+            _ => format!("{}.clone()", expr),
+        });
+        self.errors.push(TypeError::CannotMoveOut {
+            source,
+            ty: ty.clone(),
+            borrow: format!("&{}", expr),
+            clone,
+            span: expr.span,
+        });
+    }
+
+    /// Whether `name` currently resolves to a top-level `val`, declared in this file or imported,
+    /// rather than to a local, a parameter, a function or a payload-free enum variant.
+    fn is_top_level_value(&self, name: &str) -> bool {
+        let is_variable = matches!(
+            self.env.lookup(name).map(|sym| &sym.kind),
+            Some(SymbolKind::Variable { .. })
+        );
+        is_variable && !self.env.resolves_to_local(name) && !self.variant_owners.contains_key(name)
+    }
+
+    /// Whether the struct behind `ty` (looking through borrows, `Heap<T>` and `?`) declares a
+    /// field named `name`.
+    fn has_field(&self, ty: &Type, name: &str) -> bool {
+        let mut ty = ty;
+        loop {
+            match ty {
+                Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
+                    ty = inner
+                }
+                Type::Struct(id) => {
+                    return self
+                        .struct_fields(id)
+                        .is_some_and(|fields| fields.iter().any(|(f, _, _)| f == name))
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// Types a call to the built-in `clone()` member, `receiver.clone()` or `receiver?.clone()`
+    /// (the `ownership` spec, "Explicit Clone"). The receiver is read in place, through any
+    /// `&`/`&mut`, and the result is an owned value of the borrowed type.
+    fn infer_clone_call(
+        &mut self,
+        receiver_ty: &Type,
+        is_safe_nav: bool,
+        args: &[CallArg],
+        span: Span,
+    ) -> Type {
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        if !args.is_empty() {
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!("'clone()' takes no arguments, found {}", args.len()),
+                span,
+            });
+        }
+        let receiver = peel_references(receiver_ty);
+        let (cloned, nullable) = match receiver {
+            Type::Nullable(inner) if is_safe_nav => (peel_references(inner).clone(), true),
+            other => (other.clone(), false),
+        };
+        if cloned == Type::Error {
+            return Type::Error;
+        }
+        if !self.is_clone(&cloned) {
+            self.errors
+                .push(TypeError::NotCloneable { ty: cloned, span });
+            return Type::Error;
+        }
+        if nullable {
+            cloned.nullable()
+        } else {
+            cloned
         }
     }
 
@@ -3402,6 +3695,7 @@ mod tests {
                     visibility: Visibility::Public,
                     name: "DupPoint".to_string(),
                     type_params: Vec::new(),
+                    marker: None,
                     fields: vec![
                         prism_ast::StructField {
                             name: "x".to_string(),
@@ -3422,6 +3716,7 @@ mod tests {
                     visibility: Visibility::Public,
                     name: "DupEnum".to_string(),
                     type_params: Vec::new(),
+                    marker: None,
                     variants: vec![
                         prism_ast::EnumVariant {
                             name: "Val".to_string(),
@@ -3513,7 +3808,7 @@ mod tests {
     #[test]
     fn test_field_access_on_annotated_param_by_value() {
         let src = format!(
-            "{}fun byValue(user: User): String = user.name\n",
+            "{}fun byValue(user: User): String = user.name.clone()\n",
             USER_STRUCT
         );
         assert!(check_source(&src).is_empty());
@@ -3522,7 +3817,7 @@ mod tests {
     #[test]
     fn test_field_access_through_shared_reference() {
         let src = format!(
-            "{}fun byRef(user: &User): String = user.name\nfun idOf(user: &User): Int = user.id\n",
+            "{}fun byRef(user: &User): String = user.name.clone()\nfun idOf(user: &User): Int = user.id\n",
             USER_STRUCT
         );
         assert!(check_source(&src).is_empty());
@@ -3561,14 +3856,14 @@ mod tests {
     #[test]
     fn test_safe_navigation_on_annotated_nullable_struct() {
         let ok = format!(
-            "{}fun nameOf(user: User?): String? = user?.name\n",
+            "{}fun nameOf(user: User?): String? = user?.name?.clone()\n",
             USER_STRUCT
         );
         assert!(check_source(&ok).is_empty());
 
         // `user?.name` is `String?`, so it is not assignable to the `String` return type.
         let not_null = format!(
-            "{}fun nameOf(user: User?): String = user?.name\n",
+            "{}fun nameOf(user: User?): String = user?.name?.clone()\n",
             USER_STRUCT
         );
         assert_eq!(error_codes(&check_source(&not_null)), vec!["E4005"]);
@@ -3584,7 +3879,7 @@ mod tests {
     fn test_chained_field_access_through_struct_typed_field() {
         // `Order` references `User` before it is declared (forward reference in Pass 1).
         let src = format!(
-            "struct Order {{\n    val user: User\n}}\n{}fun buyer(order: &Order): String = order.user.name\n",
+            "struct Order {{\n    val user: User\n}}\n{}fun buyer(order: &Order): String = order.user.name.clone()\n",
             USER_STRUCT
         );
         assert!(check_source(&src).is_empty());
@@ -3630,7 +3925,7 @@ mod tests {
             .expect("models ABI must extract");
 
         let app = prism_parser::parse_source(
-            "package demo.app\nfun nameOf(user: &User): String = user.name\nfun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\nfun emailOf(user: &User): String? = user.email\nfun cityOf(user: User): String = user.home.city\n",
+            "package demo.app\nfun nameOf(user: &User): String = user.name.clone()\nfun rename(user: &mut User, n: String): Unit {\n    user.name = n\n}\nfun emailOf(user: &User): String? = user.email.clone()\nfun cityOf(user: User): String = user.home.city.clone()\n",
         )
         .expect("app must parse");
         let mut checker = TypeChecker::new(Some("demo.app".to_string()), "<test>");
@@ -3649,5 +3944,104 @@ mod tests {
         }
         // Private functions may still omit the return type.
         assert!(check_source("fun local(x: Int) {\n}\n").is_empty());
+    }
+
+    /// A checker that has registered `src`, for querying the `Copy` and `Clone` predicates.
+    fn registered(src: &str) -> TypeChecker {
+        let file = prism_parser::parse_source(src).expect("source must parse");
+        let mut checker = TypeChecker::new(None, "<test>");
+        checker.check_module(&file);
+        checker
+    }
+
+    #[test]
+    fn copy_and_clone_tables_cover_every_kind_of_type() {
+        let checker = registered(
+            "struct P : Copy { val x: Int }\nstruct C : Clone { val s: String }\nstruct M { val x: Int }\nenum E : Copy { A }\n",
+        );
+        let nominal = |name: &str| Type::Struct(NominalId::new("<test>", name));
+        let reference = |mutable, inner: Type| Type::Reference {
+            mutable,
+            inner: Box::new(inner),
+        };
+        let nullable = |inner: Type| Type::Nullable(Box::new(inner));
+        let heap = |inner: Type| Type::Heap(Box::new(inner));
+        let function = Type::Fn {
+            is_compose: false,
+            params: Vec::new(),
+            ret: Box::new(Type::Unit),
+        };
+        // (type, is Copy, is Clone)
+        let table = [
+            (Type::Int, true, true),
+            (Type::Float, true, true),
+            (Type::Bool, true, true),
+            (Type::Char, true, true),
+            (Type::Unit, true, true),
+            (Type::Nothing, true, true),
+            (Type::Struct(NominalId::builtin_range()), true, true),
+            (reference(false, Type::String), true, true),
+            (reference(true, Type::Int), false, false),
+            (Type::String, false, true),
+            (nullable(Type::Int), true, true),
+            (nullable(Type::String), false, true),
+            (nullable(function.clone()), false, false),
+            (heap(Type::Int), false, true),
+            (heap(function.clone()), false, false),
+            (function, false, false),
+            (Type::TypeParam("T".into()), false, false),
+            (Type::Opaque("UInt64".into()), false, false),
+            (Type::Error, true, true),
+            (nominal("P"), true, true),
+            (nominal("C"), false, true),
+            (nominal("M"), false, false),
+            (Type::Enum(NominalId::new("<test>", "E")), true, true),
+        ];
+        for (ty, copy, clone) in table {
+            assert_eq!(checker.is_copy(&ty), copy, "is_copy({ty})");
+            assert_eq!(checker.is_clone(&ty), clone, "is_clone({ty})");
+        }
+    }
+
+    #[test]
+    fn marker_of_a_type_known_only_through_a_reference() {
+        // `Money` is defined in `shop/models`, which this file does not import; only the field
+        // type recorded in `shop/api`'s ABI says that it is `Copy`.
+        let models = prism_parser::parse_source(
+            "package shop\npublic struct Money : Copy { val cents: Int }\npublic struct Note { val text: String }\n",
+        )
+        .unwrap();
+        let exported = prism_abi::declared_types(&models, true);
+        let bind = |name: &str| {
+            exported
+                .get(name)
+                .map(|header| (*header, "shop/models".to_string()))
+        };
+        let api = prism_parser::parse_source(
+            "package shop\nimport models\npublic struct Order { val price: Money, val note: Note }\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new(None, "app");
+        checker.ingest_file_abi(&FileAbi::extract(&api, "shop/api", &bind).unwrap());
+        let money = Type::Struct(NominalId::new("shop/models", "Money"));
+        let note = Type::Struct(NominalId::new("shop/models", "Note"));
+        assert!(checker
+            .type_def(&NominalId::new("shop/models", "Money"))
+            .is_none());
+        assert!(checker.is_copy(&money));
+        assert!(!checker.is_copy(&note));
+        assert!(!checker.is_clone(&note));
+    }
+
+    #[test]
+    fn marker_check_reports_each_offending_field_once() {
+        let errors = check_source(
+            "struct User : Copy { val id: Int, val name: String, val tags: Heap<Int> }\nenum Event : Copy { Click(Int, Int), Text(String) }\n",
+        );
+        let messages: Vec<String> = errors.iter().map(TypeError::message).collect();
+        assert_eq!(error_codes(&errors), vec!["E4016"; 3], "{messages:?}");
+        assert!(messages[0].contains("field 'name'") && messages[0].contains("'String'"));
+        assert!(messages[1].contains("field 'tags'"));
+        assert!(messages[2].contains("payload 1 of variant 'Text'"));
     }
 }

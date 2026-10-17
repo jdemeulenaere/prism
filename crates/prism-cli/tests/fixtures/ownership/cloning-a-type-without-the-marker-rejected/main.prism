@@ -1,0 +1,3 @@
+// expect: E4018
+struct Token { val id: Int }
+fun f(t: &Token): Token = t.clone()

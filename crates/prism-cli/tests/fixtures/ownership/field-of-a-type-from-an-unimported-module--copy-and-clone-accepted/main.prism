@@ -1,0 +1,6 @@
+// expect: ok
+import /shop/api
+fun f(o: Order) {
+    val p = o.price
+    val c = o.note.clone()
+}

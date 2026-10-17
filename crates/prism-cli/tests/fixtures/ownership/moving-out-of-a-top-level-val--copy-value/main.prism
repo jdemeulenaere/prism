@@ -1,0 +1,3 @@
+// expect: ok
+val LIMIT = 10
+fun g(): Int = LIMIT

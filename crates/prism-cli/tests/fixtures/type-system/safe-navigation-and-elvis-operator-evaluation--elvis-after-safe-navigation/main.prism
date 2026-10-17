@@ -2,4 +2,4 @@
 struct User {
     val name: String
 }
-fun nameOf(u: User?): String = u?.name ?: "anonymous"
+fun nameOf(u: User?): String = u?.name?.clone() ?: "anonymous"

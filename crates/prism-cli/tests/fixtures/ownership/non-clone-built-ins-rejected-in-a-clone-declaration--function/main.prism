@@ -1,0 +1,2 @@
+// expect: E4016
+struct Task : Clone { val run: () -> Unit }

@@ -375,6 +375,15 @@ impl ScopeStack {
         innermost == Some(0)
     }
 
+    /// Whether `name` currently resolves to a local: a symbol of a scope nested inside the module
+    /// scope (a parameter, a local binding, a loop variable).
+    pub fn resolves_to_local(&self, name: &str) -> bool {
+        matches!(
+            self.scopes.iter().rposition(|scope| scope.contains_key(name)),
+            Some(level) if level > 0
+        )
+    }
+
     /// Updates the type of an existing symbol in the innermost scope that defines it
     /// (useful for inferred private expression bodies).
     pub fn update_type(&mut self, name: &str, new_type: Type) -> bool {

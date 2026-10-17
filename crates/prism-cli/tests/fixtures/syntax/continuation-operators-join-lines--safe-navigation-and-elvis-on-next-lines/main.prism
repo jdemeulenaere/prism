@@ -5,6 +5,7 @@ struct User {
 fun f(user: User?): String {
     val n = user
         ?.name
+        ?.clone()
         ?: "anon"
     return n
 }

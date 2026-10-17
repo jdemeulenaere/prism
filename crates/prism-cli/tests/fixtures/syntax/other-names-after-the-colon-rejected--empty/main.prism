@@ -1,0 +1,2 @@
+// expect: E2001
+struct P : { val x: Int }

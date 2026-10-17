@@ -1,0 +1,12 @@
+// expect: ok
+struct User { val id: Int, val name: String }
+struct Tag { val s: String }
+fun take(s: String) {
+}
+fun f(u: User): String {
+    take(u.name.clone())
+    val t = Tag(u.name.clone())
+    var s = "x"
+    s = u.name.clone()
+    return u.name.clone()
+}
