@@ -1,0 +1,51 @@
+module main
+phase elaborated
+fun main::f(_1: Bool, _2: Bool): Unit @2:1
+  local _0: Unit (return)
+  local _1 c: Bool (argument)
+  local _2 d: Bool (argument)
+  local _3 s: String (user)
+  local _4 t: String (user)
+  local _5: Bool (drop flag)
+  bb0:
+    _5 = const false @2:1
+    goto -> bb1 @2:27
+  bb1:
+    storage_live _3 @2:32
+    _3 = const "a" @2:40
+    switch copy _1 [0 -> bb3, otherwise -> bb2] @2:49
+  bb2:
+    storage_live _4 @2:52
+    _5 = const false @2:52
+    goto -> bb4 @2:52
+  bb3:
+    storage_live _4 @2:62
+    _5 = const false @2:62
+    _4 = const "b" @2:70
+    _5 = const true @2:70
+    goto -> bb4 @2:27
+  bb4:
+    switch copy _2 [0 -> bb6, otherwise -> bb5] @2:83
+  bb5:
+    switch copy _5 [0 -> bb7, otherwise -> bb11] @2:30
+  bb6:
+    switch copy _5 [0 -> bb9, otherwise -> bb12] @2:30
+  bb7:
+    storage_dead _4 @2:30
+    _5 = const false @2:30
+    drop _3 -> bb8 @2:30
+  bb8:
+    storage_dead _3 @2:30
+    goto -> bb1 @2:27
+  bb9:
+    storage_dead _4 @2:30
+    _5 = const false @2:30
+    drop _3 -> bb10 @2:30
+  bb10:
+    storage_dead _3 @2:30
+    _0 = const () @2:25
+    return @2:1
+  bb11:
+    drop _4 -> bb7 @2:30
+  bb12:
+    drop _4 -> bb9 @2:30

@@ -9,7 +9,7 @@
 //! a move made in a previous iteration of a loop from one made earlier in the same iteration.
 
 use crate::analyses::{MaybeInitialized, ReachingUninitializations};
-use crate::dataflow::{solve, solve_with, BitSet};
+use crate::dataflow::{solve_with, BitSet, Results};
 use crate::dominators::Dominators;
 use crate::error::{BorrowError, BorrowErrorKind, Label};
 use crate::location::locations;
@@ -20,10 +20,15 @@ use prism_mir::{Body, MirFile, Place, Projection};
 use prism_typed_tree::{ArenaId, Type, TypeDef};
 use std::collections::HashSet;
 
-/// The errors of `body` of `file`, whose move data is `data`, in visiting order.
-pub(crate) fn check_body(file: &MirFile, body: &Body, data: &MoveData) -> Vec<BorrowError> {
-    let maybe = solve(body, MaybeInitialized { data });
-    let reaching = solve(body, ReachingUninitializations { data });
+/// The errors of `body` of `file`, whose move data is `data` and initialization analyses `maybe`
+/// and `reaching`, in visiting order.
+pub(crate) fn check_body(
+    file: &MirFile,
+    body: &Body,
+    data: &MoveData,
+    maybe: &Results<MaybeInitialized>,
+    reaching: &Results<ReachingUninitializations>,
+) -> Vec<BorrowError> {
     let dominators = Dominators::compute(body);
     let acyclic = solve_with(body, ReachingUninitializations { data }, |from, to| {
         !dominators.is_back_edge(from, to)

@@ -1,0 +1,3 @@
+// expect: ok
+fun take(s: String) {}
+fun f(c: Bool, s: String) { if (c) take(s) }

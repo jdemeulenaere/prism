@@ -1,0 +1,25 @@
+module main
+phase elaborated
+fun main::take(_1: String): Unit @2:1
+  local _0: Unit (return)
+  local _1 s: String (argument)
+  bb0:
+    _0 = const () @2:21
+    drop _1 -> bb1 @2:1
+  bb1:
+    return @2:1
+fun main::f(_1: String): Unit @3:1
+  local _0: Unit (return)
+  local _1 s: String (argument)
+  local _2: String (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _2 @3:25
+    _2 = move _1 @3:25
+    storage_live _3 @3:20
+    _3 = call main::take(move _2) -> bb1 @3:20
+  bb1:
+    storage_dead _3 @3:20
+    storage_dead _2 @3:20
+    _0 = const () @3:18
+    return @3:1

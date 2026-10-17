@@ -22,7 +22,9 @@ COMMANDS:
     dump-typed-tree <file.prism>
                            Print the typed tree of a source file, checked against the ABIs of
                            its imports
-    dump-mir <file.prism>  Print the MIR of a source file that typechecks
+    dump-mir [--elaborated] <file.prism>
+                           Print the MIR of a source file that typechecks; with
+                           --elaborated, borrow-check it and print its elaborated MIR
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
     tokens <file.prism>    Tokenize source file and print stream of tokens
     version                Show version information
@@ -73,11 +75,15 @@ fn main() {
             run_dump_typed_tree(&args[2]);
         }
         "dump-mir" => {
-            if args.len() < 3 {
-                eprintln!("Error: 'dump-mir' command requires a file path argument");
-                process::exit(1);
+            let elaborated = args.get(2).is_some_and(|arg| arg == "--elaborated");
+            let path = args.get(if elaborated { 3 } else { 2 });
+            match path {
+                Some(path) => run_dump_mir(path, elaborated),
+                None => {
+                    eprintln!("Error: 'dump-mir' command requires a file path argument");
+                    process::exit(1);
+                }
             }
-            run_dump_mir(&args[2]);
         }
         "abi" => {
             if args.len() < 3 {
@@ -168,10 +174,17 @@ fn run_dump_typed_tree(path: &str) {
     }
 }
 
-/// Prints the MIR of `path`. A file with type errors, or with errors before type checking, is
-/// not lowered: its errors are reported with a failure status.
-fn run_dump_mir(path: &str) {
-    match prism_cli::dump_mir(std::path::Path::new(path)) {
+/// Prints the MIR of `path`, or with `elaborated` its borrow-checked and elaborated MIR. A file
+/// with type errors, or with errors before type checking, is not lowered, and with `elaborated`
+/// a file with borrow errors prints no MIR: its errors are reported with a failure status.
+fn run_dump_mir(path: &str, elaborated: bool) {
+    let path = std::path::Path::new(path);
+    let dump = if elaborated {
+        prism_cli::dump_elaborated_mir(path)
+    } else {
+        prism_cli::dump_mir(path)
+    };
+    match dump {
         Ok(dump) => print!("{}", dump.text),
         Err(err) => {
             eprint!("{}", err.render());

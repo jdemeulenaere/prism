@@ -43,8 +43,13 @@
 //!
 //! Likewise, a case may hold `mir.snap`: the expected output of `prism dump-mir` on its entry
 //! (`prism_cli::dump_mir`), which needs an entry without type errors. Every case of the `mir`
-//! spec, and every case whose name starts with `mir`, must hold one; `PRISM_BLESS=1` writes
-//! both kinds of snapshot.
+//! spec, and every case whose name starts with `mir`, must hold one.
+//!
+//! A case may also hold `elaborated-mir.snap`: the expected output of `prism dump-mir
+//! --elaborated` on its entry (`prism_cli::dump_elaborated_mir`), which needs an entry without
+//! type or borrow errors. Every `mir` case of the scenarios of "Drops Are Elaborated After Borrow
+//! Checking" (`ELABORATED_SCENARIOS`) must hold one. `PRISM_BLESS=1` writes every kind of
+//! snapshot.
 //!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
@@ -229,16 +234,27 @@ fn run(case: &Case) -> Result<(), String> {
 /// A text snapshot a case may hold: its file name, and the dump it records.
 struct Snapshot {
     file: &'static str,
-    /// The spec, or the case-name prefix, whose cases must hold one.
-    required_for: &'static str,
+    /// Whether a case, by its spec and its directory name, must hold one.
+    required_for: fn(&str, &str) -> bool,
     /// The dump of an entry, or its rendered errors.
     dump: fn(&Path) -> Result<String, String>,
 }
 
+/// The scenarios of the `mir` spec whose cases must hold an `elaborated-mir.snap`: those of
+/// "Drops Are Elaborated After Borrow Checking".
+const ELABORATED_SCENARIOS: &[&str] = &[
+    "a-moved-value-is-not-dropped",
+    "a-conditionally-moved-value-is-dropped-under-a-flag",
+    "assigning-over-a-possibly-moved-variable",
+    "reinitialization-after-a-move-drops-nothing",
+    "deterministic-scope-exit-cleanup",
+    "drop-of-a-declaration-that-a-continue-skipped",
+];
+
 const SNAPSHOTS: &[Snapshot] = &[
     Snapshot {
         file: "typed-tree.snap",
-        required_for: "typed-tree",
+        required_for: |spec, dir| spec == "typed-tree" || dir.starts_with("typed-tree"),
         dump: |entry| {
             prism_cli::dump_typed_tree(entry)
                 .map(|dump| dump.text)
@@ -247,9 +263,23 @@ const SNAPSHOTS: &[Snapshot] = &[
     },
     Snapshot {
         file: "mir.snap",
-        required_for: "mir",
+        required_for: |spec, dir| spec == "mir" || dir.starts_with("mir"),
         dump: |entry| {
             prism_cli::dump_mir(entry)
+                .map(|dump| dump.text)
+                .map_err(|err| err.render())
+        },
+    },
+    Snapshot {
+        file: "elaborated-mir.snap",
+        required_for: |spec, dir| {
+            spec == "mir"
+                && ELABORATED_SCENARIOS
+                    .iter()
+                    .any(|scenario| dir.split("--").next() == Some(scenario))
+        },
+        dump: |entry| {
+            prism_cli::dump_elaborated_mir(entry)
                 .map(|dump| dump.text)
                 .map_err(|err| err.render())
         },
@@ -259,7 +289,7 @@ const SNAPSHOTS: &[Snapshot] = &[
 /// Whether `case` must hold `snapshot`.
 fn needs_snapshot(case: &Case, snapshot: &Snapshot) -> bool {
     let (spec, dir) = case.name.split_once('/').unwrap();
-    spec == snapshot.required_for || dir.starts_with(snapshot.required_for)
+    (snapshot.required_for)(spec, dir)
 }
 
 /// Compares each dump of `entry` with the case's snapshot, or writes it with `PRISM_BLESS`.
@@ -580,6 +610,88 @@ fn example_mir_is_well_formed() {
     assert!(
         violations.is_empty(),
         "{} MIR violations:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// mir: "Error-free MIR", after borrow checking. Elaborates the entry file of every case that
+/// passes `prism check` and checks the elaborated MIR's structural invariants
+/// (`MirFile::validate`) and its drops (`prism_borrowck::verify_elaborated`), reporting every
+/// violation and every crash at once.
+#[test]
+fn fixture_elaborated_mir_is_well_formed() {
+    let mut violations = Vec::new();
+    let mut verified = 0;
+    for case in load_cases() {
+        if !case.expected.is_empty() {
+            continue;
+        }
+        let entry = entry_of(&case);
+        if !entry.is_file() {
+            continue;
+        }
+        verified += 1;
+        let elaborate = || {
+            prism_cli::dump_elaborated_mir(&entry)
+                .map(|dump| dump.mir)
+                .map_err(|err| err.render())
+        };
+        match std::panic::catch_unwind(elaborate) {
+            Ok(Ok(mir)) => {
+                for violation in mir.validate() {
+                    violations.push(format!("{}: {}", case.name, violation));
+                }
+                for violation in prism_borrowck::verify_elaborated(&mir) {
+                    violations.push(format!("{}: {}", case.name, violation));
+                }
+            }
+            Ok(Err(rendered)) => {
+                violations.push(format!("{}: no elaborated MIR:\n{}", case.name, rendered))
+            }
+            Err(panic) => violations.push(format!(
+                "{}: elaboration panicked: {:?}",
+                case.name,
+                panic_message(&panic)
+            )),
+        }
+    }
+    assert!(verified > 200, "only {} files elaborated", verified);
+    assert!(
+        violations.is_empty(),
+        "{} elaborated MIR violations:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// mir: "Error-free MIR", after borrow checking, over `examples/`: every example except those
+/// needing an unbuilt subsystem (`examples/demo/ui`) elaborates to well-formed MIR whose drops
+/// verify.
+#[test]
+fn example_elaborated_mir_is_well_formed() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut files = Vec::new();
+    prism_files(&examples, &mut files);
+    let mut violations = Vec::new();
+    for file in &files {
+        if file.components().any(|c| c.as_os_str() == "ui") {
+            continue;
+        }
+        let mir = match prism_cli::dump_elaborated_mir(file) {
+            Ok(dump) => dump.mir,
+            Err(err) => panic!("{}: no elaborated MIR:\n{}", file.display(), err.render()),
+        };
+        for violation in mir.validate() {
+            violations.push(format!("{}: {}", file.display(), violation));
+        }
+        for violation in prism_borrowck::verify_elaborated(&mir) {
+            violations.push(format!("{}: {}", file.display(), violation));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} elaborated MIR violations:\n{}",
         violations.len(),
         violations.join("\n")
     );

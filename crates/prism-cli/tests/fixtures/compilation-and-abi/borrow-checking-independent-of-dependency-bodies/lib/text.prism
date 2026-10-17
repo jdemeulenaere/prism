@@ -1,0 +1,5 @@
+package lib
+public fun shout(s: String): String {
+    val t = s
+    return s
+}

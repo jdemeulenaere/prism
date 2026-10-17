@@ -894,3 +894,113 @@ fn test_cli_binary_dump_mir_with_type_errors() {
     );
     assert!(stderr.contains("error[E4001]"), "{}", stderr);
 }
+
+/// Runs `prism <args...> main.prism` on a single-file workspace holding `source`.
+fn run_on_source(test_name: &str, args: &[&str], source: &str) -> std::process::Output {
+    let temp = create_temp_dir(test_name);
+    let file = temp.join("main.prism");
+    fs::write(&file, source).unwrap();
+    let output = Command::new(prism_bin())
+        .args(args)
+        .arg(&file)
+        .output()
+        .expect("failed to execute prism CLI");
+    fs::remove_dir_all(&temp).ok();
+    output
+}
+
+/// mir: "Dumping elaborated MIR".
+#[test]
+fn test_cli_binary_dump_elaborated_mir() {
+    let take = "fun take(s: String) {}\n";
+    let passing = format!("{}fun f(s: String) {{ take(s) }}\n", take);
+    let output = run_on_source("dump_elaborated", &["dump-mir", "--elaborated"], &passing);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}", text);
+    assert!(
+        text.starts_with("module main\nphase elaborated\n"),
+        "{}",
+        text
+    );
+    let f = &text[text.find("fun main::f").unwrap()..];
+    assert!(!f.contains("drop"), "{}", text);
+
+    let failing = format!("{}fun g(s: String) {{ take(s); take(s) }}\n", take);
+    let output = run_on_source(
+        "dump_elaborated_errors",
+        &["dump-mir", "--elaborated"],
+        &failing,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        stderr.contains("error[E5001]: use of moved value 's'"),
+        "{}",
+        stderr
+    );
+
+    let output = run_on_source("dump_built_with_borrow_errors", &["dump-mir"], &failing);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}", text);
+    assert!(text.starts_with("module main\nfun "), "{}", text);
+    assert!(text.contains("drop _1"), "{}", text);
+}
+
+/// diagnostics: "Rendered related location", through `prism check`.
+#[test]
+fn test_cli_binary_check_renders_a_use_after_move() {
+    let output = run_on_source(
+        "check_use_after_move",
+        &["check"],
+        "fun take(s: String) {}\nfun f(s: String) { take(s); take(s) }\n",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(
+        lines[0], "error[E5001]: use of moved value 's'",
+        "{}",
+        stderr
+    );
+    assert!(lines[1].ends_with("main.prism:2:34"), "{}", stderr);
+    assert!(
+        lines[3].ends_with("^ value used here after move"),
+        "{}",
+        stderr
+    );
+    assert!(lines[4].ends_with("main.prism:2:25"), "{}", stderr);
+    assert!(lines[6].ends_with("^ value moved here"), "{}", stderr);
+    assert_eq!(
+        lines[7],
+        "   = note: 's' has type 'String', which is not 'Copy'"
+    );
+    assert_eq!(lines[8], "   = help: clone it where it moves: 's.clone()'");
+}
+
+/// ownership: "Continue skips a declaration that the condition reads", through `prism check`.
+#[test]
+fn test_cli_binary_check_renders_an_uninitialized_read() {
+    let output = run_on_source(
+        "check_uninitialized",
+        &["check"],
+        "fun next(): Int = 0\nfun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }\n",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error[E5002]: use of possibly uninitialized value 'x'\n"),
+        "{}",
+        stderr
+    );
+    assert!(stderr.contains("main.prism:2:43\n"), "{}", stderr);
+    assert!(
+        stderr.contains("^^^^^^^^ the declaration of 'x' is skipped here"),
+        "{}",
+        stderr
+    );
+}

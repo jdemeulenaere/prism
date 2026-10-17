@@ -1,0 +1,35 @@
+module main
+fun main::g(): Unit @2:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @2:9
+    return @2:1
+fun main::f(_1: Bool): Unit @3:1
+  local _0: Unit (return)
+  local _1 c: Bool (argument)
+  local _2 a: String (user)
+  local _3 b: String (user)
+  local _4: Unit (temporary)
+  bb0:
+    storage_live _2 @4:5
+    _2 = const "a" @4:13
+    switch copy _1 [0 -> bb2, otherwise -> bb1] @5:9
+  bb1:
+    storage_live _3 @6:9
+    _3 = const "b" @6:17
+    drop _3 -> bb3 @5:12
+  bb2:
+    goto -> bb4 @5:5
+  bb3:
+    storage_dead _3 @5:12
+    goto -> bb4 @5:5
+  bb4:
+    storage_live _4 @8:5
+    _4 = call main::g() -> bb5 @8:5
+  bb5:
+    storage_dead _4 @8:5
+    _0 = const () @3:16
+    drop _2 -> bb6 @3:16
+  bb6:
+    storage_dead _2 @3:16
+    return @3:1

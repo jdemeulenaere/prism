@@ -1,0 +1,49 @@
+module main
+phase elaborated
+fun main::take(_1: String): Unit @2:1
+  local _0: Unit (return)
+  local _1 s: String (argument)
+  bb0:
+    _0 = const () @2:21
+    drop _1 -> bb1 @2:1
+  bb1:
+    return @2:1
+fun main::f(_1: Bool): Unit @3:1
+  local _0: Unit (return)
+  local _1 c: Bool (argument)
+  local _2 s: String (user, var)
+  local _3: String (temporary)
+  local _4: Unit (temporary)
+  local _5: Bool (drop flag)
+  bb0:
+    _5 = const false @3:1
+    storage_live _2 @3:18
+    _5 = const false @3:18
+    _2 = const "a" @3:26
+    _5 = const true @3:26
+    switch copy _1 [0 -> bb2, otherwise -> bb1] @3:35
+  bb1:
+    storage_live _3 @3:43
+    _5 = const false @3:43
+    _3 = move _2 @3:43
+    storage_live _4 @3:38
+    _4 = call main::take(move _3) -> bb3 @3:38
+  bb2:
+    goto -> bb4 @3:31
+  bb3:
+    storage_dead _4 @3:38
+    storage_dead _3 @3:38
+    goto -> bb4 @3:31
+  bb4:
+    switch copy _5 [0 -> bb5, otherwise -> bb7] @3:47
+  bb5:
+    _2 = const "b" @3:47
+    _5 = const true @3:47
+    _0 = const () @3:16
+    drop _2 -> bb6 @3:16
+  bb6:
+    storage_dead _2 @3:16
+    _5 = const false @3:16
+    return @3:1
+  bb7:
+    drop _2 -> bb5 @3:47

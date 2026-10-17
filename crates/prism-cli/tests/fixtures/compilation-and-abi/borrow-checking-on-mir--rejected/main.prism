@@ -1,0 +1,6 @@
+// expect: E5001
+fun take(s: String) {}
+fun f(s: String) {
+    take(s)
+    take(s)
+}

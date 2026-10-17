@@ -508,6 +508,33 @@ pub fn dump_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
     })
 }
 
+/// Builds the elaborated MIR of the entry file `entry`, as `prism dump-mir --elaborated` prints
+/// it: the MIR of [`dump_mir`], borrow-checked, with its drops elaborated. A file with borrow
+/// errors has no elaborated MIR: its errors are returned instead (D1 of `borrowck-moves`). Only
+/// the entry is borrow-checked, from its own MIR.
+pub fn dump_elaborated_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
+    let (tree, type_errors) = typecheck_entry(entry)?;
+    if let Some(errors) = type_errors {
+        return Err(errors);
+    }
+    let mir = prism_mir::lower_file(&tree);
+    match prism_borrowck::check_file(&mir) {
+        Ok(elaborated) => Ok(MirDump {
+            text: elaborated.dump(),
+            mir: elaborated,
+        }),
+        Err(errors) => {
+            let path = entry.to_path_buf();
+            let source = fs::read_to_string(entry).unwrap_or_default();
+            Err(WorkspaceError::Borrow {
+                path,
+                source,
+                errors,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

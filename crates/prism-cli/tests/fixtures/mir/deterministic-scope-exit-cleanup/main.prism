@@ -1,0 +1,9 @@
+// expect: ok
+fun g() {}
+fun f(c: Bool) {
+    val a = "a"
+    if (c) {
+        val b = "b"
+    }
+    g()
+}
