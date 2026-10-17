@@ -120,6 +120,10 @@ pub trait Analysis {
     /// Applies the effect of `terminator`, at `location`. Forward, it holds on every outgoing
     /// edge.
     fn apply_terminator(&self, state: &mut BitSet, terminator: &Terminator, location: Location);
+
+    /// Applies the effect of the edge `from -> to` to the state leaving `from`, forward only,
+    /// for an analysis that tells the successors of a switch apart. None by default.
+    fn apply_edge(&self, _state: &mut BitSet, _from: BlockId, _to: BlockId) {}
 }
 
 /// The fixpoint of an analysis: the state where the analysis enters each block (its start
@@ -174,7 +178,9 @@ pub fn solve_with<A: Analysis>(
                 Direction::Forward => {
                     for successor in body.blocks[block].terminator.kind.successors() {
                         if keep_edge(block, successor) {
-                            changed |= block_states[successor.index()].union(&state);
+                            let mut edge_state = state.clone();
+                            analysis.apply_edge(&mut edge_state, block, successor);
+                            changed |= block_states[successor.index()].union(&edge_state);
                         }
                     }
                 }

@@ -260,116 +260,213 @@ fn flag_updates(
 
 /// The violations of the drops of an elaborated `body` (D15): see
 /// [`crate::verify_elaborated`].
+///
+/// The check solves, on the elaborated body alone, the states (value of the local's drop flag,
+/// what the local holds) that each local may be in at each point. A local holds nothing, a
+/// value, or `null`, which owns nothing: a nullable becomes `null` on the edge where a test of
+/// its tag finds it so. A drop takes the value, and a switch on a drop flag lets only the
+/// states whose flag matches the edge through. Then every drop of a whole local and every use
+/// must find something on every path, and no local that needs a drop may lose a value it still
+/// holds: by a new assignment, the end of its storage, or, for an argument, the return.
 pub(crate) fn verify_body(body: &Body, types: &TypeTable) -> Vec<String> {
     let data = MoveData::gather(body, types);
-    // The flag of each local with a guarded drop: a switch on a flag whose `otherwise` target
-    // drops the local.
+    // The local each flag guards: a switch on a flag whose `otherwise` target drops the local.
     let mut guards: HashMap<LocalId, LocalId> = HashMap::new();
     let mut guarded_drops: HashMap<BlockId, LocalId> = HashMap::new();
     for (_, block_data) in body.blocks.iter() {
-        if let TerminatorKind::SwitchInt {
-            value: Operand::Copy(flag),
-            otherwise,
-            ..
-        } = &block_data.terminator.kind
-        {
-            let Some(flag) = flag.as_local() else {
-                continue;
-            };
-            if body.locals[flag].kind != LocalKind::DropFlag {
-                continue;
-            }
-            if let TerminatorKind::Drop { place, .. } = &body.blocks[*otherwise].terminator.kind {
+        if let Some((flag, _, otherwise)) = flag_switch(body, &block_data.terminator) {
+            if let TerminatorKind::Drop { place, .. } = &body.blocks[otherwise].terminator.kind {
                 if let Some(local) = place.as_local() {
                     guards.insert(flag, local);
-                    guarded_drops.insert(*otherwise, local);
+                    guarded_drops.insert(otherwise, local);
                 }
             }
         }
     }
-    let analysis = FlagStates {
+    let analysis = DropStates {
         data: &data,
         body,
+        types,
         guards: &guards,
     };
     let results = solve(body, analysis);
+    let analysis = &results.analysis;
+    let needs_drop = |local: LocalId| prism_mir::needs_drop(&body.locals[local].ty, types);
     let mut cursor = results.cursor(body);
     let mut violations = Vec::new();
     for (block, block_data) in body.blocks.iter() {
-        let location = Location::terminator(body, block);
-        match &block_data.terminator.kind {
-            TerminatorKind::Drop { place, .. } => {
-                let Some(local) = place.as_local() else {
-                    continue;
+        for index in 0..=block_data.statements.len() {
+            let location = Location {
+                block,
+                statement: index,
+            };
+            let mut state = cursor.seek(location).clone();
+            let statement = block_data.statements.get(index);
+            let mut check = |state: &BitSet, step: Step| {
+                let problem = match step {
+                    Step::Use(local)
+                        if body.locals[local].kind != LocalKind::DropFlag
+                            && may_hold(state, local, Content::Nothing) =>
+                    {
+                        format!("uses _{}, which may hold no value there", local.0)
+                    }
+                    Step::Overwrite(local)
+                        if needs_drop(local) && may_hold(state, local, Content::Value) =>
+                    {
+                        format!("assigns _{}, which may still hold a value there", local.0)
+                    }
+                    Step::StorageDead(local)
+                        if needs_drop(local) && may_hold(state, local, Content::Value) =>
+                    {
+                        format!(
+                            "ends the storage of _{}, which may still hold a value there",
+                            local.0
+                        )
+                    }
+                    _ => return,
                 };
-                let state = cursor.seek(location);
-                let guarded = guarded_drops.get(&block) == Some(&local);
-                let uninitialized = (0..2).any(|flag| {
-                    // A guarded drop runs only where the flag is set.
-                    (!guarded || flag == 1) && state.contains(pair(local, flag == 1, false))
-                });
-                if uninitialized {
-                    violations.push(format!(
-                        "bb{} drops _{}, which may hold no value there",
-                        block.0, local.0
-                    ));
-                }
+                violations.push(format!("bb{} {}", block.0, problem));
+            };
+            analysis.apply_location(&mut state, location, statement, &mut check);
+            if statement.is_some() {
+                continue;
             }
-            TerminatorKind::SwitchInt {
-                value: Operand::Copy(place),
-                ..
-            } => {
-                let Some(local) = place.as_local().and_then(|flag| guards.get(&flag)) else {
-                    continue;
-                };
-                let state = cursor.seek(location);
-                if state.contains(pair(*local, true, false))
-                    || state.contains(pair(*local, false, true))
-                {
-                    violations.push(format!(
-                        "bb{}: the drop flag {} does not mirror whether _{} holds a value",
-                        block.0, place.local.0, local.0
-                    ));
+            let state = cursor.seek(location);
+            match &block_data.terminator.kind {
+                TerminatorKind::Drop { place, .. } => {
+                    let Some(local) = place.as_local() else {
+                        continue;
+                    };
+                    // A guarded drop's block is entered only with its flag set.
+                    if may_hold(state, local, Content::Nothing) {
+                        violations.push(format!(
+                            "bb{} drops _{}, which may hold no value there",
+                            block.0, local.0
+                        ));
+                    }
                 }
+                TerminatorKind::SwitchInt {
+                    value: Operand::Copy(place),
+                    ..
+                } => {
+                    let Some(local) = place.as_local().and_then(|flag| guards.get(&flag)) else {
+                        continue;
+                    };
+                    let mismatch = state.contains(bit(*local, true, Content::Nothing))
+                        || state.contains(bit(*local, false, Content::Value))
+                        || state.contains(bit(*local, false, Content::Null));
+                    if mismatch {
+                        violations.push(format!(
+                            "bb{}: the drop flag {} does not mirror whether _{} holds a value",
+                            block.0, place.local.0, local.0
+                        ));
+                    }
+                }
+                TerminatorKind::Return => {
+                    for (local, declaration) in body.locals.iter() {
+                        if declaration.kind == LocalKind::Argument
+                            && needs_drop(local)
+                            && may_hold(state, local, Content::Value)
+                        {
+                            violations.push(format!(
+                                "bb{} returns while the argument _{} may still hold a value",
+                                block.0, local.0
+                            ));
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     violations
 }
 
-/// The bit of the pair (flag value, holds a value) of `local`.
-fn pair(local: LocalId, flag: bool, initialized: bool) -> usize {
-    local.index() * 4 + usize::from(flag) * 2 + usize::from(initialized)
+/// The flag, the target for a cleared flag and the `otherwise` target of `terminator`, when it
+/// is a switch on a drop flag.
+fn flag_switch(body: &Body, terminator: &Terminator) -> Option<(LocalId, BlockId, BlockId)> {
+    let (flag, unset, otherwise) = zero_switch(terminator)?;
+    (body.locals[flag].kind == LocalKind::DropFlag).then_some((flag, unset, otherwise))
 }
 
-/// For each local, the pairs (value of its drop flag, whether it holds a value) that may hold at
-/// a point; a local without a flag keeps its flag component false.
-struct FlagStates<'a> {
+/// The local, the target for `0` and the `otherwise` target of `terminator`, when it is a
+/// switch of a local between `0` and anything else.
+fn zero_switch(terminator: &Terminator) -> Option<(LocalId, BlockId, BlockId)> {
+    let TerminatorKind::SwitchInt {
+        value: Operand::Copy(value) | Operand::Move(value),
+        targets,
+        otherwise,
+    } = &terminator.kind
+    else {
+        return None;
+    };
+    match targets.as_slice() {
+        [(0, zero)] if zero != otherwise => Some((value.as_local()?, *zero, *otherwise)),
+        _ => None,
+    }
+}
+
+/// What a local may hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Content {
+    Nothing,
+    Value,
+    /// `null`, which owns nothing to drop.
+    Null,
+}
+
+const CONTENTS: [Content; 3] = [Content::Nothing, Content::Value, Content::Null];
+
+/// The bit of the state (flag value, content) of `local`.
+fn bit(local: LocalId, flag: bool, content: Content) -> usize {
+    local.index() * 6 + usize::from(flag) * 3 + content as usize
+}
+
+/// Whether `local` may hold `content`, whatever its flag.
+fn may_hold(state: &BitSet, local: LocalId, content: Content) -> bool {
+    [false, true]
+        .iter()
+        .any(|flag| state.contains(bit(local, *flag, content)))
+}
+
+/// One step of a location that the verification checks, before it applies.
+#[derive(Debug, Clone, Copy)]
+enum Step {
+    /// A use of a path of the local.
+    Use(LocalId),
+    /// A write of a whole new value to the local.
+    Overwrite(LocalId),
+    StorageDead(LocalId),
+}
+
+/// For each local, the states (value of its drop flag, what it holds) that may hold at a point;
+/// a local without a flag keeps its flag component false.
+struct DropStates<'a> {
     data: &'a MoveData,
     body: &'a Body,
+    types: &'a TypeTable,
     /// The local each flag guards.
     guards: &'a HashMap<LocalId, LocalId>,
 }
 
-impl FlagStates<'_> {
-    /// Maps each possible pair of `local` through `update`.
+impl DropStates<'_> {
+    /// Maps each possible state of `local` through `update`.
     fn update(
         &self,
         state: &mut BitSet,
         local: LocalId,
-        update: impl Fn(bool, bool) -> (bool, bool),
+        update: impl Fn(bool, Content) -> (bool, Content),
     ) {
         let mut next = Vec::new();
         for flag in [false, true] {
-            for initialized in [false, true] {
-                if state.remove(pair(local, flag, initialized)) {
-                    next.push(update(flag, initialized));
+            for content in CONTENTS {
+                if state.remove(bit(local, flag, content)) {
+                    next.push(update(flag, content));
                 }
             }
         }
-        for (flag, initialized) in next {
-            state.insert(pair(local, flag, initialized));
+        for (flag, content) in next {
+            state.insert(bit(local, flag, content));
         }
     }
 
@@ -378,11 +475,15 @@ impl FlagStates<'_> {
         self.data.paths[path].place.local
     }
 
+    /// Applies the effects of `location` (the statement `statement`, or the block's terminator
+    /// when it is `None`) in evaluation order, calling `check` with the state before each step
+    /// it verifies.
     fn apply_location(
         &self,
         state: &mut BitSet,
         location: Location,
         statement: Option<&Statement>,
+        check: &mut impl FnMut(&BitSet, Step),
     ) {
         if let Some(Statement {
             kind: StatementKind::Assign(place, rvalue),
@@ -394,54 +495,107 @@ impl FlagStates<'_> {
             {
                 if let Some(local) = self.guards.get(&flag) {
                     let value = *value;
-                    self.update(state, *local, |_, initialized| (value, initialized));
+                    self.update(state, *local, |_, content| (value, content));
                     return;
                 }
             }
         }
         for effect in self.data.effects(location) {
             match effect {
-                Effect::Use { .. } => {}
+                Effect::Use { path, .. } => check(state, Step::Use(self.local_of(*path))),
                 Effect::Move(out) => {
                     let local = self.local_of(self.data.moves[*out].path);
-                    self.update(state, local, |flag, _| (flag, false));
+                    self.update(state, local, |flag, _| (flag, Content::Nothing));
                 }
                 Effect::Init(init) => {
                     let path = self.data.inits[*init].path;
                     if self.data.paths[path].parent.is_none() {
                         let local = self.local_of(path);
-                        self.update(state, local, |flag, _| (flag, true));
+                        check(state, Step::Overwrite(local));
+                        self.update(state, local, |flag, _| (flag, Content::Value));
                     }
                 }
                 Effect::StorageLive(start) => {
                     let local = self.data.storage_starts[*start].local;
-                    self.update(state, local, |flag, _| (flag, false));
+                    self.update(state, local, |flag, _| (flag, Content::Nothing));
                 }
                 Effect::StorageDead(local) => {
-                    self.update(state, *local, |flag, _| (flag, false));
+                    check(state, Step::StorageDead(*local));
+                    self.update(state, *local, |flag, _| (flag, Content::Nothing));
+                }
+            }
+        }
+        if statement.is_none() {
+            let terminator = &self.body.blocks[location.block].terminator;
+            if let TerminatorKind::Drop { place, .. } = &terminator.kind {
+                if let Some(local) = place.as_local() {
+                    self.update(state, local, |flag, _| (flag, Content::Nothing));
                 }
             }
         }
     }
+
+    /// The nullable local whose tag `block` switches on, as `_t = discriminant _l` followed by a
+    /// switch of `_t` between `0` and anything else: the local and the target where it is `null`.
+    fn tag_switch(&self, block: BlockId) -> Option<(LocalId, BlockId)> {
+        let data = &self.body.blocks[block];
+        let (tag, null, _) = zero_switch(&data.terminator)?;
+        let StatementKind::Assign(place, rvalue) = &data.statements.last()?.kind else {
+            return None;
+        };
+        let Rvalue::Discriminant(tested) = rvalue.as_ref() else {
+            return None;
+        };
+        let local = tested.as_local()?;
+        let nullable = matches!(self.body.locals[local].ty, Type::Nullable(_));
+        (place.as_local() == Some(tag) && nullable).then_some((local, null))
+    }
 }
 
-impl Analysis for FlagStates<'_> {
+impl Analysis for DropStates<'_> {
     fn domain_size(&self) -> usize {
-        self.body.locals.len() * 4
+        self.body.locals.len() * 6
     }
 
     fn initialize_boundary(&self, state: &mut BitSet) {
         for (local, declaration) in self.body.locals.iter() {
             let initialized = matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture);
-            state.insert(pair(local, false, initialized));
+            let content = if initialized {
+                Content::Value
+            } else {
+                Content::Nothing
+            };
+            state.insert(bit(local, false, content));
         }
     }
 
     fn apply_statement(&self, state: &mut BitSet, statement: &Statement, location: Location) {
-        self.apply_location(state, location, Some(statement));
+        self.apply_location(state, location, Some(statement), &mut |_, _| {});
     }
 
     fn apply_terminator(&self, state: &mut BitSet, _: &Terminator, location: Location) {
-        self.apply_location(state, location, None);
+        self.apply_location(state, location, None, &mut |_, _| {});
+    }
+
+    /// A switch on a guarding flag lets only the states whose flag matches the edge through,
+    /// and a nullable whose tag is `0` holds `null`.
+    fn apply_edge(&self, state: &mut BitSet, from: BlockId, to: BlockId) {
+        let terminator = &self.body.blocks[from].terminator;
+        if let Some((flag, _, otherwise)) = flag_switch(self.body, terminator) {
+            if let Some(local) = self.guards.get(&flag) {
+                let set = to == otherwise;
+                for content in CONTENTS {
+                    state.remove(bit(*local, !set, content));
+                }
+            }
+        }
+        if let Some((local, null)) = self.tag_switch(from) {
+            if to == null && prism_mir::needs_drop(&self.body.locals[local].ty, self.types) {
+                self.update(state, local, |flag, content| match content {
+                    Content::Value => (flag, Content::Null),
+                    other => (flag, other),
+                });
+            }
+        }
     }
 }

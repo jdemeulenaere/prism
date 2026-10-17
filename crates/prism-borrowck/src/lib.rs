@@ -69,9 +69,10 @@ pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
 }
 
 /// Checks the drops of an elaborated file (D15 of `borrowck-moves`): every drop of a whole local
-/// finds it initialized on every path reaching it, and every drop flag that guards a drop is
-/// true exactly when its local holds a value. Returns one line per violation, empty when the
-/// elaboration is sound. Only the tests of the CLI run it, over every passing fixture and
+/// and every use finds it holding a value on every path reaching it (so no value is dropped
+/// twice or used after its drop), no value that needs a drop is lost to a new assignment, the end
+/// of its storage or the return, and every drop flag that guards a drop is true exactly when its
+/// local holds a value. Returns one line per violation, empty when the elaboration is sound. Only the tests of the CLI run it, over every passing fixture and
 /// example: it is the only check of elaboration before the backend executes it.
 pub fn verify_elaborated(file: &MirFile) -> Vec<String> {
     let mut violations = Vec::new();

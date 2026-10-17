@@ -2,7 +2,7 @@
 //! elaborated MIR, the validator and `verify_elaborated`.
 
 use prism_borrowck::{check_file, verify_elaborated};
-use prism_mir::{MirFile, MirPhase, StatementKind};
+use prism_mir::{LocalId, MirFile, MirPhase, Place, Statement, StatementKind, TerminatorKind};
 
 /// The MIR of `source`, a file `main` that must typecheck.
 fn lower(source: &str) -> MirFile {
@@ -221,4 +221,81 @@ fn verify_reports_a_flag_that_is_not_cleared_by_a_move() {
         "{}",
         violations
     );
+}
+
+/// The body of function `name` in `file`.
+fn body_mut<'a>(file: &'a mut MirFile, name: &str) -> &'a mut prism_mir::Body {
+    let id = file
+        .bodies
+        .ids()
+        .find(|id| file.body_name(*id) == format!("main::{}", name))
+        .unwrap();
+    &mut file.bodies[id]
+}
+
+/// The violations of `file` after replacing the first drop of `f` by a jump to its target.
+fn violations_without_first_drop(mut file: MirFile) -> String {
+    let body = body_mut(&mut file, "f");
+    let block = body
+        .blocks
+        .iter_mut()
+        .find(|(_, block)| matches!(block.terminator.kind, TerminatorKind::Drop { .. }))
+        .map(|(_, block)| block)
+        .unwrap();
+    let TerminatorKind::Drop { target, .. } = block.terminator.kind else {
+        unreachable!()
+    };
+    block.terminator.kind = TerminatorKind::Goto(target);
+    verify_elaborated(&file).join("\n")
+}
+
+#[test]
+fn verify_reports_a_use_after_a_drop() {
+    // `s = s` read `s` after dropping its old value before the lowering moved it first.
+    let mut file = elaborate("fun f() { var s = \"a\"; s = \"b\" }\n");
+    let body = body_mut(&mut file, "f");
+    let (_, after_drop) = body.blocks.iter_mut().nth(1).unwrap();
+    let span = after_drop.statements[0].span;
+    after_drop.statements.insert(
+        0,
+        Statement {
+            kind: StatementKind::Read(Place::local(LocalId(1))),
+            span,
+        },
+    );
+    let violations = verify_elaborated(&file).join("\n");
+    assert!(
+        violations.contains("main::f: bb1 uses _1, which may hold no value there"),
+        "{}",
+        violations
+    );
+}
+
+#[test]
+fn verify_reports_leaked_values() {
+    let returned = violations_without_first_drop(elaborate("fun f(s: String) {}\n"));
+    assert!(
+        returned.contains("main::f: bb1 returns while the argument _1 may still hold a value"),
+        "{}",
+        returned
+    );
+    let ended = violations_without_first_drop(elaborate("fun f() { val s = \"a\" }\n"));
+    assert!(
+        ended.contains("main::f: bb1 ends the storage of _1, which may still hold a value there"),
+        "{}",
+        ended
+    );
+    let overwritten =
+        violations_without_first_drop(elaborate("fun f() { var s = \"a\"; s = \"b\" }\n"));
+    assert!(
+        overwritten.contains("main::f: bb1 assigns _1, which may still hold a value there"),
+        "{}",
+        overwritten
+    );
+}
+
+#[test]
+fn verify_accepts_a_null_nullable_that_is_not_dropped() {
+    // The temporary holding `n` is moved out on the non-null path and owns nothing on the other.
+    elaborate("fun f(n: String?): String = n ?: \"anon\"\n");
 }
