@@ -554,7 +554,7 @@ mod tests {
         assert!(res1.is_err());
         let err1 = res1.unwrap_err();
         assert!(err1.message.contains("borrowed reference types"));
-        assert!(err1.message.contains("zero-cost memory invariant"));
+        assert!(err1.message.contains("zero-cost memory-safety invariant"));
 
         let src2 = r#"
             struct MutableRefHolder(val ptr: &mut Int)
@@ -563,6 +563,27 @@ mod tests {
         assert!(res2.is_err());
         let err2 = res2.unwrap_err();
         assert!(err2.message.contains("borrowed reference types"));
+    }
+
+    #[test]
+    fn test_reject_stored_borrows_in_payloads_and_nested_types() {
+        // (source, column of the borrow the error points at)
+        for (src, column) in [
+            ("enum Slot { Some(&String), Empty }", 18),
+            ("struct A { val x: (&String)? }", 20),
+            ("struct B(val x: Heap<&Int>)", 22),
+            ("enum E { X((&Int)?) }", 13),
+        ] {
+            let err = parse_source(src).expect_err(src);
+            assert_eq!(err.code, "E2001", "{src}");
+            assert!(err.message.contains("borrowed reference types"), "{err}");
+            assert_eq!(err.span.column, column, "{src}");
+        }
+        // A function value stores no borrow; its parameters only borrow during a call.
+        assert!(
+            parse_source("struct B { val onClick: (&Int) -> Unit, val pick: (&Int) -> &Int }")
+                .is_ok()
+        );
     }
 
     #[test]

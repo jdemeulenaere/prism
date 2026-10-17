@@ -1,0 +1,4 @@
+// expect: ok
+val LIMIT = 10
+val REF: &Int = &LIMIT
+fun f(): &Int = REF

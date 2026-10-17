@@ -47,9 +47,9 @@ A struct or enum MUST be `Copy` only when it declares `: Copy`, and `Clone` only
 - **WHEN** `struct Id : Copy { val v: UInt64 }` is declared and no struct or enum `UInt64` is in scope
 - **THEN** the type checker emits `E4016` naming the field `v`
 
-#### Scenario: Borrows in enum payloads
-- **WHEN** `enum A : Copy { X(&Int) }` and `enum B : Copy { Y(&mut Int) }` are declared
-- **THEN** `A` typechecks successfully and the type checker emits `E4016` for `B`'s payload `&mut Int`
+#### Scenario: Shared borrows are Copy
+- **WHEN** a file declares `val LIMIT = 10`, `val REF: &Int = &LIMIT` and `fun f(): &Int = REF` at top level
+- **THEN** the file typechecks successfully, because reading a `&Int` copies the borrow
 
 ### Requirement: Built-In Clone Types
 Every `Copy` type and `String` MUST be `Clone`, and `T?` and `Heap<T>` MUST be `Clone` exactly when `T` is. `&mut T`, function types, type parameters and type names with no declaration in scope MUST NOT be `Clone`.

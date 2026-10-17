@@ -244,11 +244,23 @@ The grammar MUST mandate parentheses around `if` conditions and `when` subjects 
 - **THEN** `status` is parsed as the subject and the subsequent block is parsed as pattern branches
 
 ### Requirement: Struct Field Borrow Prohibition
-Struct declarations MUST NOT declare fields with borrowed reference types (`&T` or `&mut T`), enforcing Invariant 4 at parse time.
+Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T` or `&mut T`), including one nested in `?` or a type argument, enforcing the zero-cost memory-safety invariant at parse time. A borrow inside a function type MUST be accepted, because it exists only for the duration of a call.
 
 #### Scenario: Struct field declaring borrowed reference rejected
 - **WHEN** a struct definition declares a field with reference type (`struct View { val data: &String }`)
 - **THEN** the parser emits a compile error rejecting borrowed references in structs
+
+#### Scenario: Enum payload declaring borrowed reference rejected
+- **WHEN** an enum variant has a payload of reference type (`enum Slot { Some(&String), Empty }`)
+- **THEN** the parser reports `E2001`, pointing at the borrow
+
+#### Scenario: Borrow nested in a field type rejected
+- **WHEN** a struct field or enum payload has type `(&String)?` or `Heap<&Int>` (`struct A { val x: (&String)? }`, `struct B(val x: Heap<&Int>)`, `enum E { X((&Int)?) }`)
+- **THEN** the parser reports `E2001`, pointing at the nested borrow
+
+#### Scenario: Function-typed field with borrowed parameters accepted
+- **WHEN** a struct declares `val onClick: (&User) -> Unit` or `val pick: (&Int) -> &Int`
+- **THEN** the declaration parses
 
 ### Requirement: Contextual Keyword Identifier Permissibility
 Modifiers such as `compose` MUST function contextually, permitting their use as regular identifiers in member access and parameter declarations.
@@ -462,7 +474,7 @@ Prism chooses Kotlin-like ergonomics combined with value ownership semantics to 
 - **Newlines end statements.** A `(` after a newline is not a call, and `return` before a newline, or before a token that cannot start an expression (`}`, `else`, `,`, `)`, end of file), returns unit. Mandatory semicolons were rejected for ergonomics.
 - **Multi-statement closures.** Closure bodies are blocks, because single-expression closures cannot hold setup logic.
 - **`compose` is a soft keyword.** It is a modifier only directly before `fun`, so common API names such as `pipeline.compose()` stay usable.
-- **Borrowed struct fields are rejected in the parser.** Enforcing the zero-cost memory invariant at AST construction means no struct can ever carry a lifetime dependency.
+- **Borrowed struct fields are rejected in the parser.** Enforcing the zero-cost memory invariant at AST construction means no struct can ever carry a lifetime dependency. The same holds for enum payloads and for a borrow nested in `?` or a type argument (`(&String)?`, `Heap<&Int>`), which an earlier check that only looked at a field's outermost type let through. A function type's parameters and return type may mention borrows: a function value stores none, and borrows only during a call.
 - **`package` declaration versus `package` modifier.** A lookahead (`is_package_decl_ahead`) treats `package` followed by a dotted name as a declaration and `package fun` (or `struct`, `enum`, `val`) as visibility.
 - **A fixed nesting limit (256) instead of a growable stack.** Recursive descent overflowed the stack on deep input and aborted the process. A fixed limit keeps the diagnostic the same for every build of the compiler and bounds the tree for every later recursive pass; growing the stack would need a dependency with a build script.
 - **Fail-fast errors.** The parser stops at the first syntax error with an exact span and never panics. Multi-error recovery is left for LSP support: it needs error nodes in the AST and synchronization points built on the newline and separator rules, and resynchronizing per declaration would change what `parse_source` returns (`harden-parser-grammar`).

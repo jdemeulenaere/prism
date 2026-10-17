@@ -518,12 +518,7 @@ impl Parser {
                 let (fname, _) = self.expect_ident()?;
                 self.expect(TokenKind::Colon)?;
                 let fty = self.parse_type()?;
-                if matches!(fty.kind, TypeKind::Reference { .. }) {
-                    return Err(ParseError::new(
-                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (zero-cost memory invariant)",
-                        fty.span,
-                    ));
-                }
+                reject_stored_borrow(&fty, "Struct fields")?;
                 let f_end = fty.span;
                 fields.push(StructField {
                     is_var,
@@ -569,12 +564,7 @@ impl Parser {
                 let (fname, _) = self.expect_ident()?;
                 self.expect(TokenKind::Colon)?;
                 let fty = self.parse_type()?;
-                if matches!(fty.kind, TypeKind::Reference { .. }) {
-                    return Err(ParseError::new(
-                        "Struct fields cannot have borrowed reference types ('&T' or '&mut T'); use Heap<T> or own by value (zero-cost memory invariant)",
-                        fty.span,
-                    ));
-                }
+                reject_stored_borrow(&fty, "Struct fields")?;
                 let f_end = fty.span;
                 fields.push(StructField {
                     is_var,
@@ -624,7 +614,9 @@ impl Parser {
             if self.peek_kind() == &TokenKind::LParen {
                 self.bump();
                 while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-                    vfields.push(self.parse_type()?);
+                    let payload = self.parse_type()?;
+                    reject_stored_borrow(&payload, "Enum variant payloads")?;
+                    vfields.push(payload);
                     if self.peek_kind() == &TokenKind::Comma {
                         self.bump();
                     } else {
@@ -1764,5 +1756,31 @@ impl Parser {
             ));
         }
         Ok(initializer)
+    }
+}
+
+/// Rejects a struct field or enum payload type that stores a borrow, so no value can outlive what
+/// it borrows (the zero-cost memory-safety invariant). A borrow nested in `?` or a type argument
+/// (`(&String)?`, `Heap<&Int>`) is stored too. One inside a function type (`(&User) -> Unit`) is
+/// not: it exists only for the duration of a call.
+fn reject_stored_borrow(ty: &Type, members: &str) -> Result<(), ParseError> {
+    match stored_borrow(ty) {
+        Some(borrow) => Err(ParseError::new(
+            format!(
+                "{members} cannot have borrowed reference types ('&T' or '&mut T'), even inside '?' or a type argument; use Heap<T> or own by value (zero-cost memory-safety invariant)"
+            ),
+            borrow.span,
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The first borrow that a value of type `ty` would store, outside any function type.
+fn stored_borrow(ty: &Type) -> Option<&Type> {
+    match &ty.kind {
+        TypeKind::Reference { .. } => Some(ty),
+        TypeKind::Nullable(inner) => stored_borrow(inner),
+        TypeKind::Named { type_args, .. } => type_args.iter().find_map(stored_borrow),
+        TypeKind::Unit | TypeKind::Function { .. } => None,
     }
 }

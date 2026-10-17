@@ -1,0 +1,6 @@
+// expect: ok
+struct User { val name: String }
+struct Button {
+    val onClick: (&User) -> Unit
+    val pick: (&Int) -> &Int
+}
