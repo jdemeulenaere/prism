@@ -164,6 +164,20 @@ impl Builder<'_> {
         }
     }
 
+    /// Records that `local`, a temporary of any open scope, was moved out of as a whole by the
+    /// lowering itself on every path where it holds a value, so its scope does not drop it.
+    pub(super) fn record_moved_in_any_scope(&mut self, local: LocalId) {
+        if self.locals[local].kind != LocalKind::Temporary {
+            return;
+        }
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(scoped) = scope.locals.iter_mut().find(|s| s.local == local) {
+                scoped.moved = true;
+                return;
+            }
+        }
+    }
+
     /// Whether `local` is a temporary owned by the innermost scope.
     pub(super) fn is_temporary_of_innermost_scope(&self, local: LocalId) -> bool {
         self.locals[local].kind == LocalKind::Temporary

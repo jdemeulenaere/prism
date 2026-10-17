@@ -244,6 +244,11 @@ impl Builder<'_> {
             self.expression_into(destination, chain);
         } else if let Some(destination) = destination {
             let operand = self.operand(chain);
+            // The body's temporary was created before the first test, so it belongs to the
+            // enclosing scope; it is moved here or never assigned, so it needs no drop (D6).
+            if let Some(local) = operand.place().and_then(Place::as_local) {
+                self.record_moved_in_any_scope(local);
+            }
             self.assign(destination.clone(), Rvalue::WrapNullable(operand), span);
         }
         let context = self.chains.pop().expect("the chain is open");

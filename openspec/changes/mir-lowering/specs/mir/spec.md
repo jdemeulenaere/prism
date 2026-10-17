@@ -112,6 +112,10 @@ A `?.` chain MUST read the tag of each nullable it looks into, give `null` as so
 - **WHEN** `struct User { val name: String }`, `fun next(): Int = 1` and `fun User.greet(n: Int): Int = n` are declared and `fun f(u: User?): Int? = u?.greet(next())` is lowered
 - **THEN** `next` is called only on the edge where `u` is present
 
+#### Scenario: A wrapped chain value is moved, not dropped
+- **WHEN** `struct User { val name: String }` is declared and `fun f(u: User?): String? = u?.name?.clone()` is lowered
+- **THEN** the result of `clone` is held in a temporary that is moved, wrapped, into the return place, and that temporary is dropped on neither path
+
 ### Requirement: When Branches Test Patterns in Order
 A `when` MUST evaluate its subject once. A `when` whose patterns are all payload-free variants or `else` MUST switch on the subject's discriminant; any other `when` MUST test its patterns in order. When no pattern matches, an exhaustive `when` without `else` MUST reach an unreachable terminator.
 
