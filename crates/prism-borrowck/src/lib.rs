@@ -16,6 +16,7 @@
 //! borrows. Their errors join [`BorrowErrorKind`] with the next `E5xxx` codes.
 
 pub mod analyses;
+pub mod borrows;
 pub mod captures;
 mod check;
 pub mod dataflow;
@@ -24,6 +25,7 @@ mod elaborate;
 mod error;
 pub mod location;
 pub mod move_paths;
+pub mod places;
 #[cfg(test)]
 mod test_bodies;
 pub mod uses;
