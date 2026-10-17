@@ -163,7 +163,7 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 
 #### Scenario: Block statement evaluation and Unit typing
 - **WHEN** evaluating a block of statements `{ s1; s2 }`
-- **THEN** assignment statements evaluate to `Unit`, an empty block `{}` evaluates to `Unit`, and the block's final expression determines the block type
+- **THEN** a block without a tail expression (an empty block `{}`, or one ending in a declaration, an assignment or a loop) evaluates to `Unit`, and otherwise the tail expression determines the block type
 
 #### Scenario: Return statement type verification
 - **WHEN** a `return expr` statement occurs inside a function declared with return type `T`
@@ -428,6 +428,21 @@ A file MUST be able to receive and pass along a value whose nominal type is defi
 - **WHEN** a file that imports only `/shop/api` declares `fun total(o: Order): Int = o.price`, or uses `Order` in any other annotation (a local, a return type, a struct field)
 - **THEN** the type checker emits `E4014` at the annotation, naming `Order`, `shop/models` and `import /shop/models`, and reports no further error for uses of `o`
 
+### Requirement: Half-Open Ranges
+A half-open range `a..<b` MUST be typed exactly like a closed range `a..b`: both operands are checked as `Int`, and the result has the built-in `Range` type. An `in a..<b` pattern in a `when` MUST be checked like `in a..b`, with both bounds checked against the subject's type.
+
+#### Scenario: Half-open range has the Range type
+- **WHEN** `fun f(n: Int) { val r = 0..<n }` is checked
+- **THEN** the program typechecks without errors and `r` has the built-in `Range` type
+
+#### Scenario: Non-Int bound rejected
+- **WHEN** `fun f() { val r = 0..<"s" }` is checked
+- **THEN** the type checker emits `E4002`
+
+#### Scenario: Half-open range pattern
+- **WHEN** `fun f(x: Int): String = when (x) { in 0..<10 -> "small", else -> "large" }` is checked
+- **THEN** the program typechecks without errors
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -462,3 +477,7 @@ Decisions from `shadowing-and-import-paths` (decided by the user):
 - **Top-level declarations shadow imports.** Lookups check module scope before the import layer, so a file's own `helper` wins over an imported one for values, callees and type names, and also resolves what would otherwise be an `E4012` ambiguity, as a file's own declarations win over star imports in Kotlin. Two declarations in the same scope still report `E4010`.
 - **Naming a type requires importing its module** (extending D9). A type name known only through an import's signature reports `E4014` with the import hint at the annotation, and binds to the error type so the annotated value causes no further errors.
 
+Decisions from `statements-and-loops`:
+
+- **One `Range` type for both range operators.** `a..<b` and `a..b` both have the built-in `Range` type, and `in a..<b` patterns are checked like `in a..b`. Whether the end is included is a property of the runtime value, so `when` patterns, `for` loops and future APIs treat both alike. Two range types were rejected as duplicating every API.
+- **A block without a tail is `Unit`.** When a value is expected, the mismatch is reported at the block's last statement, where the value is missing, with the code of the expectation's site (`E4005` for a function body).

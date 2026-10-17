@@ -42,7 +42,7 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 ### Next up: the road to the borrow checker
 Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is one OpenSpec change, in this order; the decisions behind them are in [`docs/architecture.md`](docs/architecture.md) §1 (pipeline) and §3 (memory model).
 
-1. [ ] `statements-and-loops`: a `Statement` AST type (`Block` with an explicit tail expression, assignment as a statement); `while`, `do`/`while`, `for (x in range)` over the built-in `Range`; `break`/`continue` as `Nothing`-typed expressions with `E4015` outside a loop; the `..<` half-open range operator.
+1. [x] `statements-and-loops`: a `Statement` AST type (`Block` with an explicit tail expression, assignment as a statement); `while`, `do`/`while`, `for (x in range)` over the built-in `Range`; `break`/`continue` as `Nothing`-typed expressions with `E4015` outside a loop; the `..<` half-open range operator.
 2. [ ] `value-semantics`: opt-in `: Copy` on structs and enums, checked structurally and recorded in the ABI; the built-in `Copy` table (`String` is move-only); a move's source must be a whole owned local; top-level `var` removed.
 3. [ ] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it.
 4. [ ] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site.
@@ -59,8 +59,11 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] Trait conformance syntax: with extension-only methods, conformances need their own block (Swift's `extension T : P`, Rust's `impl P for T`).
 - [ ] Field visibility (`private var balance`), the encapsulation boundary for extension functions.
 - [ ] Static and companion functions (`User.create()`).
-- [ ] Loop labels (`break@outer`).
+- [ ] Loop labels (`break@outer`) (deferred by `statements-and-loops`).
 - [ ] Deferred `val` initialization (`val x: Int` assigned once on every path).
+- [ ] Iterating anything other than `Range` in `for` loops, which needs generics and an iteration trait (deferred by `statements-and-loops`).
+- [ ] Decide whether `while (true)` with no `break` should have type `Nothing`, so a non-`Unit` function needs no `return` after it; this would only relax the current rule (non-goal of `statements-and-loops`).
+- [ ] Decide whether an unbraced loop or `if` body may itself be a loop (`for (i in a) for (j in b) g(i, j)`, valid in Kotlin); today an unbraced body is an expression or an assignment only (from `statements-and-loops`).
 - [ ] Possible relaxation: partial moves out of owned locals, if destructuring proves insufficient.
 
 ### Other Phase 2 items

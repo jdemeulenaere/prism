@@ -304,7 +304,7 @@ The type grammar MUST accept function types `(A, B) -> R`, including the zero-pa
 - **THEN** `a` is a nullable function type, and `b` is a function type returning `Unit?`
 
 ### Requirement: Declarations in Statement Position Only
-A local `val` or `var` declaration MUST appear only as a statement directly inside a block or closure body, and the parser MUST reject it anywhere else with `E2001`. That includes call arguments, operands, assigned values, conditions, returned values, expression function bodies, and unbraced `if`/`else` or `when` branch bodies. A declaration's initializer MUST NOT be an assignment.
+A local `val` or `var` declaration MUST appear only as a statement directly inside a block or closure body, and the parser MUST reject it anywhere else with `E2001`. That includes call arguments, operands, assigned values, conditions, returned values, expression function bodies, and unbraced `if`/`else`, `when` or loop bodies. A declaration's initializer MUST NOT be an assignment.
 
 #### Scenario: Declaration as a call argument rejected
 - **WHEN** parsing `fun f() { g(val z = 1) }`
@@ -317,6 +317,10 @@ A local `val` or `var` declaration MUST appear only as a statement directly insi
 #### Scenario: Declaration as an unbraced branch body rejected
 - **WHEN** parsing `fun f(c: Bool): Int {\nif (c) val x = 1\nreturn x\n}`
 - **THEN** the parser reports `E2001` at `val`, so `x` cannot leak out of the conditional
+
+#### Scenario: Declaration as an unbraced loop body rejected
+- **WHEN** parsing `fun f(c: Bool) {\nwhile (c) val x = 1\n}`
+- **THEN** the parser reports `E2001` at `val`
 
 #### Scenario: Declaration in a braced branch accepted
 - **WHEN** parsing `if (c) { val x = 1 }`
@@ -372,6 +376,54 @@ Two statements in a block or closure body MUST be separated by a newline or `;`.
 - **WHEN** parsing `when (x) { 0 -> a 1 -> b }`
 - **THEN** the parser reports `E2001`, while `when (x) { 0 -> a, 1 -> b }` parses
 
+### Requirement: Blocks Hold Statements and an Optional Tail
+A block or closure body MUST parse into a sequence of statements followed by an optional tail expression, which gives the block its value. The tail MUST be the block's last item when that item is an expression; a block ending in a declaration, an assignment or a loop, and an empty block, have no tail. A `;` after the last expression does not change this.
+
+#### Scenario: Block ending in an expression
+- **WHEN** parsing `fun f(): Int { val a = 1; a + 1 }`
+- **THEN** the body has one statement, `val a = 1`, and the tail `a + 1`
+
+#### Scenario: Block ending in an assignment
+- **WHEN** parsing `fun f() { var x = 0; x = 1 }`
+- **THEN** the body has two statements and no tail
+
+#### Scenario: Trailing semicolon keeps the tail
+- **WHEN** parsing `fun f(): Int { 1; }`
+- **THEN** the body has no statements and the tail `1`
+
+### Requirement: Assignment Is a Statement
+An assignment MUST be a statement, never an expression. It MAY appear as a statement in a block or closure body, or as the unbraced body of an `if`/`else` branch, a `when` branch, or a `while` or `for` loop, where it forms a block with no tail. Anywhere else the parser MUST report `E2001`.
+
+#### Scenario: Assignments as unbraced branch bodies
+- **WHEN** parsing `if (c) x = 1 else x = 2` and `when (n) { 0 -> x = 3, else -> x = 4 }` inside a function body
+- **THEN** each branch body is a block holding the assignment, with no tail
+
+#### Scenario: Parenthesized assignment as a value rejected
+- **WHEN** parsing `fun f() { var x = 0; val y = (x = 1) }` or `fun f() { var x = 0; g((x = 1)) }`
+- **THEN** the parser reports `E2001`, while `g(x = 1)` still parses as a named argument
+
+### Requirement: Half-Open Range Operator
+The lexer MUST read `..<` as one token, and the parser MUST give it the precedence of `..`. `a..<b` denotes the range from `a` up to but excluding `b`. A newline before `..<` ends the expression, as for `..`.
+
+#### Scenario: Half-open range tokens
+- **WHEN** tokenizing `4..<10`
+- **THEN** the tokenizer emits `Int(4)`, `DotDotLess` and `Int(10)`, while `4..10` still emits `Int(4)`, `DotDot` and `Int(10)`
+
+#### Scenario: Half-open range precedence
+- **WHEN** parsing `0..<n - 1`
+- **THEN** arithmetic binds tighter than the range: `(0 ..< (n - 1))`
+
+#### Scenario: Half-open range in a when pattern
+- **WHEN** parsing `when (x) { in 0..<10 -> "small", else -> "large" }`
+- **THEN** the first branch's pattern is an `in` range that excludes its end
+
+### Requirement: Reserved Loop Keywords
+`while`, `do`, `for`, `break` and `continue` MUST be reserved keywords. Using one as an identifier (a variable, parameter, function, field or named argument) MUST be rejected with `E2001`.
+
+#### Scenario: Loop keyword as a variable name rejected
+- **WHEN** parsing `fun f() { val for = 1 }`
+- **THEN** the parser reports `E2001`
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -392,7 +444,14 @@ Decisions from `harden-parser-grammar`:
 
 - **A brace's meaning comes from its position, not from lookahead.** `{` is a block only as a function body, an `if`/`else` or `when` branch body, or at the start of a statement; everywhere else it is a closure, with zero parameters when it has no `->` header, and its body is always a block. Lookahead for a parameter header used to decide, so `run { 1 }` evaluated eagerly in the caller and `takesInt { 42 }` typechecked. Restricting closures to trailing-lambda and argument position was rejected because `val f = { 1 }` would then differ from `g({ 1 })`.
 - **Statement-position braces are scopes, unlike Kotlin.** In Kotlin a statement `{ … }` is a lambda that is never called. Prism keeps it as a nested scope, the natural way to end a borrow early under the zero-cost memory invariant. As in Kotlin, `fun f() = { 1 }` returns a closure.
-- **Declarations are statements, without a separate statement type.** `val`/`var` parse only directly inside a block or closure body, and a declaration's initializer is parsed above assignment precedence so `val a = b = c` is a chained assignment. The AST keeps `LocalVar` inside `BlockExpr.stmts`; a `Stmt` type is left to the typed IR. Kotlin's unbraced declaration as a branch body was rejected because Prism's `if` is an expression and the declaration's scope would leak.
+- **Declarations are statements.** `val`/`var` parse only directly inside a block or closure body, and a declaration's initializer is parsed above assignment precedence so `val a = b = c` is a chained assignment. Kotlin's unbraced declaration as a branch body was rejected because Prism's `if` is an expression and the declaration's scope would leak. (`statements-and-loops` replaced this change's choice to keep declarations inside `BlockExpr.stmts` with a `Statement` type; see below.)
 - **Kotlin's newline rule for operators.** Outside `( )` and `[ ]`, a newline before a binary operator ends the expression unless the operator is `.`, `?.`, `&&`, `||` or `?:`; inside them newlines are insignificant, and a `{` restores sensitivity. Making only `+`/`-` sensitive was rejected: `*`, `==` and `..` would still silently join lines.
 - **Separators between items on one line.** Statements need a newline or `;`, and struct fields, enum variants and `when` branches a newline, `,` or `;`, so `val a = 1 val b = 2` is an error rather than two statements; together with the newline rule, juxtaposition never silently means "two things".
 - **Function types carry `compose`.** `compose (A) -> R` is a distinct type from `(A) -> R`, written in the ABI string, because a composable content parameter is a different call contract. `() -> Unit?` returns `Unit?`; a nullable function type is `(() -> Unit)?`, as in Kotlin.
+
+Decisions from `statements-and-loops` (agreed with the user in the borrow-checker roadmap exploration):
+
+- **A `Statement` AST type and an explicit tail.** A block is `statements` plus an optional `tail` expression that gives its value. Loops are statements that are not expressions, so the AST models statements directly instead of leaving them to a later typed IR. Making the tail explicit means later stages (the typed tree, MIR lowering) never re-derive "is the last item the value?". The parser decides the tail: a final expression statement is the tail whether or not a `;` follows it, as in Kotlin. Rust's rule that `;` discards the value was rejected because Kotlin users don't expect `;` to change meaning.
+- **Assignment is a statement.** It's still allowed as an unbraced `if`/`else`, `when` or loop body, which keeps Kotlin forms such as `if (c) x = 1 else x = 2` working, as a one-statement block with no tail. Everywhere else, `=` in an expression is `E2001`. Keeping `Assign` as a `Unit`-typed expression was rejected because it would leave the statement-or-expression ambiguity in place.
+- **`..<` for half-open ranges.** It's Kotlin's own operator (since 1.9), at the precedence of `..`. Closed ranges only (`0..n - 1`) were rejected as off-by-one prone. Kotlin's `until` is an infix function there and would have to be a special-cased keyword here.
+- **Hard loop keywords.** `while`, `do`, `for`, `break` and `continue` are reserved, as in Kotlin. A soft keyword needs a following token to tell it apart, but `while (x)` would also read as a call.
