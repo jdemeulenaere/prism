@@ -293,8 +293,9 @@ fn module_path(node: &SourceNode) -> String {
         .join("/")
 }
 
-/// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 typechecking in
-/// topological SCC order, stopping at the first file with type errors.
+/// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 in topological SCC
+/// order: typechecking each file, stopping at the first file with type errors, and lowering each
+/// file that typechecks to MIR.
 fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
     let abis = extract_abis(graph)?;
 
@@ -304,7 +305,7 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
     for cluster in graph.topological_order() {
         for file_path in &cluster.files {
             let node = graph.get_node(file_path).expect("node must exist in graph");
-            let (_, errors) = typecheck_file(graph, &abis, file_path);
+            let (tree, errors) = typecheck_file(graph, &abis, file_path);
             if !errors.is_empty() {
                 let source = fs::read_to_string(file_path).unwrap_or_default();
                 return Err(WorkspaceError::Type {
@@ -313,6 +314,9 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
                     errors,
                 });
             }
+            // Phase 2 lowers each file that typechecks to MIR from its typed tree alone (D1 of
+            // `mir-lowering`). Nothing consumes it yet: the borrow checker will.
+            let _mir = prism_mir::lower_file(&tree);
 
             let abi = abis.get(file_path).expect("abi must exist");
             let package_str = if node.package.is_empty() {
