@@ -44,8 +44,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 9. Documentation and final checks
 
-- [ ] 9.1 In `docs/architecture.md` §4, "Method Call Evaluation Semantics": a by-value receiver (moved or copied) is evaluated before the arguments, a borrowed receiver's place first and its borrow after them (D10); keep the scenarios true. Verify the section still reads as planned runtime semantics.
-- [ ] 9.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/`, `prism dump-mir --elaborated` on each of them, and `openspec validate --all --strict`. Verify all pass.
+- [x] 9.1 In `docs/architecture.md` §4, "Method Call Evaluation Semantics": a by-value receiver (moved or copied) is evaluated before the arguments, a borrowed receiver's place first and its borrow after them (D10); keep the scenarios true. Verify the section still reads as planned runtime semantics.
+- [x] 9.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/`, `prism dump-mir --elaborated` on each of them, and `openspec validate --all --strict`. Verify all pass.
 
 ## Workflow follow-up
 

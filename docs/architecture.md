@@ -296,7 +296,7 @@ The type checker decides every implicit operation on a reference ([`references`]
 - **THEN** the `String` that `r` referred to is dropped and `v` is moved into its place, so the owner of that place sees `v`
 
 ### Requirement: Method Call Evaluation Semantics
-The type checker decides how each extension call passes its receiver (the `extension-functions` spec, from `extension-methods`). At runtime, a call `recv.name(args)` MUST evaluate `recv` first, then the arguments left to right, then borrow or move the receiver by the extension's mode and make the call. A temporary receiver MUST be dropped at the end of the statement. A `?.` call MUST evaluate its receiver once, and MUST evaluate no argument and give `null` when it is `null`.
+The type checker decides how each extension call passes its receiver (the `extension-functions` spec, from `extension-methods`). At runtime, a call `recv.name(args)` MUST evaluate `recv` first: a receiver the call takes by value (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, before the arguments, and a receiver the call borrows has its place evaluated then and is borrowed after the arguments. The arguments MUST be evaluated left to right, and then the call made. A temporary receiver MUST be dropped at the end of the statement. A `?.` call MUST evaluate its receiver once, and MUST evaluate no argument and give `null` when it is `null`.
 
 #### Scenario: Receiver evaluated before the arguments
 - **WHEN** `make().greet(next())` runs for `fun make(): User`, `fun next(): Int` and `fun User.greet(n: Int)`
@@ -305,6 +305,10 @@ The type checker decides how each extension call passes its receiver (the `exten
 #### Scenario: A mutable receiver is borrowed after the arguments
 - **WHEN** `v.push(v.size())` runs for `mut fun Stack.push(n: Int)` and `fun Stack.size(): Int`
 - **THEN** `v.size()` runs before `v` is borrowed mutably for `push`, which is what lets two-phase borrows accept it
+
+#### Scenario: A consuming receiver is moved before the arguments
+- **WHEN** `s.into(next())` runs for `consuming fun Stack.into(n: Int): Int` and `fun next(): Int`
+- **THEN** `s` is moved before `next()` is called, so an argument that uses `s` after it moved is rejected (`E5001`)
 
 #### Scenario: A safe call on null evaluates no argument
 - **WHEN** `u?.greet(next())` runs with `u` equal to `null`
