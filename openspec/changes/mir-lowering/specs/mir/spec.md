@@ -198,6 +198,10 @@ Each closure MUST be lowered to its own body whose captured bindings are capture
 - **WHEN** `fun f(s: String): Bool = s == "a"` is lowered
 - **THEN** the comparison is between a shared borrow of `s` and a shared borrow of a temporary holding `"a"`, and `s` is not moved
 
+#### Scenario: Comparing a value with a nullable one
+- **WHEN** `fun f(a: String, b: String?): Bool = a == b` is lowered, or `fun g(x: String?, y: String): Int = when (x) { y -> 1; else -> 2 }`
+- **THEN** the nullable operand is viewed through a test of its tag as an optional shared borrow, the other is borrowed where it lives and wrapped as non-null without a tag test, and neither is moved
+
 #### Scenario: String concatenation borrows its operands
 - **WHEN** `fun f(a: String, b: String): String = a + b` is lowered
 - **THEN** the return place is assigned the sum of a shared borrow of `a` and a shared borrow of `b`, and neither is moved

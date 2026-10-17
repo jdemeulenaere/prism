@@ -1,0 +1,51 @@
+module main
+fun main::g(_1: String?, _2: String): Int @2:1
+  local _0: Int (return)
+  local _1 x: String? (argument)
+  local _2 y: String (argument)
+  local _3: (&String)? (temporary)
+  local _4: Int (temporary)
+  local _5: &String (temporary)
+  local _6: Bool (temporary)
+  local _7: (&String)? (temporary)
+  local _8: &String (temporary)
+  bb0:
+    storage_live _3 @2:37
+    storage_live _4 @2:37
+    _4 = discriminant _1 @2:37
+    switch move _4 [0 -> bb2, otherwise -> bb1] @2:37
+  bb1:
+    storage_live _5 @2:37
+    _5 = &(_1 as payload) (operator) @2:37
+    _3 = wrap move _5 @2:37
+    storage_dead _5 @2:37
+    goto -> bb3 @2:37
+  bb2:
+    _3 = const null @2:37
+    goto -> bb3 @2:37
+  bb3:
+    storage_live _6 @2:48
+    storage_live _7 @2:48
+    storage_live _8 @2:48
+    _8 = &_2 (operator) @2:48
+    _7 = wrap move _8 @2:48
+    _6 = copy _3 == move _7 @2:48
+    storage_dead _8 @2:48
+    storage_dead _7 @2:48
+    switch move _6 [0 -> bb5, otherwise -> bb4] @2:48
+  bb4:
+    storage_dead _6 @2:48
+    _0 = const 1 @2:53
+    goto -> bb6 @2:37
+  bb5:
+    storage_dead _6 @2:48
+    _0 = const 2 @2:64
+    goto -> bb6 @2:37
+  bb6:
+    storage_dead _4 @2:37
+    storage_dead _3 @2:37
+    drop _2 -> bb7 @2:1
+  bb7:
+    drop _1 -> bb8 @2:1
+  bb8:
+    return @2:1

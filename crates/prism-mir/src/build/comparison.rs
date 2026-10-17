@@ -8,7 +8,7 @@
 use super::Builder;
 use crate::mir::{BorrowOrigin, Constant, Operand, Place, Projection, Rvalue};
 use prism_ast::Span;
-use prism_typed_tree::{BinaryOperator, ExpressionId, ExpressionKind, Type};
+use prism_typed_tree::{BinaryOperator, CoercionKind, ExpressionId, ExpressionKind, Type};
 
 /// The subject of a `when` with value patterns: its place and, when its type is not `Copy`, the
 /// place holding its (optional) borrow, evaluated once (D14).
@@ -92,6 +92,25 @@ impl Builder<'_> {
             Type::Nullable(inner) => {
                 let view_ty = shared(inner.as_ref().clone()).nullable();
                 let view = self.new_temporary(view_ty.clone(), span);
+                if let ExpressionKind::Coerce {
+                    value,
+                    kind: CoercionKind::WrapNullable,
+                } = expression.kind
+                {
+                    // A value that is never `null`, compared with a nullable one: its borrow,
+                    // wrapped, with no tag to test. A place is borrowed where it lives.
+                    let place = self.place(value);
+                    let borrow = self.new_temporary(shared(inner.as_ref().clone()), span);
+                    let rvalue = Rvalue::Borrow {
+                        mutable: false,
+                        origin: BorrowOrigin::Operator,
+                        place,
+                    };
+                    self.assign(Place::local(borrow), rvalue, span);
+                    let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow)));
+                    self.assign(Place::local(view), wrap, span);
+                    return Operand::Move(Place::local(view));
+                }
                 if let ExpressionKind::SafeNavigation { chain, .. } = expression.kind {
                     if self.expression(chain).kind.is_place() {
                         self.lower_chain(Some(&Place::local(view)), chain, &view_ty, true, span);
