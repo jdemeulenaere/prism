@@ -1,0 +1,15 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+struct main::Account @3:1
+  field 0 val owner: User
+fun main::User.toAccount(consuming this): Account @4:1
+  local %0 this: User (receiver)
+  construct main::Account: Account @4:43
+    field owner: move: User @4:51
+      local %0 this: User @4:51
+fun main::f(u: User): Account @5:1
+  local %0 u: User (parameter)
+  call main::User.toAccount: Account @5:27
+    receiver: move: User @5:27
+      local %0 u: User @5:27

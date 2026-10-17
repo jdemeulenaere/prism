@@ -1,0 +1,11 @@
+module main
+compose fun main::Label(): Unit @2:1
+  block: Unit @2:21
+fun main::log(): Unit @3:1
+  block: Unit @3:11
+compose fun main::Screen(): Unit @4:1
+  block: Unit @4:22
+    expression @5:5
+      call compose main::Label: Unit @5:5
+    expression @6:5
+      call main::log: Unit @6:5

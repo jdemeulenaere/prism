@@ -1,0 +1,27 @@
+module main
+struct main::Stack @2:1
+  field 0 var size: Int
+fun main::Stack.push(mut this, n: Int): Unit @3:1
+  local %0 this: &mut Stack (receiver)
+  local %1 n: Int (parameter)
+  block: Unit @3:28
+    assign @3:30
+      target: field 0 size: Int @3:30
+        deref: Stack @3:30
+          local %0 this: &mut Stack @3:30
+      value: binary +: Int @3:37
+        field 0 size: Int @3:37
+          deref: Stack @3:37
+            local %0 this: &mut Stack @3:37
+        local %1 n: Int @3:44
+fun main::main(): Unit @4:1
+  local %0 v: Stack (var)
+  block: Unit @4:12
+    let %0 v @5:5
+      construct main::Stack: Stack @5:13
+        field size: literal 0: Int @5:19
+    expression @6:5
+      call main::Stack.push: Unit @6:5
+        receiver: borrow mut (receiver): &mut Stack @6:5
+          local %0 v: Stack @6:5
+        argument n: literal 1: Int @6:12

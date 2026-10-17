@@ -1,0 +1,10 @@
+module main
+struct main::User @2:1
+  field 0 val id: Int
+  field 1 val name: String
+fun main::f(n: String): User @3:1
+  local %0 n: String (parameter)
+  construct main::User (order: name, id): User @3:26
+    field id: literal 1: Int @3:46
+    field name: move: String @3:38
+      local %0 n: String @3:38

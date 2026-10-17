@@ -1,0 +1,18 @@
+module main
+fun main::g(): Int @2:1
+  literal 1: Int @2:16
+fun main::h(): Int @3:1
+  literal 2: Int @3:16
+fun main::f(a: Int, b: Int, c: Int): Int @4:1
+  local %0 a: Int (parameter)
+  local %1 b: Int (parameter)
+  local %2 c: Int (parameter)
+  default b: literal 2: Int @4:24
+  default c: literal 3: Int @4:36
+  copy: Int @4:46
+    local %0 a: Int @4:46
+fun main::k(): Int @5:1
+  call main::f (order: c, a): Int @5:16
+    argument a: call main::h: Int @5:31
+    argument b: default
+    argument c: call main::g: Int @5:22

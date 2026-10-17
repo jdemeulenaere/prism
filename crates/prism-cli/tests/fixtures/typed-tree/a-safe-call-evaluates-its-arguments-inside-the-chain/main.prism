@@ -1,0 +1,5 @@
+// expect: ok
+struct User { val name: String }
+fun next(): Int = 1
+fun User.greet(n: Int): Int = n
+fun f(u: User?): Int? = u?.greet(next())

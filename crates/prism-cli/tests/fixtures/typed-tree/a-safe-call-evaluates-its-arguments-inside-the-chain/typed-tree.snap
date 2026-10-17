@@ -1,0 +1,18 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+fun main::next(): Int @3:1
+  literal 1: Int @3:19
+fun main::User.greet(this, n: Int): Int @4:1
+  local %0 this: &User (receiver)
+  local %1 n: Int (parameter)
+  copy: Int @4:31
+    local %1 n: Int @4:31
+fun main::f(u: User?): Int? @5:1
+  local %0 u: User? (parameter)
+  chain: Int? @5:25
+    call main::User.greet: Int @5:25
+      receiver: borrow (receiver): &User @5:25
+        payload: User @5:25
+          local %0 u: User? @5:25
+      argument n: call main::next: Int @5:34

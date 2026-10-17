@@ -1,0 +1,7 @@
+// expect: ok
+compose fun Label() {}
+fun log() {}
+compose fun Screen() {
+    Label()
+    log()
+}
