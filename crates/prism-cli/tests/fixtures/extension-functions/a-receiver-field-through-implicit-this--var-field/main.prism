@@ -1,0 +1,7 @@
+// expect: ok
+struct User {
+    val name: String
+    var nick: String
+}
+mut fun String.clear() { }
+mut fun User.tidy() { nick.clear() }

@@ -1,0 +1,7 @@
+// expect: E4003
+struct User {
+    val name: String
+    var nick: String
+}
+mut fun String.clear() { }
+mut fun User.wipe() { name.clear() }

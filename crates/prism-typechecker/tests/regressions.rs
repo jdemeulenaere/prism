@@ -1020,3 +1020,19 @@ fn this_cannot_be_reassigned() {
         &["E4003"],
     );
 }
+
+#[test]
+fn a_receiver_field_through_implicit_this() {
+    // Spec "A receiver field through implicit this": `name.clear()` is `this.name.clear()`, so
+    // the error names the field, not a binding called `name`.
+    let errors = check(
+        "struct User {\n    val name: String\n    var nick: String\n}\nmut fun String.clear() { }\nmut fun User.tidy() { nick.clear() }\nmut fun User.wipe() { name.clear() }\n",
+    );
+    assert_eq!(codes(&errors), vec!["E4003"], "{:?}", errors);
+    let TypeError::ImmutabilityViolation { message, help, .. } = &errors[0] else {
+        panic!("expected E4003, got {:?}", errors[0]);
+    };
+    assert!(message.contains("'this.name'"), "{message}");
+    assert!(!message.contains("immutable 'val' binding"), "{message}");
+    assert!(help.is_none(), "no 'var name' help for a field: {help:?}");
+}

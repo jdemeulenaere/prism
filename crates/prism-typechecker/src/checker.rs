@@ -2651,6 +2651,19 @@ impl TypeChecker {
             is_safe_nav,
         } = &callee.kind
         {
+            // A receiver that is a field through implicit `this` is checked, and reported, as
+            // the explicit `this.name` it stands for.
+            if let Some(field) = self.implicit_this_field(target) {
+                let callee = Expr::new(
+                    ExprKind::MemberAccess {
+                        target: Box::new(field),
+                        member: member.clone(),
+                        is_safe_nav: *is_safe_nav,
+                    },
+                    callee.span,
+                );
+                return self.infer_call_expr(&callee, args, span);
+            }
             if self.type_name_symbol(target).is_none() {
                 return self.infer_method_call(callee, target, member, *is_safe_nav, args, span);
             }

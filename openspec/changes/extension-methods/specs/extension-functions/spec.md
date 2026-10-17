@@ -90,6 +90,10 @@ Inside an extension body, `this` MUST be the receiver, a `val` binding of type `
 - **WHEN** a file declares `val id = "global"`, `struct User { val id: Int }` and `fun User.key(): Int = id`
 - **THEN** the file typechecks successfully, because `id` in the body is the field
 
+#### Scenario: A receiver field through implicit this
+- **WHEN** `struct User { val name: String, var nick: String }` and `mut fun String.clear()` are declared, and `mut fun User.tidy() { nick.clear() }` and `mut fun User.wipe() { name.clear() }` are checked
+- **THEN** the type checker accepts `tidy` and emits `E4003` for `wipe`, naming the field `this.name` rather than a binding `name`
+
 #### Scenario: Calling another extension on the implicit receiver
 - **WHEN** `fun User.greet(): String = "Hi"` and `fun User.shout(): String = greet() + "!"` are declared
 - **THEN** the file typechecks successfully, and `greet()` calls `this.greet()`
