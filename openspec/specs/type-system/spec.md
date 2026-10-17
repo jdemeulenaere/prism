@@ -53,11 +53,11 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 
 #### Scenario: Reference and borrow compatibility
 - **WHEN** passing an argument to a parameter expecting `&T` or `&mut T`
-- **THEN** the argument must provide a matching borrow (with `&mut T` coercible to `&T`), and taking `&mut` on an immutable `val` binding is rejected
+- **THEN** a `&T` parameter accepts a matching borrow (with `&mut T` coercible to `&T`) or a `T`, which is borrowed implicitly; a `&mut T` parameter requires a `&mut` borrow, written explicitly unless the argument already is one; and taking `&mut` on an immutable `val` binding is rejected
 
 #### Scenario: Borrowed constructor values match annotated references
 - **WHEN** a value built by a constructor (`val u = User("a")` or `val c = Color.Red`) is borrowed and passed to a parameter `&User`, `&mut User` or `&Color`
-- **THEN** the borrow matches: `&T` accepts `&U` when `U` is assignable to `T`, and `&mut T` accepts `&mut U` only when `T` and `U` are assignable to each other
+- **THEN** the borrow matches: `&T` accepts `&U` and `&mut T` accepts `&mut U` only when `U` and `T` are the same type, since a reference cannot change the representation of the value it points at
 
 #### Scenario: Error types absorb borrows and safe navigation
 - **WHEN** the operand of `&`, `&mut` or a safe navigation `?.` already has an error
@@ -288,7 +288,7 @@ A type in an imported signature MUST denote the same type the exporting file dec
 - **THEN** the closure is checked against `(Int) -> Int?` and the call typechecks successfully
 
 ### Requirement: Operators Read Through References
-Operator operands (arithmetic, comparison, equality, logical, unary and range bounds), and `if` and subjectless-`when` conditions, MUST be typed after peeling every `&` and `&mut` layer, so a borrowed value can be read by operators. Positions that expect a value of type `T` (arguments, initializers, returns, assignment values) MUST NOT accept a `&T`.
+Operator operands (arithmetic, comparison, equality, logical, unary and range bounds), and `if` and subjectless-`when` conditions, MUST be typed after peeling every `&` and `&mut` layer, so a borrowed value can be read by operators. Positions that expect a value of type `T` (arguments, initializers, returns, assignment values) accept a `&T` only by copying a `Copy` value out of it, as the `references` spec defines.
 
 #### Scenario: Arithmetic on a borrowed integer
 - **WHEN** `fun f(a: &Int): Int = a + 1` is checked
@@ -303,8 +303,8 @@ Operator operands (arithmetic, comparison, equality, logical, unary and range bo
 - **THEN** the function typechecks successfully
 
 #### Scenario: Borrow passed where a value is expected
-- **WHEN** `fun g(x: Int): Int` is declared and `fun f(a: &Int): Int = g(a)` is checked
-- **THEN** the type checker rejects the argument with `E4004`
+- **WHEN** `fun g(s: String): Int` is declared and `fun f(a: &String): Int = g(a)` is checked
+- **THEN** the type checker rejects the argument with `E4017`, as a move out of the borrow `a`
 
 ### Requirement: Return and Argument Mismatch Codes
 A value whose type is incompatible with the return type of its enclosing function or closure MUST be reported as `E4005`. A value incompatible with a parameter type (positional, named or trailing-lambda argument, struct constructor field, or enum payload) MUST be reported as `E4004`. Both codes MUST also apply inside an `if`/`when` branch or block's final expression producing that value.
@@ -458,7 +458,7 @@ Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
 Decisions from `typechecker-soundness`:
 
-- **Operators read through references; value positions do not** (D1). Operator operands and conditions peel `&`/`&mut`, matching field access, which already read through borrows, and needing no new syntax. An explicit prefix `*` was rejected for now: it needs grammar work, and would make operators inconsistent with implicit field access. Arguments, initializers and returns still reject a `&T` where a `T` is expected, because copying a value out of a borrow is the borrow checker's decision once it knows which types are `Copy`. Writing through a `&mut` primitive is not possible yet.
+- **Operators read through references; value positions do not** (D1). Operator operands and conditions peel `&`/`&mut`, matching field access, which already read through borrows, and needing no new syntax. An explicit prefix `*` was rejected for now: it needs grammar work, and would make operators inconsistent with implicit field access. Value positions rejected a `&T` where a `T` is expected until `reference-access` added copy-out of `Copy` values and prefix `*` for writes (see the `references` spec); reads through `*` remain unnecessary.
 - **A mismatch's code comes from where the expectation came from** (D2). The checker tracks an origin (value, return, argument): `E4005` for returned values, `E4004` for arguments, `E4002` otherwise. `if`/`when` branches and block tails inherit the origin, so a mismatch inside a returned branch is still `E4005`; every other nested expectation resets it. The alternative, `E4002` for every value mismatch (like Rust's single `E0308`), was rejected because the catalog already promised the dedicated codes and site-specific codes let tools offer site-specific fixes. Non-assignability errors such as a type name used as a value keep their own code.
 - **Unannotated private declarations are inferred on demand** (D5). The first use of a pending declaration checks its body in a fresh body context (module scope only, its own return type and compose flag), and the result is memoized, so a type no longer depends on declaration order and no body is checked twice. Reaching a declaration whose inference is in progress is a self-dependency and reports `E4013`, as Kotlin does for recursive functions without a return type. Requiring annotations everywhere was rejected as removing a convenience the spec grants, and a dependency-ordered pre-pass as needing a second walk over every body.
 - **Closure parameters need an expected type** (D6). Without one, nothing gives a parameter its type: inferring it from first use needs constraint solving across statements, which bidirectional checking avoids, and silently typing it as the error type left calls through the closure unchecked. So each such parameter reports `E4013`, bound to the error type so the body is still checked.
@@ -481,3 +481,8 @@ Decisions from `statements-and-loops`:
 
 - **One `Range` type for both range operators.** `a..<b` and `a..b` both have the built-in `Range` type, and `in a..<b` patterns are checked like `in a..b`. Whether the end is included is a property of the runtime value, so `when` patterns, `for` loops and future APIs treat both alike. Two range types were rejected as duplicating every API.
 - **A block without a tail is `Unit`.** When a value is expected, the mismatch is reported at the block's last statement, where the value is missing, with the code of the expectation's site (`E4005` for a function body).
+
+Decisions from `reference-access`:
+
+- **References are invariant in their referent** (user). `&U` is assignable to `&T` only for the same type, except that `&mut` may weaken to `&` at the outer layer and behind shared borrows; `&mut U` to `&mut T` needs equal types. A reference cannot change the representation of what it points at (`&Int` is not a `&(Int?)`), so covariance would have hidden a converted copy behind a borrow. `Heap<T>` keeps covariance until the `Heap<T>` change decides it.
+- **Value positions copy `Copy` values out of borrows.** The "Operators read through references; value positions do not" rule above now ends at copy-out: where a `T` is expected, a `&T` of a `Copy` type is accepted, and a non-`Copy` one is `E4017` (see `references`).

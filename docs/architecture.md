@@ -92,9 +92,9 @@ The compiler MUST support two distinct native execution backends: Tier 1 (Cranel
 
 Compile-time memory safety: zero runtime garbage collection, zero hidden automatic reference counting (ARC), single-owner value semantics, stack-confined borrows with automatic lifetime elision, and data-oriented handles.
 
-Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)). Everything below is planned.
+Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)). Everything below is planned.
 
-The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `reference-access`, `borrowck-moves`, `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
+The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `extension-methods` (receivers), `borrowck-moves`, `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
 
 ### Requirement: Single-Owner Value Semantics and RAII
 Every non-`Copy` value MUST have a single owning binding, and resources MUST be dropped deterministically when their owner leaves lexical scope.
@@ -130,29 +130,6 @@ Self-referential or recursive structures MUST use the standard `Heap<T>` primiti
 - **WHEN** an instance of `Heap<T>` leaves scope
 - **THEN** the allocated heap buffer and the inner value `T` are freed deterministically with zero reference-counter traffic
 
-### Requirement: Reading and Writing Through References
-A reference is a value of its own, and the value it refers to is `*r`. Member access, operators and conditions MUST read through references implicitly (as they do today). Where a `T` is expected and a `&T` or `&mut T` is given, a `Copy` value MUST be copied out implicitly, and a non-`Copy` value MUST be rejected as a move out of a borrow. Writing the whole referent MUST use the prefix `*` operator, and assigning to a `var` binding of reference type MUST re-point it.
-
-#### Scenario: Copy-out of a borrowed primitive
-- **WHEN** `fun g(x: Int): Int` is declared and `fun f(a: &Int): Int = g(a)` is checked
-- **THEN** the call typechecks, copying the `Int` out of the borrow
-
-#### Scenario: Move out of a borrow rejected
-- **WHEN** `fun take(u: User)` is declared and `fun f(u: &User) { take(u) }` is checked
-- **THEN** the type checker rejects the argument as a move out of a borrow: `E4017` with the source "borrow `u`", suggesting `u.clone()` when `User` is `Clone`
-
-#### Scenario: Writing through a mutable borrow
-- **WHEN** `fun bump(r: &mut Int) { *r = r + 1 }` is checked
-- **THEN** it typechecks and writes through `r`; `r = 5` is rejected because `r` is a `val` binding of reference type
-
-#### Scenario: Re-pointing a reference variable
-- **WHEN** a body declares `var r: &Int = &a` and later assigns `r = &b`
-- **THEN** `r` refers to `b`, and neither `a` nor `b` is modified
-
-#### Scenario: Prefix * is not a binary operator after a newline
-- **WHEN** a statement `*r = 5` follows a line ending in an expression
-- **THEN** it parses as a new statement, by the existing rule that a newline before a binary operator ends the expression
-
 ### Requirement: Stack-Scoped Borrowing and Mutation Rules
 The borrow checker MUST enforce borrowing rules: arbitrary concurrent shared borrows (`&T`), or exactly one exclusive mutable borrow (`&mut T`), strictly confined to function arguments and local execution scopes. A borrow MUST last until the last use of the reference (non-lexical), not until the end of its block.
 
@@ -172,13 +149,9 @@ The borrow checker MUST enforce borrowing rules: arbitrary concurrent shared bor
 - **WHEN** `&mut o.user` and `&mut o.email` are live at the same time
 - **THEN** the borrows are accepted, while a borrow of `o` itself conflicts with either
 
-#### Scenario: Explicit mutation at call sites
-- **WHEN** calling a function that accepts `&mut T` with an owned place
-- **THEN** the caller MUST pass the argument with explicit `&mut` syntax (`updateUser(&mut user)`); passing an existing `&mut T` binding reborrows it without `&mut`, and a method receiver is the one exception (see section 6)
-
-#### Scenario: Implicit shared borrow at argument sites
-- **WHEN** a place or temporary of type `T` is passed as an argument where `&T` is expected (`greet(name)` or `greet("Ada")` for `fun greet(name: &String)`)
-- **THEN** the argument is borrowed implicitly, a temporary living until the end of the statement; elsewhere (`val r: &User = &u`) the borrow is written explicitly
+#### Scenario: Method receivers borrow implicitly
+- **WHEN** a `mut fun` method is called on an owned place (`user.rename("a")`)
+- **THEN** the receiver is borrowed mutably without `&mut`, the one exception to explicit `&mut` at call sites (implemented for arguments by `reference-access`; see section 6)
 
 #### Scenario: Two-phase receiver borrows
 - **WHEN** a `mut fun` method is called with an argument that reads the receiver (`v.push(v.size())`)
@@ -236,8 +209,6 @@ Slot-table state handles (`State<T>`, `NodeId`) used in UI components MUST be de
 ### Design notes (2026-10-17 exploration)
 Why the requirements above were chosen; each change's `design.md` repeats the decisions it implements.
 
-- **Shared borrows are implicit at argument sites; `&mut` stays explicit.** A move-only `String` makes `&String` parameters common, and an explicit `&` on a read adds noise without adding safety. Mutation stays visible. The coercion applies only to arguments (and receivers), where it removes noise; elsewhere `&` is written. Explicit `&` everywhere was rejected as noisy. Swift/Hylo/Mojo-style parameter conventions, where `&T` stops being a type, were rejected because they would reshape the elision rules that the invariants commit to.
-- **Prefix `*` for writes; `var` references re-point.** Transparent C++-style references cannot be re-pointed, which rules out walking a `Heap`-linked structure without recursion. A type-directed `r = v` (re-point or write through depending on `v`'s type) was rejected as hard to read. Reads stay implicit, so the earlier rejection of `*` for operators (`typechecker-soundness`, D1) still holds.
 - **Non-lexical borrows.** Liveness on the MIR makes them natural; lexical borrows reject code such as `val r = &x; print(r); x = 2`.
 - **Closures are conservative until escaping closures are designed.** Inferred-borrow captures plus "capturing closures cannot escape" are sound with no new syntax; move-capturing closures, which compose's `onClick` needs, come in their own change.
 - **Elision needs nothing new in the ABI.** A returned borrow's sources follow from parameter types and the receiver mode, both already exported, so files still compile independently and builds stay hermetic.
@@ -314,7 +285,7 @@ A `while` loop MUST evaluate its condition before each iteration and a `do`/`whi
 - **THEN** the result is a bitwise copy of `p`, with no allocation
 
 ### Requirement: Reference Evaluation Semantics
-The type checker decides every implicit operation on a reference (the `references` spec, from `reference-access`). At runtime, a borrow MUST point at the borrowed place itself, never at a copy of it. A temporary created for a borrow MUST be dropped at the end of the statement that created it. A copy-out MUST be a bitwise copy that runs no user code.
+The type checker decides every implicit operation on a reference ([`references`](../openspec/specs/references/spec.md), from `reference-access`). At runtime, a borrow MUST point at the borrowed place itself, never at a copy of it. A temporary created for a borrow MUST be dropped at the end of the statement that created it. A copy-out MUST be a bitwise copy that runs no user code.
 
 #### Scenario: Implicitly borrowed place is not copied
 - **WHEN** `greet(u.name)` runs for `fun greet(n: &String)`

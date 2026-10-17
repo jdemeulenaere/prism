@@ -168,7 +168,7 @@ The parser MUST parse expressions according to Pratt operator precedence, correc
 - **THEN** the parser rejects the expression with a compile error requiring separate statements
 
 #### Scenario: Invalid assignment target rejected
-- **WHEN** the left side of `=` is not a variable, a `.` field access or an index expression (`a + b = c`, `1 = 2`, `g() = 1`, `a?.b = c`)
+- **WHEN** the left side of `=` is not a variable, a `.` field access, an index expression or a write through `*` (`a + b = c`, `1 = 2`, `g() = 1`, `a?.b = c`)
 - **THEN** the parser rejects the assignment with a syntax error at the target
 
 #### Scenario: Elvis operator binds tighter than comparison
@@ -463,6 +463,33 @@ A struct or enum declaration MUST accept an optional marker, `: Copy` or `: Clon
 - **WHEN** parsing `fun f(Copy: Int, Clone: Int): Int = Copy + Clone` and `struct Clone { val x: Int }`
 - **THEN** both declarations parse
 
+### Requirement: Writing Through a Reference
+An assignment target MAY start with one or more prefix `*` operators followed by an operand parsed at prefix precedence, so postfix operators bind tighter (`*r.x = 1` is `*(r.x) = 1`). A `*` that starts any other expression MUST be rejected with `E2001`, with a message saying that `*` is only allowed on the left of `=` and that reads through references are implicit. A newline before `*` MUST end the previous expression.
+
+#### Scenario: Write-through statement
+- **WHEN** parsing the statements `*r = 5`, `**rr = 0` and `*pick(&mut a, &mut b) = 1`
+- **THEN** each parses as an assignment whose target is `r`, `rr` or the call, under one `*` per prefix operator written
+
+#### Scenario: Postfix binds tighter than prefix star
+- **WHEN** parsing `*r.x = 1`
+- **THEN** the assignment target is `*` applied to `r.x`
+
+#### Scenario: Prefix * is not a binary operator after a newline
+- **WHEN** a statement `*r = 5` follows a line ending in an expression (`val a = b` then `*r = 5`)
+- **THEN** it parses as a new statement, by the existing rule that a newline before a binary operator ends the expression
+
+#### Scenario: Write-through in an unbraced branch or loop body
+- **WHEN** parsing `if (c) *r = 1 else *r = 2`, the `when` branch `0 -> *r = 1` and `while (c) *r = 0`
+- **THEN** each body is an assignment through `r`
+
+#### Scenario: Prefix star outside an assignment target rejected
+- **WHEN** a `*` starts an expression that is not an assignment target (`val x = *r`, `g(*r)`, `return *r`, `(*r).x = 1`, or the statement `*r` with no `=`)
+- **THEN** the parser reports `E2001` at the `*`, saying that `*` writes through a reference only on the left of `=` and that reads through references are implicit
+
+#### Scenario: Multiplication unchanged
+- **WHEN** parsing `a * b` and `a *b` on one line
+- **THEN** both parse as multiplication
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -499,3 +526,7 @@ Decisions from `value-semantics` (agreed with the user):
 
 - **Markers in Kotlin supertype position, one name only.** `: Copy` or `: Clone` goes after the type parameters and a shorthand parameter list, before the body, where Kotlin writes supertypes and where a marker-trait list would go once traits exist. Only the identifiers `Copy` and `Clone` are accepted, exactly one, and neither is a keyword. A general supertype list was rejected: trait conformances are expected to need their own block, because methods are extension functions, so a list would invent rules for names that may never appear there. Widening the marker into a list later breaks no program.
 - **Top-level declarations are `val` only.** `var` declares locals; a top-level `var` is `E2001`, with a message pointing to locals, parameters and state handles (see `ownership`).
+
+Decisions from `reference-access`:
+
+- **Prefix `*` only starts an assignment target** (user). `*r = v` writes through a reference, with one `Deref` per `*` (`**rr = v`) around an operand parsed at prefix precedence, so `*r.x = 1` is `*(r.x) = 1`. Anywhere else `*` is `E2001`, with a message saying reads through references are implicit, and `starts_expr` accepts it so that `return *r` reaches that message. A newline before `*` still ends the previous expression, so `*r = 5` on its own line is a new statement. A separate statement kind was rejected: `Deref` is the projection the typed tree and MIR places use, and it nests.

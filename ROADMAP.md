@@ -44,7 +44,7 @@ Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is on
 
 1. [x] `statements-and-loops`: a `Statement` AST type (`Block` with an explicit tail expression, assignment as a statement); `while`, `do`/`while`, `for (x in range)` over the built-in `Range`; `break`/`continue` as `Nothing`-typed expressions with `E4015` outside a loop; the `..<` half-open range operator.
 2. [x] `value-semantics`: opt-in `: Copy` and `: Clone` markers on structs and enums, checked structurally and recorded in the ABI; the built-in `Copy` and `Clone` tables (`String` is `Clone` but move-only); a built-in `x.clone()`; a move's source must be a whole owned local (`E4017`); top-level `var` removed.
-3. [ ] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it. Moving out of a borrow extends `E4017` with the source "borrow" rather than taking a new code, and borrowing a nullable's contents without cloning (`&(T?)` to `(&T)?`) needs a design (both from `value-semantics`).
+3. [x] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it. Moving out of a borrow extends `E4017` with the source "borrow" rather than taking a new code, and borrowing a nullable's contents without cloning (`&(T?)` to `(&T)?`) needs a design (both from `value-semantics`).
 4. [ ] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site. A field takes precedence over an extension of the same name, as a field named `clone` does over the built-in `clone()`, and a user extension named `clone` on a `Clone` type is rejected (from `value-semantics`).
 5. [ ] `typed-tree`: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit copy/move/borrow adjustments; no behavior change.
 6. [ ] `mir-lowering`: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with a `--dump-mir` text format for snapshot tests.
@@ -53,7 +53,7 @@ Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is on
 9. [ ] `borrowck-elision`: elision rules 1–4 derived from signatures alone, `DanglingBorrowReturn`, and borrows of top-level `val`s valid everywhere.
 
 Deliberately left until after the borrow checker (from the same session):
-- [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out.
+- [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out, whether `*h = v` writes a `Heap`'s contents, and whether `Heap<U>` to `Heap<T>` stays covariant, which changes the representation the way reference covariance did (from `reference-access`).
 - [ ] Payload-binding `when` patterns and destructuring declarations (`val (name, email) = user`), the way to take ownership of a struct's non-`Copy` fields.
 - [ ] Escaping closures that capture by move, needed by compose event handlers such as `onClick`.
 - [ ] Trait conformance syntax: with extension-only methods, conformances need their own block (Swift's `extension T : P`, Rust's `impl P for T`).
@@ -67,6 +67,11 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] Possible relaxation: partial moves out of owned locals, if destructuring proves insufficient.
 - [ ] Possible relaxation: moving a field out of a temporary (`make().name`), rejected by `value-semantics` so that no temporary needs a partial drop.
 - [ ] Moves of variables captured by closures: `value-semantics` treats a capture as a local; with inferred-borrow captures (`borrowck-exclusivity`) such a move is a move out of a borrow.
+- [ ] A syntax for reborrowing a `&mut` into a local (`val r2 = …`): prefix `*` is writes-only, so today a `&mut` can only be reborrowed by passing it as an argument (from `reference-access`).
+- [ ] Possible relaxation: copy-out in `if`/`when`/`?:` joins (`if (c) r else 5`, `first() ?: 0` with a `&Int` side), rejected for now because the join's type would depend on which side is a reference (from `reference-access`).
+- [ ] Possible relaxation: distributing a borrow through branches and `?:` to their leaves, so `greet(u.nick ?: "anon")` borrows `u.nick` instead of moving it; rejected for now in favour of "a borrow points at one place or one temporary" (from `reference-access`).
+- [ ] Smart casts (`if (n != null) greet(n)`), and borrowing through a safe navigation (`&u?.nick`) as an optional place rather than a temporary (from `reference-access`).
+- [ ] How long an explicitly borrowed temporary in a `val` initializer lives (`val r = &make()`), for `borrowck-exclusivity` or `borrowck-elision` (from `reference-access`).
 
 ### Other Phase 2 items
 - [ ] Decide the authoritative ABI hash algorithm: BLAKE3 (original design) or the current FNV-1a ([`docs/architecture.md`](docs/architecture.md) §1).

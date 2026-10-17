@@ -121,7 +121,7 @@ Every `Clone` type MUST have a built-in member `clone()` taking no arguments, un
 - **THEN** the file typechecks successfully: the call invokes the field, because a member of the receiver's type takes precedence over the built-in `clone()`
 
 ### Requirement: Consuming Positions
-A value MUST be consumed when it initializes a local, a parameter default or a top-level `val`; is assigned; is passed to a by-value parameter, struct field or enum payload; or is returned (a `return` operand, an expression body, a block tail or closure result). A branch, block tail, parenthesized expression or `?:` operand in a consuming position is consuming. Every other use reads in place.
+A value MUST be consumed when it initializes a local, a parameter default or a top-level `val`; is assigned, also through `*`; is passed to a by-value parameter, struct field or enum payload; or is returned (a `return` operand, an expression body, a block tail or closure result). A branch, block tail, parenthesized expression or `?:` operand in a consuming position is consuming. A borrowed operand that is not a place is consumed (see `references`). Every other use reads in place.
 
 #### Scenario: Branch results in a consuming position
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: User, c: Bool): String { val n = if (c) u.name else "x"; return n }` is checked
@@ -134,6 +134,14 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 #### Scenario: Reads in place are not moves
 - **WHEN** `struct User { val name: String }` is declared and a body of `fun f(u: User): Bool` uses `u.name` as an operand (`u.name == "a"`, `u.name + "!"`), a `when` subject, the operand of `&` (`val r = &u.name`), the receiver of `clone()` or a discarded expression statement
 - **THEN** the body typechecks successfully
+
+#### Scenario: Borrowing a branch or elvis result
+- **WHEN** `struct User { val name: String, val nick: String? }` is declared and a body of `fun f(c: Bool, u: User, v: User)` runs `val r = &(if (c) u.name else v.name)` and `val s = &(u.nick ?: "x")`
+- **THEN** the type checker emits `E4017` for `u.name`, `v.name` and `u.nick`, because each borrow's operand is a temporary made by moving them
+
+#### Scenario: Borrowing a safe navigation
+- **WHEN** `struct User { val name: String, val id: Int }` is declared and a body of `fun f(u: User?)` runs `val r = &u?.name` and `val i = &u?.id`
+- **THEN** the type checker emits `E4017` for `u?.name`, with help suggesting `u?.name?.clone()`, and accepts `&u?.id`, whose temporary is a copy
 
 ### Requirement: Moves Take Whole Values Only
 A non-`Copy` value in a consuming position MUST be a whole owned local or by-value parameter, or a temporary (a call, constructor, literal or variant). Taking it from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation or a top-level `val` MUST be rejected with `CannotMoveOut` (`E4017`), naming the source. Its help MUST suggest a borrow and, for a `Clone` type, `.clone()`. The error type is never reported.
@@ -185,6 +193,21 @@ Top-level declarations MUST be immutable: a top-level `var` MUST be rejected by 
 - **WHEN** a file declares `val LIMIT = 10` at top level and `fun f(): Int { var x = LIMIT; x = x + 1; return x }`
 - **THEN** the file typechecks successfully
 
+### Requirement: Moving Out of a Borrow Is Rejected
+Where a value of type `T` is expected and an expression of type `&T` or `&mut T` is given for a non-`Copy` `T`, the type checker MUST reject it with `CannotMoveOut` (`E4017`), naming the source "borrow `u`", where `u` is the expression. Its help MUST suggest `u.clone()` when `T` is `Clone`, and otherwise suggest taking a `&T`. A `Copy` value is copied out instead (see the `references` spec).
+
+#### Scenario: Move out of a borrow rejected
+- **WHEN** `struct User : Clone { val name: String }` and `fun take(u: User)` are declared and `fun f(u: &User) { take(u) }` is checked
+- **THEN** the type checker rejects the argument as a move out of a borrow: `E4017` with the source "borrow `u`", with help suggesting `u.clone()`
+
+#### Scenario: Help for a borrow that cannot be cloned
+- **WHEN** `struct Token { val id: Int }` is declared and `fun f(t: &Token): Token = t` is checked
+- **THEN** the type checker emits `E4017` with the source "borrow `t`", with help suggesting a `&Token` and no `.clone()`
+
+#### Scenario: Moves out of a borrow at every consuming site
+- **WHEN** `struct Tag { val s: String }` and `fun get(s: &String): &String` are declared and a body of `fun f(r: &String, m: &mut String)` runs `val a: String = r`, `var b = "x"`, `b = m`, `val t = Tag(r)` and `val c: String = get(r)`
+- **THEN** the type checker emits `E4017` at each of the four sites that take a borrow, naming the borrow `r`, `m`, `r` and `get(r)`, with help suggesting `.clone()`
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -198,3 +221,8 @@ Decisions from `value-semantics` (agreed with the user in the borrow-checker roa
 - **A consuming flag, not a separate pass.** A flag set at consuming sites (initializers, assignments, arguments, returns) and handed through branches, block tails and `?:` operands is taken by the next expression checked, so the leaf check runs where the leaf's type and scope are known. A post-pass would re-infer expressions or resolve names after their scope has closed.
 - **One move-out code for every source.** `E4017` names the source ("field 'name' of 'u'", "top-level value 'GREETING'"), and `reference-access` adds "borrow" to it rather than taking a new code, as Rust uses one E0507 for every place behind a reference. Its help suggests a borrow and, for a `Clone` type, `.clone()`.
 - **Top-level `var` is removed in the parser.** A borrow of a mutable global created in one function can be invalidated by an assignment in a callee, which no single function's analysis sees; Rust makes `static mut` unsafe for this reason. Rejecting it in the parser leaves no `var` flag in the AST or ABI, following the precedent of borrowed struct fields; a type-checker code would have kept a flag that no valid program sets.
+
+Decisions from `reference-access`:
+
+- **Moving out of a borrow reuses `E4017`** (user). The source is "borrow `u`", as Rust uses one E0507 for every place behind a reference, and the fixes are the same as for a field. The help suggests `u.clone()` for a `Clone` type, and otherwise taking a `&T` where the value is used, never `&u`, which is already a borrow.
+- **A borrow of a non-place consumes its operand** (user). `&(if (c) u.name else v.name)`, `&(u.nick ?: "x")` and `&u?.name` borrow a temporary made by moving the field, so they report `E4017`. A safe navigation is not a place, so `E4017`'s help for one does not suggest borrowing it.
