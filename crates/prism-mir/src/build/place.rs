@@ -86,14 +86,13 @@ impl Builder<'_> {
                 fields,
                 evaluation_order,
             } => {
+                let mut order: Vec<usize> = evaluation_order.clone();
+                order.extend((0..fields.len()).filter(|index| !evaluation_order.contains(index)));
+                let values: Vec<ExpressionId> =
+                    order.iter().map(|&index| fields[index].value).collect();
                 let mut operands: Vec<Option<Operand>> = vec![None; fields.len()];
-                for &index in evaluation_order {
-                    operands[index] = Some(self.operand(fields[index].value));
-                }
-                for (index, operand) in operands.iter_mut().enumerate() {
-                    if operand.is_none() {
-                        *operand = Some(self.operand(fields[index].value));
-                    }
+                for (index, operand) in order.into_iter().zip(self.ordered_operands(&values)) {
+                    operands[index] = Some(operand);
                 }
                 let kind = match kind {
                     ConstructKind::Struct(id) => AggregateKind::Struct(id.clone()),
@@ -111,8 +110,8 @@ impl Builder<'_> {
                 end,
                 end_inclusive,
             } => {
-                let start = self.operand(*start);
-                let end = self.operand(*end);
+                let mut bounds = self.ordered_operands(&[*start, *end]).into_iter();
+                let (start, end) = (bounds.next().unwrap(), bounds.next().unwrap());
                 let end_inclusive = Operand::Constant(Constant::Bool(*end_inclusive));
                 let destination = self.destination_or_temporary(destination, &ty, span);
                 let rvalue = Rvalue::Aggregate(
@@ -290,6 +289,115 @@ impl Builder<'_> {
                 self.expression_into(Some(&Place::local(local)), id);
                 Operand::Move(Place::local(local))
             }
+        }
+    }
+
+    /// The operands of `values`, evaluated in this order (D5). An operand reading a place that
+    /// a later value may write (a call, or a block running statements, follows it) is first
+    /// copied or moved into a temporary, so that each operand holds the value its place had
+    /// when it was evaluated, as rustc's operands do (`n + inc(&mut n)` adds the old `n`).
+    pub(super) fn ordered_operands(&mut self, values: &[ExpressionId]) -> Vec<Operand> {
+        let mut operands = Vec::with_capacity(values.len());
+        for (position, &value) in values.iter().enumerate() {
+            let operand = self.operand(value);
+            let later_may_write = values[position + 1..]
+                .iter()
+                .any(|&later| self.may_write(later));
+            if later_may_write {
+                let expression = self.expression(value);
+                let (ty, span) = (expression.ty.clone(), expression.span);
+                operands.push(self.stabilize(operand, ty, span));
+            } else {
+                operands.push(operand);
+            }
+        }
+        operands
+    }
+
+    /// `operand`, or, when it reads a place that code running before its use could write (a
+    /// place not rooted at a temporary of the lowering, or reached through a reference), a move
+    /// out of a temporary holding its current value.
+    pub(super) fn stabilize(&mut self, operand: Operand, ty: Type, span: Span) -> Operand {
+        let Some(place) = operand.place() else {
+            return operand;
+        };
+        let rooted_at_temporary = self.locals[place.local].kind == LocalKind::Temporary
+            && !place.projections.contains(&Projection::Deref);
+        if rooted_at_temporary || self.current.is_none() {
+            return operand;
+        }
+        let local = self.new_temporary(ty, span);
+        self.assign(Place::local(local), Rvalue::Use(operand), span);
+        Operand::Move(Place::local(local))
+    }
+
+    /// Whether evaluating `id` may write a place: whether it calls a function or runs a
+    /// statement (assignments are statements). Creating a closure runs nothing.
+    pub(super) fn may_write(&self, id: ExpressionId) -> bool {
+        let any = |ids: &[ExpressionId]| ids.iter().any(|&child| self.may_write(child));
+        match &self.expression(id).kind {
+            ExpressionKind::Call(_) => true,
+            ExpressionKind::Block { statements, tail } => {
+                !statements.is_empty() || tail.is_some_and(|tail| self.may_write(tail))
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Local(_)
+            | ExpressionKind::TopLevelValue(_)
+            | ExpressionKind::FunctionReference(_)
+            | ExpressionKind::VariantConstructor { .. }
+            | ExpressionKind::Closure { .. }
+            | ExpressionKind::Break { .. }
+            | ExpressionKind::Continue { .. }
+            | ExpressionKind::Error { .. } => false,
+            ExpressionKind::Field { base: value, .. }
+            | ExpressionKind::Deref { pointer: value }
+            | ExpressionKind::NonNullPayload { nullable: value }
+            | ExpressionKind::Temporary { value }
+            | ExpressionKind::Move { place: value }
+            | ExpressionKind::Copy { place: value }
+            | ExpressionKind::Borrow { place: value, .. }
+            | ExpressionKind::SafeNavigation { chain: value, .. }
+            | ExpressionKind::Coerce { value, .. }
+            | ExpressionKind::Unary { operand: value, .. } => self.may_write(*value),
+            ExpressionKind::Index { base, index } => any(&[*base, *index]),
+            ExpressionKind::Construct { fields, .. } => {
+                fields.iter().any(|field| self.may_write(field.value))
+            }
+            ExpressionKind::Range { start, end, .. } => any(&[*start, *end]),
+            ExpressionKind::Binary { left, right, .. }
+            | ExpressionKind::Logical { left, right, .. } => any(&[*left, *right]),
+            ExpressionKind::Elvis { nullable, fallback } => any(&[*nullable, *fallback]),
+            ExpressionKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                any(&[*condition, *then_branch])
+                    || else_branch.is_some_and(|branch| self.may_write(branch))
+            }
+            ExpressionKind::When {
+                subject, branches, ..
+            } => {
+                subject.is_some_and(|subject| self.may_write(subject))
+                    || branches.iter().any(|branch| {
+                        self.may_write(branch.body)
+                            || branch
+                                .patterns
+                                .iter()
+                                .any(|pattern| self.pattern_may_write(pattern))
+                    })
+            }
+            ExpressionKind::Return { value } => value.is_some_and(|value| self.may_write(value)),
+        }
+    }
+
+    /// Whether testing `pattern` may write a place.
+    pub(super) fn pattern_may_write(&self, pattern: &prism_typed_tree::Pattern) -> bool {
+        use prism_typed_tree::Pattern;
+        match pattern {
+            Pattern::Value(value) | Pattern::Condition(value) => self.may_write(*value),
+            Pattern::Range { start, end, .. } => self.may_write(*start) || self.may_write(*end),
+            Pattern::Variant { .. } | Pattern::Else => false,
         }
     }
 

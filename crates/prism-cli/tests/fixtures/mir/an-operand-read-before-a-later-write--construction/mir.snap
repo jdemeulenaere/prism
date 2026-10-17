@@ -1,0 +1,30 @@
+module main
+fun main::inc(_1: &mut Int): Int @2:1
+  local _0: Int (return)
+  local _1 r: &mut Int (argument)
+  bb0:
+    (*_1) = copy (*_1) + const 1 @2:34
+    _0 = copy (*_1) @2:48
+    return @2:1
+fun main::g(): Pair @4:1
+  local _0: Pair (return)
+  local _1 n: Int (user, var)
+  local _2: Int (temporary)
+  local _3: Int (temporary)
+  local _4: &mut Int (temporary)
+  bb0:
+    storage_live _1 @4:17
+    _1 = const 1 @4:25
+    storage_live _2 @4:40
+    _2 = copy _1 @4:40
+    storage_live _3 @4:43
+    storage_live _4 @4:47
+    _4 = &mut _1 (written) @4:47
+    _3 = call main::inc(move _4) -> bb1 @4:43
+  bb1:
+    _0 = struct main::Pair(move _2, move _3) @4:35
+    storage_dead _4 @4:28
+    storage_dead _3 @4:28
+    storage_dead _2 @4:28
+    storage_dead _1 @4:15
+    return @4:1

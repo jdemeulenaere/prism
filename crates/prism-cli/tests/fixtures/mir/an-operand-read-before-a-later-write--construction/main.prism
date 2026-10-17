@@ -1,0 +1,4 @@
+// expect: ok
+fun inc(r: &mut Int): Int { *r = r + 1; return r }
+struct Pair { val a: Int; val b: Int }
+fun g(): Pair { var n = 1; return Pair(n, inc(&mut n)) }

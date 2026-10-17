@@ -167,6 +167,13 @@ A call MUST evaluate the receiver's place first, then the written arguments in s
 - **WHEN** `fun g(): Int = 1`, `fun h(): Int = 2` and `fun f(a: Int, b: Int = 2, c: Int = 3): Int = a` are declared and `fun k(): Int = f(c = g(), a = h())` is lowered
 - **THEN** `g` is called before `h`, then the generator of `b`, and `f` is called with the results of `h`, the generator and `g`, in that order
 
+### Requirement: Operands Are Evaluated in Order
+The operands of an operator, a range and a construction MUST be evaluated in source order, and the subject of a `when` once. An operand that reads a place which a later operand, or a later pattern of the `when`, may write MUST hold the value the place had when the operand was evaluated.
+
+#### Scenario: An operand read before a later write
+- **WHEN** `fun inc(r: &mut Int): Int { *r = r + 1; return r }` is declared and `fun f(): Int { var n = 1; return n + inc(&mut n) }` is lowered, or `struct Pair { val a: Int; val b: Int }` is declared and `fun g(): Pair { var n = 1; return Pair(n, inc(&mut n)) }`, or `fun k(): Int { var n = 0; return when (n) { inc(&mut n) -> 1; else -> 2 } }`
+- **THEN** `n` is copied into a temporary before `inc` is called, and the sum, the construction or the comparison reads that temporary
+
 ### Requirement: Default Values Are Generator Bodies
 Each parameter's default value MUST be lowered to its own body, which takes a shared borrow of the receiver and of each earlier argument and returns the parameter's value. A call omitting that argument MUST call the generator with borrows of its own earlier arguments.
 

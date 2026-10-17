@@ -54,7 +54,8 @@ impl Builder<'_> {
         }
         let operand_ty = self.expression(left).ty.clone();
         let (left, right) = if self.is_copy(&operand_ty) {
-            (self.operand(left), self.operand(right))
+            let mut operands = self.ordered_operands(&[left, right]).into_iter();
+            (operands.next().unwrap(), operands.next().unwrap())
         } else {
             (
                 self.comparison_operand(left, span),

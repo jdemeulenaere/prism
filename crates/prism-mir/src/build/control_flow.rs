@@ -427,6 +427,22 @@ impl Builder<'_> {
             .iter()
             .flat_map(|b| b.patterns.iter())
             .any(|p| matches!(p, Pattern::Value(value) if !self.is_null(*value)));
+        // A `Copy` subject is read by each test; when a pattern may write its place, its value
+        // is first copied out, so the subject is evaluated once.
+        let patterns_may_write = branches
+            .iter()
+            .flat_map(|b| b.patterns.iter())
+            .any(|p| self.pattern_may_write(p));
+        let subject = subject.map(|(place, ty)| {
+            if patterns_may_write && self.is_copy(&ty) {
+                match self.stabilize(Operand::Copy(place.clone()), ty.clone(), span) {
+                    Operand::Move(stable) => (stable, ty),
+                    _ => (place, ty),
+                }
+            } else {
+                (place, ty)
+            }
+        });
         let subject =
             subject.map(|(place, ty)| self.comparison_subject(place, ty, compares_values, span));
         let mut ends = Vec::new();
