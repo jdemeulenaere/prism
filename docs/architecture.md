@@ -92,9 +92,9 @@ The compiler MUST support two distinct native execution backends: Tier 1 (Cranel
 
 Compile-time memory safety: zero runtime garbage collection, zero hidden automatic reference counting (ARC), single-owner value semantics, stack-confined borrows with automatic lifetime elision, and data-oriented handles.
 
-Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)). Everything below is planned.
+Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)). Everything below is planned.
 
-The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `extension-methods` (receivers), `borrowck-moves`, `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
+The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `borrowck-moves`, `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
 
 ### Requirement: Single-Owner Value Semantics and RAII
 Every non-`Copy` value MUST have a single owning binding, and resources MUST be dropped deterministically when their owner leaves lexical scope.
@@ -110,6 +110,10 @@ Every non-`Copy` value MUST have a single owning binding, and resources MUST be 
 #### Scenario: Reinitialization by assignment
 - **WHEN** a moved `var` is assigned a new value (`var s = a; take(s); s = b; take(s)`)
 - **THEN** it is usable again after the assignment
+
+#### Scenario: Consuming method moves the receiver
+- **WHEN** `consuming fun User.toAccount(): Account` is called as `u.toAccount()` and `u` is used afterwards
+- **THEN** the later use is rejected as a use after move (the type checker already treats the receiver as a consuming position; see `ownership`)
 
 #### Scenario: Plain enum is move-only without the marker
 - **WHEN** `enum Color { Red, Green }` is declared without a marker and a value is passed by value twice
@@ -148,10 +152,6 @@ The borrow checker MUST enforce borrowing rules: arbitrary concurrent shared bor
 #### Scenario: Disjoint field borrows
 - **WHEN** `&mut o.user` and `&mut o.email` are live at the same time
 - **THEN** the borrows are accepted, while a borrow of `o` itself conflicts with either
-
-#### Scenario: Method receivers borrow implicitly
-- **WHEN** a `mut fun` method is called on an owned place (`user.rename("a")`)
-- **THEN** the receiver is borrowed mutably without `&mut`, the one exception to explicit `&mut` at call sites (implemented for arguments by `reference-access`; see section 6)
 
 #### Scenario: Two-phase receiver borrows
 - **WHEN** a `mut fun` method is called with an argument that reads the receiver (`v.push(v.size())`)
@@ -323,41 +323,3 @@ The type checker decides how each extension call passes its receiver (the `exten
 ## 5. Compose UI Engine
 
 Implemented today: parsing `compose fun` ([`syntax`](../openspec/specs/syntax/spec.md)) and rejecting composable calls outside composable contexts (`E4008`, [`type-system`](../openspec/specs/type-system/spec.md)). The slot table, `remember` / `mutableStateOf`, the `compose fun` transform and hot-reload rendering are planned; see Phase 4 in [`ROADMAP.md`](../ROADMAP.md). The state-handle requirement is in section 3 above.
-
----
-
-## 6. Extension Methods
-
-Planned by the `extension-methods` change (decided with the user on 2026-10-17). Structs and enums declare data only (fields, variants and `: Copy`); every method is an extension function.
-
-### Requirement: Extension Functions as the Only Methods
-A method MUST be declared as an extension function `fun T.name(...)`, in any file, with the usual visibility modifiers, and is called as `value.name(...)` with static dispatch. Inside its body `this` is the receiver and names resolve to `this.name` unless a local or parameter shadows them. Calling an extension requires it to be declared in the file or exported by an import; two imports exporting the same extension are ambiguous at use (`E4012`), and a file's own declaration shadows an import.
-
-#### Scenario: Extension on a user type
-- **WHEN** `public fun User.greet(): String = "Hi " + name` is declared and `u.greet()` is called for `u: User`
-- **THEN** the call resolves statically to the extension and `name` in its body reads `this.name`
-
-#### Scenario: Extension on a built-in type
-- **WHEN** a file declares `fun Int.squared(): Int = this * this`
-- **THEN** `3.squared()` typechecks with type `Int`
-
-#### Scenario: Extension declared in another package
-- **WHEN** package `ui` imports `/models` and declares `fun User.shout()` for `models`' `User`
-- **THEN** the declaration is accepted, and a third file can call it only by importing `ui`'s module
-
-### Requirement: Receiver Modes
-A plain `fun T.m()` MUST borrow its receiver shared (`&T`), `mut fun T.m()` MUST borrow it mutably (`&mut T`), and `consuming fun T.m()` MUST take it by value. The receiver is borrowed implicitly at the call site, including for `mut fun`, which is the one exception to explicit `&mut` at call sites; the receiver of a `mut fun` must be a mutable place.
-
-#### Scenario: Mutating method on a var
-- **WHEN** `mut fun User.rename(n: String) { name = n }` is declared and `u.rename("x")` is called for `var u: User`
-- **THEN** the call borrows `u` mutably without `&mut`, while the same call on a `val u` is rejected (`E4003`)
-
-#### Scenario: Consuming method moves the receiver
-- **WHEN** `consuming fun User.toAccount(): Account` is called as `u.toAccount()` and `u` is used afterwards
-- **THEN** the later use is rejected as a use after move
-
-### Design notes (2026-10-17 exploration)
-- **Extensions only, no member functions.** One mechanism instead of Kotlin's member-versus-extension precedence; built-in and user types gain methods the same way; and a struct's ABI is only its layout and `Copy`ness, so adding a method in another file does not change the struct's ABI hash. Costs: no encapsulation boundary until field visibility exists, and trait conformances will need their own block syntax.
-- **Declarable in any file.** Restricting extensions to the type's package (Go) mainly protects trait coherence, which can be added for conformances when traits arrive; plain extensions resolve statically through imports.
-- **Modifiers, not an explicit receiver parameter.** `fun` / `mut fun` / `consuming fun` keep the common case unmarked, read naturally on extensions, and follow Swift's `mutating` / `consuming`; Rust's `&self` / `&mut self` / `self` was the alternative.
-- **Implicit `&mut` for receivers.** `(&mut u).rename()` would be unreadable; the method's declaration and the receiver position already show the call acts on `u`, as for Swift's `mutating` methods.

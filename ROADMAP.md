@@ -45,8 +45,8 @@ Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is on
 1. [x] `statements-and-loops`: a `Statement` AST type (`Block` with an explicit tail expression, assignment as a statement); `while`, `do`/`while`, `for (x in range)` over the built-in `Range`; `break`/`continue` as `Nothing`-typed expressions with `E4015` outside a loop; the `..<` half-open range operator.
 2. [x] `value-semantics`: opt-in `: Copy` and `: Clone` markers on structs and enums, checked structurally and recorded in the ABI; the built-in `Copy` and `Clone` tables (`String` is `Clone` but move-only); a built-in `x.clone()`; a move's source must be a whole owned local (`E4017`); top-level `var` removed.
 3. [x] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it. Moving out of a borrow extends `E4017` with the source "borrow" rather than taking a new code, and borrowing a nullable's contents without cloning (`&(T?)` to `(&T)?`) needs a design (both from `value-semantics`).
-4. [ ] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site. A field takes precedence over an extension of the same name, as a field named `clone` does over the built-in `clone()`, and a user extension named `clone` on a `Clone` type is rejected (from `value-semantics`).
-5. [ ] `typed-tree`: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit copy/move/borrow adjustments; no behavior change.
+4. [x] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site. A field takes precedence over an extension of the same name, as a field named `clone` does over the built-in `clone()`, and a user extension named `clone` on a `Clone` type is rejected (from `value-semantics`).
+5. [ ] `typed-tree`: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit copy/move/borrow adjustments, including the receiver adjustments `extension-methods` decides (`ReceiverAdjustment`); no behavior change.
 6. [ ] `mir-lowering`: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with a `--dump-mir` text format for snapshot tests.
 7. [ ] `borrowck-moves`: a `prism-borrowck` crate and the `E5xxx` code range; use after move, including conditional and loop moves, and reinitialization by assignment.
 8. [ ] `borrowck-exclusivity`: non-lexical borrows, disjoint field paths, two-phase receiver borrows; closures capture by inferred borrow and a capturing closure cannot escape.
@@ -72,12 +72,12 @@ Planned autonomously on 2026-10-17, when the user asked for iteration up to Mile
 24. [ ] `reactive-app-verification`: real reactive example apps (counter, todo list) running natively, with tests that no allocation outlives its owner.
 
 Deliberately left until after the borrow checker (from the same session):
-- [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out, whether `*h = v` writes a `Heap`'s contents, and whether `Heap<U>` to `Heap<T>` stays covariant, which changes the representation the way reference covariance did (from `reference-access`).
-- [ ] Payload-binding `when` patterns and destructuring declarations (`val (name, email) = user`), the way to take ownership of a struct's non-`Copy` fields.
+- [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out, whether `*h = v` writes a `Heap`'s contents, and whether `Heap<U>` to `Heap<T>` stays covariant, which changes the representation the way reference covariance did (from `reference-access`), and whether a `consuming` call may move its receiver out of a `Heap<T>`, `E4017` today (from `extension-methods`).
+- [ ] Payload-binding `when` patterns and destructuring declarations (`val (name, email) = user`), the way to take ownership of a struct's non-`Copy` fields. A `consuming fun` needs it to take `this` apart (`Account(name)` is `E4017` today, from `extension-methods`).
 - [ ] Escaping closures that capture by move, needed by compose event handlers such as `onClick`.
 - [ ] Trait conformance syntax: with extension-only methods, conformances need their own block (Swift's `extension T : P`, Rust's `impl P for T`).
-- [ ] Field visibility (`private var balance`), the encapsulation boundary for extension functions.
-- [ ] Static and companion functions (`User.create()`).
+- [ ] Field visibility (`private var balance`), the encapsulation boundary for extension functions. The `E4010` rule for an extension named like a field then applies only to fields visible where the extension is declared (from `extension-methods`).
+- [ ] Static and companion functions (`User.create()`) (non-goal of `extension-methods`).
 - [ ] Loop labels (`break@outer`) (deferred by `statements-and-loops`).
 - [ ] Deferred `val` initialization (`val x: Int` assigned once on every path).
 - [ ] Iterating anything other than `Range` in `for` loops, which needs generics and an iteration trait (deferred by `statements-and-loops`).
@@ -89,8 +89,14 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] A syntax for reborrowing a `&mut` into a local (`val r2 = …`): prefix `*` is writes-only, so today a `&mut` can only be reborrowed by passing it as an argument (from `reference-access`).
 - [ ] Possible relaxation: copy-out in `if`/`when`/`?:` joins (`if (c) r else 5`, `first() ?: 0` with a `&Int` side), rejected for now because the join's type would depend on which side is a reference (from `reference-access`).
 - [ ] Possible relaxation: distributing a borrow through branches and `?:` to their leaves, so `greet(u.nick ?: "anon")` borrows `u.nick` instead of moving it; rejected for now in favour of "a borrow points at one place or one temporary" (from `reference-access`).
-- [ ] Smart casts (`if (n != null) greet(n)`), and borrowing through a safe navigation (`&u?.nick`) as an optional place rather than a temporary (from `reference-access`).
+- [ ] Smart casts (`if (n != null) greet(n)`), and borrowing through a safe navigation (`&u?.nick`) as an optional place rather than a temporary (from `reference-access`). `?.` receivers already are optional places (`extension-methods`, D10); extend them to explicit `&u?.nick` and to `(&T)?` arguments.
 - [ ] How long an explicitly borrowed temporary in a `val` initializer lives (`val r = &make()`), for `borrowck-exclusivity` or `borrowck-elision` (from `reference-access`).
+- [ ] Extensions on nullable receiver types (`fun String?.orEmpty()`), and which extension a call on a `T?` picks when both `T` and `T?` have one (non-goal of `extension-methods`).
+- [ ] Generic receivers (`fun <T> Heap<T>.size()`), with `generics`; today a receiver is a single type name (non-goal of `extension-methods`).
+- [ ] Extension properties (`val User.fullName: String`) (non-goal of `extension-methods`).
+- [ ] Method references and extensions as values (`u::greet`); reading `u.greet` without a call is `E4006` today (non-goal of `extension-methods`).
+- [ ] Decide whether `this` in a `consuming fun` should be mutable, like Swift's consuming parameters; today it is a `val` and is moved into a `var` first (from `extension-methods`, D4).
+- [ ] Decide whether a bare `clone()` in an extension body calls the built-in `clone()` of a `Clone` receiver; implicit `this` covers only fields and extensions, so it is `E4001` today (found while archiving `extension-methods`).
 
 ### Other Phase 2 items
 - [ ] Decide the authoritative ABI hash algorithm: BLAKE3 (original design) or the current FNV-1a ([`docs/architecture.md`](docs/architecture.md) §1).

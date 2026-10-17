@@ -114,6 +114,33 @@ Each nominal type in an exported signature MUST record the referenced struct's o
 - **WHEN** a file that neither declares nor imports a type named `Range` exports `public struct Span : Copy { val r: Range }`, and an importer reads `s.r` by value for `s: Span`
 - **THEN** the ABI records `r` as the built-in `Range` type, and the importer's read typechecks as a copy
 
+### Requirement: Extension Functions in the ABI
+Phase 1 MUST record an exported extension as a function signature together with its receiver mode and its receiver type, bound like any signature type, and the ABI hash MUST cover both. Struct and enum records MUST NOT depend on extensions. The order of exported symbols MUST take the receiver into account, so that reordering declarations never changes the hash.
+
+#### Scenario: Exported extension recorded with its receiver
+- **WHEN** `models/user.prism` declares `public struct User { var name: String }` and `public mut fun User.rename(n: String): Unit`
+- **THEN** its ABI records a function `rename` with the parameter `n: String`, the return type `Unit`, the receiver type `User` from module `models/user` and the mutable receiver mode
+
+#### Scenario: Adding an extension in another file
+- **WHEN** `ui/ui.prism`, which imports `/models/user`, gains `public fun User.shout(): String`
+- **THEN** the ABI hash of `models/user` is unchanged, and the ABI hash of `ui/ui` changes
+
+#### Scenario: Adding an extension in the receiver type's file
+- **WHEN** `models/user.prism` gains `public fun User.shout(): String`
+- **THEN** its ABI hash changes, while its record of `User` is unchanged
+
+#### Scenario: Changing a receiver mode or type changes the ABI hash
+- **WHEN** `public fun User.reset(): Unit` becomes `public mut fun User.reset(): Unit`, or `public fun User.size(): Int` becomes `public fun Team.size(): Int`
+- **THEN** the exported ABI hash changes
+
+#### Scenario: Extensions sharing a name
+- **WHEN** a file exports `public fun describe(): String`, `public fun User.describe(): String` and `public fun Team.describe(): String`, and the three declarations are reordered
+- **THEN** the ABI records three distinct functions, and the exported ABI hash is the same in every order
+
+#### Scenario: Extension body or private extension edits
+- **WHEN** the body of an exported non-generic extension changes, or a private extension is added, removed or modified
+- **THEN** the exported ABI hash is unchanged
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
@@ -122,3 +149,4 @@ Each nominal type in an exported signature MUST record the referenced struct's o
 - **The hash algorithm is not final.** The code uses a 128-bit FNV-1a hash. The original design called for BLAKE3, and the choice must be made before the `.abi` cache exists (`docs/architecture.md` section 1).
 - **Markers on declarations and on every reference** (`value-semantics`, decided by the user). Each exported struct and enum records its marker (`Copy`, `Clone` or none), and so does each nominal reference in an exported signature, so an importer knows how values of a type may be duplicated without importing its module. Phase 1a reads markers from the AST alone, so no body is read and import cycles still work. Changing a type's marker therefore changes the ABI hash of every file whose exported signatures mention it, which is correct, because what importers may do with those values changes. Requiring the import (`E4014`) whenever Copy-ness is needed was rejected because an import would change whether unrelated code compiles, and treating an unknown marker as "none" because it gives false errors.
 - **The built-in `Range` has its own ABI node** (`value-semantics`). It was recorded as an unbound name and came back to importers as an opaque type, which would have made an imported `Range` field move-only. A user-declared or imported `Range` still binds first.
+- **An extension is a function record with a receiver** (`extension-methods`). `ExportedSymbol::Function` carries an optional receiver mode and type, the type bound like any signature type, and the hash covers a presence byte, the mode and the type. The sort key adds the receiver's module-qualified type text after the name, so `describe`, `User.describe` and `Team.describe` hash the same in any order. Struct and enum records never depend on extensions, so an extension in another file never changes the receiver type's file hash. Rejected: a separate `Extension` symbol kind, which would duplicate the parameter and generic-body handling, and attaching extensions to their receiver's record, which would make every extension change the receiver's ABI. Elision rule 2 needs nothing more, since it reads the receiver mode.

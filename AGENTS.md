@@ -54,6 +54,8 @@ What is implemented and what is planned live in different places. Never treat a 
   - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): Phase 1 ABI extraction, deterministic ABI hashing, and monomorphization hashes.
   - [`ownership`](openspec/specs/ownership/spec.md): `Copy` and `Clone` markers, explicit `.clone()`, whole-value moves, and immutable top-level declarations.
   - [`loops`](openspec/specs/loops/spec.md): `while`, `do`/`while` and `for` loops, and `break`/`continue`.
+  - [`references`](openspec/specs/references/spec.md): Implicit borrows at argument sites and of method receivers, copy-out, writing through references, reborrows and the borrowed-nullable view.
+  - [`extension-functions`](openspec/specs/extension-functions/spec.md): Methods as extension functions: declaration, resolution through the file and its imports, implicit `this`, and safe-navigation calls.
   - [`diagnostics`](openspec/specs/diagnostics/spec.md): The catalog of every compiler error code. A change that adds an error adds its code here.
   - [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable invariants. These are design constraints, so they also cover subsystems not built yet.
 - **Planned design: [`docs/architecture.md`](docs/architecture.md)**: code generation, compilation avoidance, execution tiers, the memory model and borrow checker, and the compose engine. A change that implements an item moves its requirements into `openspec/specs/` as delta specs and removes them from this document.

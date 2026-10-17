@@ -90,7 +90,7 @@ A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`
 - **THEN** `Seg` and `Pin` typecheck successfully and the type checker emits `E4016` for `Bad.l`
 
 ### Requirement: Explicit Clone
-Every `Clone` type MUST have a built-in member `clone()` taking no arguments, unless the type has a field named `clone`, which takes precedence. It reads its receiver in place, looking through `&` and `&mut`, and returns an owned temporary of the receiver's type with those borrows removed. `x?.clone()` MUST work on nullables. On a type that is not `Clone`, `clone()` MUST be rejected with `NotCloneable` (`E4018`) naming the type.
+Every `Clone` type MUST have a built-in `clone()` member taking no arguments, unless a field named `clone` takes precedence. It looks through `&` and `&mut` and returns an owned temporary of the receiver's type without those borrows (a receiver that is not a place is a temporary, see `references`). `x?.clone()` MUST work on nullables. On a type that is not `Clone`, `x.clone()` MUST call a visible extension named `clone`, or else report `NotCloneable` (`E4018`) naming the type.
 
 #### Scenario: Cloning a field through a borrow
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: &User): String = u.name.clone()` is checked
@@ -120,8 +120,12 @@ Every `Clone` type MUST have a built-in member `clone()` taking no arguments, un
 - **WHEN** `struct S { val clone: () -> Int }` is declared and `fun f(s: &S): Int = s.clone()` is checked
 - **THEN** the file typechecks successfully: the call invokes the field, because a member of the receiver's type takes precedence over the built-in `clone()`
 
+#### Scenario: An extension named clone on a type that is not Clone
+- **WHEN** `struct Token { val id: Int }` and `fun Token.clone(): Token = Token(id)` are declared and `fun f(t: &Token): Token = t.clone()` is checked
+- **THEN** the file typechecks successfully: the call invokes the extension instead of reporting `E4018`
+
 ### Requirement: Consuming Positions
-A value MUST be consumed when it initializes a local, a parameter default or a top-level `val`; is assigned, also through `*`; is passed to a by-value parameter, struct field or enum payload; or is returned (a `return` operand, an expression body, a block tail or closure result). A branch, block tail, parenthesized expression or `?:` operand in a consuming position is consuming. A borrowed operand that is not a place is consumed (see `references`). Every other use reads in place.
+A value MUST be consumed when it initializes a local, a parameter default or a top-level `val`; is assigned, also through `*`; is passed to a by-value parameter, struct field or enum payload; is the receiver of a `consuming fun` call; or is returned (`return`, an expression body, a block or closure tail). Branches, block tails, parentheses and `?:` operands of a consuming position are consuming, as is a borrowed operand or receiver that is not a place (`references`). Other uses read in place.
 
 #### Scenario: Branch results in a consuming position
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: User, c: Bool): String { val n = if (c) u.name else "x"; return n }` is checked
@@ -132,7 +136,7 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 - **THEN** the type checker emits `E4017` for `u.nick`, with help suggesting `u.nick?.clone()`
 
 #### Scenario: Reads in place are not moves
-- **WHEN** `struct User { val name: String }` is declared and a body of `fun f(u: User): Bool` uses `u.name` as an operand (`u.name == "a"`, `u.name + "!"`), a `when` subject, the operand of `&` (`val r = &u.name`), the receiver of `clone()` or a discarded expression statement
+- **WHEN** `struct User { val name: String }` and `fun String.shout(): String` are declared and a body of `fun f(u: User): Bool` uses `u.name` as an operand (`u.name == "a"`, `u.name + "!"`), a `when` subject, the operand of `&` (`val r = &u.name`), the receiver of `clone()`, the receiver of a plain or `mut fun` extension call (`u.name.shout()`) or a discarded expression statement
 - **THEN** the body typechecks successfully
 
 #### Scenario: Borrowing a branch or elvis result
@@ -208,6 +212,29 @@ Where a value of type `T` is expected and an expression of type `&T` or `&mut T`
 - **WHEN** `struct Tag { val s: String }` and `fun get(s: &String): &String` are declared and a body of `fun f(r: &String, m: &mut String)` runs `val a: String = r`, `var b = "x"`, `b = m`, `val t = Tag(r)` and `val c: String = get(r)`
 - **THEN** the type checker emits `E4017` at each of the four sites that take a borrow, naming the borrow `r`, `m`, `r` and `get(r)`, with help suggesting `.clone()`
 
+### Requirement: Consuming Receivers Follow the Move Rules
+The receiver of a `consuming fun` call MUST be checked as a consuming position. A whole local, parameter or temporary MUST be moved into the call. A field, a top-level `val`, an index or a safe navigation of a field MUST be rejected with `E4017`, as for any move. Through a reference or `Heap<T>`, a `Copy` receiver MUST be copied out and any other MUST be rejected with `E4017`.
+
+#### Scenario: Consuming method moves the receiver
+- **WHEN** `struct User { val name: String }`, `struct Account { val owner: User }`, `consuming fun User.toAccount(): Account = Account(this)` and `fun make(): User` are declared and a body of `fun f(u: User)` runs `val a = u.toAccount()` and `val b = make().toAccount()`
+- **THEN** the body typechecks successfully; a later use of `u` is a use after move, which the borrow checker reports, not the type checker
+
+#### Scenario: Consuming a field receiver rejected
+- **WHEN** `struct User : Clone { val name: String }`, `struct Order { val user: User }` and `consuming fun User.toAccount(): Account` are declared and `fun f(o: Order): Account = o.user.toAccount()` is checked
+- **THEN** the type checker emits `E4017` for the field `user` of `o`, with help suggesting `o.user.clone()`
+
+#### Scenario: Consuming through a borrow
+- **WHEN** `consuming fun User.toAccount(): Account`, `struct Point : Copy { val x: Int }` and `consuming fun Point.moved(): Point` are declared, and `fun f(r: &User): Account = r.toAccount()`, `fun g(h: Heap<User>): Account = h.toAccount()` and `fun k(p: &Point): Point = p.moved()` are checked
+- **THEN** the type checker emits `E4017` for `f`, naming the borrow `r`, and for `g`, and accepts `k`, copying the `Point` out
+
+#### Scenario: Consuming a top-level val receiver rejected
+- **WHEN** a file declares `val GUEST = User("guest")` and `consuming fun User.toAccount(): Account`, and `fun f(): Account = GUEST.toAccount()`
+- **THEN** the type checker emits `E4017` for the top-level value `GUEST`
+
+#### Scenario: Consuming safe call
+- **WHEN** `consuming fun User.toAccount(): Account` and `struct Team { val lead: User? }` are declared, and `fun f(u: User?): Account? = u?.toAccount()` and `fun g(t: Team): Account? = t.lead?.toAccount()` are checked
+- **THEN** the type checker accepts `f`, which moves `u`, and emits `E4017` for `g`, because `t.lead` is a field
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -226,3 +253,8 @@ Decisions from `reference-access`:
 
 - **Moving out of a borrow reuses `E4017`** (user). The source is "borrow `u`", as Rust uses one E0507 for every place behind a reference, and the fixes are the same as for a field. The help suggests `u.clone()` for a `Clone` type, and otherwise taking a `&T` where the value is used, never `&u`, which is already a borrow.
 - **A borrow of a non-place consumes its operand** (user). `&(if (c) u.name else v.name)`, `&(u.nick ?: "x")` and `&u?.name` borrow a temporary made by moving the field, so they report `E4017`. A safe navigation is not a place, so `E4017`'s help for one does not suggest borrowing it.
+
+Decisions from `extension-methods`:
+
+- **A `consuming fun` receiver is one more consuming position** (user, from `value-semantics`). It is checked exactly like a by-value argument, so `E4017`'s help stays the same for every consuming site: borrow, clone, or take the whole value. Through a reference, a `Copy` receiver is copied out and any other is a move out of the borrow. Moving out of a `Heap<T>` waits for the `Heap<T>` change. Because moves take whole values, a `consuming fun` can pass `this` on but not take its fields apart, until destructuring or partial moves exist.
+- **An extension named `clone` is called only on a type that is not `Clone`.** On a `Clone` type the built-in always wins, so such an extension is rejected (see `extension-functions`).

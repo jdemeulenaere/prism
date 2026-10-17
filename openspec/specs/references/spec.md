@@ -33,7 +33,7 @@ Where a call's parameter has type `&T`, an argument of type `T` MUST be borrowed
 - **THEN** the type checker emits `E4002` for `f`, with help suggesting `&name`, and `E4005` for `g`, with help suggesting `&u.name`
 
 ### Requirement: Explicit Mutable Borrows at Call Sites
-A parameter of type `&mut T` MUST NOT borrow an owned argument implicitly. The caller MUST write `&mut`, and an owned place passed without it MUST be rejected with `E4004`, with help suggesting `&mut` before the argument.
+A parameter of type `&mut T` MUST NOT borrow an owned argument implicitly. The caller MUST write `&mut`, and an owned place passed without it MUST be rejected with `E4004`, with help suggesting `&mut` before the argument. The receiver of a `mut fun` call is the one exception: it is borrowed mutably without `&mut` (see "Mutable Receivers Must Be Mutable Places").
 
 #### Scenario: Explicit mutation at call sites
 - **WHEN** `fun bump(r: &mut Int)` is declared, and a body declares `var x = 1` and calls `bump(x)` and `bump(&mut x)`
@@ -141,6 +141,51 @@ Assigning to a `var` binding of reference type MUST re-point it to the assigned 
 - **WHEN** `fun read(r: &Int): Int` and `fun peek(rr: &&Int): Int` are declared and `fun f(r: &mut Int, rr: &(&mut Int)): Int { return read(r) + peek(rr) }` is checked
 - **THEN** the file typechecks successfully
 
+### Requirement: Method Receivers Borrow Implicitly
+The receiver of an extension call MUST be passed by the extension's receiver mode with nothing written at the call site: borrowed shared for `fun`, borrowed mutably for `mut fun`, and by value for `consuming fun` (see `ownership`). Any number of `&`, `&mut` and `Heap<T>` layers around the receiver MUST be looked through. A place MUST be borrowed where it lives, and any other receiver MUST be a temporary, in a consuming position, that lives until the end of the statement.
+
+#### Scenario: Shared receivers of places, references and temporaries
+- **WHEN** `struct User { val name: String }`, `fun User.greet(): String`, `fun String.shout(): String` and `fun make(): User` are declared, and a body of `fun f(u: User, r: &User, rr: &&User, m: &mut User, h: Heap<User>)` runs `u.greet()`, `u.name.shout()`, `r.greet()`, `rr.greet()`, `m.greet()`, `h.greet()`, `make().greet()` and `"a".shout()`
+- **THEN** the body typechecks successfully, and neither `u` nor `u.name` is reported as moved
+
+#### Scenario: A branch receiver is a temporary
+- **WHEN** `fun String.shout(): String` and `struct User { val name: String }` are declared and `fun f(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).shout()` is checked
+- **THEN** the type checker emits `E4017` for `u.name` and for `v.name`
+
+### Requirement: Method-Call Receivers Are Classified Before Resolution
+The receiver of every call `value.name(...)` MUST be classified before the member it calls is resolved, since that depends on the receiver's type: a place, or a `?.` chain of fields over one, is read in place, and anything else is a temporary in a consuming position. This applies to a function-typed field call and to the built-in `clone()` as to an extension call.
+
+#### Scenario: A branch receiver of clone is a temporary
+- **WHEN** `struct User { val name: String }` is declared and `fun g(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).clone()` is checked
+- **THEN** the type checker emits `E4017` for `u.name` and for `v.name`
+
+### Requirement: Mutable Receivers Must Be Mutable Places
+The receiver of a `mut fun` call MUST be borrowed mutably without `&mut`. It MUST be a `var` binding, a field path whose every hop is mutable, a place reached through `&mut` (a `val` binding holding a `&mut T` is reborrowed), or a temporary. A `val` binding, a `val` field, or a place reached through a shared `&` MUST be rejected with `E4003`.
+
+#### Scenario: Method receivers borrow implicitly
+- **WHEN** `struct User { var name: String }` and `mut fun User.rename(n: String) { name = n }` are declared, and a body declares `var u = User("a")` and `val w = User("b")` and calls `u.rename("x")` and `w.rename("y")`
+- **THEN** the type checker accepts `u.rename("x")`, which borrows `u` mutably without `&mut`, and emits `E4003` for `w.rename("y")`, with help suggesting `var w`
+
+#### Scenario: Mutable receivers through references
+- **WHEN** `mut fun User.rename(n: String)` is declared, and `fun f(m: &mut User) { m.rename("x"); m.rename("y") }` and `fun g(r: &User) { r.rename("x") }` are checked
+- **THEN** the type checker accepts `f`, reborrowing `m` for each call, and emits `E4003` for `g`
+
+#### Scenario: Mutable receiver on a field path
+- **WHEN** `struct User { var name: String }`, `struct Team { var lead: User, val owner: User }` and `mut fun User.rename(n: String)` are declared, and a body declares `var t: Team` and calls `t.lead.rename("x")` and `t.owner.rename("y")`, and `fun h(p: &mut Team) { p.lead.rename("z") }` is checked
+- **THEN** the type checker accepts `t.lead.rename("x")` and `h`, and emits `E4003` for `t.owner.rename("y")`
+
+#### Scenario: Mutable receiver of a temporary
+- **WHEN** `fun make(): User` and `mut fun User.rename(n: String)` are declared and `fun f() { make().rename("x") }` is checked
+- **THEN** the file typechecks successfully, as `&mut make()` does
+
+#### Scenario: Mutable call on the implicit receiver
+- **WHEN** `mut fun User.rename(n: String)` is declared, and `mut fun User.reset() { rename("") }` and `fun User.peek() { rename("") }` are checked
+- **THEN** the type checker accepts `reset`, reborrowing `this`, and emits `E4003` for `peek`, because its `this` is a shared borrow
+
+#### Scenario: Mutable safe call on a nullable place
+- **WHEN** `mut fun User.rename(n: String)` is declared, and a body declares `var u: User? = null` and `val v: User? = null` and runs `u?.rename("x")` and `v?.rename("y")`
+- **THEN** the type checker accepts `u?.rename("x")` and emits `E4003` for `v?.rename("y")`
+
 ## Design Rationale
 Decisions from `reference-access` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change, 2026-10-17):
 
@@ -154,3 +199,10 @@ Decisions from `reference-access` (agreed with the user in the borrow-checker ro
 - **Borrowed nullables are viewed as optional borrows** (user). `&(T?)` converts to `(&T)?` (and `&mut (T?)` to `(&mut T)?` or `(&T)?`), and `?.` and `?:` read through such a reference. This is a conversion, not subtyping: it reads the tag and points at the payload. The reverse is impossible, because a `(&T)?` has no `T?` to point at. Rejected: an explicit member like Rust's `Option::as_ref` (noise on a common Kotlin idiom), and leaving cloning as the only way to read a borrowed nullable.
 - **References are invariant** (user). A reference points at existing storage, so it cannot change its referent's representation: `T` to `T?` adds a tag, which a value conversion can do and a pointer cannot. Only `&mut` weakening to `&` (at the top, and behind shared borrows) is allowed. Covariance would have made codegen hide a converted copy behind a "borrow".
 - **One coercion step.** Implicit borrows, reborrows, the nullable view and copy-out are decided by one function at every value position after plain assignability fails, which classifies each as an adjustment for the typed tree. Folding them into assignability was rejected, because assignability is also used for joins and equality, where silent borrows and copies would be wrong. A place's move check runs after the coercion, so a borrow or copy-out moves nothing, and a value that does not fit reports only the mismatch.
+
+Decisions from `extension-methods`:
+
+- **Receivers are borrowed implicitly by their mode, including for `mut fun`** (user). `(&mut u).rename()` would be unreadable, and the method's declaration already says it mutates, as for Swift's `mutating` methods; this is the one exception to explicit `&mut` at call sites. The receiver of a `mut fun` must be a mutable place by the rules of `&mut`, or a temporary, matching `&mut make()`.
+- **Receivers are looked through at any depth.** Every `&`, `&mut` and `Heap<T>` layer is peeled until the type matches the extension's receiver, as in Rust's auto-deref, because field access already reads through any depth. Requiring an exact match was rejected: `(*r).greet()` does not even parse, since `*` is writes-only.
+- **Every method-call receiver is classified before its member is resolved.** Which member a call reaches depends on the receiver's type, which is only known once the receiver is inferred, and whether it is inferred in a consuming position is what the classification decides. So a branch over fields is a moved temporary for a field call or the built-in `clone()` as for an extension call. Resolving from a speculative inference was rejected: its errors would have to be discarded, including those of declarations inferred on demand along the way.
+- **The receiver pass is decided at one point and classified** (auto-deref count, shared or mutable borrow, move or copy-out, temporary or place), so the typed tree can record it as an adjustment and MIR can emit the borrow after the arguments, which two-phase borrows need.
