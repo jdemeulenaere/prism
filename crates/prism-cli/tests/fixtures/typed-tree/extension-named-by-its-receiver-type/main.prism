@@ -1,0 +1,4 @@
+// expect: ok
+struct User { val name: String }
+fun User.shout(): String = name + "!"
+fun f(u: User): String = u.shout()

@@ -403,3 +403,40 @@ fn fixture_names_match_spec_scenarios() {
         unknown
     );
 }
+
+/// typed-tree: "Error-free trees". Builds the typed tree of the entry file of every case that
+/// reaches Phase 2 and checks its structural invariants (`TypedFile::validate`), with the
+/// error-free invariants when the entry has no type error.
+#[test]
+fn fixture_typed_trees_are_well_formed() {
+    let mut violations = Vec::new();
+    let mut validated = 0;
+    for case in load_cases() {
+        let entry = entry_of(&case);
+        if !entry.is_file() {
+            continue;
+        }
+        let Ok(dump) = prism_cli::dump_typed_tree(&entry) else {
+            continue;
+        };
+        validated += 1;
+        let error_free = dump.type_errors.is_none();
+        if case.expected.is_empty() {
+            assert!(
+                error_free,
+                "{}: expected ok, but has type errors",
+                case.name
+            );
+        }
+        for violation in dump.tree.validate(error_free) {
+            violations.push(format!("{}: {}", case.name, violation));
+        }
+    }
+    assert!(validated > 200, "only {} trees validated", validated);
+    assert!(
+        violations.is_empty(),
+        "{} typed-tree violations:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}

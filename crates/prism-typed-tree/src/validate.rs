@@ -149,11 +149,20 @@ impl Validator<'_> {
         }
     }
 
+    /// Reports `id` when it is not a place. The payload of a nullable is a place only when the
+    /// nullable is one.
     fn expect_place(&mut self, id: ExpressionId, role: &str) {
         if let Some(expression) = self.body.expressions.get(id) {
-            if !expression.kind.is_place() {
-                let message = format!("{} (node {}) is not a place", role, id.0);
-                self.report(message);
+            match &expression.kind {
+                ExpressionKind::NonNullPayload { nullable } => {
+                    let nullable = *nullable;
+                    self.expect_place(nullable, role);
+                }
+                kind if !kind.is_place() => {
+                    let message = format!("{} (node {}) is not a place", role, id.0);
+                    self.report(message);
+                }
+                _ => {}
             }
         }
     }

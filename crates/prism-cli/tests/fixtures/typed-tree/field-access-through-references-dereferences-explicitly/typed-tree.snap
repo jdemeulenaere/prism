@@ -1,0 +1,10 @@
+module main
+struct main::User @2:1
+  field 0 val id: Int
+fun main::f(u: &&User): Int @3:1
+  local %0 u: &&User (parameter)
+  copy: Int @3:25
+    field 0 id: Int @3:25
+      deref: User @3:25
+        deref: &User @3:25
+          local %0 u: &&User @3:25

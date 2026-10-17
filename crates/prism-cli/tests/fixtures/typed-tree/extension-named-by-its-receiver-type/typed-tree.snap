@@ -1,0 +1,15 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+fun main::User.shout(this): String @3:1
+  local %0 this: &User (receiver)
+  binary +: String @3:28
+    field 0 name: String @3:28
+      deref: User @3:28
+        local %0 this: &User @3:28
+    literal "!": String @3:35
+fun main::f(u: User): String @4:1
+  local %0 u: User (parameter)
+  call main::User.shout: String @4:26
+    receiver: borrow (receiver): &User @4:26
+      local %0 u: User @4:26

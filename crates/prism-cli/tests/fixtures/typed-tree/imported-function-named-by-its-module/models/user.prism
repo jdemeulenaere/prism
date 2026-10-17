@@ -1,0 +1,3 @@
+package models
+public struct User { val name: String }
+public fun greet(u: &User): String = u.name.clone()

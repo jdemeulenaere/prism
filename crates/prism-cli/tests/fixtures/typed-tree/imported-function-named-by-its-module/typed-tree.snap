@@ -1,0 +1,7 @@
+module app/main
+package app
+fun app/main::hello(u: &User): String @5:1
+  local %0 u: &User (parameter)
+  call models/user::greet: String @5:31
+    argument u: copy: &User @5:37
+      local %0 u: &User @5:37

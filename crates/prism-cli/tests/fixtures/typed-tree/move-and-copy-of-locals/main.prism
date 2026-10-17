@@ -1,0 +1,5 @@
+// expect: ok
+fun f(s: String, n: Int) {
+    val a = s
+    val b = n
+}

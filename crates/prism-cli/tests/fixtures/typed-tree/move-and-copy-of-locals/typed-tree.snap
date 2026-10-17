@@ -1,0 +1,13 @@
+module main
+fun main::f(s: String, n: Int): Unit @2:1
+  local %0 s: String (parameter)
+  local %1 n: Int (parameter)
+  local %2 a: String (val)
+  local %3 b: Int (val)
+  block: Unit @2:26
+    let %2 a @3:5
+      move: String @3:13
+        local %0 s: String @3:13
+    let %3 b @4:5
+      copy: Int @4:13
+        local %1 n: Int @4:13

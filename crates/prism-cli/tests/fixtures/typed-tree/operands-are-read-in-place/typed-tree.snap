@@ -1,0 +1,6 @@
+module main
+fun main::f(s: String): Bool @2:1
+  local %0 s: String (parameter)
+  binary ==: Bool @2:26
+    local %0 s: String @2:26
+    literal "a": String @2:31

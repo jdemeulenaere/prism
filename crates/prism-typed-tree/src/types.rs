@@ -142,6 +142,9 @@ impl Type {
                     inner.qualified()
                 )
             }
+            Type::Nullable(inner) if needs_parentheses(inner) => {
+                format!("({})?", inner.qualified())
+            }
             Type::Nullable(inner) => format!("{}?", inner.qualified()),
             Type::Heap(inner) => format!("Heap<{}>", inner.qualified()),
             Type::Fn {
@@ -180,6 +183,7 @@ impl fmt::Display for Type {
                     write!(f, "&{}", inner)
                 }
             }
+            Type::Nullable(inner) if needs_parentheses(inner) => write!(f, "({})?", inner),
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Heap(inner) => write!(f, "Heap<{}>", inner),
             Type::Struct(id) | Type::Enum(id) => write!(f, "{}", id.name),
@@ -202,5 +206,36 @@ impl fmt::Display for Type {
             Type::TypeParam(name) => write!(f, "{}", name),
             Type::Error => write!(f, "<error>"),
         }
+    }
+}
+
+/// Whether a nullable of `inner` is written with parentheses, as in source: `(&T)?` is an
+/// optional borrow, while `&T?` borrows a nullable, and `(() -> T)?` is an optional function.
+fn needs_parentheses(inner: &Type) -> bool {
+    matches!(inner, Type::Reference { .. } | Type::Fn { .. })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nullable_references_and_functions_render_as_written() {
+        let shared_int = Type::Reference {
+            mutable: false,
+            inner: Box::new(Type::Int),
+        };
+        assert_eq!(shared_int.clone().nullable().to_string(), "(&Int)?");
+        let borrowed_nullable = Type::Reference {
+            mutable: false,
+            inner: Box::new(Type::Int.nullable()),
+        };
+        assert_eq!(borrowed_nullable.to_string(), "&Int?");
+        let function = Type::Fn {
+            is_compose: false,
+            params: vec![],
+            ret: Box::new(Type::Int),
+        };
+        assert_eq!(function.nullable().qualified(), "(() -> Int)?");
     }
 }

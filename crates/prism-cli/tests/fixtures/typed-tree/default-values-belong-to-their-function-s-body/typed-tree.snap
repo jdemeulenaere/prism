@@ -1,0 +1,9 @@
+module main
+fun main::f(a: Int, b: Int): Int @2:1
+  local %0 a: Int (parameter)
+  local %1 b: Int (parameter)
+  default b: binary +: Int @2:24
+    local %0 a: Int @2:24
+    literal 1: Int @2:28
+  copy: Int @2:38
+    local %1 b: Int @2:38

@@ -1,0 +1,6 @@
+module main
+fun main::f(a: &Int): Int @2:1
+  local %0 a: &Int (parameter)
+  copy: Int @2:23
+    deref: Int @2:23
+      local %0 a: &Int @2:23
