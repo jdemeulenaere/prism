@@ -1,0 +1,623 @@
+//! The typed tree of one file: its declarations, and one body per function and top-level `val`.
+//!
+//! The tree's invariants, checked by [`TypedFile::validate`]:
+//!
+//! - **Places** (D5 of `typed-tree`). [`ExpressionKind::Local`], [`ExpressionKind::TopLevelValue`],
+//!   [`ExpressionKind::Field`], [`ExpressionKind::Deref`], [`ExpressionKind::Index`],
+//!   [`ExpressionKind::NonNullPayload`] and [`ExpressionKind::Temporary`] are places. A place
+//!   whose value is consumed is wrapped in [`ExpressionKind::Move`] or [`ExpressionKind::Copy`];
+//!   a place anywhere else is read in place. The operand of a move, copy, borrow, field or index,
+//!   and an assignment's target, is always a place.
+//! - **Slot types** (D6). In a tree without type errors, every child's type equals the type its
+//!   position expects (an argument its parameter, a value its place, a branch its `if`, a tail
+//!   its block); where a value fits only by subtyping, a [`ExpressionKind::Coerce`] node of the
+//!   expected type wraps it.
+//! - **Chains** (D7). [`ExpressionKind::NonNullPayload`] appears only inside the chain of a
+//!   [`ExpressionKind::SafeNavigation`], which it leaves with `null` when its operand is `null`.
+//! - **Error nodes** (D12). A tree without type errors has no [`ExpressionKind::Error`] node and
+//!   no node or binding of the error type.
+
+use crate::arena::{Arena, BodyId, ExpressionId, LocalId, StatementId};
+use crate::types::{NominalId, Type};
+use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
+use std::fmt;
+
+/// The typed tree of one file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedFile {
+    /// The file's module path (`app/main`).
+    pub module: String,
+    /// The file's package (`app`), `None` at the workspace root.
+    pub package: Option<String>,
+    /// The file's declarations, in source order.
+    pub items: Vec<Item>,
+    /// The bodies the items point at, in checking order.
+    pub bodies: Arena<BodyId, Body>,
+}
+
+/// A declaration of the file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    Function(FunctionItem),
+    Struct(StructItem),
+    Enum(EnumItem),
+    Value(ValueItem),
+}
+
+/// A function or extension function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionItem {
+    pub path: DeclarationPath,
+    pub visibility: Visibility,
+    pub is_compose: bool,
+    /// The receiver of an extension: its mode and its type (`User` for `fun User.greet()`).
+    pub receiver: Option<(ReceiverMode, Type)>,
+    /// The declared parameters, without the receiver.
+    pub parameters: Vec<(String, Type)>,
+    /// The declared or inferred return type.
+    pub return_type: Type,
+    pub body: BodyId,
+    pub span: Span,
+}
+
+/// A struct declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructItem {
+    pub id: NominalId,
+    pub visibility: Visibility,
+    pub marker: Option<TypeMarker>,
+    /// The fields as `(name, is_var, type)`, in declaration order: a field is named by its index.
+    pub fields: Vec<(String, bool, Type)>,
+    pub span: Span,
+}
+
+/// An enum declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumItem {
+    pub id: NominalId,
+    pub visibility: Visibility,
+    pub marker: Option<TypeMarker>,
+    /// The variants as `(name, payload types)`, in declaration order: a variant is named by its
+    /// index.
+    pub variants: Vec<(String, Vec<Type>)>,
+    pub span: Span,
+}
+
+/// A top-level `val`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueItem {
+    pub path: DeclarationPath,
+    pub visibility: Visibility,
+    /// The declared or inferred type.
+    pub ty: Type,
+    pub body: BodyId,
+    pub span: Span,
+}
+
+/// The identity of a top-level function, extension or `val`: its defining module, the receiver
+/// type for an extension, and its name (D4). It is the ABI's identity for an exported symbol,
+/// unique because Prism has no overloading and one extension per receiver type and name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeclarationPath {
+    pub module: String,
+    pub receiver: Option<Type>,
+    pub name: String,
+}
+
+impl DeclarationPath {
+    /// The path of a plain declaration `name` of `module`.
+    pub fn new(module: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            module: module.into(),
+            receiver: None,
+            name: name.into(),
+        }
+    }
+
+    /// The path of the extension `name` on `receiver`, declared in `module`.
+    pub fn extension(module: impl Into<String>, receiver: Type, name: impl Into<String>) -> Self {
+        Self {
+            module: module.into(),
+            receiver: Some(receiver),
+            name: name.into(),
+        }
+    }
+}
+
+impl fmt::Display for DeclarationPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.receiver {
+            Some(receiver) => write!(f, "{}::{}.{}", self.module, receiver, self.name),
+            None => write!(f, "{}::{}", self.module, self.name),
+        }
+    }
+}
+
+/// The body of a function or of a top-level `val`: its bindings, expressions and statements.
+/// A closure's parameters and locals live in the body of its enclosing declaration (D11).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Body {
+    /// The declaration the body belongs to.
+    pub owner: DeclarationPath,
+    pub locals: Arena<LocalId, Local>,
+    pub expressions: Arena<ExpressionId, Expression>,
+    pub statements: Arena<StatementId, Statement>,
+    /// The function's parameters, `this` first for an extension. Empty for a `val`.
+    pub parameters: Vec<LocalId>,
+    /// One default value per declared parameter (without `this`), evaluated at the call. It may
+    /// read `this` and the earlier parameters.
+    pub defaults: Vec<Option<ExpressionId>>,
+    /// The function's body or the `val`'s initializer; `None` for a function without a body.
+    pub value: Option<ExpressionId>,
+}
+
+impl Body {
+    /// An empty body owned by `owner`.
+    pub fn new(owner: DeclarationPath) -> Self {
+        Self {
+            owner,
+            locals: Arena::new(),
+            expressions: Arena::new(),
+            statements: Arena::new(),
+            parameters: Vec::new(),
+            defaults: Vec::new(),
+            value: None,
+        }
+    }
+
+    /// The type of expression `id`.
+    pub fn type_of(&self, id: ExpressionId) -> &Type {
+        &self.expressions[id].ty
+    }
+}
+
+/// A binding of a body. Two declarations with the same name are distinct bindings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Local {
+    pub name: String,
+    pub ty: Type,
+    /// Whether the binding is a `var`.
+    pub mutable: bool,
+    pub kind: LocalKind,
+    pub span: Span,
+}
+
+/// What declares a binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalKind {
+    /// The `this` of an extension.
+    Receiver,
+    /// A function parameter.
+    Parameter,
+    /// A local `val` or `var`.
+    Let,
+    /// The variable of a `for` loop.
+    ForVariable,
+    /// A closure parameter.
+    ClosureParameter,
+}
+
+/// An expression node: its kind, its type and the span of the source it stands for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expression {
+    pub kind: ExpressionKind,
+    pub ty: Type,
+    pub span: Span,
+}
+
+/// What an expression node is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExpressionKind {
+    /// A literal value.
+    Literal(Literal),
+
+    // Places (D5).
+    /// A binding of the body.
+    Local(LocalId),
+    /// A top-level `val` of the file or of a direct import.
+    TopLevelValue(DeclarationPath),
+    /// Field `index` (named `name`) of the struct value `base`, a place.
+    Field {
+        base: ExpressionId,
+        index: usize,
+        name: String,
+    },
+    /// The referent of `pointer`, a `&T`, `&mut T` or `Heap<T>`.
+    Deref { pointer: ExpressionId },
+    /// The element `index` of the place `base` (a character of a `String`).
+    Index {
+        base: ExpressionId,
+        index: ExpressionId,
+    },
+    /// The payload of `nullable`, which leaves the innermost enclosing chain with `null` when
+    /// `nullable` is `null` (D7). A place when `nullable` is one.
+    NonNullPayload { nullable: ExpressionId },
+    /// `value` evaluated into storage that lives until the end of the enclosing statement.
+    Temporary { value: ExpressionId },
+
+    // Uses of places.
+    /// The value of the place, moved out of it.
+    Move { place: ExpressionId },
+    /// The value of the place, copied (its type is `Copy`).
+    Copy { place: ExpressionId },
+    /// A borrow of the place.
+    Borrow {
+        mutable: bool,
+        origin: BorrowOrigin,
+        place: ExpressionId,
+    },
+    /// Evaluates `chain`, whose [`ExpressionKind::NonNullPayload`] nodes may leave it with
+    /// `null`. Its type is the chain's type made nullable (D7).
+    SafeNavigation {
+        chain: ExpressionId,
+        origin: SafeNavigationOrigin,
+    },
+    /// `value` converted to this node's type by assignability (D6).
+    Coerce {
+        value: ExpressionId,
+        kind: CoercionKind,
+    },
+
+    // Values.
+    /// A top-level function read as a value.
+    FunctionReference(DeclarationPath),
+    /// A variant with a payload, read as its constructor function.
+    VariantConstructor {
+        enum_id: NominalId,
+        index: usize,
+        name: String,
+    },
+    /// A call (D8).
+    Call(Call),
+    /// A struct or variant construction, its fields in declaration order (D8).
+    Construct {
+        kind: ConstructKind,
+        fields: Vec<ConstructField>,
+        /// The field indices of the written values, in source order.
+        evaluation_order: Vec<usize>,
+    },
+    /// `start..end` or `start..<end`, of the built-in `Range` type.
+    Range {
+        start: ExpressionId,
+        end: ExpressionId,
+        end_inclusive: bool,
+    },
+    /// An arithmetic or comparison operator over operands read in place.
+    Binary {
+        operator: BinaryOperator,
+        left: ExpressionId,
+        right: ExpressionId,
+    },
+    /// `-` or `!` over an operand read in place.
+    Unary {
+        operator: UnaryOperator,
+        operand: ExpressionId,
+    },
+    /// `&&` or `||`, which evaluates `right` only when needed.
+    Logical {
+        operator: LogicalOperator,
+        left: ExpressionId,
+        right: ExpressionId,
+    },
+    /// `nullable ?: fallback`, which evaluates `fallback` only when `nullable` is `null`.
+    Elvis {
+        nullable: ExpressionId,
+        fallback: ExpressionId,
+    },
+
+    // Control flow (D9).
+    /// A block: its statements, and its tail, which is the block's value. A block whose value is
+    /// discarded has no tail.
+    Block {
+        statements: Vec<StatementId>,
+        tail: Option<ExpressionId>,
+    },
+    If {
+        condition: ExpressionId,
+        then_branch: ExpressionId,
+        else_branch: Option<ExpressionId>,
+    },
+    /// A `when`, its subject read in place.
+    When {
+        subject: Option<ExpressionId>,
+        branches: Vec<WhenBranch>,
+        /// Whether the branches cover every value of the subject.
+        exhaustive: bool,
+    },
+    /// `return`, of type `Nothing`.
+    Return { value: Option<ExpressionId> },
+    /// `break`, naming the loop it leaves; `None` only in a tree with type errors.
+    Break { target: Option<StatementId> },
+    /// `continue`, naming the loop it continues; `None` only in a tree with type errors.
+    Continue { target: Option<StatementId> },
+    /// A closure (D11). Its parameters and locals are bindings of the enclosing body.
+    Closure {
+        parameters: Vec<LocalId>,
+        body: ExpressionId,
+        is_compose: bool,
+        /// The bindings of enclosing scopes its body uses, each once, in first-use order.
+        captures: Vec<Capture>,
+    },
+
+    /// Where checking failed: of the error type, keeping the nodes that were checked (D12).
+    Error { children: Vec<ExpressionId> },
+}
+
+impl ExpressionKind {
+    /// Whether the node is a place (D5). An error node counts as one, so a tree with type errors
+    /// reports no follow-on violation.
+    pub fn is_place(&self) -> bool {
+        matches!(
+            self,
+            ExpressionKind::Local(_)
+                | ExpressionKind::TopLevelValue(_)
+                | ExpressionKind::Field { .. }
+                | ExpressionKind::Deref { .. }
+                | ExpressionKind::Index { .. }
+                | ExpressionKind::NonNullPayload { .. }
+                | ExpressionKind::Temporary { .. }
+                | ExpressionKind::Error { .. }
+        )
+    }
+}
+
+/// A normalized call (D8).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Call {
+    pub callee: Callee,
+    /// One argument per parameter, in parameter order, the receiver first when `has_receiver`.
+    pub arguments: Vec<Argument>,
+    /// The parameters as the callee declares them, in the same order: the name (`None` for a
+    /// function-typed value) and the type each argument has. An extension's receiver is
+    /// `this`, of the type it is passed as (`&T`, `&mut T` or `T`).
+    pub parameters: Vec<(Option<String>, Type)>,
+    /// The parameter indices of the written arguments, in source order, the receiver first.
+    /// Defaults are evaluated after them.
+    pub evaluation_order: Vec<usize>,
+    /// Whether the first argument is an extension's receiver.
+    pub has_receiver: bool,
+    /// Whether the callee is a `compose fun` or composable function value.
+    pub is_compose: bool,
+}
+
+/// What a call calls.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Callee {
+    /// A top-level function or extension, of the file or of a direct import.
+    Function(DeclarationPath),
+    /// A function the compiler provides.
+    Builtin(BuiltinFunction),
+    /// A function-typed value, read in place.
+    Value(ExpressionId),
+}
+
+/// A function the compiler provides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinFunction {
+    /// `clone()` of a `Clone` type, called with a shared receiver borrow.
+    Clone,
+}
+
+/// One argument of a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Argument {
+    /// A written argument (or the receiver).
+    Written(ExpressionId),
+    /// An omitted parameter, which takes its default value.
+    Default,
+}
+
+/// Why a borrow exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorrowOrigin {
+    /// Written `&e` or `&mut e`.
+    Written,
+    /// Implied by a reference parameter.
+    Argument,
+    /// Implied by an extension's receiver mode. Taken after the other arguments are evaluated.
+    Receiver,
+    /// Made by a nullable conversion (`&(T?)` read as `(&T)?`).
+    Conversion,
+}
+
+/// How a [`ExpressionKind::Coerce`] converts its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoercionKind {
+    /// `T` to `T?`: a representation change.
+    WrapNullable,
+    /// `Nothing` to any type: the value never exists.
+    Diverge,
+    /// Any other assignability step: `&mut T` to `&T`, `Nothing?` to `T?`, `T?` to `U?`,
+    /// `Heap<T>` and function-type variance.
+    Subtype,
+}
+
+/// What a [`ExpressionKind::SafeNavigation`] was written as or converts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafeNavigationOrigin {
+    /// A written `?.`.
+    Written,
+    /// A borrowed nullable `&(T?)` read as an optional borrow `(&T)?`.
+    NullableView,
+    /// A `T?` place lent as an optional borrow `(&T)?`.
+    BorrowContents,
+    /// A `Copy` value read out of an optional borrow (`(&T)?` as `T?`).
+    CopyOut,
+}
+
+/// What a construction constructs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstructKind {
+    Struct(NominalId),
+    Variant {
+        enum_id: NominalId,
+        index: usize,
+        name: String,
+    },
+}
+
+/// One field of a construction, in declaration order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructField {
+    /// The field's name, `None` for a variant payload.
+    pub name: Option<String>,
+    /// The field's declared type.
+    pub ty: Type,
+    pub value: ExpressionId,
+}
+
+/// One branch of a `when`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhenBranch {
+    pub patterns: Vec<Pattern>,
+    pub body: ExpressionId,
+    pub span: Span,
+}
+
+/// A resolved `when` pattern.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// A payload-free variant of the subject's enum, which covers the whole variant.
+    Variant {
+        enum_id: NominalId,
+        index: usize,
+        name: String,
+    },
+    /// A value compared with the subject.
+    Value(ExpressionId),
+    /// `in start..end` or `in start..<end`.
+    Range {
+        start: ExpressionId,
+        end: ExpressionId,
+        end_inclusive: bool,
+    },
+    /// A condition of a `when` without subject.
+    Condition(ExpressionId),
+    /// `else`.
+    Else,
+}
+
+/// A binding of an enclosing scope that a closure uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capture {
+    pub local: LocalId,
+    /// The first use.
+    pub span: Span,
+}
+
+/// An arithmetic or comparison operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    Equal,
+    NotEqual,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+}
+
+impl BinaryOperator {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BinaryOperator::Add => "+",
+            BinaryOperator::Subtract => "-",
+            BinaryOperator::Multiply => "*",
+            BinaryOperator::Divide => "/",
+            BinaryOperator::Remainder => "%",
+            BinaryOperator::Equal => "==",
+            BinaryOperator::NotEqual => "!=",
+            BinaryOperator::Less => "<",
+            BinaryOperator::LessOrEqual => "<=",
+            BinaryOperator::Greater => ">",
+            BinaryOperator::GreaterOrEqual => ">=",
+        }
+    }
+}
+
+/// A unary operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOperator {
+    Negate,
+    Not,
+}
+
+impl UnaryOperator {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnaryOperator::Negate => "-",
+            UnaryOperator::Not => "!",
+        }
+    }
+}
+
+/// A short-circuiting operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalOperator {
+    And,
+    Or,
+}
+
+impl LogicalOperator {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogicalOperator::And => "&&",
+            LogicalOperator::Or => "||",
+        }
+    }
+}
+
+/// A statement node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Statement {
+    pub kind: StatementKind,
+    pub span: Span,
+}
+
+/// What a statement is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatementKind {
+    /// A local `val` or `var`, initialized with a consumed value.
+    Let {
+        local: LocalId,
+        initializer: ExpressionId,
+    },
+    /// An assignment to a place (D10): a binding, a field path, or a dereference for a write
+    /// through a reference. The value is consumed.
+    Assign {
+        target: ExpressionId,
+        value: ExpressionId,
+    },
+    /// An expression whose value is discarded.
+    Expression { value: ExpressionId },
+    While {
+        condition: ExpressionId,
+        body: ExpressionId,
+    },
+    /// The condition is evaluated in the body block's scope, so the body's locals live through
+    /// it.
+    DoWhile {
+        body: ExpressionId,
+        condition: ExpressionId,
+    },
+    /// `for (variable in range) body`.
+    For {
+        variable: LocalId,
+        range: ExpressionId,
+        body: ExpressionId,
+    },
+}
+
+impl StatementKind {
+    /// Whether the statement is a loop, which a `break` or `continue` can name.
+    pub fn is_loop(&self) -> bool {
+        matches!(
+            self,
+            StatementKind::While { .. } | StatementKind::DoWhile { .. } | StatementKind::For { .. }
+        )
+    }
+}
