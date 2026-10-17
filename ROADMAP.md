@@ -52,6 +52,25 @@ Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is on
 8. [ ] `borrowck-exclusivity`: non-lexical borrows, disjoint field paths, two-phase receiver borrows; closures capture by inferred borrow and a capturing closure cannot escape.
 9. [ ] `borrowck-elision`: elision rules 1–4 derived from signatures alone, `DanglingBorrowReturn`, and borrows of top-level `val`s valid everywhere.
 
+### Then: the road to Milestone 2
+Planned autonomously on 2026-10-17, when the user asked for iteration up to Milestone 2 (see [`docs/decisions-for-review.md`](docs/decisions-for-review.md)). Each item is one OpenSpec change, in this order; the order and scope may be revised as changes land, and any revision is logged there.
+
+10. [ ] `generics`: type parameters on functions, structs and enums, checked at declaration, with `Copy`/`Clone` bounds; monomorphization, and the ABI's monomorphization hashes for exported generics. Needed for `State<T>`.
+11. [ ] `compound-assignment`: `+=`, `-=`, `*=`, `/=`, `%=` as statements.
+12. [ ] `abi-cache`: decide the ABI hash algorithm, write `.abi` and artifact caches, and verify compilation avoidance (body edits recompile no importer).
+13. [ ] `prism-fmt`: the `prism fmt` code formatter.
+14. [ ] `codegen-core` (Phase 3): a `prism-codegen` crate lowering MIR to Cranelift; `prism run` for `Int`/`Bool`/`Double`, functions, control flow and loops; a `print` built-in; an executable-fixture runner comparing stdout.
+15. [ ] `codegen-aggregates`: structs, enums, nullables, references and `when` in the backend.
+16. [ ] `runtime-strings-and-drops`: owned `String`, drop elaboration on MIR, `clone()`, and `Heap<T>` construction.
+17. [ ] `closures`: closure conversion in the backend, then escaping move-capturing closures (needed for `onClick`).
+18. [ ] `hot-reload`: function-pointer tables in Tier 1 and `prism run --watch` patching changed functions while the program runs.
+19. [ ] `compose-runtime` (Phase 4): slot table, group keys and memoization.
+20. [ ] `compose-transform`: the compiler transform of `compose fun` (composer parameter, group keys, change-tracking bitmasks, skipping).
+21. [ ] `state-handles`: `remember`, `mutableStateOf` and `Copy` `State<T>` handles with generational indices; invalidation and recomposition.
+22. [ ] `ui-toolkit`: a UI node tree with layout (`Column`, `Row`, `Text`, `Button`), a desktop renderer and a headless renderer for tests, and event dispatch.
+23. [ ] `compose-hot-reload`: hot reload of composable bodies that keeps slot-table state.
+24. [ ] `reactive-app-verification`: real reactive example apps (counter, todo list) running natively, with tests that no allocation outlives its owner.
+
 Deliberately left until after the borrow checker (from the same session):
 - [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out, whether `*h = v` writes a `Heap`'s contents, and whether `Heap<U>` to `Heap<T>` stays covariant, which changes the representation the way reference covariance did (from `reference-access`).
 - [ ] Payload-binding `when` patterns and destructuring declarations (`val (name, email) = user`), the way to take ownership of a struct's non-`Copy` fields.
