@@ -8,8 +8,8 @@ fun main::f(_1: String, _2: String): String @2:1
   bb0:
     storage_live _3 @2:39
     _3 = &_1 (operator) @2:39
-    storage_live _4 @2:39
-    _4 = &_2 (operator) @2:39
+    storage_live _4 @2:43
+    _4 = &_2 (operator) @2:43
     _0 = move _3 + move _4 @2:39
     storage_dead _4 @2:39
     storage_dead _3 @2:39

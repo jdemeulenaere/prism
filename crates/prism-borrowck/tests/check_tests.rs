@@ -121,7 +121,7 @@ E5001 use of possibly moved value 's' @2:44 value used here after move
     );
 }
 
-/// Both operands are moved by one aggregate statement, at the span of the whole construction.
+/// Both operands are moved by one aggregate statement, each labelled at its own span.
 #[test]
 fn the_second_operand_of_a_construction_sees_the_first_move() {
     let source = "\
@@ -131,8 +131,8 @@ fun f(s: String): Pair = Pair(s, s)
     assert_eq!(
         rendered(source),
         "\
-E5001 use of moved value 's' @2:26 value used here after move
-  related @2:26 value moved here
+E5001 use of moved value 's' @2:34 value used here after move
+  related @2:31 value moved here
   note: 's' has type 'String', which is not 'Copy'
   help: clone it where it moves: 's.clone()'"
     );
@@ -245,4 +245,80 @@ fn moves_on_separate_paths_and_reinitialization_are_accepted() {
         "{}fun f(c: Bool, s: String) {{ while (c) {{ take(s); break }} }}\n",
         TAKE
     ));
+}
+
+/// The source text of the primary label of the only error of `source`, then of its related
+/// labels.
+fn label_texts(source: &str) -> Vec<String> {
+    let errors = errors(source);
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    let error = &errors[0];
+    std::iter::once(&error.primary)
+        .chain(&error.related)
+        .map(|label| source[label.span.start..label.span.end].to_string())
+        .collect()
+}
+
+/// ownership: "Labels point at the operands". Each use and move is labelled at the operand that
+/// uses or moves the value, not at the statement holding it.
+#[test]
+fn labels_point_at_the_operands() {
+    let declarations = "\
+struct Pair { val a: String, val b: String }
+struct User { var name: String }
+struct Point { var x: Int }
+struct Stack { var count: Int }
+enum Color { Red, Green }
+mut fun Stack.push(n: Int) {}
+fun take(s: String) {}
+fun takeUser(u: User) {}
+fun takePoint(p: Point) {}
+fun takeStack(s: Stack) {}
+fun paint(c: Color) {}
+fun run(f: () -> Int): Int = f()
+fun next(): Int = 0
+";
+    let cases: &[(&str, &[&str])] = &[
+        ("fun f(s: String): Pair = Pair(s, s)", &["s", "s"]),
+        (
+            "fun f(s: String): Bool { val t = s; return s == \"a\" }",
+            &["s", "s"],
+        ),
+        (
+            "fun f(s: String?): Bool { val t = s; return s == null }",
+            &["s", "s"],
+        ),
+        (
+            "fun f() { var u = User(\"a\"); takeUser(u); u.name = \"b\" }",
+            &["u.name", "u"],
+        ),
+        (
+            "fun f() { var p = Point(1); takePoint(p); p.x = 5 }",
+            &["p.x", "p"],
+        ),
+        (
+            "fun f(t: String) { var s = \"a\"; s = t; s = t }",
+            &["t", "t"],
+        ),
+        (
+            "fun f(c: Color): Int { paint(c); return when (c) { Red -> 1; Green -> 2 } }",
+            &["c", "c"],
+        ),
+        (
+            "fun f() { var v = Stack(0); takeStack(v); v.push(1) }",
+            &["v", "v"],
+        ),
+        (
+            "fun f(g: () -> Int): Int { val a = run(g); return g() }",
+            &["g", "g"],
+        ),
+        (
+            "fun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }",
+            &["x", "continue"],
+        ),
+    ];
+    for (body, expected) in cases {
+        let source = format!("{}{}\n", declarations, body);
+        assert_eq!(&label_texts(&source), expected, "{}", body);
+    }
 }

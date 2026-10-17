@@ -13,19 +13,19 @@ fun main::f(_1: String, _2: String?): Bool @2:1
     storage_live _4 @2:38
     _4 = &_1 (operator) @2:38
     _3 = wrap move _4 @2:38
-    storage_live _5 @2:38
-    storage_live _6 @2:38
-    _6 = discriminant _2 @2:38
-    switch move _6 [0 -> bb2, otherwise -> bb1] @2:38
+    storage_live _5 @2:43
+    storage_live _6 @2:43
+    _6 = discriminant _2 @2:43
+    switch move _6 [0 -> bb2, otherwise -> bb1] @2:43
   bb1:
-    storage_live _7 @2:38
-    _7 = &(_2 as payload) (operator) @2:38
-    _5 = wrap move _7 @2:38
-    storage_dead _7 @2:38
-    goto -> bb3 @2:38
+    storage_live _7 @2:43
+    _7 = &(_2 as payload) (operator) @2:43
+    _5 = wrap move _7 @2:43
+    storage_dead _7 @2:43
+    goto -> bb3 @2:43
   bb2:
-    _5 = const null @2:38
-    goto -> bb3 @2:38
+    _5 = const null @2:43
+    goto -> bb3 @2:43
   bb3:
     _0 = move _3 == move _5 @2:38
     storage_dead _6 @2:38

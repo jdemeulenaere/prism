@@ -1,0 +1,5 @@
+// expect: E5001
+fun g(s: String): Bool {
+    val t = s
+    return s == "a"
+}

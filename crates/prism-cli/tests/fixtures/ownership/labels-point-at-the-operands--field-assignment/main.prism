@@ -1,0 +1,10 @@
+// expect: E5001
+struct User {
+    var name: String
+}
+fun take(u: User) {}
+fun h() {
+    var u = User("a")
+    take(u)
+    u.name = "b"
+}

@@ -164,6 +164,7 @@ impl MoveData {
                         (terminator_effects(terminator), terminator.span, is_call)
                     }
                 };
+                // Uses and moves carry their own spans; `span` is the location's.
                 let effects = raw
                     .into_iter()
                     .filter_map(|effect| data.resolve(body, types, effect, location, span, is_call))
@@ -233,12 +234,12 @@ impl MoveData {
         is_call: bool,
     ) -> Option<Effect> {
         Some(match effect {
-            PlaceEffect::Use(place, kind) => Effect::Use {
+            PlaceEffect::Use(place, kind, span) => Effect::Use {
                 path: self.path_of(&place).0,
                 kind,
                 span,
             },
-            PlaceEffect::Move(place) => {
+            PlaceEffect::Move(place, span) => {
                 if types.is_copy(&place.ty(body, types)) {
                     return None;
                 }

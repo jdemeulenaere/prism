@@ -54,7 +54,8 @@ impl Builder<'_> {
                                 ty
                             );
                         }
-                        self.assign(destination.clone(), Rvalue::Use(Operand::Copy(place)), span);
+                        let operand = Operand::Copy(place, span);
+                        self.assign(destination.clone(), Rvalue::Use(operand), span);
                     }
                 }
             }
@@ -269,8 +270,8 @@ impl Builder<'_> {
                     index: *index,
                 })
             }
-            ExpressionKind::Move { place } => Operand::Move(self.place(*place)),
-            ExpressionKind::Copy { place } => Operand::Copy(self.place(*place)),
+            ExpressionKind::Move { place } => Operand::Move(self.place(*place), span),
+            ExpressionKind::Copy { place } => Operand::Copy(self.place(*place), span),
             ExpressionKind::Coerce {
                 value,
                 kind: CoercionKind::Subtype,
@@ -282,12 +283,12 @@ impl Builder<'_> {
                         ty
                     );
                 }
-                Operand::Copy(self.place(id))
+                Operand::Copy(self.place(id), span)
             }
             _ => {
                 let local = self.new_temporary(ty, span);
                 self.expression_into(Some(&Place::local(local)), id);
-                Operand::Move(Place::local(local))
+                Operand::Move(Place::local(local), span)
             }
         }
     }
@@ -328,7 +329,7 @@ impl Builder<'_> {
         }
         let local = self.new_temporary(ty, span);
         self.assign(Place::local(local), Rvalue::Use(operand), span);
-        Operand::Move(Place::local(local))
+        Operand::Move(Place::local(local), span)
     }
 
     /// Whether evaluating `id` may write a place: whether it calls a function or runs a
@@ -640,11 +641,13 @@ impl Builder<'_> {
 
     /// `target = value`: the value, then a drop of the target's old value when its type needs
     /// one, then the write (D6). A value that moves a place the source names is moved into a
-    /// temporary before the drop, so that the drop cannot destroy it (`s = s`). A target that
-    /// needs no drop and whose place evaluates nothing is written directly.
+    /// temporary before the drop, so that the drop cannot destroy it (`s = s`). The write is at
+    /// the target's span, so a write to a field of a moved value points at the field. A whole
+    /// local that needs no drop is written directly.
     fn lower_assign(&mut self, target: ExpressionId, value: ExpressionId, span: Span) {
-        let target_ty = self.expression(target).ty.clone();
-        if !self.needs_drop(&target_ty) && self.is_plain_place(target) {
+        let target_expression = self.expression(target);
+        let (target_ty, target_span) = (target_expression.ty.clone(), target_expression.span);
+        if !self.needs_drop(&target_ty) && self.is_binding(target) {
             let place = self.place(target);
             self.expression_into(Some(&place), value);
             return;
@@ -657,19 +660,11 @@ impl Builder<'_> {
             operand = self.stabilize(operand, value_ty, value_span);
             self.emit_drop(place.clone(), span);
         }
-        self.assign(place, Rvalue::Use(operand), span);
+        self.assign(place, Rvalue::Use(operand), target_span);
     }
 
-    /// Whether the place `id` is a binding followed by fields and dereferences, whose lowering
-    /// evaluates nothing.
-    fn is_plain_place(&self, mut id: ExpressionId) -> bool {
-        loop {
-            match self.expression(id).kind {
-                ExpressionKind::Field { base, .. } => id = base,
-                ExpressionKind::Deref { pointer } => id = pointer,
-                ExpressionKind::Local(_) => return true,
-                _ => return false,
-            }
-        }
+    /// Whether the place `id` is a binding, whose lowering evaluates nothing.
+    fn is_binding(&self, id: ExpressionId) -> bool {
+        matches!(self.expression(id).kind, ExpressionKind::Local(_))
     }
 }

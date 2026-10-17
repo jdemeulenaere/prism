@@ -17,6 +17,8 @@ use prism_typed_tree::{
 struct PendingReceiver {
     mutable: bool,
     place: Place,
+    /// The receiver's own span, where its borrow is taken.
+    span: Span,
 }
 
 /// The type of the slot a generator of a parameter of type `parameter` fills, when the
@@ -55,7 +57,9 @@ impl Builder<'_> {
         let callee = match &call.callee {
             TreeCallee::Function(path) => Callee::Function(path.clone()),
             TreeCallee::Builtin(builtin) => Callee::Builtin(*builtin),
-            TreeCallee::Value(value) => Callee::Value(self.place(*value)),
+            TreeCallee::Value(value) => {
+                Callee::Value(self.place(*value), self.expression(*value).span)
+            }
         };
         let count = call.arguments.len();
         let last_default = call
@@ -81,14 +85,14 @@ impl Builder<'_> {
         }
         if let Some(pending) = pending {
             let receiver_ty = call.parameters[0].1.clone();
-            let local = self.new_temporary(receiver_ty, span);
+            let local = self.new_temporary(receiver_ty, pending.span);
             let rvalue = Rvalue::Borrow {
                 mutable: pending.mutable,
                 origin: BorrowOrigin::Receiver,
                 place: pending.place,
             };
-            self.assign(Place::local(local), rvalue, span);
-            operands[0] = Some(Operand::Move(Place::local(local)));
+            self.assign(Place::local(local), rvalue, pending.span);
+            operands[0] = Some(Operand::Move(Place::local(local), pending.span));
         }
         for index in 0..count {
             if matches!(call.arguments[index], Argument::Default) {
@@ -152,6 +156,7 @@ impl Builder<'_> {
     /// for a receiver evaluated as an ordinary argument: one the call moves or copies, which is
     /// moved or copied before the arguments (D10 of `borrowck-moves`).
     fn receiver_place(&mut self, receiver: ExpressionId) -> Option<PendingReceiver> {
+        let span = self.expression(receiver).span;
         match self.expression(receiver).kind {
             ExpressionKind::Borrow {
                 mutable,
@@ -160,6 +165,7 @@ impl Builder<'_> {
             } => Some(PendingReceiver {
                 mutable,
                 place: self.place(place),
+                span,
             }),
             _ => None,
         }
@@ -173,7 +179,7 @@ impl Builder<'_> {
         let operand = self.operand(value);
         match &operand {
             Operand::Constant(_) if !borrowed_by_default => operand,
-            Operand::Move(place)
+            Operand::Move(place, _)
                 if place
                     .as_local()
                     .is_some_and(|local| self.is_temporary_of_innermost_scope(local)) =>
@@ -183,7 +189,7 @@ impl Builder<'_> {
             _ => {
                 let local = self.new_temporary(ty, span);
                 self.assign(Place::local(local), Rvalue::Use(operand), span);
-                Operand::Move(Place::local(local))
+                Operand::Move(Place::local(local), span)
             }
         }
     }
@@ -208,7 +214,7 @@ impl Builder<'_> {
         for (earlier, operand) in operands.iter().enumerate().take(index) {
             let earlier_ty = call.parameters[earlier].1.clone();
             let place = match operand {
-                Some(Operand::Move(place)) => place.clone(),
+                Some(Operand::Move(place, _)) => place.clone(),
                 _ if self.current.is_none() => return Operand::Constant(Constant::Unit),
                 _ => panic!(
                     "internal error: argument {} is not held in a temporary",
@@ -222,7 +228,7 @@ impl Builder<'_> {
                 place,
             };
             self.assign(Place::local(borrow), rvalue, span);
-            arguments.push(Operand::Move(Place::local(borrow)));
+            arguments.push(Operand::Move(Place::local(borrow), span));
             parameters.push(shared(earlier_ty));
         }
         if let Some(slot_ty) = slot_type(&parameter_ty) {
@@ -240,7 +246,7 @@ impl Builder<'_> {
                 place: Place::local(slot),
             };
             self.assign(Place::local(borrow), rvalue, span);
-            arguments.push(Operand::Move(Place::local(borrow)));
+            arguments.push(Operand::Move(Place::local(borrow), span));
             parameters.push(slot_reference);
         }
         let result = self.new_temporary(parameter_ty, span);
@@ -258,7 +264,7 @@ impl Builder<'_> {
             true,
             span,
         );
-        Operand::Move(Place::local(result))
+        Operand::Move(Place::local(result), span)
     }
 
     /// Evaluates the root temporary of a generator's borrowed default into the caller's slot

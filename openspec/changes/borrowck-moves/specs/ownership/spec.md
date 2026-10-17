@@ -75,6 +75,10 @@ An `E5001` diagnostic MUST point at the use and name the value, and MUST list as
 - **WHEN** `fun take(s: String) {}` is declared and `prism check` runs on `fun f(c: Bool, s: String) { if (c) take(s); take(s) }`
 - **THEN** it reports `error[E5001]: use of possibly moved value 's'` at the second `s`, with a related location at the first `s`
 
+#### Scenario: Labels point at the operands
+- **WHEN** `struct Pair { val a: String, val b: String }`, `struct User { var name: String }` and `fun take(u: User) {}` are declared, and `fun f(s: String): Pair = Pair(s, s)`, `fun g(s: String): Bool { val t = s; return s == "a" }` or `fun h() { var u = User("a"); take(u); u.name = "b" }` is checked
+- **THEN** the borrow checker emits `E5001` labelled at the operand that uses the value (the second `s`, the compared `s`, `u.name`), with its related location at the operand that moved it (the first `s`, the `s` of `val t = s`, the `u` passed to `take`), not at the whole construction, comparison or assignment
+
 #### Scenario: Copy suggestion for a type whose members are all Copy
 - **WHEN** `struct Point { val x: Int, val y: Int }`, `struct Name { val text: String }`, `fun g(p: Point) {}` and `fun h(n: Name) {}` are declared and `fun f(p: Point, n: Name) { g(p); g(p); h(n); h(n) }` is checked
 - **THEN** the borrow checker emits `E5001` twice: for `p` with help suggesting `: Copy` on `Point`, and for `n` with neither a `: Copy` nor a `.clone()` suggestion

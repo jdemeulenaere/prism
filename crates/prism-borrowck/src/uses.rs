@@ -1,8 +1,10 @@
 //! What each statement and terminator does to places, in evaluation order (D5 of
 //! `borrowck-moves`): which places it uses, moves and initializes, and which locals' storage it
-//! starts or ends. [`crate::move_paths::MoveData`] resolves these effects to move paths once, and
+//! starts or ends. A use or a move by an operand is at the operand's span, any other use at its
+//! statement's or terminator's. [`crate::move_paths::MoveData`] resolves these effects to move paths once, and
 //! the analyses and the use check share them.
 
+use prism_ast::Span;
 use prism_mir::{
     Callee, LocalId, Operand, Place, Projection, Rvalue, Statement, StatementKind, Terminator,
     TerminatorKind,
@@ -24,10 +26,10 @@ pub enum UseKind {
 /// One effect of a statement or terminator on a place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlaceEffect {
-    /// The place must hold a value.
-    Use(Place, UseKind),
-    /// The place's value moves out (after its use).
-    Move(Place),
+    /// The place must hold a value, at the span of the source that uses it.
+    Use(Place, UseKind, Span),
+    /// The place's value moves out (after its use), at the span of the source that moves it.
+    Move(Place, Span),
     /// The whole local is assigned a value.
     Init(LocalId),
     StorageLive(LocalId),
@@ -37,14 +39,15 @@ pub enum PlaceEffect {
 /// The effects of `statement`, in evaluation order: an assignment's rvalue, then its place.
 pub fn statement_effects(statement: &Statement) -> Vec<PlaceEffect> {
     let mut effects = Vec::new();
+    let span = statement.span;
     match &statement.kind {
         StatementKind::Assign(place, rvalue) => {
-            rvalue_effects(rvalue, &mut effects);
-            destination_effects(place, &mut effects);
+            rvalue_effects(rvalue, span, &mut effects);
+            destination_effects(place, span, &mut effects);
         }
         StatementKind::StorageLive(local) => effects.push(PlaceEffect::StorageLive(*local)),
         StatementKind::StorageDead(local) => effects.push(PlaceEffect::StorageDead(*local)),
-        StatementKind::Read(place) => use_place(place, UseKind::Used, &mut effects),
+        StatementKind::Read(place) => use_place(place, UseKind::Used, span, &mut effects),
     }
     effects
 }
@@ -53,6 +56,7 @@ pub fn statement_effects(statement: &Statement) -> Vec<PlaceEffect> {
 /// destination. A drop is not a use: drop elaboration decides whether it runs (D5).
 pub fn terminator_effects(terminator: &Terminator) -> Vec<PlaceEffect> {
     let mut effects = Vec::new();
+    let span = terminator.span;
     match &terminator.kind {
         TerminatorKind::SwitchInt { value, .. } => operand_effects(value, &mut effects),
         TerminatorKind::Call {
@@ -61,13 +65,13 @@ pub fn terminator_effects(terminator: &Terminator) -> Vec<PlaceEffect> {
             destination,
             ..
         } => {
-            if let Callee::Value(place) = callee {
-                use_place(place, UseKind::Used, &mut effects);
+            if let Callee::Value(place, callee_span) = callee {
+                use_place(place, UseKind::Used, *callee_span, &mut effects);
             }
             for argument in arguments {
                 operand_effects(argument, &mut effects);
             }
-            destination_effects(destination, &mut effects);
+            destination_effects(destination, span, &mut effects);
         }
         TerminatorKind::Goto(_)
         | TerminatorKind::Drop { .. }
@@ -77,37 +81,39 @@ pub fn terminator_effects(terminator: &Terminator) -> Vec<PlaceEffect> {
     effects
 }
 
-/// A write to `place`: the initialization of a whole local, or a use of what holds the written
-/// part (the struct of a field, the reference of a referent).
-fn destination_effects(place: &Place, effects: &mut Vec<PlaceEffect>) {
+/// A write to `place` at `span`: the initialization of a whole local, or a use of what holds
+/// the written part (the struct of a field, the reference of a referent).
+fn destination_effects(place: &Place, span: Span, effects: &mut Vec<PlaceEffect>) {
     match place.as_local() {
         Some(local) => effects.push(PlaceEffect::Init(local)),
-        None => use_place(place, UseKind::Assigned, effects),
+        None => use_place(place, UseKind::Assigned, span, effects),
     }
 }
 
-/// A use of `place`, after the uses of the locals its projections index by.
-fn use_place(place: &Place, kind: UseKind, effects: &mut Vec<PlaceEffect>) {
+/// A use of `place` at `span`, after the uses of the locals its projections index by.
+fn use_place(place: &Place, kind: UseKind, span: Span, effects: &mut Vec<PlaceEffect>) {
     for projection in &place.projections {
         if let Projection::Index(index) = projection {
-            effects.push(PlaceEffect::Use(Place::local(*index), UseKind::Used));
+            effects.push(PlaceEffect::Use(Place::local(*index), UseKind::Used, span));
         }
     }
-    effects.push(PlaceEffect::Use(place.clone(), kind));
+    effects.push(PlaceEffect::Use(place.clone(), kind, span));
 }
 
+/// The effects of `operand`, at its own span.
 fn operand_effects(operand: &Operand, effects: &mut Vec<PlaceEffect>) {
     match operand {
-        Operand::Copy(place) => use_place(place, UseKind::Used, effects),
-        Operand::Move(place) => {
-            use_place(place, UseKind::Used, effects);
-            effects.push(PlaceEffect::Move(place.clone()));
+        Operand::Copy(place, span) => use_place(place, UseKind::Used, *span, effects),
+        Operand::Move(place, span) => {
+            use_place(place, UseKind::Used, *span, effects);
+            effects.push(PlaceEffect::Move(place.clone(), *span));
         }
         Operand::Constant(_) => {}
     }
 }
 
-fn rvalue_effects(rvalue: &Rvalue, effects: &mut Vec<PlaceEffect>) {
+/// The effects of `rvalue`, whose statement is at `span`.
+fn rvalue_effects(rvalue: &Rvalue, span: Span, effects: &mut Vec<PlaceEffect>) {
     match rvalue {
         Rvalue::Use(operand)
         | Rvalue::Unary(_, operand)
@@ -117,8 +123,8 @@ fn rvalue_effects(rvalue: &Rvalue, effects: &mut Vec<PlaceEffect>) {
             operand_effects(left, effects);
             operand_effects(right, effects);
         }
-        Rvalue::Borrow { place, .. } => use_place(place, UseKind::Borrowed, effects),
-        Rvalue::Discriminant(place) => use_place(place, UseKind::Used, effects),
+        Rvalue::Borrow { place, .. } => use_place(place, UseKind::Borrowed, span, effects),
+        Rvalue::Discriminant(place) => use_place(place, UseKind::Used, span, effects),
         Rvalue::Aggregate(_, operands) => {
             for operand in operands {
                 operand_effects(operand, effects);
@@ -126,7 +132,7 @@ fn rvalue_effects(rvalue: &Rvalue, effects: &mut Vec<PlaceEffect>) {
         }
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
-                use_place(capture, UseKind::Captured, effects);
+                use_place(capture, UseKind::Captured, span, effects);
             }
         }
     }

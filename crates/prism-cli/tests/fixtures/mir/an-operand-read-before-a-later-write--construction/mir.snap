@@ -2,8 +2,12 @@ module main
 fun main::inc(_1: &mut Int): Int @2:1
   local _0: Int (return)
   local _1 r: &mut Int (argument)
+  local _2: Int (temporary)
   bb0:
-    (*_1) = copy (*_1) + const 1 @2:34
+    storage_live _2 @2:34
+    _2 = copy (*_1) + const 1 @2:34
+    (*_1) = move _2 @2:30
+    storage_dead _2 @2:29
     _0 = copy (*_1) @2:48
     return @2:1
 fun main::g(): Pair @4:1

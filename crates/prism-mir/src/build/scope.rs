@@ -189,7 +189,7 @@ impl Builder<'_> {
 
     /// Records the temporaries `operand` moves out of as a whole.
     pub(super) fn record_operand_moved(&mut self, operand: &Operand) {
-        if let Operand::Move(place) = operand {
+        if let Operand::Move(place, _) = operand {
             if let Some(local) = place.as_local() {
                 if self.locals[local].kind == LocalKind::Temporary {
                     self.record_moved(local);

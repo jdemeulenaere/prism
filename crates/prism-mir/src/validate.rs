@@ -230,14 +230,14 @@ impl Validator<'_> {
 
     fn operand_type(&mut self, operand: &Operand, at: &str) -> Option<Type> {
         match operand {
-            Operand::Copy(place) => {
+            Operand::Copy(place, _) => {
                 let ty = self.place_type(place, at)?;
                 if !self.types.is_copy(&ty) {
                     self.report(format!("{} copies a {}, which is not Copy", at, ty));
                 }
                 Some(ty)
             }
-            Operand::Move(place) => {
+            Operand::Move(place, _) => {
                 if place.projections.contains(&Projection::Deref) {
                     self.report(format!("{} moves out of a dereference", at));
                 }
@@ -302,7 +302,7 @@ impl Validator<'_> {
                 target,
                 ..
             } => {
-                if let Callee::Value(place) = callee {
+                if let Callee::Value(place, _) = callee {
                     let callee_ty = self.place_type(place, &at);
                     match callee_ty {
                         Some(Type::Fn { params, .. }) if &params != parameters => {
@@ -329,7 +329,7 @@ impl Validator<'_> {
                     self.expect(ty, parameter, &format!("{} operand {}", at, index));
                 }
                 if let Some(ty) = self.place_type(destination, &at) {
-                    if let Callee::Value(place) = callee {
+                    if let Callee::Value(place, _) = callee {
                         if let Some(Type::Fn { ret, .. }) = place.try_ty(self.body, self.types) {
                             self.expect(Some(ty.clone()), &ret, &format!("{} destination", at));
                         }
@@ -393,7 +393,7 @@ impl Validator<'_> {
         let mut used = Vec::new();
         match &data.terminator.kind {
             TerminatorKind::SwitchInt { value, .. } => match value {
-                Operand::Copy(place) if self.is_drop_flag(place.local) => {
+                Operand::Copy(place, _) if self.is_drop_flag(place.local) => {
                     used_by_projections(place, &mut used)
                 }
                 _ => used_by_operand(value, &mut used),
@@ -404,7 +404,7 @@ impl Validator<'_> {
                 destination,
                 ..
             } => {
-                if let Callee::Value(place) = callee {
+                if let Callee::Value(place, _) = callee {
                     used_by_place(place, &mut used);
                 }
                 for argument in arguments {
@@ -656,7 +656,7 @@ impl Validator<'_> {
                     destination,
                     ..
                 } => {
-                    if let Callee::Value(place) = callee {
+                    if let Callee::Value(place, _) = callee {
                         used_by_place(place, &mut used);
                     }
                     for argument in arguments {
@@ -809,7 +809,10 @@ mod tests {
         let mut file = small_file();
         body(&mut file).blocks[BlockId(0)].statements[3] = statement(StatementKind::assign(
             Place::return_place(),
-            Rvalue::Use(Operand::Copy(Place::local(LocalId(2)))),
+            Rvalue::Use(Operand::Copy(
+                Place::local(LocalId(2)),
+                prism_ast::Span::default(),
+            )),
         ));
         assert_reports(&file, "copies a String, which is not Copy");
         let mut file = small_file();
@@ -915,6 +918,7 @@ mod tests {
                 Place::local(LocalId(1))
                     .project(Projection::Deref)
                     .project(Projection::Field(0)),
+                prism_ast::Span::default(),
             )),
         ));
         assert_reports(&file, "bb0[3] moves out of a dereference");

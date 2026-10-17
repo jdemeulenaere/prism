@@ -1,0 +1,6 @@
+// expect: E5001
+struct Pair {
+    val a: String
+    val b: String
+}
+fun f(s: String): Pair = Pair(s, s)

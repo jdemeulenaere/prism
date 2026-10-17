@@ -153,7 +153,7 @@ pub(crate) fn elaborate_body(
                     },
                 });
                 elaborated.blocks[*block].terminator.kind = TerminatorKind::SwitchInt {
-                    value: Operand::Copy(Place::local(flags[local])),
+                    value: Operand::Copy(Place::local(flags[local]), terminator.span),
                     targets: vec![(0, *target)],
                     otherwise: drop,
                 };
@@ -346,7 +346,7 @@ pub(crate) fn verify_body(body: &Body, types: &TypeTable) -> Vec<String> {
                     }
                 }
                 TerminatorKind::SwitchInt {
-                    value: Operand::Copy(place),
+                    value: Operand::Copy(place, _),
                     ..
                 } => {
                     let Some(local) = place.as_local().and_then(|flag| guards.get(&flag)) else {
@@ -393,7 +393,7 @@ fn flag_switch(body: &Body, terminator: &Terminator) -> Option<(LocalId, BlockId
 /// switch of a local between `0` and anything else.
 fn zero_switch(terminator: &Terminator) -> Option<(LocalId, BlockId, BlockId)> {
     let TerminatorKind::SwitchInt {
-        value: Operand::Copy(value) | Operand::Move(value),
+        value: Operand::Copy(value, _) | Operand::Move(value, _),
         targets,
         otherwise,
     } = &terminator.kind

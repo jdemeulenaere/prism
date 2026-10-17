@@ -85,8 +85,8 @@ fun main::f(_1: User?, _2: Color, _3: Bool): Int @4:1
     storage_live _13 @7:5
     _13 = copy _10 @7:5
     storage_live _14 @8:25
-    storage_live _15 @8:25
-    _15 = discriminant _2 @8:25
+    storage_live _15 @8:31
+    _15 = discriminant _2 @8:31
     switch move _15 [0 -> bb17, 1 -> bb18, otherwise -> bb19] @8:25
   bb17:
     _14 = copy _13 @8:43

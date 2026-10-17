@@ -37,7 +37,8 @@ impl Builder<'_> {
             return None;
         }
         self.discard_scope();
-        let (on_true, on_false) = self.switch_on_bool(Operand::Move(Place::local(result)), span);
+        let (on_true, on_false) =
+            self.switch_on_bool(Operand::Move(Place::local(result), span), span);
         for block in [on_true, on_false] {
             self.current = Some(block);
             self.push_statement(StatementKind::StorageDead(result), span);
@@ -66,7 +67,7 @@ impl Builder<'_> {
         let span = self.expression(condition).span;
         if let ExpressionKind::Local(binding) = self.expression(condition).kind {
             let place = self.bindings[&binding].clone();
-            let branches = self.switch_on_bool(Operand::Copy(place), span);
+            let branches = self.switch_on_bool(Operand::Copy(place, span), span);
             return Some(branches);
         }
         self.branch_on(span, |builder, result| {
@@ -178,9 +179,9 @@ impl Builder<'_> {
             Place::local(temporary).project(Projection::Payload)
         };
         let operand = if self.is_copy(ty) {
-            Operand::Copy(value)
+            Operand::Copy(value, span)
         } else {
-            Operand::Move(value)
+            Operand::Move(value, span)
         };
         self.assign(destination.clone(), Rvalue::Use(operand), span);
         let present_end = self.current;
@@ -196,7 +197,7 @@ impl Builder<'_> {
         let present = self.new_block();
         let absent = self.new_block();
         let kind = TerminatorKind::SwitchInt {
-            value: Operand::Move(Place::local(tag)),
+            value: Operand::Move(Place::local(tag), span),
             targets: vec![(0, absent)],
             otherwise: present,
         };
@@ -237,7 +238,7 @@ impl Builder<'_> {
             };
             self.assign(Place::local(borrow), rvalue, span);
             if let Some(destination) = destination {
-                let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow)));
+                let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow), span));
                 self.assign(destination.clone(), wrap, span);
             }
         } else if &body_ty == ty || destination.is_none() {
@@ -310,6 +311,8 @@ impl Builder<'_> {
     ) {
         // A `Unit` `when` discards its branches' values.
         let branch_destination = if *ty == Type::Unit { None } else { destination };
+        // The subject is read at its own span, so a use of a moved subject points at it.
+        let subject_span = subject.map_or(span, |subject| self.expression(subject).span);
         let subject = subject.map(|subject| {
             let subject_ty = self.expression(subject).ty.clone();
             (self.place(subject), subject_ty)
@@ -320,7 +323,7 @@ impl Builder<'_> {
         let patterns = || branches.iter().flat_map(|b| b.patterns.iter());
         let ends = if patterns().all(|p| matches!(p, Pattern::Else)) {
             if let Some((place, _)) = &subject {
-                self.push_statement(StatementKind::Read(place.clone()), span);
+                self.push_statement(StatementKind::Read(place.clone()), subject_span);
             }
             match branches.first() {
                 Some(branch) => {
@@ -334,9 +337,23 @@ impl Builder<'_> {
             && patterns().all(|p| matches!(p, Pattern::Variant { .. } | Pattern::Else))
         {
             let (place, _) = subject.clone().expect("checked above");
-            self.lower_variant_switch(branch_destination, place, branches, exhaustive, span)
+            self.lower_variant_switch(
+                branch_destination,
+                place,
+                subject_span,
+                branches,
+                exhaustive,
+                span,
+            )
         } else {
-            self.lower_ordered_tests(branch_destination, subject, branches, exhaustive, span)
+            self.lower_ordered_tests(
+                branch_destination,
+                subject,
+                subject_span,
+                branches,
+                exhaustive,
+                span,
+            )
         };
         self.join(&ends, span);
         if *ty == Type::Unit {
@@ -352,15 +369,16 @@ impl Builder<'_> {
         &mut self,
         destination: Option<&Place>,
         subject: Place,
+        subject_span: Span,
         branches: &[WhenBranch],
         exhaustive: bool,
         span: Span,
     ) -> Vec<Option<BlockId>> {
-        let discriminant = self.new_temporary(Type::Int, span);
+        let discriminant = self.new_temporary(Type::Int, subject_span);
         self.assign(
             Place::local(discriminant),
             Rvalue::Discriminant(subject),
-            span,
+            subject_span,
         );
         let mut targets: Vec<(u64, BlockId)> = Vec::new();
         let mut bodies = Vec::new();
@@ -408,7 +426,7 @@ impl Builder<'_> {
             }
         };
         let kind = TerminatorKind::SwitchInt {
-            value: Operand::Move(Place::local(discriminant)),
+            value: Operand::Move(Place::local(discriminant), subject_span),
             targets,
             otherwise,
         };
@@ -420,10 +438,12 @@ impl Builder<'_> {
     }
 
     /// The branches' patterns tested in order, each test in its own temporary scope.
+    #[allow(clippy::too_many_arguments)]
     fn lower_ordered_tests(
         &mut self,
         destination: Option<&Place>,
         subject: Option<(Place, Type)>,
+        subject_span: Span,
         branches: &[WhenBranch],
         exhaustive: bool,
         span: Span,
@@ -440,16 +460,17 @@ impl Builder<'_> {
             .any(|p| self.pattern_may_write(p));
         let subject = subject.map(|(place, ty)| {
             if patterns_may_write && self.is_copy(&ty) {
-                match self.stabilize(Operand::Copy(place.clone()), ty.clone(), span) {
-                    Operand::Move(stable) => (stable, ty),
+                let operand = Operand::Copy(place.clone(), subject_span);
+                match self.stabilize(operand, ty.clone(), subject_span) {
+                    Operand::Move(stable, _) => (stable, ty),
                     _ => (place, ty),
                 }
             } else {
                 (place, ty)
             }
         });
-        let subject =
-            subject.map(|(place, ty)| self.comparison_subject(place, ty, compares_values, span));
+        let subject = subject
+            .map(|(place, ty)| self.comparison_subject(place, ty, compares_values, subject_span));
         let mut ends = Vec::new();
         let mut matched_all = false;
         for branch in branches {
@@ -489,15 +510,15 @@ impl Builder<'_> {
                         let index = *index as i64;
                         let place = subject.clone().expect("a variant pattern has a subject");
                         let tested = self.branch_on(span, |builder, result| {
-                            let discriminant = builder.new_temporary(Type::Int, span);
+                            let discriminant = builder.new_temporary(Type::Int, subject_span);
                             builder.assign(
                                 Place::local(discriminant),
                                 Rvalue::Discriminant(place.subject_place().clone()),
-                                span,
+                                subject_span,
                             );
                             let rvalue = Rvalue::Binary(
                                 BinaryOperator::Equal,
-                                Operand::Move(Place::local(discriminant)),
+                                Operand::Move(Place::local(discriminant), subject_span),
                                 Operand::Constant(Constant::Int(index)),
                             );
                             builder.assign(result.clone(), rvalue, span);
@@ -521,7 +542,7 @@ impl Builder<'_> {
                             let rvalue = Rvalue::Binary(
                                 BinaryOperator::LessOrEqual,
                                 start,
-                                Operand::Copy(value.clone()),
+                                Operand::Copy(value.clone(), subject_span),
                             );
                             builder.assign(result.clone(), rvalue, start_span);
                         });
@@ -537,7 +558,8 @@ impl Builder<'_> {
                             } else {
                                 BinaryOperator::Less
                             };
-                            let rvalue = Rvalue::Binary(operator, Operand::Copy(value), end);
+                            let rvalue =
+                                Rvalue::Binary(operator, Operand::Copy(value, subject_span), end);
                             builder.assign(result.clone(), rvalue, end_span);
                         });
                         match upper {
@@ -790,7 +812,7 @@ impl Builder<'_> {
         let index = self.loops.len() - 1;
         self.assign(
             Place::local(value),
-            Rvalue::Use(Operand::Copy(field(0))),
+            Rvalue::Use(Operand::Copy(field(0), span)),
             span,
         );
         let static_inclusive = match self.expression(range).kind {
@@ -802,7 +824,7 @@ impl Builder<'_> {
                 vec![self.for_bounds(index, range_local, last, test, inclusive, span)]
             }
             None => {
-                let inclusive_flag = Operand::Copy(field(RANGE_END_INCLUSIVE));
+                let inclusive_flag = Operand::Copy(field(RANGE_END_INCLUSIVE), span);
                 let (closed, half_open) = self.switch_on_bool(inclusive_flag, span);
                 self.current = Some(closed);
                 let closed_entry = self.for_bounds(index, range_local, last, test, true, span);
@@ -824,7 +846,7 @@ impl Builder<'_> {
         let variable_local = self.declare_binding(variable, span);
         self.assign(
             Place::local(variable_local),
-            Rvalue::Use(Operand::Copy(Place::local(value))),
+            Rvalue::Use(Operand::Copy(Place::local(value), span)),
             span,
         );
         self.expression_into(None, body);
@@ -837,18 +859,19 @@ impl Builder<'_> {
             self.current = Some(latch);
             let done = Rvalue::Binary(
                 BinaryOperator::Equal,
-                Operand::Copy(Place::local(value)),
-                Operand::Copy(Place::local(last)),
+                Operand::Copy(Place::local(value), span),
+                Operand::Copy(Place::local(last), span),
             );
             self.assign(Place::local(test), done, span);
-            let (finished, more) = self.switch_on_bool(Operand::Copy(Place::local(test)), span);
+            let (finished, more) =
+                self.switch_on_bool(Operand::Copy(Place::local(test), span), span);
             self.current = Some(finished);
             let exit = self.loop_exit(index);
             self.goto(exit, span);
             self.current = Some(more);
             let next = Rvalue::Binary(
                 BinaryOperator::Add,
-                Operand::Copy(Place::local(value)),
+                Operand::Copy(Place::local(value), span),
                 Operand::Constant(Constant::Int(1)),
             );
             self.assign(Place::local(value), next, span);
@@ -868,7 +891,7 @@ impl Builder<'_> {
         inclusive: bool,
         span: Span,
     ) -> Option<BlockId> {
-        let field = |i| Operand::Copy(Place::local(range).project(Projection::Field(i)));
+        let field = |i| Operand::Copy(Place::local(range).project(Projection::Field(i)), span);
         let operator = if inclusive {
             BinaryOperator::Greater
         } else {
@@ -879,7 +902,7 @@ impl Builder<'_> {
             Rvalue::Binary(operator, field(0), field(1)),
             span,
         );
-        let (empty, not_empty) = self.switch_on_bool(Operand::Copy(Place::local(test)), span);
+        let (empty, not_empty) = self.switch_on_bool(Operand::Copy(Place::local(test), span), span);
         self.current = Some(empty);
         let exit = self.loop_exit(index);
         self.goto(exit, span);

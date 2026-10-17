@@ -1,6 +1,7 @@
 //! Types of places and operands, and which values need a drop (D4 and D6 of `mir-lowering`).
 
 use crate::mir::{Body, Constant, Operand, Place, Projection};
+use prism_ast::Span;
 use prism_typed_tree::{NominalId, Type, TypeDef, TypeTable};
 
 /// The definition of the built-in `Range` in the MIR's type table: the fields `start` and `end`
@@ -77,15 +78,23 @@ impl Operand {
     /// a variant constructor or a top-level value) or an ill-typed place.
     pub fn try_ty(&self, body: &Body, types: &TypeTable) -> Option<Type> {
         match self {
-            Operand::Copy(place) | Operand::Move(place) => place.try_ty(body, types),
+            Operand::Copy(place, _) | Operand::Move(place, _) => place.try_ty(body, types),
             Operand::Constant(constant) => constant.ty(),
+        }
+    }
+
+    /// The span of the source that reads the operand's place, if it reads one.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Operand::Copy(_, span) | Operand::Move(_, span) => Some(*span),
+            Operand::Constant(_) => None,
         }
     }
 
     /// The place the operand reads, if any.
     pub fn place(&self) -> Option<&Place> {
         match self {
-            Operand::Copy(place) | Operand::Move(place) => Some(place),
+            Operand::Copy(place, _) | Operand::Move(place, _) => Some(place),
             Operand::Constant(_) => None,
         }
     }

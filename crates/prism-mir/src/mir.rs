@@ -299,13 +299,15 @@ pub enum Projection {
     Index(LocalId),
 }
 
-/// A value read by an rvalue or a terminator.
+/// A value read by an rvalue or a terminator. An operand that reads a place records the span of
+/// the source that reads it, so that the borrow checker can point at the operand rather than at
+/// its whole statement (both `s` of `Pair(s, s)`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operand {
     /// The place's value, copied out of it (its type is `Copy`).
-    Copy(Place),
+    Copy(Place, Span),
     /// The place's value, moved out of it.
-    Move(Place),
+    Move(Place, Span),
     Constant(Constant),
 }
 
@@ -376,8 +378,8 @@ pub enum Callee {
     Function(DeclarationPath),
     /// A function the compiler provides.
     Builtin(BuiltinFunction),
-    /// A function-typed value, read in place.
-    Value(Place),
+    /// A function-typed value, read in place, with the span of the source that names it.
+    Value(Place, Span),
     /// The generator of the default value of declared parameter `parameter` (named `name`) of
     /// `function` (D11).
     Default {

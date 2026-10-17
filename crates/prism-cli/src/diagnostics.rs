@@ -636,7 +636,7 @@ error[E5001]: use of possibly moved value 's'
 error[E5002]: use of possibly uninitialized value 'x'
   --> main.prism:2:77
     2 | fun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }
-      |                                                                             ^^^^^ 'x' used here, but it is not initialized on every path
+      |                                                                             ^ 'x' used here, but it is not initialized on every path
   --> main.prism:2:43
     2 | fun f(c: Bool) { do { val s = \"a\"; if (c) continue; val x = next() } while (x > 0) }
       |                                           ^^^^^^^^ the declaration of 'x' is skipped here

@@ -155,8 +155,8 @@ impl Printer<'_> {
 
     fn operand(&self, operand: &Operand) -> String {
         match operand {
-            Operand::Copy(place) => format!("copy {}", self.place(place)),
-            Operand::Move(place) => format!("move {}", self.place(place)),
+            Operand::Copy(place, _) => format!("copy {}", self.place(place)),
+            Operand::Move(place, _) => format!("move {}", self.place(place)),
             Operand::Constant(constant) => format!("const {}", self.constant(constant)),
         }
     }
@@ -266,7 +266,7 @@ impl Printer<'_> {
                 let callee = match callee {
                     Callee::Function(path) => path.to_string(),
                     Callee::Builtin(BuiltinFunction::Clone) => "builtin clone".to_string(),
-                    Callee::Value(place) => self.place(place),
+                    Callee::Value(place, _) => self.place(place),
                     Callee::Default { function, name, .. } => {
                         format!("default {} {}", function, name)
                     }
@@ -382,7 +382,7 @@ pub(crate) mod tests {
                 )),
                 statement(StatementKind::Assign(
                     Place::return_place(),
-                    Box::new(Rvalue::Use(Operand::Move(Place::local(n)))),
+                    Box::new(Rvalue::Use(Operand::Move(Place::local(n), Span::default()))),
                 )),
             ],
             terminator: terminator(TerminatorKind::Drop {
@@ -456,7 +456,7 @@ fun main::f(_1: &User): String @1:1
         entry.insert(5, set(false));
         let drop = body.blocks[BlockId(0)].terminator.clone();
         body.blocks[BlockId(0)].terminator = terminator(TerminatorKind::SwitchInt {
-            value: Operand::Copy(Place::local(flag)),
+            value: Operand::Copy(Place::local(flag), Span::default()),
             targets: vec![(0, BlockId(1))],
             otherwise: BlockId(2),
         });

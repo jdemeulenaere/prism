@@ -16,6 +16,8 @@ use prism_typed_tree::{BinaryOperator, CoercionKind, ExpressionId, ExpressionKin
 pub(super) struct ComparisonSubject {
     place: Place,
     view: Option<Place>,
+    /// The subject's own span, where each pattern reads it.
+    span: Span,
 }
 
 impl ComparisonSubject {
@@ -48,8 +50,9 @@ impl Builder<'_> {
         let is_equality = matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual);
         if is_equality && (self.is_null(left) || self.is_null(right)) {
             let other = if self.is_null(right) { left } else { right };
+            let other_span = self.expression(other).span;
             let place = self.place(other);
-            self.compare_tag(&destination, operator, place, span);
+            self.compare_tag(&destination, operator, place, other_span, span);
             return;
         }
         let operand_ty = self.expression(left).ty.clone();
@@ -58,37 +61,40 @@ impl Builder<'_> {
             (operands.next().unwrap(), operands.next().unwrap())
         } else {
             (
-                self.comparison_operand(left, span),
-                self.comparison_operand(right, span),
+                self.comparison_operand(left),
+                self.comparison_operand(right),
             )
         };
         self.assign(destination, Rvalue::Binary(operator, left, right), span);
     }
 
-    /// `destination = discriminant(place) <operator> 0`: a comparison with `null`.
+    /// `destination = discriminant(place) <operator> 0`: a comparison with `null`, whose tag is
+    /// read at the span of the compared value, `place_span`.
     fn compare_tag(
         &mut self,
         destination: &Place,
         operator: BinaryOperator,
         place: Place,
+        place_span: Span,
         span: Span,
     ) {
-        let tag = self.new_temporary(Type::Int, span);
-        self.assign(Place::local(tag), Rvalue::Discriminant(place), span);
+        let tag = self.new_temporary(Type::Int, place_span);
+        self.assign(Place::local(tag), Rvalue::Discriminant(place), place_span);
         let rvalue = Rvalue::Binary(
             operator,
-            Operand::Move(Place::local(tag)),
+            Operand::Move(Place::local(tag), place_span),
             Operand::Constant(Constant::Int(0)),
         );
         self.assign(destination.clone(), rvalue, span);
     }
 
     /// The operand comparing the non-`Copy` value `id`: a shared borrow of it, or for a
-    /// nullable an optional borrow of its payload. A place is borrowed where it lives, a `?.`
-    /// chain ending in a place inside the chain, and any other value in a temporary.
-    fn comparison_operand(&mut self, id: ExpressionId, span: Span) -> Operand {
+    /// nullable an optional borrow of its payload, taken at the value's own span. A place is
+    /// borrowed where it lives, a `?.` chain ending in a place inside the chain, and any other
+    /// value in a temporary.
+    fn comparison_operand(&mut self, id: ExpressionId) -> Operand {
         let expression = self.expression(id);
-        let ty = expression.ty.clone();
+        let (ty, span) = (expression.ty.clone(), expression.span);
         match &ty {
             Type::Nullable(inner) => {
                 let view_ty = shared(inner.as_ref().clone()).nullable();
@@ -108,14 +114,14 @@ impl Builder<'_> {
                         place,
                     };
                     self.assign(Place::local(borrow), rvalue, span);
-                    let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow)));
+                    let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow), span));
                     self.assign(Place::local(view), wrap, span);
-                    return Operand::Move(Place::local(view));
+                    return Operand::Move(Place::local(view), span);
                 }
                 if let ExpressionKind::SafeNavigation { chain, .. } = expression.kind {
                     if self.expression(chain).kind.is_place() {
                         self.lower_chain(Some(&Place::local(view)), chain, &view_ty, true, span);
-                        return Operand::Move(Place::local(view));
+                        return Operand::Move(Place::local(view), span);
                     }
                 }
                 let place = self.place(id);
@@ -126,7 +132,7 @@ impl Builder<'_> {
                     BorrowOrigin::Operator,
                     span,
                 );
-                Operand::Move(Place::local(view))
+                Operand::Move(Place::local(view), span)
             }
             _ => {
                 let place = self.place(id);
@@ -137,7 +143,7 @@ impl Builder<'_> {
                     place,
                 };
                 self.assign(Place::local(borrow), rvalue, span);
-                Operand::Move(Place::local(borrow))
+                Operand::Move(Place::local(borrow), span)
             }
         }
     }
@@ -171,7 +177,7 @@ impl Builder<'_> {
             place: payload,
         };
         self.assign(Place::local(borrow), rvalue, span);
-        let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow)));
+        let wrap = Rvalue::WrapNullable(Operand::Move(Place::local(borrow), span));
         self.assign(destination.clone(), wrap, span);
         self.pop_scope();
         let present_end = self.current;
@@ -247,7 +253,7 @@ impl Builder<'_> {
         } else {
             None
         };
-        ComparisonSubject { place, view }
+        ComparisonSubject { place, view, span }
     }
 
     /// `result = subject == value`, for a value pattern of a `when`.
@@ -259,14 +265,18 @@ impl Builder<'_> {
         span: Span,
     ) {
         if self.is_null(value) {
-            self.compare_tag(result, BinaryOperator::Equal, subject.place.clone(), span);
+            let place = subject.place.clone();
+            self.compare_tag(result, BinaryOperator::Equal, place, subject.span, span);
             return;
         }
         let (left, right) = match &subject.view {
-            None => (Operand::Copy(subject.place.clone()), self.operand(value)),
+            None => (
+                Operand::Copy(subject.place.clone(), subject.span),
+                self.operand(value),
+            ),
             Some(view) => (
-                Operand::Copy(view.clone()),
-                self.comparison_operand(value, span),
+                Operand::Copy(view.clone(), subject.span),
+                self.comparison_operand(value),
             ),
         };
         self.assign(

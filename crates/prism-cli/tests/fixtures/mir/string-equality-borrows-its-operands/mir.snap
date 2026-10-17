@@ -10,8 +10,8 @@ fun main::f(_1: String): Bool @2:1
     _2 = &_1 (operator) @2:26
     storage_live _3 @2:31
     _3 = const "a" @2:31
-    storage_live _4 @2:26
-    _4 = &_3 (operator) @2:26
+    storage_live _4 @2:31
+    _4 = &_3 (operator) @2:31
     _0 = move _2 == move _4 @2:26
     storage_dead _4 @2:26
     drop _3 -> bb1 @2:26
