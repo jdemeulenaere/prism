@@ -34,6 +34,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-mir"
+version = "0.1.0"
+dependencies = [
+ "prism-ast",
+ "prism-parser",
+ "prism-typechecker",
+ "prism-typed-tree",
+]
+
+[[package]]
 name = "prism-parser"
 version = "0.1.0"
 dependencies = [

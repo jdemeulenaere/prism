@@ -9,6 +9,7 @@ members = [
     "crates/prism-resolver",
     "crates/prism-typechecker",
     "crates/prism-typed-tree",
+    "crates/prism-mir",
 ]
 
 [workspace.package]

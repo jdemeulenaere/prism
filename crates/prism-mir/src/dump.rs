@@ -1,0 +1,432 @@
+//! The stable text form of a file's MIR, printed by `prism dump-mir` (D15 of `mir-lowering`).
+//!
+//! Bodies are printed in order, each with a header naming its owner, its arguments and its
+//! return type, then its locals, then its blocks, one statement or terminator per line with the
+//! line and column of the source it comes from. Places print as `_1.name` for a field (named
+//! from the type table), `(*_1)` for a dereference, `(_1 as payload)` for a nullable's payload
+//! and `_1[_2]` for an index; operands as `move _1`, `copy _1` or `const …`.
+
+use crate::mir::{
+    AggregateKind, Body, BodyId, BodyOwner, Callee, Constant, LocalKind, MirFile, Operand, Place,
+    Projection, Rvalue, StatementKind, TerminatorKind,
+};
+use crate::types::projection_type;
+use prism_ast::Span;
+use prism_typed_tree::{BuiltinFunction, NominalId, Type, TypeTable};
+use std::fmt::Write;
+
+impl MirFile {
+    /// Renders the MIR as deterministic text.
+    pub fn dump(&self) -> String {
+        let mut out = String::new();
+        writeln!(out, "module {}", self.module).unwrap();
+        for (id, body) in self.bodies.iter() {
+            self.dump_body(&mut out, id, body);
+        }
+        out
+    }
+
+    /// The name of body `id`: its declaration's path, `<function> <parameter>` for a default
+    /// generator, `<parent>#closure<index>` for a closure.
+    pub fn body_name(&self, id: BodyId) -> String {
+        match &self.bodies[id].owner {
+            BodyOwner::Function(path) | BodyOwner::Value(path) => path.to_string(),
+            BodyOwner::Default { function, name, .. } => format!("{} {}", function, name),
+            BodyOwner::Closure { parent, index } => {
+                format!("{}#closure{}", self.body_name(*parent), index)
+            }
+        }
+    }
+
+    fn dump_body(&self, out: &mut String, id: BodyId, body: &Body) {
+        let arguments: Vec<String> = body
+            .arguments()
+            .map(|local| format!("_{}: {}", local.0, body.locals[local].ty))
+            .collect();
+        let compose = if body.is_compose { "compose " } else { "" };
+        let at = position(body.span);
+        match &body.owner {
+            BodyOwner::Value(path) => {
+                writeln!(out, "val {}: {} {}", path, body.return_type(), at).unwrap()
+            }
+            BodyOwner::Function(_) | BodyOwner::Default { .. } | BodyOwner::Closure { .. } => {
+                let keyword = match body.owner {
+                    BodyOwner::Function(_) => "fun",
+                    BodyOwner::Default { .. } => "default",
+                    _ => "closure",
+                };
+                writeln!(
+                    out,
+                    "{}{} {}({}): {} {}",
+                    compose,
+                    keyword,
+                    self.body_name(id),
+                    arguments.join(", "),
+                    body.return_type(),
+                    at
+                )
+                .unwrap();
+            }
+        }
+        for (local, declaration) in body.locals.iter() {
+            let name = match &declaration.name {
+                Some(name) => format!(" {}", name),
+                None => String::new(),
+            };
+            let kind = match declaration.kind {
+                LocalKind::Return => "return",
+                LocalKind::Argument => "argument",
+                LocalKind::Capture => "capture",
+                LocalKind::User => "user",
+                LocalKind::Temporary => "temporary",
+            };
+            let var = if declaration.mutable { ", var" } else { "" };
+            writeln!(
+                out,
+                "  local _{}{}: {} ({}{})",
+                local.0, name, declaration.ty, kind, var
+            )
+            .unwrap();
+        }
+        let printer = Printer {
+            file: self,
+            body,
+            types: &self.types,
+        };
+        for (block, data) in body.blocks.iter() {
+            writeln!(out, "  bb{}:", block.0).unwrap();
+            for statement in &data.statements {
+                let text = match &statement.kind {
+                    StatementKind::Assign(place, rvalue) => {
+                        format!("{} = {}", printer.place(place), printer.rvalue(rvalue))
+                    }
+                    StatementKind::StorageLive(local) => format!("storage_live _{}", local.0),
+                    StatementKind::StorageDead(local) => format!("storage_dead _{}", local.0),
+                    StatementKind::Read(place) => format!("read {}", printer.place(place)),
+                };
+                writeln!(out, "    {} {}", text, position(statement.span)).unwrap();
+            }
+            let terminator = &data.terminator;
+            let text = printer.terminator(&terminator.kind);
+            writeln!(out, "    {} {}", text, position(terminator.span)).unwrap();
+        }
+    }
+}
+
+struct Printer<'a> {
+    file: &'a MirFile,
+    body: &'a Body,
+    types: &'a TypeTable,
+}
+
+impl Printer<'_> {
+    fn place(&self, place: &Place) -> String {
+        let mut text = format!("_{}", place.local.0);
+        let mut ty = self.body.locals.get(place.local).map(|l| l.ty.clone());
+        for projection in &place.projections {
+            text = match projection {
+                Projection::Deref => format!("(*{})", text),
+                Projection::Field(index) => {
+                    let name = match &ty {
+                        Some(Type::Struct(id)) => self
+                            .types
+                            .struct_fields(id)
+                            .and_then(|fields| fields.get(*index))
+                            .map(|(name, _, _)| name.clone()),
+                        _ => None,
+                    };
+                    match name {
+                        Some(name) => format!("{}.{}", text, name),
+                        None => format!("{}.{}", text, index),
+                    }
+                }
+                Projection::Payload => format!("({} as payload)", text),
+                Projection::Index(local) => format!("{}[_{}]", text, local.0),
+            };
+            ty = ty.and_then(|ty| projection_type(&ty, *projection, self.types));
+        }
+        text
+    }
+
+    fn operand(&self, operand: &Operand) -> String {
+        match operand {
+            Operand::Copy(place) => format!("copy {}", self.place(place)),
+            Operand::Move(place) => format!("move {}", self.place(place)),
+            Operand::Constant(constant) => format!("const {}", self.constant(constant)),
+        }
+    }
+
+    fn operands(&self, operands: &[Operand]) -> String {
+        operands
+            .iter()
+            .map(|o| self.operand(o))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn constant(&self, constant: &Constant) -> String {
+        match constant {
+            Constant::Int(v) => v.to_string(),
+            Constant::Float(v) => format!("{:?}", v),
+            Constant::Bool(v) => v.to_string(),
+            Constant::Char(v) => format!("{:?}", v),
+            Constant::String(v) => format!("{:?}", v),
+            Constant::Unit => "()".to_string(),
+            Constant::Null(_) => "null".to_string(),
+            Constant::Function(path) => format!("fn {}", path),
+            Constant::VariantConstructor { enum_id, index } => {
+                format!("fn {}", self.variant(enum_id, *index))
+            }
+            Constant::TopLevelValue(path) => format!("&{}", path),
+        }
+    }
+
+    fn variant(&self, enum_id: &NominalId, index: usize) -> String {
+        let name = self
+            .types
+            .enum_variants(enum_id)
+            .and_then(|variants| variants.get(index))
+            .map_or_else(|| index.to_string(), |(name, _)| name.clone());
+        format!("{}::{}.{}", enum_id.module, enum_id.name, name)
+    }
+
+    fn rvalue(&self, rvalue: &Rvalue) -> String {
+        match rvalue {
+            Rvalue::Use(operand) => self.operand(operand),
+            Rvalue::Borrow {
+                mutable,
+                origin,
+                place,
+            } => format!(
+                "&{}{} ({})",
+                if *mutable { "mut " } else { "" },
+                self.place(place),
+                origin.as_str()
+            ),
+            Rvalue::Binary(operator, left, right) => format!(
+                "{} {} {}",
+                self.operand(left),
+                operator.as_str(),
+                self.operand(right)
+            ),
+            Rvalue::Unary(operator, operand) => {
+                format!("{}{}", operator.as_str(), self.operand(operand))
+            }
+            Rvalue::Discriminant(place) => format!("discriminant {}", self.place(place)),
+            Rvalue::Aggregate(kind, operands) => {
+                let name = match kind {
+                    AggregateKind::Struct(id) => format!("struct {}::{}", id.module, id.name),
+                    AggregateKind::Variant { enum_id, index } => {
+                        format!("variant {}", self.variant(enum_id, *index))
+                    }
+                };
+                format!("{}({})", name, self.operands(operands))
+            }
+            Rvalue::WrapNullable(operand) => format!("wrap {}", self.operand(operand)),
+            Rvalue::Subtype(operand) => format!("subtype {}", self.operand(operand)),
+            Rvalue::Closure { body, captures } => {
+                let captures: Vec<String> = captures.iter().map(|p| self.place(p)).collect();
+                format!(
+                    "closure {} [{}]",
+                    self.file.body_name(*body),
+                    captures.join(", ")
+                )
+            }
+        }
+    }
+
+    fn terminator(&self, kind: &TerminatorKind) -> String {
+        match kind {
+            TerminatorKind::Goto(target) => format!("goto -> bb{}", target.0),
+            TerminatorKind::SwitchInt {
+                value,
+                targets,
+                otherwise,
+            } => {
+                let mut arms: Vec<String> = targets
+                    .iter()
+                    .map(|(value, target)| format!("{} -> bb{}", value, target.0))
+                    .collect();
+                arms.push(format!("otherwise -> bb{}", otherwise.0));
+                format!("switch {} [{}]", self.operand(value), arms.join(", "))
+            }
+            TerminatorKind::Call {
+                callee,
+                arguments,
+                destination,
+                target,
+                is_compose,
+                ..
+            } => {
+                let callee = match callee {
+                    Callee::Function(path) => path.to_string(),
+                    Callee::Builtin(BuiltinFunction::Clone) => "builtin clone".to_string(),
+                    Callee::Value(place) => self.place(place),
+                    Callee::Default { function, name, .. } => {
+                        format!("default {} {}", function, name)
+                    }
+                };
+                let target = match target {
+                    Some(target) => format!(" -> bb{}", target.0),
+                    None => String::new(),
+                };
+                format!(
+                    "{} = call {}{}({}){}",
+                    self.place(destination),
+                    if *is_compose { "compose " } else { "" },
+                    callee,
+                    self.operands(arguments),
+                    target
+                )
+            }
+            TerminatorKind::Drop { place, target } => {
+                format!("drop {} -> bb{}", self.place(place), target.0)
+            }
+            TerminatorKind::Return => "return".to_string(),
+            TerminatorKind::Unreachable => "unreachable".to_string(),
+        }
+    }
+}
+
+fn position(span: Span) -> String {
+    format!("@{}:{}", span.line, span.column)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::mir::*;
+    use crate::types::mir_type_table;
+    use prism_ast::Span;
+    use prism_typed_tree::{Arena, DeclarationPath, NominalId, Type, TypeDef, TypeTable};
+
+    pub(crate) fn span(line: u32, column: u32) -> Span {
+        Span::new(0, 0, line, column)
+    }
+
+    pub(crate) fn local(ty: Type, kind: LocalKind, name: Option<&str>) -> LocalDeclaration {
+        LocalDeclaration {
+            ty,
+            kind,
+            mutable: false,
+            name: name.map(str::to_string),
+            binding: None,
+            span: span(1, 1),
+        }
+    }
+
+    pub(crate) fn statement(kind: StatementKind) -> Statement {
+        Statement {
+            kind,
+            span: span(2, 5),
+        }
+    }
+
+    pub(crate) fn terminator(kind: TerminatorKind) -> Terminator {
+        Terminator {
+            kind,
+            span: span(2, 5),
+        }
+    }
+
+    pub(crate) fn types() -> TypeTable {
+        let mut types = mir_type_table(&TypeTable::with_builtins());
+        types.insert_definition(
+            NominalId::new("main", "User"),
+            TypeDef::Struct {
+                fields: vec![("name".to_string(), false, Type::String)],
+            },
+        );
+        types.insert_marker(NominalId::new("main", "User"), None);
+        types
+    }
+
+    /// `fun f(u: &User): String { val n = "x"; return n }`, lowered by hand:
+    ///
+    /// ```text
+    /// bb0: storage_live _2; _2 = const "x"; _0 = move _2; drop _2 -> bb1
+    /// bb1: storage_dead _2; return
+    /// ```
+    pub(crate) fn small_file() -> MirFile {
+        let user = Type::Struct(NominalId::new("main", "User"));
+        let mut locals = Arena::new();
+        locals.alloc(local(Type::String, LocalKind::Return, None));
+        locals.alloc(local(
+            Type::Reference {
+                mutable: false,
+                inner: Box::new(user),
+            },
+            LocalKind::Argument,
+            Some("u"),
+        ));
+        locals.alloc(local(Type::String, LocalKind::User, Some("n")));
+        let n = LocalId(2);
+        let mut blocks = Arena::new();
+        blocks.alloc(BasicBlock {
+            statements: vec![
+                statement(StatementKind::StorageLive(n)),
+                statement(StatementKind::Assign(
+                    Place::local(n),
+                    Box::new(Rvalue::Use(Operand::Constant(Constant::String(
+                        "x".to_string(),
+                    )))),
+                )),
+                statement(StatementKind::Read(
+                    Place::local(LocalId(1))
+                        .project(Projection::Deref)
+                        .project(Projection::Field(0)),
+                )),
+                statement(StatementKind::Assign(
+                    Place::return_place(),
+                    Box::new(Rvalue::Use(Operand::Move(Place::local(n)))),
+                )),
+            ],
+            terminator: terminator(TerminatorKind::Drop {
+                place: Place::local(n),
+                target: BlockId(1),
+            }),
+        });
+        blocks.alloc(BasicBlock {
+            statements: vec![statement(StatementKind::StorageDead(n))],
+            terminator: terminator(TerminatorKind::Return),
+        });
+        let body = Body {
+            owner: BodyOwner::Function(DeclarationPath::new("main", "f")),
+            is_compose: false,
+            locals,
+            argument_count: 1,
+            capture_count: 0,
+            blocks,
+            span: span(1, 1),
+        };
+        let mut bodies = Arena::new();
+        bodies.alloc(body);
+        MirFile {
+            module: "main".to_string(),
+            types: types(),
+            bodies,
+        }
+    }
+
+    #[test]
+    fn dumps_a_small_body() {
+        let file = small_file();
+        let expected = "\
+module main
+fun main::f(_1: &User): String @1:1
+  local _0: String (return)
+  local _1 u: &User (argument)
+  local _2 n: String (user)
+  bb0:
+    storage_live _2 @2:5
+    _2 = const \"x\" @2:5
+    read (*_1).name @2:5
+    _0 = move _2 @2:5
+    drop _2 -> bb1 @2:5
+  bb1:
+    storage_dead _2 @2:5
+    return @2:5
+";
+        assert_eq!(file.dump(), expected);
+        assert_eq!(file.dump(), file.dump());
+    }
+}

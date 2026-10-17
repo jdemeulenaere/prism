@@ -17,13 +17,16 @@ pub trait ArenaId: Copy + Eq + Ord + fmt::Debug {
     fn index(self) -> usize;
 }
 
+/// Defines a `u32` id type implementing [`ArenaId`], for this crate's arenas and for the arenas
+/// of later stages (MIR locals, blocks and bodies).
+#[macro_export]
 macro_rules! define_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub u32);
 
-        impl ArenaId for $name {
+        impl $crate::arena::ArenaId for $name {
             fn from_index(index: usize) -> Self {
                 Self(u32::try_from(index).expect("arena overflow"))
             }
