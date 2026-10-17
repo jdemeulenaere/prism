@@ -1,0 +1,22 @@
+module main
+fun main::g(): Int @2:1
+  literal 1: Int @2:16
+fun main::f(c: Bool): Unit @3:1
+  local %0 c: Bool (parameter)
+  block: Unit @3:16
+    expression @4:5
+      if: Unit @4:5
+        condition: local %0 c: Bool @4:9
+        then: block: Unit @4:12
+          expression @4:14
+            call main::g: Int @4:14
+    expression @5:5
+      when exhaustive: Unit @5:5
+        branch @5:12
+          pattern condition: local %0 c: Bool @5:12
+          body: block: Unit @5:17
+            expression @5:19
+              call main::g: Int @5:19
+        branch @5:26
+          pattern else
+          body: block: Unit @5:34

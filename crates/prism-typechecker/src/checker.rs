@@ -2090,7 +2090,11 @@ impl TypeChecker {
         {
             let condition = self.check_operand(cond, &Type::Bool);
             let consuming = self.parent_consuming;
-            let then_id = self.with_consuming(consuming, |c| c.check_expr(then_branch, expected));
+            let mut then_id =
+                self.with_consuming(consuming, |c| c.check_expr(then_branch, expected));
+            if else_branch.is_none() {
+                then_id = self.discard_branch(then_id);
+            }
             let else_id = else_branch
                 .as_ref()
                 .map(|else_b| self.with_consuming(consuming, |c| c.check_expr(else_b, expected)));
@@ -2286,6 +2290,7 @@ impl TypeChecker {
                 let consuming = self.parent_consuming;
                 let then_id = self.with_consuming(consuming, |c| c.infer_expr(then_branch));
                 let Some(else_b) = else_branch else {
+                    let then_id = self.discard_branch(then_id);
                     let kind = ExpressionKind::If {
                         condition,
                         then_branch: then_id,
@@ -3399,6 +3404,9 @@ impl TypeChecker {
             checker.add(kind, ty, span)
         };
         if !value_position {
+            for branch in &mut tree_branches {
+                branch.body = self.discard_branch(branch.body);
+            }
             return build(self, tree_branches, Type::Unit);
         }
 
@@ -4893,6 +4901,32 @@ impl TypeChecker {
             body
         };
         (node, is_var)
+    }
+
+    /// The branch `id` of an `if` without `else` or of a `when` statement, whose value is
+    /// discarded: a block among them holds its last expression as a statement, with no tail, as
+    /// a block checked against `Unit` does (D9 of `typed-tree`). Only the node changes; the
+    /// branch was checked as before.
+    fn discard_branch(&mut self, id: ExpressionId) -> ExpressionId {
+        if let ExpressionKind::Block {
+            statements,
+            tail: Some(tail),
+        } = self.builder.kind(id).clone()
+        {
+            let span = self.builder.span_of(tail);
+            let statement = self
+                .builder
+                .add_statement(TreeStatementKind::Expression { value: tail }, span);
+            let mut statements = statements;
+            statements.push(statement);
+            let expression = self.builder.expression_mut(id);
+            expression.kind = ExpressionKind::Block {
+                statements,
+                tail: None,
+            };
+            expression.ty = Type::Unit;
+        }
+        id
     }
 
     /// A block that evaluates `discarded` as a statement, then has the value `value`.

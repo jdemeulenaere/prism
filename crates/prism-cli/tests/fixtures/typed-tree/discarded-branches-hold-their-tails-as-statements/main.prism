@@ -1,0 +1,6 @@
+// expect: ok
+fun g(): Int = 1
+fun f(c: Bool) {
+    if (c) { g() }
+    when { c -> { g() }; else -> {} }
+}

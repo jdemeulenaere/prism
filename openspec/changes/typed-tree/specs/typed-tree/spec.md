@@ -166,6 +166,10 @@ Blocks MUST keep their statements and tail value, and a block whose value is dis
 - **WHEN** `fun g(): Int = 1` is declared and `fun f() { g() }` is checked
 - **THEN** the block of `f` has the call of `g` as an expression statement and no tail, and has type `Unit`
 
+#### Scenario: Discarded branches hold their tails as statements
+- **WHEN** `fun g(): Int = 1` is declared and a body of `fun f(c: Bool)` runs `if (c) { g() }` and `when { c -> { g() }; else -> {} }` as statements
+- **THEN** the `then` branch of the `if` and each branch of the `when`, whose values are discarded, is a block of type `Unit` with no tail, the first two holding the call of `g` as an expression statement
+
 #### Scenario: When patterns resolved to variants
 - **WHEN** `enum Color { Red, Green }` is declared and `fun f(c: Color): Int = when (c) { Red -> 1; Green -> 2 }` is checked
 - **THEN** the `when` reads the binding `c` in place, its patterns are variants 0 and 1 of `Color`, and it is exhaustive

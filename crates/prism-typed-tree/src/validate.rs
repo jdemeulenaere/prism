@@ -3,9 +3,13 @@
 
 use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
-    Argument, Body, Callee, ExpressionKind, Item, Pattern, StatementKind, TypedFile,
+    Argument, BinaryOperator, Body, Callee, CoercionKind, ConstructKind, DeclarationPath,
+    ExpressionKind, FunctionItem, Item, Pattern, StatementKind, StructItem, TypedFile,
+    UnaryOperator,
 };
-use crate::types::Type;
+use crate::types::{NominalId, Type};
+use prism_ast::ReceiverMode;
+use std::collections::{HashMap, HashSet};
 
 impl TypedFile {
     /// Returns the violations of the tree's structural invariants, empty for a well-formed tree.
@@ -15,9 +19,26 @@ impl TypedFile {
     /// projection appears only inside a chain; every binding belongs to its body; every named
     /// loop target encloses its jump. With `error_free` (the file has no type error), also: every
     /// node is reached exactly once, there is no error node and no error type, every jump names
-    /// its loop, and every child's type equals the type its slot expects.
+    /// its loop, every child's type equals the type its slot expects (also a returned value, a
+    /// closure body, a `when` pattern, an operand and a coercion's value), a block whose value
+    /// is discarded has no tail of another type, a closure's captures are exactly the bindings
+    /// its body uses from outside, and a call, construction or field of the file's own
+    /// declarations repeats their signature or fields.
     pub fn validate(&self, error_free: bool) -> Vec<String> {
         let mut violations = Vec::new();
+        let mut functions = HashMap::new();
+        let mut structs = HashMap::new();
+        for item in &self.items {
+            match item {
+                Item::Function(f) => {
+                    functions.insert(&f.path, f);
+                }
+                Item::Struct(s) => {
+                    structs.insert(&s.id, s);
+                }
+                Item::Enum(_) | Item::Value(_) => {}
+            }
+        }
         for item in &self.items {
             let (body_id, owner) = match item {
                 Item::Function(f) => (f.body, f.path.to_string()),
@@ -36,6 +57,9 @@ impl TypedFile {
                 statement_parents: vec![0; body.statements.len()],
                 chain_depth: 0,
                 loops: Vec::new(),
+                returns: Vec::new(),
+                functions: &functions,
+                structs: &structs,
                 violations: Vec::new(),
             };
             validator.body_roots(item);
@@ -55,6 +79,12 @@ struct Validator<'a> {
     chain_depth: usize,
     /// The loops enclosing the current node, innermost last; a closure starts a new list.
     loops: Vec<StatementId>,
+    /// The return type of the function or closure enclosing the current node, innermost last.
+    returns: Vec<Type>,
+    /// The file's own functions and structs, whose signatures and fields calls, constructions
+    /// and field accesses must repeat.
+    functions: &'a HashMap<&'a DeclarationPath, &'a FunctionItem>,
+    structs: &'a HashMap<&'a NominalId, &'a StructItem>,
     violations: Vec<String>,
 }
 
@@ -90,7 +120,9 @@ impl Validator<'_> {
                     }
                 }
                 if let Some(value) = self.body.value {
+                    self.returns.push(f.return_type.clone());
                     self.expression(value);
+                    self.returns.pop();
                     self.expect_type(value, &f.return_type, "function body");
                 }
             }
@@ -219,6 +251,11 @@ impl Validator<'_> {
             } => {
                 self.check_local(*variable);
                 self.expression(*range);
+                self.expect_type(
+                    *range,
+                    &Type::Struct(NominalId::builtin_range()),
+                    "loop range",
+                );
                 self.loops.push(id);
                 self.expression(*body);
                 self.loops.pop();
@@ -249,9 +286,26 @@ impl Validator<'_> {
             | ExpressionKind::FunctionReference(_)
             | ExpressionKind::VariantConstructor { .. } => {}
             ExpressionKind::Local(local) => self.check_local(*local),
-            ExpressionKind::Field { base, .. } => {
+            ExpressionKind::Field { base, index, name } => {
                 self.expression(*base);
                 self.expect_place(*base, "field base");
+                if let Some(Type::Struct(struct_id)) = self.type_of(*base).cloned() {
+                    if let Some(item) = self.structs.get(&struct_id) {
+                        match item.fields.get(*index) {
+                            Some((field_name, _, field_ty)) if field_name == name => {
+                                let field_ty = field_ty.clone();
+                                self.expect_type_of_node(id, &field_ty, "field");
+                            }
+                            _ => {
+                                let message = format!(
+                                    "field {} names field {} '{}', which {} does not declare",
+                                    id.0, index, name, struct_id.name
+                                );
+                                self.report(message);
+                            }
+                        }
+                    }
+                }
             }
             ExpressionKind::Deref { pointer } => {
                 self.expression(*pointer);
@@ -311,10 +365,29 @@ impl Validator<'_> {
                     self.expect_type_of_node(id, &chain_ty.nullable(), "chain");
                 }
             }
-            ExpressionKind::Coerce { value, .. } => {
+            ExpressionKind::Coerce { value, kind } => {
                 self.expression(*value);
                 if self.error_free && self.type_of(*value) == Some(&ty) {
                     self.report(format!("coercion {} does not change the type", id.0));
+                }
+                let value_ty = self.type_of(*value).cloned();
+                match kind {
+                    CoercionKind::WrapNullable => match &ty {
+                        Type::Nullable(inner) => {
+                            let inner = inner.as_ref().clone();
+                            self.expect_type(*value, &inner, "wrapped value");
+                        }
+                        _ if self.error_free => {
+                            self.report(format!("coercion {} wraps into a non-nullable", id.0));
+                        }
+                        _ => {}
+                    },
+                    CoercionKind::Diverge => {
+                        if value_ty.is_some_and(|t| t != Type::Nothing) {
+                            self.expect_type(*value, &Type::Nothing, "diverging value");
+                        }
+                    }
+                    CoercionKind::Subtype => {}
                 }
             }
             ExpressionKind::Call(call) => {
@@ -364,6 +437,21 @@ impl Validator<'_> {
                     );
                     self.report(message);
                 }
+                if let Callee::Function(path) = &call.callee {
+                    if let Some(function) = self.functions.get(path) {
+                        let declared = declared_parameters(function);
+                        if self.error_free
+                            && (declared != call.parameters
+                                || function.is_compose != call.is_compose
+                                || function.receiver.is_some() != call.has_receiver)
+                        {
+                            let message =
+                                format!("call {} of {} does not repeat its signature", id.0, path);
+                            self.report(message);
+                        }
+                        self.expect_type_of_node(id, &function.return_type, "call");
+                    }
+                }
                 for (index, argument) in call.arguments.iter().enumerate() {
                     if let Argument::Written(value) = argument {
                         self.expression(*value);
@@ -375,10 +463,26 @@ impl Validator<'_> {
                 }
             }
             ExpressionKind::Construct {
+                kind,
                 fields,
                 evaluation_order,
-                ..
             } => {
+                if let ConstructKind::Struct(struct_id) = kind {
+                    if let Some(item) = self.structs.get(struct_id) {
+                        let declared = item
+                            .fields
+                            .iter()
+                            .map(|(name, _, ty)| (Some(name.clone()), ty.clone()));
+                        let constructed = fields.iter().map(|f| (f.name.clone(), f.ty.clone()));
+                        if self.error_free && !declared.eq(constructed) {
+                            let message = format!(
+                                "construction {} does not repeat the fields of {}",
+                                id.0, struct_id.name
+                            );
+                            self.report(message);
+                        }
+                    }
+                }
                 if evaluation_order.len() != fields.len()
                     || evaluation_order.iter().any(|&i| i >= fields.len())
                 {
@@ -395,11 +499,34 @@ impl Validator<'_> {
                 self.expect_type(*start, &Type::Int, "range start");
                 self.expect_type(*end, &Type::Int, "range end");
             }
-            ExpressionKind::Binary { left, right, .. } => {
+            ExpressionKind::Binary {
+                operator,
+                left,
+                right,
+            } => {
                 self.expression(*left);
                 self.expression(*right);
+                // Both operands are at one type (D20): the result's for arithmetic.
+                if let Some(left_ty) = self.type_of(*left).cloned() {
+                    self.expect_type(*right, &left_ty, "right operand");
+                    let result = match operator {
+                        BinaryOperator::Add
+                        | BinaryOperator::Subtract
+                        | BinaryOperator::Multiply
+                        | BinaryOperator::Divide
+                        | BinaryOperator::Remainder => left_ty,
+                        _ => Type::Bool,
+                    };
+                    self.expect_type_of_node(id, &result, "binary operator");
+                }
             }
-            ExpressionKind::Unary { operand, .. } => self.expression(*operand),
+            ExpressionKind::Unary { operator, operand } => {
+                self.expression(*operand);
+                match operator {
+                    UnaryOperator::Not => self.expect_type(*operand, &Type::Bool, "operand"),
+                    UnaryOperator::Negate => self.expect_type(*operand, &ty, "operand"),
+                }
+            }
             ExpressionKind::Logical { left, right, .. } => {
                 self.expression(*left);
                 self.expression(*right);
@@ -441,6 +568,9 @@ impl Validator<'_> {
                     self.expression(*else_branch);
                     self.expect_type(*then_branch, &ty, "then branch");
                     self.expect_type(*else_branch, &ty, "else branch");
+                } else {
+                    // Without `else`, the branch's value is discarded.
+                    self.expect_discarded(*then_branch, "then branch");
                 }
             }
             ExpressionKind::When {
@@ -449,14 +579,35 @@ impl Validator<'_> {
                 if let Some(subject) = subject {
                     self.expression(*subject);
                 }
+                let subject_ty = subject.and_then(|s| self.type_of(s).cloned());
                 for branch in branches.clone() {
                     for pattern in &branch.patterns {
                         match pattern {
-                            Pattern::Variant { .. } | Pattern::Else => {}
-                            Pattern::Value(value) => self.expression(*value),
+                            Pattern::Variant { enum_id, .. } => {
+                                if self.error_free
+                                    && subject_ty != Some(Type::Enum(enum_id.clone()))
+                                {
+                                    let message = format!(
+                                        "when {} matches a variant of {}",
+                                        id.0, enum_id.name
+                                    );
+                                    self.report(message);
+                                }
+                            }
+                            Pattern::Else => {}
+                            Pattern::Value(value) => {
+                                self.expression(*value);
+                                if let Some(subject_ty) = &subject_ty {
+                                    self.expect_type(*value, subject_ty, "pattern value");
+                                }
+                            }
                             Pattern::Range { start, end, .. } => {
                                 self.expression(*start);
                                 self.expression(*end);
+                                if let Some(subject_ty) = &subject_ty {
+                                    self.expect_type(*start, subject_ty, "pattern range start");
+                                    self.expect_type(*end, subject_ty, "pattern range end");
+                                }
                             }
                             Pattern::Condition(condition) => {
                                 self.expression(*condition);
@@ -467,12 +618,26 @@ impl Validator<'_> {
                     self.expression(branch.body);
                     if ty != Type::Unit {
                         self.expect_type(branch.body, &ty, "when branch");
+                    } else {
+                        // A `Unit` `when` is a statement, or checked against `Unit`: either way
+                        // its branches' values are discarded.
+                        self.expect_discarded(branch.body, "when branch");
                     }
                 }
             }
             ExpressionKind::Return { value } => {
-                if let Some(value) = value {
-                    self.expression(*value);
+                let expected = self.returns.last().cloned();
+                match (value, expected) {
+                    (Some(value), expected) => {
+                        self.expression(*value);
+                        if let Some(expected) = expected {
+                            self.expect_type(*value, &expected, "returned value");
+                        }
+                    }
+                    (None, Some(expected)) if self.error_free && expected != Type::Unit => {
+                        self.report(format!("return {} has no value for {}", id.0, expected));
+                    }
+                    (None, _) => {}
                 }
             }
             ExpressionKind::Break { target } | ExpressionKind::Continue { target } => {
@@ -501,11 +666,32 @@ impl Validator<'_> {
                 for capture in captures.clone() {
                     self.check_local(capture.local);
                 }
+                let ret = match &ty {
+                    Type::Fn { params, ret, .. } => {
+                        let declared: Vec<Type> = parameters
+                            .iter()
+                            .filter_map(|p| self.body.locals.get(*p).map(|l| l.ty.clone()))
+                            .collect();
+                        if self.error_free && &declared != params {
+                            let message =
+                                format!("closure {} binds parameters of other types", id.0);
+                            self.report(message);
+                        }
+                        Some(ret.as_ref().clone())
+                    }
+                    _ => None,
+                };
                 let loops = std::mem::take(&mut self.loops);
                 let chain_depth = std::mem::replace(&mut self.chain_depth, 0);
+                self.returns.extend(ret.clone());
                 self.expression(*body);
+                if let Some(ret) = ret {
+                    self.returns.pop();
+                    self.expect_type(*body, &ret, "closure body");
+                }
                 self.loops = loops;
                 self.chain_depth = chain_depth;
+                self.check_captures(id, parameters, *body, captures);
             }
             ExpressionKind::Error { children } => {
                 if self.error_free {
@@ -514,6 +700,107 @@ impl Validator<'_> {
                 for child in children.clone() {
                     self.expression(child);
                 }
+            }
+        }
+    }
+
+    /// Reports a block in a position whose value is discarded that still has a value: its last
+    /// expression must be a statement (D9).
+    fn expect_discarded(&mut self, id: ExpressionId, slot: &str) {
+        if !self.error_free {
+            return;
+        }
+        if let Some(expression) = self.body.expressions.get(id) {
+            if let ExpressionKind::Block { tail: Some(_), .. } = expression.kind {
+                if expression.ty != Type::Unit {
+                    let message = format!(
+                        "{} (node {}) is discarded, but its block has a {} tail",
+                        slot, id.0, expression.ty
+                    );
+                    self.report(message);
+                }
+            }
+        }
+    }
+
+    /// Reports a closure whose captures are not exactly the bindings its body uses and does not
+    /// declare (D11), each once.
+    fn check_captures(
+        &mut self,
+        id: ExpressionId,
+        parameters: &[LocalId],
+        body: ExpressionId,
+        captures: &[crate::tree::Capture],
+    ) {
+        if !self.error_free {
+            return;
+        }
+        let mut declared: HashSet<LocalId> = parameters.iter().copied().collect();
+        let mut used = Vec::new();
+        self.collect_bindings(body, &mut declared, &mut used);
+        let expected: HashSet<LocalId> =
+            used.into_iter().filter(|l| !declared.contains(l)).collect();
+        let recorded: HashSet<LocalId> = captures.iter().map(|c| c.local).collect();
+        if recorded.len() != captures.len() || recorded != expected {
+            let mut expected: Vec<_> = expected.into_iter().map(|l| l.to_string()).collect();
+            expected.sort();
+            let message = format!(
+                "closure {} records captures {:?}, but its body uses [{}] from outside",
+                id.0,
+                captures
+                    .iter()
+                    .map(|c| c.local.to_string())
+                    .collect::<Vec<_>>(),
+                expected.join(", ")
+            );
+            self.report(message);
+        }
+    }
+
+    /// Collects the bindings that the subtree of `id` declares and those it uses.
+    fn collect_bindings(
+        &self,
+        id: ExpressionId,
+        declared: &mut HashSet<LocalId>,
+        used: &mut Vec<LocalId>,
+    ) {
+        let Some(expression) = self.body.expressions.get(id) else {
+            return;
+        };
+        if let ExpressionKind::Local(local) = expression.kind {
+            used.push(local);
+        }
+        if let ExpressionKind::Closure { parameters, .. } = &expression.kind {
+            declared.extend(parameters.iter().copied());
+        }
+        let mut statements = Vec::new();
+        for child in children(&expression.kind, &mut statements) {
+            self.collect_bindings(child, declared, used);
+        }
+        while let Some(statement) = statements.pop() {
+            let Some(statement) = self.body.statements.get(statement) else {
+                continue;
+            };
+            let expressions = match &statement.kind {
+                StatementKind::Let { local, initializer } => {
+                    declared.insert(*local);
+                    vec![*initializer]
+                }
+                StatementKind::Assign { target, value } => vec![*target, *value],
+                StatementKind::Expression { value } => vec![*value],
+                StatementKind::While { condition, body }
+                | StatementKind::DoWhile { body, condition } => vec![*condition, *body],
+                StatementKind::For {
+                    variable,
+                    range,
+                    body,
+                } => {
+                    declared.insert(*variable);
+                    vec![*range, *body]
+                }
+            };
+            for child in expressions {
+                self.collect_bindings(child, declared, used);
             }
         }
     }
@@ -532,6 +819,112 @@ impl Validator<'_> {
                 self.report(message);
             }
         }
+    }
+}
+
+/// The parameters a call of `function` passes, as [`crate::tree::Call::parameters`] records
+/// them: `this` first for an extension, of the type its receiver mode passes.
+fn declared_parameters(function: &FunctionItem) -> Vec<(Option<String>, Type)> {
+    let receiver = function.receiver.as_ref().map(|(mode, ty)| {
+        let ty = match mode {
+            ReceiverMode::Shared => Type::Reference {
+                mutable: false,
+                inner: Box::new(ty.clone()),
+            },
+            ReceiverMode::Mutable => Type::Reference {
+                mutable: true,
+                inner: Box::new(ty.clone()),
+            },
+            ReceiverMode::Consuming => ty.clone(),
+        };
+        (Some("this".to_string()), ty)
+    });
+    receiver
+        .into_iter()
+        .chain(
+            function
+                .parameters
+                .iter()
+                .map(|(name, ty)| (Some(name.clone()), ty.clone())),
+        )
+        .collect()
+}
+
+/// The expression children of `kind`, and its statements pushed onto `statements`.
+fn children(kind: &ExpressionKind, statements: &mut Vec<StatementId>) -> Vec<ExpressionId> {
+    match kind {
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Local(_)
+        | ExpressionKind::TopLevelValue(_)
+        | ExpressionKind::FunctionReference(_)
+        | ExpressionKind::VariantConstructor { .. }
+        | ExpressionKind::Break { .. }
+        | ExpressionKind::Continue { .. } => Vec::new(),
+        ExpressionKind::Field { base, .. } => vec![*base],
+        ExpressionKind::Deref { pointer } => vec![*pointer],
+        ExpressionKind::Index { base, index } => vec![*base, *index],
+        ExpressionKind::NonNullPayload { nullable } => vec![*nullable],
+        ExpressionKind::Temporary { value }
+        | ExpressionKind::Coerce { value, .. }
+        | ExpressionKind::Move { place: value }
+        | ExpressionKind::Copy { place: value }
+        | ExpressionKind::Borrow { place: value, .. }
+        | ExpressionKind::SafeNavigation { chain: value, .. }
+        | ExpressionKind::Unary { operand: value, .. } => vec![*value],
+        ExpressionKind::Call(call) => {
+            let callee = match call.callee {
+                Callee::Value(callee) => Some(callee),
+                _ => None,
+            };
+            callee
+                .into_iter()
+                .chain(call.arguments.iter().filter_map(|a| match a {
+                    Argument::Written(value) => Some(*value),
+                    Argument::Default => None,
+                }))
+                .collect()
+        }
+        ExpressionKind::Construct { fields, .. } => fields.iter().map(|f| f.value).collect(),
+        ExpressionKind::Range { start, end, .. } => vec![*start, *end],
+        ExpressionKind::Binary { left, right, .. }
+        | ExpressionKind::Logical { left, right, .. } => {
+            vec![*left, *right]
+        }
+        ExpressionKind::Elvis { nullable, fallback } => vec![*nullable, *fallback],
+        ExpressionKind::Block {
+            statements: s,
+            tail,
+        } => {
+            statements.extend(s.iter().copied());
+            tail.iter().copied().collect()
+        }
+        ExpressionKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => [Some(*condition), Some(*then_branch), *else_branch]
+            .into_iter()
+            .flatten()
+            .collect(),
+        ExpressionKind::When {
+            subject, branches, ..
+        } => {
+            let mut children: Vec<ExpressionId> = subject.iter().copied().collect();
+            for branch in branches {
+                for pattern in &branch.patterns {
+                    match pattern {
+                        Pattern::Value(value) | Pattern::Condition(value) => children.push(*value),
+                        Pattern::Range { start, end, .. } => children.extend([*start, *end]),
+                        Pattern::Variant { .. } | Pattern::Else => {}
+                    }
+                }
+                children.push(branch.body);
+            }
+            children
+        }
+        ExpressionKind::Return { value } => value.iter().copied().collect(),
+        ExpressionKind::Closure { body, .. } => vec![*body],
+        ExpressionKind::Error { children } => children.clone(),
     }
 }
 
@@ -748,6 +1141,121 @@ mod tests {
         let found = file.validate(false);
         assert!(
             !found.iter().any(|v| v.contains("error node")),
+            "{:?}",
+            found
+        );
+    }
+
+    #[test]
+    fn a_closure_missing_a_capture_is_reported() {
+        let mut file = file();
+        let body = body(&mut file);
+        // `{ a + 1 }` reads the parameter `a`, but records no capture.
+        let sum = body.value.unwrap();
+        let fn_ty = Type::Fn {
+            is_compose: false,
+            params: vec![],
+            ret: Box::new(Type::Int),
+        };
+        let closure = add(
+            body,
+            ExpressionKind::Closure {
+                parameters: vec![],
+                body: sum,
+                is_compose: false,
+                captures: vec![],
+            },
+            fn_ty,
+        );
+        let call = add(
+            body,
+            ExpressionKind::Call(Call {
+                callee: Callee::Value(closure),
+                arguments: vec![],
+                parameters: vec![],
+                evaluation_order: vec![],
+                has_receiver: false,
+                is_compose: false,
+            }),
+            Type::Int,
+        );
+        body.value = Some(call);
+        let found = violations(&file);
+        assert!(
+            found.iter().any(|v| v.contains("records captures")),
+            "{:?}",
+            found
+        );
+    }
+
+    #[test]
+    fn a_discarded_branch_with_a_value_and_a_mistyped_return_are_reported() {
+        let mut file = file();
+        let body = body(&mut file);
+        // `{ if (true) { a + 1 }; return "x" }`: the `if` has no `else`, so its branch is
+        // discarded and must hold its tail as a statement; and `f` returns an `Int`.
+        let sum = body.value.unwrap();
+        let condition = add(
+            body,
+            ExpressionKind::Literal(Literal::Bool(true)),
+            Type::Bool,
+        );
+        let branch = add(
+            body,
+            ExpressionKind::Block {
+                statements: vec![],
+                tail: Some(sum),
+            },
+            Type::Int,
+        );
+        let if_node = add(
+            body,
+            ExpressionKind::If {
+                condition,
+                then_branch: branch,
+                else_branch: None,
+            },
+            Type::Unit,
+        );
+        let text = add(
+            body,
+            ExpressionKind::Literal(Literal::String("x".to_string())),
+            Type::String,
+        );
+        let ret = add(
+            body,
+            ExpressionKind::Return { value: Some(text) },
+            Type::Nothing,
+        );
+        let diverge = add(
+            body,
+            ExpressionKind::Coerce {
+                value: ret,
+                kind: CoercionKind::Diverge,
+            },
+            Type::Int,
+        );
+        let statement = body.statements.alloc(Statement {
+            kind: StatementKind::Expression { value: if_node },
+            span: Span::dummy(),
+        });
+        let block = add(
+            body,
+            ExpressionKind::Block {
+                statements: vec![statement],
+                tail: Some(diverge),
+            },
+            Type::Int,
+        );
+        body.value = Some(block);
+        let found = violations(&file);
+        assert!(
+            found.iter().any(|v| v.contains("is discarded")),
+            "{:?}",
+            found
+        );
+        assert!(
+            found.iter().any(|v| v.contains("returned value")),
             "{:?}",
             found
         );
