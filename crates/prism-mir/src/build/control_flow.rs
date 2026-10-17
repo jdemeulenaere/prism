@@ -597,12 +597,28 @@ impl Builder<'_> {
         }
     }
 
+    /// `continue`: the exit of the scopes inside the loop's body, then a jump to the next
+    /// iteration. In a `do`/`while`, the condition still sees the body's locals (the `loops`
+    /// spec), including those declared after the `continue`, which it skipped: they are marked
+    /// live without a value once the body is lowered (see `lower_do_while`), so the borrow
+    /// checker's initialization analysis can reject the condition's read of one of them.
     pub(super) fn lower_continue(&mut self, target: Option<StatementId>, span: Span) {
         let index = self.loop_index(target);
         self.exit_scopes_to(self.loops[index].continue_depth);
-        if self.current.is_some() {
-            let next = self.loop_next(index);
-            self.goto(next, span);
+        if self.current.is_none() {
+            return;
+        }
+        match self.loops[index].body_scope {
+            Some(body_scope) => {
+                let block = self.new_block();
+                self.goto(block, span);
+                let count = self.scope_local_count(body_scope);
+                self.loops[index].continues.push((block, count, span));
+            }
+            None => {
+                let next = self.loop_next(index);
+                self.goto(next, span);
+            }
         }
     }
 
@@ -630,6 +646,8 @@ impl Builder<'_> {
             continue_depth: depth,
             exit: None,
             next: Some(head),
+            body_scope: None,
+            continues: Vec::new(),
         });
         if let Some((on_true, on_false)) = self.branch_on_expression(condition) {
             self.current = Some(on_false);
@@ -644,7 +662,8 @@ impl Builder<'_> {
     }
 
     /// `do body while (c)`: the condition is evaluated in the body block's scope, whose locals
-    /// are dropped on the back edge and on the exit.
+    /// are dropped on the back edge and on the exit. A `continue` reaches the condition with
+    /// the body's locals declared after it marked live but without a value.
     pub(super) fn lower_do_while(
         &mut self,
         id: StatementId,
@@ -665,6 +684,8 @@ impl Builder<'_> {
             continue_depth: self.scope_depth(),
             exit: None,
             next: None,
+            body_scope: Some(body_scope),
+            continues: Vec::new(),
         });
         match &self.expression(body).kind {
             ExpressionKind::Block { statements, tail } => {
@@ -687,6 +708,12 @@ impl Builder<'_> {
         if self.current.is_some() {
             let next = self.loop_next(index);
             self.goto(next, span);
+        }
+        for (block, count, continue_span) in std::mem::take(&mut self.loops[index].continues) {
+            self.current = Some(block);
+            self.mark_live_from(body_scope, count, continue_span);
+            let next = self.loop_next(index);
+            self.goto(next, continue_span);
         }
         if let Some(next) = self.loops[index].next {
             self.current = Some(next);
@@ -736,6 +763,8 @@ impl Builder<'_> {
             continue_depth: depth,
             exit: None,
             next: None,
+            body_scope: None,
+            continues: Vec::new(),
         });
         let index = self.loops.len() - 1;
         self.assign(

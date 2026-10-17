@@ -235,6 +235,12 @@ struct LoopContext {
     /// The block that starts the next iteration: the condition of a `while` (always present),
     /// the latch of a `for` or the condition of a `do`/`while` (created by the first jump).
     next: Option<BlockId>,
+    /// For a `do`/`while`, the index of its body's scope, which stays open in the condition.
+    body_scope: Option<usize>,
+    /// For a `do`/`while`, each `continue` lowered so far: the block it jumped to, how many
+    /// locals the body's scope had then, and its span. The body's locals declared after it are marked live
+    /// there, once the body is lowered, before the jump to the condition.
+    continues: Vec<(BlockId, usize, Span)>,
 }
 
 /// An open `?.` chain, which its payload tests leave with `null` (D8).

@@ -1,0 +1,45 @@
+module main
+fun main::next(): Int @2:1
+  local _0: Int (return)
+  bb0:
+    _0 = const 0 @2:19
+    return @2:1
+fun main::f(_1: Bool): Unit @3:1
+  local _0: Unit (return)
+  local _1 c: Bool (argument)
+  local _2 s: String (user)
+  local _3 x: Int (user)
+  local _4: Bool (temporary)
+  bb0:
+    goto -> bb1 @3:18
+  bb1:
+    storage_live _2 @3:23
+    _2 = const "a" @3:31
+    switch copy _1 [0 -> bb3, otherwise -> bb2] @3:40
+  bb2:
+    storage_live _3 @3:43
+    goto -> bb5 @3:43
+  bb3:
+    storage_live _3 @3:53
+    _3 = call main::next() -> bb4 @3:61
+  bb4:
+    goto -> bb5 @3:18
+  bb5:
+    storage_live _4 @3:77
+    _4 = copy _3 > const 0 @3:77
+    switch move _4 [0 -> bb7, otherwise -> bb6] @3:77
+  bb6:
+    storage_dead _4 @3:77
+    storage_dead _3 @3:21
+    drop _2 -> bb8 @3:21
+  bb7:
+    storage_dead _4 @3:77
+    storage_dead _3 @3:21
+    drop _2 -> bb9 @3:21
+  bb8:
+    storage_dead _2 @3:21
+    goto -> bb1 @3:18
+  bb9:
+    storage_dead _2 @3:21
+    _0 = const () @3:16
+    return @3:1

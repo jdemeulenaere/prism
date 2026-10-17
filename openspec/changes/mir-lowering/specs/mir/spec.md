@@ -134,6 +134,10 @@ A `when` MUST evaluate its subject once. A `when` whose patterns are all payload
 - **WHEN** `fun f(c: Bool, d: Bool) { while (c) { val s = "x"; if (d) break } }` is lowered
 - **THEN** the path of the `break` drops `s` and then jumps to the block after the loop
 
+#### Scenario: Continue in a do-while reaches the condition
+- **WHEN** `fun next(): Int = 0` is declared and `fun f(c: Bool) { do { val s = "a"; if (c) continue; val x = next() } while (x > 0) }` is lowered
+- **THEN** the path of the `continue` keeps `s`, marks `x` live without assigning it, and jumps to the condition, after which `x` and `s` end on both edges; reading the unassigned `x` there is left to the borrow checker's initialization analysis
+
 ### Requirement: Diverging Code Ends Its Block
 Code after an expression of type `Nothing` MUST NOT be lowered, and every block of a body MUST be reachable from its entry. A call whose callee returns `Nothing` MUST have no successor block.
 

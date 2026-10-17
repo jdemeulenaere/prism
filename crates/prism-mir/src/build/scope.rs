@@ -98,6 +98,23 @@ impl Builder<'_> {
         }
     }
 
+    /// The number of locals the scope at `index` owns so far.
+    pub(super) fn scope_local_count(&self, index: usize) -> usize {
+        self.scopes[index].locals.len()
+    }
+
+    /// Marks live, on the current path, the locals of the scope at `index` after its first
+    /// `count`: a jump that skipped their declarations to a point where they are in scope (a
+    /// `continue` to a `do`/`while` condition) leaves them live and uninitialized.
+    pub(super) fn mark_live_from(&mut self, index: usize, count: usize, span: Span) {
+        let locals = self.scopes[index].locals[count..].to_vec();
+        for scoped in locals {
+            if scoped.marked {
+                self.push_statement(StatementKind::StorageLive(scoped.local), span);
+            }
+        }
+    }
+
     /// Ends the current block with a drop of `place` and continues in a new block.
     pub(super) fn emit_drop(&mut self, place: Place, span: Span) {
         if self.current.is_none() {
