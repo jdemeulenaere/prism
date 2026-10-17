@@ -2,8 +2,9 @@
 //! fixture and example.
 
 use crate::mir::{
-    AggregateKind, BasicBlock, BlockId, Body, BodyId, BodyOwner, Callee, LocalId, LocalKind,
-    MirFile, Operand, Place, Projection, Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, BasicBlock, BlockId, Body, BodyId, BodyOwner, Callee, Constant, LocalId,
+    LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind,
+    TerminatorKind,
 };
 use crate::types::{needs_drop, projection_type};
 use prism_typed_tree::{ArenaId, BinaryOperator, Type, TypeTable, UnaryOperator};
@@ -16,10 +17,12 @@ impl MirFile {
     /// well typed; every assignment's rvalue has its place's type, except a subtyping
     /// conversion, whose operand's type differs from it; copied operands are `Copy`; aggregates
     /// match their fields; a call's operands have its parameter types and it has no successor
-    /// exactly when its destination is `Nothing`; a switch reads a `Bool` or an `Int`; only
-    /// values needing a drop are dropped; captures appear only in closures and are never marked
-    /// or dropped; and every other local is storage-live wherever it is used, never marked live
-    /// twice, and dead on every path to the return.
+    /// exactly when its destination is `Nothing`; a switch reads a `Bool` or an `Int`; no
+    /// operand moves a place through a dereference; only values needing a drop are dropped;
+    /// captures appear only in closures and are never marked or dropped; drop flags appear only
+    /// in elaborated MIR, are `Bool`, are assigned only constants and read only by a switch; and
+    /// every other local is storage-live wherever it is used, never marked live twice, and dead
+    /// on every path to the return.
     pub fn validate(&self) -> Vec<String> {
         let mut violations = Vec::new();
         for (id, body) in self.bodies.iter() {
@@ -115,7 +118,10 @@ impl Validator<'_> {
             };
             let fits = match expected {
                 Some(kind) => declaration.kind == kind,
-                None => matches!(declaration.kind, LocalKind::User | LocalKind::Temporary),
+                None => matches!(
+                    declaration.kind,
+                    LocalKind::User | LocalKind::Temporary | LocalKind::DropFlag
+                ),
             };
             if !fits {
                 self.report(format!(
@@ -131,6 +137,40 @@ impl Validator<'_> {
         }
         if body.locals.len() <= body.argument_count + body.capture_count {
             self.report("fewer locals than arguments and captures".to_string());
+        }
+        for (local, declaration) in body.locals.iter() {
+            if declaration.kind != LocalKind::DropFlag {
+                continue;
+            }
+            if self.file.phase != MirPhase::Elaborated {
+                self.report(format!(
+                    "_{} is a drop flag in MIR that is not elaborated",
+                    local.0
+                ));
+            }
+            if declaration.ty != Type::Bool {
+                self.report(format!(
+                    "the drop flag _{} has type {}",
+                    local.0, declaration.ty
+                ));
+            }
+        }
+    }
+
+    fn is_drop_flag(&self, local: LocalId) -> bool {
+        self.body.locals.get(local).map(|l| l.kind) == Some(LocalKind::DropFlag)
+    }
+
+    /// Reports each drop flag among `used`, which may only be read by a switch (D12 of
+    /// `borrowck-moves`).
+    fn check_no_drop_flag(&mut self, used: &[LocalId], at: &str) {
+        for local in used {
+            if self.is_drop_flag(*local) {
+                self.report(format!(
+                    "{} uses the drop flag _{} outside a switch",
+                    at, local.0
+                ));
+            }
         }
     }
 
@@ -197,7 +237,12 @@ impl Validator<'_> {
                 }
                 Some(ty)
             }
-            Operand::Move(place) => self.place_type(place, at),
+            Operand::Move(place) => {
+                if place.projections.contains(&Projection::Deref) {
+                    self.report(format!("{} moves out of a dereference", at));
+                }
+                self.place_type(place, at)
+            }
             Operand::Constant(constant) => constant.ty(),
         }
     }
@@ -214,6 +259,7 @@ impl Validator<'_> {
     }
 
     fn block(&mut self, block: BlockId, data: &BasicBlock) {
+        self.drop_flags(block, data);
         for (index, statement) in data.statements.iter().enumerate() {
             let at = format!("bb{}[{}]", block.0, index);
             match &statement.kind {
@@ -311,6 +357,65 @@ impl Validator<'_> {
                 }
             }
         }
+    }
+
+    /// The drop flags of `block`: each is assigned only a `Bool` constant, as a whole local, and
+    /// read only as the operand of a switch (D12 of `borrowck-moves`).
+    fn drop_flags(&mut self, block: BlockId, data: &BasicBlock) {
+        for (index, statement) in data.statements.iter().enumerate() {
+            let at = format!("bb{}[{}]", block.0, index);
+            let mut used = Vec::new();
+            match &statement.kind {
+                StatementKind::Assign(place, rvalue) => {
+                    if self.is_drop_flag(place.local) {
+                        let constant = matches!(
+                            rvalue.as_ref(),
+                            Rvalue::Use(Operand::Constant(Constant::Bool(_)))
+                        );
+                        if !place.projections.is_empty() || !constant {
+                            self.report(format!(
+                                "{} assigns the drop flag _{} other than a constant",
+                                at, place.local.0
+                            ));
+                        }
+                        used_by_projections(place, &mut used);
+                    } else {
+                        used_by_place(place, &mut used);
+                    }
+                    used_by_rvalue(rvalue, &mut used);
+                }
+                StatementKind::Read(place) => used_by_place(place, &mut used),
+                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+            }
+            self.check_no_drop_flag(&used, &at);
+        }
+        let at = format!("bb{}[terminator]", block.0);
+        let mut used = Vec::new();
+        match &data.terminator.kind {
+            TerminatorKind::SwitchInt { value, .. } => match value {
+                Operand::Copy(place) if self.is_drop_flag(place.local) => {
+                    used_by_projections(place, &mut used)
+                }
+                _ => used_by_operand(value, &mut used),
+            },
+            TerminatorKind::Call {
+                callee,
+                arguments,
+                destination,
+                ..
+            } => {
+                if let Callee::Value(place) = callee {
+                    used_by_place(place, &mut used);
+                }
+                for argument in arguments {
+                    used_by_operand(argument, &mut used);
+                }
+                used_by_place(destination, &mut used);
+            }
+            TerminatorKind::Drop { place, .. } => used_by_place(place, &mut used),
+            TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        }
+        self.check_no_drop_flag(&used, &at);
     }
 
     fn rvalue(&mut self, rvalue: &Rvalue, ty: &Type, at: &str) {
@@ -584,6 +689,11 @@ impl Validator<'_> {
 
 fn used_by_place(place: &Place, used: &mut Vec<LocalId>) {
     used.push(place.local);
+    used_by_projections(place, used);
+}
+
+/// The index locals of `place`'s projections.
+fn used_by_projections(place: &Place, used: &mut Vec<LocalId>) {
     for projection in &place.projections {
         if let Projection::Index(local) = projection {
             used.push(*local);
@@ -623,7 +733,7 @@ fn used_by_rvalue(rvalue: &Rvalue, used: &mut Vec<LocalId>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::dump::tests::{local, small_file, statement, terminator};
+    use crate::dump::tests::{elaborated_file, local, small_file, statement, terminator};
     use crate::mir::*;
     use prism_typed_tree::{BinaryOperator, Type};
 
@@ -794,5 +904,72 @@ mod tests {
             .statements
             .push(statement(StatementKind::StorageLive(LocalId(1))));
         assert_reports(&file, "marks _1, a return place, argument or capture");
+    }
+
+    #[test]
+    fn moves_through_a_dereference_are_reported() {
+        let mut file = small_file();
+        body(&mut file).blocks[BlockId(0)].statements[3] = statement(StatementKind::assign(
+            Place::return_place(),
+            Rvalue::Use(Operand::Move(
+                Place::local(LocalId(1))
+                    .project(Projection::Deref)
+                    .project(Projection::Field(0)),
+            )),
+        ));
+        assert_reports(&file, "bb0[3] moves out of a dereference");
+    }
+
+    #[test]
+    fn a_well_formed_elaborated_body_has_no_violation() {
+        assert_eq!(violations(&elaborated_file()), "");
+    }
+
+    #[test]
+    fn drop_flag_violations_are_reported() {
+        let flag = LocalId(3);
+        // A drop flag in MIR that is not elaborated.
+        let mut file = elaborated_file();
+        file.phase = MirPhase::Built;
+        assert_reports(&file, "_3 is a drop flag in MIR that is not elaborated");
+        // Not a `Bool`.
+        let mut file = elaborated_file();
+        body(&mut file).locals[flag].ty = Type::Int;
+        assert_reports(&file, "the drop flag _3 has type Int");
+        // Storage-marked.
+        let mut file = elaborated_file();
+        body(&mut file).blocks[BlockId(0)]
+            .statements
+            .push(statement(StatementKind::StorageLive(flag)));
+        assert_reports(&file, "marks _3, a return place, argument or capture");
+        // Assigned other than a constant.
+        let mut file = elaborated_file();
+        body(&mut file).blocks[BlockId(0)].statements[0] = statement(StatementKind::assign(
+            Place::local(flag),
+            Rvalue::Unary(
+                prism_typed_tree::UnaryOperator::Not,
+                Operand::Constant(Constant::Bool(true)),
+            ),
+        ));
+        assert_reports(
+            &file,
+            "bb0[0] assigns the drop flag _3 other than a constant",
+        );
+        // Read outside a switch.
+        let mut file = elaborated_file();
+        body(&mut file).blocks[BlockId(0)]
+            .statements
+            .push(statement(StatementKind::Read(Place::local(flag))));
+        assert_reports(&file, "uses the drop flag _3 outside a switch");
+        // Dropped.
+        let mut file = elaborated_file();
+        body(&mut file).blocks[BlockId(2)].terminator = terminator(TerminatorKind::Drop {
+            place: Place::local(flag),
+            target: BlockId(1),
+        });
+        assert_reports(
+            &file,
+            "bb2[terminator] uses the drop flag _3 outside a switch",
+        );
     }
 }

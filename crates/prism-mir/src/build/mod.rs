@@ -19,7 +19,7 @@ mod scope;
 
 use crate::mir::{
     BasicBlock, BlockId, Body, BodyId, BodyOwner, LocalDeclaration, LocalId, LocalKind, MirFile,
-    Place, Projection, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    MirPhase, Place, Projection, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use crate::types::mir_type_table;
 use prism_ast::Span;
@@ -45,6 +45,7 @@ pub fn lower_file(file: &TypedFile) -> MirFile {
     }
     MirFile {
         module: file.module.clone(),
+        phase: MirPhase::Built,
         types,
         bodies: bodies.finish(),
     }
@@ -134,7 +135,13 @@ fn lower_value(file: &TypedFile, types: &TypeTable, bodies: &mut BodySlots, valu
 
 /// Merges each block that a `goto` is the only way into with the block jumping to it, then
 /// renumbers the remaining blocks in order. The lowering creates such blocks at the joins and
-/// returns that only one path reaches.
+/// returns that only one path reaches; drop elaboration, where it removes a drop.
+pub fn merge_goto_blocks(body: &mut Body) {
+    let blocks = std::mem::take(&mut body.blocks).into_vec();
+    body.blocks = merge_blocks(blocks);
+}
+
+/// [`merge_goto_blocks`] over the blocks of a body being finished.
 fn merge_blocks(mut blocks: Vec<BasicBlock>) -> Arena<BlockId, BasicBlock> {
     let mut predecessors = vec![0usize; blocks.len()];
     for block in &blocks {

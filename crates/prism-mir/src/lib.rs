@@ -13,6 +13,6 @@ pub mod mir;
 pub mod types;
 pub mod validate;
 
-pub use build::lower_file;
+pub use build::{lower_file, merge_goto_blocks};
 pub use mir::*;
 pub use types::{mir_range_definition, mir_type_table, needs_drop, projection_type};

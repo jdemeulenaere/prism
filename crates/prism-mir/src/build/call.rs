@@ -11,11 +11,12 @@ use prism_typed_tree::{
     ExpressionKind, FunctionItem, SafeNavigationOrigin, Type, TypeTable, TypedFile,
 };
 
-/// How a call passes its receiver once the written arguments are evaluated (D10).
-enum PendingReceiver {
-    Borrow { mutable: bool, place: Place },
-    Move(Place),
-    Copy(Place),
+/// A receiver that a call borrows: its place is evaluated before the written arguments and
+/// borrowed after them (D10 of `mir-lowering`). A receiver that the call moves or copies is
+/// evaluated as an ordinary argument, first (D10 of `borrowck-moves`).
+struct PendingReceiver {
+    mutable: bool,
+    place: Place,
 }
 
 /// The type of the slot a generator of a parameter of type `parameter` fills, when the
@@ -39,9 +40,11 @@ fn shared(ty: Type) -> Type {
 }
 
 impl Builder<'_> {
-    /// A call: the callee, the receiver's place, the written arguments in source order (each in
-    /// a temporary, except constants no default borrows), the receiver's borrow or move, the
-    /// omitted arguments in parameter order by calling their generators, then the call (D10).
+    /// A call: the callee, then the receiver (moved or copied into a temporary when the call
+    /// takes it by value, or only its place evaluated when the call borrows it), the written
+    /// arguments in source order (each in a temporary, except constants no default borrows),
+    /// the borrowed receiver's borrow, the omitted arguments in parameter order by calling their
+    /// generators, then the call (D10 of `mir-lowering` and of `borrowck-moves`).
     pub(super) fn lower_call(
         &mut self,
         destination: Option<&Place>,
@@ -79,14 +82,10 @@ impl Builder<'_> {
         if let Some(pending) = pending {
             let receiver_ty = call.parameters[0].1.clone();
             let local = self.new_temporary(receiver_ty, span);
-            let rvalue = match pending {
-                PendingReceiver::Borrow { mutable, place } => Rvalue::Borrow {
-                    mutable,
-                    origin: BorrowOrigin::Receiver,
-                    place,
-                },
-                PendingReceiver::Move(place) => Rvalue::Use(Operand::Move(place)),
-                PendingReceiver::Copy(place) => Rvalue::Use(Operand::Copy(place)),
+            let rvalue = Rvalue::Borrow {
+                mutable: pending.mutable,
+                origin: BorrowOrigin::Receiver,
+                place: pending.place,
             };
             self.assign(Place::local(local), rvalue, span);
             operands[0] = Some(Operand::Move(Place::local(local)));
@@ -149,20 +148,19 @@ impl Builder<'_> {
         self.current = target;
     }
 
-    /// Evaluates the place of a receiver that is borrowed or moved after the arguments, or
-    /// returns `None` for a receiver evaluated as an ordinary argument.
+    /// Evaluates the place of a receiver that is borrowed after the arguments, or returns `None`
+    /// for a receiver evaluated as an ordinary argument: one the call moves or copies, which is
+    /// moved or copied before the arguments (D10 of `borrowck-moves`).
     fn receiver_place(&mut self, receiver: ExpressionId) -> Option<PendingReceiver> {
         match self.expression(receiver).kind {
             ExpressionKind::Borrow {
                 mutable,
                 origin: TreeBorrowOrigin::Receiver,
                 place,
-            } => Some(PendingReceiver::Borrow {
+            } => Some(PendingReceiver {
                 mutable,
                 place: self.place(place),
             }),
-            ExpressionKind::Move { place } => Some(PendingReceiver::Move(self.place(place))),
-            ExpressionKind::Copy { place } => Some(PendingReceiver::Copy(self.place(place))),
             _ => None,
         }
     }

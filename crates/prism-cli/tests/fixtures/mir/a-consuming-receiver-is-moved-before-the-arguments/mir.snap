@@ -1,0 +1,56 @@
+module main
+fun main::Stack.into(_1: Stack, _2: Int): Int @4:1
+  local _0: Int (return)
+  local _1 this: Stack (argument)
+  local _2 n: Int (argument)
+  bb0:
+    _0 = copy _2 @4:41
+    drop _1 -> bb1 @4:1
+  bb1:
+    return @4:1
+fun main::Point.moved(_1: Point, _2: Int): Point @5:1
+  local _0: Point (return)
+  local _1 this: Point (argument)
+  local _2 n: Int (argument)
+  bb0:
+    _0 = copy _1 @5:44
+    return @5:1
+fun main::next(): Int @6:1
+  local _0: Int (return)
+  bb0:
+    _0 = const 1 @6:19
+    return @6:1
+fun main::f(_1: Stack): Int @7:1
+  local _0: Int (return)
+  local _1 s: Stack (argument)
+  local _2: Stack (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _2 @7:24
+    _2 = move _1 @7:24
+    storage_live _3 @7:31
+    _3 = call main::next() -> bb1 @7:31
+  bb1:
+    _0 = call main::Stack.into(move _2, move _3) -> bb2 @7:24
+  bb2:
+    storage_dead _3 @7:24
+    storage_dead _2 @7:24
+    drop _1 -> bb3 @7:1
+  bb3:
+    return @7:1
+fun main::g(_1: &Point): Point @8:1
+  local _0: Point (return)
+  local _1 p: &Point (argument)
+  local _2: Point (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _2 @8:27
+    _2 = copy (*_1) @8:27
+    storage_live _3 @8:35
+    _3 = call main::next() -> bb1 @8:35
+  bb1:
+    _0 = call main::Point.moved(move _2, move _3) -> bb2 @8:27
+  bb2:
+    storage_dead _3 @8:27
+    storage_dead _2 @8:27
+    return @8:1

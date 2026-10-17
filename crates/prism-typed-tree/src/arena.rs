@@ -122,6 +122,19 @@ impl<I: ArenaId, T> Arena<I, T> {
     pub fn ids(&self) -> impl Iterator<Item = I> {
         (0..self.items.len()).map(I::from_index)
     }
+
+    /// The elements with their ids, mutably, in allocation order.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (I, &mut T)> {
+        self.items
+            .iter_mut()
+            .enumerate()
+            .map(|(index, item)| (I::from_index(index), item))
+    }
+
+    /// The elements, in allocation order.
+    pub fn into_vec(self) -> Vec<T> {
+        self.items
+    }
 }
 
 impl<I: ArenaId, T> Default for Arena<I, T> {

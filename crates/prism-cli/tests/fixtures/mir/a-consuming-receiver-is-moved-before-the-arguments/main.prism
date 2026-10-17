@@ -1,0 +1,8 @@
+// expect: ok
+struct Stack { var count: Int }
+struct Point : Copy { val x: Int }
+consuming fun Stack.into(n: Int): Int = n
+consuming fun Point.moved(n: Int): Point = this
+fun next(): Int = 1
+fun f(s: Stack): Int = s.into(next())
+fun g(p: &Point): Point = p.moved(next())

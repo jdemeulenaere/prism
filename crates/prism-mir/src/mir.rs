@@ -11,9 +11,12 @@
 //! - **Types**. Every assignment's rvalue has its place's type, except [`Rvalue::Subtype`],
 //!   whose operand's type differs from it; projections are well typed; a call's operands have
 //!   its parameter types, and it has no successor exactly when its destination is `Nothing`.
-//! - **Storage** (D6). Every local except the return place, the arguments and the captures is
-//!   marked live before its uses and dead on every path to the return, never live twice; only
-//!   values whose type needs a drop ([`crate::needs_drop`]) are dropped.
+//! - **Storage** (D6). Every local except the return place, the arguments, the captures and
+//!   drop flags is marked live before its uses and dead on every path to the return, never live
+//!   twice; only values whose type needs a drop ([`crate::needs_drop`]) are dropped.
+//! - **Phase**. Lowering builds [`MirPhase::Built`] MIR; the borrow checker returns
+//!   [`MirPhase::Elaborated`] MIR, whose drops are refined by moves and may be guarded by drop
+//!   flags ([`LocalKind::DropFlag`]), which only elaborated MIR has.
 
 use prism_ast::Span;
 use prism_typed_tree::{
@@ -45,10 +48,23 @@ impl LocalId {
 pub struct MirFile {
     /// The file's module path (`app/main`).
     pub module: String,
+    /// Whether the file's drops are as lowered or elaborated by the borrow checker.
+    pub phase: MirPhase,
     /// The file's type table, in which the built-in `Range` also has the field `endInclusive`
     /// (D4).
     pub types: TypeTable,
     pub bodies: Arena<BodyId, Body>,
+}
+
+/// The stage a file's MIR is at (D12 of `borrowck-moves`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirPhase {
+    /// As lowered: every value whose type needs a drop is dropped where its scope ends, whether
+    /// or not it was moved (D6 of `mir-lowering`).
+    Built,
+    /// Borrow-checked, with drops elaborated: a drop runs only where its value is present,
+    /// statically or under a drop flag.
+    Elaborated,
 }
 
 /// What a body is the code of.
@@ -98,10 +114,15 @@ impl Body {
         (1..=self.argument_count).map(|i| LocalId(i as u32))
     }
 
-    /// Whether `local` is the return place, an argument or a capture, none of which has storage
-    /// markers.
+    /// Whether `local` is the return place, an argument, a capture or a drop flag, none of which
+    /// has storage markers.
     pub fn is_unmarked(&self, local: LocalId) -> bool {
-        (local.0 as usize) <= self.argument_count + self.capture_count
+        self.locals.get(local).is_some_and(|declaration| {
+            matches!(
+                declaration.kind,
+                LocalKind::Return | LocalKind::Argument | LocalKind::Capture | LocalKind::DropFlag
+            )
+        })
     }
 }
 
@@ -132,6 +153,10 @@ pub enum LocalKind {
     User,
     /// A value the lowering introduced.
     Temporary,
+    /// A `Bool` that drop elaboration introduced, true exactly when the local whose drop it
+    /// guards holds a value (D12 of `borrowck-moves`). Only elaborated MIR has drop flags; they
+    /// follow every other local and have no storage markers.
+    DropFlag,
 }
 
 /// A basic block: straight-line statements, then one terminator.
@@ -198,8 +223,8 @@ pub enum TerminatorKind {
         target: Option<BlockId>,
         is_compose: bool,
     },
-    /// Drops the value of `place` and continues at `target`. Drops are not yet refined by moves
-    /// (D6): drop elaboration decides which ones run.
+    /// Drops the value of `place` and continues at `target`. As lowered, drops are not refined
+    /// by moves (D6); in elaborated MIR a drop runs only where its value is present.
     Drop {
         place: Place,
         target: BlockId,

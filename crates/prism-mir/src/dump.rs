@@ -1,14 +1,15 @@
 //! The stable text form of a file's MIR, printed by `prism dump-mir` (D15 of `mir-lowering`).
 //!
-//! Bodies are printed in order, each with a header naming its owner, its arguments and its
-//! return type, then its locals, then its blocks, one statement or terminator per line with the
+//! After the `module` line, elaborated MIR prints `phase elaborated`. Bodies are printed in
+//! order, each with a header naming its owner, its arguments and its return type, then its
+//! locals (a drop flag as `(drop flag)`), then its blocks, one statement or terminator per line with the
 //! line and column of the source it comes from. Places print as `_1.name` for a field (named
 //! from the type table), `(*_1)` for a dereference, `(_1 as payload)` for a nullable's payload
 //! and `_1[_2]` for an index; operands as `move _1`, `copy _1` or `const …`.
 
 use crate::mir::{
-    AggregateKind, Body, BodyId, BodyOwner, Callee, Constant, LocalKind, MirFile, Operand, Place,
-    Projection, Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, Body, BodyId, BodyOwner, Callee, Constant, LocalKind, MirFile, MirPhase,
+    Operand, Place, Projection, Rvalue, StatementKind, TerminatorKind,
 };
 use crate::types::projection_type;
 use prism_ast::Span;
@@ -20,6 +21,9 @@ impl MirFile {
     pub fn dump(&self) -> String {
         let mut out = String::new();
         writeln!(out, "module {}", self.module).unwrap();
+        if self.phase == MirPhase::Elaborated {
+            writeln!(out, "phase elaborated").unwrap();
+        }
         for (id, body) in self.bodies.iter() {
             self.dump_body(&mut out, id, body);
         }
@@ -79,6 +83,7 @@ impl MirFile {
                 LocalKind::Capture => "capture",
                 LocalKind::User => "user",
                 LocalKind::Temporary => "temporary",
+                LocalKind::DropFlag => "drop flag",
             };
             let var = if declaration.mutable { ", var" } else { "" };
             writeln!(
@@ -402,6 +407,7 @@ pub(crate) mod tests {
         bodies.alloc(body);
         MirFile {
             module: "main".to_string(),
+            phase: MirPhase::Built,
             types: types(),
             bodies,
         }
@@ -428,5 +434,89 @@ fun main::f(_1: &User): String @1:1
 ";
         assert_eq!(file.dump(), expected);
         assert_eq!(file.dump(), file.dump());
+    }
+
+    /// `small_file`, elaborated by hand: the drop of `n` is guarded by a drop flag.
+    pub(crate) fn elaborated_file() -> MirFile {
+        let mut file = small_file();
+        file.phase = MirPhase::Elaborated;
+        let body = &mut file.bodies[BodyId(0)];
+        let flag = body
+            .locals
+            .alloc(local(Type::Bool, LocalKind::DropFlag, None));
+        let set = |value| {
+            statement(StatementKind::assign(
+                Place::local(flag),
+                Rvalue::Use(Operand::Constant(Constant::Bool(value))),
+            ))
+        };
+        let entry = &mut body.blocks[BlockId(0)].statements;
+        entry.insert(0, set(false));
+        entry.insert(3, set(true));
+        entry.insert(5, set(false));
+        let drop = body.blocks[BlockId(0)].terminator.clone();
+        body.blocks[BlockId(0)].terminator = terminator(TerminatorKind::SwitchInt {
+            value: Operand::Copy(Place::local(flag)),
+            targets: vec![(0, BlockId(1))],
+            otherwise: BlockId(2),
+        });
+        body.blocks.alloc(BasicBlock {
+            statements: vec![],
+            terminator: drop,
+        });
+        file
+    }
+
+    #[test]
+    fn dumps_an_elaborated_body() {
+        let expected = "\
+module main
+phase elaborated
+fun main::f(_1: &User): String @1:1
+  local _0: String (return)
+  local _1 u: &User (argument)
+  local _2 n: String (user)
+  local _3: Bool (drop flag)
+  bb0:
+    _3 = const false @2:5
+    storage_live _2 @2:5
+    _2 = const \"x\" @2:5
+    _3 = const true @2:5
+    read (*_1).name @2:5
+    _3 = const false @2:5
+    _0 = move _2 @2:5
+    switch copy _3 [0 -> bb1, otherwise -> bb2] @2:5
+  bb1:
+    storage_dead _2 @2:5
+    return @2:5
+  bb2:
+    drop _2 -> bb1 @2:5
+";
+        assert_eq!(elaborated_file().dump(), expected);
+    }
+
+    #[test]
+    fn goto_chains_are_merged() {
+        let mut file = small_file();
+        let body = &mut file.bodies[BodyId(0)];
+        // bb0 drops into bb1, which now jumps to a new bb2, which jumps to a new bb3 that
+        // returns: bb1, bb2 and bb3 merge into one block.
+        let ret = body.blocks[BlockId(1)].terminator.clone();
+        body.blocks[BlockId(1)].terminator = terminator(TerminatorKind::Goto(BlockId(2)));
+        body.blocks.alloc(BasicBlock {
+            statements: vec![statement(StatementKind::Read(Place::local(LocalId(1))))],
+            terminator: terminator(TerminatorKind::Goto(BlockId(3))),
+        });
+        body.blocks.alloc(BasicBlock {
+            statements: vec![],
+            terminator: ret,
+        });
+        crate::merge_goto_blocks(body);
+        assert_eq!(body.blocks.len(), 2);
+        let last = &body.blocks[BlockId(1)];
+        assert_eq!(last.statements.len(), 2);
+        assert_eq!(last.terminator.kind, TerminatorKind::Return);
+        assert_eq!(file.dump(), file.dump());
+        assert!(file.validate().is_empty(), "{:?}", file.validate());
     }
 }
