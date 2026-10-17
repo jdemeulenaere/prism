@@ -49,6 +49,21 @@ Downstream call sites that instantiate an exported generic function MUST be re-m
 - **WHEN** the body of an exported generic function changes
 - **THEN** re-monomorphization is triggered only in downstream call sites that instantiate that generic
 
+### Requirement: Semantic Pipeline After Type Checking
+Phase 2 MUST lower each file through a typed, resolved tree and a control-flow graph before ownership checking and code generation, each produced from the previous stage and the direct imports' ABIs only.
+
+#### Scenario: Typed tree from the type checker
+- **WHEN** the type checker checks a file
+- **THEN** it produces a typed tree (`prism-typed-tree` crate) in which every node carries its type and span, names are resolved to bindings or declaration identities, calls are normalized to positional order with explicit default slots, and every implicit copy, move, borrow, copy-out and reborrow is an explicit node; the tree is produced even when the file has type errors
+
+#### Scenario: Lowering to MIR
+- **WHEN** a file has no type errors
+- **THEN** each function and closure body is lowered (`prism-mir` crate) to a place-based control-flow graph of basic blocks: statements assign rvalues to places (a local plus field and deref projections) and mark storage, terminators branch, call, return and drop, and `&&`, `||`, `?.`, `?:`, `when` and `for` become explicit branches; a stable text dump (`--dump-mir`) drives snapshot tests
+
+#### Scenario: Borrow checking on MIR
+- **WHEN** a file's MIR has been built
+- **THEN** the borrow checker (`prism-borrowck` crate) checks it using only the MIR and imported ABIs, reporting `E5xxx` diagnostics, and the same MIR later feeds the Cranelift backend
+
 ### Open decision: ABI hash algorithm
 The original design called for a BLAKE3 cryptographic hash of exported declarations. `crates/prism-abi` currently uses a deterministic 128-bit FNV-1a hash. Decide which algorithm is authoritative before building the `.abi` cache.
 
@@ -77,59 +92,154 @@ The compiler MUST support two distinct native execution backends: Tier 1 (Cranel
 
 Compile-time memory safety: zero runtime garbage collection, zero hidden automatic reference counting (ARC), single-owner value semantics, stack-confined borrows with automatic lifetime elision, and data-oriented handles.
 
-Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)), and basic borrow type compatibility, including rejecting `&mut` of a `val` ([`type-system`](../openspec/specs/type-system/spec.md)). Everything below is planned.
+Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)), and basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)). Everything below is planned.
+
+The requirements below were decided with the user on 2026-10-17 and are delivered by the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `value-semantics`, `reference-access`, `borrowck-moves`, `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
 
 ### Requirement: Single-Owner Value Semantics and RAII
-Every non-primitive resource MUST have a single owning binding, and resources MUST be dropped deterministically when their owner leaves lexical scope.
+Every non-`Copy` value MUST have a single owning binding, and resources MUST be dropped deterministically when their owner leaves lexical scope.
 
 #### Scenario: Value move on assignment
-- **WHEN** an owned non-primitive value is passed to a function by value or assigned to a new variable
-- **THEN** ownership moves to the target, and subsequent access through the original binding is rejected at compile time
+- **WHEN** an owned non-`Copy` value is passed to a function by value, returned, or assigned to a new variable
+- **THEN** ownership moves to the target, and subsequent access through the original binding is rejected at compile time (use after move, `E5xxx`)
+
+#### Scenario: Conditional and loop moves
+- **WHEN** a value is moved in only one branch of an `if` or `when`, or inside a loop body without being reassigned before the next iteration
+- **THEN** a later use (or the next iteration's use) is rejected as a use after move
+
+#### Scenario: Reinitialization by assignment
+- **WHEN** a moved `var` is assigned a new value (`var s = a; take(s); s = b; take(s)`)
+- **THEN** it is usable again after the assignment
+
+#### Scenario: Moves take whole values only
+- **WHEN** a non-`Copy` value is moved out of a field (`val n = user.name` where `name: String`), out of a borrow, through `Heap<T>`, or out of a top-level declaration
+- **THEN** the type checker rejects the move (`E4xxx`), suggesting a borrow (`&user.name`) or, once destructuring exists, `val (name, …) = user`; reading `Copy` fields and borrowing fields are unaffected
 
 #### Scenario: Deterministic scope exit cleanup
 - **WHEN** an owning variable leaves its enclosing block scope
 - **THEN** its destructor is executed immediately and deterministically, dropping owned fields and heap allocations without garbage collector intervention
 
+### Requirement: Copy Types
+A type MUST be `Copy` only when copying it is a shallow bitwise copy that runs no user code. Built-in `Copy` types are `Int`, `Float`, `Bool`, `Char`, `Unit`, `Nothing`, `Range` and shared borrows `&T`; `T?` is `Copy` when `T` is. `&mut T`, `String`, `Heap<T>` and function types are not `Copy`. A struct or enum MUST be `Copy` only when it declares `: Copy`, and the declaration MUST be rejected unless every field or variant payload is `Copy`. Whether a type is `Copy` is part of its exported ABI.
+
+#### Scenario: Opt-in Copy struct
+- **WHEN** `struct Point : Copy { val x: Double, val y: Double }` is declared and `val q = p` is followed by a use of `p`
+- **THEN** both `p` and `q` are usable
+
+#### Scenario: Copy declaration with a non-Copy field rejected
+- **WHEN** `struct User : Copy { val name: String }` is declared
+- **THEN** the type checker rejects the `: Copy` declaration, naming the non-`Copy` field
+
+#### Scenario: Plain enum is move-only without the marker
+- **WHEN** `enum Color { Red, Green }` is declared without `: Copy` and a value is passed by value twice
+- **THEN** the second use is a use after move whose help suggests adding `: Copy` to `Color`
+
+#### Scenario: String is move-only
+- **WHEN** `val b = a` is declared for `a: String` and `a` is used afterwards
+- **THEN** the use is rejected as a use after move; a string literal evaluates to a fresh owned `String`
+
+### Requirement: No Mutable Top-Level State
+Top-level declarations MUST be immutable: a top-level `var` MUST be rejected. Mutable state lives in locals and parameters, and in UI code in slot-table state handles. Borrowing a top-level `val` MUST always be valid.
+
+#### Scenario: Top-level var rejected
+- **WHEN** a file declares `var counter = 0` at top level
+- **THEN** the compiler rejects the declaration
+
+#### Scenario: Borrow of a top-level val
+- **WHEN** `val DEFAULT = User("guest")` is declared at top level and a function returns `&DEFAULT`
+- **THEN** the borrow is accepted, including from a function with no input borrows, and the caller's borrow is unconstrained
+
 ### Requirement: Recursive Heap Indirection via Heap<T>
-Self-referential or recursive structures MUST use the standard `Heap<T>` primitive to provide single-owner heap allocation.
+Self-referential or recursive structures MUST use the standard `Heap<T>` primitive to provide single-owner heap allocation. Constructing a `Heap<T>` and moving its contents out are not designed yet (see `ROADMAP.md`).
 
 #### Scenario: Dropping Heap<T> allocation
 - **WHEN** an instance of `Heap<T>` leaves scope
 - **THEN** the allocated heap buffer and the inner value `T` are freed deterministically with zero reference-counter traffic
 
+### Requirement: Reading and Writing Through References
+A reference is a value of its own, and the value it refers to is `*r`. Member access, operators and conditions MUST read through references implicitly (as they do today). Where a `T` is expected and a `&T` or `&mut T` is given, a `Copy` value MUST be copied out implicitly, and a non-`Copy` value MUST be rejected as a move out of a borrow. Writing the whole referent MUST use the prefix `*` operator, and assigning to a `var` binding of reference type MUST re-point it.
+
+#### Scenario: Copy-out of a borrowed primitive
+- **WHEN** `fun g(x: Int): Int` is declared and `fun f(a: &Int): Int = g(a)` is checked
+- **THEN** the call typechecks, copying the `Int` out of the borrow
+
+#### Scenario: Move out of a borrow rejected
+- **WHEN** `fun take(u: User)` is declared and `fun f(u: &User) { take(u) }` is checked
+- **THEN** the type checker rejects the argument as a move out of a borrow
+
+#### Scenario: Writing through a mutable borrow
+- **WHEN** `fun bump(r: &mut Int) { *r = r + 1 }` is checked
+- **THEN** it typechecks and writes through `r`; `r = 5` is rejected because `r` is a `val` binding of reference type
+
+#### Scenario: Re-pointing a reference variable
+- **WHEN** a body declares `var r: &Int = &a` and later assigns `r = &b`
+- **THEN** `r` refers to `b`, and neither `a` nor `b` is modified
+
+#### Scenario: Prefix * is not a binary operator after a newline
+- **WHEN** a statement `*r = 5` follows a line ending in an expression
+- **THEN** it parses as a new statement, by the existing rule that a newline before a binary operator ends the expression
+
 ### Requirement: Stack-Scoped Borrowing and Mutation Rules
-The type checker MUST enforce borrowing rules: arbitrary concurrent shared borrows (`&T`), or exactly one exclusive mutable borrow (`&mut T`), strictly confined to function arguments and local execution scopes.
+The borrow checker MUST enforce borrowing rules: arbitrary concurrent shared borrows (`&T`), or exactly one exclusive mutable borrow (`&mut T`), strictly confined to function arguments and local execution scopes. A borrow MUST last until the last use of the reference (non-lexical), not until the end of its block.
 
 #### Scenario: Concurrent shared borrows
 - **WHEN** multiple functions inspect the same resource concurrently via `&T`
 - **THEN** the compiler allows the shared reads
 
 #### Scenario: Exclusive mutable borrow prevents concurrent access
-- **WHEN** an exclusive borrow `&mut T` is active on a value
-- **THEN** any other borrow or access through the owner is rejected at compile time
+- **WHEN** an exclusive borrow `&mut T` is live on a value
+- **THEN** any other borrow or access through the owner is rejected at compile time (conflicting borrow, `E5xxx`), and assigning or moving a value while it is borrowed is rejected (`E5xxx`)
+
+#### Scenario: Borrow ends at its last use
+- **WHEN** a body runs `var x = 1; val r = &x; print(r); x = 2`
+- **THEN** the assignment is accepted, because `r` is not used after `print(r)`
+
+#### Scenario: Disjoint field borrows
+- **WHEN** `&mut o.user` and `&mut o.email` are live at the same time
+- **THEN** the borrows are accepted, while a borrow of `o` itself conflicts with either
 
 #### Scenario: Explicit mutation at call sites
-- **WHEN** calling a function that accepts `&mut T`
-- **THEN** the caller MUST pass the argument with explicit `&mut` syntax (`updateUser(&mut user)`)
+- **WHEN** calling a function that accepts `&mut T` with an owned place
+- **THEN** the caller MUST pass the argument with explicit `&mut` syntax (`updateUser(&mut user)`); passing an existing `&mut T` binding reborrows it without `&mut`, and a method receiver is the one exception (see section 6)
+
+#### Scenario: Implicit shared borrow at argument sites
+- **WHEN** a place or temporary of type `T` is passed as an argument where `&T` is expected (`greet(name)` or `greet("Ada")` for `fun greet(name: &String)`)
+- **THEN** the argument is borrowed implicitly, a temporary living until the end of the statement; elsewhere (`val r: &User = &u`) the borrow is written explicitly
+
+#### Scenario: Two-phase receiver borrows
+- **WHEN** a `mut fun` method is called with an argument that reads the receiver (`v.push(v.size())`)
+- **THEN** the call is accepted, because the receiver's `&mut` borrow starts when the call happens, after the arguments are evaluated
+
+#### Scenario: Closures capture by inferred borrow
+- **WHEN** a closure reads a captured variable, or writes one (`val f = { u.name = "z" }`)
+- **THEN** the closure holds a shared or mutable borrow of that variable for as long as the closure value is live, and conflicting uses of `u` meanwhile are rejected
+
+#### Scenario: Capturing closures do not escape
+- **WHEN** a closure that captures any variable, or a function-typed parameter, is returned, stored in a struct field, or assigned to a top-level declaration
+- **THEN** the borrow checker rejects it (`E5xxx`) until escaping, move-capturing closures are designed; a closure with no captures may escape
 
 ### Requirement: The Four Lifetime Elision Rules
-When a function returns a borrowed reference, its lifetime MUST be inferred deterministically according to the four lifetime elision rules without explicit lifetime annotations.
+When a function returns a borrowed reference, its lifetime MUST be inferred deterministically from the signature alone, by the four lifetime elision rules, without explicit lifetime annotations. The rules need nothing beyond the exported signature (parameter types and receiver mode), so callers in other files apply them to the imported ABI. Input borrows are parameters whose type contains a reference (`&T`, `&mut T`, `(&T)?`) and the receiver of a non-`consuming` method; function-typed parameters and `consuming` receivers are not input borrows. Function types (`(&User) -> &String`) elide by the same rules.
 
 #### Scenario: Rule 1 - Single input borrow parameter
-- **WHEN** a function signature has exactly one input borrow (`fun first(items: &Vector<String>): &String?`)
-- **THEN** the returned borrow's lifetime is automatically tied to the input parameter's lifetime at the call site
+- **WHEN** a function signature has exactly one input borrow (`fun firstName(team: &Team): (&String)?`)
+- **THEN** the returned borrow's lifetime is tied to that argument at the call site, and the body must return a borrow derived from that parameter
 
 #### Scenario: Rule 2 - Method receiver borrow
-- **WHEN** a method has a receiver borrow `this: &T` and returns a reference
-- **THEN** the returned reference's lifetime is automatically tied to the receiver's lifetime
+- **WHEN** a method with a borrowed receiver (`fun Team.captain(): &User` or a `mut fun`) returns a reference, whatever its other parameters
+- **THEN** the returned reference's lifetime is tied to the receiver only, and returning a borrow derived from another parameter is rejected with its own `E5xxx` code
 
 #### Scenario: Rule 3 - Multiple input borrow parameters
 - **WHEN** a function accepts multiple input borrows and returns a borrow
-- **THEN** the returned reference's lifetime is tied to the intersection of all input borrow scopes
+- **THEN** the returned reference borrows from every input borrow at the call site, each in its own mode (a `&mut` source stays frozen while the result is live), and the body may return a borrow derived from any of them
 
 #### Scenario: Rule 4 - Zero input borrows returning a borrow
 - **WHEN** a function has zero input borrow parameters and attempts to return a borrow to a local value
-- **THEN** compilation MUST fail with diagnostic `DanglingBorrowReturn` (no error code assigned yet)
+- **THEN** compilation MUST fail with `DanglingBorrowReturn` (an `E5xxx` code)
+
+#### Scenario: Returning a borrow of a local under any rule
+- **WHEN** a function with input borrows returns a borrow of one of its locals or of a temporary
+- **THEN** compilation fails with `DanglingBorrowReturn`
 
 ### Requirement: Data-Oriented Typed Handles for Graphs
 Graph topologies and cyclic data structures MUST use typed integer/handle IDs instead of raw pointers or reference-counting pointer cycles.
@@ -139,11 +249,25 @@ Graph topologies and cyclic data structures MUST use typed integer/handle IDs in
 - **THEN** no cyclic pointer graphs are formed and memory is managed by the owning collection
 
 ### Requirement: Reactive Tree Copy State Handles
-Slot-table state handles (`State<T>`, `NodeId`) used in UI components MUST implement `Copy` and store generational indices rather than raw heap pointers.
+Slot-table state handles (`State<T>`, `NodeId`) used in UI components MUST be declared `: Copy` and store generational indices rather than raw heap pointers.
 
 #### Scenario: Capturing State<T> handle in event closure
 - **WHEN** an escaping UI event closure captures a `State<T>` handle (`Button(onClick = { count.update { it + 1 } })`)
-- **THEN** the handle is copied by value as a 64-bit ID, avoiding heap-allocation lifetime issues
+- **THEN** the handle is copied by value as a 64-bit ID, avoiding heap-allocation lifetime issues (needs the escaping-closures follow-up)
+
+### Design notes (2026-10-17 exploration)
+Why the requirements above were chosen; each change's `design.md` repeats the decisions it implements.
+
+- **`String` is move-only.** Making it `Copy` needs either a hidden reference count, which the zero-cost memory-safety invariant forbids, or an implicit deep copy, a hidden allocation.
+- **Shared borrows are implicit at argument sites; `&mut` stays explicit.** A move-only `String` makes `&String` parameters common, and an explicit `&` on a read adds noise without adding safety. Mutation stays visible. The coercion applies only to arguments (and receivers), where it removes noise; elsewhere `&` is written. Explicit `&` everywhere was rejected as noisy. Swift/Hylo/Mojo-style parameter conventions, where `&T` stops being a type, were rejected because they would reshape the elision rules that the invariants commit to.
+- **`Copy` is opt-in (`: Copy`), not structural.** It is a deliberate API promise visible in the declaration and ABI. Adding a field never silently turns a public type move-only, a unique token or a type with a future destructor is never copyable by accident, and the syntax becomes a marker trait in Kotlin supertype syntax once traits exist. Structural `Copy` (Swift's model) would need an opt-out marker later.
+- **Prefix `*` for writes; `var` references re-point.** Transparent C++-style references cannot be re-pointed, which rules out walking a `Heap`-linked structure without recursion. A type-directed `r = v` (re-point or write through depending on `v`'s type) was rejected as hard to read. Reads stay implicit, so the earlier rejection of `*` for operators (`typechecker-soundness`, D1) still holds.
+- **Whole-value moves only.** A value is either whole or gone, which is simpler to explain and to drop. Destructuring will take a struct apart. Partial moves remain a possible relaxation, and adding them later keeps every program compiling, whereas the reverse would not.
+- **Top-level `var` removed.** A borrow of a mutable global created in one function can be invalidated by an assignment in a callee, which no single function's analysis sees; Rust makes `static mut` unsafe for this reason. Keeping `var` but forbidding borrows would leave non-`Copy` globals write-only.
+- **Non-lexical borrows.** Liveness on the MIR makes them natural; lexical borrows reject code such as `val r = &x; print(r); x = 2`.
+- **Closures are conservative until escaping closures are designed.** Inferred-borrow captures plus "capturing closures cannot escape" are sound with no new syntax; move-capturing closures, which compose's `onClick` needs, come in their own change.
+- **Elision needs nothing new in the ABI.** A returned borrow's sources follow from parameter types and the receiver mode, both already exported, so files still compile independently and builds stay hermetic.
+- **`&String?` parses as `&(String?)`.** Postfix binds tighter than prefix, as in expressions (`&x.y` borrows `x.y`), and `&mut String?` is the natural type for a mutable nullable slot. An optional borrow is written `(&String)?`.
 
 ---
 
@@ -178,3 +302,41 @@ Struct instances MUST be stored inline by value without heap indirection, and re
 ## 5. Compose UI Engine
 
 Implemented today: parsing `compose fun` ([`syntax`](../openspec/specs/syntax/spec.md)) and rejecting composable calls outside composable contexts (`E4008`, [`type-system`](../openspec/specs/type-system/spec.md)). The slot table, `remember` / `mutableStateOf`, the `compose fun` transform and hot-reload rendering are planned; see Phase 4 in [`ROADMAP.md`](../ROADMAP.md). The state-handle requirement is in section 3 above.
+
+---
+
+## 6. Extension Methods
+
+Planned by the `extension-methods` change (decided with the user on 2026-10-17). Structs and enums declare data only (fields, variants and `: Copy`); every method is an extension function.
+
+### Requirement: Extension Functions as the Only Methods
+A method MUST be declared as an extension function `fun T.name(...)`, in any file, with the usual visibility modifiers, and is called as `value.name(...)` with static dispatch. Inside its body `this` is the receiver and names resolve to `this.name` unless a local or parameter shadows them. Calling an extension requires it to be declared in the file or exported by an import; two imports exporting the same extension are ambiguous at use (`E4012`), and a file's own declaration shadows an import.
+
+#### Scenario: Extension on a user type
+- **WHEN** `public fun User.greet(): String = "Hi " + name` is declared and `u.greet()` is called for `u: User`
+- **THEN** the call resolves statically to the extension and `name` in its body reads `this.name`
+
+#### Scenario: Extension on a built-in type
+- **WHEN** a file declares `fun Int.squared(): Int = this * this`
+- **THEN** `3.squared()` typechecks with type `Int`
+
+#### Scenario: Extension declared in another package
+- **WHEN** package `ui` imports `/models` and declares `fun User.shout()` for `models`' `User`
+- **THEN** the declaration is accepted, and a third file can call it only by importing `ui`'s module
+
+### Requirement: Receiver Modes
+A plain `fun T.m()` MUST borrow its receiver shared (`&T`), `mut fun T.m()` MUST borrow it mutably (`&mut T`), and `consuming fun T.m()` MUST take it by value. The receiver is borrowed implicitly at the call site, including for `mut fun`, which is the one exception to explicit `&mut` at call sites; the receiver of a `mut fun` must be a mutable place.
+
+#### Scenario: Mutating method on a var
+- **WHEN** `mut fun User.rename(n: String) { name = n }` is declared and `u.rename("x")` is called for `var u: User`
+- **THEN** the call borrows `u` mutably without `&mut`, while the same call on a `val u` is rejected (`E4003`)
+
+#### Scenario: Consuming method moves the receiver
+- **WHEN** `consuming fun User.toAccount(): Account` is called as `u.toAccount()` and `u` is used afterwards
+- **THEN** the later use is rejected as a use after move
+
+### Design notes (2026-10-17 exploration)
+- **Extensions only, no member functions.** One mechanism instead of Kotlin's member-versus-extension precedence; built-in and user types gain methods the same way; and a struct's ABI is only its layout and `Copy`ness, so adding a method in another file does not change the struct's ABI hash. Costs: no encapsulation boundary until field visibility exists, and trait conformances will need their own block syntax.
+- **Declarable in any file.** Restricting extensions to the type's package (Go) mainly protects trait coherence, which can be added for conformances when traits arrive; plain extensions resolve statically through imports.
+- **Modifiers, not an explicit receiver parameter.** `fun` / `mut fun` / `consuming fun` keep the common case unmarked, read naturally on extensions, and follow Swift's `mutating` / `consuming`; Rust's `&self` / `&mut self` / `self` was the alternative.
+- **Implicit `&mut` for receivers.** `(&mut u).rename()` would be unreadable; the method's declaration and the receiver position already show the call acts on `u`, as for Swift's `mutating` methods.

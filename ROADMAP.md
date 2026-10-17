@@ -37,28 +37,49 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 ## Phase 2: Type System, Value Ownership & ABI Invalidation (Current)
 - [x] Type checker with bidirectional type inference, nominal types, scoping, and diagnostics (`crates/prism-typechecker`).
 - [x] ABI surface extraction and deterministic ABI hashing (`crates/prism-abi`, [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md)).
-- [ ] Value ownership transfer, move semantics, borrow checker, and the 4 lifetime elision rules for functions ([`docs/architecture.md`](docs/architecture.md) §3).
+- [ ] Value ownership transfer, move semantics, borrow checker, and the 4 lifetime elision rules for functions ([`docs/architecture.md`](docs/architecture.md) §3). Delivered by the sequence below.
+
+### Next up: the road to the borrow checker
+Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is one OpenSpec change, in this order; the decisions behind them are in [`docs/architecture.md`](docs/architecture.md) §1 (pipeline) and §3 (memory model).
+
+1. [ ] `statements-and-loops`: a `Statement` AST type (`Block` with an explicit tail expression, assignment as a statement); `while`, `do`/`while`, `for (x in range)` over the built-in `Range`; `break`/`continue` as `Nothing`-typed expressions with `E4015` outside a loop; the `..<` half-open range operator.
+2. [ ] `value-semantics`: opt-in `: Copy` on structs and enums, checked structurally and recorded in the ABI; the built-in `Copy` table (`String` is move-only); a move's source must be a whole owned local; top-level `var` removed.
+3. [ ] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it.
+4. [ ] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site.
+5. [ ] `typed-tree`: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit copy/move/borrow adjustments; no behavior change.
+6. [ ] `mir-lowering`: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with a `--dump-mir` text format for snapshot tests.
+7. [ ] `borrowck-moves`: a `prism-borrowck` crate and the `E5xxx` code range; use after move, including conditional and loop moves, and reinitialization by assignment.
+8. [ ] `borrowck-exclusivity`: non-lexical borrows, disjoint field paths, two-phase receiver borrows; closures capture by inferred borrow and a capturing closure cannot escape.
+9. [ ] `borrowck-elision`: elision rules 1–4 derived from signatures alone, `DanglingBorrowReturn`, and borrows of top-level `val`s valid everywhere.
+
+Deliberately left until after the borrow checker (from the same session):
+- [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out.
+- [ ] Payload-binding `when` patterns and destructuring declarations (`val (name, email) = user`), the way to take ownership of a struct's non-`Copy` fields.
+- [ ] Escaping closures that capture by move, needed by compose event handlers such as `onClick`.
+- [ ] Trait conformance syntax: with extension-only methods, conformances need their own block (Swift's `extension T : P`, Rust's `impl P for T`).
+- [ ] Field visibility (`private var balance`), the encapsulation boundary for extension functions.
+- [ ] Static and companion functions (`User.create()`).
+- [ ] Loop labels (`break@outer`).
+- [ ] Deferred `val` initialization (`val x: Int` assigned once on every path).
+- [ ] Possible relaxation: partial moves out of owned locals, if destructuring proves insufficient.
+
+### Other Phase 2 items
 - [ ] Decide the authoritative ABI hash algorithm: BLAKE3 (original design) or the current FNV-1a ([`docs/architecture.md`](docs/architecture.md) §1).
 - [ ] `.abi` cache and compilation avoidance ([`docs/architecture.md`](docs/architecture.md) §1).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
 - [ ] Compound assignment (`+=`, `-=`) and bitwise operators (deferred by the `lexer-parser` change).
-- [ ] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`).
+- [ ] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`). Until `Copy` bounds exist, type parameters are move-only.
 - [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`).
 - [ ] Qualified type paths such as `models.User`; imports currently bring symbols in by bare name (deferred by `resolve-nominal-type-annotations`).
 - [ ] Fix: calling a struct-typed value (`p()` where `p: Point`) goes through the constructor branch of `infer_call_expr` (noted in `resolve-nominal-type-annotations`).
 - [ ] Decide whether safe-navigation assignment (`a?.b = c`, allowed in Kotlin) is valid; it is currently rejected (from the parser plain fixes, `ecc5da3`).
 - [ ] Revisit the parser's 256-level nesting limit (E2002) before the LSP: a debug build needs about 2.75 MB of stack at the limit, more than a default 2 MB worker thread (from `8f1f932`).
-- [ ] Typed IR before the borrow checker: node IDs, resolved names, binding-site spans and typed closure parameters (deferred by `harden-parser-grammar`).
-- [ ] A `Statement` AST type separating statements from expressions; `LocalVar` currently lives in `BlockExpr.stmts` by parser invariant (deferred by `harden-parser-grammar`).
-- [ ] Methods and receivers (`this`), and loops (`for`, `while`, `break`, `continue`) (deferred by `harden-parser-grammar`).
 - [ ] Implicit `it` parameter for single-parameter closures (deferred by `harden-parser-grammar`).
 - [ ] Lint for `fun f() = { … }`, which returns a closure as in Kotlin (follow-up from `harden-parser-grammar`).
 - [ ] Unify the missing-return-type rule: `prism-abi` accepts a block-bodied exported function without a return type as `Unit` and only rejects expression bodies (`E3001`), while the type checker rejects both (`E4011`). Tighten the ABI rule or relax the specs (open question in `resolve-nominal-type-annotations`).
 - [ ] Reject recursive struct and enum layouts that lack `Heap<T>` indirection (deferred by `fix-cli-workspace-audit`).
 - [ ] Parser error recovery: report several syntax errors per file instead of stopping at the first, needed for the LSP (deferred by `lexer-parser`, and again by `harden-parser-grammar` until the AST has error nodes).
 - [ ] Traits or interfaces for polymorphism and dynamic dispatch; not designed yet (deferred by `type-checker-core`).
-- [ ] Writing through a `&mut` primitive (`*r = v`, or assignment through a `&mut` binding): `fun bump(r: &mut Int)` can receive the borrow but not write through it. Operators read through references; writes need a design (deferred by `typechecker-soundness`, D1).
-- [ ] `Copy` rules: whether a value may be copied out of a borrow where a `T` is expected (`g(a)` with `a: &Int` is rejected today), for the borrow checker to decide (deferred by `typechecker-soundness`, D1).
 - [x] Decide whether a top-level declaration may shadow an imported symbol instead of reporting `E4010` (follow-up from `typechecker-soundness`, D7). Decided and done in `shadowing-and-import-paths`.
 - [x] Decide whether a local declared in a function body may shadow a parameter (`fun f(a: Int) { val a = 2 }`, accepted today; Kotlin warns, Rust allows). Fixture `type-system/duplicate-symbol-declaration-rejected--local-duplicating-a-parameter` pins current behavior. Decided and done in `shadowing-and-import-paths`.
 - [x] Decide which stage owns `.`/`..` import segments: the parser rejects them first (`E2001`), so the spec'd resolver code `E1006` is only reachable for `import self`. The `package-resolution/import-attempting-directory-traversal--*` fixtures pin current behavior. Decided and done in `shadowing-and-import-paths`.
