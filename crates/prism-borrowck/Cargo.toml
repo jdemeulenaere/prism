@@ -1,0 +1,15 @@
+[package]
+name = "prism-borrowck"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-ast = { path = "../prism-ast" }
+prism-mir = { path = "../prism-mir" }
+prism-typed-tree = { path = "../prism-typed-tree" }
+
+[dev-dependencies]
+prism-parser = { path = "../prism-parser" }
+prism-typechecker = { path = "../prism-typechecker" }

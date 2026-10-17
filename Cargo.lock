@@ -15,6 +15,17 @@ name = "prism-ast"
 version = "0.1.0"
 
 [[package]]
+name = "prism-borrowck"
+version = "0.1.0"
+dependencies = [
+ "prism-ast",
+ "prism-mir",
+ "prism-parser",
+ "prism-typechecker",
+ "prism-typed-tree",
+]
+
+[[package]]
 name = "prism-cli"
 version = "0.1.0"
 dependencies = [
