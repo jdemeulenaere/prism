@@ -13,4 +13,4 @@ pub mod validate;
 
 pub use arena::{Arena, ArenaId, BodyId, ExpressionId, LocalId, StatementId};
 pub use tree::*;
-pub use types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
+pub use types::{NominalId, Type, TypeDef, TypeTable, BUILTIN_MODULE};

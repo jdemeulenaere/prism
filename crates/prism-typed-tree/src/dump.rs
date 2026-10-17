@@ -1,7 +1,8 @@
 //! The stable text form of a typed tree, printed by `prism dump-typed-tree` (D13 of
 //! `typed-tree`).
 //!
-//! Items are printed in source order; each body lists its bindings, then its default values and
+//! The structs and enums the file knows from its imports come first, then the items in source
+//! order; each body lists its bindings, then its default values and
 //! its value as trees, one node per line, two spaces of indentation per level. A line gives the
 //! node's role in its parent where the parent has several kinds of children (`target:`), its
 //! kind and resolved names, its type after `:` and the line and column where its source starts.
@@ -11,7 +12,7 @@ use crate::tree::{
     Argument, Body, BorrowOrigin, Callee, CoercionKind, ConstructKind, ExpressionKind, Item,
     LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TypedFile,
 };
-use crate::types::NominalId;
+use crate::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
 use std::fmt::Write;
 
@@ -23,6 +24,7 @@ impl TypedFile {
         if let Some(package) = &self.package {
             writeln!(out, "package {}", package).unwrap();
         }
+        self.dump_imported_types(&mut out);
         for item in &self.items {
             match item {
                 Item::Struct(s) => {
@@ -35,10 +37,7 @@ impl TypedFile {
                         position(s.span)
                     )
                     .unwrap();
-                    for (index, (name, is_var, ty)) in s.fields.iter().enumerate() {
-                        let keyword = if *is_var { "var" } else { "val" };
-                        writeln!(out, "  field {} {} {}: {}", index, keyword, name, ty).unwrap();
-                    }
+                    dump_fields(&mut out, &s.fields);
                 }
                 Item::Enum(e) => {
                     writeln!(
@@ -50,16 +49,7 @@ impl TypedFile {
                         position(e.span)
                     )
                     .unwrap();
-                    for (index, (name, payloads)) in e.variants.iter().enumerate() {
-                        if payloads.is_empty() {
-                            writeln!(out, "  variant {} {}", index, name).unwrap();
-                        } else {
-                            let payloads: Vec<String> =
-                                payloads.iter().map(ToString::to_string).collect();
-                            writeln!(out, "  variant {} {}({})", index, name, payloads.join(", "))
-                                .unwrap();
-                        }
-                    }
+                    dump_variants(&mut out, &e.variants);
                 }
                 Item::Function(f) => {
                     let mut parameters = Vec::new();
@@ -122,6 +112,49 @@ impl TypedFile {
             }
         }
         out
+    }
+}
+
+impl TypedFile {
+    /// Prints every struct and enum of the type table that the file neither declares nor gets
+    /// from the compiler, in [`NominalId`] order: those its direct imports export (with their
+    /// fields or variants) and those only an imported signature mentions (with their marker).
+    fn dump_imported_types(&self, out: &mut String) {
+        for id in self.types.ids() {
+            if id.module == self.module || id.module == BUILTIN_MODULE {
+                continue;
+            }
+            let marker = marker_suffix(self.types.marker(id));
+            match self.types.definition(id) {
+                Some(TypeDef::Struct { fields }) => {
+                    writeln!(out, "import struct {}{}", nominal(id), marker).unwrap();
+                    dump_fields(out, fields);
+                }
+                Some(TypeDef::Enum { variants }) => {
+                    writeln!(out, "import enum {}{}", nominal(id), marker).unwrap();
+                    dump_variants(out, variants);
+                }
+                None => writeln!(out, "import type {}{}", nominal(id), marker).unwrap(),
+            }
+        }
+    }
+}
+
+fn dump_fields(out: &mut String, fields: &[(String, bool, Type)]) {
+    for (index, (name, is_var, ty)) in fields.iter().enumerate() {
+        let keyword = if *is_var { "var" } else { "val" };
+        writeln!(out, "  field {} {} {}: {}", index, keyword, name, ty).unwrap();
+    }
+}
+
+fn dump_variants(out: &mut String, variants: &[(String, Vec<Type>)]) {
+    for (index, (name, payloads)) in variants.iter().enumerate() {
+        if payloads.is_empty() {
+            writeln!(out, "  variant {} {}", index, name).unwrap();
+        } else {
+            let payloads: Vec<String> = payloads.iter().map(ToString::to_string).collect();
+            writeln!(out, "  variant {} {}({})", index, name, payloads.join(", ")).unwrap();
+        }
     }
 }
 
@@ -612,6 +645,7 @@ pub(crate) mod tests {
                 span: span(1, 1),
             })],
             bodies,
+            types: crate::types::TypeTable::with_builtins(),
         }
     }
 
@@ -628,5 +662,47 @@ fun main::f(a: Int): Int @1:1
 ";
         assert_eq!(file.dump(), expected);
         assert_eq!(file.dump(), file.dump());
+    }
+
+    #[test]
+    fn dumps_imported_types_in_id_order() {
+        use crate::types::{NominalId, TypeDef};
+        use prism_ast::TypeMarker;
+        let mut file = addition_file();
+        let user = NominalId::new("models/user", "User");
+        let color = NominalId::new("models/color", "Color");
+        let money = NominalId::new("shop/money", "Money");
+        let own = NominalId::new("main", "Own");
+        file.types.insert_definition(
+            user.clone(),
+            TypeDef::Struct {
+                fields: vec![("name".to_string(), false, Type::String)],
+            },
+        );
+        file.types.insert_marker(user, Some(TypeMarker::Clone));
+        file.types.insert_definition(
+            color.clone(),
+            TypeDef::Enum {
+                variants: vec![
+                    ("Red".to_string(), vec![]),
+                    ("Rgb".to_string(), vec![Type::Int]),
+                ],
+            },
+        );
+        file.types.insert_marker(color, None);
+        file.types.insert_marker(money, Some(TypeMarker::Copy));
+        file.types.insert_marker(own, None);
+        let dump = file.dump();
+        let header = "\
+module main
+import enum models/color::Color
+  variant 0 Red
+  variant 1 Rgb(Int)
+import struct models/user::User : Clone
+  field 0 val name: String
+import type shop/money::Money : Copy
+fun main::f(a: Int): Int @1:1
+";
+        assert!(dump.starts_with(header), "{}", dump);
     }
 }

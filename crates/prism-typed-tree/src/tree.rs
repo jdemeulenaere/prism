@@ -18,7 +18,7 @@
 //!   no node or binding of the error type.
 
 use crate::arena::{Arena, BodyId, ExpressionId, LocalId, StatementId};
-use crate::types::{NominalId, Type};
+use crate::types::{NominalId, Type, TypeTable};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
 use std::fmt;
 
@@ -33,6 +33,9 @@ pub struct TypedFile {
     pub items: Vec<Item>,
     /// The bodies the items point at, in checking order.
     pub bodies: Arena<BodyId, Body>,
+    /// Every struct and enum the file knows, with its marker and, when known, its fields or
+    /// variants (D4 of `mir-lowering`), so later stages need neither the checker nor the ABIs.
+    pub types: TypeTable,
 }
 
 /// A declaration of the file.

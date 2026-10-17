@@ -3,6 +3,8 @@
 //! The rules over these types (lowering from annotations and ABIs, assignability, joins) live in
 //! the type checker; this module holds only the representation and its rendering.
 
+use prism_ast::TypeMarker;
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// Module path of the compiler's built-in nominal types (such as `Range`).
@@ -31,13 +33,138 @@ impl NominalId {
     }
 }
 
-/// The definition behind a [`NominalId`], kept in the checker's type table.
+/// The definition behind a [`NominalId`], kept in a [`TypeTable`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDef {
     /// Struct fields as `(name, is_var, type)`.
     Struct { fields: Vec<(String, bool, Type)> },
     /// Enum variants as `(name, payload types)`.
     Enum { variants: Vec<(String, Vec<Type>)> },
+}
+
+/// Every struct and enum known to one file (D4 of `mir-lowering`): its own declarations, those its
+/// direct imports export, the types an imported signature mentions, and the built-in `Range`.
+///
+/// A type may have a marker without a definition: a type that reached the file through an
+/// imported signature, from a module the file does not import, has a known marker but unknown
+/// fields. The first definition and the first marker recorded for an id are kept.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TypeTable {
+    definitions: BTreeMap<NominalId, TypeDef>,
+    markers: BTreeMap<NominalId, Option<TypeMarker>>,
+}
+
+impl TypeTable {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The table of a file that knows only the built-in types: the `Copy` struct `Range` with
+    /// fields `start` and `end`.
+    pub fn with_builtins() -> Self {
+        let mut table = Self::new();
+        let range = NominalId::builtin_range();
+        table.insert_definition(
+            range.clone(),
+            TypeDef::Struct {
+                fields: vec![
+                    ("start".to_string(), false, Type::Int),
+                    ("end".to_string(), false, Type::Int),
+                ],
+            },
+        );
+        table.insert_marker(range, Some(TypeMarker::Copy));
+        table
+    }
+
+    /// Records the definition of `id`, unless one is already recorded.
+    pub fn insert_definition(&mut self, id: NominalId, definition: TypeDef) {
+        self.definitions.entry(id).or_insert(definition);
+    }
+
+    /// Replaces the definition of `id`.
+    pub fn replace_definition(&mut self, id: NominalId, definition: TypeDef) {
+        self.definitions.insert(id, definition);
+    }
+
+    /// Records the marker of `id`, unless one is already recorded.
+    pub fn insert_marker(&mut self, id: NominalId, marker: Option<TypeMarker>) {
+        self.markers.entry(id).or_insert(marker);
+    }
+
+    /// The definition of `id`, if the file knows it.
+    pub fn definition(&self, id: &NominalId) -> Option<&TypeDef> {
+        self.definitions.get(id)
+    }
+
+    /// The marker of `id`, or `None` when it has none or is unknown.
+    pub fn marker(&self, id: &NominalId) -> Option<TypeMarker> {
+        self.markers.get(id).copied().flatten()
+    }
+
+    /// Whether the table records `id`, with a definition or a marker.
+    pub fn knows(&self, id: &NominalId) -> bool {
+        self.definitions.contains_key(id) || self.markers.contains_key(id)
+    }
+
+    /// Every recorded id, in [`NominalId`] order.
+    pub fn ids(&self) -> impl Iterator<Item = &NominalId> {
+        let mut ids: Vec<&NominalId> = self.definitions.keys().chain(self.markers.keys()).collect();
+        ids.sort();
+        ids.dedup();
+        ids.into_iter()
+    }
+
+    /// The fields of struct `id`, if its definition is known.
+    pub fn struct_fields(&self, id: &NominalId) -> Option<&[(String, bool, Type)]> {
+        match self.definitions.get(id) {
+            Some(TypeDef::Struct { fields }) => Some(fields),
+            _ => None,
+        }
+    }
+
+    /// The variants of enum `id`, if its definition is known.
+    pub fn enum_variants(&self, id: &NominalId) -> Option<&[(String, Vec<Type>)]> {
+        match self.definitions.get(id) {
+            Some(TypeDef::Enum { variants }) => Some(variants),
+            _ => None,
+        }
+    }
+
+    /// Whether values of `ty` are duplicated implicitly by a bitwise copy (the `ownership` spec,
+    /// "Built-In Copy Types"). The error type counts as `Copy`, so an earlier error is not
+    /// reported again as a move.
+    pub fn is_copy(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::Char
+            | Type::Unit
+            | Type::Nothing
+            | Type::Error => true,
+            Type::Reference { mutable, .. } => !mutable,
+            Type::Nullable(inner) => self.is_copy(inner),
+            Type::Struct(id) | Type::Enum(id) => self.marker(id) == Some(TypeMarker::Copy),
+            Type::String
+            | Type::Heap(_)
+            | Type::Fn { .. }
+            | Type::TypeParam(_)
+            | Type::Opaque(_) => false,
+        }
+    }
+
+    /// Whether values of `ty` can be duplicated by an explicit `.clone()` (the `ownership` spec,
+    /// "Built-In Clone Types"). Every `Copy` type is `Clone`.
+    pub fn is_clone(&self, ty: &Type) -> bool {
+        match ty {
+            Type::String => true,
+            Type::Nullable(inner) | Type::Heap(inner) => self.is_clone(inner),
+            Type::Struct(id) | Type::Enum(id) => self.marker(id).is_some(),
+            _ => self.is_copy(ty),
+        }
+    }
 }
 
 /// Semantic representation of a Prism type.
@@ -218,6 +345,53 @@ fn needs_parentheses(inner: &Type) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference(mutable: bool, inner: Type) -> Type {
+        Type::Reference {
+            mutable,
+            inner: Box::new(inner),
+        }
+    }
+
+    #[test]
+    fn copy_and_clone_of_built_in_types() {
+        let table = TypeTable::with_builtins();
+        for ty in [Type::Int, Type::Float, Type::Bool, Type::Char, Type::Unit] {
+            assert!(table.is_copy(&ty) && table.is_clone(&ty), "{}", ty);
+        }
+        assert!(table.is_copy(&Type::Struct(NominalId::builtin_range())));
+        assert!(!table.is_copy(&Type::String));
+        assert!(table.is_clone(&Type::String));
+        assert!(table.is_clone(&Type::Heap(Box::new(Type::String))));
+        assert!(!table.is_copy(&Type::Heap(Box::new(Type::Int))));
+        assert!(table.is_copy(&reference(false, Type::String)));
+        assert!(!table.is_copy(&reference(true, Type::Int)));
+        assert!(!table.is_clone(&reference(true, Type::Int)));
+        assert!(table.is_copy(&Type::Int.nullable()));
+        assert!(!table.is_copy(&Type::String.nullable()));
+        assert!(table.is_clone(&Type::String.nullable()));
+    }
+
+    #[test]
+    fn copy_and_clone_follow_markers() {
+        let mut table = TypeTable::new();
+        let point = NominalId::new("main", "Point");
+        let user = NominalId::new("main", "User");
+        let file = NominalId::new("main", "File");
+        table.insert_marker(point.clone(), Some(TypeMarker::Copy));
+        table.insert_marker(user.clone(), Some(TypeMarker::Clone));
+        table.insert_marker(file.clone(), None);
+        // The first marker is kept.
+        table.insert_marker(file.clone(), Some(TypeMarker::Copy));
+        assert!(table.is_copy(&Type::Struct(point.clone())));
+        assert!(table.is_copy(&Type::Struct(point).nullable()));
+        assert!(!table.is_copy(&Type::Struct(user.clone())));
+        assert!(table.is_clone(&Type::Enum(user)));
+        assert!(!table.is_clone(&Type::Struct(file.clone())));
+        assert!(table.knows(&file));
+        assert_eq!(table.marker(&file), None);
+        assert!(!table.is_copy(&Type::Struct(NominalId::new("main", "Unknown"))));
+    }
 
     #[test]
     fn nullable_references_and_functions_render_as_written() {

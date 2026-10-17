@@ -1,0 +1,5 @@
+// expect: ok
+// entry: app/main.prism
+package app
+import /models/user
+fun f(u: &User): Int = 1

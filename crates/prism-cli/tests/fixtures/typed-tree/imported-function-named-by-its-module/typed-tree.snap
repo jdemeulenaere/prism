@@ -1,5 +1,7 @@
 module app/main
 package app
+import struct models/user::User
+  field 0 val name: String
 fun app/main::hello(u: &User): String @5:1
   local %0 u: &User (parameter)
   call models/user::greet: String @5:31

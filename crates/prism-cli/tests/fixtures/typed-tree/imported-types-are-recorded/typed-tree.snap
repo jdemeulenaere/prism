@@ -1,0 +1,7 @@
+module app/main
+package app
+import struct models/user::User : Clone
+  field 0 val name: String
+fun app/main::f(u: &User): Int @5:1
+  local %0 u: &User (parameter)
+  literal 1: Int @5:24
