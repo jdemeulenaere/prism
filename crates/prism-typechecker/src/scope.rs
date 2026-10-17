@@ -3,6 +3,7 @@
 use crate::error::TypeError;
 use crate::types::{NominalId, Type};
 use prism_ast::{Span, Visibility};
+use prism_typed_tree::LocalId;
 use std::collections::HashMap;
 
 /// Declared mutability of a binding (`val` vs `var`).
@@ -15,12 +16,16 @@ pub enum Mutability {
 /// The semantic classification of an identifier in the symbol table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolKind {
-    /// Local variable, constant, or function parameter binding.
+    /// Local variable, constant, or function parameter binding, or a top-level `val`.
     Variable {
         ty: Type,
         mutability: Mutability,
         visibility: Visibility,
         defining_package: Option<String>,
+        /// The binding of the body being checked, for a local; `None` for a top-level `val`.
+        local: Option<LocalId>,
+        /// The defining module, for a top-level `val` or a payload-free variant.
+        module: Option<String>,
     },
     /// Function declaration.
     Function {
@@ -29,6 +34,8 @@ pub enum SymbolKind {
         has_default: Vec<bool>,
         visibility: Visibility,
         defining_package: Option<String>,
+        /// The defining module.
+        module: String,
     },
     /// Struct declaration. Its fields live in the checker's type table under `id`.
     Struct {
@@ -61,6 +68,8 @@ impl Symbol {
                 mutability,
                 visibility: Visibility::Private,
                 defining_package: None,
+                local: None,
+                module: None,
             },
             span,
         }
@@ -81,6 +90,8 @@ impl Symbol {
                 mutability,
                 visibility,
                 defining_package,
+                local: None,
+                module: None,
             },
             span,
         }
@@ -101,6 +112,7 @@ impl Symbol {
                 has_default: Vec::new(),
                 visibility,
                 defining_package,
+                module: String::new(),
             },
             span,
         }
@@ -123,6 +135,7 @@ impl Symbol {
                 has_default,
                 visibility,
                 defining_package,
+                module: String::new(),
             },
             span,
         }
@@ -160,6 +173,25 @@ impl Symbol {
             },
             span,
         }
+    }
+
+    /// The symbol, bound to the binding `local` of the body being checked.
+    pub fn with_local(mut self, id: LocalId) -> Self {
+        if let SymbolKind::Variable { local, .. } = &mut self.kind {
+            *local = Some(id);
+        }
+        self
+    }
+
+    /// The symbol, declared by module `defining_module`. Only top-level values and functions
+    /// record their module.
+    pub fn with_module(mut self, defining_module: impl Into<String>) -> Self {
+        match &mut self.kind {
+            SymbolKind::Variable { module, .. } => *module = Some(defining_module.into()),
+            SymbolKind::Function { module, .. } => *module = defining_module.into(),
+            SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {}
+        }
+        self
     }
 
     pub fn visibility(&self) -> Visibility {

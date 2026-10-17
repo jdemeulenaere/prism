@@ -1,5 +1,10 @@
 //! Main TypeChecker implementation: Pass 1 declaration registration and Pass 2 body checking.
+//!
+//! Pass 2 builds the file's typed tree while it checks (D1 of `typed-tree`): every `infer_*` and
+//! `check_*` function builds the node of the expression it checks and returns its id, and the
+//! point that decides something (a coercion, a move, a borrow, a receiver pass) records it.
 
+use crate::builder::{BodyBuilder, FileBuilder};
 use crate::error::TypeError;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::{
@@ -13,6 +18,13 @@ use prism_ast::expr::{
 use prism_ast::module::SourceFile;
 use prism_ast::statement::{Block, Statement, StatementKind};
 use prism_ast::{Span, TypeMarker, Visibility};
+use prism_typed_tree::{
+    Argument, BinaryOperator, BorrowOrigin, BuiltinFunction, Call, Callee, CoercionKind,
+    ConstructField, ConstructKind, DeclarationPath, EnumItem, ExpressionId, ExpressionKind,
+    FunctionItem, Item, Local, LocalKind, LogicalOperator, Pattern, SafeNavigationOrigin,
+    StatementId, StatementKind as TreeStatementKind, StructItem, TypedFile, UnaryOperator,
+    ValueItem,
+};
 use std::collections::{HashMap, HashSet};
 
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
@@ -72,10 +84,9 @@ enum Origin {
 }
 
 /// How a value is made to fit the type expected where it is used, when its own type is not
-/// assignable as it is (the `references` spec). The typed tree will record it on the expression;
-/// until then the checker only decides it.
+/// assignable as it is (the `references` spec). [`TypeChecker::apply_adjustment`] turns it into
+/// typed-tree nodes (D5 of `typed-tree`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // The fields are for the typed tree, which does not exist yet.
 enum Adjustment {
     /// The value is used as it is: moved, or copied when it is `Copy`.
     None,
@@ -120,12 +131,25 @@ enum Coercion {
     NoFit,
 }
 
+/// The arguments of a call normalized to its parameters (D8 of `typed-tree`).
+struct NormalizedArguments {
+    /// One argument per parameter, in parameter order, with a default slot for each omitted one.
+    arguments: Vec<Argument>,
+    /// The parameter indices of the written arguments, in source order.
+    evaluation_order: Vec<usize>,
+}
+
+/// The nodes of the arguments checked before a call was found not to match its callee.
+struct CheckedArguments(Vec<ExpressionId>);
+
 /// An extension function known to the file (the `extension-functions` spec): declared in it, or
 /// exported by a direct import. Extensions live in their own tables, keyed by receiver type and
 /// name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist.
 #[derive(Debug, Clone)]
 struct Extension {
     mode: ReceiverMode,
+    /// The defining module.
+    module: String,
     /// The function's signature, parameter names, defaults and visibility. Its name is the
     /// method's name.
     symbol: Symbol,
@@ -137,7 +161,7 @@ enum ExtensionLookup {
     None,
     /// The file's own extension, or the single import exporting one.
     Found {
-        extension: Extension,
+        extension: Box<Extension>,
         /// Whether the extension is the file's own, whose type may be inferred on demand.
         own: bool,
     },
@@ -145,10 +169,10 @@ enum ExtensionLookup {
     Ambiguous(Vec<String>),
 }
 
-/// How the receiver of an extension call is passed (D8 of `extension-methods`). The typed tree
-/// will record it on the call; until then the checker only decides it.
+/// How the receiver of an extension call is passed (D8 of `extension-methods`).
+/// [`TypeChecker::apply_receiver_adjustment`] turns it into the call's first argument (D5 of
+/// `typed-tree`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // The fields are for the typed tree, which does not exist yet.
 struct ReceiverAdjustment {
     /// The number of `&`, `&mut` and `Heap<T>` layers looked through to reach the extension's
     /// receiver type.
@@ -233,9 +257,10 @@ struct BodyContext {
     in_compose_stack: Vec<bool>,
     current_expected_return: Option<Type>,
     in_function: bool,
-    loop_depth: usize,
     origin: Origin,
     consuming: bool,
+    /// The tree of the body being checked, with its open closures and loops.
+    builder: BodyBuilder,
 }
 
 /// How the value of a `when` is used.
@@ -297,9 +322,12 @@ pub struct TypeChecker {
     pub unannotated_private_fns: Vec<String>,
     /// Whether the checker is currently evaluating within a function body.
     pub in_function: bool,
-    /// Number of loops enclosing the current point of the current function or closure body; a
-    /// `break` or `continue` at depth zero reports `E4015`. A closure body starts at zero.
-    loop_depth: usize,
+    /// The typed tree of the body being checked. Its open loops are the loops enclosing the
+    /// current point of the current function or closure body; a `break` or `continue` with none
+    /// reports `E4015`.
+    builder: BodyBuilder,
+    /// The bodies and items checked so far.
+    file: FileBuilder,
     /// The enum that owns each module-level bare variant name (`Red` for `Color.Red`).
     variant_owners: HashMap<String, String>,
     /// Bare variant names declared by more than one enum. They are not bound at module level and
@@ -342,7 +370,8 @@ impl TypeChecker {
             current_expected_return: None,
             unannotated_private_fns: Vec::new(),
             in_function: false,
-            loop_depth: 0,
+            builder: BodyBuilder::new(DeclarationPath::new("", "<none>")),
+            file: FileBuilder::default(),
             variant_owners: HashMap::new(),
             ambiguous_variants: HashSet::new(),
         }
@@ -362,6 +391,211 @@ impl TypeChecker {
     pub fn pop_compose_context(&mut self) {
         if self.in_compose_stack.len() > 1 {
             self.in_compose_stack.pop();
+        }
+    }
+
+    /// The type of node `id` of the body being built.
+    pub fn type_of(&self, id: ExpressionId) -> &Type {
+        self.builder.type_of(id)
+    }
+
+    fn ty(&self, id: ExpressionId) -> Type {
+        self.builder.type_of(id).clone()
+    }
+
+    fn add(&mut self, kind: ExpressionKind, ty: Type, span: Span) -> ExpressionId {
+        self.builder.add(kind, ty, span)
+    }
+
+    /// An error node keeping `children`, the nodes checked before checking gave up (D12).
+    fn error_node(&mut self, children: Vec<ExpressionId>, span: Span) -> ExpressionId {
+        self.add(ExpressionKind::Error { children }, Type::Error, span)
+    }
+
+    /// An error node around `id`, for a value that does not fit where it is used.
+    fn wrap_error(&mut self, id: ExpressionId) -> ExpressionId {
+        let span = self.builder.span_of(id);
+        self.error_node(vec![id], span)
+    }
+
+    /// `id` as a place: itself when it is one, or a temporary holding its value (D5). The payload
+    /// of a nullable value is a place once the nullable is held in a temporary.
+    fn as_place(&mut self, id: ExpressionId) -> ExpressionId {
+        match self.builder.kind(id).clone() {
+            ExpressionKind::NonNullPayload { nullable } => {
+                let place = self.as_place(nullable);
+                if place != nullable {
+                    self.builder.expression_mut(id).kind =
+                        ExpressionKind::NonNullPayload { nullable: place };
+                }
+                id
+            }
+            kind if kind.is_place() => id,
+            _ => {
+                let (ty, span) = (self.ty(id), self.builder.span_of(id));
+                self.add(ExpressionKind::Temporary { value: id }, ty, span)
+            }
+        }
+    }
+
+    /// The referent of `id`, a `&T`, `&mut T` or `Heap<T>`.
+    fn deref(&mut self, id: ExpressionId) -> ExpressionId {
+        let referent = match self.builder.type_of(id) {
+            Type::Reference { inner, .. } | Type::Heap(inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        let span = self.builder.span_of(id);
+        self.add(ExpressionKind::Deref { pointer: id }, referent, span)
+    }
+
+    /// Dereferences every `&` and `&mut` layer of `id`, as operators read through references.
+    fn peel_reference_nodes(&mut self, mut id: ExpressionId) -> ExpressionId {
+        while matches!(self.builder.type_of(id), Type::Reference { .. }) {
+            id = self.deref(id);
+        }
+        id
+    }
+
+    /// Dereferences every `&`, `&mut` and `Heap<T>` layer of `id`, as field access does.
+    fn peel_indirection_nodes(&mut self, mut id: ExpressionId) -> ExpressionId {
+        while matches!(
+            self.builder.type_of(id),
+            Type::Reference { .. } | Type::Heap(_)
+        ) {
+            id = self.deref(id);
+        }
+        id
+    }
+
+    /// Dereferences `&`, `&mut` and `Heap<T>` layers of `id` until its type is `target`.
+    fn deref_until(&mut self, mut id: ExpressionId, target: &Type) -> ExpressionId {
+        while self.builder.type_of(id) != target
+            && matches!(
+                self.builder.type_of(id),
+                Type::Reference { .. } | Type::Heap(_)
+            )
+        {
+            id = self.deref(id);
+        }
+        id
+    }
+
+    /// The payload of `id` reached through its references, when it is a nullable (D7): the
+    /// projection that leaves the enclosing chain with `null`.
+    fn non_null(&mut self, id: ExpressionId) -> ExpressionId {
+        let id = self.peel_reference_nodes(id);
+        match self.builder.type_of(id) {
+            Type::Nullable(inner) => {
+                let (inner, span) = (inner.as_ref().clone(), self.builder.span_of(id));
+                self.add(ExpressionKind::NonNullPayload { nullable: id }, inner, span)
+            }
+            _ => id,
+        }
+    }
+
+    /// Opens a safe navigation over `id`: returns the written chain `id` is, which the new
+    /// navigation joins (D7), and the payload the navigation reads.
+    fn open_chain(&mut self, id: ExpressionId) -> (Option<ExpressionId>, ExpressionId) {
+        match self.builder.kind(id) {
+            ExpressionKind::SafeNavigation {
+                chain,
+                origin: SafeNavigationOrigin::Written,
+            } => {
+                let chain = chain.to_owned();
+                (Some(id), self.non_null(chain))
+            }
+            _ => (None, self.non_null(id)),
+        }
+    }
+
+    /// Closes a safe navigation whose body is `body`: re-points the joined chain `joined` at
+    /// it, or makes a new chain.
+    fn close_chain(
+        &mut self,
+        joined: Option<ExpressionId>,
+        body: ExpressionId,
+        origin: SafeNavigationOrigin,
+        span: Span,
+    ) -> ExpressionId {
+        let ty = self.ty(body).nullable();
+        let kind = ExpressionKind::SafeNavigation {
+            chain: body,
+            origin,
+        };
+        match joined {
+            Some(chain) => {
+                self.builder.replace(chain, kind, ty, span);
+                chain
+            }
+            None => self.add(kind, ty, span),
+        }
+    }
+
+    /// Wraps the consumed node `id` in a move, or in a copy when its type is `Copy`, when it is a
+    /// place (D5); a consumed safe navigation moves or copies its final place inside the chain.
+    /// Any other value is fresh, so consuming it needs no node.
+    fn consume(&mut self, id: ExpressionId) -> ExpressionId {
+        match self.builder.kind(id).clone() {
+            ExpressionKind::SafeNavigation { chain, origin } => {
+                let inner = self.consume(chain);
+                if inner != chain {
+                    self.builder.expression_mut(id).kind = ExpressionKind::SafeNavigation {
+                        chain: inner,
+                        origin,
+                    };
+                }
+                id
+            }
+            ExpressionKind::Error { .. } => id,
+            kind if kind.is_place() => {
+                let place = self.as_place(id);
+                let (ty, span) = (self.ty(place), self.builder.span_of(place));
+                let kind = if self.is_copy(&ty) {
+                    ExpressionKind::Copy { place }
+                } else {
+                    ExpressionKind::Move { place }
+                };
+                self.add(kind, ty, span)
+            }
+            _ => id,
+        }
+    }
+
+    /// Wraps `id` in a coercion to `expected` when it fits only by assignability (D6), so its
+    /// type is the one its position expects.
+    fn coerce_to(&mut self, id: ExpressionId, expected: &Type) -> ExpressionId {
+        let found = self.ty(id);
+        if &found == expected
+            || found == Type::Error
+            || expected == &Type::Error
+            || !found.is_assignable_to(expected)
+        {
+            return id;
+        }
+        let span = self.builder.span_of(id);
+        if found == Type::Nothing {
+            let kind = ExpressionKind::Coerce {
+                value: id,
+                kind: CoercionKind::Diverge,
+            };
+            return self.add(kind, expected.clone(), span);
+        }
+        match expected {
+            Type::Nullable(inner) if !matches!(found, Type::Nullable(_)) => {
+                let value = self.coerce_to(id, inner);
+                let kind = ExpressionKind::Coerce {
+                    value,
+                    kind: CoercionKind::WrapNullable,
+                };
+                self.add(kind, expected.clone(), span)
+            }
+            _ => {
+                let kind = ExpressionKind::Coerce {
+                    value: id,
+                    kind: CoercionKind::Subtype,
+                };
+                self.add(kind, expected.clone(), span)
+            }
         }
     }
 
@@ -691,10 +925,10 @@ impl TypeChecker {
         target: &Expr,
         member: &str,
         span: Span,
-    ) -> Option<(Type, Option<bool>)> {
+    ) -> Option<(ExpressionId, Option<bool>)> {
         let sym = self.type_name_symbol(target)?;
         if !self.check_visibility(&sym, target.span) {
-            return Some((Type::Error, None));
+            return Some((self.error_node(Vec::new(), span), None));
         }
         let ty = sym.ty();
         if let SymbolKind::Struct { .. } = sym.kind {
@@ -704,9 +938,50 @@ impl TypeChecker {
                 span,
                 help: None,
             });
-            return Some((Type::Error, None));
+            return Some((self.error_node(Vec::new(), span), None));
         }
-        Some(self.member_type(&ty, member, false, span))
+        let (member_ty, is_var) = self.member_type(&ty, member, false, span);
+        Some((self.variant_node(&ty, member, member_ty, span), is_var))
+    }
+
+    /// The node of variant `member` of the enum `enum_ty`, whose type `member_ty` is the enum for
+    /// a payload-free variant (a construction with no fields) and the constructor's function type
+    /// for a variant with a payload.
+    fn variant_node(
+        &mut self,
+        enum_ty: &Type,
+        member: &str,
+        member_ty: Type,
+        span: Span,
+    ) -> ExpressionId {
+        let Type::Enum(enum_id) = peel_indirection(enum_ty).clone() else {
+            return self.error_node(Vec::new(), span);
+        };
+        let index = self
+            .enum_variants(&enum_id)
+            .and_then(|variants| variants.iter().position(|(name, _)| name == member));
+        let Some(index) = index else {
+            return self.error_node(Vec::new(), span);
+        };
+        let name = member.to_string();
+        let kind = match &member_ty {
+            Type::Error => return self.error_node(Vec::new(), span),
+            Type::Fn { .. } => ExpressionKind::VariantConstructor {
+                enum_id,
+                index,
+                name,
+            },
+            _ => ExpressionKind::Construct {
+                kind: ConstructKind::Variant {
+                    enum_id,
+                    index,
+                    name,
+                },
+                fields: Vec::new(),
+                evaluation_order: Vec::new(),
+            },
+        };
+        self.add(kind, member_ty, span)
     }
 
     /// Binds the bare name of a variant of `enum_name` at module level.
@@ -802,7 +1077,8 @@ impl TypeChecker {
                         *visibility,
                         abi.package.clone(),
                         Span::dummy(),
-                    );
+                    )
+                    .with_module(abi.module.clone());
                     match receiver {
                         // An extension is reached through its receiver, never by its bare name.
                         Some(receiver) => {
@@ -811,6 +1087,7 @@ impl TypeChecker {
                             if !candidates.iter().any(|(m, _)| m == &abi.module) {
                                 let extension = Extension {
                                     mode: receiver.mode,
+                                    module: abi.module.clone(),
                                     symbol,
                                 };
                                 candidates.push((abi.module.clone(), extension));
@@ -869,7 +1146,8 @@ impl TypeChecker {
                                 abi.package.clone(),
                                 Span::dummy(),
                             )
-                        };
+                        }
+                        .with_module(abi.module.clone());
                         self.define_variant(name, v_sym).ok();
                     }
                 }
@@ -885,7 +1163,8 @@ impl TypeChecker {
                         *visibility,
                         abi.package.clone(),
                         Span::dummy(),
-                    );
+                    )
+                    .with_module(abi.module.clone());
                     self.env.define_import(&abi.module, symbol);
                 }
             }
@@ -983,6 +1262,7 @@ impl TypeChecker {
                                 self.current_package.clone(),
                                 e.span,
                             )
+                            .with_module(self.module_path.clone())
                         } else {
                             Symbol::function_with_defaults(
                                 v_name.clone(),
@@ -997,6 +1277,7 @@ impl TypeChecker {
                                 self.current_package.clone(),
                                 e.span,
                             )
+                            .with_module(self.module_path.clone())
                         };
                         if let Err(err) = self.define_variant(&e.name, v_sym) {
                             self.errors.push(err);
@@ -1031,7 +1312,8 @@ impl TypeChecker {
                         v.visibility,
                         self.current_package.clone(),
                         v.span,
-                    );
+                    )
+                    .with_module(self.module_path.clone());
                     self.define_top_level(sym);
                 }
             }
@@ -1099,6 +1381,7 @@ impl TypeChecker {
             self.current_package.clone(),
             f.span,
         )
+        .with_module(self.module_path.clone())
     }
 
     /// Registers the extension function `f` in the file's extension table (D7 of
@@ -1147,13 +1430,16 @@ impl TypeChecker {
         }
         let extension = Extension {
             mode: receiver.mode,
+            module: self.module_path.clone(),
             symbol,
         };
         self.own_extensions.insert(key, extension);
     }
 
-    /// Pass 2: Typechecks the bodies of all top-level declarations in the module.
-    pub fn check_module(&mut self, source_file: &SourceFile) {
+    /// Pass 2: Typechecks the bodies of all top-level declarations in the module, returning the
+    /// file's typed tree. The tree is produced even when the file has type errors, which are
+    /// left in [`Self::errors`].
+    pub fn check_module(&mut self, source_file: &SourceFile) -> TypedFile {
         self.register_module_declarations(source_file);
         self.check_marker_declarations(source_file);
 
@@ -1203,30 +1489,115 @@ impl TypeChecker {
                 _ => {}
             }
         }
+        self.finish_file(source_file)
+    }
+
+    /// The typed tree of the file: its items in source order, structs and enums from the type
+    /// table, and the functions and values whose bodies were checked.
+    fn finish_file(&mut self, source_file: &SourceFile) -> TypedFile {
+        let mut file = std::mem::take(&mut self.file);
+        let mut items = Vec::new();
+        for decl in &source_file.declarations {
+            match decl {
+                Declaration::Struct(s) => {
+                    let id = NominalId::new(self.module_path.clone(), s.name.clone());
+                    let fields = self.struct_fields(&id).unwrap_or_default();
+                    items.push(Item::Struct(StructItem {
+                        id,
+                        visibility: s.visibility,
+                        marker: s.marker,
+                        fields,
+                        span: s.span,
+                    }));
+                }
+                Declaration::Enum(e) => {
+                    let id = NominalId::new(self.module_path.clone(), e.name.clone());
+                    let variants = self.enum_variants(&id).unwrap_or_default();
+                    items.push(Item::Enum(EnumItem {
+                        id,
+                        visibility: e.visibility,
+                        marker: e.marker,
+                        variants,
+                        span: e.span,
+                    }));
+                }
+                Declaration::Function(_) | Declaration::Var(_) => {
+                    if let Some(item) = file.items.remove(&decl.span()) {
+                        items.push(item);
+                    }
+                }
+            }
+        }
+        TypedFile {
+            module: self.module_path.clone(),
+            package: self.current_package.clone(),
+            items,
+            bodies: file.bodies,
+        }
+    }
+
+    /// Starts building the body of the declaration `owner`, returning the builder of the body
+    /// being built when it started, which [`Self::finish_body`] restores.
+    fn start_body(&mut self, owner: DeclarationPath) -> BodyBuilder {
+        std::mem::replace(&mut self.builder, BodyBuilder::new(owner))
+    }
+
+    /// Finishes the body being built, restoring `previous`, and records it with `item`, which
+    /// gets the body's id.
+    fn finish_body(
+        &mut self,
+        previous: BodyBuilder,
+        span: Span,
+        item: impl FnOnce(prism_typed_tree::BodyId) -> Item,
+    ) {
+        let built = std::mem::replace(&mut self.builder, previous);
+        let body = self.file.bodies.alloc(built.finish());
+        self.file.items.entry(span).or_insert_with(|| item(body));
     }
 
     /// Checks a top-level variable's initializer. An unannotated private variable takes the
     /// initializer's type.
     fn check_top_level_var(&mut self, v: &TopLevelVarDecl) {
-        let inferred = self.with_consuming(true, |c| c.infer_expr(&v.initializer));
-        if let Some(annot) = &v.ty {
+        let previous = self.start_body(DeclarationPath::new(self.module_path.clone(), &v.name));
+        let initializer = self.with_consuming(true, |c| c.infer_expr(&v.initializer));
+        let inferred = self.ty(initializer);
+        let (ty, value) = if let Some(annot) = &v.ty {
             let expected = self.lower_type(annot);
-            if !inferred.is_assignable_to(&expected) {
+            let value = if !inferred.is_assignable_to(&expected) {
                 self.errors.push(TypeError::TypeMismatch {
-                    expected,
+                    expected: expected.clone(),
                     found: inferred.clone(),
                     span: v.span,
                     help: None,
                 });
+                self.wrap_error(initializer)
+            } else {
+                self.coerce_to(initializer, &expected)
+            };
+            (expected, value)
+        } else {
+            if v.visibility == Visibility::Private {
+                self.env.update_type(&v.name, inferred.clone());
             }
-        } else if v.visibility == Visibility::Private {
-            self.env.update_type(&v.name, inferred);
-        }
+            (inferred, initializer)
+        };
+        self.builder.body_mut().value = Some(value);
+        let path = DeclarationPath::new(self.module_path.clone(), &v.name);
+        self.finish_body(previous, v.span, |body| {
+            Item::Value(ValueItem {
+                path,
+                visibility: v.visibility,
+                ty,
+                body,
+                span: v.span,
+            })
+        });
     }
 
     /// Infers the unannotated private declaration `name` if it is still pending. Its body is
-    /// checked in a fresh body context (module scope only), so the body being checked when the
-    /// declaration is first used does not leak into it.
+    /// checked in a fresh body context (module scope only, and a body of its own in the typed
+    /// tree), so the body being checked when the declaration is first used does not leak into
+    /// it.
     fn infer_declaration(&mut self, key: &InferenceKey) {
         let pending = match self.inference.get(key) {
             Some(Inference::Pending(pending)) => pending.clone(),
@@ -1239,9 +1610,12 @@ impl TypeChecker {
             in_compose_stack: std::mem::replace(&mut self.in_compose_stack, vec![false]),
             current_expected_return: self.current_expected_return.take(),
             in_function: std::mem::replace(&mut self.in_function, false),
-            loop_depth: std::mem::replace(&mut self.loop_depth, 0),
             origin: std::mem::replace(&mut self.origin, Origin::Value),
             consuming: std::mem::replace(&mut self.parent_consuming, false),
+            builder: std::mem::replace(
+                &mut self.builder,
+                BodyBuilder::new(DeclarationPath::new("", "<none>")),
+            ),
         };
         match pending.as_ref() {
             PendingDecl::Function(f) => self.check_function_body(f),
@@ -1251,9 +1625,9 @@ impl TypeChecker {
         self.in_compose_stack = saved.in_compose_stack;
         self.current_expected_return = saved.current_expected_return;
         self.in_function = saved.in_function;
-        self.loop_depth = saved.loop_depth;
         self.origin = saved.origin;
         self.parent_consuming = saved.consuming;
+        self.builder = saved.builder;
 
         self.inference.insert(key.clone(), Inference::Done);
     }
@@ -1290,8 +1664,50 @@ impl TypeChecker {
         }
     }
 
+    /// Adds a binding to the body being built, returning the symbol that resolves to it.
+    fn bind_local(
+        &mut self,
+        name: &str,
+        ty: Type,
+        mutability: Mutability,
+        kind: LocalKind,
+        span: Span,
+    ) -> Symbol {
+        let local = self.builder.add_local(Local {
+            name: name.to_string(),
+            ty: ty.clone(),
+            mutable: mutability == Mutability::Var,
+            kind,
+            span,
+        });
+        Symbol::variable(name, ty, mutability, span).with_local(local)
+    }
+
+    /// Defines `symbol` in the current scope, reporting a duplicate (`E4010`).
+    fn define_local(&mut self, symbol: Symbol) {
+        if let Err(err) = self.env.define(symbol) {
+            self.errors.push(err);
+        }
+    }
+
+    /// The binding a local symbol resolves to.
+    fn local_of(symbol: &Symbol) -> Option<prism_typed_tree::LocalId> {
+        match &symbol.kind {
+            SymbolKind::Variable { local, .. } => *local,
+            _ => None,
+        }
+    }
+
     /// Typechecks an individual function declaration body.
     pub fn check_function_body(&mut self, f: &FunctionDecl) {
+        let receiver_ty = f.receiver.as_ref().map(|r| self.lower_type(&r.ty));
+        let path = match &receiver_ty {
+            Some(receiver_ty) => {
+                DeclarationPath::extension(self.module_path.clone(), receiver_ty.clone(), &f.name)
+            }
+            None => DeclarationPath::new(self.module_path.clone(), &f.name),
+        };
+        let previous = self.start_body(path.clone());
         let prev_in_func = self.in_function;
         self.in_function = true;
         self.env.enter_scope();
@@ -1300,7 +1716,6 @@ impl TypeChecker {
         // An extension binds its receiver as the `val` named `this`, before the parameters, so
         // defaults may read it (D4 of `extension-methods`). No user name can collide with it,
         // because `this` is a keyword.
-        let receiver_ty = f.receiver.as_ref().map(|r| self.lower_type(&r.ty));
         if let (Some(receiver), Some(receiver_ty)) = (&f.receiver, &receiver_ty) {
             let this_ty = match receiver.mode {
                 ReceiverMode::Shared => Type::Reference {
@@ -1313,24 +1728,40 @@ impl TypeChecker {
                 },
                 ReceiverMode::Consuming => receiver_ty.clone(),
             };
-            let sym = Symbol::variable(THIS, this_ty, Mutability::Val, receiver.span);
-            if let Err(err) = self.env.define(sym) {
-                self.errors.push(err);
-            }
+            let sym = self.bind_local(
+                THIS,
+                this_ty,
+                Mutability::Val,
+                LocalKind::Receiver,
+                receiver.span,
+            );
+            let local = Self::local_of(&sym).expect("a bound local");
+            self.builder.body_mut().parameters.push(local);
+            self.define_local(sym);
         }
 
         // Bind parameters in local scope. A default value is checked against its parameter type
         // before the parameter is bound, so it may refer to earlier parameters only.
+        let mut parameters = Vec::new();
         for p in &f.params {
             let p_ty = self.lower_type(&p.ty);
             // A default value is evaluated as the call's argument, so it is borrowed like one.
-            if let Some(default) = &p.default_value {
-                self.check_argument(default, &p_ty, Origin::Value);
-            }
-            let sym = Symbol::variable(p.name.clone(), p_ty, Mutability::Val, p.span);
-            if let Err(err) = self.env.define(sym) {
-                self.errors.push(err);
-            }
+            let default = p
+                .default_value
+                .as_ref()
+                .map(|default| self.check_argument(default, &p_ty, Origin::Value));
+            self.builder.body_mut().defaults.push(default);
+            let sym = self.bind_local(
+                &p.name,
+                p_ty.clone(),
+                Mutability::Val,
+                LocalKind::Parameter,
+                p.span,
+            );
+            let local = Self::local_of(&sym).expect("a bound local");
+            self.builder.body_mut().parameters.push(local);
+            self.define_local(sym);
+            parameters.push((p.name.clone(), p_ty));
         }
 
         let declared_ret = f.return_type.as_ref().map(|t| self.lower_type(t)).or({
@@ -1343,17 +1774,19 @@ impl TypeChecker {
         let prev_ret = self.current_expected_return.take();
         self.current_expected_return = declared_ret.clone();
 
+        let mut return_type = declared_ret.clone().unwrap_or(Type::Error);
         if let Some(body) = &f.body {
-            match body {
+            let value = match body {
                 FunctionBody::Block(block) => {
                     // The final expression of a non-`Unit` body is the returned value.
                     let origin = match &declared_ret {
                         Some(Type::Unit) | None => Origin::Value,
                         Some(_) => Origin::Return,
                     };
-                    let block_ty = self.with_origin(origin, |c| {
+                    let block_id = self.with_origin(origin, |c| {
                         c.with_consuming(true, |c| c.check_block(block, declared_ret.as_ref()))
                     });
+                    let block_ty = self.ty(block_id);
                     if let Some(expected) = &declared_ret {
                         // A `Unit` block body discards its final value (see `check_block`).
                         if expected != &Type::Unit && !block_ty.is_assignable_to(expected) {
@@ -1365,23 +1798,26 @@ impl TypeChecker {
                             });
                         }
                     }
+                    block_id
                 }
                 FunctionBody::Expr(expr) => {
-                    let expr_ty = if let Some(expected) = &declared_ret {
+                    let value = if let Some(expected) = &declared_ret {
                         self.check_expr_at(expr, expected, Origin::Return)
                     } else {
                         self.with_consuming(true, |c| c.infer_expr(expr))
                     };
 
                     if declared_ret.is_none() {
+                        let expr_ty = self.ty(value);
+                        return_type = expr_ty.clone();
                         let inferred = Type::Fn {
                             is_compose: f.is_compose,
                             params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
                             ret: Box::new(expr_ty),
                         };
-                        match receiver_ty {
+                        match &receiver_ty {
                             Some(receiver_ty) => {
-                                let key = (receiver_ty, f.name.clone());
+                                let key = (receiver_ty.clone(), f.name.clone());
                                 if let Some(extension) = self.own_extensions.get_mut(&key) {
                                     if let SymbolKind::Function { fn_type, .. } =
                                         &mut extension.symbol.kind
@@ -1395,14 +1831,33 @@ impl TypeChecker {
                             }
                         }
                     }
+                    value
                 }
-            }
+            };
+            self.builder.body_mut().value = Some(value);
         }
 
         self.current_expected_return = prev_ret;
         self.pop_compose_context();
         self.env.exit_scope();
         self.in_function = prev_in_func;
+        let receiver = f
+            .receiver
+            .as_ref()
+            .zip(receiver_ty)
+            .map(|(receiver, ty)| (receiver.mode, ty));
+        self.finish_body(previous, f.span, |body| {
+            Item::Function(FunctionItem {
+                path,
+                visibility: f.visibility,
+                is_compose: f.is_compose,
+                receiver,
+                parameters,
+                return_type,
+                body,
+                span: f.span,
+            })
+        });
     }
 
     /// Runs `f` with the expectation origin set to `origin`, restoring it afterwards.
@@ -1414,7 +1869,7 @@ impl TypeChecker {
     }
 
     /// Checks `expr` against `expected` with the expectation origin `origin`.
-    fn check_expr_at(&mut self, expr: &Expr, expected: &Type, origin: Origin) -> Type {
+    fn check_expr_at(&mut self, expr: &Expr, expected: &Type, origin: Origin) -> ExpressionId {
         // A returned value and an argument are consumed.
         let consuming = origin != Origin::Value || self.consuming;
         self.with_origin(origin, |checker| {
@@ -1429,7 +1884,7 @@ impl TypeChecker {
     /// where it lives and is not consumed, and anything else is evaluated into a consumed
     /// temporary. The argument is inferred rather than checked, because it may already be a
     /// reference (`greet(longest(&a, &b))`) or be a value to borrow.
-    fn check_argument(&mut self, expr: &Expr, param_ty: &Type, origin: Origin) -> Type {
+    fn check_argument(&mut self, expr: &Expr, param_ty: &Type, origin: Origin) -> ExpressionId {
         if !is_reference_parameter(param_ty) {
             return self.check_expr_at(expr, param_ty, origin);
         }
@@ -1478,25 +1933,27 @@ impl TypeChecker {
 
     /// Infers an operator operand or a condition. Operators read through references (D1 of
     /// `typechecker-soundness`), so every `&` and `&mut` layer is peeled: with `a: &Int`,
-    /// `a + 1` is an `Int`. `Heap<T>` is not peeled.
-    fn infer_operand(&mut self, expr: &Expr) -> Type {
-        let ty = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
-        peel_references(&ty).clone()
+    /// `a + 1` is an `Int`. `Heap<T>` is not peeled. Each peeled layer is an explicit
+    /// dereference, and the operand is read in place (D5 of `typed-tree`).
+    fn infer_operand(&mut self, expr: &Expr) -> ExpressionId {
+        let id = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
+        self.peel_reference_nodes(id)
     }
 
     /// Checks an operator operand or a condition against `expected`, reading through references
     /// like [`Self::infer_operand`]. A mismatch is a plain `E4002`.
-    fn check_operand(&mut self, expr: &Expr, expected: &Type) -> Type {
-        let ty = self.infer_operand(expr);
+    fn check_operand(&mut self, expr: &Expr, expected: &Type) -> ExpressionId {
+        let id = self.infer_operand(expr);
+        let ty = self.ty(id);
         if ty.is_assignable_to(expected) {
-            return ty;
+            return self.coerce_to(id, expected);
         }
         if ty != Type::Error {
             self.with_origin(Origin::Value, |c| {
                 c.report_mismatch(expected, ty, expr.span)
             });
         }
-        Type::Error
+        self.wrap_error(id)
     }
 
     /// Reports that `found` is not assignable to `expected`, with the code of the current
@@ -1536,30 +1993,37 @@ impl TypeChecker {
         });
     }
 
-    /// Checks an expression against an expected type in bidirectional checking mode.
-    pub fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+    /// Checks an expression against an expected type in bidirectional checking mode, returning
+    /// its node.
+    pub fn check_expr(&mut self, expr: &Expr, expected: &Type) -> ExpressionId {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.check_expr(&field, expected);
         }
         let consuming = std::mem::replace(&mut self.consuming, false);
         let saved = std::mem::replace(&mut self.parent_consuming, consuming);
-        let ty = self.check_expr_kind(expr, expected);
+        let id = self.check_expr_kind(expr, expected);
         self.parent_consuming = saved;
-        ty
+        id
     }
 
-    fn check_expr_kind(&mut self, expr: &Expr, expected: &Type) -> Type {
+    fn check_expr_kind(&mut self, expr: &Expr, expected: &Type) -> ExpressionId {
         if expected == &Type::Error {
-            return Type::Error;
+            // Nothing is checked against the error type; the node keeps no child.
+            return self.error_node(Vec::new(), expr.span);
         }
 
         // Special handling for null literal
         if let ExprKind::Literal(Literal::Null) = &expr.kind {
+            let null = self.add(
+                ExpressionKind::Literal(Literal::Null),
+                Type::Nullable(Box::new(Type::Nothing)),
+                expr.span,
+            );
             if let Type::Nullable(_) = expected {
-                return expected.clone();
+                return self.coerce_to(null, expected);
             } else {
                 self.report_mismatch(expected, Type::Nullable(Box::new(Type::Nothing)), expr.span);
-                return Type::Error;
+                return self.wrap_error(null);
             }
         }
 
@@ -1580,69 +2044,74 @@ impl TypeChecker {
                         ),
                         span: expr.span,
                     });
-                    return Type::Error;
+                    return self.error_node(Vec::new(), expr.span);
                 }
 
-                self.env.enter_scope();
-                self.push_compose_context(*is_compose);
-                let prev_in_func = self.in_function;
-                self.in_function = true;
-                // A jump cannot leave the closure for a loop around it.
-                let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
-                let prev_ret = self.current_expected_return.take();
-                self.current_expected_return = Some((**exp_ret).clone());
-
+                let prev = self.enter_closure(*is_compose, Some((**exp_ret).clone()));
+                let mut parameters = Vec::new();
                 for (name, param_ty) in params.iter().zip(exp_params.iter()) {
-                    let sym = Symbol::variable(
-                        name.clone(),
+                    let sym = self.bind_local(
+                        name,
                         param_ty.clone(),
                         Mutability::Val,
+                        LocalKind::ClosureParameter,
                         expr.span,
                     );
-                    if let Err(err) = self.env.define(sym) {
-                        self.errors.push(err);
-                    }
+                    parameters.push(Self::local_of(&sym).expect("a bound local"));
+                    self.define_local(sym);
                 }
 
                 // The body's value is what the closure returns.
-                let body_ty = self.with_origin(Origin::Return, |c| {
+                let body_id = self.with_origin(Origin::Return, |c| {
                     c.with_consuming(true, |c| c.check_block(body, Some(exp_ret)))
                 });
-
-                self.loop_depth = prev_loop_depth;
-                self.current_expected_return = prev_ret;
-                self.in_function = prev_in_func;
-                self.pop_compose_context();
-                self.env.exit_scope();
-
-                return Type::Fn {
+                let captures = self.exit_closure(prev);
+                let ty = Type::Fn {
                     is_compose: *is_compose,
                     params: exp_params.clone(),
-                    ret: Box::new(body_ty),
+                    ret: Box::new(self.ty(body_id)),
                 };
+                let kind = ExpressionKind::Closure {
+                    parameters,
+                    body: body_id,
+                    is_compose: *is_compose,
+                    captures,
+                };
+                return self.add(kind, ty, expr.span);
             }
         }
 
-        // Special handling for if/else in check mode
+        // Special handling for if/else in check mode: each branch produces the checked value.
         if let ExprKind::If {
             cond,
             then_branch,
             else_branch,
         } = &expr.kind
         {
-            self.check_operand(cond, &Type::Bool);
+            let condition = self.check_operand(cond, &Type::Bool);
             let consuming = self.parent_consuming;
-            let then_ty = self.with_consuming(consuming, |c| c.check_expr(then_branch, expected));
-            if let Some(else_b) = else_branch {
-                let else_ty = self.with_consuming(consuming, |c| c.check_expr(else_b, expected));
-                if then_ty.is_assignable_to(expected) && else_ty.is_assignable_to(expected) {
-                    return expected.clone();
-                }
-            } else if expected == &Type::Unit {
-                return Type::Unit;
+            let then_id = self.with_consuming(consuming, |c| c.check_expr(then_branch, expected));
+            let else_id = else_branch
+                .as_ref()
+                .map(|else_b| self.with_consuming(consuming, |c| c.check_expr(else_b, expected)));
+            let kind = ExpressionKind::If {
+                condition,
+                then_branch: then_id,
+                else_branch: else_id,
+            };
+            if else_id.is_some() || expected == &Type::Unit {
+                // Each branch fits the expected type, or reported why not.
+                let ty = if else_id.is_some() {
+                    expected.clone()
+                } else {
+                    Type::Unit
+                };
+                return self.add(kind, ty, expr.span);
             }
-            // The branches were checked for moves already; the inference below only types them.
-            self.parent_consuming = false;
+            // Without `else`, the `if` is a `Unit`, which must fit the expected type. Its
+            // branch is checked once, above (D1 of `typed-tree`).
+            let if_id = self.add(kind, Type::Unit, expr.span);
+            return self.fit(expr, if_id, expected, Site::Value, false);
         }
 
         // Special handling for when in check mode: each branch produces the checked value
@@ -1666,60 +2135,134 @@ impl TypeChecker {
         self.fit(expr, inferred, expected, Site::Value, deferred_move)
     }
 
+    /// Enters the body of a closure: a scope, a compose context, a fresh set of open loops (a
+    /// jump cannot leave the closure for a loop around it) and the expected return type. The
+    /// builder records the closure's captures (D11 of `typed-tree`). Returns what
+    /// [`Self::exit_closure`] restores.
+    fn enter_closure(
+        &mut self,
+        is_compose: bool,
+        expected_return: Option<Type>,
+    ) -> (bool, Vec<StatementId>, Option<Type>) {
+        self.env.enter_scope();
+        self.push_compose_context(is_compose);
+        let prev_in_func = std::mem::replace(&mut self.in_function, true);
+        let prev_loops = std::mem::take(&mut self.builder.loops);
+        let prev_ret = std::mem::replace(&mut self.current_expected_return, expected_return);
+        self.builder.open_closure();
+        (prev_in_func, prev_loops, prev_ret)
+    }
+
+    /// Leaves a closure body entered by [`Self::enter_closure`], returning its captures.
+    fn exit_closure(
+        &mut self,
+        (prev_in_func, prev_loops, prev_ret): (bool, Vec<StatementId>, Option<Type>),
+    ) -> Vec<prism_typed_tree::Capture> {
+        let captures = self.builder.close_closure();
+        self.builder.loops = prev_loops;
+        self.current_expected_return = prev_ret;
+        self.in_function = prev_in_func;
+        self.pop_compose_context();
+        self.env.exit_scope();
+        captures
+    }
+
     /// Types an identifier read as a value.
-    fn infer_ident(&mut self, name: &str, span: Span) -> Type {
+    fn infer_ident(&mut self, name: &str, span: Span) -> ExpressionId {
         match self.resolve_ident(name, span) {
-            Some(sym) => match sym.kind {
-                SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
-                    self.errors.push(TypeError::TypeNameAsValue {
-                        name: name.to_string(),
-                        span,
-                    });
-                    Type::Error
-                }
-                _ => sym.ty(),
-            },
-            None => Type::Error,
+            Some(sym) => self.symbol_node(&sym, name, span),
+            None => self.error_node(Vec::new(), span),
         }
     }
 
-    /// Infers the type of an expression in inference mode.
-    pub fn infer_expr(&mut self, expr: &Expr) -> Type {
+    /// The node of a name that resolved to `sym` (D4 of `typed-tree`): a binding of the body, a
+    /// top-level value or function by its path, or a variant of an enum.
+    fn symbol_node(&mut self, sym: &Symbol, name: &str, span: Span) -> ExpressionId {
+        match &sym.kind {
+            SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
+                self.errors.push(TypeError::TypeNameAsValue {
+                    name: name.to_string(),
+                    span,
+                });
+                self.error_node(Vec::new(), span)
+            }
+            SymbolKind::Variable {
+                ty,
+                local: Some(local),
+                ..
+            } => {
+                self.builder.use_local(*local, span);
+                self.add(ExpressionKind::Local(*local), ty.clone(), span)
+            }
+            SymbolKind::Variable { ty, module, .. } => {
+                if self.variant_owners.contains_key(name) {
+                    return self.variant_node(ty, name, ty.clone(), span);
+                }
+                let module = module.clone().unwrap_or_else(|| self.module_path.clone());
+                let path = DeclarationPath::new(module, name);
+                self.add(ExpressionKind::TopLevelValue(path), ty.clone(), span)
+            }
+            SymbolKind::Function {
+                fn_type, module, ..
+            } => {
+                if self.variant_owners.contains_key(name) {
+                    if let Type::Fn { ret, .. } = fn_type {
+                        return self.variant_node(ret, name, fn_type.clone(), span);
+                    }
+                }
+                let path = DeclarationPath::new(module.clone(), name);
+                self.add(
+                    ExpressionKind::FunctionReference(path),
+                    fn_type.clone(),
+                    span,
+                )
+            }
+        }
+    }
+
+    /// Infers the type of an expression in inference mode, returning its node. A consumed place
+    /// is wrapped in a move or a copy (D5 of `typed-tree`).
+    pub fn infer_expr(&mut self, expr: &Expr) -> ExpressionId {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.infer_expr(&field);
         }
         let consuming = std::mem::replace(&mut self.consuming, false);
         let saved = std::mem::replace(&mut self.parent_consuming, consuming);
-        let ty = self.infer_expr_kind(expr);
+        let id = self.infer_expr_kind(expr);
         self.parent_consuming = saved;
         if consuming {
+            let ty = self.ty(id);
             self.check_move_source(expr, &ty);
+            return self.consume(id);
         }
-        ty
+        id
     }
 
-    fn infer_expr_kind(&mut self, expr: &Expr) -> Type {
+    fn infer_expr_kind(&mut self, expr: &Expr) -> ExpressionId {
         match &expr.kind {
-            ExprKind::Literal(lit) => match lit {
-                Literal::Int(_) => Type::Int,
-                Literal::Float(_) => Type::Float,
-                Literal::String(_) => Type::String,
-                Literal::Char(_) => Type::Char,
-                Literal::Bool(_) => Type::Bool,
-                Literal::Null => Type::Nullable(Box::new(Type::Nothing)),
-            },
+            ExprKind::Literal(lit) => {
+                let ty = match lit {
+                    Literal::Int(_) => Type::Int,
+                    Literal::Float(_) => Type::Float,
+                    Literal::String(_) => Type::String,
+                    Literal::Char(_) => Type::Char,
+                    Literal::Bool(_) => Type::Bool,
+                    Literal::Null => Type::Nullable(Box::new(Type::Nothing)),
+                };
+                self.add(ExpressionKind::Literal(lit.clone()), ty, expr.span)
+            }
 
             ExprKind::Ident(name) => {
                 self.ensure_inferred(name, expr.span);
                 self.infer_ident(name, expr.span)
             }
 
-            ExprKind::This => match self.env.lookup(THIS) {
-                Some(sym) => sym.ty(),
+            ExprKind::This => match self.env.lookup(THIS).cloned() {
+                Some(sym) => self.symbol_node(&sym, THIS, expr.span),
                 None => {
                     self.errors
                         .push(TypeError::ThisOutsideExtension { span: expr.span });
-                    Type::Error
+                    self.error_node(Vec::new(), expr.span)
                 }
             },
 
@@ -1739,25 +2282,39 @@ impl TypeChecker {
                 then_branch,
                 else_branch,
             } => {
-                self.check_operand(cond, &Type::Bool);
+                let condition = self.check_operand(cond, &Type::Bool);
                 let consuming = self.parent_consuming;
-                let then_ty = self.with_consuming(consuming, |c| c.infer_expr(then_branch));
-                if let Some(else_b) = else_branch {
-                    let else_ty = self.with_consuming(consuming, |c| c.infer_expr(else_b));
-                    if let Some(joined) = then_ty.join(&else_ty) {
-                        joined
-                    } else {
-                        self.errors.push(TypeError::TypeMismatch {
-                            expected: then_ty.clone(),
-                            found: else_ty,
-                            span: expr.span,
-                            help: None,
-                        });
-                        Type::Error
-                    }
+                let then_id = self.with_consuming(consuming, |c| c.infer_expr(then_branch));
+                let Some(else_b) = else_branch else {
+                    let kind = ExpressionKind::If {
+                        condition,
+                        then_branch: then_id,
+                        else_branch: None,
+                    };
+                    return self.add(kind, Type::Unit, expr.span);
+                };
+                let else_id = self.with_consuming(consuming, |c| c.infer_expr(else_b));
+                let (then_ty, else_ty) = (self.ty(then_id), self.ty(else_id));
+                let (then_id, else_id, ty) = if let Some(joined) = then_ty.join(&else_ty) {
+                    // Each branch is coerced to the join (D6 of `typed-tree`).
+                    let then_id = self.coerce_to(then_id, &joined);
+                    let else_id = self.coerce_to(else_id, &joined);
+                    (then_id, else_id, joined)
                 } else {
-                    Type::Unit
-                }
+                    self.errors.push(TypeError::TypeMismatch {
+                        expected: then_ty,
+                        found: else_ty,
+                        span: expr.span,
+                        help: None,
+                    });
+                    (then_id, else_id, Type::Error)
+                };
+                let kind = ExpressionKind::If {
+                    condition,
+                    then_branch: then_id,
+                    else_branch: Some(else_id),
+                };
+                self.add(kind, ty, expr.span)
             }
 
             ExprKind::When { target, branches } => {
@@ -1773,20 +2330,27 @@ impl TypeChecker {
             } => self.infer_member_access(target, member, *is_safe_nav, expr.span),
 
             ExprKind::Index { target, index } => {
-                self.check_expr(index, &Type::Int);
-                let target_ty = self.infer_expr(target);
-                let peeled = peel_indirection(&target_ty);
-                match peeled {
-                    Type::String => Type::Char,
-                    Type::Error => Type::Error,
+                let index_id = self.check_expr(index, &Type::Int);
+                let target_id = self.infer_expr(target);
+                let base = self.peel_indirection_nodes(target_id);
+                match self.ty(base) {
+                    Type::String => {
+                        let base = self.as_place(base);
+                        let kind = ExpressionKind::Index {
+                            base,
+                            index: index_id,
+                        };
+                        self.add(kind, Type::Char, expr.span)
+                    }
+                    Type::Error => self.error_node(vec![index_id, base], expr.span),
                     other => {
                         self.errors.push(TypeError::TypeMismatch {
                             expected: Type::String,
-                            found: other.clone(),
+                            found: other,
                             span: expr.span,
                             help: None,
                         });
-                        Type::Error
+                        self.error_node(vec![index_id, base], expr.span)
                     }
                 }
             }
@@ -1799,30 +2363,35 @@ impl TypeChecker {
                         span: expr.span,
                         help: None,
                     });
-                    return Type::Nothing;
+                    return self.error_node(Vec::new(), expr.span);
                 }
                 let expected = self.current_expected_return.clone();
-                if let Some(e) = opt_expr {
-                    if let Some(exp) = &expected {
-                        self.check_expr_at(e, exp, Origin::Return);
+                let value = if let Some(e) = opt_expr {
+                    Some(if let Some(exp) = &expected {
+                        self.check_expr_at(e, exp, Origin::Return)
                     } else {
-                        self.with_consuming(true, |c| c.infer_expr(e));
+                        self.with_consuming(true, |c| c.infer_expr(e))
+                    })
+                } else {
+                    if let Some(exp) = &expected {
+                        if exp != &Type::Unit && exp != &Type::Error {
+                            self.errors.push(TypeError::ReturnTypeMismatch {
+                                expected: exp.clone(),
+                                found: Type::Unit,
+                                span: expr.span,
+                                help: None,
+                            });
+                        }
                     }
-                } else if let Some(exp) = &expected {
-                    if exp != &Type::Unit && exp != &Type::Error {
-                        self.errors.push(TypeError::ReturnTypeMismatch {
-                            expected: exp.clone(),
-                            found: Type::Unit,
-                            span: expr.span,
-                            help: None,
-                        });
-                    }
-                }
-                Type::Nothing
+                    None
+                };
+                self.add(ExpressionKind::Return { value }, Type::Nothing, expr.span)
             }
 
             ExprKind::Break | ExprKind::Continue => {
-                if self.loop_depth == 0 {
+                // A jump names the innermost loop around it (D9 of `typed-tree`).
+                let target = self.builder.loops.last().copied();
+                if target.is_none() {
                     let keyword = match expr.kind {
                         ExprKind::Break => "break",
                         _ => "continue",
@@ -1832,25 +2401,30 @@ impl TypeChecker {
                         span: expr.span,
                     });
                 }
-                Type::Nothing
+                let kind = match expr.kind {
+                    ExprKind::Break => ExpressionKind::Break { target },
+                    _ => ExpressionKind::Continue { target },
+                };
+                self.add(kind, Type::Nothing, expr.span)
             }
 
             ExprKind::Closure { params, body } => {
-                self.env.enter_scope();
-                self.push_compose_context(false);
-                let prev_in_func = self.in_function;
-                self.in_function = true;
-                // A jump cannot leave the closure for a loop around it.
-                let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
-                let prev_ret = self.current_expected_return.take();
+                let prev = self.enter_closure(false, None);
 
                 // Without an expected function type, nothing gives the parameters a type (D6 of
                 // `typechecker-soundness`). They are bound to the error type so the body is still
                 // checked for other errors.
                 let mut param_types = Vec::new();
+                let mut parameters = Vec::new();
                 for name in params {
-                    let sym =
-                        Symbol::variable(name.clone(), Type::Error, Mutability::Val, expr.span);
+                    let sym = self.bind_local(
+                        name,
+                        Type::Error,
+                        Mutability::Val,
+                        LocalKind::ClosureParameter,
+                        expr.span,
+                    );
+                    parameters.push(Self::local_of(&sym).expect("a bound local"));
                     match self.env.define(sym) {
                         Ok(()) => self.errors.push(TypeError::CannotInferType {
                             message: format!(
@@ -1864,66 +2438,57 @@ impl TypeChecker {
                     param_types.push(Type::Error);
                 }
                 // The body's value is what the closure returns.
-                let body_ty = self.with_consuming(true, |c| c.check_block(body, None));
+                let body_id = self.with_consuming(true, |c| c.check_block(body, None));
+                let captures = self.exit_closure(prev);
 
-                self.loop_depth = prev_loop_depth;
-                self.current_expected_return = prev_ret;
-                self.in_function = prev_in_func;
-                self.pop_compose_context();
-                self.env.exit_scope();
-
-                Type::Fn {
+                let ty = Type::Fn {
                     is_compose: false,
                     params: param_types,
-                    ret: Box::new(body_ty),
-                }
+                    ret: Box::new(self.ty(body_id)),
+                };
+                let kind = ExpressionKind::Closure {
+                    parameters,
+                    body: body_id,
+                    is_compose: false,
+                    captures,
+                };
+                self.add(kind, ty, expr.span)
             }
         }
     }
 
-    fn infer_binary_op(&mut self, op: BinaryOp, left: &Expr, right: &Expr, span: Span) -> Type {
+    fn infer_binary_op(
+        &mut self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        span: Span,
+    ) -> ExpressionId {
+        let binary = |checker: &mut Self, l: ExpressionId, r: ExpressionId, ty: Type| {
+            let kind = ExpressionKind::Binary {
+                operator: binary_operator(op),
+                left: l,
+                right: r,
+            };
+            checker.add(kind, ty, span)
+        };
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                let left_ty = self.infer_operand(left);
-                let right_ty = self.infer_operand(right);
+                let left_id = self.infer_operand(left);
+                let right_id = self.infer_operand(right);
+                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
 
-                if left_ty == Type::Error || right_ty == Type::Error {
-                    return Type::Error;
-                }
-
-                if left_ty == Type::Int && right_ty == Type::Int {
-                    return Type::Int;
-                }
-
-                if left_ty == Type::Float && right_ty == Type::Float {
-                    return Type::Float;
-                }
-
-                if op == BinaryOp::Add && left_ty == Type::String && right_ty == Type::String {
-                    return Type::String;
-                }
-
-                // Strict typing: no implicit widening (e.g. Int + Float rejected)
-                self.errors.push(TypeError::TypeMismatch {
-                    expected: left_ty,
-                    found: right_ty,
-                    span,
-                    help: None,
-                });
-                Type::Error
-            }
-
-            BinaryOp::Eq | BinaryOp::NotEq => {
-                let left_ty = self.infer_operand(left);
-                let right_ty = self.infer_operand(right);
-
-                if left_ty == Type::Error || right_ty == Type::Error {
-                    return Type::Bool;
-                }
-
-                if left_ty.is_assignable_to(&right_ty) || right_ty.is_assignable_to(&left_ty) {
-                    Type::Bool
+                let ty = if left_ty == Type::Error || right_ty == Type::Error {
+                    Type::Error
+                } else if left_ty == Type::Int && right_ty == Type::Int {
+                    Type::Int
+                } else if left_ty == Type::Float && right_ty == Type::Float {
+                    Type::Float
+                } else if op == BinaryOp::Add && left_ty == Type::String && right_ty == Type::String
+                {
+                    Type::String
                 } else {
+                    // Strict typing: no implicit widening (e.g. Int + Float rejected)
                     self.errors.push(TypeError::TypeMismatch {
                         expected: left_ty,
                         found: right_ty,
@@ -1931,21 +2496,48 @@ impl TypeChecker {
                         help: None,
                     });
                     Type::Error
+                };
+                binary(self, left_id, right_id, ty)
+            }
+
+            BinaryOp::Eq | BinaryOp::NotEq => {
+                let left_id = self.infer_operand(left);
+                let right_id = self.infer_operand(right);
+                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
+
+                if left_ty == Type::Error || right_ty == Type::Error {
+                    return binary(self, left_id, right_id, Type::Bool);
+                }
+
+                if right_ty.is_assignable_to(&left_ty) {
+                    // Both operands are compared at one type (D6 of `typed-tree`).
+                    let right_id = self.coerce_to(right_id, &left_ty);
+                    binary(self, left_id, right_id, Type::Bool)
+                } else if left_ty.is_assignable_to(&right_ty) {
+                    let left_id = self.coerce_to(left_id, &right_ty);
+                    binary(self, left_id, right_id, Type::Bool)
+                } else {
+                    self.errors.push(TypeError::TypeMismatch {
+                        expected: left_ty,
+                        found: right_ty,
+                        span,
+                        help: None,
+                    });
+                    binary(self, left_id, right_id, Type::Error)
                 }
             }
 
             BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => {
-                let left_ty = self.infer_operand(left);
-                let right_ty = self.infer_operand(right);
+                let left_id = self.infer_operand(left);
+                let right_id = self.infer_operand(right);
+                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
 
-                if left_ty == Type::Error || right_ty == Type::Error {
-                    return Type::Bool;
-                }
-
-                if (left_ty == Type::Int && right_ty == Type::Int)
+                let comparable = left_ty == Type::Error
+                    || right_ty == Type::Error
+                    || (left_ty == Type::Int && right_ty == Type::Int)
                     || (left_ty == Type::Float && right_ty == Type::Float)
-                    || (left_ty == Type::Char && right_ty == Type::Char)
-                {
+                    || (left_ty == Type::Char && right_ty == Type::Char);
+                let ty = if comparable {
                     Type::Bool
                 } else {
                     self.errors.push(TypeError::TypeMismatch {
@@ -1955,28 +2547,46 @@ impl TypeChecker {
                         help: None,
                     });
                     Type::Error
-                }
+                };
+                binary(self, left_id, right_id, ty)
             }
 
             BinaryOp::And | BinaryOp::Or => {
-                self.check_operand(left, &Type::Bool);
-                self.check_operand(right, &Type::Bool);
-                Type::Bool
+                let left_id = self.check_operand(left, &Type::Bool);
+                let right_id = self.check_operand(right, &Type::Bool);
+                let operator = if op == BinaryOp::And {
+                    LogicalOperator::And
+                } else {
+                    LogicalOperator::Or
+                };
+                let kind = ExpressionKind::Logical {
+                    operator,
+                    left: left_id,
+                    right: right_id,
+                };
+                self.add(kind, Type::Bool, span)
             }
 
             BinaryOp::Elvis => {
                 // Both sides produce the result, so both are consumed when it is.
                 let consuming = self.parent_consuming;
-                let left_ty = self.with_consuming(consuming, |c| c.infer_expr(left));
+                let left_id = self.with_consuming(consuming, |c| c.infer_expr(left));
                 // The right side is checked even when the left side cannot be null. A borrowed
                 // nullable `&(T?)` is read as `(&T)?` (D8 of `reference-access`).
-                let left_ty = nullable_view(&left_ty).unwrap_or(left_ty);
+                let left_ty = self.ty(left_id);
+                let (left_id, left_ty) = match nullable_view(&left_ty) {
+                    Some(view) => (self.nullable_view_chain(left_id), view),
+                    None => (left_id, left_ty),
+                };
+                let left_is_nullable = matches!(left_ty, Type::Nullable(_));
                 let inner = match left_ty {
                     Type::Nullable(inner) => *inner,
                     other => other,
                 };
-                let right_ty = self.with_consuming(consuming, |c| c.infer_expr(right));
-                if inner == Type::Error || right_ty == Type::Error {
+                let right_id = self.with_consuming(consuming, |c| c.infer_expr(right));
+                let right_ty = self.ty(right_id);
+                let mut fits = true;
+                let ty = if inner == Type::Error || right_ty == Type::Error {
                     Type::Error
                 } else if right_ty == Type::Nothing {
                     inner
@@ -1993,28 +2603,84 @@ impl TypeChecker {
                         span,
                         help: None,
                     });
+                    fits = false;
                     inner
-                }
+                };
+                // Both sides are coerced to the result (D6 of `typed-tree`).
+                let (left_id, right_id) = if fits {
+                    let left_slot = if left_is_nullable {
+                        ty.clone().nullable()
+                    } else {
+                        ty.clone()
+                    };
+                    (
+                        self.coerce_to(left_id, &left_slot),
+                        self.coerce_to(right_id, &ty),
+                    )
+                } else {
+                    (left_id, right_id)
+                };
+                let kind = ExpressionKind::Elvis {
+                    nullable: left_id,
+                    fallback: right_id,
+                };
+                self.add(kind, ty, span)
             }
 
             // A half-open range has the same type; whether it excludes its end is a property
             // of the runtime value.
             BinaryOp::Range | BinaryOp::HalfOpenRange => {
-                self.check_operand(left, &Type::Int);
-                self.check_operand(right, &Type::Int);
-                Type::Struct(NominalId::builtin_range())
+                let start = self.check_operand(left, &Type::Int);
+                let end = self.check_operand(right, &Type::Int);
+                let kind = ExpressionKind::Range {
+                    start,
+                    end,
+                    end_inclusive: op == BinaryOp::Range,
+                };
+                self.add(kind, Type::Struct(NominalId::builtin_range()), span)
             }
         }
     }
 
-    fn infer_unary_op(&mut self, op: UnaryOp, inner: &Expr, span: Span) -> Type {
+    /// Reads the borrowed nullable `id`, a `&(T?)` or `&mut (T?)`, as the optional borrow `(&T)?`
+    /// or `(&mut T)?`: a chain borrowing the payload of its referent (D7 of `typed-tree`).
+    fn nullable_view_chain(&mut self, id: ExpressionId) -> ExpressionId {
+        let mutable = matches!(
+            self.builder.type_of(id),
+            Type::Reference { mutable: true, .. }
+        );
+        let span = self.builder.span_of(id);
+        let referent = self.deref(id);
+        let payload = self.non_null(referent);
+        let borrow = self.borrow(mutable, BorrowOrigin::Conversion, payload);
+        self.close_chain(None, borrow, SafeNavigationOrigin::NullableView, span)
+    }
+
+    /// A borrow of `id`, held in a temporary when it is not a place (D5 of `typed-tree`).
+    fn borrow(&mut self, mutable: bool, origin: BorrowOrigin, id: ExpressionId) -> ExpressionId {
+        let place = self.as_place(id);
+        let (ty, span) = (self.ty(place), self.builder.span_of(place));
+        let kind = ExpressionKind::Borrow {
+            mutable,
+            origin,
+            place,
+        };
+        let ty = Type::Reference {
+            mutable,
+            inner: Box::new(ty),
+        };
+        self.add(kind, ty, span)
+    }
+
+    fn infer_unary_op(&mut self, op: UnaryOp, inner: &Expr, span: Span) -> ExpressionId {
         if let Some(field) = self.implicit_this_field(inner) {
             return self.infer_unary_op(op, &field, span);
         }
         match op {
             UnaryOp::Neg => {
-                let ty = self.infer_operand(inner);
-                if ty == Type::Int || ty == Type::Float || ty == Type::Error {
+                let operand = self.infer_operand(inner);
+                let ty = self.ty(operand);
+                let ty = if ty == Type::Int || ty == Type::Float || ty == Type::Error {
                     ty
                 } else {
                     self.errors.push(TypeError::TypeMismatch {
@@ -2024,37 +2690,47 @@ impl TypeChecker {
                         help: None,
                     });
                     Type::Error
-                }
+                };
+                let kind = ExpressionKind::Unary {
+                    operator: UnaryOperator::Negate,
+                    operand,
+                };
+                self.add(kind, ty, span)
             }
             UnaryOp::Not => {
-                self.check_operand(inner, &Type::Bool);
-                Type::Bool
+                let operand = self.check_operand(inner, &Type::Bool);
+                let kind = ExpressionKind::Unary {
+                    operator: UnaryOperator::Not,
+                    operand,
+                };
+                self.add(kind, Type::Bool, span)
             }
             // The parser produces `*` only at the top of an assignment target, which
             // `check_assignment` handles; reads through references are implicit.
             UnaryOp::Deref => {
                 debug_assert!(false, "'*' outside an assignment target: {}", inner);
-                Type::Error
+                self.error_node(Vec::new(), span)
             }
             // A place is borrowed where it lives; anything else is a temporary, which is
             // consumed (D2 of `reference-access`).
             UnaryOp::Borrow => {
-                match self.with_consuming(!self.is_place(inner), |c| c.infer_expr(inner)) {
-                    Type::Error => Type::Error,
-                    ty => Type::Reference {
-                        mutable: false,
-                        inner: Box::new(ty),
-                    },
+                let value = self.with_consuming(!self.is_place(inner), |c| c.infer_expr(inner));
+                if self.ty(value) == Type::Error {
+                    return self.error_node(vec![value], span);
                 }
+                let borrow = self.borrow(false, BorrowOrigin::Written, value);
+                self.builder.expression_mut(borrow).span = span;
+                borrow
             }
             UnaryOp::BorrowMut => {
-                let (ty, writable) = if self.is_place(inner) {
+                let (value, writable) = if self.is_place(inner) {
                     self.infer_place(inner)
                 } else {
                     (self.with_consuming(true, |c| c.infer_expr(inner)), true)
                 };
+                let ty = self.ty(value);
                 if ty == Type::Error {
-                    return Type::Error;
+                    return self.error_node(vec![value], span);
                 }
                 match (binding_name(inner), &inner.kind) {
                     (Some(name), _) => {
@@ -2095,41 +2771,46 @@ impl TypeChecker {
                     }
                     _ => {}
                 }
-                Type::Reference {
-                    mutable: true,
-                    inner: Box::new(ty),
-                }
+                let borrow = self.borrow(true, BorrowOrigin::Written, value);
+                self.builder.expression_mut(borrow).span = span;
+                borrow
             }
         }
     }
 
-    fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) {
+    /// Checks the assignment `target = value`, building its statement over the target place
+    /// (D10 of `typed-tree`).
+    fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) -> StatementId {
         if let Some(field) = self.implicit_this_field(target) {
             return self.check_assignment(&field, value, span);
         }
-        let (target_ty, is_mutable) = match (&target.kind, binding_name(target)) {
+        let (target_id, target_ty, is_mutable) = match (&target.kind, binding_name(target)) {
             (ExprKind::This, _) if self.env.lookup(THIS).is_none() => {
                 self.errors
                     .push(TypeError::ThisOutsideExtension { span: target.span });
-                (Type::Error, false)
+                (self.error_node(Vec::new(), target.span), Type::Error, false)
             }
             (_, Some(name)) => match self.env.resolve(name, target.span) {
-                Ok(sym) => match &sym.kind {
-                    SymbolKind::Variable { ty, mutability, .. } => {
-                        (ty.clone(), *mutability == Mutability::Var)
+                Ok(sym) => {
+                    let sym = sym.clone();
+                    match &sym.kind {
+                        SymbolKind::Variable { ty, mutability, .. } => {
+                            let node = self.symbol_node(&sym, name, target.span);
+                            (node, ty.clone(), *mutability == Mutability::Var)
+                        }
+                        _ => {
+                            self.errors.push(TypeError::ImmutabilityViolation {
+                                message: format!("cannot assign to non-variable '{}'", name),
+                                span,
+                                help: None,
+                            });
+                            (self.error_node(Vec::new(), target.span), Type::Error, false)
+                        }
                     }
-                    _ => {
-                        self.errors.push(TypeError::ImmutabilityViolation {
-                            message: format!("cannot assign to non-variable '{}'", name),
-                            span,
-                            help: None,
-                        });
-                        (Type::Error, false)
-                    }
-                },
+                }
                 Err(err) => {
                     self.errors.push(err);
-                    (Type::Error, false)
+                    (self.error_node(Vec::new(), target.span), Type::Error, false)
                 }
             },
             (
@@ -2140,16 +2821,18 @@ impl TypeChecker {
                 },
                 _,
             ) => {
-                let (base_ty, base_writable, field_ty, is_var) =
+                let (field_id, base_ty, base_writable, is_var) =
                     match self.type_name_member(base, member, target.span) {
-                        Some((field_ty, is_var)) => (field_ty.clone(), false, field_ty, is_var),
+                        Some((node, is_var)) => (node, self.ty(node), false, is_var),
                         None => {
-                            let (base_ty, base_writable) = self.infer_place(base);
-                            let (field_ty, is_var) =
-                                self.member_type(&base_ty, member, false, target.span);
-                            (base_ty, base_writable, field_ty, is_var)
+                            let (base_id, base_writable) = self.infer_place(base);
+                            let base_ty = self.ty(base_id);
+                            let (field_id, is_var) =
+                                self.build_member_access(base_id, member, false, target.span);
+                            (field_id, base_ty, base_writable, is_var)
                         }
                     };
+                let field_ty = self.ty(field_id);
                 match is_var {
                     Some(false) => {
                         self.errors.push(TypeError::ImmutabilityViolation {
@@ -2160,7 +2843,7 @@ impl TypeChecker {
                             span,
                             help: None,
                         });
-                        (field_ty, false)
+                        (field_id, field_ty, false)
                     }
                     Some(true) if !contents_writable(&base_ty, base_writable) => {
                         self.errors.push(TypeError::ImmutabilityViolation {
@@ -2171,9 +2854,9 @@ impl TypeChecker {
                             span,
                             help: None,
                         });
-                        (field_ty, false)
+                        (field_id, field_ty, false)
                     }
-                    Some(true) => (field_ty, true),
+                    Some(true) => (field_id, field_ty, true),
                     None => {
                         if field_ty != Type::Error {
                             self.errors.push(TypeError::UnknownField {
@@ -2183,7 +2866,11 @@ impl TypeChecker {
                                 help: None,
                             });
                         }
-                        (Type::Error, false)
+                        (
+                            self.error_node(vec![field_id], target.span),
+                            Type::Error,
+                            false,
+                        )
                     }
                 }
             }
@@ -2194,8 +2881,8 @@ impl TypeChecker {
                 },
                 _,
             ) => {
-                let (referent, _) = self.write_through(reference, span);
-                (referent, true)
+                let (node, referent, _) = self.write_through(reference, span);
+                (node, referent, true)
             }
             _ => {
                 self.errors.push(TypeError::ImmutabilityViolation {
@@ -2203,14 +2890,25 @@ impl TypeChecker {
                     span,
                     help: None,
                 });
-                (Type::Error, false)
+                (self.error_node(Vec::new(), target.span), Type::Error, false)
             }
+        };
+        // The target is a place; anything else was reported above.
+        let target_id = if self.builder.kind(target_id).is_place() {
+            target_id
+        } else {
+            self.wrap_error(target_id)
         };
 
         if let (Some(name), Type::Reference { mutable, inner }) = (binding_name(target), &target_ty)
         {
-            self.check_repoint(name, is_mutable, *mutable, inner, &target_ty, value, span);
-            return;
+            let value_id =
+                self.check_repoint(name, is_mutable, *mutable, inner, &target_ty, value, span);
+            let kind = TreeStatementKind::Assign {
+                target: target_id,
+                value: value_id,
+            };
+            return self.builder.add_statement(kind, span);
         }
 
         if !is_mutable && target_ty != Type::Error {
@@ -2223,23 +2921,31 @@ impl TypeChecker {
             }
         }
 
-        self.with_consuming(true, |c| c.check_expr(value, &target_ty));
+        let value_id = self.with_consuming(true, |c| c.check_expr(value, &target_ty));
+        let kind = TreeStatementKind::Assign {
+            target: target_id,
+            value: value_id,
+        };
+        self.builder.add_statement(kind, span)
     }
 
     /// Types the referent written by `*reference = ...` (D5 of `reference-access`): `reference`
     /// is read in place and must be a reference, and every reference layer written through must
-    /// be `&mut`. Returns the referent type and whether the write is allowed; a refusal is
-    /// reported once, at the first layer that refuses it.
-    fn write_through(&mut self, reference: &Expr, span: Span) -> (Type, bool) {
-        let (ty, writable) = match &reference.kind {
+    /// be `&mut`. Returns the referent's place (a dereference), its type and whether the write is
+    /// allowed; a refusal is reported once, at the first layer that refuses it.
+    fn write_through(&mut self, reference: &Expr, span: Span) -> (ExpressionId, Type, bool) {
+        let (node, ty, writable) = match &reference.kind {
             ExprKind::Unary {
                 op: UnaryOp::Deref,
                 expr: inner,
             } => self.write_through(inner, span),
-            _ => (self.infer_expr(reference), true),
+            _ => {
+                let id = self.infer_expr(reference);
+                (id, self.ty(id), true)
+            }
         };
         match ty {
-            Type::Error => (Type::Error, false),
+            Type::Error => (node, Type::Error, false),
             Type::Reference { mutable, inner } => {
                 if writable && !mutable {
                     self.errors.push(TypeError::ImmutabilityViolation {
@@ -2254,16 +2960,17 @@ impl TypeChecker {
                         ),
                     });
                 }
-                (*inner, writable && mutable)
+                let referent = self.deref(node);
+                (referent, *inner, writable && mutable)
             }
             // A refusal at an inner layer was reported there.
-            other if !writable => (other, false),
+            other if !writable => (self.wrap_error(node), other, false),
             other => {
                 self.errors.push(TypeError::NotAReference {
                     ty: other,
                     span: reference.span,
                 });
-                (Type::Error, false)
+                (self.wrap_error(node), Type::Error, false)
             }
         }
     }
@@ -2271,7 +2978,7 @@ impl TypeChecker {
     /// Checks `name = value` for a binding of reference type `target_ty` (D6 of
     /// `reference-access`). Assigning a reference re-points the binding. Assigning a value of the
     /// referent's type is rejected with help pointing at `*name = value`: a `val` reports only
-    /// `E4003`, a `var` `E4002`.
+    /// `E4003`, a `var` `E4002`. Returns the value's node.
     #[allow(clippy::too_many_arguments)]
     fn check_repoint(
         &mut self,
@@ -2282,9 +2989,10 @@ impl TypeChecker {
         target_ty: &Type,
         value: &Expr,
         span: Span,
-    ) {
+    ) -> ExpressionId {
         let deferred_move = is_move_leaf(value);
-        let found = self.with_consuming(!deferred_move, |c| c.infer_expr(value));
+        let found_id = self.with_consuming(!deferred_move, |c| c.infer_expr(value));
+        let found = self.ty(found_id);
         if found == Type::Error
             || matches!(
                 self.coerce(&found, target_ty, Site::Value),
@@ -2303,8 +3011,7 @@ impl TypeChecker {
                     help: None,
                 });
             }
-            self.fit(value, found, target_ty, Site::Value, deferred_move);
-            return;
+            return self.fit(value, found_id, target_ty, Site::Value, deferred_move);
         }
         let help = Some(if is_mutable_reference {
             format!(
@@ -2334,6 +3041,7 @@ impl TypeChecker {
                 help,
             }
         });
+        self.wrap_error(found_id)
     }
 
     /// Typechecks a local declaration and binds it in the current scope.
@@ -2344,14 +3052,15 @@ impl TypeChecker {
         annotation: Option<&prism_ast::types::Type>,
         initializer: &Expr,
         span: Span,
-    ) {
-        let var_ty = if let Some(a) = annotation {
+    ) -> StatementId {
+        let (initializer, var_ty) = if let Some(a) = annotation {
             self.check_annotation_names(a);
             let expected = self.lower_type(a);
-            self.with_consuming(true, |c| c.check_expr(initializer, &expected));
-            expected
+            let id = self.with_consuming(true, |c| c.check_expr(initializer, &expected));
+            (id, expected)
         } else {
-            self.with_consuming(true, |c| c.infer_expr(initializer))
+            let id = self.with_consuming(true, |c| c.infer_expr(initializer));
+            (id, self.ty(id))
         };
 
         let mutability = if is_var {
@@ -2359,14 +3068,15 @@ impl TypeChecker {
         } else {
             Mutability::Val
         };
-        let sym = Symbol::variable(name.to_string(), var_ty, mutability, span);
-        if let Err(err) = self.env.define(sym) {
-            self.errors.push(err);
-        }
+        let sym = self.bind_local(name, var_ty, mutability, LocalKind::Let, span);
+        let local = Self::local_of(&sym).expect("a bound local");
+        self.define_local(sym);
+        self.builder
+            .add_statement(TreeStatementKind::Let { local, initializer }, span)
     }
 
     /// Typechecks a statement of a block.
-    fn check_statement(&mut self, statement: &Statement) {
+    fn check_statement(&mut self, statement: &Statement) -> StatementId {
         match &statement.kind {
             StatementKind::Local {
                 is_var,
@@ -2378,25 +3088,50 @@ impl TypeChecker {
                 self.check_assignment(target, value, statement.span)
             }
             StatementKind::Expression(expr) => {
-                self.infer_discarded_expr(expr);
+                let value = self.infer_discarded_expr(expr);
+                self.builder
+                    .add_statement(TreeStatementKind::Expression { value }, statement.span)
             }
             StatementKind::While { condition, body } => {
-                self.check_operand(condition, &Type::Bool);
-                self.check_loop_body(body);
+                let condition = self.check_operand(condition, &Type::Bool);
+                let id = self.builder.reserve_statement(statement.span);
+                let body = self.check_loop_body(body, id);
+                self.builder
+                    .set_statement(id, TreeStatementKind::While { condition, body });
+                id
             }
             StatementKind::DoWhile { body, condition } => {
                 // The condition is checked in the body's scope, so it sees the body's locals.
                 self.env.enter_scope();
-                self.loop_depth += 1;
+                let id = self.builder.reserve_statement(statement.span);
+                self.builder.loops.push(id);
+                let mut statements = Vec::new();
                 for statement in &body.statements {
-                    self.check_statement(statement);
+                    statements.push(self.check_statement(statement));
                 }
                 if let Some(tail) = &body.tail {
-                    self.infer_discarded_expr(tail);
+                    let value = self.infer_discarded_expr(tail);
+                    statements.push(
+                        self.builder
+                            .add_statement(TreeStatementKind::Expression { value }, tail.span),
+                    );
                 }
-                self.loop_depth -= 1;
-                self.check_operand(condition, &Type::Bool);
+                self.builder.loops.pop();
+                let kind = ExpressionKind::Block {
+                    statements,
+                    tail: None,
+                };
+                let body_id = self.add(kind, Type::Unit, body.span);
+                let condition = self.check_operand(condition, &Type::Bool);
                 self.env.exit_scope();
+                self.builder.set_statement(
+                    id,
+                    TreeStatementKind::DoWhile {
+                        body: body_id,
+                        condition,
+                    },
+                );
+                id
             }
             StatementKind::For {
                 variable,
@@ -2404,31 +3139,46 @@ impl TypeChecker {
                 iterable,
                 body,
             } => {
-                self.check_operand(iterable, &Type::Struct(NominalId::builtin_range()));
+                let range = self.check_operand(iterable, &Type::Struct(NominalId::builtin_range()));
                 // The loop variable sits in a scope level above the body, so the body may
                 // shadow it, as a function body may shadow a parameter.
                 self.env.enter_scope();
-                let sym =
-                    Symbol::variable(variable.clone(), Type::Int, Mutability::Val, *variable_span);
-                if let Err(err) = self.env.define(sym) {
-                    self.errors.push(err);
-                }
-                self.check_loop_body(body);
+                let sym = self.bind_local(
+                    variable,
+                    Type::Int,
+                    Mutability::Val,
+                    LocalKind::ForVariable,
+                    *variable_span,
+                );
+                let local = Self::local_of(&sym).expect("a bound local");
+                self.define_local(sym);
+                let id = self.builder.reserve_statement(statement.span);
+                let body = self.check_loop_body(body, id);
                 self.env.exit_scope();
+                self.builder.set_statement(
+                    id,
+                    TreeStatementKind::For {
+                        variable: local,
+                        range,
+                        body,
+                    },
+                );
+                id
             }
         }
     }
 
-    /// Typechecks the body of a `while` or `for` loop, whose value is discarded.
-    fn check_loop_body(&mut self, body: &Block) {
-        self.loop_depth += 1;
-        self.check_block(body, Some(&Type::Unit));
-        self.loop_depth -= 1;
+    /// Typechecks the body of the `while` or `for` loop `id`, whose value is discarded.
+    fn check_loop_body(&mut self, body: &Block, id: StatementId) -> ExpressionId {
+        self.builder.loops.push(id);
+        let body = self.check_block(body, Some(&Type::Unit));
+        self.builder.loops.pop();
+        body
     }
 
     /// Typechecks an expression whose value is discarded. Only `when` differs from value
     /// position: it needs neither an `else` nor a common branch type.
-    fn infer_discarded_expr(&mut self, expr: &Expr) -> Type {
+    fn infer_discarded_expr(&mut self, expr: &Expr) -> ExpressionId {
         match &expr.kind {
             ExprKind::When { target, branches } => {
                 self.infer_when_expr(target.as_deref(), branches, WhenUse::Statement, expr.span)
@@ -2440,48 +3190,60 @@ impl TypeChecker {
     /// Typechecks a block. With an expected type its final expression is checked against it,
     /// except that a block expected to produce `Unit` (the body of a `Unit` function or of a
     /// closure expected to return `Unit`) discards its final value: the expression is
-    /// typechecked as a statement and its type ignored (D8 of `typechecker-soundness`).
-    fn check_block(&mut self, block: &Block, expected: Option<&Type>) -> Type {
+    /// typechecked as a statement and its type ignored (D8 of `typechecker-soundness`), and the
+    /// block's node holds it as a statement, with no tail (D9 of `typed-tree`).
+    fn check_block(&mut self, block: &Block, expected: Option<&Type>) -> ExpressionId {
         // The tail produces the block's value, so it is consumed when the block is.
         let tail_consuming = std::mem::replace(&mut self.consuming, false);
         let saved_parent = std::mem::replace(&mut self.parent_consuming, false);
         self.env.enter_scope();
-        self.with_origin(Origin::Value, |checker| {
-            for statement in &block.statements {
-                checker.check_statement(statement);
-            }
+        let mut statements = self.with_origin(Origin::Value, |checker| {
+            block
+                .statements
+                .iter()
+                .map(|statement| checker.check_statement(statement))
+                .collect::<Vec<_>>()
         });
 
         // The tail of a block whose expected type is `Unit` is a statement too. A checked tail
         // produces the block's value, so it keeps the expectation origin.
-        let result_ty = match (&block.tail, expected) {
+        let (tail, result_ty) = match (&block.tail, expected) {
             (Some(tail), Some(Type::Unit)) => {
-                self.with_origin(Origin::Value, |c| c.infer_discarded_expr(tail));
-                Type::Unit
+                let value = self.with_origin(Origin::Value, |c| c.infer_discarded_expr(tail));
+                statements.push(
+                    self.builder
+                        .add_statement(TreeStatementKind::Expression { value }, tail.span),
+                );
+                (None, Type::Unit)
             }
             (Some(tail), Some(exp)) => {
-                self.with_consuming(tail_consuming, |c| c.check_expr(tail, exp))
+                let id = self.with_consuming(tail_consuming, |c| c.check_expr(tail, exp));
+                (Some(id), self.ty(id))
             }
-            (Some(tail), None) => self.with_origin(Origin::Value, |c| {
-                c.with_consuming(tail_consuming, |c| c.infer_expr(tail))
-            }),
+            (Some(tail), None) => {
+                let id = self.with_origin(Origin::Value, |c| {
+                    c.with_consuming(tail_consuming, |c| c.infer_expr(tail))
+                });
+                (Some(id), self.ty(id))
+            }
             // A block without a tail is `Unit`. When a value was expected, the mismatch is
             // reported at the last statement, which is where the value is missing.
             (None, Some(exp)) if exp != &Type::Unit && exp != &Type::Error => {
                 match block.statements.last() {
                     Some(last) => {
                         self.report_mismatch(exp, Type::Unit, last.span);
-                        Type::Error
+                        (None, Type::Error)
                     }
-                    None => Type::Unit,
+                    None => (None, Type::Unit),
                 }
             }
-            (None, _) => Type::Unit,
+            (None, _) => (None, Type::Unit),
         };
 
         self.env.exit_scope();
         self.parent_consuming = saved_parent;
-        result_ty
+        let kind = ExpressionKind::Block { statements, tail };
+        self.add(kind, result_ty, block.span)
     }
 
     /// Typechecks a `when`. When its value is used it must be exhaustive (`E4009`), and its
@@ -2494,24 +3256,27 @@ impl TypeChecker {
         branches: &[WhenBranch],
         use_: WhenUse,
         span: Span,
-    ) -> Type {
+    ) -> ExpressionId {
         let value_position = !matches!(use_, WhenUse::Statement);
         // The branches produce the value, so they are consumed when it is.
         let branch_consuming = value_position && self.parent_consuming;
         // The subject and the patterns are operands, so their expectations are plain values.
         let branch_origin = self.origin;
         self.origin = Origin::Value;
-        // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as `Enum`.
-        let subject_ty = target.map(|t| {
-            let ty = self.infer_expr(t);
-            let ty = peel_references(&ty).clone();
+        // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as
+        // `Enum`; the subject is read in place through its dereferences (D9 of `typed-tree`).
+        let subject = target.map(|t| {
+            let id = self.infer_expr(t);
+            let id = self.peel_reference_nodes(id);
+            let ty = self.ty(id);
             // Matching on variants needs the enum's definition, which needs its module.
             if self.reject_unimported_members(&ty, t.span) {
-                Type::Error
+                self.wrap_error(id)
             } else {
-                ty
+                id
             }
         });
+        let subject_ty = subject.map(|id| self.ty(id));
         let subject_variants = match &subject_ty {
             Some(Type::Enum(id)) => self
                 .enum_variants(id)
@@ -2521,75 +3286,116 @@ impl TypeChecker {
         let mut has_else = false;
         let mut unified_ty: Option<Type> = None;
         let mut matched_variants = HashSet::new();
+        let mut tree_branches = Vec::new();
 
         for branch in branches {
+            let mut patterns = Vec::new();
             for pattern in &branch.patterns {
                 match pattern {
                     WhenPattern::Else => {
                         has_else = true;
+                        patterns.push(Pattern::Else);
                     }
                     WhenPattern::Expr(p_expr) => {
                         let covered = subject_variants.as_ref().and_then(|(id, variants)| {
                             self.unit_variant_pattern(p_expr, id, variants)
+                                .map(|name| (id.clone(), variants, name))
                         });
-                        if let Some(v_name) = covered {
+                        if let Some((enum_id, variants, v_name)) = covered {
+                            let index = variants
+                                .iter()
+                                .position(|(name, _)| name == &v_name)
+                                .expect("a covered variant is a variant");
+                            patterns.push(Pattern::Variant {
+                                enum_id,
+                                index,
+                                name: v_name.clone(),
+                            });
                             matched_variants.insert(v_name);
                         } else if let Some(s_ty) = &subject_ty {
-                            self.check_expr(p_expr, s_ty);
+                            patterns.push(Pattern::Value(self.check_expr(p_expr, s_ty)));
                         } else {
-                            self.check_operand(p_expr, &Type::Bool);
+                            patterns
+                                .push(Pattern::Condition(self.check_operand(p_expr, &Type::Bool)));
                         }
                     }
                     // Whether the end is included only matters at runtime.
-                    WhenPattern::InRange { start, end, .. } => {
+                    WhenPattern::InRange {
+                        start,
+                        end,
+                        end_inclusive,
+                    } => {
                         if let Some(s_ty) = &subject_ty {
-                            self.check_expr(start, s_ty);
-                            self.check_expr(end, s_ty);
+                            let start = self.check_expr(start, s_ty);
+                            let end = self.check_expr(end, s_ty);
+                            patterns.push(Pattern::Range {
+                                start,
+                                end,
+                                end_inclusive: *end_inclusive,
+                            });
+                        } else {
+                            // A range pattern needs a subject; it is not checked without one.
+                            let missing = self.error_node(Vec::new(), branch.span);
+                            patterns.push(Pattern::Condition(missing));
                         }
                     }
                 }
             }
 
-            if let WhenUse::Check(expected) = use_ {
+            let body = if let WhenUse::Check(expected) = use_ {
                 self.with_consuming(branch_consuming, |c| {
                     c.check_expr_at(&branch.body, expected, branch_origin)
-                });
-                continue;
-            }
-            let branch_ty = self.with_consuming(branch_consuming, |c| c.infer_expr(&branch.body));
-            if value_position && branch_ty != Type::Nothing {
-                if let Some(current) = &unified_ty {
-                    if let Some(joined) = current.join(&branch_ty) {
-                        unified_ty = Some(joined);
+                })
+            } else {
+                let body = self.with_consuming(branch_consuming, |c| c.infer_expr(&branch.body));
+                let branch_ty = self.ty(body);
+                if value_position && branch_ty != Type::Nothing {
+                    if let Some(current) = &unified_ty {
+                        if let Some(joined) = current.join(&branch_ty) {
+                            unified_ty = Some(joined);
+                        } else {
+                            self.errors.push(TypeError::TypeMismatch {
+                                expected: current.clone(),
+                                found: branch_ty.clone(),
+                                span: branch.span,
+                                help: None,
+                            });
+                        }
                     } else {
-                        self.errors.push(TypeError::TypeMismatch {
-                            expected: current.clone(),
-                            found: branch_ty.clone(),
-                            span: branch.span,
-                            help: None,
-                        });
+                        unified_ty = Some(branch_ty);
                     }
-                } else {
-                    unified_ty = Some(branch_ty);
                 }
-            }
+                body
+            };
+            tree_branches.push(prism_typed_tree::WhenBranch {
+                patterns,
+                body,
+                span: branch.span,
+            });
         }
 
         self.origin = branch_origin;
+        let covers_variants = subject_variants.as_ref().is_some_and(|(_, variants)| {
+            !variants.is_empty()
+                && variants
+                    .iter()
+                    .all(|(v_name, _)| matched_variants.contains(v_name))
+        });
+        let build = |checker: &mut Self, branches, ty| {
+            let kind = ExpressionKind::When {
+                subject,
+                branches,
+                exhaustive: has_else || covers_variants,
+            };
+            checker.add(kind, ty, span)
+        };
         if !value_position {
-            return Type::Unit;
+            return build(self, tree_branches, Type::Unit);
         }
 
         // Exhaustiveness check: a `when` in value position needs an `else` or every variant. A
         // subject whose type is already an error has nothing more to report.
-        let is_exhaustive = has_else
-            || subject_ty == Some(Type::Error)
-            || subject_variants.is_some_and(|(_, variants)| {
-                !variants.is_empty()
-                    && variants
-                        .iter()
-                        .all(|(v_name, _)| matched_variants.contains(v_name))
-            });
+        let is_exhaustive = has_else || subject_ty == Some(Type::Error) || covers_variants;
 
         if !is_exhaustive {
             self.errors.push(TypeError::NonExhaustiveWhen {
@@ -2598,10 +3404,16 @@ impl TypeChecker {
                 span,
             });
         }
-
         match use_ {
-            WhenUse::Check(expected) => expected.clone(),
-            _ => unified_ty.unwrap_or(Type::Unit),
+            WhenUse::Check(expected) => build(self, tree_branches, expected.clone()),
+            _ => {
+                let ty = unified_ty.unwrap_or(Type::Unit);
+                // Each branch is coerced to the join (D6 of `typed-tree`).
+                for branch in &mut tree_branches {
+                    branch.body = self.coerce_to(branch.body, &ty);
+                }
+                build(self, tree_branches, ty)
+            }
         }
     }
 
@@ -2641,7 +3453,7 @@ impl TypeChecker {
             .then(|| v_name.clone())
     }
 
-    fn infer_call_expr(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Type {
+    fn infer_call_expr(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> ExpressionId {
         // In an extension body, `name(...)` may call a field or another extension of `this`.
         if let Some(member) = self.implicit_this_callee(callee) {
             return self.infer_call_expr(&member, args, span);
@@ -2672,10 +3484,10 @@ impl TypeChecker {
         }
         // A struct name is its constructor; an enum name is only a namespace for its variants.
         let type_name = self.type_name_symbol(callee);
-        let callee_ty = match &type_name {
-            Some(sym) if !self.check_visibility(sym, callee.span) => Type::Error,
+        let (callee_node, callee_ty) = match &type_name {
+            Some(sym) if !self.check_visibility(sym, callee.span) => (None, Type::Error),
             Some(sym) => match sym.kind {
-                SymbolKind::Struct { .. } => sym.ty(),
+                SymbolKind::Struct { .. } => (None, sym.ty()),
                 _ => {
                     self.errors.push(TypeError::CallSignatureMismatch {
                         message: format!(
@@ -2684,24 +3496,35 @@ impl TypeChecker {
                         ),
                         span,
                     });
-                    Type::Error
+                    (None, Type::Error)
                 }
             },
-            None => self.infer_expr(callee),
+            None => {
+                let id = self.infer_expr(callee);
+                (Some(id), self.ty(id))
+            }
         };
-        self.call_with_type(callee, callee_ty, type_name.is_some(), args, span)
+        self.call_with_type(
+            callee,
+            callee_node,
+            callee_ty,
+            type_name.is_some(),
+            args,
+            span,
+        )
     }
 
     /// Checks a call of `callee`, of type `callee_ty`, with `args`: a function or function-typed
-    /// value, or a struct constructor when `is_constructor`.
+    /// value whose node is `callee_node`, or a struct constructor when `is_constructor`.
     fn call_with_type(
         &mut self,
         callee: &Expr,
+        callee_node: Option<ExpressionId>,
         callee_ty: Type,
         is_constructor: bool,
         args: &[CallArg],
         span: Span,
-    ) -> Type {
+    ) -> ExpressionId {
         match callee_ty {
             Type::Fn {
                 is_compose,
@@ -2741,121 +3564,252 @@ impl TypeChecker {
                     (Vec::new(), Vec::new())
                 };
 
-                self.check_call_arguments(&params, &param_names, &has_default, args, span);
-                *ret
-            }
-            Type::Struct(id) if is_constructor => {
-                let name = id.name.clone();
-                let fields = self.struct_fields(&id).unwrap_or_default();
-                let has_named = args.iter().any(|a| a.name.is_some());
-                if !has_named {
-                    if args.len() != fields.len() {
-                        self.errors.push(TypeError::CallSignatureMismatch {
-                            message: format!(
-                                "struct '{}' expected {} arguments, found {}",
-                                name,
-                                fields.len(),
-                                args.len()
-                            ),
+                let checked =
+                    self.check_call_arguments(&params, &param_names, &has_default, args, span);
+                let callee_node = callee_node.expect("a function type comes from a node");
+                match checked {
+                    Err(CheckedArguments(children)) => {
+                        let mut all = vec![callee_node];
+                        all.extend(children);
+                        self.error_node(all, span)
+                    }
+                    Ok(NormalizedArguments {
+                        arguments,
+                        evaluation_order,
+                    }) => {
+                        let parameters = parameter_list(&param_names, &params);
+                        self.build_call(
+                            callee_node,
+                            arguments,
+                            parameters,
+                            evaluation_order,
+                            is_compose,
+                            *ret,
                             span,
-                        });
-                        return Type::Struct(id);
-                    }
-                    for (arg, (_, _, f_ty)) in args.iter().zip(fields.iter()) {
-                        self.check_expr_at(&arg.value, f_ty, Origin::Argument);
-                    }
-                } else {
-                    let mut field_assigned = vec![false; fields.len()];
-                    let mut seen_fields = HashSet::new();
-                    let mut pos_idx = 0;
-
-                    for arg in args {
-                        if let Some(arg_name) = &arg.name {
-                            if !seen_fields.insert(arg_name.clone()) {
-                                self.errors.push(TypeError::CallSignatureMismatch {
-                                    message: format!(
-                                        "duplicate field '{}' provided in struct '{}' instantiation",
-                                        arg_name, name
-                                    ),
-                                    span: arg.span,
-                                });
-                                continue;
-                            }
-                            if let Some(idx) = fields.iter().position(|(n, _, _)| n == arg_name) {
-                                if field_assigned[idx] {
-                                    self.errors.push(TypeError::CallSignatureMismatch {
-                                        message: format!(
-                                            "field '{}' of struct '{}' is already given a positional argument",
-                                            arg_name, name
-                                        ),
-                                        span: arg.span,
-                                    });
-                                }
-                                field_assigned[idx] = true;
-                                self.check_expr_at(&arg.value, &fields[idx].2, Origin::Argument);
-                            } else {
-                                self.errors.push(TypeError::UnknownField {
-                                    target_type: Type::Struct(id.clone()),
-                                    field_name: arg_name.clone(),
-                                    span: arg.span,
-                                    help: None,
-                                });
-                            }
-                        } else {
-                            if pos_idx < fields.len() {
-                                if field_assigned[pos_idx] {
-                                    self.errors.push(TypeError::CallSignatureMismatch {
-                                        message: format!(
-                                            "positional argument assigns field '{}' of struct '{}', which is already given by name",
-                                            fields[pos_idx].0, name
-                                        ),
-                                        span: arg.span,
-                                    });
-                                }
-                                field_assigned[pos_idx] = true;
-                                self.check_expr_at(
-                                    &arg.value,
-                                    &fields[pos_idx].2,
-                                    Origin::Argument,
-                                );
-                                pos_idx += 1;
-                            } else {
-                                self.errors.push(TypeError::CallSignatureMismatch {
-                                    message: format!(
-                                        "struct '{}' expected at most {} arguments, found more",
-                                        name,
-                                        fields.len()
-                                    ),
-                                    span: arg.span,
-                                });
-                            }
-                        }
-                    }
-
-                    for (idx, (f_name, _, _)) in fields.iter().enumerate() {
-                        if !field_assigned[idx] {
-                            self.errors.push(TypeError::CallSignatureMismatch {
-                                message: format!(
-                                    "missing required field '{}' in struct '{}' instantiation",
-                                    f_name, name
-                                ),
-                                span,
-                            });
-                        }
+                        )
                     }
                 }
-
-                Type::Struct(id)
             }
-            Type::Error => Type::Error,
+            Type::Struct(id) if is_constructor => self.construct_struct(id, args, span),
+            Type::Error => self.error_node(callee_node.into_iter().collect(), span),
             other => {
                 self.errors.push(TypeError::CallSignatureMismatch {
                     message: format!("type '{}' cannot be called as a function", other),
                     span,
                 });
-                Type::Error
+                self.error_node(callee_node.into_iter().collect(), span)
             }
         }
+    }
+
+    /// The node of a call whose normalized arguments are `arguments` (D8 of `typed-tree`). A
+    /// call of a declared function names it by its path, and a payload variant called as a
+    /// constructor is a construction; both take over the callee's node. Any other callee is a
+    /// function-typed value read in place.
+    #[allow(clippy::too_many_arguments)]
+    fn build_call(
+        &mut self,
+        callee_node: ExpressionId,
+        arguments: Vec<Argument>,
+        parameters: Vec<(Option<String>, Type)>,
+        evaluation_order: Vec<usize>,
+        is_compose: bool,
+        ret: Type,
+        span: Span,
+    ) -> ExpressionId {
+        match self.builder.kind(callee_node).clone() {
+            ExpressionKind::FunctionReference(path) => {
+                let call = Call {
+                    callee: Callee::Function(path),
+                    arguments,
+                    parameters,
+                    evaluation_order,
+                    has_receiver: false,
+                    is_compose,
+                };
+                self.builder
+                    .replace(callee_node, ExpressionKind::Call(call), ret, span);
+                callee_node
+            }
+            ExpressionKind::VariantConstructor {
+                enum_id,
+                index,
+                name,
+            } => {
+                let fields = arguments
+                    .iter()
+                    .zip(&parameters)
+                    .filter_map(|(argument, (_, ty))| match argument {
+                        Argument::Written(value) => Some(ConstructField {
+                            name: None,
+                            ty: ty.clone(),
+                            value: *value,
+                        }),
+                        Argument::Default => None,
+                    })
+                    .collect();
+                let kind = ExpressionKind::Construct {
+                    kind: ConstructKind::Variant {
+                        enum_id,
+                        index,
+                        name,
+                    },
+                    fields,
+                    evaluation_order,
+                };
+                self.builder.replace(callee_node, kind, ret, span);
+                callee_node
+            }
+            _ => {
+                let call = Call {
+                    callee: Callee::Value(callee_node),
+                    arguments,
+                    parameters,
+                    evaluation_order,
+                    has_receiver: false,
+                    is_compose,
+                };
+                self.add(ExpressionKind::Call(call), ret, span)
+            }
+        }
+    }
+
+    /// Checks the construction of struct `id` with `args`, positional or named, building it with
+    /// its fields in declaration order (D8 of `typed-tree`).
+    fn construct_struct(&mut self, id: NominalId, args: &[CallArg], span: Span) -> ExpressionId {
+        let name = id.name.clone();
+        let fields = self.struct_fields(&id).unwrap_or_default();
+        let mut values: Vec<Option<ExpressionId>> = vec![None; fields.len()];
+        let mut evaluation_order = Vec::new();
+        let mut checked = Vec::new();
+        let mut failed = false;
+        let has_named = args.iter().any(|a| a.name.is_some());
+        if !has_named {
+            if args.len() != fields.len() {
+                self.errors.push(TypeError::CallSignatureMismatch {
+                    message: format!(
+                        "struct '{}' expected {} arguments, found {}",
+                        name,
+                        fields.len(),
+                        args.len()
+                    ),
+                    span,
+                });
+                return self.error_node(Vec::new(), span);
+            }
+            for (index, (arg, (_, _, f_ty))) in args.iter().zip(fields.iter()).enumerate() {
+                let value = self.check_expr_at(&arg.value, f_ty, Origin::Argument);
+                values[index] = Some(value);
+                evaluation_order.push(index);
+                checked.push(value);
+            }
+        } else {
+            let mut field_assigned = vec![false; fields.len()];
+            let mut seen_fields = HashSet::new();
+            let mut pos_idx = 0;
+
+            for arg in args {
+                if let Some(arg_name) = &arg.name {
+                    if !seen_fields.insert(arg_name.clone()) {
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!(
+                                "duplicate field '{}' provided in struct '{}' instantiation",
+                                arg_name, name
+                            ),
+                            span: arg.span,
+                        });
+                        failed = true;
+                        continue;
+                    }
+                    if let Some(idx) = fields.iter().position(|(n, _, _)| n == arg_name) {
+                        if field_assigned[idx] {
+                            self.errors.push(TypeError::CallSignatureMismatch {
+                                message: format!(
+                                    "field '{}' of struct '{}' is already given a positional argument",
+                                    arg_name, name
+                                ),
+                                span: arg.span,
+                            });
+                            failed = true;
+                        }
+                        field_assigned[idx] = true;
+                        let value =
+                            self.check_expr_at(&arg.value, &fields[idx].2, Origin::Argument);
+                        values[idx] = Some(value);
+                        evaluation_order.push(idx);
+                        checked.push(value);
+                    } else {
+                        self.errors.push(TypeError::UnknownField {
+                            target_type: Type::Struct(id.clone()),
+                            field_name: arg_name.clone(),
+                            span: arg.span,
+                            help: None,
+                        });
+                        failed = true;
+                    }
+                } else if pos_idx < fields.len() {
+                    if field_assigned[pos_idx] {
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!(
+                                "positional argument assigns field '{}' of struct '{}', which is already given by name",
+                                fields[pos_idx].0, name
+                            ),
+                            span: arg.span,
+                        });
+                        failed = true;
+                    }
+                    field_assigned[pos_idx] = true;
+                    let value =
+                        self.check_expr_at(&arg.value, &fields[pos_idx].2, Origin::Argument);
+                    values[pos_idx] = Some(value);
+                    evaluation_order.push(pos_idx);
+                    checked.push(value);
+                    pos_idx += 1;
+                } else {
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!(
+                            "struct '{}' expected at most {} arguments, found more",
+                            name,
+                            fields.len()
+                        ),
+                        span: arg.span,
+                    });
+                    failed = true;
+                }
+            }
+
+            for (idx, (f_name, _, _)) in fields.iter().enumerate() {
+                if !field_assigned[idx] {
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!(
+                            "missing required field '{}' in struct '{}' instantiation",
+                            f_name, name
+                        ),
+                        span,
+                    });
+                    failed = true;
+                }
+            }
+        }
+
+        if failed {
+            return self.error_node(checked, span);
+        }
+        let fields = fields
+            .into_iter()
+            .zip(values)
+            .map(|((name, _, ty), value)| ConstructField {
+                name: Some(name),
+                ty,
+                value: value.expect("every field is given"),
+            })
+            .collect();
+        let kind = ExpressionKind::Construct {
+            kind: ConstructKind::Struct(id.clone()),
+            fields,
+            evaluation_order,
+        };
+        self.add(kind, Type::Struct(id), span)
     }
 
     /// Checks a call `target.member(args)` (or `target?.member(args)`) whose target is a value,
@@ -2876,31 +3830,30 @@ impl TypeChecker {
         is_safe_nav: bool,
         args: &[CallArg],
         span: Span,
-    ) -> Type {
+    ) -> ExpressionId {
         let is_place = self.is_place(target) || self.is_optional_place(target);
-        let (receiver_ty, writable) = self.with_origin(Origin::Value, |c| {
+        let (receiver, writable) = self.with_origin(Origin::Value, |c| {
             if is_place {
                 c.infer_place(target)
             } else {
                 (c.with_consuming(true, |c| c.infer_expr(target)), true)
             }
         });
+        let receiver_ty = self.ty(receiver);
         if receiver_ty == Type::Error {
-            for arg in args {
-                self.infer_expr(&arg.value);
-            }
-            return Type::Error;
+            return self.give_up_call(receiver, args, span);
         }
 
         // 1. A field takes precedence over everything else.
         if self.has_field(&receiver_ty, member) {
-            let (field_ty, _) = self.member_type(&receiver_ty, member, is_safe_nav, callee.span);
-            return self.call_with_type(callee, field_ty, false, args, span);
+            let (field, _) = self.build_member_access(receiver, member, is_safe_nav, callee.span);
+            let field_ty = self.ty(field);
+            return self.call_with_type(callee, Some(field), field_ty, false, args, span);
         }
 
         // 2. The built-in `clone()` of a `Clone` type.
         if member == "clone" && self.is_clone(&clone_target(&receiver_ty, is_safe_nav).0) {
-            return self.infer_clone_call(&receiver_ty, is_safe_nav, args, span);
+            return self.infer_clone_call(receiver, is_safe_nav, args, span);
         }
 
         // 3. An extension on the receiver's type, behind any `&`, `&mut` and `Heap<T>`.
@@ -2939,20 +3892,16 @@ impl TypeChecker {
         };
         match lookup {
             ExtensionLookup::Ambiguous(modules) => {
-                for arg in args {
-                    self.infer_expr(&arg.value);
-                }
+                let call = self.give_up_call(receiver, args, span);
                 self.errors.push(TypeError::AmbiguousImport {
                     name: format!("{}.{}", reached, member),
                     modules,
                     span: callee.span,
                 });
-                Type::Error
+                call
             }
             ExtensionLookup::Found { .. } if through_nullable && !is_safe_nav => {
-                for arg in args {
-                    self.infer_expr(&arg.value);
-                }
+                let call = self.give_up_call(receiver, args, span);
                 self.errors.push(TypeError::UnknownField {
                     target_type: receiver_ty.clone(),
                     field_name: member.to_string(),
@@ -2962,7 +3911,7 @@ impl TypeChecker {
                         target, target, member
                     )),
                 });
-                Type::Error
+                call
             }
             ExtensionLookup::Found { extension, own } => {
                 let extension = if own {
@@ -2980,12 +3929,9 @@ impl TypeChecker {
                     extension
                 };
                 if !self.check_visibility(&extension.symbol, callee.span) {
-                    for arg in args {
-                        self.infer_expr(&arg.value);
-                    }
-                    return Type::Error;
+                    return self.give_up_call(receiver, args, span);
                 }
-                let receiver = ReceiverSite {
+                let receiver_site = ReceiverSite {
                     expr: target,
                     ty: &receiver_ty,
                     is_place,
@@ -2993,22 +3939,33 @@ impl TypeChecker {
                     layers: &layers,
                     through_nullable,
                 };
-                self.pass_receiver(&receiver, &extension, member);
-                let ret = self.call_extension(callee, &extension, args, span);
+                let adjustment = self.pass_receiver(&receiver_site, &extension, member);
+                let (joined, receiver_argument) =
+                    self.apply_receiver_adjustment(receiver, adjustment, &reached);
+                let call = self.call_extension(
+                    callee,
+                    &extension,
+                    &reached,
+                    member,
+                    receiver_argument,
+                    args,
+                    span,
+                );
                 if through_nullable {
-                    ret.nullable()
+                    // A safe call evaluates its arguments inside the chain (D7 of `typed-tree`).
+                    self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
                 } else {
-                    ret
+                    call
                 }
             }
             // 4. Nothing matched.
             ExtensionLookup::None if member == "clone" => {
-                self.infer_clone_call(&receiver_ty, is_safe_nav, args, span)
+                self.infer_clone_call(receiver, is_safe_nav, args, span)
             }
             ExtensionLookup::None => {
                 let errors_before = self.errors.len();
-                let (member_ty, _) =
-                    self.member_type(&receiver_ty, member, is_safe_nav, callee.span);
+                let (member_node, _) =
+                    self.build_member_access(receiver, member, is_safe_nav, callee.span);
                 if self.errors.len() > errors_before {
                     if let Some(TypeError::UnknownField {
                         help: help @ None, ..
@@ -3021,20 +3978,72 @@ impl TypeChecker {
                         ));
                     }
                 }
-                self.call_with_type(callee, member_ty, false, args, span)
+                let member_ty = self.ty(member_node);
+                self.call_with_type(callee, Some(member_node), member_ty, false, args, span)
             }
         }
     }
 
+    /// Gives up on a call whose callee cannot be resolved: its arguments are still checked, and
+    /// the call is an error node keeping the receiver and them.
+    fn give_up_call(
+        &mut self,
+        receiver: ExpressionId,
+        args: &[CallArg],
+        span: Span,
+    ) -> ExpressionId {
+        let mut children = vec![receiver];
+        for arg in args {
+            children.push(self.infer_expr(&arg.value));
+        }
+        self.error_node(children, span)
+    }
+
+    /// The first argument of an extension call: the receiver `receiver` passed as `adjustment`
+    /// decides (D5 of `typed-tree`). Returns the written chain the call joins, for a safe call
+    /// on one, and the argument.
+    fn apply_receiver_adjustment(
+        &mut self,
+        receiver: ExpressionId,
+        adjustment: ReceiverAdjustment,
+        reached: &Type,
+    ) -> (Option<ExpressionId>, ExpressionId) {
+        let (joined, base) = if adjustment.through_nullable {
+            self.open_chain(receiver)
+        } else {
+            (None, receiver)
+        };
+        let place = self.deref_until(base, reached);
+        let argument = match adjustment.pass {
+            ReceiverPass::SharedBorrow => self.borrow(false, BorrowOrigin::Receiver, place),
+            ReceiverPass::MutableBorrow => self.borrow(true, BorrowOrigin::Receiver, place),
+            // A whole receiver is moved (or copied); a temporary is the consumed value itself.
+            ReceiverPass::Move => self.consume(place),
+            ReceiverPass::CopyOut => self.copy(place),
+        };
+        (joined, argument)
+    }
+
+    /// A copy of the place `id`.
+    fn copy(&mut self, id: ExpressionId) -> ExpressionId {
+        let place = self.as_place(id);
+        let (ty, span) = (self.ty(place), self.builder.span_of(place));
+        self.add(ExpressionKind::Copy { place }, ty, span)
+    }
+
     /// Checks the arguments of a call of `extension` against its parameters, and its compose
-    /// context (`E4008`). Returns its return type.
+    /// context (`E4008`), building the call with `receiver_argument` as its first argument.
+    #[allow(clippy::too_many_arguments)]
     fn call_extension(
         &mut self,
         callee: &Expr,
         extension: &Extension,
+        reached: &Type,
+        member: &str,
+        receiver_argument: ExpressionId,
         args: &[CallArg],
         span: Span,
-    ) -> Type {
+    ) -> ExpressionId {
         let SymbolKind::Function {
             fn_type:
                 Type::Fn {
@@ -3047,7 +4056,7 @@ impl TypeChecker {
             ..
         } = &extension.symbol.kind
         else {
-            return Type::Error;
+            return self.error_node(vec![receiver_argument], span);
         };
         if *is_compose && !self.is_in_compose() {
             self.errors.push(TypeError::InvalidComposeContext {
@@ -3055,10 +4064,54 @@ impl TypeChecker {
                 span,
             });
         }
-        let (params, param_names, has_default) =
-            (params.clone(), param_names.clone(), has_default.clone());
-        self.check_call_arguments(&params, &param_names, &has_default, args, span);
-        (**ret).clone()
+        let (is_compose, params, param_names, has_default, ret) = (
+            *is_compose,
+            params.clone(),
+            param_names.clone(),
+            has_default.clone(),
+            (**ret).clone(),
+        );
+        let this_ty = match extension.mode {
+            ReceiverMode::Shared => Type::Reference {
+                mutable: false,
+                inner: Box::new(reached.clone()),
+            },
+            ReceiverMode::Mutable => Type::Reference {
+                mutable: true,
+                inner: Box::new(reached.clone()),
+            },
+            ReceiverMode::Consuming => reached.clone(),
+        };
+        match self.check_call_arguments(&params, &param_names, &has_default, args, span) {
+            Err(CheckedArguments(children)) => {
+                let mut all = vec![receiver_argument];
+                all.extend(children);
+                self.error_node(all, span)
+            }
+            Ok(NormalizedArguments {
+                arguments,
+                evaluation_order,
+            }) => {
+                // The receiver is the first argument, evaluated first (D8 of `typed-tree`).
+                let mut all_arguments = vec![Argument::Written(receiver_argument)];
+                all_arguments.extend(arguments);
+                let mut order = vec![0];
+                order.extend(evaluation_order.iter().map(|index| index + 1));
+                let mut parameters = vec![(Some(THIS.to_string()), this_ty)];
+                parameters.extend(parameter_list(&param_names, &params));
+                let path =
+                    DeclarationPath::extension(extension.module.clone(), reached.clone(), member);
+                let call = Call {
+                    callee: Callee::Function(path),
+                    arguments: all_arguments,
+                    parameters,
+                    evaluation_order: order,
+                    has_receiver: true,
+                    is_compose,
+                };
+                self.add(ExpressionKind::Call(call), ret, span)
+            }
+        }
     }
 
     /// The extension named `name` on receiver type `receiver` visible in this file: its own one,
@@ -3067,14 +4120,14 @@ impl TypeChecker {
         let key = (receiver.clone(), name.to_string());
         if let Some(extension) = self.own_extensions.get(&key) {
             return ExtensionLookup::Found {
-                extension: extension.clone(),
+                extension: Box::new(extension.clone()),
                 own: true,
             };
         }
         match self.imported_extensions.get(&key).map(Vec::as_slice) {
             None | Some([]) => ExtensionLookup::None,
             Some([(_, extension)]) => ExtensionLookup::Found {
-                extension: extension.clone(),
+                extension: Box::new(extension.clone()),
                 own: false,
             },
             Some(many) => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.clone()).collect()),
@@ -3266,6 +4319,10 @@ impl TypeChecker {
     /// Checks the arguments of a call against the parameters of a function, positional, named
     /// or omitted for a parameter with a default. `param_names` and `has_default` are empty when
     /// the callee is not a declared function (a function-typed value), which allows neither.
+    ///
+    /// Returns the arguments in parameter order with a default slot for each omitted one, and
+    /// the parameter indices of the written arguments in source order (D8 of `typed-tree`); or,
+    /// when the arguments do not match the parameters (`E4004`), the nodes of those checked.
     fn check_call_arguments(
         &mut self,
         params: &[Type],
@@ -3273,7 +4330,7 @@ impl TypeChecker {
         has_default: &[bool],
         args: &[CallArg],
         span: Span,
-    ) {
+    ) -> Result<NormalizedArguments, CheckedArguments> {
         let n_params = params.len();
         let min_args = if has_default.len() == n_params {
             has_default.iter().filter(|&&d| !d).count()
@@ -3282,6 +4339,9 @@ impl TypeChecker {
         };
 
         let has_named_args = args.iter().any(|a| a.name.is_some());
+        let mut arguments = vec![Argument::Default; n_params];
+        let mut evaluation_order = Vec::new();
+        let mut checked = Vec::new();
 
         if !has_named_args {
             if args.len() < min_args || args.len() > n_params {
@@ -3301,87 +4361,112 @@ impl TypeChecker {
                 };
                 self.errors
                     .push(TypeError::CallSignatureMismatch { message: msg, span });
-                return;
+                return Err(CheckedArguments(Vec::new()));
             }
 
-            for (arg, param_ty) in args.iter().zip(params.iter()) {
-                self.check_argument(&arg.value, param_ty, Origin::Argument);
+            for (index, (arg, param_ty)) in args.iter().zip(params.iter()).enumerate() {
+                let value = self.check_argument(&arg.value, param_ty, Origin::Argument);
+                arguments[index] = Argument::Written(value);
+                evaluation_order.push(index);
             }
-        } else {
-            let mut param_assigned = vec![false; n_params];
-            let mut seen_names = HashSet::new();
-            let mut positional_idx = 0;
+            return Ok(NormalizedArguments {
+                arguments,
+                evaluation_order,
+            });
+        }
 
-            for arg in args {
-                if let Some(arg_name) = &arg.name {
-                    if !seen_names.insert(arg_name.clone()) {
-                        self.errors.push(TypeError::CallSignatureMismatch {
-                            message: format!("duplicate argument '{}' provided", arg_name),
-                            span: arg.span,
-                        });
-                        continue;
-                    }
-                    if let Some(pos) = param_names.iter().position(|pn| pn == arg_name) {
-                        if param_assigned[pos] {
-                            self.errors.push(TypeError::CallSignatureMismatch {
-                                message: format!(
-                                    "parameter '{}' is already given a positional argument",
-                                    arg_name
-                                ),
-                                span: arg.span,
-                            });
-                        }
-                        param_assigned[pos] = true;
-                        self.check_argument(&arg.value, &params[pos], Origin::Argument);
-                    } else {
-                        self.errors.push(TypeError::CallSignatureMismatch {
-                            message: format!("unknown parameter '{}'", arg_name),
-                            span: arg.span,
-                        });
-                    }
-                } else {
-                    if positional_idx < n_params {
-                        if param_assigned[positional_idx] {
-                            self.errors.push(TypeError::CallSignatureMismatch {
-                                message: format!(
-                                    "positional argument assigns parameter '{}', which is already given by name",
-                                    param_names
-                                        .get(positional_idx)
-                                        .map(String::as_str)
-                                        .unwrap_or("parameter")
-                                ),
-                                span: arg.span,
-                            });
-                        }
-                        param_assigned[positional_idx] = true;
-                        self.check_argument(&arg.value, &params[positional_idx], Origin::Argument);
-                        positional_idx += 1;
-                    } else {
+        let mut failed = false;
+        let mut param_assigned = vec![false; n_params];
+        let mut seen_names = HashSet::new();
+        let mut positional_idx = 0;
+
+        for arg in args {
+            if let Some(arg_name) = &arg.name {
+                if !seen_names.insert(arg_name.clone()) {
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!("duplicate argument '{}' provided", arg_name),
+                        span: arg.span,
+                    });
+                    failed = true;
+                    continue;
+                }
+                if let Some(pos) = param_names.iter().position(|pn| pn == arg_name) {
+                    if param_assigned[pos] {
                         self.errors.push(TypeError::CallSignatureMismatch {
                             message: format!(
-                                "too many positional arguments (expected at most {})",
-                                n_params
+                                "parameter '{}' is already given a positional argument",
+                                arg_name
                             ),
                             span: arg.span,
                         });
+                        failed = true;
                     }
-                }
-            }
-
-            for (i, &assigned) in param_assigned.iter().enumerate().take(n_params) {
-                let has_def = has_default.get(i).copied().unwrap_or(false);
-                if !has_def && !assigned {
-                    let p_name = param_names
-                        .get(i)
-                        .map(|s| s.as_str())
-                        .unwrap_or("parameter");
+                    param_assigned[pos] = true;
+                    let value = self.check_argument(&arg.value, &params[pos], Origin::Argument);
+                    arguments[pos] = Argument::Written(value);
+                    evaluation_order.push(pos);
+                    checked.push(value);
+                } else {
                     self.errors.push(TypeError::CallSignatureMismatch {
-                        message: format!("missing required argument '{}'", p_name),
-                        span,
+                        message: format!("unknown parameter '{}'", arg_name),
+                        span: arg.span,
                     });
+                    failed = true;
                 }
+            } else if positional_idx < n_params {
+                if param_assigned[positional_idx] {
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!(
+                            "positional argument assigns parameter '{}', which is already given by name",
+                            param_names
+                                .get(positional_idx)
+                                .map(String::as_str)
+                                .unwrap_or("parameter")
+                        ),
+                        span: arg.span,
+                    });
+                    failed = true;
+                }
+                param_assigned[positional_idx] = true;
+                let value =
+                    self.check_argument(&arg.value, &params[positional_idx], Origin::Argument);
+                arguments[positional_idx] = Argument::Written(value);
+                evaluation_order.push(positional_idx);
+                checked.push(value);
+                positional_idx += 1;
+            } else {
+                self.errors.push(TypeError::CallSignatureMismatch {
+                    message: format!(
+                        "too many positional arguments (expected at most {})",
+                        n_params
+                    ),
+                    span: arg.span,
+                });
+                failed = true;
             }
         }
+
+        for (i, &assigned) in param_assigned.iter().enumerate().take(n_params) {
+            let has_def = has_default.get(i).copied().unwrap_or(false);
+            if !has_def && !assigned {
+                let p_name = param_names
+                    .get(i)
+                    .map(|s| s.as_str())
+                    .unwrap_or("parameter");
+                self.errors.push(TypeError::CallSignatureMismatch {
+                    message: format!("missing required argument '{}'", p_name),
+                    span,
+                });
+                failed = true;
+            }
+        }
+        if failed {
+            return Err(CheckedArguments(checked));
+        }
+        Ok(NormalizedArguments {
+            arguments,
+            evaluation_order,
+        })
     }
 
     /// Decides how a value of type `found` fits `expected` at `site`, in the order of D10 of
@@ -3443,26 +4528,36 @@ impl TypeChecker {
         Coercion::NoFit
     }
 
-    /// Checks `expr`, already inferred as `found`, against `expected` at `site`, reporting what
-    /// does not fit. `deferred_move` is set when `expr` is a place whose move check was held back
-    /// until the coercion is known: a borrow or copy-out moves nothing, and a value that does not
-    /// fit reports only the mismatch.
+    /// Checks `expr`, already inferred as the node `found_id`, against `expected` at `site`,
+    /// reporting what does not fit, and returns the node that fits: wrapped in the adjustment,
+    /// move, copy or coercion that makes it fit (D5 and D6 of `typed-tree`), or in an error
+    /// node. `deferred_move` is set when `expr` is a place whose move check was held back until
+    /// the coercion is known: a borrow or copy-out moves nothing, and a value that does not fit
+    /// reports only the mismatch.
     fn fit(
         &mut self,
         expr: &Expr,
-        found: Type,
+        found_id: ExpressionId,
         expected: &Type,
         site: Site,
         deferred_move: bool,
-    ) -> Type {
+    ) -> ExpressionId {
+        let found = self.ty(found_id);
         match self.coerce(&found, expected, site) {
             Coercion::Fits(Adjustment::None) => {
-                if deferred_move {
+                let id = if deferred_move {
                     self.check_move_source(expr, &found);
-                }
-                found
+                    self.consume(found_id)
+                } else if matches!(site, Site::Argument { is_place: true }) && self.is_copy(&found)
+                {
+                    // A shared borrow passed on is copied.
+                    self.consume(found_id)
+                } else {
+                    found_id
+                };
+                self.coerce_to(id, expected)
             }
-            Coercion::Fits(_) => expected.clone(),
+            Coercion::Fits(adjustment) => self.apply_adjustment(found_id, adjustment, expected),
             Coercion::MovesOutOfBorrow { ty, nullable } => {
                 let clone = self.is_clone(&ty).then(|| match nullable {
                     true => format!("{}?.clone()", expr),
@@ -3475,16 +4570,86 @@ impl TypeChecker {
                     clone,
                     span: expr.span,
                 });
-                expected.clone()
+                self.wrap_error(found_id)
             }
             Coercion::NoFit => {
-                if found != Type::Error {
-                    let help = borrow_help(expr, &found, expected, site);
-                    self.report_mismatch_with_help(expected, found, expr.span, help);
+                if found == Type::Error {
+                    return found_id;
                 }
-                Type::Error
+                let help = borrow_help(expr, &found, expected, site);
+                self.report_mismatch_with_help(expected, found, expr.span, help);
+                self.wrap_error(found_id)
             }
         }
+    }
+
+    /// Builds the nodes of `adjustment`, which makes the node `found_id` fit `expected` (the
+    /// table of D5 of `typed-tree`): copies and borrows of dereferences, temporaries and
+    /// payloads, in a chain for the nullable conversions.
+    fn apply_adjustment(
+        &mut self,
+        found_id: ExpressionId,
+        adjustment: Adjustment,
+        expected: &Type,
+    ) -> ExpressionId {
+        let span = self.builder.span_of(found_id);
+        let adjusted = match adjustment {
+            Adjustment::None => found_id,
+            Adjustment::CopyOut {
+                layers,
+                through_nullable,
+            } => {
+                let mut place = if through_nullable {
+                    self.non_null(found_id)
+                } else {
+                    found_id
+                };
+                for _ in 0..layers {
+                    place = self.deref(place);
+                }
+                let copy = self.copy(place);
+                if through_nullable {
+                    self.close_chain(None, copy, SafeNavigationOrigin::CopyOut, span)
+                } else {
+                    copy
+                }
+            }
+            Adjustment::Borrow => self.borrow(false, BorrowOrigin::Argument, found_id),
+            Adjustment::BorrowTemporary => match self.ty(found_id) {
+                // A temporary lent as an optional borrow `(&T)?` lends its contents; `null`
+                // lends nothing, so it is an empty optional borrow.
+                Type::Nullable(inner)
+                    if *inner == Type::Nothing && matches!(expected, Type::Nullable(_)) =>
+                {
+                    found_id
+                }
+                Type::Nullable(_) if matches!(expected, Type::Nullable(_)) => {
+                    let temporary = self.as_place(found_id);
+                    let payload = self.non_null(temporary);
+                    let borrow = self.borrow(false, BorrowOrigin::Argument, payload);
+                    self.close_chain(None, borrow, SafeNavigationOrigin::BorrowContents, span)
+                }
+                _ => self.borrow(false, BorrowOrigin::Argument, found_id),
+            },
+            Adjustment::BorrowContents => {
+                let payload = self.non_null(found_id);
+                let borrow = self.borrow(false, BorrowOrigin::Argument, payload);
+                self.close_chain(None, borrow, SafeNavigationOrigin::BorrowContents, span)
+            }
+            Adjustment::Reborrow => {
+                let mutable = matches!(
+                    match expected {
+                        Type::Nullable(inner) => inner.as_ref(),
+                        other => other,
+                    },
+                    Type::Reference { mutable: true, .. }
+                );
+                let referent = self.deref(found_id);
+                self.borrow(mutable, BorrowOrigin::Argument, referent)
+            }
+            Adjustment::NullableView => self.nullable_view_chain(found_id),
+        };
+        self.coerce_to(adjusted, expected)
     }
 
     /// Rejects moving `expr`, of type `ty`, out of where it lives (the `ownership` spec, "Moves
@@ -3565,16 +4730,19 @@ impl TypeChecker {
 
     /// Types a call to the built-in `clone()` member, `receiver.clone()` or `receiver?.clone()`
     /// (the `ownership` spec, "Explicit Clone"). The receiver is read in place, through any
-    /// `&`/`&mut`, and the result is an owned value of the borrowed type.
+    /// `&`/`&mut`, and the result is an owned value of the borrowed type. The call is a call of
+    /// the built-in clone function with a shared receiver borrow (D8 of `typed-tree`).
     fn infer_clone_call(
         &mut self,
-        receiver_ty: &Type,
+        receiver: ExpressionId,
         is_safe_nav: bool,
         args: &[CallArg],
         span: Span,
-    ) -> Type {
+    ) -> ExpressionId {
+        let receiver_ty = self.ty(receiver);
+        let mut children = vec![receiver];
         for arg in args {
-            self.infer_expr(&arg.value);
+            children.push(self.infer_expr(&arg.value));
         }
         if !args.is_empty() {
             self.errors.push(TypeError::CallSignatureMismatch {
@@ -3582,19 +4750,39 @@ impl TypeChecker {
                 span,
             });
         }
-        let (cloned, nullable) = clone_target(receiver_ty, is_safe_nav);
+        let (cloned, nullable) = clone_target(&receiver_ty, is_safe_nav);
         if cloned == Type::Error {
-            return Type::Error;
+            return self.error_node(children, span);
         }
         if !self.is_clone(&cloned) {
             self.errors
                 .push(TypeError::NotCloneable { ty: cloned, span });
-            return Type::Error;
+            return self.error_node(children, span);
         }
-        if nullable {
-            cloned.nullable()
+        if !args.is_empty() {
+            return self.error_node(children, span);
+        }
+        let (joined, base) = if nullable {
+            self.open_chain(receiver)
         } else {
-            cloned
+            (None, receiver)
+        };
+        let place = self.peel_reference_nodes(base);
+        let borrow = self.borrow(false, BorrowOrigin::Receiver, place);
+        let borrow_ty = self.ty(borrow);
+        let call = Call {
+            callee: Callee::Builtin(BuiltinFunction::Clone),
+            arguments: vec![Argument::Written(borrow)],
+            parameters: vec![(Some(THIS.to_string()), borrow_ty)],
+            evaluation_order: vec![0],
+            has_receiver: true,
+            is_compose: false,
+        };
+        let call = self.add(ExpressionKind::Call(call), cloned, span);
+        if nullable {
+            self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
+        } else {
+            call
         }
     }
 
@@ -3604,11 +4792,12 @@ impl TypeChecker {
         member: &str,
         is_safe_nav: bool,
         span: Span,
-    ) -> Type {
-        if let Some((ty, _)) = self.type_name_member(target, member, span) {
-            return ty;
+    ) -> ExpressionId {
+        if let Some((node, _)) = self.type_name_member(target, member, span) {
+            return node;
         }
-        let target_ty = self.infer_expr(target);
+        let target_id = self.infer_expr(target);
+        let target_ty = self.ty(target_id);
         if !self.has_member(&target_ty, member) && self.extension_named(&target_ty, member) {
             // An extension is not a value: only a call reaches it.
             self.errors.push(TypeError::UnknownField {
@@ -3623,9 +4812,92 @@ impl TypeChecker {
                     member
                 )),
             });
-            return Type::Error;
+            return self.error_node(vec![target_id], span);
         }
-        self.member_type(&target_ty, member, is_safe_nav, span).0
+        self.build_member_access(target_id, member, is_safe_nav, span)
+            .0
+    }
+
+    /// Builds `member` accessed on the node `target`, reporting unknown members like
+    /// [`Self::member_type`]: a field of the struct reached through every `&`, `&mut` and
+    /// `Heap<T>` layer, each an explicit dereference, or a variant of the enum reached; inside a
+    /// chain for `?.` on a nullable, which joins a chain `target` is (D5 and D7 of
+    /// `typed-tree`). Returns the node and, for a field, whether it is declared `var`.
+    fn build_member_access(
+        &mut self,
+        target: ExpressionId,
+        member: &str,
+        is_safe_nav: bool,
+        span: Span,
+    ) -> (ExpressionId, Option<bool>) {
+        let target_ty = self.ty(target);
+        let (member_ty, is_var) = self.member_type(&target_ty, member, is_safe_nav, span);
+        if member_ty == Type::Error {
+            return (self.error_node(vec![target], span), is_var);
+        }
+        // The navigation `member_type` made: through the references to a nullable for `?.`.
+        let navigated = match peel_references(&target_ty) {
+            nullable @ Type::Nullable(_) if is_safe_nav => nullable,
+            _ => &target_ty,
+        };
+        let (base_ty, through_nullable) = match navigated {
+            Type::Nullable(inner) => (inner.as_ref(), true),
+            other => (other, false),
+        };
+        let reached = peel_indirection(base_ty).clone();
+        if let (Type::Enum(_), Type::Fn { .. }) = (&reached, &member_ty) {
+            // A payload variant read through a value is its constructor; the value is
+            // evaluated and discarded.
+            let variant = self.variant_node(&reached, member, member_ty, span);
+            return (self.discard_then(target, variant), is_var);
+        }
+        let (joined, base) = if through_nullable {
+            self.open_chain(target)
+        } else {
+            (None, target)
+        };
+        let base = self.peel_indirection_nodes(base);
+        let body = match &reached {
+            Type::Struct(id) => {
+                let fields = self.struct_fields(id).unwrap_or_default();
+                let index = fields
+                    .iter()
+                    .position(|(name, _, _)| name == member)
+                    .expect("member_type found the field");
+                let field_ty = fields[index].2.clone();
+                let base = self.as_place(base);
+                let kind = ExpressionKind::Field {
+                    base,
+                    index,
+                    name: member.to_string(),
+                };
+                self.add(kind, field_ty, span)
+            }
+            _ => {
+                let variant = self.variant_node(&reached, member, reached.clone(), span);
+                self.discard_then(base, variant)
+            }
+        };
+        let node = if through_nullable {
+            self.close_chain(joined, body, SafeNavigationOrigin::Written, span)
+        } else {
+            body
+        };
+        (node, is_var)
+    }
+
+    /// A block that evaluates `discarded` as a statement, then has the value `value`.
+    fn discard_then(&mut self, discarded: ExpressionId, value: ExpressionId) -> ExpressionId {
+        let span = self.builder.span_of(discarded);
+        let statement = self
+            .builder
+            .add_statement(TreeStatementKind::Expression { value: discarded }, span);
+        let (ty, value_span) = (self.ty(value), self.builder.span_of(value));
+        let kind = ExpressionKind::Block {
+            statements: vec![statement],
+            tail: Some(value),
+        };
+        self.add(kind, ty, value_span)
     }
 
     /// Whether the struct or enum behind `ty` has a field or variant named `name`.
@@ -3759,14 +5031,14 @@ impl TypeChecker {
         }
     }
 
-    /// Infers the type of a place expression (a binding or a field path such as `o.user.name`)
-    /// together with whether the place itself may be written.
+    /// Infers a place expression (a binding or a field path such as `o.user.name`), returning
+    /// its node together with whether the place itself may be written.
     ///
     /// A binding is writable when it is `var`. A field is writable when it is `var` and the value
     /// holding it is writable, where a `&mut` hop grants and a `&` hop denies write access
     /// regardless of the binding that holds the reference. Any other expression is a temporary,
     /// which is writable unless it is reached through a shared reference.
-    fn infer_place(&mut self, expr: &Expr) -> (Type, bool) {
+    fn infer_place(&mut self, expr: &Expr) -> (ExpressionId, bool) {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.infer_place(&field);
         }
@@ -3774,7 +5046,7 @@ impl TypeChecker {
             // `this` is a `val`: a `mut fun` writes through it, never to it.
             ExprKind::This => (self.infer_expr(expr), false),
             ExprKind::Ident(name) => {
-                let ty = self.infer_expr(expr);
+                let id = self.infer_expr(expr);
                 let writable = matches!(
                     self.env.lookup(name).map(|sym| &sym.kind),
                     Some(SymbolKind::Variable {
@@ -3782,26 +5054,68 @@ impl TypeChecker {
                         ..
                     })
                 );
-                (ty, writable)
+                (id, writable)
             }
             ExprKind::MemberAccess {
                 target,
                 member,
                 is_safe_nav,
             } => {
-                if let Some((ty, _)) = self.type_name_member(target, member, expr.span) {
-                    return (ty, true);
+                if let Some((node, _)) = self.type_name_member(target, member, expr.span) {
+                    return (node, true);
                 }
-                let (base_ty, base_writable) = self.infer_place(target);
-                let (ty, is_var) = self.member_type(&base_ty, member, *is_safe_nav, expr.span);
+                let (base, base_writable) = self.infer_place(target);
+                let base_ty = self.ty(base);
+                let (node, is_var) =
+                    self.build_member_access(base, member, *is_safe_nav, expr.span);
                 // An enum variant is a fresh temporary rather than a field.
                 let writable = match is_var {
                     Some(is_var) => is_var && contents_writable(&base_ty, base_writable),
                     None => true,
                 };
-                (ty, writable)
+                (node, writable)
             }
             _ => (self.infer_expr(expr), true),
+        }
+    }
+}
+
+/// The parameters of a callee as a call records them: each with its name, when the callee is a
+/// declared function, and its type.
+fn parameter_list(names: &[String], params: &[Type]) -> Vec<(Option<String>, Type)> {
+    params
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            let name = names.get(index).filter(|name| !name.is_empty()).cloned();
+            (name, ty.clone())
+        })
+        .collect()
+}
+
+/// The typed-tree operator of an arithmetic or comparison operator.
+fn binary_operator(op: BinaryOp) -> BinaryOperator {
+    match op {
+        BinaryOp::Add => BinaryOperator::Add,
+        BinaryOp::Sub => BinaryOperator::Subtract,
+        BinaryOp::Mul => BinaryOperator::Multiply,
+        BinaryOp::Div => BinaryOperator::Divide,
+        BinaryOp::Mod => BinaryOperator::Remainder,
+        BinaryOp::Eq => BinaryOperator::Equal,
+        BinaryOp::NotEq => BinaryOperator::NotEqual,
+        BinaryOp::Lt => BinaryOperator::Less,
+        BinaryOp::LtEq => BinaryOperator::LessOrEqual,
+        BinaryOp::Gt => BinaryOperator::Greater,
+        BinaryOp::GtEq => BinaryOperator::GreaterOrEqual,
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Elvis
+        | BinaryOp::Range
+        | BinaryOp::HalfOpenRange => {
+            unreachable!(
+                "'{}' is not an arithmetic or comparison operator",
+                op.as_str()
+            )
         }
     }
 }
@@ -4013,6 +5327,18 @@ mod tests {
         Type::Enum(id)
     }
 
+    /// Infers `e` in `checker`, returning its type.
+    fn infer(checker: &mut TypeChecker, e: &Expr) -> Type {
+        let id = checker.infer_expr(e);
+        checker.type_of(id).clone()
+    }
+
+    /// Checks `e` against `expected` in `checker`, returning the type of its node.
+    fn check(checker: &mut TypeChecker, e: &Expr, expected: &Type) -> Type {
+        let id = checker.check_expr(e, expected);
+        checker.type_of(id).clone()
+    }
+
     fn statement(kind: StatementKind) -> Statement {
         Statement::new(kind, Span::dummy())
     }
@@ -4031,7 +5357,7 @@ mod tests {
             right: Box::new(expr(ExprKind::Literal(Literal::Float(2.0)))),
         });
 
-        let res = checker.infer_expr(&plus);
+        let res = infer(&mut checker, &plus);
         assert_eq!(res, Type::Error);
         assert_eq!(checker.errors.len(), 1);
         assert_eq!(checker.errors[0].code(), "E4002");
@@ -4041,7 +5367,7 @@ mod tests {
     fn test_char_literal_and_indexing() {
         let mut checker = TypeChecker::new(None, "<test>");
         let char_expr = expr(ExprKind::Literal(Literal::Char('z')));
-        assert_eq!(checker.infer_expr(&char_expr), Type::Char);
+        assert_eq!(infer(&mut checker, &char_expr), Type::Char);
 
         let index_expr = expr(ExprKind::Index {
             target: Box::new(expr(ExprKind::Literal(Literal::String(
@@ -4049,7 +5375,7 @@ mod tests {
             )))),
             index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
         });
-        assert_eq!(checker.infer_expr(&index_expr), Type::Char);
+        assert_eq!(infer(&mut checker, &index_expr), Type::Char);
     }
 
     #[test]
@@ -4082,7 +5408,7 @@ mod tests {
             left: Box::new(expr(ExprKind::Ident("not_found".to_string()))),
             right: Box::new(expr(ExprKind::Literal(Literal::Int(1)))),
         });
-        let res = checker.infer_expr(&err_expr);
+        let res = infer(&mut checker, &err_expr);
         assert_eq!(res, Type::Error);
         // Only 1 error (E4001: unresolved symbol), no cascade E4002 error
         assert_eq!(checker.errors.len(), 1);
@@ -4110,7 +5436,7 @@ mod tests {
             callee: Box::new(expr(ExprKind::Ident("MyView".to_string()))),
             args: Vec::new(),
         });
-        checker.infer_expr(&call);
+        infer(&mut checker, &call);
 
         assert_eq!(checker.errors.len(), 1);
         assert_eq!(checker.errors[0].code(), "E4008");
@@ -4127,7 +5453,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        checker.infer_expr(&when_no_else);
+        infer(&mut checker, &when_no_else);
 
         assert_eq!(checker.errors.len(), 1);
         assert_eq!(checker.errors[0].code(), "E4009");
@@ -4141,7 +5467,7 @@ mod tests {
             tail: None,
             span: Span::dummy(),
         }));
-        assert_eq!(checker.infer_expr(&block_empty), Type::Unit);
+        assert_eq!(infer(&mut checker, &block_empty), Type::Unit);
 
         let block_trailing = expr(ExprKind::Block(Block {
             statements: vec![statement(StatementKind::Local {
@@ -4153,7 +5479,7 @@ mod tests {
             tail: Some(Box::new(expr(ExprKind::Ident("a".to_string())))),
             span: Span::dummy(),
         }));
-        assert_eq!(checker.infer_expr(&block_trailing), Type::Int);
+        assert_eq!(infer(&mut checker, &block_trailing), Type::Int);
     }
 
     #[test]
@@ -4181,7 +5507,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        checker.infer_expr(&call_wrong_arity);
+        infer(&mut checker, &call_wrong_arity);
         assert_eq!(checker.errors.len(), 1);
         assert_eq!(checker.errors[0].code(), "E4004");
 
@@ -4201,7 +5527,7 @@ mod tests {
                 },
             ],
         });
-        checker.infer_expr(&call_wrong_type);
+        infer(&mut checker, &call_wrong_type);
         assert_eq!(checker.errors.len(), 2);
         assert_eq!(checker.errors[1].code(), "E4004");
     }
@@ -4228,7 +5554,7 @@ mod tests {
             ret: Box::new(Type::Int),
         };
 
-        let checked = checker.check_expr(&closure, &expected_fn);
+        let checked = check(&mut checker, &closure, &expected_fn);
         assert_eq!(checked, expected_fn);
         assert!(checker.errors.is_empty());
     }
@@ -4257,7 +5583,7 @@ mod tests {
         });
 
         // The 'return' branch has Nothing, so unified type is Int
-        let ty = checker.infer_expr(&when_expr);
+        let ty = infer(&mut checker, &when_expr);
         assert_eq!(ty, Type::Int);
         assert!(checker.errors.is_empty());
     }
@@ -4290,7 +5616,7 @@ mod tests {
                 },
             ],
         });
-        let res_pos = checker.infer_expr(&call_pos);
+        let res_pos = infer(&mut checker, &call_pos);
         assert!(matches!(res_pos, Type::Struct(ref id) if id.name == "Point"));
 
         // Valid named field instantiation
@@ -4309,7 +5635,7 @@ mod tests {
                 },
             ],
         });
-        let res_named = checker.infer_expr(&call_named);
+        let res_named = infer(&mut checker, &call_named);
         assert!(matches!(res_named, Type::Struct(ref id) if id.name == "Point"));
 
         // Field access: p.x -> Int
@@ -4318,7 +5644,7 @@ mod tests {
             member: "x".to_string(),
             is_safe_nav: false,
         });
-        assert_eq!(checker.infer_expr(&field_access), Type::Int);
+        assert_eq!(infer(&mut checker, &field_access), Type::Int);
 
         // Unknown field access: p.z -> E4006
         let unknown_field = expr(ExprKind::MemberAccess {
@@ -4326,7 +5652,7 @@ mod tests {
             member: "z".to_string(),
             is_safe_nav: false,
         });
-        assert_eq!(checker.infer_expr(&unknown_field), Type::Error);
+        assert_eq!(infer(&mut checker, &unknown_field), Type::Error);
         assert!(checker.errors.iter().any(|e| e.code() == "E4006"));
     }
 
@@ -4451,7 +5777,7 @@ mod tests {
             member: "None".to_string(),
             is_safe_nav: false,
         });
-        let res_none = checker.infer_expr(&none_access);
+        let res_none = infer(&mut checker, &none_access);
         assert!(matches!(res_none, Type::Enum(ref id) if id.name == "Option"));
 
         // Qualified variant constructor call: Option.Some(42) -> Option
@@ -4467,7 +5793,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        let res_some = checker.infer_expr(&some_call);
+        let res_some = infer(&mut checker, &some_call);
         assert!(matches!(res_some, Type::Enum(ref id) if id.name == "Option"));
 
         // Option.Some("bad") -> E4004 (argument type mismatch)
@@ -4483,7 +5809,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        checker.infer_expr(&some_bad);
+        infer(&mut checker, &some_bad);
         assert!(checker.errors.iter().any(|e| e.code() == "E4004"));
     }
 
@@ -4504,7 +5830,7 @@ mod tests {
             expr: Box::new(expr(ExprKind::Ident("x".to_string()))),
         });
         assert_eq!(
-            checker.infer_expr(&shared_borrow),
+            infer(&mut checker, &shared_borrow),
             Type::Reference {
                 mutable: false,
                 inner: Box::new(Type::Int),
@@ -4516,7 +5842,7 @@ mod tests {
             op: UnaryOp::BorrowMut,
             expr: Box::new(expr(ExprKind::Ident("x".to_string()))),
         });
-        checker.infer_expr(&mut_borrow_val);
+        infer(&mut checker, &mut_borrow_val);
         assert!(checker.errors.iter().any(|e| e.code() == "E4003"));
 
         // Mutable borrow on var: &mut y -> &mut Int
@@ -4532,7 +5858,7 @@ mod tests {
             expr: Box::new(expr(ExprKind::Ident("y".to_string()))),
         });
         assert_eq!(
-            checker.infer_expr(&mut_borrow_var),
+            infer(&mut checker, &mut_borrow_var),
             Type::Reference {
                 mutable: true,
                 inner: Box::new(Type::Int),
@@ -4565,7 +5891,7 @@ mod tests {
             is_safe_nav: true,
         });
         assert_eq!(
-            checker.infer_expr(&safe_nav),
+            infer(&mut checker, &safe_nav),
             Type::Nullable(Box::new(Type::Int))
         );
 
@@ -4575,7 +5901,7 @@ mod tests {
             left: Box::new(expr(ExprKind::Literal(Literal::Null))),
             right: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
         });
-        assert_eq!(checker.infer_expr(&elvis), Type::Int);
+        assert_eq!(infer(&mut checker, &elvis), Type::Int);
     }
 
     #[test]
@@ -4602,7 +5928,7 @@ mod tests {
             member: "x".to_string(),
             is_safe_nav: false,
         });
-        assert_eq!(checker.infer_expr(&field_access), Type::Int);
+        assert_eq!(infer(&mut checker, &field_access), Type::Int);
     }
 
     #[test]
@@ -4659,7 +5985,7 @@ mod tests {
                 },
             ],
         });
-        assert_eq!(ext_checker.infer_expr(&call_pub), Type::Int);
+        assert_eq!(infer(&mut ext_checker, &call_pub), Type::Int);
         assert!(ext_checker.errors.is_empty());
 
         // Calling package-visible 'internal_calc' from external package -> E4007
@@ -4667,13 +5993,13 @@ mod tests {
             callee: Box::new(expr(ExprKind::Ident("internal_calc".to_string()))),
             args: Vec::new(),
         });
-        ext_checker.infer_expr(&call_pkg);
+        infer(&mut ext_checker, &call_pkg);
         assert!(ext_checker.errors.iter().any(|e| e.code() == "E4007"));
 
         // Case 2: Ingested from identical package 'core.math'
         let mut same_checker = TypeChecker::new(Some("core.math".to_string()), "<test>");
         same_checker.ingest_file_abi(&abi);
-        assert_eq!(same_checker.infer_expr(&call_pkg), Type::Int);
+        assert_eq!(infer(&mut same_checker, &call_pkg), Type::Int);
         assert!(same_checker.errors.is_empty());
     }
 
@@ -4705,7 +6031,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        assert_eq!(checker.infer_expr(&call_one), Type::String);
+        assert_eq!(infer(&mut checker, &call_one), Type::String);
         assert!(checker.errors.is_empty());
 
         // 2. Named arguments: greet(msg = "hi", prefix = ">>") -> OK
@@ -4724,7 +6050,7 @@ mod tests {
                 },
             ],
         });
-        assert_eq!(checker.infer_expr(&call_named), Type::String);
+        assert_eq!(infer(&mut checker, &call_named), Type::String);
         assert!(checker.errors.is_empty());
 
         // 3. Duplicate named argument -> E4004
@@ -4743,7 +6069,7 @@ mod tests {
                 },
             ],
         });
-        checker.infer_expr(&call_dup);
+        infer(&mut checker, &call_dup);
         assert!(checker.errors.iter().any(|e| e.code() == "E4004"));
         checker.errors.clear();
 
@@ -4756,7 +6082,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        checker.infer_expr(&call_missing);
+        infer(&mut checker, &call_missing);
         assert!(checker.errors.iter().any(|e| e.code() == "E4004"));
     }
 
@@ -4788,7 +6114,7 @@ mod tests {
                 },
             ],
         });
-        checker.infer_expr(&call_ok);
+        infer(&mut checker, &call_ok);
         assert!(checker.errors.is_empty());
 
         // Duplicate field: Point(x = 1, x = 2) -> E4004
@@ -4807,7 +6133,7 @@ mod tests {
                 },
             ],
         });
-        checker.infer_expr(&call_dup);
+        infer(&mut checker, &call_dup);
         assert!(checker.errors.iter().any(|e| e.code() == "E4004"));
         checker.errors.clear();
 
@@ -4820,7 +6146,7 @@ mod tests {
                 span: Span::dummy(),
             }],
         });
-        checker.infer_expr(&call_missing);
+        infer(&mut checker, &call_missing);
         assert!(checker.errors.iter().any(|e| e.code() == "E4004"));
     }
 
@@ -4902,7 +6228,7 @@ mod tests {
                 },
             ],
         });
-        let ty = checker.infer_expr(&when_exhaustive);
+        let ty = infer(&mut checker, &when_exhaustive);
         assert_eq!(ty, Type::Int);
         assert!(checker.errors.is_empty());
 
@@ -4924,7 +6250,7 @@ mod tests {
                 },
             ],
         });
-        checker.infer_expr(&when_incomplete);
+        infer(&mut checker, &when_incomplete);
         assert!(checker.errors.iter().any(|e| e.code() == "E4009"));
     }
 
@@ -4934,7 +6260,7 @@ mod tests {
         let ret_expr = expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(
             Literal::Int(42),
         ))))));
-        checker.infer_expr(&ret_expr);
+        infer(&mut checker, &ret_expr);
         assert!(checker.errors.iter().any(|e| e.code() == "E4005"));
     }
 
@@ -4971,7 +6297,7 @@ mod tests {
         });
 
         // Inferring the closure should not leak the outer compose context -> emits E4008!
-        checker.infer_expr(&closure);
+        infer(&mut checker, &closure);
         assert!(checker.errors.iter().any(|e| e.code() == "E4008"));
     }
 
@@ -5059,7 +6385,7 @@ mod tests {
             target: Box::new(expr(ExprKind::Ident("s".to_string()))),
             index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
         });
-        assert_eq!(checker.infer_expr(&index_expr), Type::Char);
+        assert_eq!(infer(&mut checker, &index_expr), Type::Char);
         assert!(checker.errors.is_empty());
 
         // Non-collection Heap: Heap<Int> -> cannot index -> E4002
@@ -5077,7 +6403,7 @@ mod tests {
             target: Box::new(expr(ExprKind::Ident("h".to_string()))),
             index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
         });
-        checker.infer_expr(&bad_index);
+        infer(&mut checker, &bad_index);
         assert!(checker.errors.iter().any(|e| e.code() == "E4002"));
     }
 

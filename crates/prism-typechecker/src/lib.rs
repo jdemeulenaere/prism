@@ -7,6 +7,7 @@
 //! - Zero-cost memory invariant: stack references (`&T`, `&mut T`) and `Heap<T>` typing.
 //! - First-class compose invariant: composable function context constraints (`E4008`).
 
+mod builder;
 pub mod checker;
 pub mod error;
 pub mod scope;
