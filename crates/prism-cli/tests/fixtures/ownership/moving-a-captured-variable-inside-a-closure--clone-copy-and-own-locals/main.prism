@@ -1,0 +1,6 @@
+// expect: ok
+fun take(s: String) {}
+fun run(f: () -> Int): Int = f()
+fun h(s: String): Int = run { take(s.clone()); 1 }
+fun k(n: Int): Int = run { val m = n; m }
+fun l(): Int = run { val s = "a"; take(s); 1 }

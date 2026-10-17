@@ -104,6 +104,14 @@ impl BodyBuilder {
         }
     }
 
+    /// Whether binding `id` is older than the innermost open closure, so that the closure
+    /// captures it, and borrows it, when it uses it (D11 of `borrowck-exclusivity`).
+    pub(crate) fn is_capture(&self, id: LocalId) -> bool {
+        self.closures
+            .last()
+            .is_some_and(|closure| (id.0 as usize) < closure.first_local)
+    }
+
     pub(crate) fn open_closure(&mut self) {
         self.closures.push(OpenClosure {
             first_local: self.body.locals.len(),

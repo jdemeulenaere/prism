@@ -4650,7 +4650,8 @@ impl TypeChecker {
     /// Rejects moving `expr`, of type `ty`, out of where it lives (the `ownership` spec, "Moves
     /// Take Whole Values Only"). Only leaves are checked: a non-`Copy` value may be consumed from
     /// a whole local or parameter, or as a temporary, but not from a field, a safe navigation, an
-    /// index or a top-level `val`. Pass-through forms (`if`, `when`, blocks, `?:`) mark their
+    /// index, a top-level `val`, a binding a default value borrows or a binding the innermost
+    /// closure captures. Pass-through forms (`if`, `when`, blocks, `?:`) mark their
     /// children as consumed instead.
     fn check_move_source(&mut self, expr: &Expr, ty: &Type) {
         if self.is_copy(ty) {
@@ -4668,6 +4669,14 @@ impl TypeChecker {
             ExprKind::This if self.is_default_input(THIS) => {
                 borrowed = true;
                 "'this', which a default value borrows".to_string()
+            }
+            ExprKind::Ident(name) if self.is_capture(name) => {
+                borrowed = true;
+                format!("captured variable '{}', which the closure borrows", name)
+            }
+            ExprKind::This if self.is_capture(THIS) => {
+                borrowed = true;
+                "'this', which the closure borrows".to_string()
             }
             ExprKind::Ident(name) if self.is_top_level_value(name) => {
                 format!("top-level value '{}'", name)
@@ -4718,6 +4727,15 @@ impl TypeChecker {
             .lookup(name)
             .and_then(Self::local_of)
             .is_some_and(|local| inputs.contains(&local))
+    }
+
+    /// Whether `name` resolves to a binding that the innermost open closure captures, and so
+    /// borrows (D11 of `borrowck-exclusivity`).
+    fn is_capture(&self, name: &str) -> bool {
+        self.env
+            .lookup(name)
+            .and_then(Self::local_of)
+            .is_some_and(|local| self.builder.is_capture(local))
     }
 
     /// Whether `name` currently resolves to a top-level `val`, declared in this file or imported,

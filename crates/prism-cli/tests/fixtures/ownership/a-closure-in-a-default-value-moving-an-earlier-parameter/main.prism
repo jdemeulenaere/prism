@@ -1,0 +1,4 @@
+// expect: E4017
+fun take(s: String) {}
+fun run(f: () -> Int): Int = f()
+fun f(a: String, b: Int = run { take(a); 1 }): Int = b

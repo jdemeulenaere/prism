@@ -1,0 +1,6 @@
+// expect: E4017
+fun take(s: String) {}
+fun run(f: () -> Int): Int = f()
+struct Token { val id: Int }
+fun f(s: String): Int = run { take(s); 1 }
+fun g(t: Token): Int = run { val u = t; 1 }

@@ -1,0 +1,5 @@
+// expect: ok
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun run(f: () -> Int): Int = f()
+fun f(s: String) { run { greet(s) }; take(s) }

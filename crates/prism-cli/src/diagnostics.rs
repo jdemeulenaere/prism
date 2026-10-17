@@ -528,6 +528,21 @@ mod tests {
     }
 
     #[test]
+    fn test_moving_a_captured_variable_inside_a_closure_help() {
+        let out = render_type_errors(
+            "fun take(s: String) {}\nfun run(f: () -> Int): Int = f()\nfun f(s: String): Int = run { take(s); 1 }\n",
+        );
+        assert!(
+            out.contains(
+                "error[E4017]: cannot move out of captured variable 's', which the closure borrows"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("help: clone it: 's.clone()'"), "{out}");
+        assert!(!out.contains("borrow it instead"), "{out}");
+    }
+
+    #[test]
     fn test_borrow_help_lines() {
         let out = render_type_errors(
             "struct User { val name: String }\nfun bump(r: &mut Int) {}\nfun f(name: String, u: &User): &String {\n    var x = 1\n    bump(x)\n    val r: &String = name\n    return u.name\n}\n",
