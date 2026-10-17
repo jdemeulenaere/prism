@@ -225,6 +225,8 @@ impl TypeChecker {
         match self.env.lookup_import(name, is_type_symbol) {
             ImportLookup::Ambiguous(_) => Some(Type::Error),
             _ if name == "Range" => Some(Type::Struct(NominalId::builtin_range())),
+            // Reported as `E4014` by `check_annotation_names`; `Error` avoids a follow-on `E4006`.
+            _ if self.unimported_type_named(name).is_some() => Some(Type::Error),
             _ => None,
         }
     }
@@ -363,6 +365,14 @@ impl TypeChecker {
                     self.errors.push(TypeError::AmbiguousImport {
                         name: name.clone(),
                         modules,
+                        span: ast_ty.span,
+                    });
+                } else if let Some(id) = self.unimported_type_named(name) {
+                    // The name is a type this file only knows through an import's signature:
+                    // naming it requires importing its module, like using its members.
+                    self.errors.push(TypeError::MemberOfUnimportedType {
+                        type_name: id.name,
+                        module: id.module,
                         span: ast_ty.span,
                     });
                 }
@@ -742,14 +752,8 @@ impl TypeChecker {
     }
 
     /// Defines a top-level declaration in module scope. A declaration with the same name as an
-    /// imported symbol is a duplicate (`E4010`), even though it shadows the import.
+    /// imported symbol shadows the import: lookups check module scope before the import layer.
     fn define_top_level(&mut self, symbol: Symbol) {
-        if self.env.is_imported(&symbol.name) {
-            self.errors.push(TypeError::DuplicateSymbol {
-                name: symbol.name.clone(),
-                span: symbol.span,
-            });
-        }
         if let Err(err) = self.env.define(symbol) {
             self.errors.push(err);
         }

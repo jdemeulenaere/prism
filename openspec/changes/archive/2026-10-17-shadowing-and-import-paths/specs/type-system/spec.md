@@ -41,3 +41,22 @@ When two imported modules export the same name and a file uses that name (as a v
 #### Scenario: Local declaration resolving an ambiguity
 - **WHEN** a file imports both `a/lib` and `b/lib`, which each export `helper`, declares its own `helper`, and uses it
 - **THEN** the use resolves to the local declaration and no `E4012` is reported
+
+### Requirement: Members of a Type Require Importing Its Module
+A file MUST be able to receive and pass along a value whose nominal type is defined in a module it does not import directly. Reading or writing that value's fields, matching on its enum variants, constructing it, or naming the type in an annotation MUST be rejected with `E4014`, naming the type, its defining module and the import to add. The type checker MUST read only the ABIs of the file's direct imports.
+
+#### Scenario: Field access on a type from an unimported module
+- **WHEN** `shop/api` exports `public fun first(): Order`, where `Order` is declared in `shop/models`, and a file that imports only `/shop/api` evaluates `first().price`
+- **THEN** the type checker emits `E4014` naming `Order`, `shop/models` and `import /shop/models`
+
+#### Scenario: Passing the value along without touching its members
+- **WHEN** the same file declares `fun keep(): Unit { send(first()) }`, where `send(o: Order)` is also exported by `shop/api`
+- **THEN** the file typechecks successfully
+
+#### Scenario: Importing the defining module
+- **WHEN** the file also imports `/shop/models` and evaluates `first().price`
+- **THEN** the access typechecks with the declared type of `price`
+
+#### Scenario: Naming an unimported type in an annotation
+- **WHEN** a file that imports only `/shop/api` declares `fun total(o: Order): Int = o.price`, or uses `Order` in any other annotation (a local, a return type, a struct field)
+- **THEN** the type checker emits `E4014` at the annotation, naming `Order`, `shop/models` and `import /shop/models`, and reports no further error for uses of `o`

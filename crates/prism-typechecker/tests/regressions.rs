@@ -750,10 +750,21 @@ fn ambiguous_type_name_in_an_annotation() {
 
 #[test]
 fn local_declaration_colliding_with_an_import() {
+    // The local declaration shadows the import: `helper("s")` resolves to it.
     assert_import_codes(
         &[HELPER_A],
-        "package app\nfun helper(x: String): Int = 1\n",
-        &["E4010"],
+        "package app\nfun helper(x: String): Int = 1\nfun g(): Int = helper(\"s\")\n",
+        &[],
+    );
+}
+
+#[test]
+fn local_declaration_resolving_an_ambiguity() {
+    // Both imports export `helper` and `User`; the local declarations win, so no E4012.
+    assert_import_codes(
+        &[HELPER_A, HELPER_B],
+        "package app\nfun helper(x: Int): Int = x\nstruct User {\n    val age: Int\n}\nfun g(u: User): Int = helper(u.age)\n",
+        &[],
     );
 }
 
@@ -885,6 +896,42 @@ fn importing_the_defining_module() {
     assert_shop_codes(
         &["shop/api", "shop/models"],
         "package app\nfun g(): Int = first().price\n",
+        &[],
+    );
+}
+
+#[test]
+fn naming_an_unimported_type_in_an_annotation() {
+    // Reported at the annotation, with the import hint, and nowhere else.
+    let errors = assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun total(o: Order): Int = o.price\n",
+        &["E4014"],
+    );
+    let message = errors[0].message();
+    for part in ["'Order'", "shop/models", "import /shop/models"] {
+        assert!(message.contains(part), "{}", message);
+    }
+    // Every annotation site: local, return type, struct field.
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g() {\n    val o: Order = first()\n}\n",
+        &["E4014"],
+    );
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nfun g(): Order = first()\n",
+        &["E4014"],
+    );
+    assert_shop_codes(
+        &["shop/api"],
+        "package app\nstruct Box {\n    val o: Order\n}\n",
+        &["E4014"],
+    );
+    // Importing the defining module makes the name usable.
+    assert_shop_codes(
+        &["shop/api", "shop/models"],
+        "package app\nfun total(o: Order): Int = o.price\n",
         &[],
     );
 }

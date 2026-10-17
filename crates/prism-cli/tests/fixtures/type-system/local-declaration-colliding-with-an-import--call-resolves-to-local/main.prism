@@ -1,0 +1,4 @@
+// expect: ok
+import /a/lib
+fun helper(x: String): Int = 1
+fun g(): Int = helper("s")

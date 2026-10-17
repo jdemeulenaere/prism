@@ -1263,4 +1263,17 @@ mod tests {
             parse_source(src).unwrap_or_else(|e| panic!("{}\n{}", e, src));
         }
     }
+
+    #[test]
+    fn import_attempting_directory_traversal() {
+        for src in [
+            "import ../outside",
+            "import ./sibling",
+            "import /core/../fmt",
+            "import core..fmt",
+        ] {
+            assert_parse_error(src, "import paths cannot contain '.' or '..'");
+        }
+        parse_source("import /core/fmt\nimport widgets").expect("identifier segments parse");
+    }
 }

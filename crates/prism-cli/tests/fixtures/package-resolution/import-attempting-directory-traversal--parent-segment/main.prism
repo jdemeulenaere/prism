@@ -1,7 +1,3 @@
-// expect-current: E2001
-// FIXME(decision): the spec and the catalog say an import with a `..` segment is rejected with
-// E1006 by resolution, but the parser rejects `..` and `.` in import paths first, so E1006 is only
-// reachable from source for `import self` (see invalid-import-path--import-of-the-file-itself).
-// Decide whether the parser or the resolver owns this diagnostic.
+// expect: E2001
 import ../outside
 fun main(): Int = 1

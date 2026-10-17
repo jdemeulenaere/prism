@@ -1,0 +1,3 @@
+// expect: E4014
+import /shop/api
+fun total(o: Order): Int = o.price

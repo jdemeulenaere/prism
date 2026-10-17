@@ -1,0 +1,5 @@
+package b
+public fun helper(x: String): Int = 1
+public struct User {
+    val name: String
+}

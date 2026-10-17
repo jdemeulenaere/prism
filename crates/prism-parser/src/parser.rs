@@ -287,15 +287,21 @@ impl Parser {
             is_root = true;
         }
 
+        self.reject_relative_import_segment()?;
         let (first, mut end_span) = self.expect_ident()?;
         path.push(first);
 
         // Either slash-separated (/core/fmt) or dot-separated (doo.util)
         while self.peek_kind() == &TokenKind::Slash || self.peek_kind() == &TokenKind::Dot {
             self.bump();
+            self.reject_relative_import_segment()?;
             let (part, s) = self.expect_ident()?;
             path.push(part);
             end_span = s;
+        }
+        if self.peek_kind() == &TokenKind::DotDot {
+            // `import a..b`: the lexer reads `..` as one token right after a segment.
+            self.reject_relative_import_segment()?;
         }
 
         Ok(ImportDecl {
@@ -303,6 +309,23 @@ impl Parser {
             path,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// Rejects a `.` or `..` segment where an import path segment is expected. Import paths
+    /// consist of identifiers only; relative navigation is expressed with root-anchored imports.
+    fn reject_relative_import_segment(&self) -> Result<(), ParseError> {
+        let segment = match self.peek_kind() {
+            TokenKind::Dot => ".",
+            TokenKind::DotDot => "..",
+            _ => return Ok(()),
+        };
+        Err(ParseError::new(
+            format!(
+                "import paths cannot contain '.' or '..' (found '{}'); use a root-anchored import such as 'import /core/fmt'",
+                segment
+            ),
+            self.peek().span,
+        ))
     }
 
     // --- Declarations ---

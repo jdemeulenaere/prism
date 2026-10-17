@@ -6,11 +6,15 @@ The type system defines semantic analysis, lexical symbol resolution, nominal ty
 ## Requirements
 
 ### Requirement: Lexical Scope and Symbol Resolution
-The type checker MUST resolve identifiers across nested lexical scopes (local blocks, parameters, file declarations, and imported ABI symbols) and reject unresolved or duplicate symbols.
+The type checker MUST resolve identifiers across nested lexical scopes (local blocks, parameters, file declarations, and imported ABI symbols) and reject unresolved or duplicate symbols. Parameters form a scope level above the function body, so a local declared in the body MAY shadow a parameter.
 
 #### Scenario: Local variable shadowing and resolution
 - **WHEN** an expression references an identifier declared in an outer or enclosing block
 - **THEN** the identifier resolves to the innermost matching declaration
+
+#### Scenario: Local shadowing a parameter
+- **WHEN** `fun f(a: Int): String { val a = "s"; return a }` is checked
+- **THEN** the file typechecks successfully, and `a` after the local declaration refers to the `String` local
 
 #### Scenario: Unknown identifier error reporting
 - **WHEN** an expression references an undeclared identifier
@@ -364,7 +368,7 @@ The inferred type of an unannotated private top-level function or variable MUST 
 - **THEN** the type checker emits `E4001` exactly once
 
 ### Requirement: Ambiguous Imported Names Rejected at Use
-When two imported modules export the same name and a file uses that name (as a value, callee or type), the type checker MUST reject the use with an ambiguity error (`E4012`) that names both modules. Importing both modules without using the name MUST be accepted. A top-level declaration that has the same name as an imported symbol MUST still be rejected with `E4010`.
+When two imported modules export the same name and a file uses that name (as a value, callee or type), the type checker MUST reject the use with an ambiguity error (`E4012`) that names both modules. Importing both modules without using the name MUST be accepted. A top-level declaration that has the same name as an imported symbol MUST be accepted and MUST shadow the import: every use of the name in the file resolves to the local declaration, and no ambiguity is reported for it.
 
 #### Scenario: Using a name exported by two imports
 - **WHEN** `a/lib` exports `public fun helper(x: Int): Int`, `b/lib` exports `public fun helper(x: String): Int`, and a file importing both calls `helper("s")`
@@ -379,8 +383,12 @@ When two imported modules export the same name and a file uses that name (as a v
 - **THEN** the type checker emits `E4012` for the annotation
 
 #### Scenario: Local declaration colliding with an import
-- **WHEN** a file imports `a/lib` and also declares its own `fun helper(x: String): Int`
-- **THEN** the type checker emits `E4010`
+- **WHEN** a file imports `a/lib`, which exports `public fun helper(x: Int): Int`, declares its own `fun helper(x: String): Int`, and calls `helper("s")`
+- **THEN** the file typechecks successfully, and the call resolves to the local `helper`
+
+#### Scenario: Local declaration resolving an ambiguity
+- **WHEN** a file imports both `a/lib` and `b/lib`, which each export `helper`, declares its own `helper`, and uses it
+- **THEN** the use resolves to the local declaration and no `E4012` is reported
 
 ### Requirement: Discarded Block Values
 The final expression of a block body whose value is discarded MUST be typechecked, but its type MUST be ignored. A block body's value is discarded when it is the body of a block-bodied function returning `Unit` (declared or implied), or the body of a closure whose expected return type is `Unit`. Expression bodies are never discarded.
@@ -402,7 +410,7 @@ The final expression of a block body whose value is discarded MUST be typechecke
 - **THEN** the type checker emits `E4005`
 
 ### Requirement: Members of a Type Require Importing Its Module
-A file MUST be able to receive and pass along a value whose nominal type is defined in a module it does not import directly. Reading or writing that value's fields, matching on its enum variants, or constructing it MUST be rejected with `E4014`, naming the type, its defining module and the import to add. The type checker MUST read only the ABIs of the file's direct imports.
+A file MUST be able to receive and pass along a value whose nominal type is defined in a module it does not import directly. Reading or writing that value's fields, matching on its enum variants, constructing it, or naming the type in an annotation MUST be rejected with `E4014`, naming the type, its defining module and the import to add. The type checker MUST read only the ABIs of the file's direct imports.
 
 #### Scenario: Field access on a type from an unimported module
 - **WHEN** `shop/api` exports `public fun first(): Order`, where `Order` is declared in `shop/models`, and a file that imports only `/shop/api` evaluates `first().price`
@@ -416,6 +424,10 @@ A file MUST be able to receive and pass along a value whose nominal type is defi
 - **WHEN** the file also imports `/shop/models` and evaluates `first().price`
 - **THEN** the access typechecks with the declared type of `price`
 
+#### Scenario: Naming an unimported type in an annotation
+- **WHEN** a file that imports only `/shop/api` declares `fun total(o: Order): Int = o.price`, or uses `Order` in any other annotation (a local, a return type, a struct field)
+- **THEN** the type checker emits `E4014` at the annotation, naming `Order`, `shop/models` and `import /shop/models`, and reports no further error for uses of `o`
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -427,7 +439,7 @@ Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 - **Two passes per file, two phases per workspace.** Pass 1 registers all top-level symbols, so declarations can refer to each other in any order. Across the workspace, every file's ABI is extracted before any body is checked, so files in an import cycle can see each other. (Unannotated private declarations are now inferred on demand; see `typechecker-soundness` below.)
 - **Nominal types are identities; names bind eagerly, definitions are looked up lazily** (`typechecker-soundness`, superseding the lazy resolution of `resolve-nominal-type-annotations`). A struct or enum type is a `NominalId` (defining module plus name) and carries no members; fields and variants live in the checker's type table. An annotation binds its name to an identity where it appears, and a member is looked up in the table where it is read. Lazy name resolution was right while types carried field lists, because eager resolution then meant cycle guards and whole-list equality; with identities neither cost exists, and equality is exact, so same-named types from different files, a struct and an enum, or a user `Range` and the built-in one, are never conflated. Every struct and enum name in a file is declared before any annotation is lowered, so annotations may name types declared later.
 - **Type lookup skips values.** `lookup_type` returns the innermost struct or enum and ignores variables and functions, so a local `val User` cannot hide the struct `User`.
-- **Unknown type names stay opaque for now.** Rejecting them (`E4001`) needs a builtin type list and generic scoping. Until then, misuse surfaces as `E4006` at the first member access.
+- **Unknown type names stay opaque for now.** Rejecting them (`E4001`) needs a builtin type list and generic scoping. Until then, misuse surfaces as `E4006` at the first member access. A name known through an import's signature is not unknown: it reports `E4014` at the annotation (`shadowing-and-import-paths`).
 
 Decisions from `typechecker-soundness`:
 
@@ -435,7 +447,7 @@ Decisions from `typechecker-soundness`:
 - **A mismatch's code comes from where the expectation came from** (D2). The checker tracks an origin (value, return, argument): `E4005` for returned values, `E4004` for arguments, `E4002` otherwise. `if`/`when` branches and block tails inherit the origin, so a mismatch inside a returned branch is still `E4005`; every other nested expectation resets it. The alternative, `E4002` for every value mismatch (like Rust's single `E0308`), was rejected because the catalog already promised the dedicated codes and site-specific codes let tools offer site-specific fixes. Non-assignability errors such as a type name used as a value keep their own code.
 - **Unannotated private declarations are inferred on demand** (D5). The first use of a pending declaration checks its body in a fresh body context (module scope only, its own return type and compose flag), and the result is memoized, so a type no longer depends on declaration order and no body is checked twice. Reaching a declaration whose inference is in progress is a self-dependency and reports `E4013`, as Kotlin does for recursive functions without a return type. Requiring annotations everywhere was rejected as removing a convenience the spec grants, and a dependency-ordered pre-pass as needing a second walk over every body.
 - **Closure parameters need an expected type** (D6). Without one, nothing gives a parameter its type: inferring it from first use needs constraint solving across statements, which bidirectional checking avoids, and silently typing it as the error type left calls through the closure unchecked. So each such parameter reports `E4013`, bound to the error type so the body is still checked.
-- **Imports form a layer below the module scope, and ambiguity is reported at use** (D7). Each imported name keeps one candidate per exporting module. A use with several candidates reports `E4012`; importing two modules that export the same name is fine while the name is unused, as in Kotlin and Go. Reporting at the import would forbid combining libraries that merely share a name, and first-import-wins was silent and order-dependent. A top-level declaration named like an import still reports `E4010`; letting it shadow the import is a separate decision.
+- **Imports form a layer below the module scope, and ambiguity is reported at use** (D7). Each imported name keeps one candidate per exporting module. A use with several candidates reports `E4012`; importing two modules that export the same name is fine while the name is unused, as in Kotlin and Go. Reporting at the import would forbid combining libraries that merely share a name, and first-import-wins was silent and order-dependent. A top-level declaration named like an import shadows it (see `shadowing-and-import-paths` below).
 - **A `Unit` body discards its final value** (D8). The block body of a `Unit` function, or of a closure expected to return `Unit`, checks its final expression as a statement and ignores its type, so a body may end in a call that returns a value. Expression bodies are not discarded, because there the author wrote the value explicitly.
 - **Members of a type need its module imported** (D9, decided by the user). A value whose type comes from a module the file does not import can be received and passed along, since assignability compares identities, but reading its members, matching its variants or constructing it reports `E4014` with the import to add. The checker therefore still reads only direct imports' ABIs, which keeps builds hermetic. Embedding each mentioned type's shape in the exporter's ABI (duplicating definitions) and relaxing the hermetic-builds invariant to read transitive ABIs were rejected.
 
@@ -443,3 +455,10 @@ Decisions from `harden-parser-grammar`:
 
 - **Parameterless closures use the existing closure rules.** The type checker sees a zero-parameter `Closure` wherever source has braces in expression position, so trailing lambdas are checked against the parameter's function type and its compose flag, and a closure where a non-function is expected is a mismatch. Only the closure body's shape (always a block, checked like a block-bodied function's body) changed in the checker.
 - **The compose flag comes from the written type.** `Type::from_ast` keeps `is_compose` from a `compose (…) -> T` annotation, and composable and plain function types stay mutually unassignable, so a composable content lambda can call composables while a plain callback such as `onClick` cannot.
+
+Decisions from `shadowing-and-import-paths` (decided by the user):
+
+- **Locals may shadow parameters.** Parameters form a scope level above the body, so `val a` in the body shadows parameter `a` from its declaration on, as in Rust. Kotlin warns instead; Prism has no warnings channel.
+- **Top-level declarations shadow imports.** Lookups check module scope before the import layer, so a file's own `helper` wins over an imported one for values, callees and type names, and also resolves what would otherwise be an `E4012` ambiguity, as a file's own declarations win over star imports in Kotlin. Two declarations in the same scope still report `E4010`.
+- **Naming a type requires importing its module** (extending D9). A type name known only through an import's signature reports `E4014` with the import hint at the annotation, and binds to the error type so the annotated value causes no further errors.
+

@@ -1,0 +1,8 @@
+// expect: ok
+import /a/lib
+import /b/lib
+fun helper(x: Int): Int = x
+struct User {
+    val age: Int
+}
+fun g(u: User): Int = helper(u.age)

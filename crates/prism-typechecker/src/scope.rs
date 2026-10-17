@@ -235,11 +235,6 @@ impl ScopeStack {
         }
     }
 
-    /// Whether some import exports `name`.
-    pub fn is_imported(&self, name: &str) -> bool {
-        self.imports.contains_key(name)
-    }
-
     /// Looks `name` up among the imports, keeping only candidates accepted by `keep`.
     pub fn lookup_import(&self, name: &str, keep: impl Fn(&Symbol) -> bool) -> ImportLookup<'_> {
         let candidates: Vec<&(String, Symbol)> = self

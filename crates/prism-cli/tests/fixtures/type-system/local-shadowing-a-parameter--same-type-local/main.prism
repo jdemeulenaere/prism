@@ -1,0 +1,5 @@
+// expect: ok
+fun f(a: Int): Int {
+    val a = 2
+    return a
+}

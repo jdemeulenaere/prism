@@ -28,6 +28,9 @@ Diagnostic codes are grouped by stage (`diagnostics`: "Code range identifies the
 
 **Alternative:** let the parser accept `.`/`..` as segments so the resolver reports `E1006`. Rejected: the grammar would accept paths the language forbids, only to reject them one stage later.
 
+### D4. Annotations naming an unimported type report `E4014` (user decision)
+The checker already records every nominal type that reaches the file through a direct import's signature (`seen_nominals`, from `typechecker-soundness` D9). `check_annotation_names` now reports `E4014` at a type name that no scope or import declares but that matches exactly one such recorded type, and `bind_type_name` binds it to the error type so uses of the annotated value report nothing further. A truly unknown name (a typo) still stays opaque, pending the ROADMAP item on rejecting unknown type names.
+
 ## Risks / Trade-offs
 
 - **[Risk] Silent shadowing of an import can hide a mistake** (a local `helper` unintentionally replacing an imported one). → Accepted by the user; a future warnings channel can flag it.

@@ -36,7 +36,7 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 | `E1003` | `PackageHeterogeneity` | Files directly inside one directory declare different packages. |
 | `E1004` | `InconsistentWorkspaceRoot` | A dependency resolves to a different workspace root than the entry file. |
 | `E1005` | `WorkspaceBoundaryViolation` | An import, entry file or scanned file resolves outside the workspace root, for example through a symlink. |
-| `E1006` | `InvalidImportPath` | An import path contains `.` or `..` segments or is otherwise malformed. |
+| `E1006` | `InvalidImportPath` | A file imports itself, or a sibling import has more than one segment. `.` and `..` segments are rejected earlier by the parser (`E2001`). |
 | `E1007` | (retired) | Cyclic dependency. Retired by `fix-cli-workspace-audit`, which allowed mutually recursive imports. Do not reuse. |
 
 ### E2xxx: Lexing and parsing (`crates/prism-lexer`, `crates/prism-parser`)
