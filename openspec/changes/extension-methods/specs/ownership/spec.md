@@ -51,7 +51,7 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 - **THEN** the type checker emits `E4017` for `u?.name`, with help suggesting `u?.name?.clone()`, and accepts `&u?.id`, whose temporary is a copy
 
 ### Requirement: Explicit Clone
-Every `Clone` type MUST have a built-in member `clone()` taking no arguments, unless the type has a field named `clone`, which takes precedence. It reads its receiver in place, looking through `&` and `&mut`, and returns an owned temporary of the receiver's type with those borrows removed. `x?.clone()` MUST work on nullables. On a type that is not `Clone`, `x.clone()` MUST call an extension named `clone` when one is visible (see `extension-functions`), and otherwise be rejected with `NotCloneable` (`E4018`) naming the type.
+Every `Clone` type MUST have a built-in member `clone()` taking no arguments, unless the type has a field named `clone`, which takes precedence. It looks through `&` and `&mut` and returns an owned temporary of the receiver's type with those borrows removed. A receiver that is a place is read in place; any other receiver is evaluated into a temporary first (see "Method-Call Receivers Are Classified Before Resolution" in `references`). `x?.clone()` MUST work on nullables. On a type that is not `Clone`, `x.clone()` MUST call an extension named `clone` when one is visible (see `extension-functions`), and otherwise be rejected with `NotCloneable` (`E4018`) naming the type.
 
 #### Scenario: Cloning a field through a borrow
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: &User): String = u.name.clone()` is checked
