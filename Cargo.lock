@@ -56,4 +56,12 @@ dependencies = [
  "prism-abi",
  "prism-ast",
  "prism-parser",
+ "prism-typed-tree",
+]
+
+[[package]]
+name = "prism-typed-tree"
+version = "0.1.0"
+dependencies = [
+ "prism-ast",
 ]

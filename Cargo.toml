@@ -8,6 +8,7 @@ members = [
     "crates/prism-cli",
     "crates/prism-resolver",
     "crates/prism-typechecker",
+    "crates/prism-typed-tree",
 ]
 
 [workspace.package]

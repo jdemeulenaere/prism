@@ -2,7 +2,9 @@
 
 use crate::error::TypeError;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
-use crate::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
+use crate::types::{
+    type_from_abi, type_from_ast, NominalId, Type, TypeDef, TypeRelations, BUILTIN_MODULE,
+};
 use prism_abi::{AbiType, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
@@ -497,7 +499,7 @@ impl TypeChecker {
     /// Lowers an annotation to a semantic type, binding each nominal name to the struct or enum
     /// it denotes where the annotation appears. Names with no declaration stay opaque.
     pub fn lower_type(&self, ast_ty: &prism_ast::types::Type) -> Type {
-        Type::from_ast(ast_ty).bind_names(&|name| self.bind_type_name(name))
+        type_from_ast(ast_ty).bind_names(&|name| self.bind_type_name(name))
     }
 
     /// Resolves an identifier, reporting `E4001` when it is unknown and `E4007` when it names a
@@ -783,14 +785,14 @@ impl TypeChecker {
                 } => {
                     let param_types = params
                         .iter()
-                        .map(|(_, ty_str, _)| Type::from_abi(ty_str))
+                        .map(|(_, ty_str, _)| type_from_abi(ty_str))
                         .collect();
                     let param_names = params.iter().map(|(n, _, _)| n.clone()).collect();
                     let has_default = params.iter().map(|(_, _, d)| d.is_some()).collect();
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
                         params: param_types,
-                        ret: Box::new(Type::from_abi(return_type)),
+                        ret: Box::new(type_from_abi(return_type)),
                     };
                     let symbol = Symbol::function_with_defaults(
                         name.clone(),
@@ -804,7 +806,7 @@ impl TypeChecker {
                     match receiver {
                         // An extension is reached through its receiver, never by its bare name.
                         Some(receiver) => {
-                            let key = (Type::from_abi(&receiver.ty), name.clone());
+                            let key = (type_from_abi(&receiver.ty), name.clone());
                             let candidates = self.imported_extensions.entry(key).or_default();
                             if !candidates.iter().any(|(m, _)| m == &abi.module) {
                                 let extension = Extension {
@@ -821,7 +823,7 @@ impl TypeChecker {
                     let fields = fields
                         .iter()
                         .map(|(f_name, is_var, f_ty)| {
-                            (f_name.clone(), *is_var, Type::from_abi(f_ty))
+                            (f_name.clone(), *is_var, type_from_abi(f_ty))
                         })
                         .collect();
                     let id = NominalId::new(abi.module.clone(), name.clone());
@@ -836,7 +838,7 @@ impl TypeChecker {
                     let variant_types: Vec<(String, Vec<Type>)> = variants
                         .iter()
                         .map(|(v_name, f_types)| {
-                            (v_name.clone(), f_types.iter().map(Type::from_abi).collect())
+                            (v_name.clone(), f_types.iter().map(type_from_abi).collect())
                         })
                         .collect();
                     let id = NominalId::new(abi.module.clone(), name.clone());
@@ -878,7 +880,7 @@ impl TypeChecker {
                 } => {
                     let symbol = Symbol::top_level_variable(
                         name.clone(),
-                        Type::from_abi(ty),
+                        type_from_abi(ty),
                         Mutability::Val,
                         *visibility,
                         abi.package.clone(),

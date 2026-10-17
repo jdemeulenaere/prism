@@ -1,86 +1,22 @@
-//! Semantic type representation and subtyping rules for Prism.
+//! Subtyping rules for Prism, and the lowering of annotations and ABI types to semantic types.
+//!
+//! The semantic [`Type`] itself lives in `prism-typed-tree`, which the typed tree shares with
+//! later stages; the rules stay with the type checker.
 
 use prism_abi::{AbiType, NominalKind, PrimKind};
-use std::fmt;
+pub use prism_typed_tree::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
 
-/// Module path of the compiler's built-in nominal types (such as `Range`).
-pub const BUILTIN_MODULE: &str = "<builtin>";
-
-/// Canonical identity of a struct or enum: its defining module (the root-relative file path
-/// without extension, such as `a/lib`) and its name. Two nominal types are equal exactly when
-/// their identities are equal.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NominalId {
-    pub module: String,
-    pub name: String,
+/// The assignability rules over semantic types: subtyping, and the join of two branches.
+pub trait TypeRelations {
+    /// Checks whether `self` is assignable to `expected`; see the implementation for `Type`.
+    fn is_assignable_to(&self, expected: &Type) -> bool;
+    /// Whether a shared borrow of `self` can be read as a shared borrow of `target`.
+    fn is_shared_view_of(&self, target: &Type) -> bool;
+    /// Joins the types of two branches into the least type both are assignable to.
+    fn join(&self, other: &Type) -> Option<Type>;
 }
 
-impl NominalId {
-    pub fn new(module: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            module: module.into(),
-            name: name.into(),
-        }
-    }
-
-    /// The built-in `Range` type produced by `a..b`.
-    pub fn builtin_range() -> Self {
-        Self::new(BUILTIN_MODULE, "Range")
-    }
-}
-
-/// The definition behind a [`NominalId`], kept in the checker's type table.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeDef {
-    /// Struct fields as `(name, is_var, type)`.
-    Struct { fields: Vec<(String, bool, Type)> },
-    /// Enum variants as `(name, payload types)`.
-    Enum { variants: Vec<(String, Vec<Type>)> },
-}
-
-/// Semantic representation of a Prism type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
-    /// 64-bit signed integer.
-    Int,
-    /// 64-bit IEEE floating point.
-    Float,
-    /// Boolean (`true` or `false`).
-    Bool,
-    /// Unicode scalar value character literal (`'a'`).
-    Char,
-    /// UTF-8 string.
-    String,
-    /// Unit type `()`, equivalent to `void`.
-    Unit,
-    /// Bottom type `Nothing`, representing expressions that diverge or return.
-    Nothing,
-    /// Stack-scoped borrowed reference (`&T` or `&mut T`).
-    Reference { mutable: bool, inner: Box<Type> },
-    /// Nullable type `T?`.
-    Nullable(Box<Type>),
-    /// Single-owner heap boxed indirection `Heap<T>` for recursive types.
-    Heap(Box<Type>),
-    /// Nominal struct type. Its fields live in the checker's type table.
-    Struct(NominalId),
-    /// Nominal enum type. Its variants live in the checker's type table.
-    Enum(NominalId),
-    /// A type name with no struct or enum declaration in scope. Opaque types compare by name,
-    /// and have no members.
-    Opaque(String),
-    /// First-class function type.
-    Fn {
-        is_compose: bool,
-        params: Vec<Type>,
-        ret: Box<Type>,
-    },
-    /// Generic type parameter (e.g. `T`).
-    TypeParam(String),
-    /// Sentinel type for error recovery and downstream error suppression.
-    Error,
-}
-
-impl Type {
+impl TypeRelations for Type {
     /// Checks whether `self` is assignable to `expected` according to Prism's subtyping lattice:
     /// - `Error` unifies with any type (suppresses cascade errors)
     /// - `Nothing <= T` for all `T` (divergent expressions can be placed in any value branch)
@@ -89,7 +25,7 @@ impl Type {
     ///   otherwise invariant in their referent
     /// - Structs and Enums are nominal (matched by [`NominalId`])
     /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Float`)
-    pub fn is_assignable_to(&self, expected: &Type) -> bool {
+    fn is_assignable_to(&self, expected: &Type) -> bool {
         if self == &Type::Error || expected == &Type::Error {
             return true;
         }
@@ -196,7 +132,7 @@ impl Type {
     ///
     /// `Nothing` joins to the other side, and a nullable side makes the join nullable, so
     /// `Int` joined with `null` (`Nothing?`) is `Int?`.
-    pub fn join(&self, other: &Type) -> Option<Type> {
+    fn join(&self, other: &Type) -> Option<Type> {
         if self == &Type::Error || other == &Type::Error {
             return Some(Type::Error);
         }
@@ -212,206 +148,83 @@ impl Type {
             _ => None,
         }
     }
+}
 
-    /// Makes a type nullable. `Error` stays `Error`, and nullable types never nest (`T??` is
-    /// `T?`).
-    pub fn nullable(self) -> Type {
-        match self {
-            Type::Error | Type::Nullable(_) => self,
-            other => Type::Nullable(Box::new(other)),
+/// Converts an AST type to a semantic `Type`. Nominal names stay [`Type::Opaque`] until the
+/// checker binds them in scope.
+pub fn type_from_ast(ast_ty: &prism_ast::types::Type) -> Type {
+    match &ast_ty.kind {
+        prism_ast::types::TypeKind::Named { name, type_args } => match name.as_str() {
+            "Int" => Type::Int,
+            "Float" | "Double" => Type::Float,
+            "Bool" => Type::Bool,
+            "Char" => Type::Char,
+            "String" => Type::String,
+            "Unit" => Type::Unit,
+            "Nothing" => Type::Nothing,
+            "Heap" if type_args.len() == 1 => Type::Heap(Box::new(type_from_ast(&type_args[0]))),
+            // Nominal type or generic type parameter, bound by the checker's scope.
+            _ => Type::Opaque(name.clone()),
+        },
+        prism_ast::types::TypeKind::Nullable(inner) => {
+            Type::Nullable(Box::new(type_from_ast(inner)))
         }
-    }
-
-    /// Rewrites every opaque type name inside `self` with `bind`, keeping names it returns
-    /// `None` for. Used to bind names lowered from annotations or ABI types to the struct or enum
-    /// they denote.
-    pub fn bind_names(self, bind: &dyn Fn(&str) -> Option<Type>) -> Type {
-        match self {
-            Type::Opaque(name) => bind(&name).unwrap_or(Type::Opaque(name)),
-            Type::Reference { mutable, inner } => Type::Reference {
-                mutable,
-                inner: Box::new(inner.bind_names(bind)),
-            },
-            Type::Nullable(inner) => Type::Nullable(Box::new(inner.bind_names(bind))),
-            Type::Heap(inner) => Type::Heap(Box::new(inner.bind_names(bind))),
-            Type::Fn {
-                is_compose,
-                params,
-                ret,
-            } => Type::Fn {
-                is_compose,
-                params: params.into_iter().map(|p| p.bind_names(bind)).collect(),
-                ret: Box::new(ret.bind_names(bind)),
-            },
-            other => other,
-        }
-    }
-
-    /// Converts an AST type to a semantic `Type`. Nominal names stay [`Type::Opaque`] until the
-    /// checker binds them in scope.
-    pub fn from_ast(ast_ty: &prism_ast::types::Type) -> Self {
-        match &ast_ty.kind {
-            prism_ast::types::TypeKind::Named { name, type_args } => match name.as_str() {
-                "Int" => Type::Int,
-                "Float" | "Double" => Type::Float,
-                "Bool" => Type::Bool,
-                "Char" => Type::Char,
-                "String" => Type::String,
-                "Unit" => Type::Unit,
-                "Nothing" => Type::Nothing,
-                "Heap" if type_args.len() == 1 => {
-                    Type::Heap(Box::new(Type::from_ast(&type_args[0])))
-                }
-                // Nominal type or generic type parameter, bound by the checker's scope.
-                _ => Type::Opaque(name.clone()),
-            },
-            prism_ast::types::TypeKind::Nullable(inner) => {
-                Type::Nullable(Box::new(Type::from_ast(inner)))
-            }
-            prism_ast::types::TypeKind::Reference { mutable, inner } => Type::Reference {
-                mutable: *mutable,
-                inner: Box::new(Type::from_ast(inner)),
-            },
-            prism_ast::types::TypeKind::Unit => Type::Unit,
-            prism_ast::types::TypeKind::Function {
-                is_compose,
-                params,
-                return_type,
-            } => Type::Fn {
-                is_compose: *is_compose,
-                params: params.iter().map(Type::from_ast).collect(),
-                ret: Box::new(Type::from_ast(return_type)),
-            },
-        }
-    }
-
-    /// Converts a type recorded in an imported file's ABI. Phase 1 has already bound each
-    /// nominal name to its defining module; an unbound name stays opaque.
-    pub fn from_abi(ty: &AbiType) -> Self {
-        match ty {
-            AbiType::Prim(prim) => match prim {
-                PrimKind::Int => Type::Int,
-                PrimKind::Float => Type::Float,
-                PrimKind::Bool => Type::Bool,
-                PrimKind::Char => Type::Char,
-                PrimKind::String => Type::String,
-                PrimKind::Nothing => Type::Nothing,
-            },
-            AbiType::Unit => Type::Unit,
-            AbiType::Nominal {
-                kind, module, name, ..
-            } => {
-                let id = NominalId::new(module.clone(), name.clone());
-                match kind {
-                    NominalKind::Struct => Type::Struct(id),
-                    NominalKind::Enum => Type::Enum(id),
-                }
-            }
-            AbiType::Range => Type::Struct(NominalId::builtin_range()),
-            AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
-            AbiType::Nullable(inner) => Type::Nullable(Box::new(Type::from_abi(inner))),
-            AbiType::Ref { mutable, inner } => Type::Reference {
-                mutable: *mutable,
-                inner: Box::new(Type::from_abi(inner)),
-            },
-            AbiType::Heap(inner) => Type::Heap(Box::new(Type::from_abi(inner))),
-            AbiType::Fn {
-                compose,
-                params,
-                ret,
-            } => Type::Fn {
-                is_compose: *compose,
-                params: params.iter().map(Type::from_abi).collect(),
-                ret: Box::new(Type::from_abi(ret)),
-            },
-        }
+        prism_ast::types::TypeKind::Reference { mutable, inner } => Type::Reference {
+            mutable: *mutable,
+            inner: Box::new(type_from_ast(inner)),
+        },
+        prism_ast::types::TypeKind::Unit => Type::Unit,
+        prism_ast::types::TypeKind::Function {
+            is_compose,
+            params,
+            return_type,
+        } => Type::Fn {
+            is_compose: *is_compose,
+            params: params.iter().map(type_from_ast).collect(),
+            ret: Box::new(type_from_ast(return_type)),
+        },
     }
 }
 
-impl Type {
-    /// Renders `expected` and `found` for a diagnostic. Nominal types show their bare names,
-    /// unless both render the same, in which case each nominal type is qualified with its
-    /// defining module (`a/lib::User` versus `b/lib::User`).
-    pub fn render_pair(expected: &Type, found: &Type) -> (String, String) {
-        let (e, f) = (expected.to_string(), found.to_string());
-        if e == f && expected != found {
-            (expected.qualified(), found.qualified())
-        } else {
-            (e, f)
-        }
-    }
-
-    /// Renders the type with every nominal type qualified by its defining module.
-    pub fn qualified(&self) -> String {
-        match self {
-            Type::Struct(id) | Type::Enum(id) => format!("{}::{}", id.module, id.name),
-            Type::Reference { mutable, inner } => {
-                format!(
-                    "{}{}",
-                    if *mutable { "&mut " } else { "&" },
-                    inner.qualified()
-                )
+/// Converts a type recorded in an imported file's ABI. Phase 1 has already bound each
+/// nominal name to its defining module; an unbound name stays opaque.
+pub fn type_from_abi(ty: &AbiType) -> Type {
+    match ty {
+        AbiType::Prim(prim) => match prim {
+            PrimKind::Int => Type::Int,
+            PrimKind::Float => Type::Float,
+            PrimKind::Bool => Type::Bool,
+            PrimKind::Char => Type::Char,
+            PrimKind::String => Type::String,
+            PrimKind::Nothing => Type::Nothing,
+        },
+        AbiType::Unit => Type::Unit,
+        AbiType::Nominal {
+            kind, module, name, ..
+        } => {
+            let id = NominalId::new(module.clone(), name.clone());
+            match kind {
+                NominalKind::Struct => Type::Struct(id),
+                NominalKind::Enum => Type::Enum(id),
             }
-            Type::Nullable(inner) => format!("{}?", inner.qualified()),
-            Type::Heap(inner) => format!("Heap<{}>", inner.qualified()),
-            Type::Fn {
-                is_compose,
-                params,
-                ret,
-            } => format!(
-                "{}({}) -> {}",
-                if *is_compose { "compose " } else { "" },
-                params
-                    .iter()
-                    .map(Type::qualified)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                ret.qualified()
-            ),
-            other => other.to_string(),
         }
-    }
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Type::Int => write!(f, "Int"),
-            Type::Float => write!(f, "Float"),
-            Type::Bool => write!(f, "Bool"),
-            Type::Char => write!(f, "Char"),
-            Type::String => write!(f, "String"),
-            Type::Unit => write!(f, "Unit"),
-            Type::Nothing => write!(f, "Nothing"),
-            Type::Reference { mutable, inner } => {
-                if *mutable {
-                    write!(f, "&mut {}", inner)
-                } else {
-                    write!(f, "&{}", inner)
-                }
-            }
-            Type::Nullable(inner) => write!(f, "{}?", inner),
-            Type::Heap(inner) => write!(f, "Heap<{}>", inner),
-            Type::Struct(id) | Type::Enum(id) => write!(f, "{}", id.name),
-            Type::Opaque(name) => write!(f, "{}", name),
-            Type::Fn {
-                is_compose,
-                params,
-                ret,
-            } => {
-                let comp = if *is_compose { "compose " } else { "" };
-                write!(f, "{}(", comp)?;
-                for (i, p) in params.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", p)?;
-                }
-                write!(f, ") -> {}", ret)
-            }
-            Type::TypeParam(name) => write!(f, "{}", name),
-            Type::Error => write!(f, "<error>"),
-        }
+        AbiType::Range => Type::Struct(NominalId::builtin_range()),
+        AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
+        AbiType::Nullable(inner) => Type::Nullable(Box::new(type_from_abi(inner))),
+        AbiType::Ref { mutable, inner } => Type::Reference {
+            mutable: *mutable,
+            inner: Box::new(type_from_abi(inner)),
+        },
+        AbiType::Heap(inner) => Type::Heap(Box::new(type_from_abi(inner))),
+        AbiType::Fn {
+            compose,
+            params,
+            ret,
+        } => Type::Fn {
+            is_compose: *compose,
+            params: params.iter().map(type_from_abi).collect(),
+            ret: Box::new(type_from_abi(ret)),
+        },
     }
 }
 

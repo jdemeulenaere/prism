@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 prism-ast = { path = "../prism-ast" }
 prism-abi = { path = "../prism-abi" }
+prism-typed-tree = { path = "../prism-typed-tree" }
 
 [dev-dependencies]
 prism-parser = { path = "../prism-parser" }
