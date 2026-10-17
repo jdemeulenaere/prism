@@ -1,0 +1,4 @@
+// expect: E4017
+struct User : Clone { val name: String }
+fun User.g(u: User = this): Int = 1
+consuming fun User.consumed(u: User = this): Int = 1

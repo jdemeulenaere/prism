@@ -83,6 +83,11 @@ impl BodyBuilder {
         self.body.statements[id].kind = kind;
     }
 
+    /// The number of closures open at the current point.
+    pub(crate) fn closure_depth(&self) -> usize {
+        self.closures.len()
+    }
+
     pub(crate) fn add_local(&mut self, local: Local) -> LocalId {
         self.body.locals.alloc(local)
     }

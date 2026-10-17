@@ -311,6 +311,10 @@ pub struct TypeChecker {
     /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
     /// the file does not import, which can be named in an `E4014` hint.
     seen_nominals: HashMap<String, Vec<NominalId>>,
+    /// While a parameter's default value is checked: the bindings it borrows (`this` and the
+    /// earlier parameters), and the number of closures open around the default. Moving one of
+    /// them outside a closure of the default is a move out of a borrow (D11 of `borrowck-moves`).
+    default_inputs: Option<(Vec<prism_typed_tree::LocalId>, usize)>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
@@ -352,6 +356,7 @@ impl TypeChecker {
             imported_extensions: HashMap::new(),
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
+            default_inputs: None,
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
@@ -1707,10 +1712,17 @@ impl TypeChecker {
         for p in &f.params {
             let p_ty = self.lower_type(&p.ty);
             // A default value is evaluated as the call's argument, so it is borrowed like one.
-            let default = p
-                .default_value
-                .as_ref()
-                .map(|default| self.check_argument(default, &p_ty, Origin::Value));
+            // Its generator only borrows `this` and the earlier parameters (D11 of
+            // `borrowck-moves`).
+            let inputs = (
+                self.builder.body_mut().parameters.clone(),
+                self.builder.closure_depth(),
+            );
+            let saved_inputs = self.default_inputs.replace(inputs);
+            let default = p.default_value.as_ref().map(|default| {
+                self.with_consuming(true, |c| c.check_argument(default, &p_ty, Origin::Value))
+            });
+            self.default_inputs = saved_inputs;
             self.builder.body_mut().defaults.push(default);
             let sym = self.bind_local(
                 &p.name,
@@ -4642,7 +4654,16 @@ impl TypeChecker {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.check_move_source(&field, ty);
         }
+        let mut borrowed = false;
         let source = match &expr.kind {
+            ExprKind::Ident(name) if self.is_default_input(name) => {
+                borrowed = true;
+                format!("parameter '{}', which a default value borrows", name)
+            }
+            ExprKind::This if self.is_default_input(THIS) => {
+                borrowed = true;
+                "'this', which a default value borrows".to_string()
+            }
             ExprKind::Ident(name) if self.is_top_level_value(name) => {
                 format!("top-level value '{}'", name)
             }
@@ -4660,21 +4681,38 @@ impl TypeChecker {
             Type::Nullable(_) => format!("{}?.clone()", expr),
             _ => format!("{}.clone()", expr),
         });
-        // A safe navigation is not a place, so borrowing it would move the field too.
-        let is_safe_nav = matches!(
-            expr.kind,
-            ExprKind::MemberAccess {
-                is_safe_nav: true,
-                ..
-            }
-        );
+        // A safe navigation is not a place, so borrowing it would move the field too; a default
+        // value's input is already borrowed.
+        let is_borrowed = borrowed
+            || matches!(
+                expr.kind,
+                ExprKind::MemberAccess {
+                    is_safe_nav: true,
+                    ..
+                }
+            );
         self.errors.push(TypeError::CannotMoveOut {
             source,
             ty: ty.clone(),
-            borrow: (!is_safe_nav).then(|| format!("&{}", expr)),
+            borrow: (!is_borrowed).then(|| format!("&{}", expr)),
             clone,
             span: expr.span,
         });
+    }
+
+    /// Whether `name` resolves to a binding that the default value being checked borrows (`this`
+    /// or an earlier parameter of its function), outside any closure of the default.
+    fn is_default_input(&self, name: &str) -> bool {
+        let Some((inputs, depth)) = &self.default_inputs else {
+            return false;
+        };
+        if self.builder.closure_depth() != *depth {
+            return false;
+        }
+        self.env
+            .lookup(name)
+            .and_then(Self::local_of)
+            .is_some_and(|local| inputs.contains(&local))
     }
 
     /// Whether `name` currently resolves to a top-level `val`, declared in this file or imported,

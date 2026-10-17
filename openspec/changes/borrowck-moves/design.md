@@ -224,7 +224,7 @@ Every passing fixture and example was written before uses after move were checke
 
 ### Implementation notes
 
-(Filled in during implementation.)
+- **D11: a default value is now a consuming position.** The type checker checked a default value with `check_argument(.., Origin::Value)`, which did not mark it consumed, so `fun f(a: String, b: String = a)` produced a typed tree whose default read `a` in place, and lowering it panicked ("a String place read in place is used as a value"). The default is now checked in a consuming position, as the argument it stands for, which makes `check_move_source` see the move and report `E4017`. For a shared receiver, `fun User.g(u: User = this)` was already `E4017` ("cannot move out of borrow 'this'", since `this` is `&User` there); the new source wording applies to an earlier by-value parameter and to a `consuming` receiver.
 
 ## Risks / Trade-offs
 

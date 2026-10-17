@@ -437,6 +437,31 @@ mod tests {
         assert!(!out.contains("clone"), "{out}");
     }
 
+    /// ownership: "Moving an earlier parameter in a default value".
+    #[test]
+    fn test_moving_an_earlier_parameter_in_a_default_value_help() {
+        let out = render_type_errors(
+            "struct User : Clone { val name: String }\nfun f(a: String, b: String = a): Int = 1\nconsuming fun User.g(u: User = this): Int = 1\n",
+        );
+        assert!(
+            out.contains(
+                "error[E4017]: cannot move out of parameter 'a', which a default value borrows"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("help: clone it: 'a.clone()'"), "{out}");
+        assert!(
+            out.contains("help: or take a '&String' where the value is used"),
+            "{out}"
+        );
+        assert!(
+            out.contains("error[E4017]: cannot move out of 'this', which a default value borrows"),
+            "{out}"
+        );
+        assert!(out.contains("help: clone it: 'this.clone()'"), "{out}");
+        assert!(!out.contains("borrow it instead"), "{out}");
+    }
+
     #[test]
     fn test_borrow_help_lines() {
         let out = render_type_errors(

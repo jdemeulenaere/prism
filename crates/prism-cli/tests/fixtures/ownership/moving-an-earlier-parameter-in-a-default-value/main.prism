@@ -1,0 +1,2 @@
+// expect: E4017
+fun f(a: String, b: String = a): Int = 1
