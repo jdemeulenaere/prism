@@ -1,0 +1,7 @@
+module app/main
+fun app/main::hello(): Int @5:1
+  local _0: Int (return)
+  bb0:
+    _0 = call models/user::greet(const 1) -> bb1 @5:20
+  bb1:
+    return @5:1

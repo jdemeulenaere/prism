@@ -1,0 +1,35 @@
+module main
+fun main::greet(_1: &String): Int @2:1
+  local _0: Int (return)
+  local _1 n: &String (argument)
+  bb0:
+    _0 = const 1 @2:39
+    return @2:1
+default main::greet n(_1: &mut String?): &String @2:24
+  local _0: &String (return)
+  local _1: &mut String? (argument)
+  bb0:
+    (*_1) = wrap const "anon" @2:24
+    _0 = &((*_1) as payload) (argument) @2:24
+    return @2:24
+fun main::f(): Int @3:1
+  local _0: Int (return)
+  local _1: String? (temporary)
+  local _2: &mut String? (temporary)
+  local _3: &String (temporary)
+  bb0:
+    storage_live _1 @3:16
+    _1 = const null @3:16
+    storage_live _2 @3:16
+    _2 = &mut _1 (default) @3:16
+    storage_live _3 @3:16
+    _3 = call default main::greet n(move _2) -> bb1 @3:16
+  bb1:
+    _0 = call main::greet(move _3) -> bb2 @3:16
+  bb2:
+    storage_dead _3 @3:16
+    storage_dead _2 @3:16
+    drop _1 -> bb3 @3:16
+  bb3:
+    storage_dead _1 @3:16
+    return @3:1

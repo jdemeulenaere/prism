@@ -1,0 +1,14 @@
+module app/main
+fun app/main::f(_1: String): String @5:1
+  local _0: String (return)
+  local _1 s: String (argument)
+  local _2: &String (temporary)
+  bb0:
+    storage_live _2 @5:34
+    _2 = &_1 (argument) @5:34
+    _0 = call lib/text::shout(move _2) -> bb1 @5:28
+  bb1:
+    storage_dead _2 @5:28
+    drop _1 -> bb2 @5:1
+  bb2:
+    return @5:1

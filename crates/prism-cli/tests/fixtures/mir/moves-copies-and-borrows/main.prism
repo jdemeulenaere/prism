@@ -1,0 +1,3 @@
+// expect: ok
+fun greet(n: &String): Int = 1
+fun f(s: String, n: Int): Int { val a = n; val b = s; return greet(b) }

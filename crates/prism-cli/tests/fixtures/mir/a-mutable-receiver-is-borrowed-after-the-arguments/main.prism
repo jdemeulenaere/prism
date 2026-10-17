@@ -1,0 +1,5 @@
+// expect: ok
+struct Stack { var count: Int }
+mut fun Stack.push(n: Int) {}
+fun Stack.size(): Int = count
+fun f() { var v = Stack(0); v.push(v.size()) }

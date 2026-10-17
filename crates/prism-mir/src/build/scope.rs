@@ -147,6 +147,15 @@ impl Builder<'_> {
         }
     }
 
+    /// Whether `local` is a temporary owned by the innermost scope.
+    pub(super) fn is_temporary_of_innermost_scope(&self, local: LocalId) -> bool {
+        self.locals[local].kind == LocalKind::Temporary
+            && self
+                .scopes
+                .last()
+                .is_some_and(|scope| scope.locals.iter().any(|s| s.local == local))
+    }
+
     /// Records the temporaries `operand` moves out of as a whole.
     pub(super) fn record_operand_moved(&mut self, operand: &Operand) {
         if let Operand::Move(place) = operand {

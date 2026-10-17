@@ -1,0 +1,26 @@
+module main
+compose fun main::Label(): Unit @2:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @2:21
+    return @2:1
+fun main::log(): Unit @3:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @3:11
+    return @3:1
+compose fun main::Screen(): Unit @4:1
+  local _0: Unit (return)
+  local _1: Unit (temporary)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _1 @4:24
+    _1 = call compose main::Label() -> bb1 @4:24
+  bb1:
+    storage_dead _1 @4:24
+    storage_live _2 @4:33
+    _2 = call main::log() -> bb2 @4:33
+  bb2:
+    storage_dead _2 @4:33
+    _0 = const () @4:22
+    return @4:1

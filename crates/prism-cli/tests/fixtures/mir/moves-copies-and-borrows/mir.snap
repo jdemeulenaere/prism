@@ -1,0 +1,31 @@
+module main
+fun main::greet(_1: &String): Int @2:1
+  local _0: Int (return)
+  local _1 n: &String (argument)
+  bb0:
+    _0 = const 1 @2:30
+    return @2:1
+fun main::f(_1: String, _2: Int): Int @3:1
+  local _0: Int (return)
+  local _1 s: String (argument)
+  local _2 n: Int (argument)
+  local _3 a: Int (user)
+  local _4 b: String (user)
+  local _5: &String (temporary)
+  bb0:
+    storage_live _3 @3:33
+    _3 = copy _2 @3:41
+    storage_live _4 @3:44
+    _4 = move _1 @3:52
+    storage_live _5 @3:68
+    _5 = &_4 (argument) @3:68
+    _0 = call main::greet(move _5) -> bb1 @3:62
+  bb1:
+    storage_dead _5 @3:55
+    drop _4 -> bb2 @3:31
+  bb2:
+    storage_dead _4 @3:31
+    storage_dead _3 @3:31
+    drop _1 -> bb3 @3:1
+  bb3:
+    return @3:1

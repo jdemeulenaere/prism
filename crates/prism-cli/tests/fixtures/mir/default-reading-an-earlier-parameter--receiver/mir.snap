@@ -1,0 +1,36 @@
+module main
+fun main::Stack.f(_1: &Stack, _2: Int): Int @3:1
+  local _0: Int (return)
+  local _1 this: &Stack (argument)
+  local _2 n: Int (argument)
+  bb0:
+    _0 = copy _2 @3:36
+    return @3:1
+default main::Stack.f n(_1: &&Stack): Int @3:22
+  local _0: Int (return)
+  local _1 this: &&Stack (argument)
+  bb0:
+    _0 = copy (*(*_1)).count @3:22
+    return @3:22
+fun main::g(_1: Stack): Int @4:1
+  local _0: Int (return)
+  local _1 s: Stack (argument)
+  local _2: &Stack (temporary)
+  local _3: &&Stack (temporary)
+  local _4: Int (temporary)
+  bb0:
+    storage_live _2 @4:24
+    _2 = &_1 (receiver) @4:24
+    storage_live _3 @4:24
+    _3 = &_2 (default) @4:24
+    storage_live _4 @4:24
+    _4 = call default main::Stack.f n(move _3) -> bb1 @4:24
+  bb1:
+    _0 = call main::Stack.f(move _2, move _4) -> bb2 @4:24
+  bb2:
+    storage_dead _4 @4:24
+    storage_dead _3 @4:24
+    storage_dead _2 @4:24
+    drop _1 -> bb3 @4:1
+  bb3:
+    return @4:1

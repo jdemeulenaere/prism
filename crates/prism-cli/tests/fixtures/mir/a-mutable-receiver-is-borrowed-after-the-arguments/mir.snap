@@ -1,0 +1,43 @@
+module main
+fun main::Stack.push(_1: &mut Stack, _2: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 this: &mut Stack (argument)
+  local _2 n: Int (argument)
+  bb0:
+    _0 = const () @3:28
+    return @3:1
+fun main::Stack.size(_1: &Stack): Int @4:1
+  local _0: Int (return)
+  local _1 this: &Stack (argument)
+  bb0:
+    _0 = copy (*_1).count @4:25
+    return @4:1
+fun main::f(): Unit @5:1
+  local _0: Unit (return)
+  local _1 v: Stack (user, var)
+  local _2: Int (temporary)
+  local _3: &Stack (temporary)
+  local _4: &mut Stack (temporary)
+  local _5: Unit (temporary)
+  bb0:
+    storage_live _1 @5:11
+    _1 = struct main::Stack(const 0) @5:19
+    storage_live _2 @5:36
+    storage_live _3 @5:36
+    _3 = &_1 (receiver) @5:36
+    _2 = call main::Stack.size(move _3) -> bb1 @5:36
+  bb1:
+    storage_live _4 @5:29
+    _4 = &mut _1 (receiver) @5:29
+    storage_live _5 @5:29
+    _5 = call main::Stack.push(move _4, move _2) -> bb2 @5:29
+  bb2:
+    storage_dead _5 @5:29
+    storage_dead _4 @5:29
+    storage_dead _3 @5:29
+    storage_dead _2 @5:29
+    _0 = const () @5:9
+    drop _1 -> bb3 @5:9
+  bb3:
+    storage_dead _1 @5:9
+    return @5:1

@@ -1,0 +1,4 @@
+// expect: ok
+struct Stack { var count: Int }
+fun Stack.f(n: Int = count): Int = n
+fun g(s: Stack): Int = s.f()
