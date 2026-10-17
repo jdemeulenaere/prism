@@ -52,3 +52,26 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         span: Span::dummy(),
     }
 }
+
+/// The MIR of `source`, a file `main` that must typecheck.
+pub(crate) fn lower(source: &str) -> prism_mir::MirFile {
+    let file = prism_parser::parse_source(source).expect("the source parses");
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+    let tree = checker.check_module(&file);
+    assert!(
+        checker.errors.is_empty(),
+        "type errors: {:?}",
+        checker.errors
+    );
+    prism_mir::lower_file(&tree)
+}
+
+/// The body of the function `name` of `file`.
+pub(crate) fn body<'a>(file: &'a prism_mir::MirFile, name: &str) -> &'a Body {
+    let (_, body) = file
+        .bodies
+        .iter()
+        .find(|(id, _)| file.body_name(*id) == format!("main::{}", name))
+        .unwrap_or_else(|| panic!("no body main::{} in\n{}", name, file.dump()));
+    body
+}

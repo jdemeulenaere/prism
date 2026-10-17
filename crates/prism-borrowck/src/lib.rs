@@ -19,8 +19,10 @@ pub mod dataflow;
 pub mod dominators;
 mod error;
 pub mod location;
+pub mod move_paths;
 #[cfg(test)]
 mod test_bodies;
+pub mod uses;
 
 pub use error::{BorrowError, BorrowErrorKind, Label};
 pub use location::Location;
