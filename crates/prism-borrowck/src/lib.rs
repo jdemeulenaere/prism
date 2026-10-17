@@ -15,6 +15,7 @@
 //! disjoint fields from the move paths' field projections; `borrowck-elision` adds returned
 //! borrows. Their errors join [`BorrowErrorKind`] with the next `E5xxx` codes.
 
+pub mod analyses;
 pub mod dataflow;
 pub mod dominators;
 mod error;

@@ -24,7 +24,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 5. Initialization analyses (D4)
 
-- [ ] 5.1 Add `src/analyses.rs` with `MaybeInitialized` and `ReachingUninitializations` over `MoveData`, as D4 defines their entry states and transfer functions. Verify with unit tests on bodies lowered from source: after `if (c) take(s)` `s` is possibly initialized and reached by one move; after `take(s); s = b` it is definitely initialized and reached by none; in `while (c) take(s)` the move reaches the loop head; in the `do`/`while` of N5 the condition is reached by the `StorageLive` of `x` on the `continue` path only.
+- [x] 5.1 Add `src/analyses.rs` with `MaybeInitialized` and `ReachingUninitializations` over `MoveData`, as D4 defines their entry states and transfer functions. Verify with unit tests on bodies lowered from source: after `if (c) take(s)` `s` is possibly initialized and reached by one move; after `take(s); s = b` it is definitely initialized and reached by none; in `while (c) take(s)` the move reaches the loop head; in the `do`/`while` of N5 the condition is reached by the `StorageLive` of `x` on the `continue` path only.
 
 ## 6. The use check and its diagnostics (D6, D7, D8, D9, D13)
 
