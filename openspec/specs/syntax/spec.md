@@ -36,7 +36,7 @@ All declarations marked `public` or `package` MUST declare explicit parameter ty
 - **THEN** type inference is permitted and the compiler infers the return type during body typechecking
 
 ### Requirement: Variable Bindings and Immutability
-Variables MUST be immutable by default using `val`, while mutable variables MUST be explicitly declared with `var`.
+Variables MUST be immutable by default using `val`, while mutable variables MUST be explicitly declared with `var`. `var` declares a mutable local only: a top-level declaration is always a `val` (see the [`ownership`](../ownership/spec.md) spec, "No Mutable Top-Level State").
 
 #### Scenario: Reassigning immutable val binding
 - **WHEN** code attempts to reassign a variable declared with `val` (`val x = 10; x = 20`)
@@ -424,6 +424,33 @@ The lexer MUST read `..<` as one token, and the parser MUST give it the preceden
 - **WHEN** parsing `fun f() { val for = 1 }`
 - **THEN** the parser reports `E2001`
 
+### Requirement: Copy and Clone Markers on Struct and Enum Declarations
+A struct or enum declaration MUST accept an optional marker, `: Copy` or `: Clone`, in Kotlin supertype position: after the name and type parameters, after a shorthand struct's parameter list, and before the body. Exactly one of the names `Copy` and `Clone` MUST follow the colon; anything else MUST be rejected with `E2001`. Both names stay ordinary identifiers everywhere else.
+
+#### Scenario: Markers on a block struct and an enum
+- **WHEN** parsing `struct Point : Copy { val x: Int, val y: Int }`, `struct User : Clone { val name: String }` and `enum Color : Copy { Red, Green }`
+- **THEN** the declarations parse, marked `Copy`, `Clone` and `Copy` respectively
+
+#### Scenario: Marker after type parameters and a shorthand parameter list
+- **WHEN** parsing `struct Tagged<T> : Copy { val id: Int }` and `struct Name(val v: String) : Clone`
+- **THEN** both declarations parse with their markers
+
+#### Scenario: Declaration without a marker
+- **WHEN** parsing `struct Point { val x: Int }`
+- **THEN** the declaration parses with no marker
+
+#### Scenario: Other names after the colon rejected
+- **WHEN** parsing `struct P : Eq { val x: Int }`, `struct P : Copy, Clone { val x: Int }`, `struct P : Copy, Copy { val x: Int }` or `struct P : { val x: Int }`
+- **THEN** the parser reports `E2001`, saying that exactly one of `Copy` and `Clone` may follow `:` in a struct or enum declaration, and that `Copy` already implies `Clone`
+
+#### Scenario: Marker in the wrong place rejected
+- **WHEN** parsing `struct P : Copy <T> { val x: T }` or `struct Id : Copy (val v: Int)`
+- **THEN** the parser reports `E2001`
+
+#### Scenario: Marker names remain identifiers
+- **WHEN** parsing `fun f(Copy: Int, Clone: Int): Int = Copy + Clone` and `struct Clone { val x: Int }`
+- **THEN** both declarations parse
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -436,7 +463,7 @@ Prism chooses Kotlin-like ergonomics combined with value ownership semantics to 
 - **Multi-statement closures.** Closure bodies are blocks, because single-expression closures cannot hold setup logic.
 - **`compose` is a soft keyword.** It is a modifier only directly before `fun`, so common API names such as `pipeline.compose()` stay usable.
 - **Borrowed struct fields are rejected in the parser.** Enforcing the zero-cost memory invariant at AST construction means no struct can ever carry a lifetime dependency.
-- **`package` declaration versus `package` modifier.** A lookahead (`is_package_decl_ahead`) treats `package` followed by a dotted name as a declaration and `package fun` (or `struct`, `enum`, `val`, `var`) as visibility.
+- **`package` declaration versus `package` modifier.** A lookahead (`is_package_decl_ahead`) treats `package` followed by a dotted name as a declaration and `package fun` (or `struct`, `enum`, `val`) as visibility.
 - **A fixed nesting limit (256) instead of a growable stack.** Recursive descent overflowed the stack on deep input and aborted the process. A fixed limit keeps the diagnostic the same for every build of the compiler and bounds the tree for every later recursive pass; growing the stack would need a dependency with a build script.
 - **Fail-fast errors.** The parser stops at the first syntax error with an exact span and never panics. Multi-error recovery is left for LSP support: it needs error nodes in the AST and synchronization points built on the newline and separator rules, and resynchronizing per declaration would change what `parse_source` returns (`harden-parser-grammar`).
 
@@ -455,3 +482,8 @@ Decisions from `statements-and-loops` (agreed with the user in the borrow-checke
 - **Assignment is a statement.** It's still allowed as an unbraced `if`/`else`, `when` or loop body, which keeps Kotlin forms such as `if (c) x = 1 else x = 2` working, as a one-statement block with no tail. Everywhere else, `=` in an expression is `E2001`. Keeping `Assign` as a `Unit`-typed expression was rejected because it would leave the statement-or-expression ambiguity in place.
 - **`..<` for half-open ranges.** It's Kotlin's own operator (since 1.9), at the precedence of `..`. Closed ranges only (`0..n - 1`) were rejected as off-by-one prone. Kotlin's `until` is an infix function there and would have to be a special-cased keyword here.
 - **Hard loop keywords.** `while`, `do`, `for`, `break` and `continue` are reserved, as in Kotlin. A soft keyword needs a following token to tell it apart, but `while (x)` would also read as a call.
+
+Decisions from `value-semantics` (agreed with the user):
+
+- **Markers in Kotlin supertype position, one name only.** `: Copy` or `: Clone` goes after the type parameters and a shorthand parameter list, before the body, where Kotlin writes supertypes and where a marker-trait list would go once traits exist. Only the identifiers `Copy` and `Clone` are accepted, exactly one, and neither is a keyword. A general supertype list was rejected: trait conformances are expected to need their own block, because methods are extension functions, so a list would invent rules for names that may never appear there. Widening the marker into a list later breaks no program.
+- **Top-level declarations are `val` only.** `var` declares locals; a top-level `var` is `E2001`, with a message pointing to locals, parameters and state handles (see `ownership`).

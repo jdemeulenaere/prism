@@ -88,9 +88,37 @@ The ABI MUST record the file's module path (its root-relative path without exten
 - **WHEN** an exported signature names a type that is neither declared in the file nor exported by a direct import
 - **THEN** ABI extraction succeeds and records the name unbound
 
+### Requirement: Copy and Clone Markers in the ABI
+The ABI MUST record each exported struct's and enum's marker (`Copy`, `Clone` or none), and the ABI hash MUST cover it. A marker is part of the type's exported contract, so adding, removing or changing it MUST change the ABI hash, as changing a field type does.
+
+#### Scenario: Adding or changing a marker changes the ABI hash
+- **WHEN** `public struct Point { val x: Int }` gains `: Clone`, then `: Clone` becomes `: Copy`, or `public enum Color { Red }` gains `: Copy`
+- **THEN** the file's exported ABI hash changes at each step, and the ABI records the new marker
+
+#### Scenario: Marker on a private type
+- **WHEN** a private struct that no exported signature mentions gains or loses a marker
+- **THEN** the exported ABI hash is unaffected
+
+### Requirement: Markers of Referenced Nominal Types
+Each nominal type in an exported signature MUST record the referenced struct's or enum's marker, taken from the defining file's declarations alone (its own, or a direct import's exported ones), never from a body, and covered by the ABI hash. An importer MUST learn whether a type is `Copy` or `Clone` from the signature that mentions it, without importing the type's module.
+
+#### Scenario: Referenced type records its marker
+- **WHEN** `shop/models` exports `public struct Money : Copy { val cents: Int }` and `public struct Note : Clone { val text: String }`, and `shop/api` imports it and exports `public struct Order { val price: Money, val note: Note }`
+- **THEN** the ABI of `shop/api` records `Order.price` as `Money` from module `shop/models` marked `Copy`, and `Order.note` as `Note` marked `Clone`
+
+#### Scenario: Changing a referenced type's marker
+- **WHEN** `Money` in `shop/models` loses its `: Copy` marker and nothing else changes
+- **THEN** the ABI hashes of both `shop/models` and `shop/api` change
+
+#### Scenario: Built-in Range in an exported signature
+- **WHEN** a file that neither declares nor imports a type named `Range` exports `public struct Span : Copy { val r: Range }`, and an importer reads `s.r` by value for `s: Span`
+- **THEN** the ABI records `r` as the built-in `Range` type, and the importer's read typechecks as a copy
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
 - **The hash ignores spans and formatting.** Source positions, comments and whitespace are excluded, including from a generic function's body hash, so reformatting never invalidates downstream files.
 - **Block-bodied exports default to `Unit` here.** ABI extraction only rejects expression-bodied exports without a return type. The type checker rejects both forms (`E4011`). Whether to tighten the ABI rule or relax the specs is an open item in `ROADMAP.md` (`resolve-nominal-type-annotations`).
 - **The hash algorithm is not final.** The code uses a 128-bit FNV-1a hash. The original design called for BLAKE3, and the choice must be made before the `.abi` cache exists (`docs/architecture.md` section 1).
+- **Markers on declarations and on every reference** (`value-semantics`, decided by the user). Each exported struct and enum records its marker (`Copy`, `Clone` or none), and so does each nominal reference in an exported signature, so an importer knows how values of a type may be duplicated without importing its module. Phase 1a reads markers from the AST alone, so no body is read and import cycles still work. Changing a type's marker therefore changes the ABI hash of every file whose exported signatures mention it, which is correct, because what importers may do with those values changes. Requiring the import (`E4014`) whenever Copy-ness is needed was rejected because an import would change whether unrelated code compiles, and treating an unknown marker as "none" because it gives false errors.
+- **The built-in `Range` has its own ABI node** (`value-semantics`). It was recorded as an unbound name and came back to importers as an opaque type, which would have made an imported `Range` field move-only. A user-declared or imported `Range` still binds first.

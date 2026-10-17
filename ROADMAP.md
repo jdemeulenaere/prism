@@ -43,9 +43,9 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is one OpenSpec change, in this order; the decisions behind them are in [`docs/architecture.md`](docs/architecture.md) §1 (pipeline) and §3 (memory model).
 
 1. [x] `statements-and-loops`: a `Statement` AST type (`Block` with an explicit tail expression, assignment as a statement); `while`, `do`/`while`, `for (x in range)` over the built-in `Range`; `break`/`continue` as `Nothing`-typed expressions with `E4015` outside a loop; the `..<` half-open range operator.
-2. [ ] `value-semantics`: opt-in `: Copy` on structs and enums, checked structurally and recorded in the ABI; the built-in `Copy` table (`String` is move-only); a move's source must be a whole owned local; top-level `var` removed.
-3. [ ] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it.
-4. [ ] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site.
+2. [x] `value-semantics`: opt-in `: Copy` and `: Clone` markers on structs and enums, checked structurally and recorded in the ABI; the built-in `Copy` and `Clone` tables (`String` is `Clone` but move-only); a built-in `x.clone()`; a move's source must be a whole owned local (`E4017`); top-level `var` removed.
+3. [ ] `reference-access`: implicit shared borrow at argument sites (temporaries included); implicit copy-out of `Copy` values from borrows, and moving out of a borrow rejected; prefix `*` for writing through a reference (`*r = v`); `var` reference bindings can be re-pointed; passing a `&mut` binding reborrows it. Moving out of a borrow extends `E4017` with the source "borrow" rather than taking a new code, and borrowing a nullable's contents without cloning (`&(T?)` to `(&T)?`) needs a design (both from `value-semantics`).
+4. [ ] `extension-methods`: methods are extension functions only, declarable in any file, with `fun` / `mut fun` / `consuming fun` receiver modes, implicit `this` and static dispatch; receivers borrow implicitly at the call site. A field takes precedence over an extension of the same name, as a field named `clone` does over the built-in `clone()`, and a user extension named `clone` on a `Clone` type is rejected (from `value-semantics`).
 5. [ ] `typed-tree`: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit copy/move/borrow adjustments; no behavior change.
 6. [ ] `mir-lowering`: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with a `--dump-mir` text format for snapshot tests.
 7. [ ] `borrowck-moves`: a `prism-borrowck` crate and the `E5xxx` code range; use after move, including conditional and loop moves, and reinitialization by assignment.
@@ -65,13 +65,15 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] Decide whether `while (true)` with no `break` should have type `Nothing`, so a non-`Unit` function needs no `return` after it; this would only relax the current rule (non-goal of `statements-and-loops`).
 - [ ] Decide whether an unbraced loop or `if` body may itself be a loop (`for (i in a) for (j in b) g(i, j)`, valid in Kotlin); today an unbraced body is an expression or an assignment only (from `statements-and-loops`).
 - [ ] Possible relaxation: partial moves out of owned locals, if destructuring proves insufficient.
+- [ ] Possible relaxation: moving a field out of a temporary (`make().name`), rejected by `value-semantics` so that no temporary needs a partial drop.
+- [ ] Moves of variables captured by closures: `value-semantics` treats a capture as a local; with inferred-borrow captures (`borrowck-exclusivity`) such a move is a move out of a borrow.
 
 ### Other Phase 2 items
 - [ ] Decide the authoritative ABI hash algorithm: BLAKE3 (original design) or the current FNV-1a ([`docs/architecture.md`](docs/architecture.md) §1).
 - [ ] `.abi` cache and compilation avoidance ([`docs/architecture.md`](docs/architecture.md) §1).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
 - [ ] Compound assignment (`+=`, `-=`) and bitwise operators (deferred by the `lexer-parser` change).
-- [ ] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`). Until `Copy` bounds exist, type parameters are move-only.
+- [ ] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`). Until `Copy` and `Clone` bounds exist, type parameters are neither `Copy` nor `Clone` (from `value-semantics`).
 - [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`).
 - [ ] Qualified type paths such as `models.User`; imports currently bring symbols in by bare name (deferred by `resolve-nominal-type-annotations`).
 - [ ] Fix: calling a struct-typed value (`p()` where `p: Point`) goes through the constructor branch of `infer_call_expr` (noted in `resolve-nominal-type-annotations`).
@@ -82,7 +84,8 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] Unify the missing-return-type rule: `prism-abi` accepts a block-bodied exported function without a return type as `Unit` and only rejects expression bodies (`E3001`), while the type checker rejects both (`E4011`). Tighten the ABI rule or relax the specs (open question in `resolve-nominal-type-annotations`).
 - [ ] Reject recursive struct and enum layouts that lack `Heap<T>` indirection (deferred by `fix-cli-workspace-audit`).
 - [ ] Parser error recovery: report several syntax errors per file instead of stopping at the first, needed for the LSP (deferred by `lexer-parser`, and again by `harden-parser-grammar` until the AST has error nodes).
-- [ ] Traits or interfaces for polymorphism and dynamic dispatch; not designed yet (deferred by `type-checker-core`).
+- [ ] Traits or interfaces for polymorphism and dynamic dispatch; not designed yet (deferred by `type-checker-core`). Custom `clone()` bodies wait for them: today a `Clone` type's clone clones each field (from `value-semantics`).
+- [ ] Reject borrows in enum payloads (`enum A { X(&Int) }`), as the parser already does for struct fields; today such an enum may even be `: Copy` (found by `value-semantics`).
 - [x] Decide whether a top-level declaration may shadow an imported symbol instead of reporting `E4010` (follow-up from `typechecker-soundness`, D7). Decided and done in `shadowing-and-import-paths`.
 - [x] Decide whether a local declared in a function body may shadow a parameter (`fun f(a: Int) { val a = 2 }`, accepted today; Kotlin warns, Rust allows). Fixture `type-system/duplicate-symbol-declaration-rejected--local-duplicating-a-parameter` pins current behavior. Decided and done in `shadowing-and-import-paths`.
 - [x] Decide which stage owns `.`/`..` import segments: the parser rejects them first (`E2001`), so the spec'd resolver code `E1006` is only reachable for `import self`. The `package-resolution/import-attempting-directory-traversal--*` fixtures pin current behavior. Decided and done in `shadowing-and-import-paths`.
