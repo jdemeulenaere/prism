@@ -7,7 +7,7 @@ The code generation specification defines the Tier 1 backend: how the elaborated
 ## Requirements
 
 ### Requirement: Tier 1 Compiles Elaborated MIR in Memory
-`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, without invoking any external program such as a linker or an assembler. Every body MUST be compiled except generic bodies, which are compiled only as the instances the program calls, and closure bodies, which wait for closure conversion.
+`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, without invoking any external program such as a linker or an assembler. Every body MUST be compiled, closure bodies included, except generic bodies and the closures inside them, which are compiled only as the instances the program calls.
 
 #### Scenario: Running a scalar program
 - **WHEN** `fun square(x: Int): Int = x * x` and `fun main() { println(square(7)) }` are declared in `main.prism` and `prism run main.prism` runs
@@ -20,6 +20,10 @@ The code generation specification defines the Tier 1 backend: how the elaborated
 #### Scenario: A called generic function is compiled per instance
 - **WHEN** `fun <T> keep(x: T): T = x` and `fun main() { println(keep(1)); println(keep(true)) }` are declared and `prism run main.prism` runs
 - **THEN** it prints `1` and `true` and exits with status 0
+
+#### Scenario: A closure is compiled
+- **WHEN** `fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))` and `fun main() { println(twice({ n -> n * 3 }, 2)) }` are declared and `prism run main.prism` runs
+- **THEN** it prints `18` and exits with status 0
 
 ### Requirement: One Code Unit per File
 Each file MUST be compiled into its own code unit from its own elaborated MIR alone. A code unit MUST refer to the functions and top-level values of other files only by their symbols, so that its code does not depend on how those files are compiled.
@@ -160,7 +164,7 @@ Each top-level `val` MUST have storage in its file's code unit and an accessor t
 - **THEN** it prints the same text both times and exits with status 0
 
 #### Scenario: Dumping a file the backend rejects
-- **WHEN** `prism dump-clif main.prism` runs on a file holding `fun f(g: () -> Int): Int = 1`
+- **WHEN** `prism dump-clif main.prism` runs on a file holding `compose fun Label() {}`
 - **THEN** it reports `E6001`, prints no IR, and exits with a failure status
 
 ### Requirement: Layout Dump
@@ -171,8 +175,8 @@ Each top-level `val` MUST have storage in its file's code unit and an accessor t
 - **THEN** it prints the same text both times and exits with status 0
 
 #### Scenario: A type without a layout yet
-- **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Task { val run: () -> Unit }` and `struct Box<T>(val v: T)`
-- **THEN** it lists `Task` as having no layout yet because of function values and closures, and `Box` as laid out per instance, and exits with status 0
+- **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Task { val run: () -> Unit }`, `struct Box<T>(val v: T)` and `struct Odd { val w: Widget }`, with no declaration of `Widget`
+- **THEN** it lists `Task` with size 16 and `run` at offset 0, `Box` as laid out per instance, and `Odd` as having no layout because of values of unknown type `Widget`, and exits with status 0
 
 #### Scenario: Dumping a file with errors
 - **WHEN** `prism dump-layout main.prism` runs on `struct P { val x: Int }` and `fun f(): Int = nope`
@@ -311,31 +315,20 @@ Every drop, clone and equality glue function MUST check the stack on entry, as c
 Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
 
 #### Scenario: A struct is rejected
-- **WHEN** `struct P { val run: () -> Int }`, `fun one(): Int = 1` and `fun main() { val p = P(one); println(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` in `main`, naming function values and closures, with a note naming the `closures` change, prints nothing to stdout and exits with status 1
+- **WHEN** `struct P { val content: compose () -> Unit }` and `fun main() { val p = P({}); println(1) }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `{}`, naming composable functions, with a note naming the `compose-transform` change, prints nothing to stdout and exits with status 1
 
 #### Scenario: A recursive enum runs
 - **WHEN** `enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun main() { val e = Expr.Add(Heap(Expr.Literal(1)), Heap(Expr.Literal(2))); println(1) }` are declared
 - **THEN** `prism run --check-allocations main.prism` prints `1`, writes nothing to stderr and exits with status 0
 
 #### Scenario: Unsupported constructs in several forms
-- **WHEN** a program's `main` runs `val f = { 1 }`, or the program declares `compose fun Label() {}` or `fun first(g: () -> Int): Int = 1`
-- **THEN** `prism run` reports `E6001` naming closures at `{ 1 }`, composable functions at `Label`, and function values at the declaration of `first`, and runs nothing
+- **WHEN** a program's `main` runs `val c: compose () -> Unit = {}`, or the program declares `compose fun Label() {}` or `fun first(w: Widget): Int = 1` with no declaration of `Widget`
+- **THEN** `prism run` reports `E6001` naming composable functions at `{}` and at `Label`, and values of unknown type `Widget` at the declaration of `first`, and runs nothing
 
 #### Scenario: One error per body
-- **WHEN** `fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }` and `fun g(): Int { val c = { 3 }; return 2 }` are declared with a `main` that calls neither
-- **THEN** `prism run` reports exactly two `E6001`, one at the first closure in `f` and one at the closure in `g`
-
-### Requirement: Aggregates Holding Function Values Are Rejected
-A struct, enum or nullable holding a function value MUST be rejected with `E6001`, naming what it holds, until `closures` supports them.
-
-#### Scenario: A struct holding a function value
-- **WHEN** `struct Task { val run: () -> Int }`, `fun size(t: &Task): Int = 1` and `fun main() { println(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming function values and closures, and exits with status 1
-
-#### Scenario: An enum holding a function value is rejected
-- **WHEN** `enum Job { Run(() -> Int), Idle }` and `fun main() { val j = Job.Idle }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `Job.Idle`, naming function values and closures, prints nothing to stdout and exits with status 1
+- **WHEN** `fun f(a: Widget, b: Gadget): Int = 1` and `fun g(c: Widget): Int = 2` are declared, with no declaration of `Widget` or `Gadget`, with a `main` that calls neither
+- **THEN** `prism run` reports exactly two `E6001`, one at the declaration of `f`, naming `Widget`, and one at the declaration of `g`
 
 ### Requirement: A Template Is One Runtime Call
 The backend MUST lower a template rvalue to one call of a runtime function receiving the destination and a table of the parts in order: text parts as the address, byte length and character count of the code unit's literal data, string parts as the address of the borrowed string, and scalar parts as their values. A template MUST NOT call any other string or conversion function of the runtime, and MUST NOT be rejected with `E6001`.
@@ -379,11 +372,80 @@ An instance's symbol MUST be its generic's symbol followed by its type arguments
 - **THEN** `prism dump-clif --instances app/main.prism` prints the functions `lib/box::keep<lib/user::User>`, `lib/box::lib/box.Box.get<Int>`, `lib/box::pad<Int>` and `lib/box::pad<Int>#default(y)`, and `prism run --check-allocations app/main.prism` prints `1` and `2`
 
 ### Requirement: The Backend Checks Each Instance
-The backend MUST check each instance it compiles as it checks every other body, and MUST report an unsupported construct of an instance at its location in the generic's source, once however many instances share it.
+The backend MUST check each instance it compiles as it checks every other body, closures of the instance included, and MUST report an unsupported construct of an instance at its location in the generic's source, once however many instances share it.
 
 #### Scenario: An unsupported construct in a generic body
-- **WHEN** `lib/run.prism` declares `public fun <T> later(x: T): Int { val f = { 1 }; return 1 }`, and `app/main.prism` imports `/lib/run` and declares `fun main() { println(later(1)); println(later(true)) }`
-- **THEN** `prism check app/main.prism` passes, and `prism run app/main.prism` reports exactly one `E6001`, at `{ 1 }` in `lib/run.prism`, naming closures, and runs nothing
+- **WHEN** `lib/run.prism` declares `public fun <T> later(x: T): Int { val f: compose () -> Unit = {}; return 1 }`, and `app/main.prism` imports `/lib/run` and declares `fun main() { println(later(1)); println(later(true)) }`
+- **THEN** `prism check app/main.prism` passes, and `prism run app/main.prism` reports exactly one `E6001`, at `{}` in `lib/run.prism`, naming composable functions, and runs nothing
+
+### Requirement: Function Values Are a Descriptor and an Environment
+A value of a function type, composable or not, MUST be 16 bytes with the alignment of a pointer: the address of its closure's descriptor at offset 0, never null, and the address of its environment at offset 8, null when the closure captures nothing. It MUST be held, passed and returned in memory like a struct, and a nullable function value MUST be laid out with a tag byte.
+
+#### Scenario: Layout of a struct holding a function value
+- **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Task { val run: () -> Unit, val id: Int }` and `fun later(f: (() -> Unit)?) {}`
+- **THEN** it shows `Task` with size 24 and alignment 8, `run` at offset 0 and `id` at 16, and `(() -> Unit)?` with size 24, its tag at offset 0 and its payload at 8
+
+#### Scenario: Signature of a function taking a function value
+- **WHEN** `fun call(f: () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs
+- **THEN** `call` takes one machine value, the address of `f`, and returns a 64-bit integer
+
+### Requirement: Each Closure Has a Descriptor
+Each compiled closure body MUST have one descriptor, static data of its code unit named `<closure symbol>#descriptor`, holding the address of the function-table slot of the closure's code and the environment's drop entry, which MUST be null for a closure that captures by borrow. Every value the closure builds MUST point at that descriptor.
+
+#### Scenario: Building a closure names its descriptor
+- **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs on a file holding `fun main() { val a = 1; println(run { a + 1 }) }`
+- **THEN** the body of `main` writes the address of the data symbol `main::main#closure0#descriptor` into the closure value it passes to `run`
+
+### Requirement: Closure Code Is a Function With Its Own Slot
+Each closure body outside a generic body MUST be compiled as a function of its file's code unit with its own function-table slot, named `<parent symbol>#closure<i>` after the body it is lowered in and its index there. Its signature MUST be its body's, with the environment's address after the result address and before the parameters.
+
+#### Scenario: Closure functions in the IR dump
+- **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs on a file holding `fun main() { val a = 1; println(run { a + 1 }) }`
+- **THEN** it prints the functions `main::run`, `main::main` and `main::main#closure0`, the last taking one pointer and returning a 64-bit integer, and `prism run main.prism` prints `2`
+
+#### Scenario: Symbols of nested and default closures
+- **WHEN** `fun run(f: () -> Int): Int = f()` and `fun pick(n: Int, f: () -> Int = { 3 }): Int = n + f()` are declared and `prism dump-clif main.prism` runs on a file holding `fun main() { println(run { run { 1 } }); println(pick(1)) }`
+- **THEN** it prints the functions `main::main#closure0`, `main::main#closure0#closure0` and `main::pick#default(f)#closure0`, and `prism run main.prism` prints `1` and then `4`
+
+### Requirement: Calls of Function Values Go Through the Descriptor's Slot
+A call of a function value MUST load the slot address from the value's descriptor and the code from that slot, and call it indirectly with the value's environment address, so that a repointed slot is followed by every value built before. No call of a function value MUST be inlined.
+
+#### Scenario: A call of a function value in the IR dump
+- **WHEN** `fun call(f: () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs
+- **THEN** the body of `call` loads the descriptor from `f`, the slot address from the descriptor and the code from the slot, and calls it indirectly passing the environment address loaded from `f`
+
+#### Scenario: A repointed closure slot is followed
+- **WHEN** a program declares `fun run(f: () -> Int): Int = f()` and `fun main() { println(run { 1 }); println(run { 2 }) }`, and before `main` runs the slot of `main::main#closure0` is pointed at the code of `main::main#closure1`
+- **THEN** the program prints `2` twice
+
+### Requirement: Environments of Borrowing Closures Hold Pointers in the Creating Frame
+The environment of a closure that captures by borrow MUST hold the address of each captured place, one pointer per capture in capture order, in stack storage of the function that builds the closure. Building or calling such a closure MUST NOT allocate.
+
+#### Scenario: A writing closure allocates nothing
+- **WHEN** `fun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }` is declared and `prism dump-clif main.prism` runs on a file holding `fun main() { var count = 0; repeat(3) { count += 1 }; println(count) }`
+- **THEN** no function of the file calls the runtime's allocation function, and `prism run main.prism` prints `3`
+
+#### Scenario: A closure built in an earlier iteration still runs
+- **WHEN** `fun main() { val a = 10; var keep: () -> Int = { 0 }; var i = 0; while (i < 3) { val g = { a + 1 }; if (i == 0) keep = g; i += 1 }; println(keep()) }` runs with `--check-allocations`
+- **THEN** it prints `11`, reports no live allocation and exits with status 0
+
+### Requirement: Dropping a Function Value Runs Its Drop Entry
+Dropping a function value, alone or as a part of a struct, enum or nullable, MUST run the drop glue of its function type, `<module>#drop(<function type>)`, which MUST call the descriptor's drop entry with the environment's address when the entry is not null and do nothing otherwise.
+
+#### Scenario: Drop glue of a function type in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct Task { val run: () -> Int, val name: String }` and `fun f(t: Task) {}`
+- **THEN** after the file's functions it prints `function main#drop(() -> Int)` and `function main#drop(main::Task)`, which calls it for `run`
+
+#### Scenario: Dropping a struct holding a function value
+- **WHEN** `struct Task { val run: () -> Int, val name: String }` is declared and `fun main() { val t = Task({ 7 }, "a" + "b"); println(t.run()); println(t.name) }` runs with `--check-allocations`
+- **THEN** it prints `7` and then `ab`, reports no live allocation and exits with status 0
+
+### Requirement: Closures of Instances Are Compiled in the Instance's Unit
+The closures lowered inside a generic body MUST be compiled as part of each instance of that body, in the instance's code unit, each with its own slot and named `<instance symbol>#closure<i>`.
+
+#### Scenario: A closure in an instance
+- **WHEN** `fun run(g: () -> Int): Int = g()` and `fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }` are declared and `prism dump-clif --instances main.prism` runs on a file holding `fun main() { println(count(2) { n -> n * 10 }) }`
+- **THEN** it prints the functions `main::count<Int>` and `main::count<Int>#closure0`, and `prism run main.prism` prints `21`
 
 ## Design Rationale
 
@@ -427,7 +489,7 @@ Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, 
 - **Clone glue follows drop glue** (D10). `<unit module>#clone(<type>)` takes the destination's and the source's addresses, copies the whole value bitwise (every part that owns nothing, the tag and the padding) and then replaces each owning part of the current variant or payload, in declaration order, by a clone made by its own glue; a `String` is cloned by `prism_rt_string_clone` (a copy when it owns no buffer, a new exactly sized one otherwise). Glue exists only for `Clone` types, runs no user code, and shares no owned memory with the source.
 - **Equality stays inline; strings compare in the runtime** (D11). Without `Heap<T>` no type reaches itself, so inline expansion still terminates; a `String` part calls `prism_rt_string_equals`. `heap-boxes` turned the comparison of boxed aggregates into `#equals` glue functions of the same kind (below).
 - **Strings in the calling convention** (D16). `String` is `Representation::Memory`, so every rule for aggregates applies: a stack slot per local, parameters by the address of caller-owned memory (a literal operand is first built in a slot), results through the caller's result address, a move a 32-byte copy that leaves the source untouched. A top-level `String`'s `#storage` is 32 bytes and its accessor registers it with the runtime once initialized (see `execution`).
-- **What the backend still rejects** (D18). Strings and every type holding them are supported; `classify` names, in field order, function values and closures (`closures`), composable functions (`compose-transform`) and values of unknown type (calls of generic functions too, until `monomorphization` made them run), and the fixtures that pinned strings as unsupported pinned `Heap<T>` until `heap-boxes` moved them to function values.
+- **What the backend still rejects** (D18). Strings and every type holding them are supported; `classify` names, in field order, function values and closures (until `closures` made them run), composable functions (`compose-transform`) and values of unknown type (calls of generic functions too, until `monomorphization` made them run), and the fixtures that pinned strings as unsupported pinned `Heap<T>` until `heap-boxes` moved them to function values.
 
 Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
@@ -456,7 +518,19 @@ Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined w
 - **Instance symbols name their type arguments** (D4). The generic's symbol, then its arguments in angle brackets separated by `, `, written as glue names types (structs and enums qualified by module): `lib/box::keep<lib/user::User>`, `lib/box::lib/box.Box.get<Int>` (an extension's arguments are its own type parameters', in declaration order), `lib/box::pad<Int>#default(y)`; `closures` will name an instance's closures `<instance symbol>#closure<i>`. The unit is named by the symbol, which prefixes its data and glue (`lib/box::keep<lib/user::User>#drop(lib/user::User)`). Arguments are normalized types, so `keep<Int?>` named twice is one instance. Rejected: a hash of the arguments, as Rust's mangling does (unreadable dumps and stub errors; Tier 2 escapes symbols anyway); numbering instances per program (unstable as a program grows, so `hot-reload` could not match old and new).
 - **Instances are collected over the whole program** (D5). `collect_instances` (`crates/prism-codegen/src/instances.rs`) builds every generic's record (`compilation-and-abi`), rejects cross-file growing cycles (`E6004`, `generics`), and runs a worklist from the calls with type arguments in every compiled body: a request is the body, its arguments and the definitions they mention, taken from the requester's table; a request whose symbol is already built or queued is dropped before its definitions are gathered; each instance's own calls become requests from the instance's table. Built-ins with type arguments (`Heap<T>(...)`, `clone()`) are lowered directly, not instantiated. Units are sorted by symbol, so linking and dumps are deterministic. The work is linear in the program's distinct instances and their sizes, plus a hash lookup per generic call site, and it terminates because no growing cycle exists. Collection is the first step of Phase 3 over a program and reports a backend-stage error, so it lives in `prism-codegen`, while substitution, a MIR-to-MIR function, lives in `prism-mir`. `Program::compile` and `prism run` call it after the per-file checks. Rejected: a `prism-monomorphize` crate for two modules; collection in the CLI driver, duplicated for `Program::compile` and the dumps.
 - **The backend checks every instance** (D10, D17). Some constructs become unsupported only through a type argument, so the `E6001` check runs on each instance unit and reports at the generic's source, once per (file, location, construct) however many instances share it, and errors in generics of several files are reported per file in compile order. A type parameter reaching a compiled body is the construct `TypeParameter` ("values of the uninstantiated type parameter 'T'"), which no program reaches since instances have none and generic bodies are not compiled, so a backend bug gives a diagnostic rather than a crash. "Calls of generic functions" left `E6001`.
-- **Closures inside generic bodies wait for `closures`** (D12). A generic's closure bodies are part of its record but not compiled, and an instance building a closure is `E6001` at the closure in the generic's source, its closure bodies not copied into the unit. `closures` will instantiate them with their parent's arguments, in the parent instance's unit.
+- **Closures inside generic bodies wait for `closures`** (D12; superseded by `closures` D11, below, which compiles them with each instance). A generic's closure bodies are part of its record but not compiled, and an instance building a closure is `E6001` at the closure in the generic's source, its closure bodies not copied into the unit. `closures` will instantiate them with their parent's arguments, in the parent instance's unit.
 - **An instance reports and stores as its generic's file** (D14). An instance unit's runtime file name is the generic's file, so a runtime error inside it names the generic's file and position whoever called it. Its string literals are data of its own unit, named after the unit; top-level `val`s are reached through their accessors' slots.
 - **`--instances` on `dump-clif`** (D11). `prism dump-clif --instances` compiles the whole program, as `prism run` does, and prints every instance unit's functions and glue in symbol order; plain `prism dump-clif` still compiles the file alone and prints no instance.
 - **Measured cost** (D17). `compile_timing.rs` has an `inst` stage (collection, the `E6004` check and the support check of every instance) and shapes for many call sites of one generic, one generic at 4096 struct types, a chain of 4096 generics reached transitively, generic calls nested 120 deep and 4096 nested generic structs; every stage grows linearly. Code generation per instance is inherent to monomorphization; instance units make it cacheable by `instance-cache`.
+
+Decisions from `closures` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **A function value is a descriptor address and an environment address** (D2). 16 bytes, held in memory like a struct: the closure's descriptor (never null) and its environment (null without captures). One representation serves closures with and without captures, adapters for function names, and the owned environments of `escaping-closures`, so `(A) -> R` is one type and a call never asks where the value came from. Rejected: a bare code pointer (cannot carry captures), a code address and an environment (a stored value would keep running pre-reload code, and there is no place for a drop), three words (every later entry would grow every function value), a boxed closure (allocates per closure) and an inline environment (the type's size would depend on the closure). A nullable function value is a tag and the value, 24 bytes; a null descriptor as `null` is an open niche.
+- **One descriptor per closure body, static data** (D3). `<closure symbol>#descriptor` holds a data relocation to the closure's slot, never a code address, so a repointed slot is followed by every value built before it and old descriptors stay valid across `hot-reload`, and the environment's drop entry, null for every borrowing closure. Rejected: descriptors per site (the same thing, one site per body), per function type (a descriptor names its closure's slot) and in the function table (slots hold code only).
+- **A closure's code is a function with its own slot** (D4), `<parent symbol>#closure<i>`, the name `codegen-core` reserved, with the environment after the result address and before the parameters, even when null, so every call of a function value has one shape. Rejected: the environment last (moves with every parameter list) and in a fixed register (the host C convention has none).
+- **Borrowing environments are pointers in the creating frame** (D5). One word per capture, the captured place's address, in a stack slot of the building function, rewritten each time the closure is built. It is sound because a capturing closure never outlives its frame (`E5007`) and a capture's loan keeps the captured place alive (`E5006`); rebuilding in a loop writes the same addresses, so a value from an earlier iteration still reads correct ones. Every captured local is kept in memory. Rejected: copying shared `Copy` captures (a closure may return a borrow of what it captures, which must point at the binding), an explicit MIR environment local (a type and MIR change for frame-lived storage) and a heap environment (an allocation per `run { ... }`).
+- **Calls go through the descriptor's slot** (D6): three dependent loads, one more than a named call, the price of reaching reloaded code from a stored value in Tier 1; Tier 2 can call known closures directly. The function value is read in place, also through references and boxes (found in review).
+- **Dropping a function value runs its descriptor's drop entry** (D9) through `<unit>#drop(<function type>)`, dynamic because one parameter can hold either kind of closure once `escaping-closures` lands. Function types stay neither `Copy` nor `Clone` (a copy would duplicate mutable borrows; an owned environment's clone is not promised by the type).
+- **Composable closures wait for `compose-transform`** (D10), `E6001` at the closure, which will give composable code a composer and group keys; compiling them as plain functions now would have to be undone.
+- **Closures of generic bodies are instantiated with their parent** (D11), placed in the instance's unit after its body as `<instance symbol>#closure<i>`; `GenericRecord` keeps the file's ids of its function, defaults and closures so `instantiate` renumbers them.
+- **Measured cost** (2026-10-18, `compile_timing.rs` shapes `nested-closures`, `many-closures`, `many-captures`, `many-adapters` and `generic-closures`). Closure conversion adds no analysis and every stage grows linearly: one Cranelift function per closure and adapter. Capture-mode inference scanned a closure once per capture (x10 per x4 at 4096 captures) and now finds every capture's first mutable use in one pass (`first_mutable_uses`). 4096 closures in one body still grow x6 per x4 in `borrow`, the loan flow over many live loans, as `live-borrows` does.

@@ -6,7 +6,7 @@ The references specification defines how borrowed references are used: as the ty
 ## Requirements
 
 ### Requirement: Implicit Shared Borrow at Argument Sites
-Where a call's parameter has type `&T`, an argument of type `T` MUST be borrowed implicitly. A place argument (a variable or a `.` field path) MUST be borrowed where it lives, without being consumed. A string's character `s[i]` is a value, not a place. Any other argument MUST be evaluated as a temporary, in a consuming position, that lives until the end of the statement, converted to the parameter's referent type before it is borrowed. Default values are arguments. Elsewhere a borrow MUST be written with `&`.
+Where a call's parameter has type `&T`, an argument of type `T` MUST be borrowed implicitly. A place argument (a variable or a `.` field path) MUST be borrowed where it lives, without being consumed. A string's character `s[i]` is a value, not a place. Any other argument MUST be evaluated, in a consuming position, into a temporary of the referent type that lives until the end of the statement. Default values are arguments. Elsewhere a borrow MUST be written with `&`.
 
 #### Scenario: Implicit shared borrow at argument sites
 - **WHEN** `fun greet(name: &String)` and `struct User { val name: String }` are declared and a body of `fun f(u: &User, name: String)` runs `greet(name)`, `greet(u.name)` and `greet("Ada")`
