@@ -72,6 +72,54 @@ impl Builder<'_> {
         self.assign(destination, Rvalue::Binary(operator, left, right), span);
     }
 
+    /// `target op= value` (D5 of `compound-assignment`): the target's place, evaluated once, is
+    /// read (copied for a `Copy` type, held in a temporary when the value may write it, otherwise
+    /// borrowed for the operator), then the value is evaluated and the operator applied. A `Copy`
+    /// result is written to the place directly; any other result goes through a temporary, so
+    /// the old value can be dropped before the result is moved in. The read and the write are at
+    /// the target's span, like the write of `=` (D6 of `borrowck-exclusivity`).
+    pub(super) fn lower_compound_assign(
+        &mut self,
+        operator: BinaryOperator,
+        target: ExpressionId,
+        value: ExpressionId,
+        span: Span,
+    ) {
+        let target_expression = self.expression(target);
+        let (ty, target_span) = (target_expression.ty.clone(), target_expression.span);
+        let place = self.place(target);
+        let (left, right) = if self.is_copy(&ty) {
+            let mut left = Operand::Copy(place.clone(), target_span);
+            if self.may_write(value) {
+                left = self.stabilize(left, ty.clone(), target_span);
+            }
+            (left, self.operand(value))
+        } else {
+            let borrow = self.new_temporary(shared(ty.clone()), target_span);
+            let rvalue = Rvalue::Borrow {
+                mutable: false,
+                origin: BorrowOrigin::Operator,
+                place: place.clone(),
+            };
+            self.assign(Place::local(borrow), rvalue, target_span);
+            let left = Operand::Move(Place::local(borrow), target_span);
+            (left, self.comparison_operand(value))
+        };
+        if self.current.is_none() {
+            return;
+        }
+        let rvalue = Rvalue::Binary(operator, left, right);
+        if self.needs_drop(&ty) {
+            let result = self.new_temporary(ty, span);
+            self.assign(Place::local(result), rvalue, span);
+            self.emit_drop(place.clone(), span);
+            let moved = Operand::Move(Place::local(result), span);
+            self.assign(place, Rvalue::Use(moved), target_span);
+        } else {
+            self.assign(place, rvalue, target_span);
+        }
+    }
+
     /// `destination = discriminant(place) <operator> 0`: a comparison with `null`, whose tag is
     /// read at the span of the compared value, `place_span`.
     fn compare_tag(

@@ -1,0 +1,8 @@
+// expect: E5004
+fun print(n: &Int) {}
+fun f() {
+    var y = 1
+    val m = &mut y
+    y += 1
+    print(m)
+}

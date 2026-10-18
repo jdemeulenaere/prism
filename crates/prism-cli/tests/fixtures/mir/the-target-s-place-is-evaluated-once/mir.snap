@@ -1,0 +1,35 @@
+module main
+fun main::pick(_1: &mut Int, _2: &mut Int): &mut Int @2:1
+  local _0: &mut Int (return)
+  local _1 a: &mut Int (argument)
+  local _2 b: &mut Int (argument)
+  bb0:
+    _0 = move _1 @2:48
+    return @2:1
+fun main::f(): Unit @3:1
+  local _0: Unit (return)
+  local _1 a: Int (user, var)
+  local _2 b: Int (user, var)
+  local _3: &mut Int (temporary)
+  local _4: &mut Int (temporary)
+  local _5: &mut Int (temporary)
+  bb0:
+    storage_live _1 @4:5
+    _1 = const 1 @4:13
+    storage_live _2 @5:5
+    _2 = const 2 @5:13
+    storage_live _3 @6:6
+    storage_live _4 @6:11
+    _4 = &mut _1 (written) @6:11
+    storage_live _5 @6:19
+    _5 = &mut _2 (written) @6:19
+    _3 = call main::pick(move _4, move _5) -> bb1 @6:6
+  bb1:
+    (*_3) = copy (*_3) + const 1 @6:6
+    storage_dead _5 @6:5
+    storage_dead _4 @6:5
+    storage_dead _3 @6:5
+    _0 = const () @3:9
+    storage_dead _2 @7:1
+    storage_dead _1 @7:1
+    return @3:1

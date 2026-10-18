@@ -1,0 +1,30 @@
+module main
+fun main::f(_1: String): String @2:1
+  local _0: String (return)
+  local _1 t: String (argument)
+  local _2 s: String (user, var)
+  local _3: &String (temporary)
+  local _4: &String (temporary)
+  local _5: String (temporary)
+  bb0:
+    storage_live _2 @3:5
+    _2 = const "a" @3:13
+    storage_live _3 @4:5
+    _3 = &_2 (operator) @4:5
+    storage_live _4 @4:10
+    _4 = &_1 (operator) @4:10
+    storage_live _5 @4:5
+    _5 = move _3 + move _4 @4:5
+    drop _2 -> bb1 @4:5
+  bb1:
+    _2 = move _5 @4:5
+    storage_dead _5 @4:5
+    storage_dead _4 @4:5
+    storage_dead _3 @4:5
+    _0 = move _2 @5:12
+    drop _2 -> bb2 @5:5
+  bb2:
+    storage_dead _2 @5:5
+    drop _1 -> bb3 @2:1
+  bb3:
+    return @2:1

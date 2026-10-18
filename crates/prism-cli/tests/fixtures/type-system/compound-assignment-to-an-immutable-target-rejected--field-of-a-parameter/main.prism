@@ -1,0 +1,5 @@
+// expect: E4003
+struct P { val x: Int; var y: Int }
+fun f(q: P) {
+    q.y += 1
+}

@@ -529,6 +529,16 @@ impl Printer<'_> {
                 self.expression(*target, depth + 1, "target");
                 self.expression(*value, depth + 1, "value");
             }
+            StatementKind::CompoundAssign {
+                operator,
+                target,
+                value,
+            } => {
+                let text = format!("compound-assign {} {}", operator.as_str(), at);
+                self.line(depth, "", &text);
+                self.expression(*target, depth + 1, "target");
+                self.expression(*value, depth + 1, "value");
+            }
             StatementKind::Expression { value } => {
                 self.line(depth, "", &format!("expression {}", at));
                 self.expression(*value, depth + 1, "");

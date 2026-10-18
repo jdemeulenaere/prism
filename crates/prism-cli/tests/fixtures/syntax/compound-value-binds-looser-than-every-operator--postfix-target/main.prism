@@ -1,0 +1,8 @@
+// expect: E4019
+// `*r.n` is `*(r.n)`, and `r.n` is not a reference.
+struct Box {
+    var n: Int
+}
+fun f(r: &mut Box) {
+    *r.n += 1
+}

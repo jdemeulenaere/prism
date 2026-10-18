@@ -1,0 +1,15 @@
+module main
+fun main::f(k: &Int): Int @2:1
+  local %0 k: &Int (parameter)
+  local %1 n: Int (var)
+  block: Int @2:21
+    let %1 n @3:5
+      literal 1: Int @3:13
+    compound-assign + @4:5
+      target: local %1 n: Int @4:5
+      value: deref: Int @4:10
+        local %0 k: &Int @4:10
+    tail: coerce diverge: Int @5:5
+      return: Nothing @5:5
+        copy: Int @5:12
+          local %1 n: Int @5:12

@@ -1,0 +1,10 @@
+// expect: ok
+struct Counter { var count: Int }
+mut fun Counter.bump() {
+    count += 1
+    this.count *= 2
+}
+fun f(r: &mut Int, c: &mut Counter, k: &Int) {
+    *r += k
+    c.count -= 1
+}

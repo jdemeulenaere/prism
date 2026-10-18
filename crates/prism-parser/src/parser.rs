@@ -30,6 +30,37 @@ pub enum Precedence {
 pub const MAX_NESTING_DEPTH: usize = 256;
 
 /// The error for a prefix `*` anywhere but at the start of an assignment target.
+/// The message for `++` or `--` (`operator`) anywhere: Prism has no increment or decrement
+/// operators (D8 of `compound-assignment`).
+fn no_increment_message(operator: &TokenKind) -> String {
+    let compound = if operator == &TokenKind::PlusPlus {
+        "+="
+    } else {
+        "-="
+    };
+    format!(
+        "Prism has no '{}' operator; write 'x {} 1' as a statement instead",
+        operator, compound
+    )
+}
+
+/// The arithmetic operator of a compound assignment token (`+=` is `Add`), if `kind` is one.
+fn compound_operator(kind: &TokenKind) -> Option<BinaryOp> {
+    match kind {
+        TokenKind::PlusEqual => Some(BinaryOp::Add),
+        TokenKind::MinusEqual => Some(BinaryOp::Sub),
+        TokenKind::StarEqual => Some(BinaryOp::Mul),
+        TokenKind::SlashEqual => Some(BinaryOp::Div),
+        TokenKind::PercentEqual => Some(BinaryOp::Mod),
+        _ => None,
+    }
+}
+
+/// Whether `kind` is `=` or a compound assignment operator.
+fn is_assignment_operator(kind: &TokenKind) -> bool {
+    kind == &TokenKind::Eq || compound_operator(kind).is_some()
+}
+
 const DEREF_OUTSIDE_TARGET: &str = "A prefix '*' writes through a reference and is only allowed on the left of '=', as in '*r = v'; reads through references are implicit";
 
 pub struct Parser {
@@ -186,6 +217,11 @@ impl Parser {
     /// breaks end an expression (outside parentheses and brackets).
     fn at_line_break(&self) -> bool {
         self.peek().is_preceded_by_newline && self.newline_modes.last() != Some(&false)
+    }
+
+    /// Whether the current token is `=` or a compound assignment operator on the same line.
+    fn at_assignment_operator(&self) -> bool {
+        is_assignment_operator(self.peek_kind()) && !self.at_line_break()
     }
 
     /// Runs `f` with line breaks significant (`{ }`) or insignificant (`( )`, `[ ]`).
@@ -1232,7 +1268,12 @@ impl Parser {
             return Precedence::Lowest;
         }
         match &tok.kind {
-            TokenKind::Eq => Precedence::Assign,
+            TokenKind::Eq
+            | TokenKind::PlusEqual
+            | TokenKind::MinusEqual
+            | TokenKind::StarEqual
+            | TokenKind::SlashEqual
+            | TokenKind::PercentEqual => Precedence::Assign,
             TokenKind::PipePipe => Precedence::LogicalOr,
             TokenKind::AmpAmp => Precedence::LogicalAnd,
             TokenKind::EqEq | TokenKind::BangEq => Precedence::Equality,
@@ -1243,7 +1284,10 @@ impl Parser {
             TokenKind::DotDot | TokenKind::DotDotLess => Precedence::Range,
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
-            TokenKind::Dot | TokenKind::QuestionDot => Precedence::Postfix,
+            TokenKind::Dot
+            | TokenKind::QuestionDot
+            | TokenKind::PlusPlus
+            | TokenKind::MinusMinus => Precedence::Postfix,
             TokenKind::LBracket | TokenKind::LParen | TokenKind::LBrace => Precedence::Call,
             _ => Precedence::Lowest,
         }
@@ -1269,6 +1313,11 @@ impl Parser {
             TokenKind::Minus | TokenKind::Bang | TokenKind::Amp | TokenKind::AmpAmp => {
                 self.parse_unary()
             }
+
+            TokenKind::PlusPlus | TokenKind::MinusMinus => Err(ParseError::new(
+                no_increment_message(self.peek_kind()),
+                self.peek().span,
+            )),
 
             // `*` only writes through a reference, as an assignment target, which
             // `parse_assignment_or_expression` parses before reaching here.
@@ -1412,6 +1461,8 @@ impl Parser {
                 | TokenKind::Amp
                 | TokenKind::AmpAmp
                 | TokenKind::Star
+                | TokenKind::PlusPlus
+                | TokenKind::MinusMinus
                 | TokenKind::LParen
                 | TokenKind::LBrace
                 | TokenKind::If
@@ -1497,8 +1548,12 @@ impl Parser {
             TokenKind::LBrace => self.parse_trailing_lambda_call(left, Vec::new()),
             // Indexing: target[index]
             TokenKind::LBracket => self.parse_index(left),
+            TokenKind::PlusPlus | TokenKind::MinusMinus => Err(ParseError::new(
+                no_increment_message(self.peek_kind()),
+                self.peek().span,
+            )),
             // Assignments are statements, parsed by `parse_statement_or_expression`.
-            TokenKind::Eq => Err(ParseError::new(
+            kind if is_assignment_operator(kind) => Err(ParseError::new(
                 "An assignment is a statement, not an expression; it cannot be used as a value",
                 self.peek().span,
             )),
@@ -1736,16 +1791,16 @@ impl Parser {
         } else {
             self.parse_expr(Precedence::Assign)?
         };
-        if self.peek_kind() != &TokenKind::Eq || self.at_line_break() {
+        if !is_assignment_operator(self.peek_kind()) || self.at_line_break() {
             if is_write_through {
                 return Err(ParseError::new(DEREF_OUTSIDE_TARGET, start_span));
             }
             let span = target.span;
             return Ok(Statement::new(StatementKind::Expression(target), span));
         }
-        self.bump(); // '='
+        let operator = compound_operator(&self.bump().kind); // '=' or 'op='
         let value = self.parse_expr(Precedence::Assign)?;
-        if self.peek_kind() == &TokenKind::Eq && !self.at_line_break() {
+        if self.at_assignment_operator() {
             return Err(ParseError::new(
                 "Chained assignments are not allowed; use separate statements",
                 self.peek().span,
@@ -1768,10 +1823,15 @@ impl Parser {
             ));
         }
         let span = target.span.merge(value.span);
-        Ok(Statement::new(
-            StatementKind::Assign { target, value },
-            span,
-        ))
+        let kind = match operator {
+            Some(operator) => StatementKind::CompoundAssign {
+                operator,
+                target,
+                value,
+            },
+            None => StatementKind::Assign { target, value },
+        };
+        Ok(Statement::new(kind, span))
     }
 
     /// A write-through target `*e`, `**e`, ...: one `Deref` per `*` around an operand parsed
@@ -2120,6 +2180,12 @@ impl Parser {
         if self.peek_kind() == &TokenKind::Eq && !self.at_line_break() {
             return Err(ParseError::new(
                 "Chained assignments are not allowed; use separate statements",
+                self.peek().span,
+            ));
+        }
+        if self.at_assignment_operator() {
+            return Err(ParseError::new(
+                "An assignment is a statement, not an expression; it cannot be used as a value",
                 self.peek().span,
             ));
         }

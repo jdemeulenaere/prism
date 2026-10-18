@@ -1,0 +1,11 @@
+module main
+struct main::Counter @2:1
+  field 0 var count: Int
+fun main::f(c: &mut Counter): Unit @3:1
+  local %0 c: &mut Counter (parameter)
+  block: Unit @3:24
+    compound-assign * @4:5
+      target: field 0 count: Int @4:5
+        deref: Counter @4:5
+          local %0 c: &mut Counter @4:5
+      value: literal 2: Int @4:16

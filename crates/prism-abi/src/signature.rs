@@ -517,6 +517,16 @@ fn hash_statement_span_free(statement: &Statement, hasher: &mut DeterministicHas
             hash_expr_span_free(target, hasher);
             hash_expr_span_free(value, hasher);
         }
+        StatementKind::CompoundAssign {
+            operator,
+            target,
+            value,
+        } => {
+            hasher.write_u8(31);
+            hasher.write_str(operator.as_str());
+            hash_expr_span_free(target, hasher);
+            hash_expr_span_free(value, hasher);
+        }
         StatementKind::Local {
             is_var,
             name,

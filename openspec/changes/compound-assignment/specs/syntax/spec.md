@@ -10,8 +10,8 @@ A statement MAY be a compound assignment `target op= value`, where `op=` is one 
 - **THEN** each parses as a compound assignment of its operator, with the written target and the value as its right-hand side
 
 #### Scenario: Compound value binds looser than every operator
-- **WHEN** parsing `x += a * b ?: c` and `*r.n += 1`
-- **THEN** the value of the first is the whole expression `(a * b) ?: c`, and the target of the second is `*` applied to `r.n`
+- **WHEN** parsing `x += a ?: b * c` and `*r.n += 1`
+- **THEN** the value of the first is the whole expression `a ?: (b * c)`, and the target of the second is `*` applied to `r.n`
 
 #### Scenario: Compound assignment in an unbraced body
 - **WHEN** parsing `if (c) x += 1 else x -= 1`, the `when` branch `0 -> x += 1` and `while (c) x *= 2`

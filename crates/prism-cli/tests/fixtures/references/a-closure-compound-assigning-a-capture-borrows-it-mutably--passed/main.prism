@@ -1,0 +1,8 @@
+// expect: ok
+fun run(f: () -> Int): Int = f()
+fun print(n: &Int) {}
+fun f() {
+    var total = 0
+    run { total += 1; total }
+    print(total)
+}

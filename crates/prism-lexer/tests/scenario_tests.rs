@@ -174,3 +174,76 @@ fn loop_keywords_are_reserved() {
         ]
     );
 }
+
+// --- Compound Assignment (`compound-assignment`)
+
+fn ident(name: &str) -> TokenKind {
+    TokenKind::Ident(name.to_string())
+}
+
+#[test]
+fn compound_operators_are_single_tokens() {
+    let joined = [
+        ("a+=b", TokenKind::PlusEqual),
+        ("a-=b", TokenKind::MinusEqual),
+        ("a*=b", TokenKind::StarEqual),
+        ("a/=b", TokenKind::SlashEqual),
+        ("a%=b", TokenKind::PercentEqual),
+    ];
+    for (source, operator) in joined {
+        assert_eq!(
+            kinds(source),
+            vec![ident("a"), operator, ident("b"), TokenKind::Eof],
+            "{}",
+            source
+        );
+    }
+    assert_eq!(
+        kinds("a = -b"),
+        vec![
+            ident("a"),
+            TokenKind::Eq,
+            TokenKind::Minus,
+            ident("b"),
+            TokenKind::Eof
+        ]
+    );
+    assert_eq!(
+        kinds("a->b"),
+        vec![ident("a"), TokenKind::Arrow, ident("b"), TokenKind::Eof]
+    );
+    assert_eq!(
+        kinds("a == b"),
+        vec![ident("a"), TokenKind::EqEq, ident("b"), TokenKind::Eof]
+    );
+    assert_eq!(
+        kinds("a /* c */ = b"),
+        vec![ident("a"), TokenKind::Eq, ident("b"), TokenKind::Eof]
+    );
+}
+
+// --- No Increment or Decrement Operators (`compound-assignment`)
+
+#[test]
+fn increment_and_decrement_are_single_tokens() {
+    assert_eq!(
+        kinds("x++ --y"),
+        vec![
+            ident("x"),
+            TokenKind::PlusPlus,
+            TokenKind::MinusMinus,
+            ident("y"),
+            TokenKind::Eof
+        ]
+    );
+    assert_eq!(
+        kinds("a - -b"),
+        vec![
+            ident("a"),
+            TokenKind::Minus,
+            TokenKind::Minus,
+            ident("b"),
+            TokenKind::Eof
+        ]
+    );
+}

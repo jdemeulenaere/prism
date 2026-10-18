@@ -1,0 +1,6 @@
+// expect: E2001
+fun f() {
+    var a = 0
+    var b = 0
+    a += b += 1
+}

@@ -46,11 +46,20 @@ pub enum TokenKind {
     Ident(String),
 
     // Operators & Punctuation
-    Plus,          // +
-    Minus,         // -
-    Star,          // *
-    Slash,         // /
-    Percent,       // %
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Percent,      // %
+    PlusEqual,    // +=
+    MinusEqual,   // -=
+    StarEqual,    // *=
+    SlashEqual,   // /=
+    PercentEqual, // %=
+    /// `++`, reserved: Prism has no increment operator, and the parser rejects it.
+    PlusPlus,
+    /// `--`, reserved: Prism has no decrement operator, and the parser rejects it.
+    MinusMinus,
     Eq,            // =
     EqEq,          // ==
     BangEq,        // !=
@@ -155,6 +164,13 @@ impl fmt::Display for TokenKind {
             TokenKind::Star => write!(f, "*"),
             TokenKind::Slash => write!(f, "/"),
             TokenKind::Percent => write!(f, "%"),
+            TokenKind::PlusEqual => write!(f, "+="),
+            TokenKind::MinusEqual => write!(f, "-="),
+            TokenKind::StarEqual => write!(f, "*="),
+            TokenKind::SlashEqual => write!(f, "/="),
+            TokenKind::PercentEqual => write!(f, "%="),
+            TokenKind::PlusPlus => write!(f, "++"),
+            TokenKind::MinusMinus => write!(f, "--"),
             TokenKind::Eq => write!(f, "="),
             TokenKind::EqEq => write!(f, "=="),
             TokenKind::BangEq => write!(f, "!="),

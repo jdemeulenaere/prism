@@ -1,0 +1,4 @@
+// expect: E4003
+fun f(r: &Int) {
+    *r += 1
+}

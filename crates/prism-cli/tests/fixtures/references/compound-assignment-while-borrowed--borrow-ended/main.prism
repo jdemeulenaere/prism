@@ -1,0 +1,8 @@
+// expect: ok
+fun print(n: &Int) {}
+fun f() {
+    var z = 1
+    val k = &z
+    print(k)
+    z += 1
+}

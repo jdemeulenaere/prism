@@ -151,6 +151,7 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`). Generic scoping now exists (`generics`), so only the builtin list and the migration of the opaque-name fixtures remain.
 - [ ] Qualified type paths such as `models.User`; imports currently bring symbols in by bare name (deferred by `resolve-nominal-type-annotations`).
 - [ ] Fix: calling a struct-typed value (`p()` where `p: Point`) goes through the constructor branch of `infer_call_expr` (noted in `resolve-nominal-type-annotations`).
+- [ ] Fix: `?:` whose left side is not nullable (`a ?: c` for `a: Int`, accepted by the type checker) lowers to a discriminant read of a non-nullable value, which the MIR validator rejects (found while implementing `compound-assignment`).
 - [ ] Decide whether safe-navigation assignment (`a?.b = c`, allowed in Kotlin) is valid; it is currently rejected (from the parser plain fixes, `ecc5da3`).
 - [ ] Revisit the parser's 256-level nesting limit (E2002) before the LSP: a debug build needs about 2.75 MB of stack at the limit, more than a default 2 MB worker thread (from `8f1f932`).
 - [ ] Implicit `it` parameter for single-parameter closures (deferred by `harden-parser-grammar`).

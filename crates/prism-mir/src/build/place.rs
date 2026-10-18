@@ -576,6 +576,15 @@ impl Builder<'_> {
                 self.lower_assign(*target, *value, span);
                 self.pop_scope();
             }
+            TreeStatementKind::CompoundAssign {
+                operator,
+                target,
+                value,
+            } => {
+                self.push_scope(span);
+                self.lower_compound_assign(*operator, *target, *value, span);
+                self.pop_scope();
+            }
             TreeStatementKind::Expression { value } => {
                 self.push_scope(span);
                 self.expression_into(None, *value);

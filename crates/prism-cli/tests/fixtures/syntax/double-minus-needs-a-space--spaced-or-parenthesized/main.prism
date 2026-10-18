@@ -1,0 +1,3 @@
+// expect: ok
+fun g(a: Int, b: Int): Int = a - -b
+fun h(x: Int): Int = -(-x)

@@ -1,0 +1,6 @@
+// expect: E4002
+fun g(a: Int) {
+    var x = 1
+    var r: &mut Int = &mut x
+    r += a
+}

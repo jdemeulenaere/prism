@@ -3024,13 +3024,8 @@ impl TypeChecker {
 
                 let ty = if left_ty == Type::Error || right_ty == Type::Error {
                     Type::Error
-                } else if left_ty == Type::Int && right_ty == Type::Int {
-                    Type::Int
-                } else if left_ty == Type::Float && right_ty == Type::Float {
-                    Type::Float
-                } else if op == BinaryOp::Add && left_ty == Type::String && right_ty == Type::String
-                {
-                    Type::String
+                } else if let Some(ty) = arithmetic_result(op, &left_ty, &right_ty) {
+                    ty
                 } else {
                     // Strict typing: no implicit widening (e.g. Int + Float rejected)
                     let help = type_parameter_operator_help(&left_ty, &right_ty);
@@ -3341,12 +3336,12 @@ impl TypeChecker {
         }
     }
 
-    /// Checks the assignment `target = value`, building its statement over the target place
-    /// (D10 of `typed-tree`).
-    fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) -> StatementId {
-        if let Some(field) = self.implicit_this_field(target) {
-            return self.check_assignment(&field, value, span);
-        }
+    /// Types the target of an assignment or a compound assignment, reporting a target that cannot
+    /// be written (`E4003`) except a `val` binding, which the caller reports. Returns the target's
+    /// place (an error node when it is not one), its type, and whether it is writable: a `var`
+    /// binding, a writable field or a write through `&mut`. Implicit `this` fields are resolved
+    /// by the caller.
+    fn assignment_target(&mut self, target: &Expr, span: Span) -> (ExpressionId, Type, bool) {
         let (target_id, target_ty, is_mutable) = match (&target.kind, binding_name(target)) {
             (ExprKind::This, _) if self.env.lookup(THIS).is_none() => {
                 self.errors
@@ -3462,6 +3457,16 @@ impl TypeChecker {
         } else {
             self.wrap_error(target_id)
         };
+        (target_id, target_ty, is_mutable)
+    }
+
+    /// Checks the assignment `target = value`, building its statement over the target place
+    /// (D10 of `typed-tree`).
+    fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) -> StatementId {
+        if let Some(field) = self.implicit_this_field(target) {
+            return self.check_assignment(&field, value, span);
+        }
+        let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
 
         if let (Some(name), Type::Reference { mutable, inner }) = (binding_name(target), &target_ty)
         {
@@ -3490,6 +3495,125 @@ impl TypeChecker {
             value: value_id,
         };
         self.builder.add_statement(kind, span)
+    }
+
+    /// Checks the compound assignment `target op= value` (`compound-assignment`), building its
+    /// statement over the target place (D4). It is `target = target op value` with the target
+    /// written once: the target must be writable as for `=` (D7), the value is an operator
+    /// operand, read through references and never consumed, and the operator must apply to the
+    /// target's and the value's types, its result then having the target's type (D3). A binding
+    /// of reference type is rejected as `r = 5` is (D6 of `reference-access`).
+    fn check_compound_assignment(
+        &mut self,
+        operator: BinaryOp,
+        target: &Expr,
+        value: &Expr,
+        span: Span,
+    ) -> StatementId {
+        if let Some(field) = self.implicit_this_field(target) {
+            return self.check_compound_assignment(operator, &field, value, span);
+        }
+        let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
+        let value_id = self.with_consuming(false, |c| c.infer_operand(value));
+        let value_ty = self.ty(value_id);
+        let compound = format!("{}=", operator.as_str());
+        let checked = target_ty != Type::Error && value_ty != Type::Error;
+
+        let fits = match (binding_name(target), &target_ty) {
+            (Some(name), Type::Reference { mutable, .. }) => {
+                if checked {
+                    self.reject_compound_repoint(
+                        name, is_mutable, *mutable, &compound, &target_ty, &value_ty, value, span,
+                    );
+                }
+                !checked
+            }
+            _ => {
+                if !is_mutable && target_ty != Type::Error {
+                    if let Some(name) = binding_name(target) {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot reassign to immutable 'val' binding '{}'",
+                                name
+                            ),
+                            span,
+                            help: None,
+                        });
+                    }
+                }
+                if checked && arithmetic_result(operator, &target_ty, &value_ty).is_none() {
+                    let help = type_parameter_operator_help(&target_ty, &value_ty)
+                        .or_else(|| Some(compound_operand_help(operator, &compound)));
+                    self.errors.push(TypeError::OperatorMismatch {
+                        operator: compound,
+                        left: target_ty,
+                        right: value_ty,
+                        span,
+                        help,
+                    });
+                    false
+                } else {
+                    true
+                }
+            }
+        };
+        let value_id = if fits {
+            value_id
+        } else {
+            self.wrap_error(value_id)
+        };
+        let kind = TreeStatementKind::CompoundAssign {
+            operator: binary_operator(operator),
+            target: target_id,
+            value: value_id,
+        };
+        self.builder.add_statement(kind, span)
+    }
+
+    /// Reports `name op= value` for a binding of reference type `target_ty`, which would
+    /// re-point the binding to a number or a string (D7 of `compound-assignment`): a `val`
+    /// reports only `E4003`, a `var` `E4002`, each with help pointing at `*name op= value` for a
+    /// `&mut` reference.
+    #[allow(clippy::too_many_arguments)]
+    fn reject_compound_repoint(
+        &mut self,
+        name: &str,
+        is_var: bool,
+        is_mutable_reference: bool,
+        compound: &str,
+        target_ty: &Type,
+        value_ty: &Type,
+        value: &Expr,
+        span: Span,
+    ) {
+        let help = Some(if is_mutable_reference {
+            format!(
+                "to write through the reference, use '*{} {} {}'",
+                name, compound, value
+            )
+        } else {
+            format!(
+                "'{}' is a shared '&' borrow, which cannot be written through",
+                name
+            )
+        });
+        self.errors.push(if is_var {
+            TypeError::TypeMismatch {
+                expected: target_ty.clone(),
+                found: value_ty.clone(),
+                span: value.span,
+                help,
+            }
+        } else {
+            TypeError::ImmutabilityViolation {
+                message: format!(
+                    "cannot reassign to immutable 'val' binding '{}' of reference type",
+                    name
+                ),
+                span,
+                help,
+            }
+        });
     }
 
     /// Types the referent written by `*reference = ...` (D5 of `reference-access`): `reference`
@@ -3650,6 +3774,11 @@ impl TypeChecker {
             StatementKind::Assign { target, value } => {
                 self.check_assignment(target, value, statement.span)
             }
+            StatementKind::CompoundAssign {
+                operator,
+                target,
+                value,
+            } => self.check_compound_assignment(*operator, target, value, statement.span),
             StatementKind::Expression(expr) => {
                 let value = self.infer_discarded_expr(expr);
                 self.builder
@@ -6340,6 +6469,34 @@ fn parameter_list(names: &[String], params: &[Type]) -> Vec<(Option<String>, Typ
             (name, ty.clone())
         })
         .collect()
+}
+
+/// The type of `left op right` for the arithmetic operator `op`, when it applies: `Int` with
+/// `Int`, `Float` with `Float`, and `String` with `String` for `+`. There is no implicit
+/// widening.
+fn arithmetic_result(op: BinaryOp, left: &Type, right: &Type) -> Option<Type> {
+    match (left, right) {
+        (Type::Int, Type::Int) => Some(Type::Int),
+        (Type::Float, Type::Float) => Some(Type::Float),
+        (Type::String, Type::String) if op == BinaryOp::Add => Some(Type::String),
+        _ => None,
+    }
+}
+
+/// The help of an `OperatorMismatch` for the compound operator `compound` (`+=`) of `op`: the
+/// operand types it accepts (D7 of `compound-assignment`).
+fn compound_operand_help(op: BinaryOp, compound: &str) -> String {
+    if op == BinaryOp::Add {
+        format!(
+            "'{}' needs a target and a value that are both 'Int', both 'Float' or both 'String'",
+            compound
+        )
+    } else {
+        format!(
+            "'{}' needs a target and a value that are both 'Int' or both 'Float'",
+            compound
+        )
+    }
 }
 
 /// The typed-tree operator of an arithmetic or comparison operator.

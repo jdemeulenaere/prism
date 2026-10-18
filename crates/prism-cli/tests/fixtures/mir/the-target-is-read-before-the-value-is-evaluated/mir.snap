@@ -1,0 +1,31 @@
+module main
+fun main::inc(_1: &mut Int): Int @2:1
+  local _0: Int (return)
+  local _1 r: &mut Int (argument)
+  bb0:
+    (*_1) = copy (*_1) + const 1 @3:6
+    _0 = copy (*_1) @4:12
+    return @2:1
+fun main::f(): Int @6:1
+  local _0: Int (return)
+  local _1 n: Int (user, var)
+  local _2: Int (temporary)
+  local _3: Int (temporary)
+  local _4: &mut Int (temporary)
+  bb0:
+    storage_live _1 @7:5
+    _1 = const 1 @7:13
+    storage_live _2 @8:5
+    _2 = copy _1 @8:5
+    storage_live _3 @8:10
+    storage_live _4 @8:14
+    _4 = &mut _1 (written) @8:14
+    _3 = call main::inc(move _4) -> bb1 @8:10
+  bb1:
+    _1 = move _2 + move _3 @8:5
+    storage_dead _4 @8:5
+    storage_dead _3 @8:5
+    storage_dead _2 @8:5
+    _0 = copy _1 @9:12
+    storage_dead _1 @9:5
+    return @6:1

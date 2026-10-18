@@ -1,0 +1,5 @@
+// expect: E4002
+fun f() {
+    var b = true
+    b += true
+}

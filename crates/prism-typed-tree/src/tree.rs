@@ -570,6 +570,19 @@ impl BinaryOperator {
             BinaryOperator::GreaterOrEqual => ">=",
         }
     }
+
+    /// Whether the operator is arithmetic (`+`, `-`, `*`, `/`, `%`), whose result has its
+    /// operands' type, rather than a comparison.
+    pub fn is_arithmetic(self) -> bool {
+        matches!(
+            self,
+            BinaryOperator::Add
+                | BinaryOperator::Subtract
+                | BinaryOperator::Multiply
+                | BinaryOperator::Divide
+                | BinaryOperator::Remainder
+        )
+    }
 }
 
 /// A unary operator.
@@ -622,6 +635,15 @@ pub enum StatementKind {
     /// An assignment to a place (D10): a binding, a field path, or a dereference for a write
     /// through a reference. The value is consumed.
     Assign {
+        target: ExpressionId,
+        value: ExpressionId,
+    },
+    /// A compound assignment `target op= value` (D4 of `compound-assignment`): the target is a
+    /// place, read in place and then written with `target op value`; the value is an operand of
+    /// the target's type, read in place when it is a place and never consumed. `operator` is
+    /// arithmetic (`Add` to `Remainder`).
+    CompoundAssign {
+        operator: BinaryOperator,
         target: ExpressionId,
         value: ExpressionId,
     },

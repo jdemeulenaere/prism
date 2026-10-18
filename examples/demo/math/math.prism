@@ -20,3 +20,12 @@ public fun describe(value: Int): String = when (value) {
     in 4..10 -> "medium number"
     else -> "large number"
 }
+
+// Loops and compound assignment (`+=` reads and writes its target once)
+public fun sumTo(n: Int): Int {
+    var total = 0
+    for (i in 1..n) {
+        total += i
+    }
+    return total
+}

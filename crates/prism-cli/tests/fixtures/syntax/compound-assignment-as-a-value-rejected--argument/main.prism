@@ -1,0 +1,6 @@
+// expect: E2001
+fun g(x: Int) {}
+fun f() {
+    var x = 0
+    g(x += 1)
+}

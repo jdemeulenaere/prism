@@ -1,0 +1,5 @@
+// expect: E4002
+fun f() {
+    var x = 1
+    x += 1.0
+}

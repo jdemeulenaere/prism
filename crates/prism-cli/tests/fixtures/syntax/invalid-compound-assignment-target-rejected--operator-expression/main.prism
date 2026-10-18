@@ -1,0 +1,4 @@
+// expect: E2001
+fun f(a: Int, b: Int) {
+    a + b += 1
+}

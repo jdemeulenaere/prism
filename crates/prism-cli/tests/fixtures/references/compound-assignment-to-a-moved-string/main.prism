@@ -1,0 +1,7 @@
+// expect: E5001
+fun take(s: String) {}
+fun f() {
+    var s = "a"
+    take(s)
+    s += "b"
+}

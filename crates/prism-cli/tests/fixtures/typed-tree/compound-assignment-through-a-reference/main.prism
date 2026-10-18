@@ -1,0 +1,5 @@
+// expect: ok
+struct Counter { var count: Int }
+fun f(c: &mut Counter) {
+    c.count *= 2
+}

@@ -1,0 +1,15 @@
+// expect: ok
+fun f(): String {
+    var n = 1
+    n += 2
+    n -= 1
+    n *= 3
+    n /= 2
+    n %= 2
+    var d = 1.5
+    d += 0.5
+    d %= 1.0
+    var s = "a"
+    s += "b"
+    return s
+}

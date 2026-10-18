@@ -11,14 +11,14 @@ Current state:
 - **Type checker** (`check_assignment`): types the target (binding, field path with `contents_writable`, `Deref` through `write_through`, implicit `this` field), reports `E4003` for non-writable targets, re-routes reference bindings to `check_repoint` (D6 of `reference-access`), and checks the value in a consuming position. Arithmetic (`infer_binary_op`) infers both operands with `infer_operand`, which peels references and reads places in place, and accepts `Int`/`Int`, `Float`/`Float` and, for `+`, `String`/`String`; anything else is `E4002` `TypeMismatch { expected: left, found: right }`.
 - **Typed tree**: `StatementKind::Assign { target, value }`; the validator requires the target to be a place and the value to have its type. Places appear once (single-parent rule).
 - **MIR** (`lower_assign`): evaluates the value first, then the target place, drops the old value when the type needs a drop, then writes; a binding with no drop is written directly, and the write is relocated to the target's span (D6 of `borrowck-exclusivity`). `lower_binary` reads `Copy` operands through `ordered_operands`, which stabilizes an operand into a temporary when a later operand may write (`n + inc(&mut n)`), and borrows non-`Copy` operands (`comparison_operand`) with origin `Operator`.
-- **Borrow checker**: works on MIR only. `x = x + 1` while `x` is mutably borrowed reports both `E5004` (the write) and `E5003` (the read), at different spans.
+- **Borrow checker**: works on MIR only. `x = x + 1` while `x` is mutably borrowed reports both `E5004` (the write) and `E5003` (the read), at different spans. Of several accesses at one span that conflict with one loan, only the last is reported (`conflicts.rs`).
 - **ABI**: `hash_statement_span_free` hashes every statement kind of a body (used for bodies whose text is part of an ABI).
 
 ## Goals / Non-Goals
 
 **Goals:**
 - `t op= v` means exactly `t = t op v` with `t`'s place evaluated once, so every later stage (borrow checker, backend) gets its meaning from rules that already exist.
-- No new MIR construct and no new borrow-checker analysis.
+- No new MIR construct and no borrow-checker change.
 - A fixture for every new scenario, and typed-tree and MIR snapshots for the lowering.
 
 **Non-Goals:**
@@ -64,15 +64,15 @@ Rejected: desugaring in the type checker to `Assign { target, value: Binary(op, 
 - **`Copy` type** (`Int`, `Float`): the left operand is `copy place`, stabilized into a temporary when the value may write (`may_write`), as `ordered_operands` does. The right operand is the value's operand. Then `place = op(left, right)`, written at the target's span: `_1 = copy _1 + const 2`.
 - **Other types** (`String`): a shared `Operator` borrow of the place, then the value's borrow (`comparison_operand`), then `tmp = op(borrow, borrow)`, a drop of the place, and `place = move tmp` at the target's span.
 
-The whole statement runs in its own temporary scope, like `Assign`. The borrow checker then sees a read of the place followed by a write, with no new rule: a live shared borrow makes the write `E5004`, a live mutable one makes the read `E5003`, a closure's write to a capture makes it mutable, and a moved `String` target is `E5001` at its borrow.
+The whole statement runs in its own temporary scope, like `Assign`. The borrow checker then sees a read of the place followed by a write, with no new rule: a live borrow makes the write `E5004` (D6), a closure's write to a capture makes it mutable, and a moved `String` target is `E5001` at its borrow.
 
 Rejected: a MIR `CompoundAssign` statement, which every borrow-checker analysis (uses, conflicts, moves, captures, elaboration) and the backend would have to learn. rustc's MIR also lowers primitive compound assignment to `_1 = Add(copy _1, …)`.
 
 ### D6. One conflict per compound assignment (autonomous)
 
-With a mutable borrow of `x` live, `x += 1` both reads and writes `x` at the same span, which would report `E5003` and `E5004` for one mistake. The borrow checker reports only the first conflict (the read's `E5003`) when a statement's write conflicts with the same borrow at the same span as an already reported read. `x = x + 1` keeps reporting both, since its read and write are at different spans and the user wrote both. With a shared borrow live, only the write conflicts (`E5004`).
+With a mutable borrow of `x` live, `x += 1` both reads and writes `x` at the same span, which could report `E5003` for the read and `E5004` for the write, one mistake twice at one caret. The borrow checker already reports, of the accesses at one span that conflict with one loan, only the last (the rule written for optional reborrows in `borrowck-elision`), so it reports the write's `E5004` alone, "cannot assign to 'x' because it is borrowed", whether the borrow is shared or mutable. `x = x + 1` keeps reporting both, since its read and its write are at different spans and the user wrote both. Nothing changes in `prism-borrowck`; fixtures pin the behaviour.
 
-Rejected: reporting both, which says the same thing twice at one caret.
+Rejected: putting the read at the operator's span so both are reported, and reporting the read's `E5003` instead, which for a shared borrow would not apply (a read does not conflict with a shared borrow) and so would make the code depend on the borrow's kind.
 
 ### D7. Diagnostics reuse existing codes
 
@@ -100,7 +100,7 @@ No new capability: the grammar goes to `syntax`, the typing to `type-system` (ne
 
 - [`String += String` allocates a new string each time, so `s += x` in a loop is quadratic until the backend appends in place] → the semantics already allow an in-place append (D3); `runtime-strings-and-drops` can implement it, and is listed as the follow-up.
 - [Breaking `a--b`] → no fixture or example uses it; the diagnostic says how to write it.
-- [D6's deduplication hides a second, genuine conflict at the same span] → both conflicts are with the same borrow, and the fix (end the borrow before the statement) is the same.
+- [D6 reports a compound assignment under a mutable borrow as an assignment, not as a use] → both conflicts are with the same borrow, and the fix (end the borrow before the statement) is the same.
 - [Compound assignment and plain assignment evaluate in different orders (D2)] → only observable when the place itself has side effects (a call under `*`, an index) and the value writes what the place reads; the MIR snapshot fixtures pin both orders.
 
 ## Migration Plan

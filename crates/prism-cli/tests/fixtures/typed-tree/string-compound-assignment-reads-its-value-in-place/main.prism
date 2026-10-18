@@ -1,0 +1,5 @@
+// expect: ok
+fun f(t: String) {
+    var s = "a"
+    s += t
+}

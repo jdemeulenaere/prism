@@ -1,6 +1,6 @@
 //! Statement syntax trees and blocks for Prism.
 
-use crate::expr::Expr;
+use crate::expr::{BinaryOp, Expr};
 use crate::span::Span;
 use crate::types::Type;
 use std::fmt;
@@ -44,6 +44,14 @@ pub enum StatementKind {
     },
     /// An assignment `target = value`. Assignments are statements, never expressions.
     Assign { target: Expr, value: Expr },
+    /// A compound assignment `target op= value` (`x += 1`), which means `target = target op
+    /// value` with the target evaluated once. `operator` is one of the arithmetic operators
+    /// (`Add`, `Sub`, `Mul`, `Div`, `Mod`).
+    CompoundAssign {
+        operator: BinaryOp,
+        target: Expr,
+        value: Expr,
+    },
     /// An expression whose value is discarded.
     Expression(Expr),
     /// `while (condition) body`.
@@ -88,6 +96,11 @@ impl fmt::Display for Statement {
                 }
             }
             StatementKind::Assign { target, value } => write!(f, "{} = {}", target, value),
+            StatementKind::CompoundAssign {
+                operator,
+                target,
+                value,
+            } => write!(f, "{} {}= {}", target, operator.as_str(), value),
             StatementKind::Expression(expr) => write!(f, "{}", expr),
             StatementKind::While { condition, body } => {
                 write!(f, "while ({}) {}", condition, body)

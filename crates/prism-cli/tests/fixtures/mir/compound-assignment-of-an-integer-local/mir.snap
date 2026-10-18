@@ -1,0 +1,11 @@
+module main
+fun main::f(): Int @2:1
+  local _0: Int (return)
+  local _1 n: Int (user, var)
+  bb0:
+    storage_live _1 @3:5
+    _1 = const 1 @3:13
+    _1 = copy _1 + const 2 @4:5
+    _0 = copy _1 @5:12
+    storage_dead _1 @5:5
+    return @2:1

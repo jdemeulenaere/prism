@@ -1,0 +1,5 @@
+// expect: E2001
+fun g(): Int = 1
+fun f() {
+    g() += 1
+}

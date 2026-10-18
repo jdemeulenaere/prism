@@ -1,0 +1,12 @@
+// expect: ok
+fun f(b: Int): Int {
+    var a = 1
+    a+=b
+    a-=b
+    a*=b
+    a/=b
+    a%=b
+    a = -b
+    a /* c */ = b
+    return a
+}

@@ -1,0 +1,6 @@
+// expect: ok
+fun f(k: &Int): Int {
+    var n = 1
+    n += k
+    return n
+}

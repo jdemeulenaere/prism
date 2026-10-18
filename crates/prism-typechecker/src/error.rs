@@ -22,6 +22,18 @@ pub enum TypeError {
         help: Option<String>,
     },
 
+    /// E4002: An operator that does not apply to its operands' types: today the operator of a
+    /// compound assignment (`s -= "a"`), with the target's type on the left (D7 of
+    /// `compound-assignment`). `operator` is written as in the source (`-=`).
+    OperatorMismatch {
+        operator: String,
+        left: Type,
+        right: Type,
+        span: Span,
+        /// The operand types the operator accepts.
+        help: Option<String>,
+    },
+
     /// E4002: A struct or enum name used where a value is expected (`val u = User`).
     TypeNameAsValue { name: String, span: Span },
 
@@ -187,6 +199,7 @@ impl TypeError {
             TypeError::UnresolvedSymbol { .. } => "E4001",
             TypeError::ThisOutsideExtension { .. } => "E4001",
             TypeError::TypeMismatch { .. } => "E4002",
+            TypeError::OperatorMismatch { .. } => "E4002",
             TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
@@ -220,6 +233,7 @@ impl TypeError {
             TypeError::UnresolvedSymbol { span, .. } => *span,
             TypeError::ThisOutsideExtension { span } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
+            TypeError::OperatorMismatch { span, .. } => *span,
             TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
@@ -261,6 +275,18 @@ impl TypeError {
             } => {
                 let (expected, found) = Type::render_pair(expected, found);
                 format!("type mismatch: expected '{}', found '{}'", expected, found)
+            }
+            TypeError::OperatorMismatch {
+                operator,
+                left,
+                right,
+                ..
+            } => {
+                let (left, right) = Type::render_pair(left, right);
+                format!(
+                    "operator '{}' cannot be applied to '{}' and '{}'",
+                    operator, left, right
+                )
             }
             TypeError::ArgumentTypeMismatch {
                 expected, found, ..

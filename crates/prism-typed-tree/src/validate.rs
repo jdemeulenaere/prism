@@ -3,9 +3,8 @@
 
 use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
-    Argument, BinaryOperator, Body, Callee, CoercionKind, ConstructKind, DeclarationPath,
-    ExpressionKind, FunctionItem, Item, Pattern, StatementKind, StructItem, TypedFile,
-    UnaryOperator,
+    Argument, Body, Callee, CoercionKind, ConstructKind, DeclarationPath, ExpressionKind,
+    FunctionItem, Item, Pattern, StatementKind, StructItem, TypedFile, UnaryOperator,
 };
 use crate::types::{NominalId, Type, TypeParameter};
 use prism_ast::ReceiverMode;
@@ -282,6 +281,26 @@ impl Validator<'_> {
                 self.expect_place(*target, "assignment target");
                 if let Some(ty) = self.type_of(*target).cloned() {
                     self.expect_type(*value, &ty, "assigned value");
+                }
+            }
+            StatementKind::CompoundAssign {
+                operator,
+                target,
+                value,
+            } => {
+                self.expression(*target);
+                self.expression(*value);
+                self.expect_place(*target, "compound assignment target");
+                if !operator.is_arithmetic() {
+                    self.report(format!(
+                        "statement {} is a compound assignment with the non-arithmetic operator '{}'",
+                        id.0,
+                        operator.as_str()
+                    ));
+                }
+                // The operator's result has the target's type (D3 of `compound-assignment`).
+                if let Some(ty) = self.type_of(*target).cloned() {
+                    self.expect_type(*value, &ty, "compound assignment value");
                 }
             }
             StatementKind::Expression { value } => self.expression(*value),
@@ -591,13 +610,10 @@ impl Validator<'_> {
                 // Both operands are at one type (D20): the result's for arithmetic.
                 if let Some(left_ty) = self.type_of(*left).cloned() {
                     self.expect_type(*right, &left_ty, "right operand");
-                    let result = match operator {
-                        BinaryOperator::Add
-                        | BinaryOperator::Subtract
-                        | BinaryOperator::Multiply
-                        | BinaryOperator::Divide
-                        | BinaryOperator::Remainder => left_ty,
-                        _ => Type::Bool,
+                    let result = if operator.is_arithmetic() {
+                        left_ty
+                    } else {
+                        Type::Bool
                     };
                     self.expect_type_of_node(id, &result, "binary operator");
                 }
@@ -873,7 +889,8 @@ impl Validator<'_> {
                     declared.insert(*local);
                     vec![*initializer]
                 }
-                StatementKind::Assign { target, value } => vec![*target, *value],
+                StatementKind::Assign { target, value }
+                | StatementKind::CompoundAssign { target, value, .. } => vec![*target, *value],
                 StatementKind::Expression { value } => vec![*value],
                 StatementKind::While { condition, body }
                 | StatementKind::DoWhile { body, condition } => vec![*condition, *body],
@@ -1171,6 +1188,53 @@ mod tests {
         let found = violations(&file);
         assert!(
             found.iter().any(|v| v.contains("outside a chain")),
+            "{:?}",
+            found
+        );
+    }
+
+    #[test]
+    fn an_ill_typed_compound_assignment_is_reported() {
+        let mut file = file();
+        let body = body(&mut file);
+        let parameter = body.parameters[0];
+        let target = add(body, ExpressionKind::Local(parameter), Type::Int);
+        let value = add(
+            body,
+            ExpressionKind::Literal(Literal::String("a".to_string())),
+            Type::String,
+        );
+        let statement = body.statements.alloc(Statement {
+            kind: StatementKind::CompoundAssign {
+                operator: BinaryOperator::Equal,
+                target,
+                value,
+            },
+            span: Span::dummy(),
+        });
+        let tail = body.value.unwrap();
+        let block = add(
+            body,
+            ExpressionKind::Block {
+                statements: vec![statement],
+                tail: Some(tail),
+                close_brace: Span::dummy(),
+            },
+            Type::Int,
+        );
+        body.value = Some(block);
+        let found = violations(&file);
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("non-arithmetic operator '=='")),
+            "{:?}",
+            found
+        );
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("compound assignment value")),
             "{:?}",
             found
         );

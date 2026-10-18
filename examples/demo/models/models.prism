@@ -44,6 +44,11 @@ public fun resetCount(count: &mut Int): Unit {
     *count = 0
 }
 
+// Compound assignment writes through a mutable borrow the same way
+public fun addToCount(count: &mut Int, amount: Int): Unit {
+    *count += amount
+}
+
 // Algebraic Data Types (Enums) & Recursive Types via Heap<T>
 public enum Expr {
     Literal(Int)

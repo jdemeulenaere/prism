@@ -68,28 +68,47 @@ impl<'a> Lexer<'a> {
         let kind = match ch {
             b'+' => {
                 self.bump();
-                TokenKind::Plus
+                match self.peek_byte() {
+                    b'=' => {
+                        self.bump();
+                        TokenKind::PlusEqual
+                    }
+                    b'+' => {
+                        self.bump();
+                        TokenKind::PlusPlus
+                    }
+                    _ => TokenKind::Plus,
+                }
             }
             b'-' => {
                 self.bump();
-                if self.peek_byte() == b'>' {
-                    self.bump();
-                    TokenKind::Arrow
-                } else {
-                    TokenKind::Minus
+                match self.peek_byte() {
+                    b'>' => {
+                        self.bump();
+                        TokenKind::Arrow
+                    }
+                    b'=' => {
+                        self.bump();
+                        TokenKind::MinusEqual
+                    }
+                    b'-' => {
+                        self.bump();
+                        TokenKind::MinusMinus
+                    }
+                    _ => TokenKind::Minus,
                 }
             }
             b'*' => {
                 self.bump();
-                TokenKind::Star
+                self.with_equal(TokenKind::Star, TokenKind::StarEqual)
             }
             b'/' => {
                 self.bump();
-                TokenKind::Slash
+                self.with_equal(TokenKind::Slash, TokenKind::SlashEqual)
             }
             b'%' => {
                 self.bump();
-                TokenKind::Percent
+                self.with_equal(TokenKind::Percent, TokenKind::PercentEqual)
             }
             b'=' => {
                 self.bump();
@@ -555,6 +574,17 @@ impl<'a> Lexer<'a> {
         }
 
         saw_newline
+    }
+
+    /// `joined` when the next byte is `=`, which it consumes (`*` then `=` is `*=`), otherwise
+    /// `single`.
+    fn with_equal(&mut self, single: TokenKind, joined: TokenKind) -> TokenKind {
+        if self.peek_byte() == b'=' {
+            self.bump();
+            joined
+        } else {
+            single
+        }
     }
 
     fn peek_byte(&self) -> u8 {

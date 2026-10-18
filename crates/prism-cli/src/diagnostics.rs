@@ -225,6 +225,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         | TypeError::TypeMismatch {
             help: Some(help), ..
         }
+        | TypeError::OperatorMismatch {
+            help: Some(help), ..
+        }
         | TypeError::ArgumentTypeMismatch {
             help: Some(help), ..
         }
@@ -460,6 +463,35 @@ mod tests {
         assert!(formatted.contains("error[E4002]: type mismatch: expected 'Int', found 'String'"));
         assert!(formatted.contains("main.prism:2:11"));
         assert!(formatted.contains("val x: Int = \"hello\""));
+    }
+
+    #[test]
+    fn compound_operator_mismatch_names_the_operator_and_its_operand_types() {
+        let rendered = render_type_errors("fun f() {\n    var s = \"a\"\n    s -= \"b\"\n}\n");
+        assert!(
+            rendered
+                .contains("error[E4002]: operator '-=' cannot be applied to 'String' and 'String'"),
+            "{}",
+            rendered
+        );
+        assert!(
+            rendered.contains(
+                "= help: '-=' needs a target and a value that are both 'Int' or both 'Float'"
+            ),
+            "{}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn compound_assignment_to_a_reference_binding_suggests_writing_through_it() {
+        let rendered = render_type_errors("fun f(r: &mut Int) {\n    r += 1\n}\n");
+        assert!(rendered.contains("error[E4003]"), "{}", rendered);
+        assert!(
+            rendered.contains("= help: to write through the reference, use '*r += 1'"),
+            "{}",
+            rendered
+        );
     }
 
     /// Renders the type errors of `src`, checked as a single file.

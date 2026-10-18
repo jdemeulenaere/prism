@@ -1,0 +1,10 @@
+module main
+fun main::f(t: String): Unit @2:1
+  local %0 t: String (parameter)
+  local %1 s: String (var)
+  block: Unit @2:18
+    let %1 s @3:5
+      literal "a": String @3:13
+    compound-assign + @4:5
+      target: local %1 s: String @4:5
+      value: local %0 t: String @4:10

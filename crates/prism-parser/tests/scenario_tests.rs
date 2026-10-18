@@ -1190,3 +1190,188 @@ fn non_associative_comparison() {
         "((a < b) == (c > d))"
     );
 }
+
+// --- Compound Assignment (`compound-assignment`)
+
+/// The operator, target and value of a compound assignment statement.
+#[track_caller]
+fn compound_parts(item: &Statement) -> (BinaryOp, &Expr, &Expr) {
+    match &item.kind {
+        StatementKind::CompoundAssign {
+            operator,
+            target,
+            value,
+        } => (*operator, target, value),
+        other => panic!("expected a compound assignment, got {:?}", other),
+    }
+}
+
+#[test]
+fn compound_assignment_statements() {
+    let stmts = block_stmts(
+        "fun f() {\n    x += 1\n    x -= 1\n    x *= 2\n    x /= 2\n    x %= 2\n    u.count += 1\n    xs[i] += 1\n    *r += 1\n    count += 1\n}\n",
+    );
+    let operators: Vec<BinaryOp> = stmts.iter().map(|s| compound_parts(s).0).collect();
+    assert_eq!(
+        operators,
+        vec![
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Mod,
+            BinaryOp::Add,
+            BinaryOp::Add,
+            BinaryOp::Add,
+            BinaryOp::Add,
+        ]
+    );
+    let (_, target, value) = compound_parts(&stmts[0]);
+    assert_eq!((ident(target), int(value)), ("x", 1));
+    assert!(matches!(
+        compound_parts(&stmts[5]).1.kind,
+        ExprKind::MemberAccess { .. }
+    ));
+    assert!(matches!(
+        compound_parts(&stmts[6]).1.kind,
+        ExprKind::Index { .. }
+    ));
+    let (depth, operand) = deref_target(compound_parts(&stmts[7]).1);
+    assert_eq!((depth, ident(operand)), (1, "r"));
+    assert_eq!(ident(compound_parts(&stmts[8]).1), "count");
+}
+
+#[test]
+fn compound_value_binds_looser_than_every_operator() {
+    let stmts = block_stmts("fun f() {\n    x += a ?: b * c\n    *r.n += 1\n}\n");
+    let (_, _, value) = compound_parts(&stmts[0]);
+    assert_eq!(value.to_string(), "(a ?: (b * c))");
+    let (depth, operand) = deref_target(compound_parts(&stmts[1]).1);
+    assert_eq!(depth, 1);
+    let ExprKind::MemberAccess { target, member, .. } = &operand.kind else {
+        panic!("expected '*' around 'r.n', got {:?}", operand);
+    };
+    assert_eq!((ident(target), member.as_str()), ("r", "n"));
+}
+
+#[test]
+fn compound_assignment_in_an_unbraced_body() {
+    let stmts = block_stmts(
+        "fun f(c: Bool, n: Int) {\n    if (c) x += 1 else x -= 1\n    when (n) { 0 -> x += 1, else -> {} }\n    while (c) x *= 2\n}\n",
+    );
+    let compound = |e: &Expr, operator: BinaryOp| match &e.kind {
+        ExprKind::Block(b) => {
+            b.tail.is_none()
+                && b.statements.len() == 1
+                && compound_parts(&b.statements[0]).0 == operator
+        }
+        _ => false,
+    };
+    let ExprKind::If {
+        then_branch,
+        else_branch,
+        ..
+    } = &expr_of(&stmts[0]).kind
+    else {
+        panic!("expected an if, got {:?}", stmts[0].kind);
+    };
+    assert!(compound(then_branch, BinaryOp::Add));
+    assert!(compound(
+        else_branch.as_ref().expect("else branch"),
+        BinaryOp::Sub
+    ));
+    let ExprKind::When { branches, .. } = &expr_of(&stmts[1]).kind else {
+        panic!("expected a when, got {:?}", stmts[1].kind);
+    };
+    assert!(compound(&branches[0].body, BinaryOp::Add));
+    let StatementKind::While { body, .. } = &stmts[2].kind else {
+        panic!("expected a while, got {:?}", stmts[2].kind);
+    };
+    assert!(body.tail.is_none());
+    assert_eq!(compound_parts(&body.statements[0]).0, BinaryOp::Mul);
+}
+
+#[test]
+fn invalid_compound_assignment_target_rejected() {
+    for (src, column) in [
+        ("fun f() { a + b += 1 }", 11),
+        ("fun f() { 1 += 2 }", 11),
+        ("fun f() { g() += 1 }", 11),
+        ("fun f() { a?.b += 1 }", 11),
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains("Invalid assignment target"), "{}", err);
+        assert_eq!(err.span.column, column, "{}", src);
+    }
+}
+
+#[test]
+fn compound_assignment_as_a_value_rejected() {
+    for (src, message) in [
+        (
+            "fun f() { var x = 0; val y = (x += 1) }",
+            "assignment is a statement",
+        ),
+        (
+            "fun f() { var x = 0; g(x += 1) }",
+            "assignment is a statement",
+        ),
+        (
+            "fun f() { var x = 0; val y = x += 1 }",
+            "assignment is a statement",
+        ),
+        (
+            "fun f() { var a = 0; var b = 0; a += b += 1 }",
+            "Chained assignments",
+        ),
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains(message), "{}: {}", src, err);
+        let at = &src[err.span.start..err.span.end];
+        assert_eq!(at, "+=", "{}", src);
+    }
+}
+
+#[test]
+fn a_newline_before_a_compound_operator_ends_the_expression() {
+    let src = "fun f() {\nvar x = 0\nx\n+= 1\n}\n";
+    let err = parse_source(src).expect_err(src);
+    assert_eq!(err.code, "E2001");
+    assert_eq!((err.span.line, err.span.column), (4, 1));
+}
+
+// --- No Increment or Decrement Operators (`compound-assignment`)
+
+#[test]
+fn increment_and_decrement_rejected() {
+    for (statement, operator, help) in [
+        ("x++", "++", "x += 1"),
+        ("x--", "--", "x -= 1"),
+        ("++x", "++", "x += 1"),
+        ("--x", "--", "x -= 1"),
+    ] {
+        let src = format!("fun f() {{\n    {}\n}}\n", statement);
+        let err = parse_source(&src).expect_err(&src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert_eq!(&src[err.span.start..err.span.end], operator, "{}", src);
+        assert!(err.message.contains(help), "{}: {}", src, err);
+    }
+}
+
+#[test]
+fn double_minus_needs_a_space() {
+    let src = "fun f(a: Int, b: Int): Int = a--b";
+    let err = parse_source(src).expect_err(src);
+    assert_eq!(err.code, "E2001");
+    assert_eq!(&src[err.span.start..err.span.end], "--");
+    assert_eq!(
+        expr_body("fun g(a: Int, b: Int): Int = a - -b").to_string(),
+        "(a - (-b))"
+    );
+    assert_eq!(
+        expr_body("fun h(x: Int): Int = -(-x)").to_string(),
+        "(-(-x))"
+    );
+}
