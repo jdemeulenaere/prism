@@ -1128,3 +1128,41 @@ fn test_cli_relative_entry_path_resolved_before_root_discovery() {
 
     fs::remove_dir_all(&temp).ok();
 }
+
+/// compilation-and-abi: "A private field type is recorded", through `prism abi`.
+#[test]
+fn a_private_field_type_is_recorded_by_prism_abi() {
+    let temp = create_temp_dir("private_field_type_abi");
+    let lib = temp.join("lib");
+    fs::create_dir_all(&lib).unwrap();
+    fs::write(
+        lib.join("a.prism"),
+        "package lib\n\
+         struct Secret : Copy { val k: Int }\n\
+         public struct Outer : Copy { val s: Secret, val n: Int }\n\
+         struct Helper { val h: Int }\n",
+    )
+    .unwrap();
+    let output = prism()
+        .current_dir(&temp)
+        .arg("abi")
+        .arg("lib/a.prism")
+        .output()
+        .expect("failed to execute prism CLI");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}", stdout);
+    let tail: Vec<&str> = stdout.lines().skip(3).collect();
+    assert_eq!(
+        tail,
+        [
+            "Exported Symbols (1):",
+            "  public struct Outer : Copy { val s: Secret, val n: Int }",
+            "Reachable Types (1):",
+            "  struct lib/a::Secret : Copy { val k: Int }",
+        ],
+        "{}",
+        stdout
+    );
+    assert!(!stdout.contains("Helper"), "{}", stdout);
+    fs::remove_dir_all(&temp).ok();
+}

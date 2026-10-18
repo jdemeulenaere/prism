@@ -342,6 +342,42 @@ mod tests {
         assert!(matches!(first_param(&abi), AbiType::Unbound { name, .. } if name == "Mystery"));
     }
 
+    #[test]
+    fn test_type_definitions_bind_private_imported_and_unknown_types() {
+        use prism_abi::{type_definitions, AbiTypeMembers};
+        let file = parse_source(
+            "package lib\n\
+             struct Secret : Copy { val k: Int }\n\
+             public struct Outer { val s: Secret, val v: Vec, val m: Mystery }\n\
+             enum Choice<T> { Some(T), None }\n",
+        )
+        .unwrap();
+        let bind = |name: &str| (name == "Vec").then(|| (STRUCT, "geo/core".to_string()));
+        let definitions = type_definitions(&file, "lib/a", &bind);
+        let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["Secret", "Outer", "Choice"]);
+        assert!(definitions.iter().all(|d| d.module == "lib/a"));
+        let AbiTypeMembers::Fields(fields) = &definitions[1].members else {
+            panic!("Outer is a struct");
+        };
+        let module_of = |ty: &AbiType| match ty {
+            AbiType::Nominal { module, .. } => Some(module.clone()),
+            _ => None,
+        };
+        assert_eq!(module_of(&fields[0].2).as_deref(), Some("lib/a"));
+        assert_eq!(module_of(&fields[1].2).as_deref(), Some("geo/core"));
+        assert!(matches!(&fields[2].2, AbiType::Unbound { name, .. } if name == "Mystery"));
+        assert_eq!(definitions[0].marker, Some(prism_ast::TypeMarker::Copy));
+        let AbiTypeMembers::Variants(variants) = &definitions[2].members else {
+            panic!("Choice is an enum");
+        };
+        assert!(matches!(
+            variants[0].1[0],
+            AbiType::Parameter { index: 0, .. }
+        ));
+        assert_eq!(definitions[2].kind(), NominalKind::Enum);
+    }
+
     const STRUCT: NominalHeader = NominalHeader {
         kind: NominalKind::Struct,
         marker: None,

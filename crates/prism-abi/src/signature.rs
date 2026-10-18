@@ -294,6 +294,260 @@ pub fn declared_types(file: &SourceFile, exported_only: bool) -> HashMap<&str, N
         .collect()
 }
 
+/// The fields of struct `s`, as `(name, is_var, type)`, each type bound with `bind` under the
+/// struct's own type parameters.
+fn struct_fields(s: &StructDecl, bind: &NameBinder) -> Vec<(String, bool, AbiType)> {
+    let parameter_names: Vec<&str> = s.type_parameters.iter().map(|p| p.name.as_str()).collect();
+    s.fields
+        .iter()
+        .map(|field| {
+            let ty = AbiType::from_ast(&field.ty, &parameter_names, bind);
+            (field.name.clone(), field.is_var, ty)
+        })
+        .collect()
+}
+
+/// The variants of enum `e`, as `(name, payload types)`, each type bound with `bind` under the
+/// enum's own type parameters.
+fn enum_variants(e: &EnumDecl, bind: &NameBinder) -> Vec<(String, Vec<AbiType>)> {
+    let parameter_names: Vec<&str> = e.type_parameters.iter().map(|p| p.name.as_str()).collect();
+    e.variants
+        .iter()
+        .map(|variant| {
+            let payloads = variant
+                .fields
+                .iter()
+                .map(|ty| AbiType::from_ast(ty, &parameter_names, bind))
+                .collect();
+            (variant.name.clone(), payloads)
+        })
+        .collect()
+}
+
+/// The fields of a struct or the variants of an enum, in a [`AbiTypeDefinition`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbiTypeMembers {
+    /// A struct's fields as `(name, is_var, type)`.
+    Fields(Vec<(String, bool, AbiType)>),
+    /// An enum's variants as `(name, payload types)`.
+    Variants(Vec<(String, Vec<AbiType>)>),
+}
+
+/// The definition of a struct or enum that a value reached through a file's exports can hold
+/// (D2 of `codegen-aggregates`): what an importer needs to lay out values of it, read from its
+/// defining file's declarations alone, with every type bound as signature types are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbiTypeDefinition {
+    /// The defining module.
+    pub module: String,
+    pub name: String,
+    pub type_parameters: Vec<AbiTypeParameter>,
+    pub marker: Option<TypeMarker>,
+    pub marker_parameters: Vec<u32>,
+    pub members: AbiTypeMembers,
+}
+
+impl AbiTypeDefinition {
+    /// Whether the definition is a struct's or an enum's.
+    pub fn kind(&self) -> NominalKind {
+        match self.members {
+            AbiTypeMembers::Fields(_) => NominalKind::Struct,
+            AbiTypeMembers::Variants(_) => NominalKind::Enum,
+        }
+    }
+
+    /// Every field or payload type, in declaration order.
+    pub fn member_types(&self) -> Vec<&AbiType> {
+        match &self.members {
+            AbiTypeMembers::Fields(fields) => fields.iter().map(|(_, _, ty)| ty).collect(),
+            AbiTypeMembers::Variants(variants) => {
+                variants.iter().flat_map(|(_, payloads)| payloads).collect()
+            }
+        }
+    }
+
+    fn hash_into(&self, hasher: &mut DeterministicHasher) {
+        hasher.write_str("definition");
+        hasher.write_str(&self.module);
+        hasher.write_str(&self.name);
+        hash_marker(self.marker, hasher);
+        hash_marker_parameters(&self.marker_parameters, hasher);
+        hash_type_parameters(&self.type_parameters, hasher);
+        match &self.members {
+            AbiTypeMembers::Fields(fields) => {
+                hasher.write_u8(0);
+                hasher.write_u64(fields.len() as u64);
+                for (name, is_var, ty) in fields {
+                    hasher.write_str(name);
+                    hasher.write_u8(u8::from(*is_var));
+                    ty.hash_into(hasher);
+                }
+            }
+            AbiTypeMembers::Variants(variants) => {
+                hasher.write_u8(1);
+                hasher.write_u64(variants.len() as u64);
+                for (name, payloads) in variants {
+                    hasher.write_str(name);
+                    hasher.write_u64(payloads.len() as u64);
+                    for ty in payloads {
+                        ty.hash_into(hasher);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The binder of a file's own type names: its own structs and enums (private ones included)
+/// first, bound to `module`, then `bind_import`, as Phase 1 binds every signature type.
+fn own_binder<'a>(
+    file: &'a SourceFile,
+    module: &'a str,
+    bind_import: &'a NameBinder<'a>,
+) -> impl Fn(&str) -> Option<(NominalHeader, String)> + 'a {
+    let own_types = declared_types(file, false);
+    move |name: &str| match own_types.get(name) {
+        Some(header) => Some((header.clone(), module.to_string())),
+        None => bind_import(name),
+    }
+}
+
+/// The definition of every struct and enum `file` declares, private ones included, in
+/// declaration order (Phase 1a, D3 of `codegen-aggregates`). Types are bound as
+/// [`FileAbi::extract`] binds them: to the file's own declarations first, then with
+/// `bind_import`. A definition depends only on the file's AST and its direct imports' headers.
+pub fn type_definitions(
+    file: &SourceFile,
+    module: &str,
+    bind_import: &NameBinder,
+) -> Vec<AbiTypeDefinition> {
+    let bind = own_binder(file, module, bind_import);
+    file.declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Declaration::Struct(s) => Some(AbiTypeDefinition {
+                module: module.to_string(),
+                name: s.name.clone(),
+                type_parameters: abi_type_parameters(&s.type_parameters),
+                marker: s.marker,
+                marker_parameters: struct_header(s).marker_parameters,
+                members: AbiTypeMembers::Fields(struct_fields(s, &bind)),
+            }),
+            Declaration::Enum(e) => Some(AbiTypeDefinition {
+                module: module.to_string(),
+                name: e.name.clone(),
+                type_parameters: abi_type_parameters(&e.type_parameters),
+                marker: e.marker,
+                marker_parameters: enum_header(e).marker_parameters,
+                members: AbiTypeMembers::Variants(enum_variants(e, &bind)),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Feeds the defining module and name of every struct and enum occurring in `ty` into `out`:
+/// the type itself, its type arguments, and the insides of nullables, references, `Heap<T>`
+/// and function types.
+fn nominal_types_in<'t>(ty: &'t AbiType, out: &mut Vec<(&'t str, &'t str)>) {
+    match ty {
+        AbiType::Nominal {
+            module, name, args, ..
+        } => {
+            out.push((module, name));
+            args.iter().for_each(|arg| nominal_types_in(arg, out));
+        }
+        AbiType::Unbound { args, .. } => args.iter().for_each(|arg| nominal_types_in(arg, out)),
+        AbiType::Nullable(inner) | AbiType::Heap(inner) | AbiType::Ref { inner, .. } => {
+            nominal_types_in(inner, out)
+        }
+        AbiType::Fn { params, ret, .. } => {
+            params.iter().for_each(|param| nominal_types_in(param, out));
+            nominal_types_in(ret, out);
+        }
+        AbiType::Prim(_) | AbiType::Unit | AbiType::Range | AbiType::Parameter { .. } => {}
+    }
+}
+
+/// Every type an exported symbol shows: parameter, receiver, return and value types, and the
+/// fields and payloads of exported structs and enums.
+fn symbol_types(symbol: &ExportedSymbol) -> Vec<&AbiType> {
+    match symbol {
+        ExportedSymbol::Function {
+            receiver,
+            params,
+            return_type,
+            ..
+        } => receiver
+            .iter()
+            .map(|r| &r.ty)
+            .chain(params.iter().map(|(_, ty, _)| ty))
+            .chain(std::iter::once(return_type))
+            .collect(),
+        ExportedSymbol::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
+        ExportedSymbol::Enum { variants, .. } => {
+            variants.iter().flat_map(|(_, payloads)| payloads).collect()
+        }
+        ExportedSymbol::Var { ty, .. } => vec![ty],
+    }
+}
+
+/// The definitions of the types reachable from `symbols` of the file `module` (D2 of
+/// `codegen-aggregates`): the closure, over `definition`, of the nominal types the symbols
+/// show, following each reached definition's fields and payloads, without the file's own
+/// exported structs and enums (recorded as symbols). Sorted by module and name. A type
+/// `definition` does not know ends the walk there.
+fn reachable_definitions(
+    module: &str,
+    symbols: &[ExportedSymbol],
+    definition: &dyn Fn(&str, &str) -> Option<AbiTypeDefinition>,
+) -> Vec<AbiTypeDefinition> {
+    let own_exports: std::collections::HashSet<&str> = symbols
+        .iter()
+        .filter_map(|symbol| match symbol {
+            ExportedSymbol::Struct { name, .. } | ExportedSymbol::Enum { name, .. } => {
+                Some(name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    let mut pending: Vec<(String, String)> = Vec::new();
+    let mut roots = Vec::new();
+    for ty in symbols.iter().flat_map(symbol_types) {
+        nominal_types_in(ty, &mut roots);
+    }
+    pending.extend(
+        roots
+            .into_iter()
+            .map(|(m, n)| (m.to_string(), n.to_string())),
+    );
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut found = Vec::new();
+    while let Some((type_module, name)) = pending.pop() {
+        if !seen.insert((type_module.clone(), name.clone())) {
+            continue;
+        }
+        if type_module == module && own_exports.contains(name.as_str()) {
+            continue;
+        }
+        let Some(reached) = definition(&type_module, &name) else {
+            continue;
+        };
+        let mut members = Vec::new();
+        for ty in reached.member_types() {
+            nominal_types_in(ty, &mut members);
+        }
+        pending.extend(
+            members
+                .into_iter()
+                .map(|(m, n)| (m.to_string(), n.to_string())),
+        );
+        found.push(reached);
+    }
+    found.sort_by(|a, b| (&a.module, &a.name).cmp(&(&b.module, &b.name)));
+    found
+}
+
 /// The exported ABI boundary of a Prism source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileAbi {
@@ -304,6 +558,9 @@ pub struct FileAbi {
     pub module: String,
     /// All exported (`public` and `package`) symbols.
     pub symbols: Vec<ExportedSymbol>,
+    /// The definitions of the structs and enums reachable from the symbols, other than the
+    /// file's own exported ones, sorted by module and name (D2 of `codegen-aggregates`).
+    pub type_definitions: Vec<AbiTypeDefinition>,
     /// The deterministic hash of the whole exported ABI: the interface hash and the
     /// Monomorphization Hashes of the exported generic bodies.
     pub abi_hash: ContentHash,
@@ -320,19 +577,36 @@ impl FileAbi {
     /// the file's own top-level structs and enums (private ones included), then with
     /// `bind_import`, which looks the name up among the types exported by the file's direct
     /// imports. Binding never reads a function body. A name neither binds stays unbound.
+    ///
+    /// The reachable type definitions are looked up among the file's own declarations only;
+    /// [`FileAbi::extract_with_definitions`] sees those of other files too.
     pub fn extract(
         file: &SourceFile,
         module: &str,
         bind_import: &NameBinder,
     ) -> Result<Self, AbiError> {
+        let own = type_definitions(file, module, bind_import);
+        let definition = |type_module: &str, name: &str| {
+            own.iter()
+                .find(|d| d.module == type_module && d.name == name)
+                .cloned()
+        };
+        Self::extract_with_definitions(file, module, bind_import, &definition)
+    }
+
+    /// [`FileAbi::extract`], recording the definition of every type reachable from the exports
+    /// that `definition` (by defining module and name) knows (D2 and D3 of
+    /// `codegen-aggregates`).
+    pub fn extract_with_definitions(
+        file: &SourceFile,
+        module: &str,
+        bind_import: &NameBinder,
+        definition: &dyn Fn(&str, &str) -> Option<AbiTypeDefinition>,
+    ) -> Result<Self, AbiError> {
         let package = file.package.as_ref().map(|p| p.package_string());
         let mut symbols = Vec::new();
 
-        let own_types = declared_types(file, false);
-        let bind = |name: &str| match own_types.get(name) {
-            Some(header) => Some((header.clone(), module.to_string())),
-            None => bind_import(name),
-        };
+        let bind = own_binder(file, module, bind_import);
 
         for decl in &file.declarations {
             // Default visibility is `private`. Private declarations are EXCLUDED from the ABI.
@@ -414,11 +688,7 @@ impl FileAbi {
                 }
 
                 Declaration::Struct(s) => {
-                    let fields: Vec<(String, bool, AbiType)> = s
-                        .fields
-                        .iter()
-                        .map(|fld| (fld.name.clone(), fld.is_var, lower(&fld.ty)))
-                        .collect();
+                    let fields = struct_fields(s, &bind);
 
                     symbols.push(ExportedSymbol::Struct {
                         visibility: vis,
@@ -431,11 +701,7 @@ impl FileAbi {
                 }
 
                 Declaration::Enum(e) => {
-                    let variants: Vec<(String, Vec<AbiType>)> = e
-                        .variants
-                        .iter()
-                        .map(|v| (v.name.clone(), v.fields.iter().map(lower).collect()))
-                        .collect();
+                    let variants = enum_variants(e, &bind);
 
                     symbols.push(ExportedSymbol::Enum {
                         visibility: vis,
@@ -471,24 +737,29 @@ impl FileAbi {
         // Sort symbols deterministically by (kind, name) so declaration order does not perturb the hash
         symbols.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
-        let (interface_hash, abi_hash) = Self::calculate_hashes(&package, module, &symbols);
+        let type_definitions = reachable_definitions(module, &symbols, definition);
+        let (interface_hash, abi_hash) =
+            Self::calculate_hashes(&package, module, &symbols, &type_definitions);
 
         Ok(FileAbi {
             package,
             module: module.to_string(),
             symbols,
+            type_definitions,
             abi_hash,
             interface_hash,
         })
     }
 
-    /// The interface hash and the ABI hash of `symbols`. The interface hash covers every
-    /// symbol without its Monomorphization Hash; the ABI hash covers the interface hash, then
-    /// each symbol's Monomorphization Hash or its absence, in symbol order.
+    /// The interface hash and the ABI hash of `symbols` and `definitions`. The interface hash
+    /// covers every symbol without its Monomorphization Hash, then every reachable type
+    /// definition; the ABI hash covers the interface hash, then each symbol's Monomorphization
+    /// Hash or its absence, in symbol order.
     fn calculate_hashes(
         package: &Option<String>,
         module: &str,
         symbols: &[ExportedSymbol],
+        definitions: &[AbiTypeDefinition],
     ) -> (ContentHash, ContentHash) {
         let mut hasher = DeterministicHasher::new();
 
@@ -503,6 +774,11 @@ impl FileAbi {
 
         for sym in symbols {
             sym.hash_interface_into(&mut hasher);
+        }
+
+        hasher.write_u64(definitions.len() as u64);
+        for definition in definitions {
+            definition.hash_into(&mut hasher);
         }
 
         let interface_hash = hasher.finish();

@@ -7605,6 +7605,7 @@ mod tests {
         let abi = FileAbi {
             package: Some("core.math".to_string()),
             module: "core/math/math".to_string(),
+            type_definitions: Vec::new(),
             symbols: vec![
                 ExportedSymbol::Function {
                     visibility: Visibility::Public,

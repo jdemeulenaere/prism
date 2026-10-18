@@ -17,4 +17,7 @@ pub use abi_type::{
 };
 pub use error::AbiError;
 pub use hasher::{ContentHash, DeterministicHasher};
-pub use signature::{declared_types, marker_parameters, AbiReceiver, ExportedSymbol, FileAbi};
+pub use signature::{
+    declared_types, marker_parameters, type_definitions, AbiReceiver, AbiTypeDefinition,
+    AbiTypeMembers, ExportedSymbol, FileAbi,
+};

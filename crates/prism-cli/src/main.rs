@@ -462,6 +462,46 @@ fn run_abi(path: &str) {
             }
         }
     }
+    println!("Reachable Types ({}):", abi.type_definitions.len());
+    for definition in &abi.type_definitions {
+        let members = match &definition.members {
+            prism_abi::AbiTypeMembers::Fields(fields) => fields
+                .iter()
+                .map(|(f, is_var, t)| {
+                    format!("{} {}: {}", if *is_var { "var" } else { "val" }, f, t)
+                })
+                .collect::<Vec<_>>(),
+            prism_abi::AbiTypeMembers::Variants(variants) => variants
+                .iter()
+                .map(|(v, payloads)| {
+                    if payloads.is_empty() {
+                        v.clone()
+                    } else {
+                        let payloads: Vec<String> =
+                            payloads.iter().map(ToString::to_string).collect();
+                        format!("{}({})", v, payloads.join(", "))
+                    }
+                })
+                .collect(),
+        };
+        let kind = match definition.kind() {
+            prism_abi::NominalKind::Struct => "struct",
+            prism_abi::NominalKind::Enum => "enum",
+        };
+        println!(
+            "  {} {}::{}{}{} {{ {} }}",
+            kind,
+            definition.module,
+            definition.name,
+            type_parameter_list(&definition.type_parameters),
+            generic_marker_suffix(
+                definition.marker,
+                &definition.type_parameters,
+                &definition.marker_parameters
+            ),
+            members.join(", ")
+        );
+    }
 }
 
 /// `prism fmt [--check] <path>...` (the `formatting` spec). Exits with status 1 when a file

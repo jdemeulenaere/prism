@@ -5,7 +5,8 @@
 use crate::cache::{BuildCache, InstanceRequest};
 use crate::diagnostics;
 use prism_abi::{
-    declared_types, AbiError, ContentHash, DeterministicHasher, FileAbi, NominalHeader,
+    declared_types, type_definitions, AbiError, AbiTypeDefinition, ContentHash,
+    DeterministicHasher, FileAbi, NominalHeader,
 };
 use prism_mir::MirFile;
 use prism_parser::ParseError;
@@ -603,31 +604,56 @@ pub(crate) fn extract_abis(
         .map(|(path, node)| (path.as_path(), declared_types(&node.source_file, true)))
         .collect();
 
+    // The binder of each file: its type names bound to the one direct import that exports them.
+    let bind_import = |node: &SourceNode, name: &str| {
+        let mut found = node.direct_imports.iter().filter_map(|dep| {
+            let header = exported_types.get(dep.as_path())?.get(name)?;
+            Some((header.clone(), module_path(graph.get_node(dep)?)))
+        });
+        match (found.next(), found.next()) {
+            // A name exported by several imports stays unbound; Phase 2 reports `E4012`.
+            (Some(binding), None) => Some(binding),
+            _ => None,
+        }
+    };
+
+    // Phase 1a, continued: the definition of every struct and enum of every file, private ones
+    // included, bound as Phase 1b binds signature types (D3 of `codegen-aggregates`).
+    let mut definitions: HashMap<(String, String), AbiTypeDefinition> = HashMap::new();
+    for node in graph.nodes.values() {
+        let bind = |name: &str| bind_import(node, name);
+        for definition in type_definitions(&node.source_file, &module_path(node), &bind) {
+            definitions
+                .entry((definition.module.clone(), definition.name.clone()))
+                .or_insert(definition);
+        }
+    }
+    let definition = |module: &str, name: &str| {
+        definitions
+            .get(&(module.to_string(), name.to_string()))
+            .cloned()
+    };
+
     // Phase 1b: extract each file's ABI, binding the type names in its exported signatures to
-    // its own declarations or to the one direct import that exports them.
+    // its own declarations or to the one direct import that exports them, and recording the
+    // definitions of the types its exports reach.
     let mut abis: HashMap<PathBuf, FileAbi> = HashMap::new();
     for (file_path, node) in &graph.nodes {
-        let bind_import = |name: &str| {
-            let mut found = node.direct_imports.iter().filter_map(|dep| {
-                let header = exported_types.get(dep.as_path())?.get(name)?;
-                Some((header.clone(), module_path(graph.get_node(dep)?)))
-            });
-            match (found.next(), found.next()) {
-                // A name exported by several imports stays unbound; Phase 2 reports `E4012`.
-                (Some(binding), None) => Some(binding),
-                _ => None,
+        let bind = |name: &str| bind_import(node, name);
+        let abi = FileAbi::extract_with_definitions(
+            &node.source_file,
+            &module_path(node),
+            &bind,
+            &definition,
+        )
+        .map_err(|err| {
+            let source = fs::read_to_string(file_path).unwrap_or_default();
+            WorkspaceError::Abi {
+                path: file_path.clone(),
+                source,
+                error: err,
             }
-        };
-        let abi = FileAbi::extract(&node.source_file, &module_path(node), &bind_import).map_err(
-            |err| {
-                let source = fs::read_to_string(file_path).unwrap_or_default();
-                WorkspaceError::Abi {
-                    path: file_path.clone(),
-                    source,
-                    error: err,
-                }
-            },
-        )?;
+        })?;
         abis.insert(file_path.clone(), abi);
     }
     Ok(abis)

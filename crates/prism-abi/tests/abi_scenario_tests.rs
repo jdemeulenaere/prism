@@ -3,8 +3,8 @@
 //! data-driven fixtures of `prism-cli`, because they compare two extractions.
 
 use prism_abi::{
-    declared_types, no_imports, AbiError, AbiType, AbiTypeParameter, ContentHash, ExportedSymbol,
-    FileAbi, NominalKind,
+    declared_types, no_imports, type_definitions, AbiError, AbiType, AbiTypeMembers,
+    AbiTypeParameter, ContentHash, ExportedSymbol, FileAbi, NominalKind,
 };
 use prism_ast::{ReceiverMode, TypeMarker, Visibility};
 use prism_parser::parse_source;
@@ -935,4 +935,142 @@ fn changing_a_non_generic_extension_of_a_generic_type() {
     let after = extract(&format!("{}public fun Box<Int>.sum(): Int = v + 1\n", BOX));
     assert_eq!(generic_body_hash_of(&before), None);
     assert_eq!(before.abi_hash, after.abi_hash);
+}
+
+// --- Definitions of reachable types (D2 and D3 of `codegen-aggregates`)
+
+const LIB_A: &str = "package lib\n\
+     struct Secret : Copy { val k: Int }\n\
+     public struct Outer : Copy { val s: Secret, val n: Int }\n\
+     struct Helper { val h: Int }\n";
+
+/// The ABI of `source` as module `lib/a`, with no imports.
+fn extract_lib(source: &str) -> FileAbi {
+    FileAbi::extract(&parse_source(source).unwrap(), "lib/a", &no_imports).unwrap()
+}
+
+fn reachable_names(abi: &FileAbi) -> Vec<String> {
+    abi.type_definitions
+        .iter()
+        .map(|d| format!("{}::{}", d.module, d.name))
+        .collect()
+}
+
+const GEO_CORE: &str = "package geo\npublic struct Vec : Copy { val x: Int }\n";
+const GEO_SHAPES: &str = "package geo\nimport /geo/core\n\
+     public struct Circle : Copy { val center: Vec, val r: Int }\n";
+
+/// The ABIs of `geo/core` and of `geo/shapes`, which imports it, extracted as `extract_abis`
+/// does: each file's definitions read first, then each ABI walking all of them.
+fn extract_geo(core: &str, shapes: &str) -> (FileAbi, FileAbi) {
+    let core = parse_source(core).unwrap();
+    let shapes = parse_source(shapes).unwrap();
+    let core_exports = declared_types(&core, true);
+    let bind_shapes = |name: &str| {
+        core_exports
+            .get(name)
+            .map(|header| (header.clone(), "geo/core".to_string()))
+    };
+    let mut definitions = type_definitions(&core, "geo/core", &no_imports);
+    definitions.extend(type_definitions(&shapes, "geo/shapes", &bind_shapes));
+    let lookup = |module: &str, name: &str| {
+        definitions
+            .iter()
+            .find(|d| d.module == module && d.name == name)
+            .cloned()
+    };
+    (
+        FileAbi::extract_with_definitions(&core, "geo/core", &no_imports, &lookup).unwrap(),
+        FileAbi::extract_with_definitions(&shapes, "geo/shapes", &bind_shapes, &lookup).unwrap(),
+    )
+}
+
+#[test]
+fn a_private_field_type_is_recorded() {
+    let abi = extract_lib(LIB_A);
+    assert!(abi
+        .symbols
+        .iter()
+        .any(|s| matches!(s, ExportedSymbol::Struct { name, .. } if name == "Outer")));
+    assert_eq!(reachable_names(&abi), ["lib/a::Secret"]);
+    let AbiTypeMembers::Fields(fields) = &abi.type_definitions[0].members else {
+        panic!("Secret is a struct");
+    };
+    assert_eq!(
+        fields,
+        &[(
+            "k".to_string(),
+            false,
+            AbiType::Prim(prism_abi::PrimKind::Int)
+        )]
+    );
+}
+
+#[test]
+fn a_type_of_a_module_the_importer_does_not_import() {
+    let (core, shapes) = extract_geo(GEO_CORE, GEO_SHAPES);
+    assert_eq!(reachable_names(&core), Vec::<String>::new());
+    assert_eq!(reachable_names(&shapes), ["geo/core::Vec"]);
+    assert_eq!(shapes.type_definitions[0].kind(), NominalKind::Struct);
+}
+
+#[test]
+fn changing_a_reachable_type_changes_the_hashes() {
+    // Vec gains a field: the hashes of both geo files change.
+    let (core, shapes) = extract_geo(GEO_CORE, GEO_SHAPES);
+    let (core2, shapes2) = extract_geo(
+        "package geo\npublic struct Vec : Copy { val x: Int, val y: Int }\n",
+        GEO_SHAPES,
+    );
+    assert_ne!(core.interface_hash, core2.interface_hash);
+    assert_ne!(core.abi_hash, core2.abi_hash);
+    assert_ne!(shapes.interface_hash, shapes2.interface_hash);
+    assert_ne!(shapes.abi_hash, shapes2.abi_hash);
+
+    // The private Secret gains a field: the hashes of lib/a change.
+    let lib = extract_lib(LIB_A);
+    let secret = extract_lib(&LIB_A.replace("val k: Int", "val k: Int, val j: Int"));
+    assert_ne!(lib.interface_hash, secret.interface_hash);
+    assert_ne!(lib.abi_hash, secret.abi_hash);
+
+    // The private Helper, which no export reaches, changes: no hash changes.
+    let helper = extract_lib(&LIB_A.replace("val h: Int", "val h: Int, var g: Bool"));
+    assert_eq!(lib.interface_hash, helper.interface_hash);
+    assert_eq!(lib.abi_hash, helper.abi_hash);
+}
+
+#[test]
+fn a_cycle_through_heap_terminates() {
+    let abi = extract_lib(
+        "package lib\n\
+         enum Node { Leaf(Int), Branch(Heap<Node>, Heap<Tree>) }\n\
+         struct Tree { val root: Node? }\n\
+         public fun make(t: Tree): Int = 1\n",
+    );
+    assert_eq!(reachable_names(&abi), ["lib/a::Node", "lib/a::Tree"]);
+}
+
+#[test]
+fn reachable_types_keep_the_hash_stable_across_reordering() {
+    let before = extract_lib(
+        "package lib\n\
+         struct B { val n: Int }\n\
+         struct A { val b: B }\n\
+         public fun f(a: A): Int = 1\n\
+         public fun g(): Int = 2\n",
+    );
+    let after = extract_lib(
+        "package lib\n\
+         public fun g(): Int = 2\n\
+         struct A { val b: B }\n\
+         public fun f(a: A): Int = 1\n\
+         struct B { val n: Int }\n",
+    );
+    assert_eq!(reachable_names(&before), ["lib/a::A", "lib/a::B"]);
+    assert_eq!(before.abi_hash, after.abi_hash);
+    let plain = |source: &str| extract_lib(source).abi_hash;
+    assert_eq!(
+        plain("package lib\npublic fun f(): Int = 1\npublic fun g(): Int = 2\n"),
+        plain("package lib\npublic fun g(): Int = 2\npublic fun f(): Int = 1\n")
+    );
 }
