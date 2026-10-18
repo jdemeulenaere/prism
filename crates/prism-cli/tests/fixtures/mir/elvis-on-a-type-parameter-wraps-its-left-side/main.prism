@@ -1,0 +1,2 @@
+// expect: ok
+fun <T> orElse(a: T, c: T): T = a ?: c

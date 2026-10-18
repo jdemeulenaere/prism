@@ -156,7 +156,9 @@ impl Builder<'_> {
     /// `n ?: f`: the consumed nullable in a temporary, a switch on its tag, its payload moved or
     /// copied out where it is present, the fallback in its own scope where it is `null` (D8).
     /// A left side that cannot be null, which the type checker accepts, is the value: it is
-    /// lowered alone and the fallback, which can never run, is not lowered.
+    /// lowered alone and the fallback, which can never run, is not lowered. A left side whose
+    /// type is a type parameter `T` may be null in an instance whose argument is nullable, so it
+    /// is wrapped into a `T?` temporary and tested like a nullable (D7 of `monomorphization`).
     pub(super) fn lower_elvis(
         &mut self,
         destination: Option<&Place>,
@@ -165,14 +167,21 @@ impl Builder<'_> {
         ty: &Type,
         span: Span,
     ) {
-        if !self.is_nullable(nullable) {
+        let left_ty = self.expression(nullable).ty.clone();
+        let wraps = matches!(left_ty, Type::Parameter(_));
+        if !self.is_nullable(nullable) && !wraps {
             self.expression_into(destination, nullable);
             return;
         }
         let destination = self.destination_or_temporary(destination, ty, span);
-        let nullable_ty = self.expression(nullable).ty.clone();
+        let nullable_ty = left_ty.nullable();
         let temporary = self.new_temporary(nullable_ty.clone(), span);
-        self.expression_into(Some(&Place::local(temporary)), nullable);
+        if wraps {
+            let operand = self.operand(nullable);
+            self.assign(Place::local(temporary), Rvalue::WrapNullable(operand), span);
+        } else {
+            self.expression_into(Some(&Place::local(temporary)), nullable);
+        }
         if self.current.is_none() {
             return;
         }

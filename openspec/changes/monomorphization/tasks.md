@@ -9,7 +9,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 2. `?:` on a type parameter (D7)
 
-- [ ] 2.1 In `lower_elvis` (`crates/prism-mir/src/build/control_flow.rs`), when the left operand's type is a `Type::Parameter`, lower it into a `T?` temporary through `Rvalue::WrapNullable`, then switch on its tag and move or copy its payload out as for a nullable operand. Keep the non-nullable path for every other type. Update the doc comment and any `mir.snap` that holds such a `?:`. Verify with a `mir/` fixture holding `mir.snap` for "Elvis on a type parameter wraps its left side", that the existing "Elvis on a non-nullable left side is the left side" cases are unchanged, and that `cargo test -p prism-mir -p prism-borrowck` passes.
+- [x] 2.1 In `lower_elvis` (`crates/prism-mir/src/build/control_flow.rs`), when the left operand's type is a `Type::Parameter`, lower it into a `T?` temporary through `Rvalue::WrapNullable`, then switch on its tag and move or copy its payload out as for a nullable operand. Keep the non-nullable path for every other type. Update the doc comment and any `mir.snap` that holds such a `?:`. Verify with a `mir/` fixture holding `mir.snap` for "Elvis on a type parameter wraps its left side", that the existing "Elvis on a non-nullable left side is the left side" cases are unchanged, and that `cargo test -p prism-mir -p prism-borrowck` passes.
 
 ## 3. Generic records and instance MIR (D2, D6)
 
