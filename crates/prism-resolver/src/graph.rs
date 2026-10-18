@@ -20,6 +20,9 @@ pub struct SourceNode {
     pub workspace_root: PathBuf,
     /// Declared package segments (e.g. `["foo", "bar"]` or empty for root files).
     pub package: Vec<String>,
+    /// The source text that was parsed, so that later stages (the build cache's content key)
+    /// see exactly what was checked even if the file changes on disk meanwhile.
+    pub source: String,
     /// Parsed AST of the source file.
     pub source_file: SourceFile,
     /// Resolved target paths of direct imports.
@@ -144,6 +147,7 @@ impl DependencyGraph {
                 path: current_path.clone(),
                 workspace_root: authoritative_root.clone(),
                 package,
+                source: content,
                 source_file,
                 direct_imports,
             };

@@ -9,8 +9,8 @@ The cache scenarios are integration tests in `crates/prism-cli/tests/cache_tests
 
 ## 2. The cache store (D3, D5, D6, D7, D8)
 
-- [ ] 2.1 In `prism-resolver`, keep the parsed source text in `SourceNode` (`source: String`). Verify that `cargo test -p prism-resolver` passes.
-- [ ] 2.2 Add `crates/prism-cli/src/cache.rs`: `BuildCache` opened from a directory and a compiler identity, or from the environment (`PRISM_CACHE`, `off`, the platform default per D3, the identity per D5); `CACHEDIR.TAG`; entry paths `v1/<2 hex>/<key>`; `read_check`, `write_check`, `has_instance` and `record_instance` with the D6 format, validation and checksum, and D8's temporary file and rename. Every IO error is a miss or a skipped write (D7). Verify with unit tests: an entry round-trips; a truncated, garbage, wrong-version, wrong-kind or wrong-key entry is a miss; a cache directory that is a regular file reads and writes nothing without error; the default location for each platform's environment ("Default cache location", with the environment injected); two identities give different keys.
+- [x] 2.1 In `prism-resolver`, keep the parsed source text in `SourceNode` (`source: String`). Verify that `cargo test -p prism-resolver` passes.
+- [x] 2.2 Add `crates/prism-cli/src/cache.rs`: `BuildCache` opened from a directory and a compiler identity, or from the environment (`PRISM_CACHE`, `off`, the platform default per D3, the identity per D5); `CACHEDIR.TAG`; entry paths `v1/<2 hex>/<key>`; `read_check`, `write_check`, `has_instance` and `record_instance` with the D6 format, validation and checksum, and D8's temporary file and rename. Every IO error is a miss or a skipped write (D7). Verify with unit tests: an entry round-trips; a truncated, garbage, wrong-version, wrong-kind or wrong-key entry is a miss; a cache directory that is a regular file reads and writes nothing without error; the default location for each platform's environment ("Default cache location", with the environment injected); two identities give different keys.
 
 ## 3. Compilation avoidance in `prism check` (D2, D4, D9, D10, D11)
 
