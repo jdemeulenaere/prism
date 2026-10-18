@@ -77,14 +77,6 @@ pub enum TypeError {
         span: Span,
     },
 
-    /// E4004: An argument of `print` or `println` of a type it cannot print (D15 of
-    /// `codegen-core`).
-    UnprintableArgument {
-        function: String,
-        ty: Type,
-        span: Span,
-    },
-
     /// E4004: An argument's type is not assignable to its parameter's type (including struct
     /// constructor fields and enum payloads).
     ArgumentTypeMismatch {
@@ -284,12 +276,24 @@ pub enum TypeError {
     /// or binding modes (D10 of `payload-patterns`). `message` names the binding.
     InconsistentAlternativeBindings { message: String, span: Span },
 
-    /// E4026: A string template part of type `ty` has no text form (D8 of `string-templates`),
-    /// for `reason`. `help` names the fixes, one per line of help.
+    /// E4026: A string template part, or with `printed` an argument of `print` or `println`,
+    /// of type `ty` has no text form (D8 of `string-templates`, D9 of `standard-library`), for
+    /// `reason`. `help` names the fixes, one per line of help.
     NoTextForm {
         ty: Type,
         reason: NoTextFormReason,
         help: Vec<String>,
+        printed: bool,
+        span: Span,
+    },
+
+    /// E4029: A declaration of the bundled library that breaks a rule of `external` or
+    /// `intrinsic` declarations (D5 and D6 of `standard-library`): an external that is `public`,
+    /// generic, an extension, `compose`, has defaults or returns a reference, or an intrinsic
+    /// the catalog does not provide or provides with another signature.
+    InvalidLibraryDeclaration {
+        message: String,
+        help: Option<String>,
         span: Span,
     },
 
@@ -459,7 +463,6 @@ impl TypeError {
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
             TypeError::ClosureParameterCount { .. } => "E4004",
-            TypeError::UnprintableArgument { .. } => "E4004",
             TypeError::ArgumentTypeMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
             TypeError::UnknownField { .. } => "E4006",
@@ -488,6 +491,7 @@ impl TypeError {
             TypeError::InvalidPattern { .. } => "E4024",
             TypeError::InconsistentAlternativeBindings { .. } => "E4025",
             TypeError::NoTextForm { .. } => "E4026",
+            TypeError::InvalidLibraryDeclaration { .. } => "E4029",
             TypeError::PolymorphicRecursion { .. } => "E4027",
             TypeError::CannotCaptureByValue { .. } => "E4028",
         }
@@ -508,7 +512,6 @@ impl TypeError {
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
             TypeError::ClosureParameterCount { span, .. } => *span,
-            TypeError::UnprintableArgument { span, .. } => *span,
             TypeError::BuiltinFunctionAsValue { span, .. } => *span,
             TypeError::ArgumentTypeMismatch { span, .. } => *span,
             TypeError::ReturnTypeMismatch { span, .. } => *span,
@@ -536,6 +539,7 @@ impl TypeError {
             TypeError::InvalidPattern { span, .. } => *span,
             TypeError::InconsistentAlternativeBindings { span, .. } => *span,
             TypeError::NoTextForm { span, .. } => *span,
+            TypeError::InvalidLibraryDeclaration { span, .. } => *span,
             TypeError::PolymorphicRecursion { span, .. } => *span,
             TypeError::CannotCaptureByValue { span, .. } => *span,
         }
@@ -622,9 +626,6 @@ impl TypeError {
                 };
                 format!("closure expected {}, but {}", expected_text, declared_text)
             }
-            TypeError::UnprintableArgument { function, ty, .. } => {
-                format!("'{}' cannot print a value of type '{}'", function, ty)
-            }
             TypeError::BuiltinFunctionAsValue { name, .. } if name == "List" => {
                 "the built-in type 'List' cannot be used as a value or called".to_string()
             }
@@ -667,25 +668,43 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),
             TypeError::InvalidPattern { message, .. } => message.clone(),
             TypeError::InconsistentAlternativeBindings { message, .. } => message.clone(),
-            TypeError::NoTextForm { ty, reason, .. } => match reason {
-                NoTextFormReason::Nullable => {
-                    format!("a nullable '{}' has no text form in a string template", ty)
+            TypeError::NoTextForm {
+                ty,
+                reason,
+                printed,
+                ..
+            } => {
+                let place = if *printed {
+                    "as a printed value"
+                } else {
+                    "in a string template"
+                };
+                match reason {
+                    NoTextFormReason::Nullable => {
+                        format!("a nullable '{}' has no text form {}", ty, place)
+                    }
+                    NoTextFormReason::NoToString => {
+                        format!("'{}' has no text form {}", ty, place)
+                    }
+                    NoTextFormReason::ToStringReturns(returned) => {
+                        format!("'toString()' of '{}' returns '{}', not 'String'", ty, returned)
+                    }
+                    NoTextFormReason::ToStringNeedsArguments => {
+                        format!("'toString' of '{}' needs arguments", ty)
+                    }
+                    NoTextFormReason::ToStringReceiver { mutable } => format!(
+                        "{} does not call the '{}' 'toString()' of '{}' implicitly",
+                        if *printed {
+                            "printing"
+                        } else {
+                            "a string template"
+                        },
+                        if *mutable { "mut" } else { "consuming" },
+                        ty
+                    ),
                 }
-                NoTextFormReason::NoToString => {
-                    format!("'{}' has no text form in a string template", ty)
-                }
-                NoTextFormReason::ToStringReturns(returned) => {
-                    format!("'toString()' of '{}' returns '{}', not 'String'", ty, returned)
-                }
-                NoTextFormReason::ToStringNeedsArguments => {
-                    format!("'toString' of '{}' needs arguments", ty)
-                }
-                NoTextFormReason::ToStringReceiver { mutable } => format!(
-                    "a string template does not call the '{}' 'toString()' of '{}' implicitly",
-                    if *mutable { "mut" } else { "consuming" },
-                    ty
-                ),
-            },
+            }
+            TypeError::InvalidLibraryDeclaration { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
             TypeError::BuiltinNameDeclared { name, .. } => {

@@ -56,7 +56,7 @@ impl Signature {
     /// nothing.
     pub fn of_callee(callee: &Callee) -> Self {
         match callee {
-            Callee::Function(_) | Callee::Builtin(_) => Signature::Function {
+            Callee::Function(_) | Callee::External(_) | Callee::Builtin(_) => Signature::Function {
                 has_receiver: callee.has_receiver(),
             },
             Callee::Value(..) => Signature::FunctionValue,

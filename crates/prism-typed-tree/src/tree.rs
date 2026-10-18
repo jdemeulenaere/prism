@@ -36,6 +36,9 @@ pub struct TypedFile {
     /// Every struct and enum the file knows, with its marker and, when known, its fields or
     /// variants (D4 of `mir-lowering`), so later stages need neither the checker nor the ABIs.
     pub types: TypeTable,
+    /// The `external` functions the file declares or imports (D5 of `standard-library`): a
+    /// function reference to one of them is lowered to an adapter calling it by symbol.
+    pub externals: Vec<DeclarationPath>,
 }
 
 /// A declaration of the file.
@@ -534,6 +537,9 @@ impl Call {
 pub enum Callee {
     /// A top-level function or extension, of the file or of a direct import.
     Function(DeclarationPath),
+    /// An `external fun` of the bundled library: a runtime entry point called directly by the
+    /// C symbol equal to its name, with no function-table slot (D5 of `standard-library`).
+    External(DeclarationPath),
     /// A function the compiler provides.
     Builtin(BuiltinFunction),
     /// A function-typed value, read in place.

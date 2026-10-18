@@ -377,6 +377,7 @@ impl Printer<'_> {
                     Callee::Function(path) => {
                         format!("{}{}", path, render_type_arguments(type_arguments))
                     }
+                    Callee::External(path) => format!("external {}", path),
                     Callee::Builtin(builtin) => format!(
                         "builtin {}{}",
                         builtin.name(),

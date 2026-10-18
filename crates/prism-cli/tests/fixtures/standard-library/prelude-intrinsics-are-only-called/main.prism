@@ -1,2 +1,2 @@
-// expect: E4001
+// expect: E4013
 fun f() { val p = println }

@@ -108,7 +108,7 @@ impl GenericRecord {
                     matches!(&body.owner, BodyOwner::Default { parameter: p, .. } if p == parameter)
                 })
                 .map(|(body, id)| (*id, body)),
-            Callee::Builtin(_) | Callee::Value(..) => None,
+            Callee::External(_) | Callee::Builtin(_) | Callee::Value(..) => None,
         }
     }
 

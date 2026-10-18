@@ -413,6 +413,12 @@ impl Parser {
             _ => {}
         }
 
+        // Library modifier (`external fun`, `intrinsic fun`, `intrinsic val`), after the
+        // visibility and before everything else (D12 of `standard-library`). It is a modifier
+        // only directly before `compose`, `mut`, `consuming`, `fun` or `val`, so the words stay
+        // names everywhere else.
+        let library = self.parse_library_modifier()?;
+
         // Check compose modifier (`compose fun`)
         let mut is_compose = false;
         if self.peek_kind() == &TokenKind::Compose {
@@ -446,9 +452,27 @@ impl Parser {
             mode = Some((receiver_mode, tok.span));
         }
 
+        if let Some(modifier) = library {
+            if self.peek_kind() == &TokenKind::Val && !is_compose && mode.is_none() {
+                let property = self.parse_extension_property(visibility, modifier, start_span)?;
+                return Ok(Declaration::ExtensionProperty(property));
+            }
+            if self.peek_kind() != &TokenKind::Fun {
+                return Err(ParseError::new(
+                    format!(
+                        "Expected 'fun' after '{}'; modifiers go in the order visibility, 'external' or 'intrinsic', 'compose', then 'mut' or 'consuming', as in 'public {} fun f()'",
+                        modifier.kind.as_str(),
+                        modifier.kind.as_str()
+                    ),
+                    self.peek().span,
+                ));
+            }
+        }
+
         match self.peek_kind() {
             TokenKind::Fun => {
-                let func = self.parse_function(visibility, is_compose, mode, start_span)?;
+                let func =
+                    self.parse_function(visibility, is_compose, mode, library, start_span)?;
                 Ok(Declaration::Function(func))
             }
             TokenKind::Struct => {
@@ -502,6 +526,7 @@ impl Parser {
         visibility: Visibility,
         is_compose: bool,
         mode: Option<(ReceiverMode, Span)>,
+        library: Option<LibraryModifier>,
         start_span: Span,
     ) -> Result<FunctionDecl, ParseError> {
         self.expect(TokenKind::Fun)?;
@@ -611,9 +636,37 @@ impl Parser {
             return_type = Some(self.parse_type()?);
         }
 
-        // Body: = expr OR { ... } OR none (forward declaration / interface)
+        // Body: `= expr` or `{ ... }`, or none for a library declaration (D12 of
+        // `standard-library`).
         let mut body = None;
         let mut end_span = return_type.as_ref().map_or(rparen_span, |t| t.span);
+
+        let has_body = matches!(self.peek_kind(), TokenKind::Eq | TokenKind::LBrace);
+        match library {
+            Some(modifier) if has_body => {
+                return Err(ParseError::new(
+                    format!(
+                        "An {} declaration has no body: the {} it declares",
+                        modifier.kind.as_str(),
+                        match modifier.kind {
+                            LibraryKind::Intrinsic => "compiler provides what",
+                            LibraryKind::External => "runtime provides the function",
+                        }
+                    ),
+                    self.peek().span,
+                ));
+            }
+            None if !has_body => {
+                return Err(ParseError::new(
+                    format!(
+                        "A function needs a body: write '= expression' or '{{ ... }}' after the signature of '{}'",
+                        name
+                    ),
+                    end_span,
+                ));
+            }
+            _ => {}
+        }
 
         if self.peek_kind() == &TokenKind::Eq {
             self.bump(); // '='
@@ -635,6 +688,108 @@ impl Parser {
             params,
             return_type,
             body,
+            library,
+            span: start_span.merge(end_span),
+        })
+    }
+
+    /// Reads an `external` or `intrinsic` modifier: the word directly before `compose`, `mut`,
+    /// `consuming`, `fun` or `val`. Two library modifiers in a row are rejected.
+    fn parse_library_modifier(&mut self) -> Result<Option<LibraryModifier>, ParseError> {
+        let kind = match self.peek_kind() {
+            TokenKind::Ident(word) if word == "external" => LibraryKind::External,
+            TokenKind::Ident(word) if word == "intrinsic" => LibraryKind::Intrinsic,
+            _ => return Ok(None),
+        };
+        let follows_modifier = |kind: &TokenKind| match kind {
+            TokenKind::Compose | TokenKind::Mut | TokenKind::Fun | TokenKind::Val => true,
+            TokenKind::Ident(word) => word == "consuming",
+            _ => false,
+        };
+        let next = self.peek_ahead(1).clone();
+        if let TokenKind::Ident(word) = &next {
+            if word == "external" || word == "intrinsic" {
+                return Err(ParseError::new(
+                    "A declaration takes one of 'external' and 'intrinsic', once",
+                    self.tokens[(self.cursor + 1).min(self.tokens.len() - 1)].span,
+                ));
+            }
+        }
+        if !follows_modifier(&next) {
+            return Ok(None);
+        }
+        let span = self.bump().span;
+        Ok(Some(LibraryModifier { kind, span }))
+    }
+
+    /// An intrinsic extension property from `val` on: `val <T> List<T>.size: Int`, with no
+    /// initializer (D6 of `standard-library`).
+    fn parse_extension_property(
+        &mut self,
+        visibility: Visibility,
+        library: LibraryModifier,
+        start_span: Span,
+    ) -> Result<ExtensionPropertyDecl, ParseError> {
+        self.expect(TokenKind::Val)?;
+        if library.kind == LibraryKind::External {
+            return Err(ParseError::new(
+                "An external declaration is a function: 'external fun name(...)'; properties are 'intrinsic val'",
+                library.span,
+            ));
+        }
+        let type_parameters = if self.peek_kind() == &TokenKind::Lt {
+            self.parse_type_parameter_list(true)?
+        } else {
+            Vec::new()
+        };
+        let (receiver_name, receiver_span) = self.expect_ident()?;
+        let mut receiver_arguments = Vec::new();
+        let mut receiver_end = receiver_span;
+        if self.peek_kind() == &TokenKind::Lt {
+            let lt_span = self.peek().span;
+            match self.try_parse_receiver_type_arguments() {
+                Some((arguments, end)) => {
+                    receiver_arguments = arguments;
+                    receiver_end = end;
+                }
+                None => {
+                    return Err(ParseError::new(
+                        "Expected '.' and the property name after the receiver type of an intrinsic property",
+                        lt_span,
+                    ))
+                }
+            }
+        }
+        if self.peek_kind() != &TokenKind::Dot {
+            return Err(ParseError::new(
+                "An intrinsic property has a receiver, as in 'intrinsic val String.length: Int'",
+                self.peek().span,
+            ));
+        }
+        let receiver_span = receiver_span.merge(receiver_end);
+        let receiver = if receiver_arguments.is_empty() {
+            Type::named(receiver_name, receiver_span)
+        } else {
+            Type::generic(receiver_name, receiver_arguments, receiver_span)
+        };
+        self.bump(); // '.'
+        let (name, _) = self.expect_ident()?;
+        self.expect(TokenKind::Colon)?;
+        let ty = self.parse_type()?;
+        if matches!(self.peek_kind(), TokenKind::Eq | TokenKind::LBrace) {
+            return Err(ParseError::new(
+                "An intrinsic property has no initializer: the compiler provides its value",
+                self.peek().span,
+            ));
+        }
+        let end_span = ty.span;
+        Ok(ExtensionPropertyDecl {
+            visibility,
+            library,
+            type_parameters,
+            receiver,
+            name,
+            ty,
             span: start_span.merge(end_span),
         })
     }
@@ -881,7 +1036,16 @@ impl Parser {
     ) -> Result<TopLevelVarDecl, ParseError> {
         self.expect(TokenKind::Val)?;
 
-        let (name, _) = self.expect_ident()?;
+        let (name, name_span) = self.expect_ident()?;
+        if matches!(self.peek_kind(), TokenKind::Dot | TokenKind::Lt) {
+            return Err(ParseError::new(
+                format!(
+                    "A top-level 'val' has no receiver: extension properties such as 'val {}.name' are declared only by the bundled library, with 'intrinsic val'",
+                    name
+                ),
+                name_span.merge(self.peek().span),
+            ));
+        }
         let mut ty = None;
         if self.peek_kind() == &TokenKind::Colon {
             self.bump();

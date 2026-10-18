@@ -17,6 +17,20 @@ pub enum AbiError {
         visibility: String,
         span: Span,
     },
+    /// `E3002`: a workspace file declares something `external` or `intrinsic`, which only the
+    /// bundled library may (D12 of `standard-library`). `modifier` is the word written.
+    LibraryOnlyDeclaration { modifier: String, span: Span },
+}
+
+impl AbiError {
+    /// The span the error points at.
+    pub fn span(&self) -> Span {
+        match self {
+            AbiError::MissingExplicitReturnType { span, .. }
+            | AbiError::MissingExplicitVarType { span, .. }
+            | AbiError::LibraryOnlyDeclaration { span, .. } => *span,
+        }
+    }
 }
 
 impl fmt::Display for AbiError {
@@ -42,6 +56,13 @@ impl fmt::Display for AbiError {
                     f,
                     "ABI violation at {}: {} variable '{}' must declare an explicit type for ABI extraction",
                     span, visibility, var_name
+                )
+            }
+            AbiError::LibraryOnlyDeclaration { modifier, span } => {
+                write!(
+                    f,
+                    "'{}' declaration outside the bundled library at {}",
+                    modifier, span
                 )
             }
         }

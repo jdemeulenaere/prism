@@ -51,7 +51,8 @@ pub fn lower_files(files: &[(&str, &str)]) -> Vec<MirFile> {
             let package = module
                 .rsplit_once('/')
                 .map(|(package, _)| package.replace('/', "."));
-            let mut checker = prism_typechecker::TypeChecker::new(package, *module);
+            let mut checker = prism_typechecker::TypeChecker::new(package, *module)
+                .with_prelude(prism_typechecker::test_prelude());
             let imports = imports_of(file);
             for abi in &abis {
                 if imports.contains(&abi.module) {

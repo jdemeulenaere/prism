@@ -892,8 +892,8 @@ mod tests {
     fn test_spans_of_bodyless_functions_lambdas_and_closures() {
         let text = |src: &'static str, span: Span| &src[span.start..span.end];
 
-        // S1: a function without a body ends at its signature.
-        let src = "fun a(): Int\n\n\nfun b()\nfun c() = 1";
+        // S1: an intrinsic function, which has no body, ends at its signature.
+        let src = "intrinsic fun a(): Int\n\n\nintrinsic fun b()\nfun c() = 1";
         let file = parse_source(src).unwrap();
         let spans: Vec<Span> = file
             .declarations
@@ -903,8 +903,8 @@ mod tests {
                 _ => panic!("Expected function"),
             })
             .collect();
-        assert_eq!(text(src, spans[0]), "fun a(): Int");
-        assert_eq!(text(src, spans[1]), "fun b()");
+        assert_eq!(text(src, spans[0]), "intrinsic fun a(): Int");
+        assert_eq!(text(src, spans[1]), "intrinsic fun b()");
 
         // S2: a trailing lambda argument spans the lambda only, a named
         // argument includes its name.

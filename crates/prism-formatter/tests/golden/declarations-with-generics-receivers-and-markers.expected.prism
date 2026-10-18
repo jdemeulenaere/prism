@@ -12,4 +12,4 @@ fun <A, B : Clone> pair(a: A, b: B): Pair<A, B> = Pair(a, b)
 
 enum Option<T> : Clone { Some(T), None }
 
-fun declared(): Int
+intrinsic fun declared(): Int

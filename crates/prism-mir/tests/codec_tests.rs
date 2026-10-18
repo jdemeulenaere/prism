@@ -6,7 +6,8 @@ use prism_typed_tree::{DeclarationPath, Type};
 /// The MIR of `source`, a file of module `module` that must typecheck.
 fn lower_module(module: &str, source: &str) -> MirFile {
     let file = prism_parser::parse_source(source).expect("the source parses");
-    let mut checker = prism_typechecker::TypeChecker::new(None, module);
+    let mut checker = prism_typechecker::TypeChecker::new(None, module)
+        .with_prelude(prism_typechecker::test_prelude());
     let tree = checker.check_module(&file);
     assert!(
         checker.errors.is_empty(),
@@ -156,7 +157,8 @@ fn calls_of_own_and_imported_generics_are_roots() {
         "package app\nimport /lib/box\nfun main() { println(keep(\"s\")) }\n",
     )
     .expect("the caller parses");
-    let mut checker = prism_typechecker::TypeChecker::new(Some("app".to_string()), "app/main");
+    let mut checker = prism_typechecker::TypeChecker::new(Some("app".to_string()), "app/main")
+        .with_prelude(prism_typechecker::test_prelude());
     checker.ingest_file_abi(&abi);
     let tree = checker.check_module(&source);
     assert!(checker.errors.is_empty(), "{:?}", checker.errors);

@@ -6,7 +6,8 @@ use prism_borrowck::{check_file, BorrowError};
 /// The MIR of `source`, a file `main` that must typecheck.
 fn lower(source: &str) -> prism_mir::MirFile {
     let file = prism_parser::parse_source(source).expect("the source parses");
-    let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main")
+        .with_prelude(prism_typechecker::test_prelude());
     let tree = checker.check_module(&file);
     assert!(
         checker.errors.is_empty(),

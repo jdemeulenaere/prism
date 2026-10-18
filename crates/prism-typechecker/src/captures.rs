@@ -958,7 +958,8 @@ mod tests {
     /// Checks `source`, returning the typed tree and the error codes.
     fn check(source: &str) -> (TypedFile, Vec<&'static str>) {
         let file = prism_parser::parse_source(source).expect("parses");
-        let mut checker = TypeChecker::new(None, "main");
+        let mut checker =
+            TypeChecker::new(None, "main").with_prelude(crate::prelude::test_prelude());
         let typed = checker.check_module(&file);
         let codes = checker.errors.iter().map(|e| e.code()).collect();
         (typed, codes)
@@ -1216,7 +1217,8 @@ mod timing {
     fn measure(n: usize) -> (Duration, Duration) {
         let source = generate(n);
         let file = prism_parser::parse_source(&source).expect("parses");
-        let mut checker = TypeChecker::new(None, "main");
+        let mut checker =
+            TypeChecker::new(None, "main").with_prelude(crate::prelude::test_prelude());
         let start = Instant::now();
         let mut typed = checker.check_module(&file);
         let check = start.elapsed();

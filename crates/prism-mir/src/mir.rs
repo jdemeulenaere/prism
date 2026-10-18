@@ -538,6 +538,9 @@ impl AggregateKind {
 pub enum Callee {
     /// A top-level function or extension, of the file or of a direct import.
     Function(DeclarationPath),
+    /// An `external fun` of the bundled library, called directly by the C symbol equal to its
+    /// name (D5 of `standard-library`). It is never generic and never an extension.
+    External(DeclarationPath),
     /// A function the compiler provides.
     Builtin(BuiltinFunction),
     /// A function-typed value, read in place, with the span of the source that names it.
@@ -564,7 +567,7 @@ impl Callee {
         match self {
             Callee::Function(path) => path.receiver.is_some(),
             Callee::Builtin(builtin) => builtin.has_receiver(),
-            Callee::Value(..) | Callee::Default { .. } => false,
+            Callee::External(_) | Callee::Value(..) | Callee::Default { .. } => false,
         }
     }
 }

@@ -491,6 +491,7 @@ dependencies = [
  "prism-codegen",
  "prism-formatter",
  "prism-lexer",
+ "prism-library",
  "prism-mir",
  "prism-parser",
  "prism-resolver",
@@ -535,6 +536,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-library"
+version = "0.1.0"
+
+[[package]]
 name = "prism-mir"
 version = "0.1.0"
 dependencies = [
@@ -558,6 +563,7 @@ name = "prism-resolver"
 version = "0.1.0"
 dependencies = [
  "prism-ast",
+ "prism-library",
  "prism-parser",
 ]
 
@@ -571,7 +577,9 @@ version = "0.1.0"
 dependencies = [
  "prism-abi",
  "prism-ast",
+ "prism-library",
  "prism-parser",
+ "prism-typechecker",
  "prism-typed-tree",
 ]
 

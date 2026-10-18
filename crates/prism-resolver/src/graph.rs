@@ -5,17 +5,38 @@
 //! compilation unit and zero-marker invariants.
 
 use crate::error::ResolveError;
-use crate::import::resolve_import_with;
+use crate::import::{resolve_import_with, resolve_library_import, LibraryImport};
 use crate::root::{absolute_path, discover_root_with, DirectoryListings};
 use prism_ast::SourceFile;
+use prism_library::{Library, ROOT_PACKAGE};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// Where a source file comes from (D2 of `standard-library`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SourceOrigin {
+    /// A file of the workspace, read from disk (or a watch session's overlay).
+    Workspace,
+    /// A module of the bundled library, embedded in the executable and never read from disk.
+    Library,
+}
+
+/// The key of the library module `module` (`prism/core`) in a graph: the virtual relative path
+/// `prism/core.prism`, which no workspace file's absolute path can equal and which is how
+/// diagnostics, `--explain-cache` and runtime errors show it.
+pub fn library_key(module: &str) -> PathBuf {
+    PathBuf::from(format!("{}.prism", module))
+}
 
 /// A compiled compilation unit in the dependency graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceNode {
-    /// Canonical path to this source file.
+    /// Canonical path to this source file; for a library module its virtual key
+    /// ([`library_key`]).
     pub path: PathBuf,
+    /// Whether the file is the workspace's or the bundled library's.
+    pub origin: SourceOrigin,
     /// Discovered workspace root for this compilation graph.
     pub workspace_root: PathBuf,
     /// Declared package segments (e.g. `["foo", "bar"]` or empty for root files).
@@ -27,6 +48,23 @@ pub struct SourceNode {
     pub source_file: SourceFile,
     /// Resolved target paths of direct imports.
     pub direct_imports: Vec<PathBuf>,
+    /// The prelude modules a workspace file sees without importing them, by key, in prelude
+    /// order (D4 of `standard-library`); empty for a library file. Ordering and instance
+    /// planning treat them as direct imports.
+    pub prelude_imports: Vec<PathBuf>,
+}
+
+impl SourceNode {
+    /// Whether the node is a module of the bundled library.
+    pub fn is_library(&self) -> bool {
+        self.origin == SourceOrigin::Library
+    }
+
+    /// The node's direct imports, then its prelude modules: every file whose ABI its Phase 2
+    /// sees.
+    pub fn imports_with_prelude(&self) -> impl Iterator<Item = &PathBuf> {
+        self.direct_imports.iter().chain(&self.prelude_imports)
+    }
 }
 
 /// A Strongly Connected Component (SCC) cluster in the dependency graph.
@@ -61,7 +99,41 @@ impl DependencyGraph {
     /// Relative entry paths are made absolute against the current directory first, so the root
     /// is discovered from the file's real location; every path in the graph is absolute.
     pub fn from_entries(entry_files: &[impl AsRef<Path>]) -> Result<Self, ResolveError> {
-        Self::build(entry_files, &mut SourceStore::new())
+        Self::from_entries_with_library(entry_files, Library::bundled())
+    }
+
+    /// [`DependencyGraph::from_entries`] with `library` as the bundled library, which tests use
+    /// to add modules to it (D13 of `standard-library`).
+    pub fn from_entries_with_library(
+        entry_files: &[impl AsRef<Path>],
+        library: &Library,
+    ) -> Result<Self, ResolveError> {
+        Self::build(entry_files, &mut SourceStore::new(), library)
+    }
+
+    /// The graph of every module of `library`, with no workspace file: what the library's own
+    /// tests check (D13 of `standard-library`).
+    pub fn from_library(library: &Library) -> Result<Self, ResolveError> {
+        let mut nodes = HashMap::new();
+        let mut worklist: VecDeque<PathBuf> = library
+            .modules()
+            .iter()
+            .map(|module| library_key(&module.path))
+            .collect();
+        while let Some(path) = worklist.pop_front() {
+            if nodes.contains_key(&path) {
+                continue;
+            }
+            let node = library_node(&path, library, &PathBuf::new())?;
+            worklist.extend(node.direct_imports.iter().cloned());
+            nodes.insert(path, node);
+        }
+        let sccs = compute_sccs(&nodes);
+        Ok(Self {
+            workspace_root: PathBuf::new(),
+            nodes,
+            sccs,
+        })
     }
 
     /// [`DependencyGraph::from_entry`], reading every file through `store` (D9 of
@@ -69,16 +141,20 @@ impl DependencyGraph {
     /// since, then the disk. Only content that changed since the store last read it is parsed
     /// again, so a watch session that rebuilds the graph after an edit parses the edited files
     /// alone.
+    ///
+    /// Library modules come from the bundled library, never from the store, so a watch session
+    /// never reads, watches or invalidates them.
     pub fn from_entry_with(
         entry_file: &Path,
         store: &mut SourceStore,
     ) -> Result<Self, ResolveError> {
-        Self::build(&[entry_file], store)
+        Self::build(&[entry_file], store, Library::bundled())
     }
 
     fn build(
         entry_files: &[impl AsRef<Path>],
         store: &mut SourceStore,
+        library: &Library,
     ) -> Result<Self, ResolveError> {
         if entry_files.is_empty() {
             return Err(ResolveError::Io {
@@ -102,13 +178,44 @@ impl DependencyGraph {
             worklist.push_back(absolute_path(entry.as_ref()));
         }
 
+        let prelude: Vec<PathBuf> = library
+            .prelude()
+            .iter()
+            .map(|module| library_key(module))
+            .collect();
+        let mut library_keys: HashSet<PathBuf> = prelude.iter().cloned().collect();
+
         while let Some(current_path) = worklist.pop_front() {
             if visited.contains(&current_path) {
                 continue;
             }
             visited.insert(current_path.clone());
 
+            // A library module is loaded from the library, under its virtual key (D2 of
+            // `standard-library`).
+            if library_keys.contains(&current_path) {
+                let node = library_node(&current_path, library, &authoritative_root)?;
+                for import in &node.direct_imports {
+                    library_keys.insert(import.clone());
+                    if !visited.contains(import) {
+                        worklist.push_back(import.clone());
+                    }
+                }
+                nodes.insert(current_path, node);
+                continue;
+            }
+
             let (content, source_file) = store.read(&current_path)?;
+
+            // The root package `prism` names the bundled library (D2 of `standard-library`).
+            if let Some(package) = &source_file.package {
+                if package.path.first().map(String::as_str) == Some(ROOT_PACKAGE) {
+                    return Err(ResolveError::ReservedPackage {
+                        file: current_path,
+                        package: package.package_string(),
+                    });
+                }
+            }
 
             let current_root =
                 discover_root_with(&current_path, source_file.package.as_ref(), &mut listings)?;
@@ -135,12 +242,19 @@ impl DependencyGraph {
 
             let mut direct_imports = Vec::new();
             for import_decl in &source_file.imports {
-                let resolved_target = resolve_import_with(
-                    &current_path,
-                    import_decl,
-                    &authoritative_root,
-                    &mut listings,
-                )?;
+                let resolved_target = match resolve_library_import(import_decl, library) {
+                    LibraryImport::Module(key) => {
+                        library_keys.insert(key.clone());
+                        key
+                    }
+                    LibraryImport::Missing(error) => return Err(error),
+                    LibraryImport::NotLibrary => resolve_import_with(
+                        &current_path,
+                        import_decl,
+                        &authoritative_root,
+                        &mut listings,
+                    )?,
+                };
                 if !direct_imports.contains(&resolved_target) {
                     direct_imports.push(resolved_target.clone());
                 }
@@ -155,13 +269,22 @@ impl DependencyGraph {
                 .map(|p| p.path.clone())
                 .unwrap_or_default();
 
+            // Every workspace file sees the prelude modules (D4 of `standard-library`).
+            for module in &prelude {
+                if !visited.contains(module) {
+                    worklist.push_back(module.clone());
+                }
+            }
+
             let node = SourceNode {
                 path: current_path.clone(),
+                origin: SourceOrigin::Workspace,
                 workspace_root: authoritative_root.clone(),
                 package,
                 source: content,
                 source_file,
                 direct_imports,
+                prelude_imports: prelude.clone(),
             };
 
             nodes.insert(current_path, node);
@@ -327,6 +450,107 @@ impl SourceStore {
     }
 }
 
+/// The node of the library module whose key is `key`: its embedded source, parsed once per
+/// process for the bundled library, with its imports resolved within the library only (D2 of
+/// `standard-library`). A library file sees no prelude.
+fn library_node(
+    key: &Path,
+    library: &Library,
+    workspace_root: &Path,
+) -> Result<SourceNode, ResolveError> {
+    let module = key
+        .to_str()
+        .and_then(|key| key.strip_suffix(".prism"))
+        .unwrap_or_default();
+    let source = library
+        .module(module)
+        .ok_or_else(|| ResolveError::LibraryImportNotFound {
+            import_path: format!("/{}", module),
+            reason: format!("the bundled library has no module '{}'", module),
+        })?
+        .source
+        .clone();
+    let source_file =
+        parse_library_module(module, &source, library).map_err(|error| ResolveError::Parse {
+            path: key.to_path_buf(),
+            error,
+        })?;
+    let package_dir: Vec<&str> = module.split('/').collect();
+    let mut direct_imports = Vec::new();
+    for import in &source_file.imports {
+        let target = if import.is_root {
+            match resolve_library_import(import, library) {
+                LibraryImport::Module(target) => target,
+                LibraryImport::Missing(error) => return Err(error),
+                LibraryImport::NotLibrary => {
+                    return Err(ResolveError::LibraryImportNotFound {
+                        import_path: import.path_string(),
+                        reason: "library files import only library modules".to_string(),
+                    })
+                }
+            }
+        } else {
+            // A sibling import names a module of the file's own package directory.
+            let mut segments = package_dir[..package_dir.len() - 1].to_vec();
+            segments.extend(import.path.iter().map(String::as_str));
+            let sibling = segments.join("/");
+            if library.module(&sibling).is_none() {
+                return Err(ResolveError::LibraryImportNotFound {
+                    import_path: import.path_string(),
+                    reason: format!(
+                        "library files import only library modules, and the bundled library has no module '{}'",
+                        sibling
+                    ),
+                });
+            }
+            library_key(&sibling)
+        };
+        if !direct_imports.contains(&target) {
+            direct_imports.push(target);
+        }
+    }
+    let package = source_file
+        .package
+        .as_ref()
+        .map(|p| p.path.clone())
+        .unwrap_or_default();
+    Ok(SourceNode {
+        path: key.to_path_buf(),
+        origin: SourceOrigin::Library,
+        workspace_root: workspace_root.to_path_buf(),
+        package,
+        source,
+        source_file,
+        direct_imports,
+        prelude_imports: Vec::new(),
+    })
+}
+
+/// The syntax tree of the library module `module` with `source`: for the bundled library, the
+/// tree parsed by the first graph of the process that reached it, so that a watch session that
+/// rebuilds its graph after every edit never parses the library again.
+fn parse_library_module(
+    module: &str,
+    source: &str,
+    library: &Library,
+) -> Result<SourceFile, prism_parser::ParseError> {
+    static PARSED: OnceLock<std::sync::Mutex<HashMap<String, SourceFile>>> = OnceLock::new();
+    let bundled = library.module(module) == Library::bundled().module(module);
+    if !bundled {
+        return prism_parser::parse_source(source);
+    }
+    let parsed = PARSED.get_or_init(Default::default);
+    if let Some(file) = parsed.lock().expect("the parse cache").get(module) {
+        return Ok(file.clone());
+    }
+    let file = prism_parser::parse_source(source)?;
+    parsed
+        .lock()
+        .expect("the parse cache")
+        .insert(module.to_string(), file.clone());
+    Ok(file)
+}
+
 /// Tarjan's strongly connected components algorithm producing a dependency-first topological sort.
 fn compute_sccs(nodes: &HashMap<PathBuf, SourceNode>) -> Vec<SccCluster> {
     let mut file_list: Vec<PathBuf> = nodes.keys().cloned().collect();
@@ -343,7 +567,7 @@ fn compute_sccs(nodes: &HashMap<PathBuf, SourceNode>) -> Vec<SccCluster> {
 
     for (path, node) in nodes {
         if let Some(&u) = file_to_id.get(path) {
-            for imp in &node.direct_imports {
+            for imp in node.imports_with_prelude() {
                 if let Some(&v) = file_to_id.get(imp) {
                     adj[u].push(v);
                 }

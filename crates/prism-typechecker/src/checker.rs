@@ -16,7 +16,7 @@ use crate::types::{
     type_from_abi, type_parameters_from_abi, NominalId, Type, TypeDef, TypeParameter,
     TypeRelations, BUILTIN_MODULE,
 };
-use prism_abi::{AbiType, ExportedSymbol, FileAbi};
+use prism_abi::{AbiType, ExportedSymbol, FileAbi, FunctionKind};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
     BinaryOp, CallArg, Expr, ExprKind, Literal, PatternKind, TemplatePart, UnaryOp, WhenBranch,
@@ -71,6 +71,18 @@ pub fn peel_indirection(mut ty: &Type) -> &Type {
     }
 }
 
+/// The type constructor of an ABI receiver type, as the intrinsic catalog names receivers:
+/// `Int`, `String`, `List`, or a struct or enum's name.
+fn abi_constructor_name(ty: &AbiType) -> String {
+    match ty {
+        AbiType::Nominal { name, .. } | AbiType::Unbound { name, .. } => name.clone(),
+        AbiType::List(_) => LIST.to_string(),
+        AbiType::Heap(_) => HEAP.to_string(),
+        AbiType::Prim(prism_abi::PrimKind::Float) => "Double".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Every type recorded in an exported symbol's signature or definition.
 fn abi_symbol_types(sym: &ExportedSymbol) -> Vec<&AbiType> {
     match sym {
@@ -88,6 +100,7 @@ fn abi_symbol_types(sym: &ExportedSymbol) -> Vec<&AbiType> {
         ExportedSymbol::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
         ExportedSymbol::Enum { variants, .. } => variants.iter().flat_map(|(_, p)| p).collect(),
         ExportedSymbol::Var { ty, .. } => vec![ty],
+        ExportedSymbol::ExtensionProperty { receiver, ty, .. } => vec![receiver, ty],
     }
 }
 
@@ -265,89 +278,33 @@ type ArgumentChecker<'a, 'b> =
     dyn FnMut(&mut TypeChecker, usize, &'a Expr) -> Option<ExpressionId> + 'b;
 
 /// An extension function known to the file (the `extension-functions` spec): declared in it, or
-/// exported by a direct import. Extensions live in their own tables, keyed by receiver type and
-/// name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist.
+/// exported by a direct import or a prelude module. Extensions live in their own tables, keyed
+/// by receiver type and name, apart from the name scopes, so `fun greet()` and
+/// `fun User.greet()` coexist. An intrinsic extension of the bundled library is a member of its
+/// receiver type instead (D7 of `standard-library`), in the members table.
 #[derive(Debug, Clone)]
-struct Extension {
-    mode: ReceiverMode,
+pub(crate) struct Extension {
+    pub(crate) mode: ReceiverMode,
     /// The declared receiver type, which may mention the extension's type parameters
     /// (`Box<T>` in `fun <T> Box<T>.get()`).
-    receiver: Type,
+    pub(crate) receiver: Type,
     /// The defining module.
-    module: String,
+    pub(crate) module: String,
     /// The function's signature, parameter names, defaults and visibility. Its name is the
-    /// method's name.
-    symbol: Symbol,
-    /// The built-in function a built-in member is a call of (a list member, D6 of
-    /// `collections`); `None` for a declared extension.
-    builtin: Option<BuiltinFunction>,
-}
-
-impl Extension {
-    /// The built-in list member named `name`, as an extension on `List<T>` with `T` its type
-    /// parameter, from a table built once (D6 of `collections`). `size` and `indices` are read
-    /// without parentheses, so they are not members a call finds.
-    fn list_member(name: &str) -> Option<&'static Extension> {
-        static MEMBERS: std::sync::OnceLock<HashMap<&'static str, Extension>> =
-            std::sync::OnceLock::new();
-        MEMBERS
-            .get_or_init(|| {
-                BuiltinFunction::LIST_MEMBERS
-                    .into_iter()
-                    .filter(|builtin| {
-                        !matches!(
-                            builtin,
-                            BuiltinFunction::ListSize | BuiltinFunction::ListIndices
-                        )
-                    })
-                    .filter_map(|builtin| {
-                        let signature = builtin.list_member_signature()?;
-                        let parameter = BuiltinFunction::list_element_parameter();
-                        let receiver = Type::List(Box::new(parameter.as_type()));
-                        let (names, params): (Vec<String>, Vec<Type>) = signature
-                            .parameters
-                            .into_iter()
-                            .map(|(name, ty)| (name.to_string(), ty))
-                            .unzip();
-                        let has_default = vec![false; params.len()];
-                        let symbol = Symbol::function_with_defaults(
-                            builtin.name(),
-                            Type::function(false, params, signature.result),
-                            names,
-                            has_default,
-                            Visibility::Public,
-                            None,
-                            Span::dummy(),
-                        )
-                        .with_module(BUILTIN_MODULE)
-                        .with_type_parameters(vec![parameter]);
-                        let extension = Extension {
-                            mode: signature.mode,
-                            receiver,
-                            module: BUILTIN_MODULE.to_string(),
-                            symbol,
-                            builtin: Some(builtin),
-                        };
-                        Some((builtin.name(), extension))
-                    })
-                    .collect()
-            })
-            .get(name)
-    }
-}
-
-/// Whether `name` is the name of a built-in list member, `size` and `indices` included: an
-/// extension of that name on `List` could never be called (D6 of `collections`).
-fn is_list_member_name(name: &str) -> bool {
-    BuiltinFunction::LIST_MEMBERS
-        .iter()
-        .any(|builtin| builtin.name() == name)
+    /// method's name. An intrinsic property's symbol is a function of no parameters returning
+    /// the property's type.
+    pub(crate) symbol: Symbol,
+    /// The built-in function an intrinsic member is a call of (D6 of `standard-library`);
+    /// `None` for a declared extension.
+    pub(crate) builtin: Option<BuiltinFunction>,
+    /// Whether the member is an intrinsic property, read without parentheses (`s.length`).
+    pub(crate) property: bool,
 }
 
 /// What extensions are keyed by: the type constructor of their receiver, without type arguments
 /// (D10 of `generics`), so `fun Box<Int>.sum()` and `fun <T> Box<T>.sum()` share a key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ReceiverKey {
+pub(crate) enum ReceiverKey {
     /// A struct or enum, by identity.
     Nominal(NominalId),
     /// Any list, whatever its element type (D2 of `collections`).
@@ -357,7 +314,7 @@ enum ReceiverKey {
 }
 
 impl ReceiverKey {
-    fn of(ty: &Type) -> Self {
+    pub(crate) fn of(ty: &Type) -> Self {
         match ty {
             Type::List(_) => ReceiverKey::List,
             _ => match ty.nominal_id() {
@@ -531,6 +488,18 @@ pub struct TypeChecker {
     /// Extension functions exported by direct imports, by receiver type and name, with one
     /// candidate per exporting module.
     imported_extensions: HashMap<(ReceiverKey, String), Vec<(String, Extension)>>,
+    /// The intrinsic extensions of the bundled library the file declares or imports, members of
+    /// their receiver types (D7 of `standard-library`), by receiver type and name. The
+    /// prelude's members are in [`Self::prelude`].
+    members: HashMap<(ReceiverKey, String), Extension>,
+    /// The plain intrinsic functions the file declares or imports, by defining module and name,
+    /// with the built-in their calls lower to (D6 of `standard-library`).
+    intrinsic_functions: HashMap<(String, String), BuiltinFunction>,
+    /// The external functions the file declares or imports (D5 of `standard-library`).
+    externals: Vec<DeclarationPath>,
+    /// The prelude every workspace file sees without an import, consulted after the file's own
+    /// declarations and its imports (D4 of `standard-library`); `None` for a library file.
+    prelude: Option<std::sync::Arc<crate::prelude::PreludeScope>>,
     /// Module paths of the file's direct imports, whose ABIs this checker has ingested.
     direct_imports: HashSet<String>,
     /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
@@ -601,6 +570,10 @@ impl TypeChecker {
             recursive_inference: HashSet::new(),
             own_extensions: HashMap::new(),
             imported_extensions: HashMap::new(),
+            members: HashMap::new(),
+            intrinsic_functions: HashMap::new(),
+            externals: Vec::new(),
+            prelude: None,
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
             exported_nominals: HashSet::new(),
@@ -619,6 +592,120 @@ impl TypeChecker {
             ambiguous_variants: HashSet::new(),
             guard_bindings: Vec::new(),
             shared_loop_variables: HashMap::new(),
+        }
+    }
+
+    /// The checker, with `prelude` in scope after the file's own declarations and its imports
+    /// (D4 of `standard-library`). Installing it costs a pointer copy, plus the definitions of
+    /// the types the prelude declares, of which today's prelude has none.
+    pub fn with_prelude(mut self, prelude: std::sync::Arc<crate::prelude::PreludeScope>) -> Self {
+        self.env.set_prelude(prelude.names());
+        prelude.install_types(&mut self.types);
+        for module in prelude.modules() {
+            self.direct_imports.insert(module.clone());
+        }
+        for (name, ids) in prelude.seen_nominals() {
+            self.seen_nominals
+                .entry(name.clone())
+                .or_default()
+                .extend(ids.iter().cloned());
+        }
+        self.exported_nominals
+            .extend(prelude.exported_nominals().iter().cloned());
+        self.prelude = Some(prelude);
+        self
+    }
+
+    /// The parts of this checker's ingested imports that [`crate::prelude::PreludeScope`]
+    /// keeps: the import layer's names, the extensions, the members, the plain intrinsics, the
+    /// externals and the type table.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn into_prelude_parts(
+        self,
+    ) -> (
+        HashMap<String, Symbol>,
+        HashMap<(ReceiverKey, String), Extension>,
+        HashMap<(ReceiverKey, String), Extension>,
+        HashMap<(String, String), BuiltinFunction>,
+        Vec<DeclarationPath>,
+        TypeTable,
+        HashMap<String, Vec<NominalId>>,
+        HashSet<NominalId>,
+        HashSet<String>,
+    ) {
+        let names = self.env.imported_names();
+        let extensions = self
+            .imported_extensions
+            .into_iter()
+            .filter_map(|(key, candidates)| {
+                let (_, extension) = candidates.into_iter().next()?;
+                Some((key, extension))
+            })
+            .collect();
+        (
+            names,
+            extensions,
+            self.members,
+            self.intrinsic_functions,
+            self.externals,
+            self.types,
+            self.seen_nominals,
+            self.exported_nominals,
+            self.direct_imports,
+        )
+    }
+
+    /// The intrinsic member named `name` of the type constructor of `receiver`, declared or
+    /// imported by the file, else of the prelude (D7 of `standard-library`).
+    fn member(&self, receiver: &Type, name: &str) -> Option<&Extension> {
+        let key = (ReceiverKey::of(receiver), name.to_string());
+        self.members
+            .get(&key)
+            .or_else(|| self.prelude.as_ref()?.member(&key))
+    }
+
+    /// Whether `receiver` has an intrinsic property named `name` (`length` of `String`, `size`
+    /// and `indices` of `List<T>`), which reads like a field.
+    fn has_intrinsic_property(&self, receiver: &Type, name: &str) -> bool {
+        self.member(receiver, name)
+            .is_some_and(|member| member.property)
+    }
+
+    /// Whether `receiver` has an intrinsic member function named `name`.
+    fn has_intrinsic_function(&self, receiver: &Type, name: &str) -> bool {
+        self.member(receiver, name)
+            .is_some_and(|member| !member.property)
+    }
+
+    /// The built-in a call of the plain function `module::name` lowers to, when that function
+    /// is an intrinsic the file declares or imports, or one of the prelude.
+    fn intrinsic_function(&self, module: &str, name: &str) -> Option<BuiltinFunction> {
+        let key = (module.to_string(), name.to_string());
+        self.intrinsic_functions
+            .get(&key)
+            .copied()
+            .or_else(|| self.prelude.as_ref()?.intrinsic_function(&key))
+    }
+
+    /// Whether the plain function `path` is an external function the file declares or imports.
+    fn is_external(&self, path: &DeclarationPath) -> bool {
+        self.externals.contains(path)
+            || self
+                .prelude
+                .as_ref()
+                .is_some_and(|prelude| prelude.externals().contains(path))
+    }
+
+    /// The built-in a bare callee names when it resolves to an intrinsic function: the file's
+    /// own, an import's or the prelude's, found as any name is (D4 of `standard-library`), so a
+    /// local, parameter, declaration or import of the name shadows the prelude's.
+    fn intrinsic_callee(&self, callee: &Expr) -> Option<BuiltinFunction> {
+        let ExprKind::Ident(name) = &callee.kind else {
+            return None;
+        };
+        match &self.env.lookup(name)?.kind {
+            SymbolKind::Function { module, .. } => self.intrinsic_function(module, name),
+            _ => None,
         }
     }
 
@@ -1171,13 +1258,8 @@ impl TypeChecker {
                 self.check_visibility(&sym, span);
                 Some(sym)
             }
-            Err(TypeError::UnresolvedSymbol { .. })
-                if output_builtin_named(name).is_some()
-                    || name == HEAP
-                    || name == LIST
-                    || name == LIST_OF =>
-            {
-                // An output built-in can only be called (D15 of `codegen-core`).
+            Err(TypeError::UnresolvedSymbol { .. }) if name == HEAP || name == LIST => {
+                // The box constructor can only be called, and `List` is a type.
                 self.errors.push(TypeError::BuiltinFunctionAsValue {
                     name: name.to_string(),
                     span,
@@ -1685,13 +1767,13 @@ impl TypeChecker {
             match sym {
                 ExportedSymbol::Function {
                     visibility,
+                    kind,
                     is_compose,
                     receiver,
                     name,
                     type_parameters,
                     params,
                     return_type,
-                    ..
                 } => {
                     let type_parameters = type_parameters_from_abi(type_parameters);
                     let param_types = params
@@ -1717,7 +1799,29 @@ impl TypeChecker {
                     )
                     .with_module(abi.module.clone())
                     .with_type_parameters(type_parameters.clone());
+                    // An intrinsic is a declaration the catalog knows (checked in its own
+                    // file, D6 of `standard-library`); one it does not know is left out.
+                    let intrinsic = (*kind == FunctionKind::Intrinsic).then(|| {
+                        let constructor = receiver.as_ref().map(|r| abi_constructor_name(&r.ty));
+                        crate::intrinsics::lookup(&abi.module, constructor.as_deref(), name)
+                    });
                     match receiver {
+                        // An intrinsic extension is a member of its receiver type (D7).
+                        Some(receiver) if intrinsic.is_some() => {
+                            let Some(Some(entry)) = intrinsic else {
+                                continue;
+                            };
+                            let receiver_ty = type_from_abi(&receiver.ty, &type_parameters);
+                            let key = (ReceiverKey::of(&receiver_ty), name.clone());
+                            self.members.entry(key).or_insert(Extension {
+                                mode: receiver.mode,
+                                receiver: receiver_ty,
+                                module: abi.module.clone(),
+                                symbol,
+                                builtin: Some(entry.builtin),
+                                property: false,
+                            });
+                        }
                         // An extension is reached through its receiver, never by its bare name.
                         Some(receiver) => {
                             let receiver_ty = type_from_abi(&receiver.ty, &type_parameters);
@@ -1730,12 +1834,66 @@ impl TypeChecker {
                                     module: abi.module.clone(),
                                     symbol,
                                     builtin: None,
+                                    property: false,
                                 };
                                 candidates.push((abi.module.clone(), extension));
                             }
                         }
-                        None => self.env.define_import(&abi.module, symbol),
+                        None => {
+                            match intrinsic {
+                                Some(Some(entry)) => {
+                                    self.intrinsic_functions
+                                        .insert((abi.module.clone(), name.clone()), entry.builtin);
+                                }
+                                Some(None) => continue,
+                                None => {}
+                            }
+                            if *kind == FunctionKind::External {
+                                let path = DeclarationPath::new(abi.module.clone(), name.clone());
+                                if !self.externals.contains(&path) {
+                                    self.externals.push(path);
+                                }
+                            }
+                            self.env.define_import(&abi.module, symbol)
+                        }
                     }
+                }
+                ExportedSymbol::ExtensionProperty {
+                    type_parameters,
+                    receiver,
+                    name,
+                    ty,
+                    visibility,
+                } => {
+                    let constructor = abi_constructor_name(receiver);
+                    let Some(entry) =
+                        crate::intrinsics::lookup(&abi.module, Some(&constructor), name)
+                    else {
+                        continue;
+                    };
+                    let type_parameters = type_parameters_from_abi(type_parameters);
+                    let receiver_ty = type_from_abi(receiver, &type_parameters);
+                    let property_ty = type_from_abi(ty, &type_parameters);
+                    let symbol = Symbol::function_with_defaults(
+                        name.clone(),
+                        Type::function(false, Vec::new(), property_ty),
+                        Vec::new(),
+                        Vec::new(),
+                        *visibility,
+                        abi.package.clone(),
+                        Span::dummy(),
+                    )
+                    .with_module(abi.module.clone())
+                    .with_type_parameters(type_parameters);
+                    let key = (ReceiverKey::of(&receiver_ty), name.clone());
+                    self.members.entry(key).or_insert(Extension {
+                        mode: ReceiverMode::Shared,
+                        receiver: receiver_ty,
+                        module: abi.module.clone(),
+                        symbol,
+                        builtin: Some(entry.builtin),
+                        property: true,
+                    });
                 }
                 ExportedSymbol::Struct {
                     name,
@@ -1938,7 +2096,7 @@ impl TypeChecker {
                 Declaration::Struct(s) => (&s.name, s.span),
                 Declaration::Enum(e) => (&e.name, e.span),
                 Declaration::Var(v) => (&v.name, v.span),
-                Declaration::Function(_) => continue,
+                Declaration::Function(_) | Declaration::ExtensionProperty(_) => continue,
             };
             if name == HEAP || name == LIST {
                 self.errors.push(TypeError::BuiltinNameDeclared {
@@ -2095,6 +2253,7 @@ impl TypeChecker {
                 }
                 // Extensions are registered once every struct's fields are known (below).
                 Declaration::Function(f) if f.receiver.is_some() => {}
+                Declaration::ExtensionProperty(_) => {}
                 Declaration::Function(f) => {
                     self.register_function_decl(f);
                 }
@@ -2128,13 +2287,182 @@ impl TypeChecker {
             }
         }
 
+        // The library's intrinsic members first, so that an extension named like one is
+        // reported (D7 of `standard-library`).
+        for decl in &source_file.declarations {
+            match decl {
+                Declaration::Function(f) if f.receiver.is_some() && f.is_intrinsic() => {
+                    self.register_intrinsic_extension(f);
+                }
+                Declaration::ExtensionProperty(p) => self.register_intrinsic_property(p),
+                _ => {}
+            }
+        }
         for decl in &source_file.declarations {
             if let Declaration::Function(f) = decl {
-                if f.receiver.is_some() {
+                if f.receiver.is_some() && !f.is_intrinsic() {
                     self.register_extension_decl(f);
                 }
             }
         }
+    }
+
+    /// Checks the intrinsic declaration whose path is `module::receiver.name` and whose text
+    /// is `text` against the catalog (D6 of `standard-library`), returning its entry, or
+    /// reporting `E4029` for a path the catalog does not have or a different signature.
+    fn check_intrinsic(
+        &mut self,
+        receiver: Option<&str>,
+        name: &str,
+        text: &str,
+        span: Span,
+    ) -> Option<&'static crate::intrinsics::Intrinsic> {
+        let Some(entry) = crate::intrinsics::lookup(&self.module_path, receiver, name) else {
+            let on = receiver.map_or(String::new(), |receiver| format!(" on '{}'", receiver));
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "the compiler provides no intrinsic '{}'{} in '/{}'",
+                    name, on, self.module_path
+                ),
+                help: Some(
+                    "an intrinsic declares a function the compiler lowers itself; write a function with a body instead".to_string(),
+                ),
+                span,
+            });
+            return None;
+        };
+        if entry.signature != text {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "the intrinsic '{}' is declared as '{}', but the compiler provides '{}'",
+                    name, text, entry.signature
+                ),
+                help: Some(format!("declare it as '{}'", entry.signature)),
+                span,
+            });
+        }
+        Some(entry)
+    }
+
+    /// Reports `E4029` for each rule of external functions `f` breaks (D5 of
+    /// `standard-library`): an external is not `public`, generic, an extension or `compose`, has
+    /// no default values, and returns no type holding a reference.
+    fn check_external(&mut self, f: &FunctionDecl) {
+        let mut broken = Vec::new();
+        if f.visibility == Visibility::Public {
+            broken.push((
+                "is 'public'",
+                "make it private and call it from a public function of the library",
+            ));
+        }
+        if !f.type_parameters.is_empty() {
+            broken.push((
+                "is generic",
+                "one runtime symbol has one machine signature: declare one external per type",
+            ));
+        }
+        if f.receiver.is_some() {
+            broken.push((
+                "is an extension",
+                "declare a plain external and an extension calling it",
+            ));
+        }
+        if f.is_compose {
+            broken.push((
+                "is 'compose'",
+                "declare a plain external and a composable calling it",
+            ));
+        }
+        if f.params.iter().any(|p| p.default_value.is_some()) {
+            broken.push((
+                "has default values",
+                "give the defaults to a function calling it",
+            ));
+        }
+        let result = f.return_type.as_ref().map(|ty| self.lower_type(ty));
+        if result
+            .as_ref()
+            .is_some_and(|ty| ty.reference_outside_functions().is_some())
+        {
+            broken.push((
+                "returns a type holding a reference",
+                "no elision rule can make the runtime's answer safe: return an owned value",
+            ));
+        }
+        for (rule, help) in broken {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!("the external function '{}' {}", f.name, rule),
+                help: Some(help.to_string()),
+                span: f.span,
+            });
+        }
+    }
+
+    /// Registers the intrinsic extension `f` of a library file as a member of its receiver
+    /// type, once the catalog accepts it (D6 and D7 of `standard-library`).
+    fn register_intrinsic_extension(&mut self, f: &FunctionDecl) {
+        let receiver = f.receiver.as_ref().expect("an extension has a receiver");
+        let text = crate::intrinsics::declaration_text(f);
+        let constructor = crate::intrinsics::constructor_name(&receiver.ty);
+        let Some(entry) = self.check_intrinsic(constructor, &f.name, &text, f.span) else {
+            return;
+        };
+        let receiver_ty = self.with_type_parameters(type_parameters_of(&f.type_parameters), |c| {
+            c.check_annotation_names(&receiver.ty);
+            c.lower_type(&receiver.ty)
+        });
+        let symbol = self.function_symbol(f);
+        let key = (ReceiverKey::of(&receiver_ty), f.name.clone());
+        self.members.insert(
+            key,
+            Extension {
+                mode: receiver.mode,
+                receiver: receiver_ty,
+                module: self.module_path.clone(),
+                symbol,
+                builtin: Some(entry.builtin),
+                property: false,
+            },
+        );
+    }
+
+    /// Registers the intrinsic property `p` of a library file as a member of its receiver type
+    /// (D6 and D7 of `standard-library`).
+    fn register_intrinsic_property(&mut self, p: &prism_ast::decl::ExtensionPropertyDecl) {
+        let text = crate::intrinsics::property_text(p);
+        let constructor = crate::intrinsics::constructor_name(&p.receiver);
+        let Some(entry) = self.check_intrinsic(constructor, &p.name, &text, p.span) else {
+            return;
+        };
+        let parameters = type_parameters_of(&p.type_parameters);
+        let (receiver_ty, property_ty) = self.with_type_parameters(parameters.clone(), |c| {
+            c.check_annotation_names(&p.receiver);
+            c.check_annotation_names(&p.ty);
+            (c.lower_type(&p.receiver), c.lower_type(&p.ty))
+        });
+        let symbol = Symbol::function_with_defaults(
+            p.name.clone(),
+            Type::function(false, Vec::new(), property_ty),
+            Vec::new(),
+            Vec::new(),
+            p.visibility,
+            self.current_package.clone(),
+            p.span,
+        )
+        .with_module(self.module_path.clone())
+        .with_type_parameters(parameters);
+        let key = (ReceiverKey::of(&receiver_ty), p.name.clone());
+        self.members.insert(
+            key,
+            Extension {
+                mode: ReceiverMode::Shared,
+                receiver: receiver_ty,
+                module: self.module_path.clone(),
+                symbol,
+                builtin: Some(entry.builtin),
+                property: true,
+            },
+        );
     }
 
     /// Defines a top-level declaration in module scope. A declaration with the same name as an
@@ -2146,6 +2474,19 @@ impl TypeChecker {
     }
 
     fn register_function_decl(&mut self, f: &FunctionDecl) {
+        if f.is_intrinsic() {
+            let text = crate::intrinsics::declaration_text(f);
+            if let Some(entry) = self.check_intrinsic(None, &f.name, &text, f.span) {
+                self.intrinsic_functions
+                    .insert((self.module_path.clone(), f.name.clone()), entry.builtin);
+            }
+        } else if f.is_external() {
+            self.check_external(f);
+            let path = DeclarationPath::new(self.module_path.clone(), f.name.clone());
+            if !self.externals.contains(&path) {
+                self.externals.push(path);
+            }
+        }
         let sym = self.function_symbol(f);
         self.define_top_level(sym);
     }
@@ -2211,6 +2552,9 @@ impl TypeChecker {
     /// `E4010`: all but the first could never be called, because members take precedence.
     fn register_extension_decl(&mut self, f: &FunctionDecl) {
         let receiver = f.receiver.as_ref().expect("an extension has a receiver");
+        if f.is_external() {
+            self.check_external(f);
+        }
         let receiver_ty = self.with_type_parameters(type_parameters_of(&f.type_parameters), |c| {
             c.check_annotation_names(&receiver.ty);
             c.lower_type(&receiver.ty)
@@ -2226,9 +2570,9 @@ impl TypeChecker {
                 .is_some_and(|fields| fields.iter().any(|(name, _, _)| name == &f.name)),
             _ => false,
         };
-        let builtin_clash = (f.name == TO_STRING && has_builtin_to_string(&receiver_ty))
-            || (f.name == STRING_LENGTH && receiver_ty == Type::String)
-            || (matches!(receiver_ty, Type::List(_)) && is_list_member_name(&f.name));
+        // An intrinsic member of the library always takes precedence (D7 of
+        // `standard-library`).
+        let member_clash = self.member(&receiver_ty, &f.name).map(|m| m.module.clone());
         if self.own_extensions.contains_key(&key) {
             // Extensions are keyed by the receiver's type constructor (D10 of `generics`), so
             // `Box<Int>.size` and `Box<T>.size` are one name.
@@ -2259,11 +2603,11 @@ impl TypeChecker {
                 ),
                 span: f.span,
             });
-        } else if builtin_clash {
+        } else if let Some(module) = member_clash {
             self.errors.push(TypeError::UncallableExtension {
                 message: format!(
-                    "extension '{}.{}' can never be called: the built-in member '{}' of '{}' always takes precedence",
-                    receiver_ty, f.name, f.name, receiver_ty
+                    "extension '{}.{}' can never be called: the member '{}' of '{}' that '/{}' declares always takes precedence",
+                    receiver_ty, f.name, f.name, receiver_ty, module
                 ),
                 span: f.span,
             });
@@ -2274,6 +2618,7 @@ impl TypeChecker {
             module: self.module_path.clone(),
             symbol,
             builtin: None,
+            property: false,
         };
         self.own_extensions.insert(key, extension);
     }
@@ -2380,7 +2725,13 @@ impl TypeChecker {
                         items.push(item);
                     }
                 }
+                // An intrinsic property has no code: its reads are lowered where they are.
+                Declaration::ExtensionProperty(_) => {}
             }
+        }
+        let mut externals = self.externals.clone();
+        if let Some(prelude) = &self.prelude {
+            externals.extend(prelude.externals().iter().cloned());
         }
         TypedFile {
             module: self.module_path.clone(),
@@ -2388,6 +2739,7 @@ impl TypeChecker {
             items,
             bodies: file.bodies,
             types: self.types.clone(),
+            externals,
         }
     }
 
@@ -3195,6 +3547,24 @@ impl TypeChecker {
     /// top-level value or function by its path, or a variant of an enum.
     fn symbol_node(&mut self, sym: &Symbol, name: &str, span: Span) -> ExpressionId {
         let generic_callee = std::mem::take(&mut self.generic_callee);
+        // An intrinsic has no code to name: its calls are lowered where they are written (D6
+        // of `standard-library`).
+        if let SymbolKind::Function { module, .. } = &sym.kind {
+            if self.intrinsic_function(module, name).is_some() {
+                self.errors.push(TypeError::CannotInferType {
+                    help: Some(format!(
+                        "call it, or wrap the call in a closure, as in '{{ x -> {}(x) }}'",
+                        name
+                    )),
+                    message: format!(
+                        "the intrinsic '{}' of '/{}' cannot be used as a value: it can only be called",
+                        name, module
+                    ),
+                    span,
+                });
+                return self.error_node(Vec::new(), span);
+            }
+        }
         if !generic_callee && !sym.type_parameters().is_empty() {
             // A generic function or variant constructor named outside a call: nothing gives its
             // type arguments (D8 of `generics`).
@@ -3526,6 +3896,22 @@ impl TypeChecker {
     fn check_template_part(&mut self, part: &Expr, following: &str) -> ExpressionId {
         let is_place = self.is_place(part) || self.is_optional_place(part);
         let id = self.with_origin(Origin::Value, |c| c.infer_read(part));
+        self.check_text_form(part, id, is_place, TextFormUse::Template { following })
+    }
+
+    /// The node of the text form of `part`, whose value read in place is the node `id`: the
+    /// rule of template parts (D6 and D9 of `string-templates`), which the arguments of `print`
+    /// and `println` follow too (D9 of `standard-library`). A `String` is a place, a scalar is
+    /// used as it is, and any other type is the result of its `toString()`, resolved as the
+    /// method call `part.toString()` is, in a temporary. A type without a text form is
+    /// `E4026`, with the help of `context`.
+    fn check_text_form(
+        &mut self,
+        part: &Expr,
+        id: ExpressionId,
+        is_place: bool,
+        context: TextFormUse,
+    ) -> ExpressionId {
         let ty = self.ty(id);
         let reason = match peel_indirection(&ty) {
             Type::Error => return id,
@@ -3548,11 +3934,12 @@ impl TypeChecker {
         };
         if let Some(reason) = reason {
             let referent = peel_indirection(&ty).clone();
-            let help = template_part_help(part, &referent, &reason, following);
+            let help = template_part_help(part, &referent, &reason, context);
             self.errors.push(TypeError::NoTextForm {
                 ty: referent,
                 reason,
                 help,
+                printed: matches!(context, TextFormUse::Printed),
                 span: part.span,
             });
             return self.wrap_error(id);
@@ -5043,14 +5430,18 @@ impl TypeChecker {
         if let Some(member) = self.implicit_this_callee(callee) {
             return self.infer_call_expr(&member, type_arguments, args, span, expected);
         }
-        // `print(...)` and `println(...)` call the output built-ins unless a declaration of the
-        // name is in scope (D15 of `codegen-core`).
-        if let Some(builtin) = self.output_builtin(callee) {
-            return self.infer_output_call(builtin, type_arguments, args, span);
-        }
-        // `listOf(...)` likewise (D4 of `collections`).
-        if self.is_list_construction(callee) {
-            return self.infer_list_construction(type_arguments, args, expected.as_ref(), span);
+        // A call of a rule-typed intrinsic of the library, found as any name is, so a local,
+        // parameter, declaration or import of the name shadows the prelude's (D4 and D6 of
+        // `standard-library`): `print` and `println` take any argument with a text form, and
+        // `listOf` any number of elements.
+        match self.intrinsic_callee(callee) {
+            Some(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
+                return self.infer_output_call(builtin, type_arguments, args, span);
+            }
+            Some(BuiltinFunction::ListOf) => {
+                return self.infer_list_construction(type_arguments, args, expected.as_ref(), span);
+            }
+            _ => {}
         }
         // `recv.name(...)`: a field, the built-in `clone()` or an extension function.
         if let ExprKind::MemberAccess {
@@ -5132,30 +5523,6 @@ impl TypeChecker {
             expected.as_ref(),
             span,
         )
-    }
-
-    /// The output built-in a bare `print` or `println` callee names: only when no local,
-    /// parameter, top-level declaration or import of that name is in scope, so the built-ins are
-    /// found last (D15 of `codegen-core`).
-    fn output_builtin(&self, callee: &Expr) -> Option<BuiltinFunction> {
-        let ExprKind::Ident(name) = &callee.kind else {
-            return None;
-        };
-        let builtin = output_builtin_named(name)?;
-        let declared = self.env.lookup(name).is_some()
-            || !matches!(self.env.lookup_import(name, |_| true), ImportLookup::None);
-        (!declared).then_some(builtin)
-    }
-
-    /// Whether the callee `callee` is the built-in `listOf`: a bare `listOf` with no local,
-    /// parameter, top-level declaration or import of that name in scope (D4 of `collections`).
-    fn is_list_construction(&self, callee: &Expr) -> bool {
-        matches!(&callee.kind, ExprKind::Ident(name) if name == LIST_OF)
-            && self.env.lookup(LIST_OF).is_none()
-            && matches!(
-                self.env.lookup_import(LIST_OF, |_| true),
-                ImportLookup::None
-            )
     }
 
     /// Checks `listOf(e1, ..., en)`, typed as a call of `fun <T> listOf(e1: T, ..., en: T):
@@ -5274,7 +5641,7 @@ impl TypeChecker {
         let mut arguments = Vec::new();
         let mut parameters = Vec::new();
         if let Some(arg) = args.first() {
-            match self.check_printed_argument(name, &arg.value) {
+            match self.check_printed_argument(&arg.value) {
                 Ok(value) => {
                     parameters.push((None, self.ty(value)));
                     arguments.push(Argument::Written(value));
@@ -5366,15 +5733,14 @@ impl TypeChecker {
         }
     }
 
-    /// Checks the argument of an output built-in named `name`, adjusted as for a parameter of
-    /// its type: a `Copy` scalar is passed by value, copied out of references, and a `String`
-    /// is borrowed implicitly, as for a `&String` parameter, without being moved. Any other type
-    /// is `E4004`; the error result is the node checked so far.
-    fn check_printed_argument(
-        &mut self,
-        name: &str,
-        expr: &Expr,
-    ) -> Result<ExpressionId, ExpressionId> {
+    /// Checks the argument of an output built-in, adjusted as for a parameter of its type: a
+    /// `Copy` scalar is passed by value, copied out of references, and a `String` is borrowed
+    /// implicitly, as for a `&String` parameter, without being moved. Any other type is printed
+    /// through its text form, the rule of template parts (D9 of `standard-library`): the
+    /// `toString()` that `expr.toString()` resolves, called on a shared borrow, its result a
+    /// temporary of the statement that is borrowed. A type without one is `E4026`; the error
+    /// result is the node checked so far.
+    fn check_printed_argument(&mut self, expr: &Expr) -> Result<ExpressionId, ExpressionId> {
         let is_place = self.is_place(expr);
         let found = self.with_origin(Origin::Value, |c| {
             c.with_consuming(!is_place, |c| c.infer_expr(expr))
@@ -5389,13 +5755,13 @@ impl TypeChecker {
                 inner: Box::new(Type::String),
             },
             Type::Error => return Err(found),
-            other => {
-                self.errors.push(TypeError::UnprintableArgument {
-                    function: name.to_string(),
-                    ty: other.clone(),
-                    span: expr.span,
-                });
-                return Err(found);
+            _ => {
+                let is_place = is_place || self.is_optional_place(expr);
+                let text = self.check_text_form(expr, found, is_place, TextFormUse::Printed);
+                if self.ty(text) == Type::Error {
+                    return Err(text);
+                }
+                return Ok(self.borrow(false, BorrowOrigin::Argument, text));
             }
         };
         Ok(self.with_origin(Origin::Argument, |c| {
@@ -5882,8 +6248,14 @@ impl TypeChecker {
     ) -> ExpressionId {
         match self.builder.kind(callee_node).clone() {
             ExpressionKind::FunctionReference(path) => {
+                // An external is called by its symbol (D5 of `standard-library`).
+                let callee = if self.is_external(&path) {
+                    Callee::External(path)
+                } else {
+                    Callee::Function(path)
+                };
                 let call = Call {
-                    callee: Callee::Function(path),
+                    callee,
                     arguments,
                     parameters,
                     escaping,
@@ -6276,8 +6648,10 @@ impl TypeChecker {
         if member == "clone" && self.is_clone(&clone_target(&receiver_ty, is_safe_nav).0) {
             return self.infer_clone_call(receiver, is_safe_nav, args, span);
         }
+        let scalar = peel_indirection(&clone_target(&receiver_ty, is_safe_nav).0).clone();
         if member == TO_STRING
-            && has_builtin_to_string(peel_indirection(&clone_target(&receiver_ty, is_safe_nav).0))
+            && has_builtin_to_string(&scalar)
+            && self.has_intrinsic_function(&scalar, TO_STRING)
         {
             return self.infer_to_string_call(receiver, is_safe_nav, type_arguments, args, span);
         }
@@ -6759,7 +7133,15 @@ impl TypeChecker {
             };
         }
         match self.imported_extensions.get(&key).map(Vec::as_slice) {
-            None | Some([]) => ExtensionLookup::None,
+            // A prelude extension is found last, so the file's own and imported ones shadow it
+            // without `E4012` (D4 of `standard-library`).
+            None | Some([]) => match self.prelude.as_ref().and_then(|p| p.extension(&key)) {
+                Some(extension) => ExtensionLookup::Found {
+                    extension: Box::new(extension.clone()),
+                    own: false,
+                },
+                None => ExtensionLookup::None,
+            },
             Some([(_, extension)]) => ExtensionLookup::Found {
                 extension: Box::new(extension.clone()),
                 own: false,
@@ -6778,9 +7160,9 @@ impl TypeChecker {
         layers: &mut Vec<Layer>,
     ) -> (ExtensionLookup, Type) {
         loop {
-            // A list's built-in members take precedence over its extensions (D6 of
-            // `collections`).
-            if let (Type::List(_), Some(extension)) = (&reached, Extension::list_member(member)) {
+            // An intrinsic member takes precedence over every extension (D7 of
+            // `standard-library`): the list members.
+            if let Some(extension) = self.member(&reached, member).filter(|m| !m.property) {
                 let found = ExtensionLookup::Found {
                     extension: Box::new(extension.clone()),
                     own: false,
@@ -6994,10 +7376,9 @@ impl TypeChecker {
             return None;
         }
         let receiver = self.current_receiver()?;
-        // A built-in list member is an extension on `List<T>` that wins over declared ones
-        // (D6 of `collections`), so a bare call of one in an extension on a list is a call on
-        // `this` too.
-        if matches!(receiver, Type::List(_)) && Extension::list_member(name).is_some() {
+        // An intrinsic member wins over declared extensions (D7 of `standard-library`), so a
+        // bare call of one in an extension on its receiver type is a call on `this` too.
+        if self.has_intrinsic_function(&receiver, name) {
             return Some(this_member(name, callee.span));
         }
         match self.find_extension(&receiver, name) {
@@ -7711,9 +8092,9 @@ impl TypeChecker {
                         .struct_fields(id)
                         .is_some_and(|fields| fields.iter().any(|(f, _, _)| f == name))
                 }
-                Type::String => return name == STRING_LENGTH,
-                // `size` and `indices` read like fields (D6 of `collections`).
-                Type::List(_) => return name == LIST_SIZE || name == LIST_INDICES,
+                // Intrinsic properties read like fields: `length` of a `String`, `size` and
+                // `indices` of a list (D7 of `standard-library`).
+                Type::String | Type::List(_) => return self.has_intrinsic_property(ty, name),
                 _ => return false,
             }
         }
@@ -8177,14 +8558,26 @@ impl TypeChecker {
                 }
             }
             // The built-in `length`, which cannot be assigned: strings are immutable.
-            Type::String if member == STRING_LENGTH => (wrap(Type::Int), Some(false)),
-            // The built-in `size` and `indices` of a list, which are not assignable (D6 of
+            Type::String
+                if member == STRING_LENGTH && self.has_intrinsic_property(&peeled_ty, member) =>
+            {
+                (wrap(Type::Int), Some(false))
+            }
+            // The intrinsic `size` and `indices` of a list, which are not assignable (D6 of
             // `collections`).
-            Type::List(_) if member == LIST_SIZE => (wrap(Type::Int), Some(false)),
-            Type::List(_) if member == LIST_INDICES => (
-                wrap(Type::plain_struct(NominalId::builtin_range())),
-                Some(false),
-            ),
+            Type::List(_)
+                if member == LIST_SIZE && self.has_intrinsic_property(&peeled_ty, member) =>
+            {
+                (wrap(Type::Int), Some(false))
+            }
+            Type::List(_)
+                if member == LIST_INDICES && self.has_intrinsic_property(&peeled_ty, member) =>
+            {
+                (
+                    wrap(Type::plain_struct(NominalId::builtin_range())),
+                    Some(false),
+                )
+            }
             other => {
                 let help = matches!(other, Type::Parameter(_)).then(|| {
                     format!(
@@ -8305,15 +8698,6 @@ impl TypeChecker {
 
 /// The parameters of a callee as a call records them: each with its name, when the callee is a
 /// declared function, and its type.
-/// The output built-in called by the bare name `name`, if any (D15 of `codegen-core`).
-fn output_builtin_named(name: &str) -> Option<BuiltinFunction> {
-    match name {
-        "print" => Some(BuiltinFunction::Print),
-        "println" => Some(BuiltinFunction::PrintLine),
-        _ => None,
-    }
-}
-
 fn parameter_list(names: &[String], params: &[Type]) -> Vec<(Option<String>, Type)> {
     params
         .iter()
@@ -8693,15 +9077,24 @@ fn template_part_help(
     part: &Expr,
     ty: &Type,
     reason: &NoTextFormReason,
-    following: &str,
+    context: TextFormUse,
 ) -> Vec<String> {
     let operand = template_part_operand(part);
     let mut help = Vec::new();
+    let following = match context {
+        TextFormUse::Template { following } => following,
+        TextFormUse::Printed => "",
+    };
+    // How the fix is written: inside the template, or as the printed argument.
+    let written = |text: String| match context {
+        TextFormUse::Template { .. } => format!("${{{}}}", text),
+        TextFormUse::Printed => text,
+    };
     match reason {
         NoTextFormReason::Nullable => {
             help.push(format!(
-                "give a fallback for null: '${{{} ?: ...}}'",
-                operand
+                "give a fallback for null: '{}'",
+                written(format!("{} ?: ...", operand))
             ));
         }
         NoTextFormReason::NoToString => {
@@ -8728,11 +9121,23 @@ fn template_part_help(
             }
         }
         NoTextFormReason::ToStringReceiver { .. } => {
-            help.push(format!("call it explicitly: '${{{}.toString()}}'", operand));
+            help.push(format!(
+                "call it explicitly: '{}'",
+                written(format!("{}.toString()", operand))
+            ));
         }
         NoTextFormReason::ToStringReturns(_) | NoTextFormReason::ToStringNeedsArguments => {}
     }
     help
+}
+
+/// Where a value's text form is needed, for the help of `E4026`.
+#[derive(Debug, Clone, Copy)]
+enum TextFormUse<'a> {
+    /// A string template part, followed by the text `following`.
+    Template { following: &'a str },
+    /// An argument of `print` or `println`.
+    Printed,
 }
 
 /// The template part `part` as the operand of `?:` or `.` in a help: as written when it binds
@@ -9601,6 +10006,7 @@ mod tests {
             symbols: vec![
                 ExportedSymbol::Function {
                     visibility: Visibility::Public,
+                    kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
                     receiver: None,
                     name: "add".to_string(),
@@ -9623,6 +10029,7 @@ mod tests {
                 },
                 ExportedSymbol::Function {
                     visibility: Visibility::Package,
+                    kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
                     receiver: None,
                     name: "internal_calc".to_string(),

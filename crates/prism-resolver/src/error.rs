@@ -42,6 +42,13 @@ pub enum ResolveError {
     },
     /// E1006: An import path syntax is invalid (e.g. contains `..` or relative parent traversal).
     InvalidImportPath { import_path: String, reason: String },
+    /// E1002: An import of the bundled library names no module of it, or a library file
+    /// imports something other than a library module (D2 of `standard-library`). `reason`
+    /// says which.
+    LibraryImportNotFound { import_path: String, reason: String },
+    /// E1008: A workspace file declares the package `prism`, or one below it, which names the
+    /// bundled library (D2 of `standard-library`).
+    ReservedPackage { file: PathBuf, package: String },
     /// E1000: IO error during resolution.
     Io { path: PathBuf, message: String },
     /// E2xxx: Lexer or parser error in a file; the code comes from `error`.
@@ -58,6 +65,8 @@ impl ResolveError {
             ResolveError::InconsistentWorkspaceRoot { .. } => "E1004",
             ResolveError::WorkspaceBoundaryViolation { .. } => "E1005",
             ResolveError::InvalidImportPath { .. } => "E1006",
+            ResolveError::LibraryImportNotFound { .. } => "E1002",
+            ResolveError::ReservedPackage { .. } => "E1008",
             ResolveError::Io { .. } => "E1000",
             ResolveError::Parse { error, .. } => error.code,
         }
@@ -83,6 +92,9 @@ impl ResolveError {
             }
             ResolveError::InvalidImportPath { .. } => {
                 Some("Use sibling import 'name' or root-anchored import '/path'.")
+            }
+            ResolveError::ReservedPackage { .. } => {
+                Some("Rename the package: the root package 'prism' names the bundled library.")
             }
             _ => None,
         }
@@ -174,6 +186,27 @@ impl fmt::Display for ResolveError {
                     self.code(),
                     import_path,
                     reason
+                )
+            }
+            ResolveError::LibraryImportNotFound {
+                import_path,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "{}: Cannot resolve import '{}': {}",
+                    self.code(),
+                    import_path,
+                    reason
+                )
+            }
+            ResolveError::ReservedPackage { file, package } => {
+                write!(
+                    f,
+                    "{}: File '{}' declares the package '{}', which the bundled library reserves",
+                    self.code(),
+                    file.display(),
+                    package
                 )
             }
             ResolveError::Io { path, message } => {

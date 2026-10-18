@@ -223,7 +223,7 @@ fn test_fixture_6_import_directed_isolation() {
 
     let graph = DependencyGraph::from_entry(&main).expect("graph build should succeed");
 
-    assert_eq!(graph.len(), 2);
+    assert_eq!(workspace_len(&graph), 2);
     assert!(graph.get_node(&main).is_some());
     assert!(graph.get_node(&widgets).is_some());
     assert!(graph.get_node(&draft).is_none());
@@ -243,10 +243,10 @@ fn test_fixture_7_mutual_recursion_scc() {
 
     let graph = DependencyGraph::from_entry(&a).expect("cyclic imports must succeed into SCC");
 
-    assert_eq!(graph.len(), 2);
+    assert_eq!(workspace_len(&graph), 2);
     assert!(graph.is_cyclic());
 
-    let sccs = graph.sccs();
+    let sccs = &workspace_sccs(&graph);
     assert_eq!(sccs.len(), 1);
     assert_eq!(sccs[0].files.len(), 2);
     assert!(sccs[0].files.contains(&a));
@@ -452,10 +452,10 @@ fn test_dependency_first_topological_sort() {
     let c = ws.write_file("c.prism", "fun leaf() {}\n");
 
     let graph = DependencyGraph::from_entry(&a).expect("graph should build");
-    assert_eq!(graph.len(), 3);
+    assert_eq!(workspace_len(&graph), 3);
     assert!(!graph.is_cyclic());
 
-    let sccs = graph.topological_order();
+    let sccs = &workspace_sccs(&graph);
     assert_eq!(sccs.len(), 3);
     assert_eq!(sccs[0].files, vec![c]);
     assert_eq!(sccs[1].files, vec![b]);
@@ -613,10 +613,10 @@ fn test_adv_diamond_dependency_topological_sort() {
     let d = ws.write_file("d.prism", "fun base() {}\n");
 
     let graph = DependencyGraph::from_entry(&a).expect("diamond graph must build");
-    assert_eq!(graph.len(), 4);
+    assert_eq!(workspace_len(&graph), 4);
     assert!(!graph.is_cyclic());
 
-    let sccs = graph.topological_order();
+    let sccs = &workspace_sccs(&graph);
     assert_eq!(sccs.len(), 4);
 
     let order: Vec<PathBuf> = sccs.iter().flat_map(|c| c.files.clone()).collect();
@@ -641,10 +641,10 @@ fn test_adv_three_node_mutual_recursion_scc() {
     let c = ws.write_file("c.prism", "import a\n");
 
     let graph = DependencyGraph::from_entry(&a).expect("3-node cycle must group into SCC");
-    assert_eq!(graph.len(), 3);
+    assert_eq!(workspace_len(&graph), 3);
     assert!(graph.is_cyclic());
 
-    let sccs = graph.sccs();
+    let sccs = &workspace_sccs(&graph);
     assert_eq!(sccs.len(), 1);
     assert_eq!(sccs[0].files.len(), 3);
     assert!(sccs[0].files.contains(&a));
@@ -669,10 +669,10 @@ fn a_source_store_parses_only_changed_files() {
     );
     let mut store = prism_resolver::SourceStore::new();
     let first = DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
-    assert_eq!(first.len(), 2);
+    assert_eq!(workspace_len(&first), 2);
     assert_eq!(store.parses(), 2);
     let again = DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
-    assert_eq!(again.len(), 2);
+    assert_eq!(workspace_len(&again), 2);
     assert_eq!(store.parses(), 2, "an unchanged file is not parsed again");
 
     let math = workspace.path().join("lib/math.prism");
@@ -712,7 +712,7 @@ fn an_overlay_hides_the_disk_and_can_add_a_file() {
         "package\npublic fun two(): Int = 2\n".replace("package\n", ""),
     );
     let graph = DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
-    assert_eq!(graph.len(), 2, "the new import adds a node");
+    assert_eq!(workspace_len(&graph), 2, "the new import adds a node");
     assert!(graph
         .get_node(&entry_path)
         .unwrap()
@@ -723,4 +723,91 @@ fn an_overlay_hides_the_disk_and_can_add_a_file() {
         "fun main() { println(1) }\n",
         "the disk is unchanged"
     );
+}
+
+/// The number of workspace files of `graph`, without the library modules every workspace file
+/// reaches through the prelude (D4 of `standard-library`).
+fn workspace_len(graph: &DependencyGraph) -> usize {
+    graph
+        .nodes
+        .values()
+        .filter(|node| !node.is_library())
+        .count()
+}
+
+/// The clusters of `graph` that hold workspace files, in order.
+fn workspace_sccs(graph: &DependencyGraph) -> Vec<prism_resolver::SccCluster> {
+    graph
+        .sccs()
+        .iter()
+        .filter(|cluster| {
+            cluster
+                .files
+                .iter()
+                .any(|file| !graph.get_node(file).unwrap().is_library())
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_file_without_imports_has_the_two_prelude_nodes_first() {
+    let ws = TestWorkspace::new("prelude_nodes");
+    let main = ws.write_file(
+        "main.prism",
+        "fun main() {}
+",
+    );
+    let graph = DependencyGraph::from_entry(&main).unwrap();
+    let node = graph.get_node(&main).unwrap();
+    assert!(node.direct_imports.is_empty());
+    assert_eq!(
+        node.prelude_imports,
+        vec![
+            PathBuf::from("prism/core.prism"),
+            PathBuf::from("prism/collections.prism")
+        ]
+    );
+    assert_eq!(graph.len(), 3);
+    let order: Vec<PathBuf> = graph.sccs().iter().flat_map(|c| c.files.clone()).collect();
+    assert_eq!(order.last(), Some(&main), "library nodes come first");
+    for key in &node.prelude_imports {
+        let library = graph.get_node(key).unwrap();
+        assert!(library.is_library());
+        assert!(
+            library.prelude_imports.is_empty(),
+            "a library file has no prelude"
+        );
+    }
+}
+
+#[test]
+fn a_library_node_is_never_read_from_disk() {
+    // A workspace directory `prism` holding `core.prism` beside the entry changes nothing.
+    let ws = TestWorkspace::new("library_not_disk");
+    ws.write_file("prism/core.prism", "!!! not Prism !!!");
+    ws.write_file("prism/system.prism", "!!! not Prism !!!");
+    let main = ws.write_file(
+        "main.prism",
+        "import /prism/system
+fun main() {}
+",
+    );
+    let graph = DependencyGraph::from_entry(&main).unwrap();
+    let system = graph.get_node(Path::new("prism/system.prism")).unwrap();
+    assert!(system.is_library());
+    assert!(system.source.contains("exitProcess"));
+    assert!(graph
+        .get_node(Path::new("prism/core.prism"))
+        .unwrap()
+        .source
+        .contains("intrinsic"));
+}
+
+#[test]
+fn the_library_graph_holds_every_module() {
+    let library = prism_library::Library::bundled();
+    let graph = DependencyGraph::from_library(library).unwrap();
+    assert_eq!(graph.len(), library.modules().len());
+    assert!(graph.nodes.values().all(|node| node.is_library()));
 }

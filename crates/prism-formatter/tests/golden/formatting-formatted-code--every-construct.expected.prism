@@ -38,7 +38,7 @@ public compose fun Counter(initial: Int = 0): Unit {
     }
 }
 
-fun declaredOnly(
+intrinsic fun declaredOnly(
     callback: (Int, String) -> Bool,
     view: compose () -> Unit,
     maybe: (() -> Unit)?,

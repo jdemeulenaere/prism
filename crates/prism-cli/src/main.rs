@@ -306,6 +306,7 @@ fn run_check(path: &str, no_cache: bool, explain_cache: bool) {
             prism_cli::BuildCache::from_environment()
         },
         explain_cache,
+        ..prism_cli::CheckOptions::default()
     };
     match prism_cli::check_path_with(p, &options) {
         Ok(report) => {
@@ -335,13 +336,14 @@ fn run_check(path: &str, no_cache: bool, explain_cache: bool) {
     }
 }
 
-/// Prints the cache directory, then each file in check order as checked or reused under its
-/// path relative to the workspace root, then the program's instances once, in symbol order
-/// (D10 of `instance-cache`).
+/// Prints the cache directory, then each file in check order, library modules first, as
+/// checked or reused under its path relative to the workspace root, then the program's
+/// instances once, in symbol order (D10 of `instance-cache`).
 fn print_cache_explanation(report: &prism_cli::CheckReport, cache: Option<&prism_cli::BuildCache>) {
     let files: Vec<(&std::path::Path, prism_cli::CacheOutcome)> = report
-        .checked_files
+        .library_files
         .iter()
+        .chain(&report.checked_files)
         .map(|file| (file.path.as_path(), file.cache))
         .collect();
     print!(
@@ -439,15 +441,20 @@ fn run_abi(path: &str) {
         match sym {
             prism_abi::ExportedSymbol::Function {
                 visibility,
+                kind,
                 is_compose,
                 receiver,
                 name,
                 type_parameters,
                 params,
                 return_type,
-                ..
             } => {
-                let comp = if *is_compose { "compose " } else { "" };
+                let comp = match kind.as_str() {
+                    "" if *is_compose => "compose ".to_string(),
+                    "" => String::new(),
+                    library if *is_compose => format!("{} compose ", library),
+                    library => format!("{} ", library),
+                };
                 let (mode, receiver) = match receiver {
                     Some(r) if r.mode.as_str().is_empty() => (String::new(), format!("{}.", r.ty)),
                     Some(r) => (format!("{} ", r.mode.as_str()), format!("{}.", r.ty)),
@@ -472,6 +479,11 @@ fn run_abi(path: &str) {
                     "  {} {}{}fun {}{}{}({}): {}",
                     visibility, comp, mode, type_parameters, receiver, name, param_str, return_type
                 );
+            }
+            prism_abi::ExportedSymbol::ExtensionProperty { .. } => {
+                if let Some(text) = sym.declaration_text() {
+                    println!("  {}", text);
+                }
             }
             prism_abi::ExportedSymbol::Struct {
                 visibility,

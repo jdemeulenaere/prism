@@ -7,7 +7,8 @@ use prism_typechecker::{TypeChecker, TypeError};
 /// Parses and checks a single source file, returning its diagnostics.
 fn check(src: &str) -> Vec<TypeError> {
     let file = prism_parser::parse_source(src).expect("source must parse");
-    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");
+    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app")
+        .with_prelude(prism_typechecker::test_prelude());
     checker.check_module(&file);
     checker.errors
 }
@@ -48,7 +49,8 @@ fn check_workspace(modules: &[(&str, &str)], app_imports: &[&str], app: &str) ->
         |file: &prism_ast::SourceFile, name: &str| declared_types(file, true).get(name).cloned();
 
     let file = prism_parser::parse_source(app).expect("app must parse");
-    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");
+    let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app")
+        .with_prelude(prism_typechecker::test_prelude());
     for (module, dep_file) in &parsed {
         if !app_imports.contains(module) {
             continue;
@@ -1109,7 +1111,8 @@ fn reachable_definitions_are_recorded_for_layout_only() {
 
     let check = |app: &str| {
         let file = prism_parser::parse_source(app).unwrap();
-        let mut checker = TypeChecker::new(Some("app".to_string()), "app/main");
+        let mut checker = TypeChecker::new(Some("app".to_string()), "app/main")
+            .with_prelude(prism_typechecker::test_prelude());
         checker.ingest_file_abi(&abi);
         let tree = checker.check_module(&file);
         (tree, checker.errors)
@@ -1152,7 +1155,8 @@ fn a_cycle_across_modules_is_reported_in_each_file() {
         };
         let abi = FileAbi::extract(other, other_module, &bind_other).unwrap();
         let mut checker =
-            TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), *module);
+            TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), *module)
+                .with_prelude(prism_typechecker::test_prelude());
         checker.ingest_file_abi(&abi);
         checker.check_module(file);
         let expected = if *module == "a/one" { "One" } else { "Two" };

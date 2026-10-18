@@ -32,18 +32,39 @@ fn unique_temp_dir(name: &str) -> PathBuf {
 }
 
 /// A workspace and a cache, both in temporary directories removed on drop.
+///
+/// The cache starts with the entries of the bundled library, which a check and a run of a
+/// one-line program in another directory write: the library's entries are shared by every
+/// workspace (the `build-cache` spec, "Library entries are shared between workspaces"), so
+/// [`Workspace::entries`] leaves them out and the explanations leave out the library's lines.
 struct Workspace {
     root: PathBuf,
     cache: PathBuf,
+    /// The entries the library wrote before the test.
+    library_entries: BTreeSet<PathBuf>,
 }
 
 impl Workspace {
     fn new(name: &str, files: &[(&str, &str)]) -> Self {
         let base = unique_temp_dir(name);
-        let workspace = Self {
+        let mut workspace = Self {
             root: base.join("workspace"),
             cache: base.join("cache"),
+            library_entries: BTreeSet::new(),
         };
+        let warm_up = base.join("warm-up");
+        fs::create_dir_all(&warm_up).unwrap();
+        fs::write(warm_up.join("main.prism"), "fun main() {}\n").unwrap();
+        for command in ["check", "run"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+                .current_dir(&warm_up)
+                .env("PRISM_CACHE", &workspace.cache)
+                .args([command, "main.prism"])
+                .output()
+                .expect("failed to execute prism CLI");
+            assert_success(&output);
+        }
+        workspace.library_entries = workspace.all_entries();
         for (path, source) in files {
             workspace.write(path, source);
         }
@@ -95,8 +116,16 @@ impl Workspace {
         paths
     }
 
-    /// Every file under the cache's entry directories.
+    /// Every file under the cache's entry directories, but the library's.
     fn entries(&self) -> BTreeSet<PathBuf> {
+        self.all_entries()
+            .difference(&self.library_entries)
+            .cloned()
+            .collect()
+    }
+
+    /// Every file under the cache's entry directories.
+    fn all_entries(&self) -> BTreeSet<PathBuf> {
         let mut paths = BTreeSet::new();
         if self.cache.is_dir() {
             collect(&self.cache.join("v2"), &mut paths);
@@ -135,17 +164,19 @@ fn assert_success(output: &Output) {
     );
 }
 
-/// The lines after `Cache: ...`, without their indentation.
+/// The lines after `Cache: ...`, without their indentation and without the library's.
 fn explanation(output: &Output) -> Vec<String> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .skip_while(|line| !line.starts_with("Cache: "))
         .skip(1)
         .map(|line| line.trim().to_string())
+        .filter(|line| !is_library_line(line))
         .collect()
 }
 
-/// The explanation lines a `prism run --explain-cache` printed to stderr, after `Cache: ...`.
+/// The explanation lines a `prism run --explain-cache` printed to stderr, after `Cache: ...`,
+/// without the library's.
 fn run_explanation(output: &Output) -> Vec<String> {
     String::from_utf8_lossy(&output.stderr)
         .lines()
@@ -153,7 +184,14 @@ fn run_explanation(output: &Output) -> Vec<String> {
         .skip(1)
         .take_while(|line| line.starts_with("  "))
         .map(|line| line.trim().to_string())
+        .filter(|line| !is_library_line(line))
         .collect()
+}
+
+/// Whether an explanation line is about a library module or an instance of a library generic.
+fn is_library_line(line: &str) -> bool {
+    line.split_once(' ')
+        .is_some_and(|(_, rest)| rest.trim_start_matches("instance ").starts_with("prism/"))
 }
 
 /// The report without the explanation.
@@ -710,9 +748,10 @@ fn concurrent_checks_share_a_cache() {
 #[test]
 fn checking_without_the_cache() {
     let workspace = text_workspace("without");
+    let before = workspace.all_entries();
     let output = workspace.run(&["check", "--no-cache", "--explain-cache", "app/main.prism"]);
     assert_success(&output);
-    assert!(!workspace.cache.exists(), "--no-cache writes nothing");
+    assert_eq!(workspace.all_entries(), before, "--no-cache writes nothing");
 
     workspace.explain("app/main.prism");
     let entries = workspace.entries();

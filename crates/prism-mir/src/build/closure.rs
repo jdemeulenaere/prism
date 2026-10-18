@@ -115,6 +115,8 @@ impl Builder<'_> {
 enum AdapterTarget {
     /// A top-level function.
     Function(DeclarationPath),
+    /// An external function, called by symbol.
+    External(DeclarationPath),
     /// A variant of an enum, with the enum's type arguments.
     Variant {
         enum_id: NominalId,
@@ -152,6 +154,11 @@ impl Builder<'_> {
             panic!("internal error: a function value of type {}", expression.ty);
         };
         let target = match &expression.kind {
+            // An external has no slot: its adapter calls it by symbol (D5 of
+            // `standard-library`).
+            ExpressionKind::FunctionReference(path) if self.file.externals.contains(path) => {
+                AdapterTarget::External(path.clone())
+            }
             ExpressionKind::FunctionReference(path) => AdapterTarget::Function(path.clone()),
             ExpressionKind::VariantConstructor { enum_id, index, .. } => {
                 let arguments = match declared_result.as_ref() {
@@ -223,6 +230,17 @@ impl Builder<'_> {
             Place::return_place()
         };
         match target {
+            AdapterTarget::External(path) => closure.emit_call(
+                Callee::External(path),
+                operands,
+                declared_parameters.clone(),
+                declared_escaping.clone(),
+                Vec::new(),
+                value.clone(),
+                *declared_compose,
+                **declared_result != Type::Nothing,
+                span,
+            ),
             AdapterTarget::Function(path) => closure.emit_call(
                 Callee::Function(path),
                 operands,

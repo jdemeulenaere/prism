@@ -90,6 +90,24 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
                 display_path(target_path)
             ));
         }
+        ResolveError::LibraryImportNotFound {
+            import_path,
+            reason,
+        } => {
+            out.push_str(&format!("error[{}]: imported module not found\n", code));
+            out.push_str(&format!(
+                "   = note: cannot resolve import '{}': {}\n",
+                import_path, reason
+            ));
+        }
+        ResolveError::ReservedPackage { file, package } => {
+            out.push_str(&format!("error[{}]: reserved package\n", code));
+            out.push_str(&format!("  --> {}:1:1\n", display_path(file)));
+            out.push_str(&format!(
+                "   = note: the package '{}' is reserved: the root package 'prism' names the bundled library\n",
+                package
+            ));
+        }
         ResolveError::PackageHeterogeneity {
             file,
             package_dir,
@@ -186,11 +204,29 @@ pub fn format_parse_error(path: &Path, source: Option<&str>, err: &ParseError) -
 /// Formats an ABI extraction error.
 pub fn format_abi_error(path: &Path, source: Option<&str>, err: &AbiError) -> String {
     let mut out = String::new();
+    if let AbiError::LibraryOnlyDeclaration { modifier, span } = err {
+        out.push_str(&format!(
+            "error[E3002]: '{}' declaration outside the bundled library\n",
+            modifier
+        ));
+        out.push_str(&format!(
+            "  --> {}:{}:{}\n",
+            display_path(path),
+            span.line,
+            span.column
+        ));
+        if let Some(snippet) =
+            source.and_then(|src| render_code_snippet(src, span.line, span.column))
+        {
+            out.push_str(&format!("{}\n", snippet));
+        }
+        out.push_str(
+            "   = help: only the bundled library may declare external or intrinsic functions\n",
+        );
+        return out;
+    }
     out.push_str("error[E3001]: ABI specification violation\n");
-    let span = match err {
-        AbiError::MissingExplicitReturnType { span, .. } => span,
-        AbiError::MissingExplicitVarType { span, .. } => span,
-    };
+    let span = err.span();
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
         display_path(path),
@@ -278,6 +314,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         | TypeError::InvalidPattern {
             help: Some(help), ..
+        }
+        | TypeError::InvalidLibraryDeclaration {
+            help: Some(help), ..
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }
@@ -306,12 +345,6 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             out.push_str(
                 "   = help: verify parameter counts, argument types, or named parameters\n",
             );
-        }
-        TypeError::UnprintableArgument { function, .. } => {
-            out.push_str(&format!(
-                "   = help: '{}' accepts an 'Int', 'Double', 'Bool', 'Char' or 'String', or a reference to one\n",
-                function
-            ));
         }
         TypeError::BuiltinFunctionAsValue { name, .. } if name == "Heap" => {
             out.push_str("   = help: 'Heap' is the built-in box constructor and can only be called, as in 'Heap(x)'\n");
@@ -714,7 +747,8 @@ mod tests {
     /// Renders the type errors of `src`, checked as a single file.
     fn render_type_errors(src: &str) -> String {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main")
+            .with_prelude(prism_typechecker::test_prelude());
         checker.check_module(&file);
         checker
             .errors
@@ -987,7 +1021,8 @@ mod tests {
     /// Renders the borrow errors of `src`, checked as a single file `main.prism`.
     fn render_borrow_errors(src: &str) -> String {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main")
+            .with_prelude(prism_typechecker::test_prelude());
         let tree = checker.check_module(&file);
         assert!(checker.errors.is_empty(), "{:?}", checker.errors);
         let mir = prism_mir::lower_file(&tree);

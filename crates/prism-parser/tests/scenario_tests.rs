@@ -1028,7 +1028,9 @@ fn type_parameter_lists() {
             Declaration::Function(f) => type_parameter_shapes(&f.type_parameters),
             Declaration::Struct(s) => type_parameter_shapes(&s.type_parameters),
             Declaration::Enum(e) => type_parameter_shapes(&e.type_parameters),
-            Declaration::Var(_) => panic!("no top-level val in the source"),
+            Declaration::Var(_) | Declaration::ExtensionProperty(_) => {
+                panic!("no top-level val in the source")
+            }
         })
         .collect();
     assert_eq!(

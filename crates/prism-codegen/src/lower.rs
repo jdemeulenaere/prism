@@ -1563,7 +1563,10 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .collect();
         let parameters = &parameters[..];
         match callee {
-            Callee::Function(_) | Callee::Default { .. } | Callee::Value(..) => {
+            Callee::Function(_)
+            | Callee::External(_)
+            | Callee::Default { .. }
+            | Callee::Value(..) => {
                 // A function value is read in place: its code is loaded from the slot its
                 // descriptor names, and its environment passed after the result address (D6 of
                 // `closures`).
@@ -1622,6 +1625,26 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         Lowered::Empty => {}
                         Lowered::Scalar(value) | Lowered::Memory(value) => values.push(value),
                     }
+                }
+                // An external is a direct call of the runtime's entry point, declared with the
+                // signature its table entry records, which `check_file` compared with the
+                // declaration's (D5 of `standard-library`).
+                if let Callee::External(path) = callee {
+                    let entry = prism_runtime::RUNTIME_FUNCTIONS
+                        .iter()
+                        .find(|function| function.name == path.name)
+                        .ok_or_else(|| {
+                            BackendError::new(format!("no runtime function {}", path.name))
+                        })?;
+                    let function = self.runtime_function(entry.name)?;
+                    let call = self.builder.ins().call(function, &values);
+                    if let Some(result) = self.builder.inst_results(call).first().copied() {
+                        self.write_place(destination, Lowered::Scalar(result), false)?;
+                    }
+                    if let Some(temporary) = result_temporary {
+                        self.write_place(destination, Lowered::Memory(temporary), false)?;
+                    }
+                    return self.finish_call(target);
                 }
                 let (target, signature) = match function_value {
                     Some((code, _)) => (
@@ -1790,6 +1813,12 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 self.list_call(*builtin, arguments, type_arguments, destination, span)?
             }
         }
+        self.finish_call(target)
+    }
+
+    /// Ends the block of a call: a jump to `target`, or a trap after a callee that returns
+    /// `Nothing`.
+    fn finish_call(&mut self, target: Option<prism_mir::BlockId>) -> Result<(), BackendError> {
         match target {
             Some(target) => self.go_to(target),
             // The callee returns `Nothing`.

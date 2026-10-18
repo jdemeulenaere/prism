@@ -299,6 +299,7 @@ impl Printer<'_> {
                     Callee::Function(path) => {
                         format!("{}{}", path, render_type_arguments(&call.type_arguments))
                     }
+                    Callee::External(path) => format!("external {}", path),
                     Callee::Builtin(builtin) => format!(
                         "builtin {}{}",
                         builtin.name(),
@@ -841,6 +842,7 @@ pub(crate) mod tests {
             })],
             bodies,
             types: crate::types::TypeTable::with_builtins(),
+            externals: Vec::new(),
         }
     }
 

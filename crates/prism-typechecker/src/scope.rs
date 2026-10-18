@@ -6,6 +6,7 @@ use prism_ast::{Span, Visibility};
 use prism_typed_tree::LocalId;
 use prism_typed_tree::TypeParameter;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Declared mutability of a binding (`val` vs `var`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,6 +275,10 @@ pub struct ScopeStack {
     /// Symbols exported by direct imports, below the module scope. Each name maps to one
     /// candidate per exporting module; a name with several candidates is ambiguous at use.
     imports: HashMap<String, Vec<(String, Symbol)>>,
+    /// The names of the prelude modules, below the imports: found only when no scope and no
+    /// import has the name, so any of them shadows a prelude name (D4 of `standard-library`).
+    /// Shared by every checker of a process.
+    prelude: Option<Arc<HashMap<String, Symbol>>>,
 }
 
 /// The nested levels [`ScopeStack::take_locals`] hid, which [`ScopeStack::restore_locals`]
@@ -304,7 +309,29 @@ impl ScopeStack {
             levels: vec![Vec::new()],
             hidden_through: 0,
             imports: HashMap::new(),
+            prelude: None,
         }
+    }
+
+    /// Puts the prelude's `names` below the imports.
+    pub fn set_prelude(&mut self, names: Arc<HashMap<String, Symbol>>) {
+        self.prelude = Some(names);
+    }
+
+    /// The prelude symbol named `name`, if a prelude is set and has one.
+    fn lookup_prelude(&self, name: &str) -> Option<&Symbol> {
+        self.prelude.as_ref()?.get(name)
+    }
+
+    /// The imported symbols, one per name: the first candidate of each.
+    pub(crate) fn imported_names(&self) -> HashMap<String, Symbol> {
+        self.imports
+            .iter()
+            .filter_map(|(name, candidates)| {
+                let (_, symbol) = candidates.first()?;
+                Some((name.clone(), symbol.clone()))
+            })
+            .collect()
     }
 
     /// Adds a symbol exported by the imported module `module` to the import layer. A module
@@ -406,7 +433,8 @@ impl ScopeStack {
         }
         match self.lookup_import(name, |_| true) {
             ImportLookup::One(symbol) => Some(symbol),
-            _ => None,
+            ImportLookup::None => self.lookup_prelude(name),
+            ImportLookup::Ambiguous(_) => None,
         }
     }
 
@@ -422,7 +450,10 @@ impl ScopeStack {
             Some(symbol) => Some(symbol),
             None => match self.lookup_import(name, is_type_symbol) {
                 ImportLookup::One(symbol) => Some(symbol),
-                _ => None,
+                ImportLookup::None => self
+                    .lookup_prelude(name)
+                    .filter(|symbol| is_type_symbol(symbol)),
+                ImportLookup::Ambiguous(_) => None,
             },
         }
     }
@@ -444,10 +475,13 @@ impl ScopeStack {
                 modules,
                 span,
             }),
-            ImportLookup::None => Err(TypeError::UnresolvedSymbol {
-                name: name.to_string(),
-                span,
-            }),
+            ImportLookup::None => match self.lookup_prelude(name) {
+                Some(symbol) => Ok(symbol),
+                None => Err(TypeError::UnresolvedSymbol {
+                    name: name.to_string(),
+                    span,
+                }),
+            },
         }
     }
 

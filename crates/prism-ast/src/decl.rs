@@ -128,6 +128,33 @@ pub struct TypeParameter {
     pub span: Span,
 }
 
+/// What a library-only modifier says the compiler provides for a body-less declaration (D5,
+/// D6 and D12 of `standard-library`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LibraryKind {
+    /// `intrinsic`: calls are typed by the declaration and lowered by the compiler.
+    Intrinsic,
+    /// `external`: a runtime entry point, called by the C symbol equal to the name.
+    External,
+}
+
+impl LibraryKind {
+    /// The modifier as written.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LibraryKind::Intrinsic => "intrinsic",
+            LibraryKind::External => "external",
+        }
+    }
+}
+
+/// An `external` or `intrinsic` modifier, with its span, where diagnostics about it point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LibraryModifier {
+    pub kind: LibraryKind,
+    pub span: Span,
+}
+
 /// Function declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
@@ -141,8 +168,35 @@ pub struct FunctionDecl {
     pub type_parameters: Vec<TypeParameter>,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
+    /// The body; `None` exactly when `library` is set (the parser rejects every other case).
     pub body: Option<FunctionBody>,
+    /// The `external` or `intrinsic` modifier of a body-less library declaration.
+    pub library: Option<LibraryModifier>,
     pub span: Span,
+}
+
+impl FunctionDecl {
+    /// Whether the declaration is `intrinsic`.
+    pub fn is_intrinsic(&self) -> bool {
+        matches!(
+            self.library,
+            Some(LibraryModifier {
+                kind: LibraryKind::Intrinsic,
+                ..
+            })
+        )
+    }
+
+    /// Whether the declaration is `external`.
+    pub fn is_external(&self) -> bool {
+        matches!(
+            self.library,
+            Some(LibraryModifier {
+                kind: LibraryKind::External,
+                ..
+            })
+        )
+    }
 }
 
 /// Struct field declaration.
@@ -218,6 +272,22 @@ pub struct TopLevelVarDecl {
     pub span: Span,
 }
 
+/// An intrinsic extension property, `intrinsic val <T> List<T>.size: Int` (D6 of
+/// `standard-library`): read without parentheses, typed by its declaration and lowered by the
+/// compiler. Only the bundled library declares them, and only `intrinsic`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExtensionPropertyDecl {
+    pub visibility: Visibility,
+    /// The `intrinsic` modifier.
+    pub library: LibraryModifier,
+    pub type_parameters: Vec<TypeParameter>,
+    /// The receiver type (`List<T>`).
+    pub receiver: Type,
+    pub name: String,
+    pub ty: Type,
+    pub span: Span,
+}
+
 /// Top-level declarations in a Prism file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Declaration {
@@ -225,6 +295,7 @@ pub enum Declaration {
     Struct(StructDecl),
     Enum(EnumDecl),
     Var(TopLevelVarDecl),
+    ExtensionProperty(ExtensionPropertyDecl),
 }
 
 impl Declaration {
@@ -234,6 +305,7 @@ impl Declaration {
             Declaration::Struct(s) => s.visibility,
             Declaration::Enum(e) => e.visibility,
             Declaration::Var(v) => v.visibility,
+            Declaration::ExtensionProperty(p) => p.visibility,
         }
     }
 
@@ -243,6 +315,7 @@ impl Declaration {
             Declaration::Struct(s) => &s.name,
             Declaration::Enum(e) => &e.name,
             Declaration::Var(v) => &v.name,
+            Declaration::ExtensionProperty(p) => &p.name,
         }
     }
 
@@ -252,6 +325,16 @@ impl Declaration {
             Declaration::Struct(s) => s.span,
             Declaration::Enum(e) => e.span,
             Declaration::Var(v) => v.span,
+            Declaration::ExtensionProperty(p) => p.span,
+        }
+    }
+
+    /// The `external` or `intrinsic` modifier of a library declaration, if it has one.
+    pub fn library_modifier(&self) -> Option<LibraryModifier> {
+        match self {
+            Declaration::Function(f) => f.library,
+            Declaration::ExtensionProperty(p) => Some(p.library),
+            Declaration::Struct(_) | Declaration::Enum(_) | Declaration::Var(_) => None,
         }
     }
 }

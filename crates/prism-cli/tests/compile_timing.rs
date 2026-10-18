@@ -932,7 +932,8 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
     abi.unwrap_or_else(|error| panic!("ABI error: {:?}", error));
     let package = file.package.as_ref().map(|p| p.package_string());
     let ((tree, errors), time) = timed(|| {
-        let mut checker = prism_typechecker::TypeChecker::new(package, "bench");
+        let mut checker = prism_typechecker::TypeChecker::new(package, "bench")
+            .with_prelude(prism_typechecker::test_prelude());
         let tree = checker.check_module(&file);
         (tree, checker.errors)
     });

@@ -58,6 +58,7 @@ impl Builder<'_> {
     ) {
         let callee = match &call.callee {
             TreeCallee::Function(path) => Callee::Function(path.clone()),
+            TreeCallee::External(path) => Callee::External(path.clone()),
             TreeCallee::Builtin(builtin) => Callee::Builtin(*builtin),
             TreeCallee::Value(value) => {
                 Callee::Value(self.place(*value), self.expression(*value).span)

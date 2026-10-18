@@ -170,7 +170,8 @@ pub fn symbols_of(file: &MirFile) -> Vec<String> {
 }
 
 /// The symbol a call of `callee` with `type_arguments` calls through its slot, an instance's for
-/// a generic callee: `None` for a built-in, which is not a generated function, and for a
+/// a generic callee: `None` for a built-in, which is not a generated function, for an external,
+/// which is called by its C symbol and has no slot (D5 of `standard-library`), and for a
 /// function value.
 pub fn callee_symbol(callee: &Callee, type_arguments: &[Type]) -> Option<String> {
     match callee {
@@ -178,7 +179,7 @@ pub fn callee_symbol(callee: &Callee, type_arguments: &[Type]) -> Option<String>
         Callee::Default { function, name, .. } => {
             Some(default_instance_symbol(function, type_arguments, name))
         }
-        Callee::Builtin(_) | Callee::Value(..) => None,
+        Callee::Builtin(_) | Callee::External(_) | Callee::Value(..) => None,
     }
 }
 

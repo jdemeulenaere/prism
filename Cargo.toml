@@ -14,6 +14,7 @@ members = [
     "crates/prism-formatter",
     "crates/prism-runtime",
     "crates/prism-codegen",
+    "crates/prism-library",
 ]
 
 [workspace.package]

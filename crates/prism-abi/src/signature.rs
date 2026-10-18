@@ -27,11 +27,51 @@ pub struct AbiParameter {
     pub default: Option<String>,
 }
 
+/// What provides an exported function's code (D5 and D6 of `standard-library`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FunctionKind {
+    /// A function with a Prism body.
+    #[default]
+    Prism,
+    /// An `intrinsic` declaration, whose calls the compiler lowers.
+    Intrinsic,
+    /// An `external` declaration, a runtime entry point.
+    External,
+}
+
+impl FunctionKind {
+    /// The modifier written before the declaration, empty for an ordinary function.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FunctionKind::Prism => "",
+            FunctionKind::Intrinsic => "intrinsic",
+            FunctionKind::External => "external",
+        }
+    }
+
+    /// The kind of `f`, from its modifier.
+    pub fn of(f: &FunctionDecl) -> Self {
+        match f.library {
+            None => FunctionKind::Prism,
+            Some(LibraryModifier {
+                kind: LibraryKind::Intrinsic,
+                ..
+            }) => FunctionKind::Intrinsic,
+            Some(LibraryModifier {
+                kind: LibraryKind::External,
+                ..
+            }) => FunctionKind::External,
+        }
+    }
+}
+
 /// Represents an exported symbol in a file's ABI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportedSymbol {
     Function {
         visibility: Visibility,
+        /// Whether the function has a body, or is intrinsic or external.
+        kind: FunctionKind,
         is_compose: bool,
         /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
         receiver: Option<AbiReceiver>,
@@ -64,6 +104,15 @@ pub enum ExportedSymbol {
         name: String,
         ty: AbiType,
     },
+    /// An exported intrinsic extension property (`public intrinsic val <T> List<T>.size: Int`,
+    /// D6 of `standard-library`).
+    ExtensionProperty {
+        visibility: Visibility,
+        type_parameters: Vec<AbiTypeParameter>,
+        receiver: AbiType,
+        name: String,
+        ty: AbiType,
+    },
 }
 
 impl ExportedSymbol {
@@ -73,6 +122,7 @@ impl ExportedSymbol {
         match self {
             ExportedSymbol::Function {
                 visibility,
+                kind,
                 is_compose,
                 receiver,
                 name,
@@ -80,7 +130,13 @@ impl ExportedSymbol {
                 params,
                 return_type,
             } => {
-                hasher.write_str("fun");
+                // An ordinary function keeps the tag it always had, so library kinds change no
+                // existing hash.
+                hasher.write_str(match kind {
+                    FunctionKind::Prism => "fun",
+                    FunctionKind::Intrinsic => "intrinsic fun",
+                    FunctionKind::External => "external fun",
+                });
                 hasher.write_str(visibility.as_str());
                 hasher.write_u8(if *is_compose { 1 } else { 0 });
                 match receiver {
@@ -167,6 +223,89 @@ impl ExportedSymbol {
                 hasher.write_str(name);
                 ty.hash_into(hasher);
             }
+            ExportedSymbol::ExtensionProperty {
+                visibility,
+                type_parameters,
+                receiver,
+                name,
+                ty,
+            } => {
+                hasher.write_str("intrinsic val");
+                hasher.write_str(visibility.as_str());
+                hash_type_parameters(type_parameters, hasher);
+                receiver.hash_into(hasher);
+                hasher.write_str(name);
+                ty.hash_into(hasher);
+            }
+        }
+    }
+
+    /// The symbol's declaration as `prism abi` shows it and the intrinsic catalog compares it
+    /// (D6 of `standard-library`): visibility, library modifier, `compose`, receiver mode, type
+    /// parameters, receiver, name, parameters without their defaults and result, as in
+    /// `public intrinsic mut fun <T> List<T>.add(element: T): Unit`. `None` for a struct or
+    /// enum.
+    pub fn declaration_text(&self) -> Option<String> {
+        match self {
+            ExportedSymbol::Function {
+                visibility,
+                kind,
+                is_compose,
+                receiver,
+                name,
+                type_parameters,
+                params,
+                return_type,
+            } => {
+                let mut text = format!("{} ", visibility);
+                if *kind != FunctionKind::Prism {
+                    text.push_str(kind.as_str());
+                    text.push(' ');
+                }
+                if *is_compose {
+                    text.push_str("compose ");
+                }
+                if let Some(receiver) = receiver {
+                    if !receiver.mode.as_str().is_empty() {
+                        text.push_str(receiver.mode.as_str());
+                        text.push(' ');
+                    }
+                }
+                text.push_str("fun ");
+                text.push_str(&type_parameter_text(type_parameters));
+                if let Some(receiver) = receiver {
+                    text.push_str(&format!("{}.", receiver.ty));
+                }
+                let params: Vec<String> = params
+                    .iter()
+                    .map(|p| {
+                        let modifier = if p.escaping { "escaping " } else { "" };
+                        format!("{}: {}{}", p.name, modifier, p.ty)
+                    })
+                    .collect();
+                text.push_str(&format!("{}({}): {}", name, params.join(", "), return_type));
+                Some(text)
+            }
+            ExportedSymbol::ExtensionProperty {
+                visibility,
+                type_parameters,
+                receiver,
+                name,
+                ty,
+            } => Some(format!(
+                "{} intrinsic val {}{}.{}: {}",
+                visibility,
+                type_parameter_text(type_parameters),
+                receiver,
+                name,
+                ty
+            )),
+            ExportedSymbol::Var {
+                visibility,
+                name,
+                ty,
+            } => Some(format!("{} val {}: {}", visibility, name, ty)),
+            ExportedSymbol::Struct { .. } | ExportedSymbol::Enum { .. } => None,
         }
     }
 
@@ -184,8 +323,26 @@ impl ExportedSymbol {
                     .as_ref()
                     .map_or_else(String::new, |r| qualified_type_text(&r.ty)),
             ),
+            ExportedSymbol::ExtensionProperty { name, receiver, .. } => {
+                (4, name.as_str(), qualified_type_text(receiver))
+            }
         }
     }
+}
+
+/// `<T, R : Copy> ` for type parameters, with a trailing space, or nothing.
+fn type_parameter_text(parameters: &[AbiTypeParameter]) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    let parameters: Vec<String> = parameters
+        .iter()
+        .map(|p| match p.bound {
+            Some(bound) => format!("{} : {}", p.name, bound.as_str()),
+            None => p.name.clone(),
+        })
+        .collect();
+    format!("<{}> ", parameters.join(", "))
 }
 
 /// The text of `ty` with every nominal name qualified by its defining module (`models/user.User`).
@@ -494,6 +651,7 @@ fn symbol_types(symbol: &ExportedSymbol) -> Vec<&AbiType> {
             variants.iter().flat_map(|(_, payloads)| payloads).collect()
         }
         ExportedSymbol::Var { ty, .. } => vec![ty],
+        ExportedSymbol::ExtensionProperty { receiver, ty, .. } => vec![receiver, ty],
     }
 }
 
@@ -605,6 +763,33 @@ impl FileAbi {
         bind_import: &NameBinder,
         definition: &dyn Fn(&str, &str) -> Option<AbiTypeDefinition>,
     ) -> Result<Self, AbiError> {
+        Self::extract_with_origin(file, module, bind_import, definition, false)
+    }
+
+    /// [`FileAbi::extract_with_definitions`] for a file of the bundled library when
+    /// `in_library`, the only files that may declare `external` and `intrinsic` declarations: a
+    /// workspace file using either is rejected at its first modifier with
+    /// [`AbiError::LibraryOnlyDeclaration`] (`E3002`, D12 of `standard-library`), so no ABI ever
+    /// carries a workspace intrinsic.
+    pub fn extract_with_origin(
+        file: &SourceFile,
+        module: &str,
+        bind_import: &NameBinder,
+        definition: &dyn Fn(&str, &str) -> Option<AbiTypeDefinition>,
+        in_library: bool,
+    ) -> Result<Self, AbiError> {
+        if !in_library {
+            if let Some(modifier) = file
+                .declarations
+                .iter()
+                .find_map(Declaration::library_modifier)
+            {
+                return Err(AbiError::LibraryOnlyDeclaration {
+                    modifier: modifier.kind.as_str().to_string(),
+                    span: modifier.span,
+                });
+            }
+        }
         let package = file.package.as_ref().map(|p| p.package_string());
         let mut symbols = Vec::new();
 
@@ -622,6 +807,7 @@ impl FileAbi {
                 Declaration::Function(f) => &f.type_parameters[..],
                 Declaration::Struct(s) => &s.type_parameters[..],
                 Declaration::Enum(e) => &e.type_parameters[..],
+                Declaration::ExtensionProperty(p) => &p.type_parameters[..],
                 Declaration::Var(_) => &[],
             }
             .iter()
@@ -639,6 +825,8 @@ impl FileAbi {
                             // If it's an expression body `= expr` without return type, it is an inferred return type
                             // which is forbidden for exported ABI.
                             match &f.body {
+                                // A library declaration has no body to infer from, so it
+                                // returns `Unit` unless it says otherwise.
                                 Some(FunctionBody::Expr(_)) => {
                                     return Err(AbiError::MissingExplicitReturnType {
                                         function_name: f.name.clone(),
@@ -678,6 +866,7 @@ impl FileAbi {
 
                     symbols.push(ExportedSymbol::Function {
                         visibility: vis,
+                        kind: FunctionKind::of(f),
                         is_compose: f.is_compose,
                         receiver,
                         name: f.name.clone(),
@@ -729,6 +918,16 @@ impl FileAbi {
                         visibility: vis,
                         name: v.name.clone(),
                         ty,
+                    });
+                }
+
+                Declaration::ExtensionProperty(p) => {
+                    symbols.push(ExportedSymbol::ExtensionProperty {
+                        visibility: vis,
+                        type_parameters: abi_type_parameters(&p.type_parameters),
+                        receiver: lower(&p.receiver),
+                        name: p.name.clone(),
+                        ty: lower(&p.ty),
                     });
                 }
             }

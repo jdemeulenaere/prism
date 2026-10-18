@@ -13,6 +13,8 @@ pub mod checker;
 pub mod error;
 pub mod exhaustiveness;
 pub mod inference;
+pub mod intrinsics;
+pub mod prelude;
 mod recursion;
 pub mod scope;
 pub mod types;
@@ -22,6 +24,9 @@ pub use error::{
     closure_parameter_count_help, CaptureRefusal, MissingImplicitParameter, NoTextFormReason,
     TypeError,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use prelude::test_prelude;
+pub use prelude::PreludeScope;
 pub use prism_typed_tree::TypedFile;
 pub use scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 pub use types::{

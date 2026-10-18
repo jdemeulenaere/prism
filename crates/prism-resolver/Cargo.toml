@@ -8,3 +8,4 @@ license.workspace = true
 [dependencies]
 prism-ast = { path = "../prism-ast" }
 prism-parser = { path = "../prism-parser" }
+prism-library = { path = "../prism-library" }

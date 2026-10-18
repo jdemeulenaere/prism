@@ -150,6 +150,7 @@ fn surface_extraction_records_package_and_every_exported_kind() {
                 assert_eq!((name.as_str(), *visibility), ("origin", Visibility::Public));
                 seen.push("var");
             }
+            ExportedSymbol::ExtensionProperty { .. } => panic!("no property in the source"),
         }
     }
     seen.sort();
@@ -528,7 +529,7 @@ fn user_record(abi: &FileAbi) -> &ExportedSymbol {
 #[test]
 fn exported_extension_recorded_with_its_receiver() {
     let abi = extract_user_module(
-        "public struct User { var name: String }\npublic mut fun User.rename(n: String): Unit\n",
+        "public struct User { var name: String }\npublic mut fun User.rename(n: String): Unit {}\n",
     );
     let Some(ExportedSymbol::Function {
         receiver: Some(receiver),

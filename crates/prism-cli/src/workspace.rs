@@ -7,13 +7,32 @@ use crate::diagnostics;
 use crate::plan::{instance_code_key, planned_display, DefinitionsHasher, ProgramDefinitions};
 use prism_abi::{declared_types, type_definitions, AbiError, ContentHash, FileAbi, NominalHeader};
 use prism_codegen::{InstanceError, PlannedInstance};
+use prism_library::Library;
 use prism_mir::{FileSummary, GenericRecord, MirFile};
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
-use prism_typechecker::TypedFile;
+use prism_typechecker::{PreludeScope, TypedFile};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Phase 1 of a program: the ABI of every file, by path, and the prelude scope built once
+/// from the prelude modules' ABIs, which every workspace file's checker shares (D4 of
+/// `standard-library`).
+pub(crate) struct ProgramAbis {
+    pub files: HashMap<PathBuf, FileAbi>,
+    /// `None` when the graph has no workspace file, as the library's own graph.
+    pub prelude: Option<Arc<PreludeScope>>,
+}
+
+impl std::ops::Deref for ProgramAbis {
+    type Target = HashMap<PathBuf, FileAbi>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.files
+    }
+}
 
 /// Information about a verified source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,21 +69,40 @@ pub struct InstanceOutcome {
 }
 
 /// How `prism check` runs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CheckOptions {
     /// The build cache to read and write, or `None` to check every file (D10 of `abi-cache`).
     pub cache: Option<BuildCache>,
     /// Whether to look up which instances the cache holds code for (`--explain-cache`), which
     /// costs one lookup per instance.
     pub explain_cache: bool,
+    /// The bundled library, which tests replace to add modules to it (D13 of
+    /// `standard-library`). The command line never does.
+    pub library: Arc<Library>,
+}
+
+impl Default for CheckOptions {
+    fn default() -> Self {
+        Self {
+            cache: None,
+            explain_cache: false,
+            library: Arc::new(Library::bundled().clone()),
+        }
+    }
 }
 
 /// The result of running `prism check` on a workspace or entry file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckReport {
     pub workspace_root: PathBuf,
+    /// The number of workspace files checked; library modules are not counted (the
+    /// `build-cache` spec, "Reports List Workspace Files").
     pub total_files: usize,
+    /// The workspace files, in check order.
     pub checked_files: Vec<CheckedFile>,
+    /// The library modules the program reached, in check order, which only `--explain-cache`
+    /// shows.
+    pub library_files: Vec<CheckedFile>,
     /// The program's instances, in symbol order (D7 and D10 of `instance-cache`).
     pub instances: Vec<InstanceOutcome>,
 }
@@ -181,7 +219,7 @@ pub fn check_file_with(
     options: &CheckOptions,
 ) -> Result<CheckReport, WorkspaceError> {
     validate_entry_file(entry_file)?;
-    let graph = DependencyGraph::from_entry(entry_file)?;
+    let graph = DependencyGraph::from_entries_with_library(&[entry_file], &options.library)?;
 
     // Assert that all reachable files reside inside the discovered workspace root
     assert_workspace_boundary(&graph)?;
@@ -264,7 +302,7 @@ pub fn check_directory_with(
     all_files.sort();
     all_files.dedup();
 
-    let graph = DependencyGraph::from_entries(&all_files)?;
+    let graph = DependencyGraph::from_entries_with_library(&all_files, &options.library)?;
 
     // Assert that all files reside inside the discovered workspace root
     assert_workspace_boundary(&graph)?;
@@ -353,10 +391,11 @@ pub(crate) fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), W
             message: e.to_string(),
         })?;
 
-    for path in graph.nodes.keys() {
-        // A file that exists only in a watch session's overlay was resolved from root-relative
+    for (path, node) in &graph.nodes {
+        // A library module is not a file of the workspace (D2 of `standard-library`). A file
+        // that exists only in a watch session's overlay was resolved from root-relative
         // segments without `..`, so it is inside the root (D16 of `hot-reload`).
-        if !path.exists() {
+        if node.is_library() || !path.exists() {
             continue;
         }
         let canon_path = path.canonicalize().map_err(|e| WorkspaceError::Io {
@@ -380,6 +419,11 @@ pub(crate) fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), W
 /// root-anchored import path (`a/lib` for `<root>/a/lib.prism`). The package segments are the
 /// file's directory relative to the workspace root.
 pub(crate) fn module_path(node: &SourceNode) -> String {
+    // A library module's key is its module path and `.prism` (D2 of `standard-library`).
+    if node.is_library() {
+        let key = node.path.to_string_lossy();
+        return key.strip_suffix(".prism").unwrap_or(&key).to_string();
+    }
     let stem = node
         .path
         .file_stem()
@@ -408,6 +452,7 @@ fn validate_and_extract_abi(
 
     // Phase 2: Typecheck function bodies and expressions in topological SCC order
     let mut checked_files = Vec::new();
+    let mut library_files = Vec::new();
     let mut summaries: Vec<FileSummary> = Vec::new();
 
     for cluster in graph.topological_order() {
@@ -435,13 +480,18 @@ fn validate_and_extract_abi(
                 node.package.join(".")
             };
 
-            checked_files.push(CheckedFile {
+            let checked = CheckedFile {
                 path: file_path.clone(),
                 package: package_str,
                 exported_symbols: abi.symbols.len(),
                 abi_hash: abi.abi_hash_hex(),
                 cache: outcome,
-            });
+            };
+            if node.is_library() {
+                library_files.push(checked);
+            } else {
+                checked_files.push(checked);
+            }
         }
     }
 
@@ -457,12 +507,15 @@ fn validate_and_extract_abi(
         workspace_root: graph.workspace_root.clone(),
         total_files: checked_files.len(),
         checked_files,
+        library_files,
         instances,
     })
 }
 
 /// The key of the check entry of the file at `file_path`: its module path, its source and its
-/// direct imports' ABI hashes, which cover no body (D3 of `instance-cache`).
+/// direct imports' ABI hashes, which cover no body (D3 of `instance-cache`), then for a
+/// workspace file the prelude modules' (D4 of `standard-library`). A library module is keyed
+/// by the same inputs, so its entries are shared by every workspace.
 pub(crate) fn file_check_key(
     keys: &crate::cache::CacheKeys,
     graph: &DependencyGraph,
@@ -471,8 +524,7 @@ pub(crate) fn file_check_key(
 ) -> ContentHash {
     let node = graph.get_node(file_path).expect("node must exist in graph");
     let import_hashes: Vec<ContentHash> = node
-        .direct_imports
-        .iter()
+        .imports_with_prelude()
         .filter_map(|dep| abis.get(dep))
         .map(|abi| abi.abi_hash)
         .collect();
@@ -514,7 +566,7 @@ impl ElaboratedFile {
 /// type or borrow errors instead when it has any.
 pub(crate) fn elaborate_and_summarize(
     graph: &DependencyGraph,
-    abis: &HashMap<PathBuf, FileAbi>,
+    abis: &ProgramAbis,
     file_path: &Path,
 ) -> Result<ElaboratedFile, WorkspaceError> {
     let mir = elaborate_file(graph, abis, file_path)?;
@@ -541,7 +593,7 @@ pub(crate) fn elaborate_and_summarize(
 /// of `prism check` and the backend of `prism run` consume it.
 pub(crate) fn elaborate_file(
     graph: &DependencyGraph,
-    abis: &HashMap<PathBuf, FileAbi>,
+    abis: &ProgramAbis,
     file_path: &Path,
 ) -> Result<MirFile, WorkspaceError> {
     let (tree, errors) = typecheck_file(graph, abis, file_path);
@@ -621,16 +673,20 @@ fn instance_outcomes(
 }
 
 /// The text `--explain-cache` prints (the `build-cache` spec): `Cache: <directory>` or
-/// `Cache: off`, then each file in check order as `checked`, `reused` or `compiled` under its
-/// path relative to `workspace_root` with `/` separators, then the program's instances once,
-/// in symbol order, as `instantiate <instance>` or `reused instance <instance>` (D10 of
-/// `instance-cache`).
+/// `Cache: off`, then each file in check order, library modules first, as `checked`, `reused`
+/// or `compiled` under its path relative to `workspace_root` with `/` separators, a library
+/// module under its key (`prism/core.prism`), then the program's instances once, in symbol
+/// order, as `instantiate <instance>` or `reused instance <instance>` (D10 of
+/// `instance-cache`). A library module's key is relative; a workspace file's path never is.
 pub fn explain_cache(
     directory: Option<&Path>,
     workspace_root: &Path,
     files: &[(&Path, CacheOutcome)],
     instances: &[InstanceOutcome],
 ) -> String {
+    let (library, workspace): (Vec<_>, Vec<_>) =
+        files.iter().partition(|(path, _)| path.is_relative());
+    let files: Vec<&(&Path, CacheOutcome)> = library.into_iter().chain(workspace).collect();
     let mut text = match directory {
         Some(directory) => format!("Cache: {}\n", directory.display()),
         None => "Cache: off\n".to_string(),
@@ -641,7 +697,10 @@ pub fn explain_cache(
     };
     let root = root.canonicalize().ok();
     for (path, outcome) in files {
-        let canonical = path.canonicalize().ok();
+        let canonical = path
+            .is_absolute()
+            .then(|| path.canonicalize().ok())
+            .flatten();
         let relative = root
             .as_ref()
             .zip(canonical.as_ref())
@@ -672,7 +731,7 @@ pub fn explain_cache(
 /// Phase 1: extracts the ABI of every file of `graph` from its AST alone. No body is read.
 pub(crate) fn extract_abis(
     graph: &DependencyGraph,
-) -> Result<(HashMap<PathBuf, FileAbi>, ProgramDefinitions), WorkspaceError> {
+) -> Result<(ProgramAbis, ProgramDefinitions), WorkspaceError> {
     // Phase 1a: the structs and enums each file exports, with their kinds and markers, read from
     // its AST alone.
     let exported_types: HashMap<&Path, HashMap<&str, NominalHeader>> = graph
@@ -681,17 +740,23 @@ pub(crate) fn extract_abis(
         .map(|(path, node)| (path.as_path(), declared_types(&node.source_file, true)))
         .collect();
 
-    // The binder of each file: its type names bound to the one direct import that exports them.
-    let bind_import = |node: &SourceNode, name: &str| {
-        let mut found = node.direct_imports.iter().filter_map(|dep| {
+    // The binder of each file: its type names bound to the one direct import that exports
+    // them, else to the prelude module that does (D4 of `standard-library`).
+    let bind_from = |imports: &[PathBuf], name: &str| {
+        let mut found = imports.iter().filter_map(|dep| {
             let header = exported_types.get(dep.as_path())?.get(name)?;
             Some((header.clone(), module_path(graph.get_node(dep)?)))
         });
         match (found.next(), found.next()) {
             // A name exported by several imports stays unbound; Phase 2 reports `E4012`.
-            (Some(binding), None) => Some(binding),
+            (Some(binding), None) => Some(Ok(binding)),
+            (Some(_), Some(_)) => Some(Err(())),
             _ => None,
         }
+    };
+    let bind_import = |node: &SourceNode, name: &str| match bind_from(&node.direct_imports, name) {
+        Some(binding) => binding.ok(),
+        None => bind_from(&node.prelude_imports, name).and_then(Result::ok),
     };
 
     // Phase 1a, continued: the definition of every struct and enum of every file, private ones
@@ -717,11 +782,12 @@ pub(crate) fn extract_abis(
     let mut abis: HashMap<PathBuf, FileAbi> = HashMap::new();
     for (file_path, node) in &graph.nodes {
         let bind = |name: &str| bind_import(node, name);
-        let abi = FileAbi::extract_with_definitions(
+        let abi = FileAbi::extract_with_origin(
             &node.source_file,
             &module_path(node),
             &bind,
             &definition,
+            node.is_library(),
         )
         .map_err(|err| {
             let source = node.source.clone();
@@ -733,7 +799,27 @@ pub(crate) fn extract_abis(
         })?;
         abis.insert(file_path.clone(), abi);
     }
-    Ok((abis, definitions))
+    // The prelude scope, built once from the prelude modules' ABIs for every workspace file
+    // (D4 of `standard-library`).
+    let prelude = graph
+        .nodes
+        .values()
+        .find(|node| !node.is_library())
+        .map(|node| {
+            let prelude: Vec<&FileAbi> = node
+                .prelude_imports
+                .iter()
+                .filter_map(|module| abis.get(module))
+                .collect();
+            Arc::new(PreludeScope::from_abis(&prelude))
+        });
+    Ok((
+        ProgramAbis {
+            files: abis,
+            prelude,
+        },
+        definitions,
+    ))
 }
 
 /// Phase 2 of one file: checks the file at `file_path` of `graph` against the ABIs of its direct
@@ -741,7 +827,7 @@ pub(crate) fn extract_abis(
 /// invariant), returning its typed tree and its type errors.
 fn typecheck_file(
     graph: &DependencyGraph,
-    abis: &HashMap<PathBuf, FileAbi>,
+    abis: &ProgramAbis,
     file_path: &Path,
 ) -> (TypedFile, Vec<prism_typechecker::TypeError>) {
     let node = graph.get_node(file_path).expect("node must exist in graph");
@@ -752,6 +838,13 @@ fn typecheck_file(
     };
 
     let mut checker = prism_typechecker::TypeChecker::new(package_name, module_path(node));
+    // A workspace file sees the prelude after its imports; a library file imports what it
+    // uses (D4 of `standard-library`).
+    if !node.is_library() {
+        if let Some(prelude) = &abis.prelude {
+            checker = checker.with_prelude(Arc::clone(prelude));
+        }
+    }
 
     // Ingest FileAbi of all direct dependencies
     for dep_path in &node.direct_imports {
@@ -813,7 +906,7 @@ fn typecheck_entry(entry: &Path) -> Result<(TypedFile, Option<WorkspaceError>), 
     let (tree, errors) = typecheck_file(&graph, &abis, &entry_path);
     let type_errors = (!errors.is_empty()).then(|| WorkspaceError::Type {
         path: entry_path.clone(),
-        source: fs::read_to_string(&entry_path).unwrap_or_default(),
+        source: source_of(&graph, &entry_path),
         errors,
     });
     Ok((tree, type_errors))
@@ -1145,6 +1238,7 @@ mod tests {
                 crate::cache::identity_of("test", &ContentHash([5; 32])),
             )),
             explain_cache: true,
+            ..CheckOptions::default()
         };
 
         let uncached = check_path(&temp).unwrap();
@@ -1164,10 +1258,68 @@ mod tests {
 
         // No run generated the instance's code, so it stays one to instantiate.
         let mut expected = uncached.clone();
-        for file in &mut expected.checked_files {
+        for file in expected
+            .checked_files
+            .iter_mut()
+            .chain(&mut expected.library_files)
+        {
             file.cache = CacheOutcome::Reused;
         }
         assert_eq!(warm, expected);
+        assert_eq!(uncached.total_files, 2, "library modules are not counted");
+
+        // An injected library module, imported by the program, is checked and reused like the
+        // others (D13 of `standard-library`).
+        fs::write(
+            app.join("main.prism"),
+            "package app\nimport /lib/box\nimport /prism/test\nfun f(): Int = keep(seven())\n",
+        )
+        .unwrap();
+        let options = CheckOptions {
+            library: Arc::new(Library::with_modules(vec![(
+                "prism/test".to_string(),
+                "package prism\npublic fun seven(): Int = 7\n".to_string(),
+            )])),
+            ..options
+        };
+        let uncached = check_path_with(
+            &temp,
+            &CheckOptions {
+                cache: None,
+                explain_cache: true,
+                library: Arc::clone(&options.library),
+            },
+        )
+        .unwrap();
+        let cold = check_path_with(&temp, &options).unwrap();
+        let warm = check_path_with(&temp, &options).unwrap();
+        // The cache already holds the entries of the files the edit left unchanged.
+        let outcomes_cleared = |report: &CheckReport| {
+            let mut report = report.clone();
+            for file in report
+                .checked_files
+                .iter_mut()
+                .chain(&mut report.library_files)
+            {
+                file.cache = CacheOutcome::Checked;
+            }
+            report
+        };
+        assert_eq!(outcomes_cleared(&uncached), outcomes_cleared(&cold));
+        assert!(cold
+            .library_files
+            .iter()
+            .any(|file| file.path == Path::new("prism/test.prism")
+                && file.cache == CacheOutcome::Checked));
+        assert!(uncached
+            .library_files
+            .iter()
+            .any(|file| file.path == Path::new("prism/test.prism")));
+        assert!(warm
+            .library_files
+            .iter()
+            .chain(&warm.checked_files)
+            .all(|file| file.cache == CacheOutcome::Reused));
 
         fs::remove_dir_all(&temp).ok();
     }

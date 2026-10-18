@@ -227,3 +227,34 @@ pub fn candidate_target_path(
     candidate.push(&file_name);
     Ok(normalize_path(&candidate))
 }
+
+/// What [`resolve_library_import`] found for an import.
+pub enum LibraryImport {
+    /// The import names the library module with this key (`prism/system.prism`).
+    Module(PathBuf),
+    /// The import names the library, which has no such module (`E1002`).
+    Missing(ResolveError),
+    /// The import does not name the library.
+    NotLibrary,
+}
+
+/// Resolves a root-anchored import of two or more segments whose first segment is `prism` to
+/// the module of the bundled library with that path, whatever the workspace root holds (D2 of
+/// `standard-library`). `import /prism` alone stays a workspace import, so a root file named
+/// `prism.prism` keeps working.
+pub fn resolve_library_import(
+    import: &ImportDecl,
+    library: &prism_library::Library,
+) -> LibraryImport {
+    if !import.is_root || import.path.len() < 2 || import.path[0] != prism_library::ROOT_PACKAGE {
+        return LibraryImport::NotLibrary;
+    }
+    let module = import.path.join("/");
+    match library.module(&module) {
+        Some(_) => LibraryImport::Module(crate::graph::library_key(&module)),
+        None => LibraryImport::Missing(ResolveError::LibraryImportNotFound {
+            import_path: import.path_string(),
+            reason: format!("the bundled library has no module '{}'", module),
+        }),
+    }
+}

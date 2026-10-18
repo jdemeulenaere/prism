@@ -23,5 +23,5 @@ cranelift-native = "=0.136.2"
 
 [dev-dependencies]
 prism-parser = { path = "../prism-parser" }
-prism-typechecker = { path = "../prism-typechecker" }
+prism-typechecker = { path = "../prism-typechecker", features = ["test-support"] }
 prism-borrowck = { path = "../prism-borrowck" }

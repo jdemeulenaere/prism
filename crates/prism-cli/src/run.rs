@@ -378,26 +378,35 @@ pub(crate) fn build_program(
 
     let mut units: Vec<BuiltUnit> = Vec::new();
     let mut value_keys = ValueKeys::new();
-    for file in &mut files {
+    let cached_units: Vec<Option<UnitArtifact>> = files
+        .iter()
+        .map(|file| match (cache, file.checked_now) {
+            (Some(cache), false) if is_needed(UnitId::File(file.module.clone())) => cache
+                .read_code(EntryKind::Unit, &file.code_key)
+                .and_then(|bytes| UnitArtifact::decode(&bytes)),
+            _ => None,
+        })
+        .collect();
+    // Every file whose code is to be generated passes the backend's support check before any
+    // unit is compiled, so that a program the backend rejects writes no code to the cache,
+    // whatever the order of its units (the library's come first).
+    for (file, cached) in files.iter_mut().zip(&cached_units) {
+        let needed = is_needed(UnitId::File(file.module.clone()));
+        if needed && cached.is_none() && file.elaborated.is_none() {
+            let elaborated = elaborate_and_summarize(graph, &abis, &file.path)?;
+            check_file(&elaborated.mir)
+                .map_err(|errors| codegen_error(graph, &file.path, errors))?;
+            file.elaborated = Some(Rc::new(elaborated));
+        }
+    }
+    for (file, cached) in files.iter_mut().zip(cached_units) {
         let id = UnitId::File(file.module.clone());
         if !is_needed(id.clone()) {
             continue;
         }
-        let cached = match (cache, file.checked_now) {
-            (Some(cache), false) => cache
-                .read_code(EntryKind::Unit, &file.code_key)
-                .and_then(|bytes| UnitArtifact::decode(&bytes)),
-            _ => None,
-        };
         let artifact = match cached {
             Some(artifact) => artifact,
             None => {
-                if file.elaborated.is_none() {
-                    let elaborated = elaborate_and_summarize(graph, &abis, &file.path)?;
-                    check_file(&elaborated.mir)
-                        .map_err(|errors| codegen_error(graph, &file.path, errors))?;
-                    file.elaborated = Some(Rc::new(elaborated));
-                }
                 if file.outcome == CacheOutcome::Reused {
                     file.outcome = CacheOutcome::Compiled;
                 }
@@ -602,7 +611,7 @@ fn write_code(
 /// on the entry's elaborated MIR, which errors are never cached for (D9 of `instance-cache`).
 fn entry_main(
     graph: &DependencyGraph,
-    abis: &HashMap<PathBuf, prism_abi::FileAbi>,
+    abis: &crate::workspace::ProgramAbis,
     entry_path: &Path,
     files: &mut [FileState],
 ) -> Result<DeclarationPath, WorkspaceError> {
@@ -629,7 +638,7 @@ fn entry_main(
 /// program-wide type table is built only when an instance misses (D13).
 fn build_missed_instances(
     graph: &DependencyGraph,
-    abis: &HashMap<PathBuf, prism_abi::FileAbi>,
+    abis: &crate::workspace::ProgramAbis,
     cache: Option<&BuildCache>,
     definitions: &crate::plan::ProgramDefinitions,
     files: &mut [FileState],
@@ -656,7 +665,7 @@ fn build_missed_instances(
 /// The record of the generic of `planned`, found as [`build_missed_instances`] says.
 fn record_of<'a>(
     graph: &DependencyGraph,
-    abis: &HashMap<PathBuf, prism_abi::FileAbi>,
+    abis: &crate::workspace::ProgramAbis,
     cache: Option<&BuildCache>,
     files: &'a mut [FileState],
     stored: &'a mut HashMap<String, GenericRecord>,
@@ -968,7 +977,14 @@ mod tests {
         assert_eq!(warm.compiled_functions, 0, "a warm run compiles nothing");
         assert_eq!(warm.plan, before.plan);
         let before = before.plan.unwrap();
-        assert_eq!(before.units.len(), 2);
+        // The two files' units, and the prelude modules' (D3 of `standard-library`).
+        let workspace_units = before
+            .units
+            .iter()
+            .filter(|unit| !unit.module.starts_with("prism/"))
+            .count();
+        assert_eq!(workspace_units, 2);
+        assert_eq!(before.units.len(), 4);
         assert_eq!(before.instances.len(), 2);
         assert!(before.changed_since(&before).is_empty());
 

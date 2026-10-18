@@ -526,7 +526,14 @@ impl WatchSession {
             }
         };
         assert_workspace_boundary(&graph)?;
-        let mut watched: Vec<PathBuf> = graph.nodes.keys().cloned().collect();
+        // The library is in the executable: it never changes during a session, so it is not
+        // watched, and its units are never rebuilt (D3 of `standard-library`).
+        let mut watched: Vec<PathBuf> = graph
+            .nodes
+            .values()
+            .filter(|node| !node.is_library())
+            .map(|node| node.path.clone())
+            .collect();
         watched.sort();
         // A file the program no longer imports is not watched, so the store reads it again if
         // an import brings it back: it may have changed meanwhile.
@@ -714,11 +721,13 @@ fn error_file(error: &ResolveError) -> Option<&Path> {
     match error {
         ResolveError::PackagePathMismatch { file, .. }
         | ResolveError::PackageHeterogeneity { file, .. }
-        | ResolveError::InconsistentWorkspaceRoot { file, .. } => Some(file),
+        | ResolveError::InconsistentWorkspaceRoot { file, .. }
+        | ResolveError::ReservedPackage { file, .. } => Some(file),
         ResolveError::FileNotFound { target_path, .. } => Some(target_path),
         ResolveError::Io { path, .. } | ResolveError::Parse { path, .. } => Some(path),
         ResolveError::WorkspaceBoundaryViolation { .. }
-        | ResolveError::InvalidImportPath { .. } => None,
+        | ResolveError::InvalidImportPath { .. }
+        | ResolveError::LibraryImportNotFound { .. } => None,
     }
 }
 

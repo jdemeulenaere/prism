@@ -361,7 +361,10 @@ impl BodyChecker<'_> {
                 }
                 let callee_place = match callee {
                     Callee::Value(place, _) => self.place(place),
-                    Callee::Builtin(_) | Callee::Function(_) | Callee::Default { .. } => None,
+                    Callee::Builtin(_)
+                    | Callee::Function(_)
+                    | Callee::External(_)
+                    | Callee::Default { .. } => None,
                 };
                 callee_place
                     .or_else(|| arguments.iter().find_map(|argument| self.operand(argument)))

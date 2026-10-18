@@ -1,0 +1,9 @@
+[package]
+name = "prism-library"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# No dependencies: the crate only embeds the library's sources (D1 of `standard-library`).
+[dependencies]

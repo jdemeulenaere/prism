@@ -82,6 +82,18 @@ impl<'a> Printer<'a> {
                 parts.push(self.right_side(&variable.initializer));
                 concat(parts)
             }
+            Declaration::ExtensionProperty(property) => {
+                let mut parts = vec![self.visibility(property.visibility, property.span)];
+                parts.push(text(format!("{} val ", property.library.kind.as_str())));
+                if !property.type_parameters.is_empty() {
+                    parts.push(self.type_parameters(&property.type_parameters));
+                    parts.push(text(" "));
+                }
+                parts.push(self.ty(&property.receiver));
+                parts.push(text(format!(".{}: ", property.name)));
+                parts.push(self.ty(&property.ty));
+                concat(parts)
+            }
         }
     }
 
@@ -119,6 +131,9 @@ impl<'a> Printer<'a> {
 
     fn function(&mut self, function: &FunctionDecl) -> Document {
         let mut parts = vec![self.visibility(function.visibility, function.span)];
+        if let Some(library) = function.library {
+            parts.push(text(format!("{} ", library.kind.as_str())));
+        }
         if function.is_compose {
             parts.push(text("compose "));
         }

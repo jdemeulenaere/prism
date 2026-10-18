@@ -1323,6 +1323,10 @@ impl Codec for Callee {
                 parameter.encode(encoder);
                 name.encode(encoder);
             }
+            Callee::External(path) => {
+                encoder.u8(4);
+                path.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1335,6 +1339,7 @@ impl Codec for Callee {
                 parameter: decoder.decode()?,
                 name: decoder.decode()?,
             },
+            4 => Callee::External(decoder.decode()?),
             _ => return None,
         })
     }
