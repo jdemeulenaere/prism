@@ -665,3 +665,38 @@ fn top_level_values_are_released_before_the_check() {
     assert_eq!(allocation_statistics().live_allocations, 0);
     prism_runtime::start(Vec::new(), false);
 }
+
+#[test]
+fn a_leak_of_compiled_code_is_reported() {
+    // The scenario "A leak is reported", through compiled code: the check itself must catch a
+    // value that nothing drops, so that every fixture passing it means something. Rust plays
+    // the caller that forgets the returned string.
+    let program = compile(
+        "fun text(): String = 7.toString() + \"!!!!\"\n\
+         struct User { val name: String, val id: Int }\n\
+         fun user(): User = User(text(), 1)\n",
+    );
+    let text: StringResult = function(&program, "main::text");
+    let user: extern "C" fn(*mut [u64; 5]) = function(&program, "main::user");
+    let _lock = prism_runtime::test_lock();
+    prism_runtime::start(Vec::new(), true);
+    let leaked = returned(|r| text(r));
+    assert_eq!((leaked.as_str(), leaked.capacity), ("7!!!!", 5));
+    let mut forgotten = [0u64; 5];
+    user(&mut forgotten);
+    let statistics = allocation_statistics();
+    assert_eq!(
+        (statistics.live_allocations, statistics.live_bytes),
+        (2, 10)
+    );
+    assert_eq!(
+        prism_runtime::finish(),
+        prism_runtime::ALLOCATION_CHECK_EXIT_STATUS
+    );
+    drop_string(leaked);
+    // SAFETY: the user's name is at offset 0 (fields are ordered by alignment, then
+    // declaration): a string, which nothing else frees.
+    unsafe { prism_rt_string_drop(forgotten.as_mut_ptr().cast()) };
+    assert_eq!(allocation_statistics().live_allocations, 0);
+    prism_runtime::start(Vec::new(), false);
+}
