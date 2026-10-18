@@ -276,6 +276,19 @@ impl AbiType {
     }
 }
 
+/// The constructor of an extension's receiver type, which with the extension's module and name
+/// identifies it (one extension per receiver constructor and name): `<module>.<Name>` for a
+/// struct or enum, the name of a built-in type (`Int`, `Range`) or of an unbound one, and the
+/// type's text otherwise. Type arguments are left out. The build cache matches MIR callees to
+/// ABI symbols with it.
+pub fn receiver_constructor(ty: &AbiType) -> String {
+    match ty {
+        AbiType::Nominal { module, name, .. } => format!("{}.{}", module, name),
+        AbiType::Unbound { name, .. } => name.clone(),
+        other => other.to_string(),
+    }
+}
+
 impl fmt::Display for AbiType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

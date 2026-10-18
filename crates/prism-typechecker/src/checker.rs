@@ -7452,7 +7452,8 @@ mod tests {
                     generic_body_hash: None,
                 },
             ],
-            abi_hash: 12345,
+            abi_hash: prism_abi::ContentHash([1; 32]),
+            interface_hash: prism_abi::ContentHash([2; 32]),
         };
 
         // Case 1: Ingested from external package 'app.ui'

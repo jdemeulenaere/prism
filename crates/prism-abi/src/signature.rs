@@ -1,11 +1,11 @@
 //! Surface ABI signature extraction and hashing engine.
 
 use crate::abi_type::{
-    hash_marker, hash_marker_parameters, hash_type_parameters, AbiType, AbiTypeParameter,
-    NameBinder, NominalHeader, NominalKind,
+    hash_marker, hash_marker_parameters, hash_type_parameters, receiver_constructor, AbiType,
+    AbiTypeParameter, NameBinder, NominalHeader, NominalKind,
 };
 use crate::error::AbiError;
-use crate::hasher::DeterministicHasher;
+use crate::hasher::{ContentHash, DeterministicHasher};
 use prism_ast::*;
 use std::collections::HashMap;
 
@@ -29,7 +29,8 @@ pub enum ExportedSymbol {
         type_parameters: Vec<AbiTypeParameter>,
         params: Vec<(String, AbiType, Option<String>)>, // (name, type, default_value_expr)
         return_type: AbiType,
-        generic_body_hash: Option<u128>,
+        /// The Monomorphization Hash of a generic function's body, `None` for a non-generic one.
+        generic_body_hash: Option<ContentHash>,
     },
     Struct {
         visibility: Visibility,
@@ -179,8 +180,12 @@ pub struct FileAbi {
     pub module: String,
     /// All exported (`public` and `package`) symbols.
     pub symbols: Vec<ExportedSymbol>,
-    /// 128-bit deterministic hash of the surface ABI.
-    pub abi_hash: u128,
+    /// The deterministic hash of the whole exported ABI: the interface hash and the
+    /// Monomorphization Hashes of the exported generic bodies.
+    pub abi_hash: ContentHash,
+    /// The deterministic hash of the exported ABI without the Monomorphization Hashes: what an
+    /// importer's Phase 2 depends on (D2 of `abi-cache`).
+    pub interface_hash: ContentHash,
 }
 
 impl FileAbi {
@@ -342,18 +347,25 @@ impl FileAbi {
         // Sort symbols deterministically by (kind, name) so declaration order does not perturb the hash
         symbols.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
-        // Compute deterministic ABI hash
-        let abi_hash = Self::calculate_hash(&package, module, &symbols);
+        let (interface_hash, abi_hash) = Self::calculate_hashes(&package, module, &symbols);
 
         Ok(FileAbi {
             package,
             module: module.to_string(),
             symbols,
             abi_hash,
+            interface_hash,
         })
     }
 
-    fn calculate_hash(package: &Option<String>, module: &str, symbols: &[ExportedSymbol]) -> u128 {
+    /// The interface hash and the ABI hash of `symbols`. The interface hash covers every
+    /// symbol without its Monomorphization Hash; the ABI hash covers the interface hash, then
+    /// each symbol's Monomorphization Hash or its absence, in symbol order.
+    fn calculate_hashes(
+        package: &Option<String>,
+        module: &str,
+        symbols: &[ExportedSymbol],
+    ) -> (ContentHash, ContentHash) {
         let mut hasher = DeterministicHasher::new();
 
         if let Some(pkg) = package {
@@ -375,7 +387,7 @@ impl FileAbi {
                     type_parameters,
                     params,
                     return_type,
-                    generic_body_hash,
+                    generic_body_hash: _,
                 } => {
                     hasher.write_str("fun");
                     hasher.write_str(visibility.as_str());
@@ -406,12 +418,6 @@ impl FileAbi {
                         }
                     }
                     return_type.hash_into(&mut hasher);
-                    if let Some(gh) = generic_body_hash {
-                        hasher.write_u8(1);
-                        hasher.write_u128(*gh);
-                    } else {
-                        hasher.write_u8(0);
-                    }
                 }
                 ExportedSymbol::Struct {
                     visibility,
@@ -472,12 +478,57 @@ impl FileAbi {
             }
         }
 
-        hasher.finish()
+        let interface_hash = hasher.finish();
+
+        let mut hasher = DeterministicHasher::new();
+        hasher.write_str("abi");
+        hasher.write_hash(&interface_hash);
+        for sym in symbols {
+            match sym {
+                ExportedSymbol::Function {
+                    generic_body_hash: Some(body_hash),
+                    ..
+                } => {
+                    hasher.write_u8(1);
+                    hasher.write_hash(body_hash);
+                }
+                _ => hasher.write_u8(0),
+            }
+        }
+        (interface_hash, hasher.finish())
     }
 
-    /// Formats the ABI hash as a 32-character hexadecimal string.
+    /// Formats the ABI hash as 64 hexadecimal digits.
     pub fn abi_hash_hex(&self) -> String {
-        format!("{:032x}", self.abi_hash)
+        self.abi_hash.to_hex()
+    }
+
+    /// Formats the interface hash as 64 hexadecimal digits.
+    pub fn interface_hash_hex(&self) -> String {
+        self.interface_hash.to_hex()
+    }
+
+    /// The Monomorphization Hash of the exported generic function or extension `name`, whose
+    /// receiver's constructor is `receiver` ([`receiver_constructor`]) or which has no receiver.
+    /// `None` when the file exports no such generic.
+    pub fn generic_body_hash_of(&self, name: &str, receiver: Option<&str>) -> Option<ContentHash> {
+        self.symbols.iter().find_map(|symbol| match symbol {
+            ExportedSymbol::Function {
+                name: symbol_name,
+                receiver: symbol_receiver,
+                generic_body_hash,
+                ..
+            } if symbol_name == name
+                && symbol_receiver
+                    .as_ref()
+                    .map(|r| receiver_constructor(&r.ty))
+                    .as_deref()
+                    == receiver =>
+            {
+                *generic_body_hash
+            }
+            _ => None,
+        })
     }
 }
 

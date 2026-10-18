@@ -3,8 +3,8 @@
 //! data-driven fixtures of `prism-cli`, because they compare two extractions.
 
 use prism_abi::{
-    declared_types, no_imports, AbiError, AbiType, AbiTypeParameter, ExportedSymbol, FileAbi,
-    NominalKind,
+    declared_types, no_imports, AbiError, AbiType, AbiTypeParameter, ContentHash, ExportedSymbol,
+    FileAbi, NominalKind,
 };
 use prism_ast::{ReceiverMode, TypeMarker, Visibility};
 use prism_parser::parse_source;
@@ -359,6 +359,61 @@ fn changing_a_generic_function_body_changes_the_monomorphization_and_abi_hashes(
     assert_ne!(before.abi_hash, after.abi_hash);
 }
 
+// --- Interface hash
+
+#[test]
+fn changing_a_generic_body_keeps_the_interface_hash() {
+    let before = extract("public fun <T> keep(x: T): T = x\n");
+    let after = extract("public fun <T> keep(x: T): T {\n    val y = x\n    return y\n}\n");
+    assert_ne!(before.abi_hash, after.abi_hash);
+    assert_eq!(before.interface_hash, after.interface_hash);
+    assert_ne!(
+        before.generic_body_hash_of("keep", None),
+        after.generic_body_hash_of("keep", None)
+    );
+}
+
+#[test]
+fn changing_a_signature_changes_the_interface_hash() {
+    let pairs = [
+        (
+            "public fun shout(s: &String): String = s.clone()\n",
+            "public fun shout(s: &Int): String = \"\"\n",
+        ),
+        (
+            "public struct User { val name: String }\n",
+            "public struct User { val name: String, val age: Int }\n",
+        ),
+    ];
+    for (before, after) in pairs {
+        let (before, after) = (extract(before), extract(after));
+        assert_ne!(before.interface_hash, after.interface_hash);
+        assert_ne!(before.abi_hash, after.abi_hash);
+    }
+}
+
+#[test]
+fn the_interface_hash_ignores_only_generic_bodies() {
+    // Without generic bodies the interface and ABI hashes still differ (the ABI hash is
+    // derived from the interface hash), but both change together.
+    let plain = extract("public fun f(x: Int): Int = x\n");
+    assert_ne!(plain.abi_hash, plain.interface_hash);
+    assert_eq!(plain.generic_body_hash_of("f", None), None);
+}
+
+#[test]
+fn generic_body_hashes_are_found_by_receiver_constructor() {
+    let abi = extract(&format!(
+        "{}public fun <T> Box<T>.get(): &T = &v\npublic fun <T> get(b: &Box<T>): &T = &b.v\n",
+        BOX
+    ));
+    let extension = abi.generic_body_hash_of("get", Some("test/file.Box"));
+    let plain = abi.generic_body_hash_of("get", None);
+    assert!(extension.is_some() && plain.is_some());
+    assert_ne!(extension, plain);
+    assert_eq!(abi.generic_body_hash_of("get", Some("other.Box")), None);
+}
+
 #[test]
 fn a_non_generic_function_records_no_monomorphization_hash() {
     let abi = extract("public fun f(x: Int): Int = x\n");
@@ -628,7 +683,7 @@ fn extensions_sharing_a_name() {
         [team, plain, user],
         [team, user, plain],
     ];
-    let hashes: Vec<u128> = orders
+    let hashes: Vec<ContentHash> = orders
         .iter()
         .map(|order| extract(&format!("{}{}", USER, order.concat())).abi_hash)
         .collect();
@@ -846,7 +901,7 @@ fn marker_parameters_recorded() {
 const BOX: &str = "public struct Box<T>(val v: T)\n";
 
 /// The Monomorphization Hash of the only exported function of `abi`.
-fn generic_body_hash_of(abi: &FileAbi) -> Option<u128> {
+fn generic_body_hash_of(abi: &FileAbi) -> Option<ContentHash> {
     abi.symbols
         .iter()
         .find_map(|s| match s {

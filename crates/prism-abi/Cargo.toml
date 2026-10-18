@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 prism-ast = { path = "../prism-ast" }
+blake3 = "1.8"
 
 [dev-dependencies]
 prism-parser = { path = "../prism-parser" }

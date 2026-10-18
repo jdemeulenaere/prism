@@ -19,3 +19,8 @@ edition = "2021"
 authors = ["Prism Authors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jdemeulenaere/prism"
+
+# The build cache hashes the compiler executable on every cached run (D5 of `abi-cache`), which
+# an unoptimized BLAKE3 would make slow in debug builds.
+[profile.dev.package.blake3]
+opt-level = 3

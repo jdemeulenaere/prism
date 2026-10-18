@@ -1004,3 +1004,50 @@ fn test_cli_binary_check_renders_an_uninitialized_read() {
         stderr
     );
 }
+
+/// Whether `line` holds `<label>0x` followed by 64 lowercase hexadecimal digits.
+fn has_full_hash(text: &str, label: &str) -> bool {
+    text.lines().any(|line| {
+        line.split(label).nth(1).is_some_and(|rest| {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            digits.len() == 64 && digits.chars().all(|c| !c.is_ascii_uppercase())
+        })
+    })
+}
+
+/// compilation-and-abi: "Hashes printed in full".
+#[test]
+fn hashes_printed_in_full() {
+    let source = "public fun f(x: Int): Int = x\n";
+    let abi = run_on_source("hashes_in_full_abi", &["abi"], source);
+    assert!(abi.status.success());
+    assert!(has_full_hash(
+        &String::from_utf8_lossy(&abi.stdout),
+        "ABI Hash: 0x"
+    ));
+
+    let check = run_on_source("hashes_in_full_check", &["check"], source);
+    assert!(check.status.success());
+    assert!(has_full_hash(
+        &String::from_utf8_lossy(&check.stdout),
+        "ABI: 0x"
+    ));
+}
+
+/// compilation-and-abi: "Interface hash printed by `prism abi`".
+#[test]
+fn interface_hash_printed_by_prism_abi() {
+    let output = run_on_source(
+        "interface_hash",
+        &["abi"],
+        "public fun <T> keep(x: T): T = x\n",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let abi_line = lines.iter().position(|l| l.starts_with("ABI Hash: 0x"));
+    let interface_line = lines
+        .iter()
+        .position(|l| l.starts_with("Interface Hash: 0x"));
+    assert_eq!(interface_line, abi_line.map(|i| i + 1), "{}", stdout);
+    assert!(has_full_hash(&stdout, "Interface Hash: 0x"), "{}", stdout);
+}
