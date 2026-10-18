@@ -82,6 +82,13 @@ impl OwnedText {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+
+    /// The string, which the caller owns from then on.
+    pub fn into_string(self) -> PrismString {
+        let text = std::mem::ManuallyDrop::new(self);
+        // SAFETY: the value is not dropped, so the string is moved out exactly once.
+        unsafe { std::ptr::read(&text.0) }
+    }
 }
 
 impl Drop for OwnedText {

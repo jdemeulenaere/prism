@@ -83,7 +83,7 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 7. Input dispatch (D14)
 
-- [ ] 7.1 Add `src/input.rs`:
+- [x] 7.1 Add `src/input.rs`:
   - `hit_test(tree, x, y)`, in reverse drawing order, for `clickable` and `toggleable` elements at their recorded bounds (later elements of a chain first) and for text fields;
   - a `Dispatcher` holding the pressed target (node and element) and the focused node;
   - `press`, `release`, `character` and `key`, with the rules of D14.

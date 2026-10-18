@@ -31,6 +31,7 @@ pub mod error;
 pub mod geometry;
 pub mod handle;
 pub mod handlers;
+pub mod input;
 pub mod layout;
 pub mod modifier;
 pub mod node;
