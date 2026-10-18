@@ -246,6 +246,9 @@ mod tests {
                         assert_eq!(callee.to_string(), "Column");
                         assert_eq!(args.len(), 2);
                         assert_eq!(args[0].name.as_deref(), Some("padding"));
+                        // Only the lambda after the parentheses is marked as the trailing lambda.
+                        assert!(!args[0].is_trailing_lambda);
+                        assert!(args[1].is_trailing_lambda);
                         // A parameterless trailing lambda is a closure, not a block.
                         assert!(matches!(
                             &args[1].value.kind,
@@ -260,6 +263,7 @@ mod tests {
                         if let ExprKind::Call { callee, args, .. } = &initializer.kind {
                             assert_eq!(callee.to_string(), "remember");
                             assert_eq!(args.len(), 1);
+                            assert!(args[0].is_trailing_lambda);
                         } else {
                             panic!("Expected Call for remember");
                         }

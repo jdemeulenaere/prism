@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Handler(name: String, run: () -> Unit)
+
+fun main() {
+    val handler = Handler("h") { println("run") }
+    println(handler.name)
+    handler.run()
+}

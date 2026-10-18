@@ -1,0 +1,7 @@
+// expect: E4004
+// run: 1
+struct Handler(name: String, run: () -> Unit)
+
+fun main() {
+    val handler = Handler("h", run = {}) {}
+}

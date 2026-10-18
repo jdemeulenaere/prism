@@ -1,0 +1,5 @@
+error[E4004]: function takes no parameters, so it cannot take a trailing lambda
+  --> main.prism:6:10
+    6 |     none {}
+      |          ^
+   = help: verify parameter counts, argument types, or named parameters

@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+enum Event {
+    Click(Int, (Int) -> Unit)
+}
+
+fun main() {
+    val event = Event.Click(5) { println(it) }
+    when (event) {
+        Click(val position, val handle) -> handle(position)
+    }
+}

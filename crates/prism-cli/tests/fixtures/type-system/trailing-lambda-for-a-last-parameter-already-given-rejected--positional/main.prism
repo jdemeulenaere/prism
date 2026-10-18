@@ -1,0 +1,9 @@
+// expect: E4004
+// run: 1
+fun Button(label: String = "", content: () -> Unit) {
+    content()
+}
+
+fun main() {
+    Button("a", {}) {}
+}

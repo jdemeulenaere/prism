@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+fun main() {
+    val values = listOf({ 1 }) { 2 }
+    println(values.size)
+}

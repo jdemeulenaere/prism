@@ -1,0 +1,5 @@
+error[E4004]: the trailing lambda is passed to parameter 2, the last parameter, which is already given a positional argument
+  --> main.prism:5:14
+    5 |     f(1, {}) {}
+      |              ^
+   = help: verify parameter counts, argument types, or named parameters

@@ -1,0 +1,6 @@
+// expect: E4004
+// run: 1
+fun main() {
+    val f: (Int, () -> Unit) -> Unit = { n, body -> body() }
+    f(1, {}) {}
+}

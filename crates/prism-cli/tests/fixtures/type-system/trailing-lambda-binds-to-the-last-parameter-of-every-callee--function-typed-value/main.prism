@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun main() {
+    val f: (Int, () -> Unit) -> Unit = { n, body ->
+        println(n)
+        body()
+    }
+    f(1) { println("body") }
+}

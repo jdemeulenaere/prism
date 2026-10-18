@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun Int.twice(action: (Int) -> Unit) {
+    action(this)
+    action(this + 1)
+}
+
+fun main() {
+    2.twice { println(it) }
+}

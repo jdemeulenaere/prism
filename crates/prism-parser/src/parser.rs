@@ -1729,6 +1729,7 @@ impl Parser {
                 name: None,
                 span: lambda.span,
                 value: lambda,
+                is_trailing_lambda: true,
             });
         }
 
@@ -1763,6 +1764,7 @@ impl Parser {
                 name,
                 value,
                 span: arg_span,
+                is_trailing_lambda: false,
             });
             if self.peek_kind() == &TokenKind::Comma {
                 self.bump();
@@ -1788,6 +1790,7 @@ impl Parser {
                     name: None,
                     span: lambda.span,
                     value: lambda,
+                    is_trailing_lambda: true,
                 }],
             },
             span,

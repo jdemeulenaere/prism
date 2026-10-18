@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun Button(label: String = "", onClick: () -> Unit = {}, content: () -> Unit) {
+    print(label)
+    onClick()
+    content()
+}
+
+fun main() {
+    Button(onClick = { println("hi") }) { println("content") }
+}

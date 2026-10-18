@@ -1,0 +1,5 @@
+error[E4004]: the trailing lambda is passed to 'run', the last field of struct 'Handler', which is already given by name
+  --> main.prism:6:42
+    6 |     val handler = Handler("h", run = {}) {}
+      |                                          ^
+   = help: verify parameter counts, argument types, or named parameters

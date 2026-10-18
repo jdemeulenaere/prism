@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun <T: Copy> pick(value: T, choose: (T) -> T): T = choose(value)
+
+fun main() {
+    println(pick(3) { it + 1 })
+}

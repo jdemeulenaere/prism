@@ -1,0 +1,22 @@
+module main
+fun main::f(a: Int, b: Int, c: Int, body: () -> Unit): Unit @2:1
+  local %0 a: Int (parameter)
+  local %1 b: Int (parameter)
+  local %2 c: Int (parameter)
+  local %3 body: () -> Unit (parameter)
+  default a: literal 1: Int @2:16
+  default b: literal 2: Int @2:28
+  default c: literal 3: Int @2:40
+  block: Unit @2:61
+    expression @3:5
+      call value: Unit @3:5
+        callee: local %3 body: () -> Unit @3:5
+fun main::k(): Unit @6:1
+  block: Unit @6:9
+    expression @7:5
+      call main::f (order: c, a, body): Unit @7:5
+        argument a: literal 5: Int @7:18
+        argument b: default
+        argument c: literal 4: Int @7:11
+        argument body: closure (): () -> Unit @7:21
+          block: Unit @7:22

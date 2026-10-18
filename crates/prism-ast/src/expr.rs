@@ -120,12 +120,16 @@ impl UnaryOp {
     }
 }
 
-/// A call argument, optionally named (e.g. `padding = 16`).
+/// A call argument, optionally named (e.g. `padding = 16`), or the trailing lambda written
+/// after the argument list (`Button(onClick = handler) { Text("Click") }`), which is always the
+/// call's last argument and binds to the callee's last parameter.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CallArg {
     pub name: Option<String>,
     pub value: Expr,
     pub span: Span,
+    /// Whether the argument is the trailing lambda, written after the parentheses.
+    pub is_trailing_lambda: bool,
 }
 
 /// A pattern of a `when` branch (D1 of `payload-patterns`): it mirrors how the matched value is
@@ -188,6 +192,7 @@ impl Pattern {
                             name: argument.name.clone(),
                             value,
                             span: argument.span,
+                            is_trailing_lambda: false,
                         })
                     })
                     .collect::<Option<Vec<_>>>()?;
@@ -382,8 +387,12 @@ impl fmt::Display for Expr {
                         type_arguments.iter().map(|ty| ty.to_string()).collect();
                     write!(f, "<{}>", written.join(", "))?;
                 }
+                let (trailing_lambda, regular) = match args.split_last() {
+                    Some((last, regular)) if last.is_trailing_lambda => (Some(last), regular),
+                    _ => (None, &args[..]),
+                };
                 write!(f, "(")?;
-                for (i, arg) in args.iter().enumerate() {
+                for (i, arg) in regular.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -392,7 +401,11 @@ impl fmt::Display for Expr {
                     }
                     write!(f, "{}", arg.value)?;
                 }
-                write!(f, ")")
+                write!(f, ")")?;
+                match trailing_lambda {
+                    Some(lambda) => write!(f, " {}", lambda.value),
+                    None => Ok(()),
+                }
             }
             ExprKind::MemberAccess {
                 target,

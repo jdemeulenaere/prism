@@ -1,0 +1,7 @@
+// expect: E4004
+// run: 1
+fun none() {}
+
+fun main() {
+    none {}
+}

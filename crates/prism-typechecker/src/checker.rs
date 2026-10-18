@@ -91,6 +91,16 @@ fn abi_symbol_types(sym: &ExportedSymbol) -> Vec<&AbiType> {
     }
 }
 
+/// Names parameter `index` of a callee in a diagnostic: `'content'` for a declared function, or
+/// `parameter 2` (counting from 1) for a function-typed value or variant, whose parameters have
+/// no names.
+fn describe_parameter(param_names: &[String], index: usize) -> String {
+    match param_names.get(index) {
+        Some(name) => format!("'{}'", name),
+        None => format!("parameter {}", index + 1),
+    }
+}
+
 /// Peels reference (`&T`, `&mut T`) layers, keeping `Heap<T>`.
 fn peel_references(mut ty: &Type) -> &Type {
     while let Type::Reference { inner, .. } = ty {
@@ -6031,7 +6041,11 @@ impl TypeChecker {
         let mut checked = Vec::new();
         let mut failed = false;
         let has_named = args.iter().any(|a| a.name.is_some());
-        if !has_named {
+        // A trailing lambda binds to the last field (as to a function's last parameter).
+        let trailing_lambda_in_order = args
+            .last()
+            .is_none_or(|last| !last.is_trailing_lambda || args.len() == fields.len());
+        if !has_named && trailing_lambda_in_order {
             if args.len() != fields.len() {
                 self.errors.push(TypeError::CallSignatureMismatch {
                     message: format!(
@@ -6056,7 +6070,40 @@ impl TypeChecker {
             let mut pos_idx = 0;
 
             for arg in args {
-                if let Some(arg_name) = &arg.name {
+                if arg.is_trailing_lambda {
+                    let Some(last) = fields.len().checked_sub(1) else {
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!(
+                                "struct '{}' has no fields, so it cannot take a trailing lambda",
+                                name
+                            ),
+                            span: arg.span,
+                        });
+                        failed = true;
+                        continue;
+                    };
+                    if field_assigned[last] {
+                        let given = if seen_fields.contains(&fields[last].0) {
+                            "by name"
+                        } else {
+                            "a positional argument"
+                        };
+                        self.errors.push(TypeError::CallSignatureMismatch {
+                            message: format!(
+                                "the trailing lambda is passed to '{}', the last field of struct '{}', which is already given {}",
+                                fields[last].0, name, given
+                            ),
+                            span: arg.span,
+                        });
+                        failed = true;
+                        continue;
+                    }
+                    field_assigned[last] = true;
+                    let value = check(self, last, &arg.value);
+                    values[last] = value;
+                    evaluation_order.push(last);
+                    checked.extend(value);
+                } else if let Some(arg_name) = &arg.name {
                     if !seen_fields.insert(arg_name.clone()) {
                         self.errors.push(TypeError::CallSignatureMismatch {
                             message: format!(
@@ -7017,8 +7064,13 @@ impl TypeChecker {
         let mut arguments = vec![Argument::Default; n_params];
         let mut evaluation_order = Vec::new();
         let mut checked = Vec::new();
+        // A trailing lambda binds to the last parameter, so positional binding gives the same
+        // parameters only when it is the argument for that parameter (`f(1) { }` of `f(a, b)`).
+        let trailing_lambda_in_order = args
+            .last()
+            .is_none_or(|last| !last.is_trailing_lambda || args.len() == n_params);
 
-        if !has_named_args {
+        if !has_named_args && trailing_lambda_in_order {
             if args.len() < min_args || args.len() > n_params {
                 let msg = if min_args == n_params {
                     format!(
@@ -7057,7 +7109,40 @@ impl TypeChecker {
         let mut positional_idx = 0;
 
         for arg in args {
-            if let Some(arg_name) = &arg.name {
+            if arg.is_trailing_lambda {
+                let Some(last) = n_params.checked_sub(1) else {
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message:
+                            "function takes no parameters, so it cannot take a trailing lambda"
+                                .to_string(),
+                        span: arg.span,
+                    });
+                    failed = true;
+                    continue;
+                };
+                if param_assigned[last] {
+                    let given = match param_names.get(last) {
+                        Some(name) if seen_names.contains(name) => "by name",
+                        _ => "a positional argument",
+                    };
+                    self.errors.push(TypeError::CallSignatureMismatch {
+                        message: format!(
+                            "the trailing lambda is passed to {}, the last parameter, which is already given {}",
+                            describe_parameter(param_names, last),
+                            given
+                        ),
+                        span: arg.span,
+                    });
+                    failed = true;
+                    continue;
+                }
+                param_assigned[last] = true;
+                if let Some(value) = check(self, last, &arg.value) {
+                    arguments[last] = Argument::Written(value);
+                    checked.push(value);
+                }
+                evaluation_order.push(last);
+            } else if let Some(arg_name) = &arg.name {
                 if !seen_names.insert(arg_name.clone()) {
                     self.errors.push(TypeError::CallSignatureMismatch {
                         message: format!("duplicate argument '{}' provided", arg_name),
@@ -9057,6 +9142,7 @@ mod tests {
                 name: None,
                 value: expr(ExprKind::Literal(Literal::Int(1))),
                 span: Span::dummy(),
+                is_trailing_lambda: false,
             }],
         });
         infer(&mut checker, &call_wrong_arity);
@@ -9072,11 +9158,13 @@ mod tests {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::String("bad".to_string()))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9165,11 +9253,13 @@ mod tests {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(10))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(20))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9185,11 +9275,13 @@ mod tests {
                     name: Some("x".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(10))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: Some("y".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(20))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9239,11 +9331,13 @@ mod tests {
                         name: None,
                         value: expr(ExprKind::Literal(Literal::Int(1))),
                         span: Span::dummy(),
+                        is_trailing_lambda: false,
                     },
                     CallArg {
                         name: None,
                         value: expr(ExprKind::Literal(Literal::Int(20))),
                         span: Span::dummy(),
+                        is_trailing_lambda: false,
                     },
                 ],
             }),
@@ -9294,11 +9388,13 @@ mod tests {
                         name: None,
                         value: expr(ExprKind::Literal(Literal::Int(2))),
                         span: Span::dummy(),
+                        is_trailing_lambda: false,
                     },
                     CallArg {
                         name: None,
                         value: expr(ExprKind::Literal(Literal::Int(30))),
                         span: Span::dummy(),
+                        is_trailing_lambda: false,
                     },
                 ],
             }),
@@ -9352,6 +9448,7 @@ mod tests {
                 name: None,
                 value: expr(ExprKind::Literal(Literal::Int(42))),
                 span: Span::dummy(),
+                is_trailing_lambda: false,
             }],
         });
         let res_some = infer(&mut checker, &some_call);
@@ -9369,6 +9466,7 @@ mod tests {
                 name: None,
                 value: expr(ExprKind::Literal(Literal::String("bad".to_string()))),
                 span: Span::dummy(),
+                is_trailing_lambda: false,
             }],
         });
         infer(&mut checker, &some_bad);
@@ -9549,11 +9647,13 @@ mod tests {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9603,6 +9703,7 @@ mod tests {
                 name: None,
                 value: expr(ExprKind::Literal(Literal::String("hello".to_string()))),
                 span: Span::dummy(),
+                is_trailing_lambda: false,
             }],
         });
         assert_eq!(infer(&mut checker, &call_one), Type::String);
@@ -9617,11 +9718,13 @@ mod tests {
                     name: Some("msg".to_string()),
                     value: expr(ExprKind::Literal(Literal::String("hi".to_string()))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: Some("prefix".to_string()),
                     value: expr(ExprKind::Literal(Literal::String(">>".to_string()))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9637,11 +9740,13 @@ mod tests {
                     name: Some("msg".to_string()),
                     value: expr(ExprKind::Literal(Literal::String("a".to_string()))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: Some("msg".to_string()),
                     value: expr(ExprKind::Literal(Literal::String("b".to_string()))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9657,6 +9762,7 @@ mod tests {
                 name: Some("count".to_string()),
                 value: expr(ExprKind::Literal(Literal::Int(2))),
                 span: Span::dummy(),
+                is_trailing_lambda: false,
             }],
         });
         infer(&mut checker, &call_missing);
@@ -9684,11 +9790,13 @@ mod tests {
                     name: Some("x".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: Some("y".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9704,11 +9812,13 @@ mod tests {
                     name: Some("x".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
                 CallArg {
                     name: Some("x".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
+                    is_trailing_lambda: false,
                 },
             ],
         });
@@ -9724,6 +9834,7 @@ mod tests {
                 name: Some("x".to_string()),
                 value: expr(ExprKind::Literal(Literal::Int(1))),
                 span: Span::dummy(),
+                is_trailing_lambda: false,
             }],
         });
         infer(&mut checker, &call_missing);

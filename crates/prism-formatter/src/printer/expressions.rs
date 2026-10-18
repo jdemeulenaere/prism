@@ -501,16 +501,7 @@ impl<'a> Printer<'a> {
         if !type_arguments.is_empty() {
             parts.push(self.type_arguments(type_arguments));
         }
-        let trailing = args.last().filter(|argument| {
-            argument.name.is_none()
-                && matches!(argument.value.kind, ExprKind::Closure { .. })
-                && !self.is_parenthesized(&argument.value)
-                && !matches!(
-                    self.token_before(argument.value.span.start)
-                        .map(|t| &t.kind),
-                    Some(TokenKind::LParen | TokenKind::Comma)
-                )
-        });
+        let trailing = args.last().filter(|argument| argument.is_trailing_lambda);
         let regular = match trailing {
             Some(_) => &args[..args.len() - 1],
             None => &args[..],

@@ -121,6 +121,10 @@ Every call MUST name its callee: a declaration path, a built-in function, or a f
 - **WHEN** `fun g(): Int = 1`, `fun h(): Int = 2` and `fun f(a: Int, b: Int = 2, c: Int = 3): Int = a` are declared and `fun k(): Int = f(c = g(), a = h())` is checked
 - **THEN** the call's arguments are, in order, the call of `h`, a default slot, and the call of `g`, and its evaluation order is `c` then `a`
 
+#### Scenario: Trailing lambda in parameter order
+- **WHEN** `fun f(a: Int = 1, b: Int = 2, c: Int = 3, body: () -> Unit) { body() }` is declared and `fun k() { f(c = 4, a = 5) { } }` is checked
+- **THEN** the call's arguments are, in order, the literal `5`, a default slot, the literal `4` and the closure, and its evaluation order is `c`, `a`, then `body`
+
 #### Scenario: Composable calls are marked
 - **WHEN** `compose fun Label() {}`, `fun log() {}` and `compose fun Screen() { Label(); log() }` are declared
 - **THEN** the call of `Label` in `Screen` is marked composable, and the call of `log` is not

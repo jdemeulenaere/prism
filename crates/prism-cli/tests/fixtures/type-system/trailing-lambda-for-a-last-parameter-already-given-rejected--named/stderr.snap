@@ -1,0 +1,5 @@
+error[E4004]: the trailing lambda is passed to 'content', the last parameter, which is already given by name
+  --> main.prism:8:26
+    8 |     Button(content = {}) {}
+      |                          ^
+   = help: verify parameter counts, argument types, or named parameters
