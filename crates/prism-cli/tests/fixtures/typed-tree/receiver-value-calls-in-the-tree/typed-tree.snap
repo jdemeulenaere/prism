@@ -1,0 +1,31 @@
+module main
+struct main::Scope : Copy @2:1
+  field 0 val depth: Int
+fun main::Scope.run(this, f: Scope.(Int) -> Int): Int @3:1
+  local %0 this: &Scope (receiver)
+  local %1 f: Scope.(Int) -> Int (parameter)
+  local %2 s: Scope (val)
+  block: Int @3:43
+    let %2 s @4:5
+      construct main::Scope: Scope @4:13
+        field depth: literal 2: Int @4:19
+    tail: coerce diverge: Int @5:5
+      return: Nothing @5:5
+        binary +: Int @5:12
+          binary +: Int @5:12
+            call value: Int @5:12
+              callee: local %1 f: Scope.(Int) -> Int @5:12
+              argument 0: borrow (argument): &Scope @5:14
+                local %2 s: Scope @5:14
+              argument 1: literal 1: Int @5:17
+            call value: Int @5:22
+              callee: local %1 f: Scope.(Int) -> Int @5:22
+              argument 0: borrow (receiver): &Scope @5:22
+                local %2 s: Scope @5:22
+              argument 1: literal 2: Int @5:26
+          call value: Int @5:31
+            callee: local %1 f: Scope.(Int) -> Int @5:31
+            argument 0: borrow (argument): &Scope @5:31
+              deref: Scope @5:31
+                local %0 this: &Scope @5:31
+            argument 1: literal 3: Int @5:33

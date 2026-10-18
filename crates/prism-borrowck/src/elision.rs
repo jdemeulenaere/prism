@@ -23,8 +23,12 @@ use prism_typed_tree::Type;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signature {
     /// A top-level function or extension (`has_receiver`), or a top-level `val`'s initializer,
-    /// which is a function without parameters.
-    Function { has_receiver: bool },
+    /// which is a function without parameters. An extension with a context parameter
+    /// (`has_context`) has its receiver second (D9 of `receiver-lambdas`).
+    Function {
+        has_receiver: bool,
+        has_context: bool,
+    },
     /// A function type: a closure, or a call of a function value.
     FunctionValue,
     /// A default value's generator, whose parameters are a shared borrow `&P` of each earlier
@@ -58,6 +62,7 @@ impl Signature {
         match callee {
             Callee::Function(_) | Callee::External(_) | Callee::Builtin(_) => Signature::Function {
                 has_receiver: callee.has_receiver(),
+                has_context: callee.has_context(),
             },
             Callee::Value(..) => Signature::FunctionValue,
             Callee::Default { .. } => Signature::Default,
@@ -70,6 +75,7 @@ impl Signature {
         match &body.owner {
             BodyOwner::Function(_) | BodyOwner::Value(_) => Signature::Function {
                 has_receiver: body.owner.has_receiver(),
+                has_context: body.owner.has_context(),
             },
             BodyOwner::Closure { .. } => Signature::FunctionValue,
             BodyOwner::Default { .. } => Signature::Default,
@@ -89,10 +95,16 @@ pub fn tied_inputs(signature: Signature, parameters: &[Type]) -> (Rule, Vec<usiz
             .collect()
     };
     match signature {
-        Signature::Function { has_receiver: true }
-            if parameters.first().is_some_and(places::is_input_borrow) =>
+        // A context parameter counts as an input borrow, but rule 2 ties a returned borrow to
+        // the receiver only, which follows it (D9 of `receiver-lambdas`).
+        Signature::Function {
+            has_receiver: true,
+            has_context,
+        } if parameters
+            .get(usize::from(has_context))
+            .is_some_and(places::is_input_borrow) =>
         {
-            (Rule::Receiver, vec![0])
+            (Rule::Receiver, vec![usize::from(has_context)])
         }
         Signature::Function { .. } => {
             let tied = input_borrows();
@@ -154,13 +166,31 @@ mod tests {
     }
 
     fn method() -> Signature {
-        Signature::Function { has_receiver: true }
+        Signature::Function {
+            has_receiver: true,
+            has_context: false,
+        }
     }
 
     fn function() -> Signature {
         Signature::Function {
             has_receiver: false,
+            has_context: false,
         }
+    }
+
+    #[test]
+    fn a_context_extension_is_tied_to_its_receiver_only() {
+        // `context(s: RowScope) fun Team.leader(): &String`.
+        let scope = Type::plain_struct(NominalId::new("main", "RowScope"));
+        let signature = Signature::Function {
+            has_receiver: true,
+            has_context: true,
+        };
+        assert_eq!(
+            tied_inputs(signature, &[shared(scope), shared(team())]),
+            (Rule::Receiver, vec![1])
+        );
     }
 
     #[test]

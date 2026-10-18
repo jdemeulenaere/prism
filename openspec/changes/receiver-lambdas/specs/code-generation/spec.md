@@ -11,4 +11,4 @@ Every compiled function of a declaration MUST have a symbol derived from its dec
 
 #### Scenario: Symbols of extensions differing by context
 - **WHEN** `lib/layout.prism`, in package `lib`, declares `public struct Modifier : Copy { val fraction: Double }`, `public struct RowScope : Copy {}`, `public struct ColumnScope : Copy {}`, `context(scope: RowScope) public fun Modifier.weight(w: Double, fill: Bool = true): Modifier = Modifier(w)` and `context(scope: ColumnScope) public fun Modifier.weight(w: Double): Modifier = Modifier(w)`
-- **THEN** `prism dump-clif lib/layout.prism` prints the functions `lib/layout::Modifier.weight#context(RowScope)`, `lib/layout::Modifier.weight#context(RowScope)#default(fill)` and `lib/layout::Modifier.weight#context(ColumnScope)`
+- **THEN** `prism dump-clif lib/layout.prism` prints the functions `lib/layout::lib/layout.Modifier.weight#context(lib/layout.RowScope)`, `lib/layout::lib/layout.Modifier.weight#context(lib/layout.RowScope)#default(fill)` and `lib/layout::lib/layout.Modifier.weight#context(lib/layout.ColumnScope)`, the receiver and the context written as the ABI writes their type constructors

@@ -443,7 +443,10 @@ impl Printer<'_> {
                     self.expression(*callee, depth, "callee");
                 }
                 for (index, argument) in call.arguments.iter().enumerate() {
-                    let label = if call.has_receiver && index == 0 {
+                    let receiver_index = usize::from(call.has_context);
+                    let label = if call.has_context && index == 0 {
+                        "context".to_string()
+                    } else if call.has_receiver && index == receiver_index {
                         "receiver".to_string()
                     } else {
                         format!("argument {}", parameter_label(call, index))

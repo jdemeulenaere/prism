@@ -1,0 +1,7 @@
+// expect: E5008
+struct Scope : Copy {}
+fun pick(f: Scope.(&Int) -> &Int): Int = 1
+fun b(): Int = pick { k ->
+    val m = 2
+    &m
+}

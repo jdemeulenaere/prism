@@ -1,0 +1,4 @@
+// expect: ok
+struct Scope : Copy {}
+fun pick(f: Scope.(&Int) -> &Int): Int = 1
+fun a(): Int = pick { k -> k }

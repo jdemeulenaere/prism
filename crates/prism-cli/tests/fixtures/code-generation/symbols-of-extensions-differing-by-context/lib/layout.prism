@@ -1,0 +1,16 @@
+// expect: ok
+package lib
+
+public struct Modifier : Copy {
+    val fraction: Double
+}
+
+public struct RowScope : Copy {}
+
+public struct ColumnScope : Copy {}
+
+context(scope: RowScope)
+public fun Modifier.weight(w: Double, fill: Bool = true): Modifier = Modifier(w)
+
+context(scope: ColumnScope)
+public fun Modifier.weight(w: Double): Modifier = Modifier(w)

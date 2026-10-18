@@ -108,6 +108,12 @@ impl BodyOwner {
     pub fn has_receiver(&self) -> bool {
         matches!(self, BodyOwner::Function(path) if path.receiver.is_some())
     }
+
+    /// Whether the body's first argument is a context parameter, which precedes the receiver
+    /// (D9 of `receiver-lambdas`).
+    pub fn has_context(&self) -> bool {
+        matches!(self, BodyOwner::Function(path) if path.context.is_some())
+    }
 }
 
 /// The control-flow graph of one body.
@@ -583,6 +589,13 @@ impl Callee {
             Callee::Builtin(builtin) => builtin.has_receiver(),
             Callee::External(_) | Callee::Value(..) | Callee::Default { .. } => false,
         }
+    }
+
+    /// Whether the call's first operand is a context argument, before the receiver: for a call
+    /// of an extension with a context parameter (D9 of `receiver-lambdas`). A plain function's
+    /// context is an ordinary input borrow.
+    pub fn has_context(&self) -> bool {
+        matches!(self, Callee::Function(path) if path.context.is_some())
     }
 }
 

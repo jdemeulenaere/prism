@@ -1,0 +1,5 @@
+// expect: ok
+struct Team { val lead: String }
+struct RowScope { val name: String }
+context(s: RowScope)
+fun Team.leader(): &String = &lead

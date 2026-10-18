@@ -1,0 +1,5 @@
+// expect: E5009
+struct Team { val lead: String }
+struct RowScope { val name: String }
+context(s: RowScope)
+fun Team.scopeName(): &String = &s.name

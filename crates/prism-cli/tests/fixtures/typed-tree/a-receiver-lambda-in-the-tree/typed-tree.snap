@@ -1,0 +1,26 @@
+module main
+struct main::Scope : Copy @2:1
+  field 0 val depth: Int
+fun main::nest(f: Scope.(Int) -> Int): Int @3:1
+  local %0 f: Scope.(Int) -> Int (parameter)
+  call value: Int @3:40
+    callee: local %0 f: Scope.(Int) -> Int @3:40
+    argument 0: borrow (argument): &Scope @3:42
+      temporary: Scope @3:42
+        construct main::Scope: Scope @3:42
+          field depth: literal 1: Int @3:48
+    argument 1: literal 2: Int @3:52
+fun main::g(k: Int): Int @4:1
+  local %0 k: Int (parameter)
+  local %1 this: &Scope (closure receiver)
+  local %2 it: Int (implicit closure parameter)
+  call main::nest: Int @4:22
+    argument f: closure (%1 this, %2 it) captures [borrow %0 k]: Scope.(Int) -> Int @4:27
+      block: Int @4:29
+        tail: binary +: Int @4:29
+          binary +: Int @4:29
+            field 0 depth: Int @4:29
+              deref: Scope @4:29
+                local %1 this: &Scope @4:29
+            local %2 it: Int @4:37
+          local %0 k: Int @4:42

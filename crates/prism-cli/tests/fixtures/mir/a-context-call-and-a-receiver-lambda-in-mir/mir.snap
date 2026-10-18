@@ -1,0 +1,55 @@
+module main
+fun main::row(_1: RowScope.() -> Modifier): Modifier @4:1
+  local _0: Modifier (return)
+  local _1 f: RowScope.() -> Modifier (argument)
+  local _2: &RowScope (temporary)
+  local _3: RowScope (temporary)
+  bb0:
+    storage_live _2 @4:51
+    storage_live _3 @4:51
+    _3 = struct main::RowScope() @4:51
+    _2 = &_3 (argument) @4:51
+    _0 = call _1(move _2) -> bb1 @4:49
+  bb1:
+    storage_dead _3 @4:49
+    storage_dead _2 @4:49
+    drop _1 -> bb2 @4:1
+  bb2:
+    return @4:1
+fun main::Modifier.weight#context(RowScope)(_1: &RowScope, _2: &Modifier, _3: Float): Modifier @5:1
+  local _0: Modifier (return)
+  local _1 scope: &RowScope (argument)
+  local _2 this: &Modifier (argument)
+  local _3 w: Float (argument)
+  bb0:
+    _0 = struct main::Modifier(copy _3) @6:44
+    return @5:1
+fun main::g(): Modifier @7:1
+  local _0: Modifier (return)
+  local _1: RowScope.() -> Modifier (temporary)
+  bb0:
+    storage_live _1 @7:25
+    _1 = closure main::g#closure0 [] @7:25
+    _0 = call main::row(move _1) -> bb1 @7:21
+  bb1:
+    storage_dead _1 @7:21
+    return @7:1
+closure main::g#closure0(_1: &RowScope): Modifier @7:25
+  local _0: Modifier (return)
+  local _1 this: &RowScope (argument)
+  local _2: Modifier (temporary)
+  local _3: &RowScope (temporary)
+  local _4: &Modifier (temporary)
+  bb0:
+    storage_live _2 @7:27
+    _2 = struct main::Modifier(const 0.0) @7:27
+    storage_live _3 @7:27
+    _3 = &(*_1) (argument) @7:27
+    storage_live _4 @7:27
+    _4 = &_2 (receiver) @7:27
+    _0 = call main::Modifier.weight#context(RowScope)(move _3, move _4, const 1.0) -> bb1 @7:27
+  bb1:
+    storage_dead _4 @7:27
+    storage_dead _3 @7:27
+    storage_dead _2 @7:27
+    return @7:25

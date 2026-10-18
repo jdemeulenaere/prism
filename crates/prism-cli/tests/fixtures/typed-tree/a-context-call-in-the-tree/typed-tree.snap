@@ -1,0 +1,32 @@
+module main
+struct main::Modifier : Copy @2:1
+  field 0 val fraction: Float
+struct main::RowScope : Copy @3:1
+fun main::row(f: RowScope.() -> Modifier): Modifier @4:1
+  local %0 f: RowScope.() -> Modifier (parameter)
+  call value: Modifier @4:49
+    callee: local %0 f: RowScope.() -> Modifier @4:49
+    argument 0: borrow (argument): &RowScope @4:51
+      temporary: RowScope @4:51
+        construct main::RowScope: RowScope @4:51
+fun main::Modifier.weight#context(RowScope)(context scope: RowScope, this, w: Float): Modifier @5:1
+  local %0 scope: &RowScope (parameter)
+  local %1 this: &Modifier (receiver)
+  local %2 w: Float (parameter)
+  construct main::Modifier: Modifier @6:44
+    field fraction: copy: Float @6:53
+      local %2 w: Float @6:53
+fun main::g(): Modifier @7:1
+  local %0 this: &RowScope (closure receiver)
+  call main::row: Modifier @7:21
+    argument f: closure (%0 this): RowScope.() -> Modifier @7:25
+      block: Modifier @7:27
+        tail: call main::Modifier.weight#context(RowScope): Modifier @7:27
+          context: borrow (argument): &RowScope @7:27
+            deref: RowScope @7:27
+              local %0 this: &RowScope @7:27
+          receiver: borrow (receiver): &Modifier @7:27
+            temporary: Modifier @7:27
+              construct main::Modifier: Modifier @7:27
+                field fraction: literal 0.0: Float @7:36
+          argument w: literal 1.0: Float @7:48

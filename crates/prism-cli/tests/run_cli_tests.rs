@@ -266,6 +266,34 @@ fn symbols_of_a_file() {
 }
 
 #[test]
+fn symbols_of_extensions_differing_by_context() {
+    let directory = temporary_directory("context-symbols");
+    write(
+        &directory.join("lib/layout.prism"),
+        "package lib\npublic struct Modifier : Copy { val fraction: Double }\npublic struct RowScope : Copy {}\npublic struct ColumnScope : Copy {}\ncontext(scope: RowScope) public fun Modifier.weight(w: Double, fill: Bool = true): Modifier = Modifier(w)\ncontext(scope: ColumnScope) public fun Modifier.weight(w: Double): Modifier = Modifier(w)\n",
+    );
+    let dump = prism(&["dump-clif", "lib/layout.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let headers: Vec<String> = stdout(&dump)
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("function ")
+                .filter(|rest| !rest.starts_with('%'))
+        })
+        .map(str::to_string)
+        .collect();
+    // The receiver and the context are written as the ABI writes their type constructors.
+    assert_eq!(
+        headers,
+        [
+            "lib/layout::lib/layout.Modifier.weight#context(lib/layout.RowScope)",
+            "lib/layout::lib/layout.Modifier.weight#context(lib/layout.RowScope)#default(fill)",
+            "lib/layout::lib/layout.Modifier.weight#context(lib/layout.ColumnScope)",
+        ]
+    );
+}
+
+#[test]
 fn compiling_independent_source_files() {
     let directory = two_files(
         "independent",
