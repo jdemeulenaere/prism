@@ -4840,7 +4840,13 @@ impl TypeChecker {
                     callee.kind,
                     ExprKind::Ident(_) | ExprKind::MemberAccess { .. }
                 );
-                let id = self.infer_expr(callee);
+                // A function value is called in place. A callee that is not a name or a path
+                // is a temporary, so what its branches and `?:` operands give is consumed (the
+                // `ownership` spec, "Consuming Positions").
+                let id = match callee.kind {
+                    ExprKind::Ident(_) | ExprKind::MemberAccess { .. } => self.infer_expr(callee),
+                    _ => self.infer_read(callee),
+                };
                 self.generic_callee = false;
                 (Some(id), self.ty(id))
             }

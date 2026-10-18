@@ -21,6 +21,10 @@ Calling a function value, also through references and boxes, MUST run the body o
 - **WHEN** `enum Action { Run((Int) -> Int), Stop }`, `fun act(a: &Action): Int = when (a) { Action.Run(val f) -> f(5); Action.Stop -> 0 }` and `fun call(f: &(() -> Int)): Int = f()` are declared and `fun main() { println(act(Action.Run { n -> n * 3 })); val g: () -> Int = { 4 }; println(call(g)); println(call { 7 }); val h = Heap({ 6 }); println(h()) }` runs with `--check-allocations`
 - **THEN** it prints `15`, `4`, `7` and `6`, reports no live allocation and exits with status 0
 
+#### Scenario: Calling a function value given by an expression
+- **WHEN** `fun main() { val opt: (() -> Int)? = null; println((opt ?: { 0 })()); val c = 1 > 0; val a: () -> Int = { 5 }; val b: () -> Int = { 6 }; println((if (c) a else b)()) }` runs with `--check-allocations`
+- **THEN** it prints `0` and then `5`, reports no live allocation and exits with status 0: the callee is a temporary, which takes the value its `?:` or branch gives
+
 ### Requirement: Closures Use the Variables They Capture
 A closure MUST read and write the captured variables themselves, not copies: it MUST see their values when it runs, and its writes MUST be seen by the enclosing body after the closure returns.
 

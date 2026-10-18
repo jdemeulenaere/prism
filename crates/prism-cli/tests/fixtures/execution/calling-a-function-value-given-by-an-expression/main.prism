@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun main() {
+    val opt: (() -> Int)? = null
+    println((opt ?: { 0 })())
+    val c = 1 > 0
+    val a: () -> Int = { 5 }
+    val b: () -> Int = { 6 }
+    println((if (c) a else b)())
+}
