@@ -201,6 +201,13 @@ Kotlin's syntax: `"Count: $count"` for a name and `"${a + b}"` for an expression
 
 Strings and glue extend `code-generation` (representation, glue, allocator) and `execution` (runtime meaning, `--check-allocations`); the new built-in members extend `type-system`, `typed-tree`, `mir`, `references` and `extension-functions`; `E4010` and `E6001` change catalog rows in `diagnostics`. Rejected: a `strings` capability (its rules would be split from the operators, members and runtime rules they belong with) and a `memory-management` capability (drops are already in `mir` and `ownership`; what glue frees is the backend's contract).
 
+### D22. Decisions made while implementing (autonomous)
+
+- **The receiver of `s[i]` and `s.length` is a receiver borrow, taken after the other arguments.** Both are calls of built-ins with a `Receiver` borrow, like `clone()` and extension receivers, so the MIR evaluates the index of `s[i]` before it borrows `s` (the `mir` spec's receivers are borrowed after the arguments). The order is observable only through an index that reassigns the string (`s[{ s = "cd"; 0 }]` reads the new `s`), where Kotlin would read the old one. Rejected: a special evaluation order for the built-in members alone, which would make them the only calls whose receiver is borrowed first.
+- **`s.length = n` is `E4003`.** `length` counts as a field, an immutable one, so assigning it reports "cannot assign to immutable 'val' struct field 'length'". Rejected: `E4006` (it is a member) and a string-specific message (no scenario asks for one).
+- **A zero-sized allocation is a dangling, aligned pointer, never tracked.** `prism_rt_allocate(0, a)` returns `a` as an address without allocating and `prism_rt_free(_, 0, _)` does nothing, as Rust's allocator API requires a non-zero size; no caller of this change allocates zero bytes, and `heap-boxes` boxes of zero-sized values use this (its D19 recommendation). Rejected: rounding the size up to 1 (an allocation for nothing).
+- **The allocation map has its own lock.** The design put the map "behind the state lock"; it is a separate `Mutex` in `allocation.rs`, so that reporting an invalid free, which flushes the output under the output lock, never runs with the map locked. No behaviour differs.
+
 ## Risks / Trade-offs
 
 - [32 bytes per string is more than Rust's 24 and Swift's 16, in every struct holding one] → the character count buys O(1) `length` and ASCII indexing under character semantics; a small-string or packed representation can come later without changing programs (D2).

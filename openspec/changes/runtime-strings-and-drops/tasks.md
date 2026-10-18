@@ -38,8 +38,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 7. Integration
 
-- [ ] 7.1 Extend `examples/run/main.prism` with a string built from `toString()` and `+` and printed, keeping it a valid `prism check` input and the `run_cli_tests.rs` output test passing, and run the timing benchmark (`cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture`), recording the median time to `main` in the commit message.
-- [ ] 7.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` with no new warnings, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/` (only `examples/demo/ui` may fail), `prism run --check-allocations` on `examples/run/main.prism`, and `prism run` on each other `examples/` file, which must run or report a diagnostic (`E6001` naming `'Heap' values` or another remaining construct, or `E6002`) rather than crash; and `openspec validate runtime-strings-and-drops --strict`. Verify all pass.
+- [x] 7.1 Extend `examples/run/main.prism` with a string built from `toString()` and `+` and printed, keeping it a valid `prism check` input and the `run_cli_tests.rs` output test passing, and run the timing benchmark (`cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture`), recording the median time to `main` in the commit message.
+- [x] 7.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` with no new warnings, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/` (only `examples/demo/ui` may fail), `prism run --check-allocations` on `examples/run/main.prism`, and `prism run` on each other `examples/` file, which must run or report a diagnostic (`E6001` naming `'Heap' values` or another remaining construct, or `E6002`) rather than crash; and `openspec validate runtime-strings-and-drops --strict`. Verify all pass.
 
 ## Workflow follow-up
 
