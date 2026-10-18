@@ -280,13 +280,27 @@ impl Escapes<'_> {
                 let name = declaration.name.clone();
                 let quoted = places::quoted(&name);
                 let captured = self.owning_capture(state, value, item);
+                // The capture that holds the input: the input itself, or a function value that
+                // holds it, such as a closure that captured it (`{ h() }` for `h = { r }`).
+                let captured_label = |(capture, at): (Option<String>, Span)| Label {
+                    span: at,
+                    message: if capture == name {
+                        format!("{} is captured here", quoted)
+                    } else {
+                        format!(
+                            "{}, which holds {}, is captured here",
+                            places::quoted(&capture),
+                            quoted
+                        )
+                    },
+                };
+                let through_holder = captured
+                    .as_ref()
+                    .is_some_and(|(capture, _)| *capture != name);
                 if places::contains_function(&declaration.ty) {
                     let mut related = Vec::new();
-                    if let Some((_, at)) = captured {
-                        related.push(Label {
-                            span: at,
-                            message: format!("{} is captured here", quoted),
-                        });
+                    if let Some(captured) = captured {
+                        related.push(captured_label(captured));
                     }
                     related.push(Label {
                         span: declaration.span,
@@ -317,16 +331,16 @@ impl Escapes<'_> {
                     };
                     (holder, related, notes, helps)
                 } else {
-                    let related = vec![match captured {
-                        Some((_, at)) => Label {
-                            span: at,
-                            message: format!("{} is captured here", quoted),
-                        },
-                        None => Label {
+                    let mut related = Vec::new();
+                    if let Some(captured) = captured {
+                        related.push(captured_label(captured));
+                    }
+                    if related.is_empty() || through_holder {
+                        related.push(Label {
                             span: declaration.span,
                             message: format!("{} is a parameter here", quoted),
-                        },
-                    }];
+                        });
+                    }
                     (
                         EscapingHolder::ClosureOwningReference(name),
                         related,

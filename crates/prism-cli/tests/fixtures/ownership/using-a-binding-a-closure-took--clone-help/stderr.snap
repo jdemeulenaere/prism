@@ -1,0 +1,12 @@
+error[E5001]: use of moved value 's'
+  --> main.prism:10:10
+   10 |     take(s)
+      |          ^ value used here after move
+  --> main.prism:9:20
+    9 |     val b = Button({ greet(s) })
+      |                    ^^^^^^^^^^^^ value moved into closure here
+  --> main.prism:9:20
+    9 |     val b = Button({ greet(s) })
+      |                    ^^^^^^^^^^^^ the closure owns its captures because it is stored in a field here
+   = note: 's' has type 'String', which is not 'Copy'
+   = help: clone it into a 'val' before the closure and capture that instead: 'val m = s.clone()'

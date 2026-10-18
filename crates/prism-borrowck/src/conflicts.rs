@@ -31,7 +31,7 @@
 
 use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::captures::CaptureModes;
-use crate::check::{clone_help, sort_labels};
+use crate::check::{builds_closure, capture_clone_help, clone_help, sort_labels};
 use crate::dataflow::Results;
 use crate::dominators::Dominators;
 use crate::error::{AccessKind, BorrowError, BorrowErrorKind, Label};
@@ -541,7 +541,11 @@ impl Checker<'_, '_> {
             AccessKind::Move => {
                 if let Some(name) = &place_name {
                     let ty = place.ty(self.body, &self.file.types);
-                    helps.extend(clone_help(self.file, name, &ty));
+                    if builds_closure(self.body, location) {
+                        helps.extend(capture_clone_help(self.file, name, &ty));
+                    } else {
+                        helps.extend(clone_help(self.file, name, &ty));
+                    }
                 }
                 (
                     BorrowErrorKind::MoveOutWhileBorrowed {

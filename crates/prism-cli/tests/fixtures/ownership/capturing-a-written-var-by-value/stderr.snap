@@ -1,0 +1,27 @@
+error[E4028]: cannot capture the variable 'n' by value
+  --> main.prism:8:21
+    8 |     return Button({ n += 1; n })
+      |                     ^
+  --> main.prism:8:19
+    8 |     return Button({ n += 1; n })
+      |                   ^^^^^^^^^^^^^ the closure owns its captures because it is stored in a field here
+   = note: a closure that owns its captures would keep the value 'n' had when it was built, and not see later writes to the 'var'
+   = help: the closure writes 'n', and a closure cannot write what it owns: keep it from escaping, so that it borrows 'n'
+error[E4028]: cannot capture the variable 'c' by value
+  --> main.prism:12:21
+   12 |     return Button({ c.n = 3; 1 })
+      |                     ^
+  --> main.prism:12:19
+   12 |     return Button({ c.n = 3; 1 })
+      |                   ^^^^^^^^^^^^^^ the closure owns its captures because it is stored in a field here
+   = note: a closure that owns its captures would keep the value 'c' had when it was built, and not see later writes to the 'var'
+   = help: the closure writes 'c', and a closure cannot write what it owns: keep it from escaping, so that it borrows 'c'
+error[E4028]: cannot capture the variable 'n' by value
+  --> main.prism:16:27
+   16 |     return Button({ run { n += 1; n } })
+      |                           ^
+  --> main.prism:16:19
+   16 |     return Button({ run { n += 1; n } })
+      |                   ^^^^^^^^^^^^^^^^^^^^^ the closure owns its captures because it is stored in a field here
+   = note: a closure that owns its captures would keep the value 'n' had when it was built, and not see later writes to the 'var'
+   = help: the closure writes 'n', and a closure cannot write what it owns: keep it from escaping, so that it borrows 'n'

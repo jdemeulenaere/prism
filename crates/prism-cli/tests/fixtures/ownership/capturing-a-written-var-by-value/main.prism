@@ -1,0 +1,18 @@
+// expect: E4028
+// run: 1
+struct Button { val onClick: () -> Int }
+struct Counter { var n: Int }
+fun run(f: () -> Int): Int = f()
+fun f(): Button {
+    var n = 0
+    return Button({ n += 1; n })
+}
+fun g(): Button {
+    var c = Counter(0)
+    return Button({ c.n = 3; 1 })
+}
+fun h(): Button {
+    var n = 0
+    return Button({ run { n += 1; n } })
+}
+fun main() {}

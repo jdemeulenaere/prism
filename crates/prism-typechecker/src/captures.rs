@@ -28,6 +28,7 @@ use prism_typed_tree::{
     ExpressionId, ExpressionKind, LocalId, LocalKind, OwnershipReason, OwnershipReasonKind,
     Pattern, StatementId, StatementKind, TypeTable,
 };
+use std::collections::HashSet;
 
 /// What a body's value is, which names why a closure it returns owns its captures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +100,9 @@ struct Graph<'a> {
     roots: Vec<(Node, OwnershipReason)>,
     /// A buffer for [`Graph::tops`].
     scratch: Vec<(Node, Span)>,
+    /// The bindings each closure writes, assigning them or a field of them or borrowing them
+    /// mutably, itself or in a nested closure: (closure index, binding).
+    writes: HashSet<(usize, LocalId)>,
 }
 
 /// Decides the captures of every closure of `body`, recording each capture's mode and each
@@ -158,10 +162,30 @@ impl<'a> Graph<'a> {
             edges: Vec::new(),
             roots: Vec::new(),
             scratch: Vec::new(),
+            writes: HashSet::new(),
         }
     }
 
     // --- Recording
+
+    /// Records that the closures being walked write the binding at the root of `place`, when
+    /// it is a binding or a field path of one.
+    fn written(&mut self, place: ExpressionId) {
+        if self.closure_stack.is_empty() {
+            return;
+        }
+        let mut place = place;
+        let local = loop {
+            match &self.body.expressions[place].kind {
+                ExpressionKind::Local(local) => break *local,
+                ExpressionKind::Field { base, .. } => place = *base,
+                _ => return,
+            }
+        };
+        for &closure in &self.closure_stack {
+            self.writes.insert((closure, local));
+        }
+    }
 
     fn enter_scope(&mut self) {
         let index = self.scopes.len() as u32;
@@ -420,6 +444,14 @@ impl<'a> Graph<'a> {
                 self.own(*value, OwnershipReasonKind::Returned);
                 self.expression(*value);
             }
+            ExpressionKind::Borrow {
+                mutable: true,
+                place,
+                ..
+            } => {
+                self.written(*place);
+                self.expression(*place);
+            }
             // The other nodes, visited without allocating their list of children.
             ExpressionKind::Field { base: child, .. }
             | ExpressionKind::Deref { pointer: child }
@@ -482,6 +514,7 @@ impl<'a> Graph<'a> {
                 self.expression(*initializer);
             }
             StatementKind::Assign { target, value } => {
+                self.written(*target);
                 match self.assigned_binding(*target) {
                     AssignTarget::Binding(local) => self.store(*value, local, statement.span),
                     AssignTarget::CapturedBinding => {
@@ -513,6 +546,7 @@ impl<'a> Graph<'a> {
                 self.expression(*value);
             }
             StatementKind::CompoundAssign { target, value, .. } => {
+                self.written(*target);
                 self.expression(*target);
                 self.expression(*value);
             }
@@ -678,7 +712,12 @@ impl<'a> Graph<'a> {
                         errors.push(TypeError::CannotCaptureByValue {
                             name: local.name.clone(),
                             refusal,
-                            help: capture_help(&local.name, refusal, types.is_clone(&local.ty)),
+                            help: capture_help(
+                                &local.name,
+                                refusal,
+                                types.is_clone(&local.ty),
+                                self.writes.contains(&(index, capture.local)),
+                            ),
                             reason: owning,
                             span: capture.span,
                         });
@@ -882,10 +921,15 @@ enum AssignTarget {
     ThroughReference,
 }
 
-/// The help of `E4028`: copy a `var` into a `val`, or clone what the closure cannot take.
-fn capture_help(name: &str, refusal: CaptureRefusal, cloneable: bool) -> String {
+/// The help of `E4028`: copy a `var` into a `val`, or clone what the closure cannot take. A
+/// `var` the closure writes cannot be copied into a `val`, which the closure could not write.
+fn capture_help(name: &str, refusal: CaptureRefusal, cloneable: bool, written: bool) -> String {
     let fresh = if name == "m" { "k" } else { "m" };
     match refusal {
+        CaptureRefusal::Variable if written => format!(
+            "the closure writes '{}', and a closure cannot write what it owns: keep it from escaping, so that it borrows '{}'",
+            name, name
+        ),
         CaptureRefusal::Variable => format!(
             "copy it into a 'val' before the closure and capture that instead: 'val {} = {}'",
             fresh, name

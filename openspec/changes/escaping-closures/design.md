@@ -187,7 +187,7 @@ D2 records the flow graph "while checking", carrying an owning flag with the exp
 
 ### D20. Help for captures a closure cannot take (autonomous)
 
-`E4028`'s help follows D15: "copy it into a 'val' before the closure and capture that instead: 'val m = n'" for a `var`, and "clone it into a 'val' ... 'val m = s.clone()'" for a capture of the enclosing closure. A default value cannot declare a `val`, so for an earlier parameter read in a default value the help is "give 'a' to the closure when it is called, as a parameter, instead of capturing it". Rejected: one clone help for all three (it cannot be written in a default value).
+`E4028`'s help follows D15: "copy it into a 'val' before the closure and capture that instead: 'val m = n'" for a `var`, and "clone it into a 'val' ... 'val m = s.clone()'" for a capture of the enclosing closure. A default value cannot declare a `val`, so for an earlier parameter read in a default value the help is "give 'a' to the closure when it is called, as a parameter, instead of capturing it". A `var` that the closure writes (assigns, assigns a field of, or borrows mutably, itself or in a nested closure, which the same walk records) cannot be copied into a `val` the closure could not write either, so its help is "the closure writes 'n', and a closure cannot write what it owns: keep it from escaping, so that it borrows 'n'" (added in review). Likewise `E5001` and `E5005` for a value a closure moved suggest "clone it into a 'val' before the closure and capture that instead: 'val m = s.clone()'", since a clone written inside the closure would be moved with it. Rejected: one clone help for all three (it cannot be written in a default value).
 
 ## Implementation Notes
 

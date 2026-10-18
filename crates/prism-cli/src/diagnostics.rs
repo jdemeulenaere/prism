@@ -835,6 +835,19 @@ mod tests {
         assert!(out.contains("help: copy it into a 'val' before the closure and capture that instead: 'val m = n'"), "{out}");
     }
 
+    /// ownership: "Capturing a written var by value".
+    #[test]
+    fn test_capturing_a_written_var_by_value_help() {
+        let out = render_type_errors(
+            "struct Button { val onClick: () -> Int }\nfun f(): Button { var n = 0; return Button({ n += 1; n }) }\n",
+        );
+        assert!(
+            out.contains("help: the closure writes 'n', and a closure cannot write what it owns: keep it from escaping, so that it borrows 'n'"),
+            "{out}"
+        );
+        assert!(!out.contains("'val m = n'"), "{out}");
+    }
+
     #[test]
     fn test_capturing_what_the_closure_cannot_take_labels() {
         let out = render_type_errors(
@@ -1133,6 +1146,47 @@ error[E5007]: the parameter 'p' cannot escape
             out.contains("the closure owns its captures because it is stored in a field here"),
             "{out}"
         );
+        assert!(
+            out.contains("help: clone it into a 'val' before the closure and capture that instead: 'val m = s.clone()'"),
+            "{out}"
+        );
+        assert!(!out.contains("clone it where it moves"), "{out}");
+    }
+
+    /// A value moved into a closure while it is borrowed gets the same help as a use after
+    /// that move (D20 of `escaping-closures`).
+    #[test]
+    fn test_moved_into_closure_while_borrowed_help() {
+        let out = render_borrow_errors(
+            "struct Button { val onClick: () -> Int }\nfun greet(s: &String): Int = 1\nfun g(s: String): Button { val r = &s; val b = Button({ greet(s) }); greet(r); return b }\n",
+        );
+        assert!(
+            out.contains("error[E5005]: cannot move out of 's' because it is borrowed"),
+            "{out}"
+        );
+        assert!(
+            out.contains("help: clone it into a 'val' before the closure and capture that instead: 'val m = s.clone()'"),
+            "{out}"
+        );
+    }
+
+    /// references: "Escaping closure labels", for a closure that owns another closure holding
+    /// the borrow.
+    #[test]
+    fn test_escaping_closure_labels_through_a_closure() {
+        let out = render_borrow_errors(
+            "fun f(r: &Int): () -> Int { val h = { r + 1 }; return { h() } }\n",
+        );
+        assert!(
+            out.contains("error[E5007]: a closure that captures the reference 'r' cannot escape"),
+            "{out}"
+        );
+        assert!(
+            out.contains("'h', which holds 'r', is captured here"),
+            "{out}"
+        );
+        assert!(out.contains("'r' is a parameter here"), "{out}");
+        assert!(!out.contains("'r' is captured here"), "{out}");
     }
 
     /// ownership: "Possibly moved value".

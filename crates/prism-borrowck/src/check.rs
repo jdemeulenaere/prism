@@ -12,7 +12,7 @@ use crate::analyses::{MaybeInitialized, ReachingUninitializations};
 use crate::dataflow::{solve_with, BitSet, Results};
 use crate::dominators::Dominators;
 use crate::error::{BorrowError, BorrowErrorKind, Label};
-use crate::location::locations;
+use crate::location::{locations, Location};
 use crate::move_paths::{Effect, Event, MoveData, MovePathId};
 use crate::uses::UseKind;
 use prism_ast::{Span, TypeMarker};
@@ -234,7 +234,16 @@ impl Checker<'_> {
         if let Some(help) = self.copy_help(&ty) {
             helps.push(help);
         }
-        helps.extend(clone_help(self.file, &name, &ty));
+        // A clone written at the closure would still be moved into it, so a value a closure
+        // took is cloned into a `val` the closure captures instead.
+        let into_closure = moves
+            .iter()
+            .any(|event| self.closure_move(*event).is_some());
+        if into_closure {
+            helps.extend(capture_clone_help(self.file, &name, &ty));
+        } else {
+            helps.extend(clone_help(self.file, &name, &ty));
+        }
         let mutable = place.projections.is_empty() && self.body.locals[place.local].mutable;
         if in_previous_iteration && mutable {
             helps.push(format!(
@@ -329,6 +338,38 @@ pub(crate) fn clone_help(file: &MirFile, name: &str, ty: &Type) -> Option<String
         _ => format!("{}.clone()", name),
     };
     Some(format!("clone it where it moves: '{}'", clone))
+}
+
+/// The help suggesting to clone the value `name` of type `ty`, which a closure owning its
+/// captures moves, into a `val` that the closure captures instead, for a `Clone` type (D15 of
+/// `escaping-closures`).
+pub(crate) fn capture_clone_help(file: &MirFile, name: &str, ty: &Type) -> Option<String> {
+    if !file.types.is_clone(ty) {
+        return None;
+    }
+    let fresh = if name == "m" { "k" } else { "m" };
+    let clone = match ty {
+        Type::Nullable(_) => format!("{}?.clone()", name),
+        _ => format!("{}.clone()", name),
+    };
+    Some(format!(
+        "clone it into a 'val' before the closure and capture that instead: 'val {} = {}'",
+        fresh, clone
+    ))
+}
+
+/// Whether the statement at `location` of `body` builds a closure, which moves the captures
+/// it owns.
+pub(crate) fn builds_closure(body: &Body, location: Location) -> bool {
+    body.blocks[location.block]
+        .statements
+        .get(location.statement)
+        .is_some_and(|statement| {
+            matches!(
+                &statement.kind,
+                StatementKind::Assign(_, rvalue) if matches!(rvalue.as_ref(), Rvalue::Closure { .. })
+            )
+        })
 }
 
 /// Sorts labels in source order.

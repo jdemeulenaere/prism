@@ -1,0 +1,13 @@
+// expect: E5001
+// run: 1
+// A value a closure owns is moved where the closure is built, so a clone written inside the
+// closure would be moved with it: the help clones it into a 'val' the closure captures.
+struct Button { val onClick: () -> Int }
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun f(s: String): Button {
+    val b = Button({ greet(s) })
+    take(s)
+    return b
+}
+fun main() {}
