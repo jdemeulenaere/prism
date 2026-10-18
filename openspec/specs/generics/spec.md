@@ -189,14 +189,18 @@ A generic function MUST NOT reach a call of itself, directly or through other ge
 - **THEN** the file passes `prism check`
 
 ### Requirement: Non-Regular Generic Types Are Rejected
-A generic struct or enum MUST NOT reach itself through its fields or payloads, `Heap<T>` included, with a type argument that holds one of its own type parameters nested in another type, since its layout, drop glue and equality would then need infinitely many types. Such a field or payload MUST be `PolymorphicRecursion` (`E4027`) at the declaration. A type that `E4023` already rejects is not reported again.
+A generic struct or enum MUST NOT reach itself through its fields or payloads, `Heap<T>` and `List<T>` included, with a type argument that holds one of its own type parameters nested in another type, since its layout, drop glue and equality would then need infinitely many types. Such a field or payload MUST be `PolymorphicRecursion` (`E4027`) at the declaration. A type that `E4023` already rejects is not reported again.
 
 #### Scenario: A generic type reaching itself through a box with a growing argument
 - **WHEN** `struct Box<T>(val v: T)` and `struct Nest<T>(val v: T, val next: Heap<Nest<Box<T>>>?)` are checked
 - **THEN** the type checker emits `E4027` at the field `next`, saying that `Nest` contains `Nest<Box<T>>`
 
+#### Scenario: A generic type reaching itself through a list with a growing argument
+- **WHEN** `struct Box<T>(val v: T)` and `struct Nest<T>(val v: T, val more: List<Nest<Box<T>>>)` are checked
+- **THEN** the type checker emits `E4027` at the field `more`, saying that `Nest` contains `Nest<Box<T>>`
+
 #### Scenario: A regular recursive generic type accepted
-- **WHEN** `enum List<T> { Cons(T, Heap<List<T>>), Nil }` and `struct Tree<T>(val v: T, val kids: Heap<List<Tree<T>>>?)` are checked
+- **WHEN** `enum Chain<T> { Cons(T, Heap<Chain<T>>), Nil }`, `struct Tree<T>(val v: T, val kids: Heap<Chain<Tree<T>>>?)` and `struct Forest<T>(val v: T, val trees: List<Forest<T>>)` are checked
 - **THEN** the file passes `prism check`
 
 ### Requirement: Polymorphic Recursion Across Files Is Rejected When Compiled
@@ -225,3 +229,7 @@ Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined w
 - **Polymorphic recursion is a growing cycle, rejected at the declaration** (D8). The instantiation graph has a node per (generic, type parameter); a call of `g` with `A1..An` inside `f` adds an edge from each of `f`'s parameters occurring in `Aj` to `g`'s `j`th, growing unless `Aj` is the parameter itself or its nullable (flattening keeps `T??` at `T?`). Calls in default values and closures count as the generic's. A strongly connected component holding a growing edge is `E4027`, found by Tarjan's components and then a shortest path back from the growing edge (`prism_typed_tree::instantiation`), linear in the edges, and it is what lets instance collection terminate without a depth limit (Go's "instantiation cycle" check). It runs whether or not anything instantiates the generic, keeping "no error from an instantiation". Messages name each generic once per visit, so a cycle between two parameters of one generic reads as that generic instantiating itself (review). Rejected: a depth limit during instantiation (Rust's `recursion_limit`: late, arbitrary, and only once called); run-time type passing or boxing (Swift, OCaml), which is neither monomorphic nor zero-cost; rejecting every recursion between generics.
 - **Non-regular generic types are rejected by the same graph** (D9). `struct Nest<T>(val next: Heap<Nest<Box<T>>>?)` has a finite layout, so `E4023` accepts it, but its glue would need `Nest<Box<T>>`, `Nest<Box<Box<T>>>` and so on. Every application of a generic struct or enum in a field or payload adds edges, through `Heap`, nullables and other generic types but not function types, whose glue does not depend on them. A cycle is reported at the growing field when it is the file's own, otherwise at the first own field on it, against the full type table, which holds every reachable type of other modules; a cycle through other modules' types alone is theirs to report, and a type `E4023` reported is skipped. Rejected: leaving it to instance collection, which would loop or need a limit in glue generation.
 - **Across files, `E6004` when compiled** (D8). A growing cycle through generics of several files needs an import cycle, and no single file's check sees the other bodies (the single-file compilation units invariant), so `prism run` finds it over every record before collecting instances, and `prism check` does not see it. `instance-cache`, which keeps every file's record, can check import cycles in `prism check` and then decide whether `E6004` stays.
+
+Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Lists are generic slots and an indirection** (D2, D11). `List<T>` reaches its element type the way `Heap<T>` does, so `E4027` looks through it (`struct Nest<T> { val inner: List<Nest<List<T>>> }` would need infinitely many glue instances) while `E4023` does not follow it; and `add(element: T)` is a parameter of a type-parameter type, so a closure stored in a list owns its captures and one holding a borrow is `E5007`. A user `enum List<T>` is now `E4010`, so the examples of this spec name it `Chain<T>`.

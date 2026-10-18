@@ -76,4 +76,4 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## Workflow follow-up
 
-- [ ] On archive, add the non-goals of the proposal and design (D5, D10, D13, D14, D17 and the risks) to `ROADMAP.md` as unchecked items naming `collections`, tick item 24 and the deferred item "Iterating anything other than `Range` in `for` loops", and promote D1 to D19 into `## Design Rationale` sections of `collections`, `loops`, `code-generation` and `execution`.
+- [x] On archive, add the non-goals of the proposal and design (D5, D10, D13, D14, D17 and the risks) to `ROADMAP.md` as unchecked items naming `collections`, tick item 24 and the deferred item "Iterating anything other than `Range` in `for` loops", and promote D1 to D19 into `## Design Rationale` sections of `collections`, `loops`, `code-generation` and `execution`.

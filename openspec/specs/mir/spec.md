@@ -193,7 +193,7 @@ A `when` MUST evaluate its subject once. A `when` without guards whose patterns 
 - **THEN** the discriminant of `b` is compared with `0`, then only on that edge its payload is compared with `0`; when either test fails the second pattern's discriminant test follows
 
 ### Requirement: Loops Become Cycles of Blocks
-`while`, `do`/`while` and `for` MUST become cycles of blocks. A `for` loop MUST evaluate its range once and step its variable from the start to the last element without overflowing. `break` and `continue` MUST jump to their loop's exit or next iteration, dropping every scope they leave.
+`while`, `do`/`while` and `for` MUST become cycles of blocks. A `for` loop over a range MUST evaluate its range once and step its variable from the start to the last element without overflowing; a `for` loop over a list walks it by index ("For Loops Over Lists Walk Them by Index"). `break` and `continue` MUST jump to their loop's exit or next iteration, dropping every scope they leave.
 
 #### Scenario: For loop over a closed range
 - **WHEN** `fun g(i: Int) {}` is declared and `fun f(n: Int) { for (i in 0..n) g(i) }` is lowered
@@ -524,6 +524,31 @@ A closure value MUST be built from a move of each non-`Copy` capture it owns and
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String, n: Int): () -> Int = { greet(s) + n }` passes the borrow checker
 - **THEN** the MIR of `f`, as lowered and elaborated, builds the closure value from a move of `s` and a copy of `n`, and the elaborated MIR has no drop of `s`
 
+### Requirement: Elements Are Index Projections of Their List
+An element `xs[i]` MUST be the place of the list with an index projection by an `Int` local, into which the index is evaluated before the place is used. The projection MUST be valid only on a `List<T>` place, giving a place of type `T`, and, as for a dereference, the validator MUST reject a move out of a place that has one. Assigning to an element MUST drop the old element first, as every assignment drops the old value of its place.
+
+#### Scenario: Reading and writing elements
+- **WHEN** `fun f(i: Int): Int { var xs = listOf(1, 2); xs[i + 1] = 3; return xs[0] }` is lowered
+- **THEN** the MIR evaluates `i + 1` into a temporary, assigns `3` to the place of `xs` indexed by that temporary, evaluates `0` into another temporary, and returns a copy of `xs` indexed by it
+
+#### Scenario: Borrowing an element of a list behind a reference
+- **WHEN** `fun f(xs: &List<String>): &String = &xs[0]` is lowered
+- **THEN** the MIR borrows the place `(*_1)` indexed by a temporary holding `0`
+
+### Requirement: For Loops Over Lists Walk Them by Index
+A `for` loop over a list MUST evaluate its iterable once into a hidden local holding the loop's borrow, read the size once through it, and skip the loop when it is 0. Each iteration MUST bind the variable, in a fresh scope, to a borrow (of the loop borrow's kind) of the element at a hidden `Int` counter; the latch (`continue`'s target) MUST increment the counter and exit once it equals the size. A temporary list MUST be dropped after the loop ends.
+
+#### Scenario: For loop over a list
+- **WHEN** `fun g(x: &Int) {}` is declared and `fun f(xs: List<Int>) { for (x in xs) g(x) }` is lowered
+- **THEN** the MIR borrows `_1` once into a local, calls `builtin size` once, branches past the loop when the size is 0, and in each iteration binds `x` to a shared borrow of the borrowed list's dereference indexed by the counter, calls `g`, then compares the incremented counter with the size
+
+### Requirement: List Operations Are Built-In Calls
+`listOf`, `size`, `indices` and each built-in list member MUST be `Call` terminators of a built-in callee, printed `builtin listOf`, `builtin size`, `builtin add` and so on, with the list's receiver borrow first (when it has one) and then the arguments, in the order `Calls Name Their Callee` and `Receivers Lead the Operands of Calls` give. `removeAt` and `removeLast` MUST write the removed element to their destination as a value the caller owns.
+
+#### Scenario: Built-in list calls
+- **WHEN** `fun f(): Int { var xs = listOf(1, 2); xs.add(3); return xs.removeAt(0) }` is lowered
+- **THEN** the MIR calls `builtin listOf` with `1` and `2` into `xs`, `builtin add` with a mutable borrow of `xs` and `3`, and `builtin removeAt` with a mutable borrow of `xs` and `0` into the return place
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -613,3 +638,8 @@ Decisions from `closures` (planned autonomously on 2026-10-17, refined while imp
 Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Owned captures are operands of the closure value** (D2). Lowering builds `Rvalue::Closure` from `Capture::Owned(Operand::Move)` or `Capture::Owned(Operand::Copy)` for the captures the typed tree records as owned and `Capture::Borrowed(place)` for the others, so stage 1 of the borrow checker sees ordinary moves and copies and drop elaboration needs nothing new. In elaborated MIR `CaptureMode::Owned` keeps one mode per capture local; `Body::ownership_reason` carries the reason for diagnostics; calls and argument locals carry `escaping` flags, which the escape check and the loan flow read.
+
+Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **List operations are built-in calls, elements index places, and list loops share the loop skeleton** (D16). `listOf` and each member are `Call` terminators of `Callee::Builtin`, so allocation and index failures happen at terminators or place accesses. `Projection::Index` is valid on `List<T>` places and never moved out of. `lower_for` runs one skeleton (loop context, fresh scope per iteration, latch) with a plan per iteration: a list loop borrows its iterable into a hidden local once, reads `size` once, skips an empty list, binds `&(*_l)[_i]` (or `&mut`) per iteration and exits when the incremented counter equals the size, which keeps the counter below the size so it never overflows. The loop's own size call and element borrows have the origin `iteration`. The per-element bounds check always passes and is left for Tier 2 to remove.
+- **An element target is evaluated before the assigned value** (D21): `lower_assign` evaluates the target first when it reaches an element, so the index is computed before the value, as compound assignments already did.

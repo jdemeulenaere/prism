@@ -36,7 +36,7 @@ The grammar MUST accept `do body while (condition)` as a statement whose body is
 - **THEN** the type checker emits `E4001` for the `x` in `val y = x`
 
 ### Requirement: For Loops Over Ranges
-The grammar MUST accept `for (name in iterable) body` as a statement. The iterable MUST have the built-in `Range` type after peeling `&` and `&mut` layers, as conditions do, otherwise `E4002` is reported. It is evaluated once, before the first iteration. The loop variable MUST be a fresh immutable `Int` binding in each iteration, in a scope enclosing the body, so the body may shadow it.
+The grammar MUST accept `for (name in iterable) body` as a statement. The iterable, read through `&`, `&mut` and `Heap<T>` layers as conditions are, MUST be a `Range` or a list (`collections`, "For Loops Over Lists"), and is otherwise `E4002`, naming both. It is evaluated once, before the first iteration. The loop variable MUST be a fresh immutable binding in each iteration, an `Int` over a range and a borrow of the element over a list, in a scope enclosing the body, so the body may shadow it.
 
 #### Scenario: Counting loop over a half-open range
 - **WHEN** `fun f(n: Int): Int { var sum = 0; for (i in 0..<n) { sum = sum + i }; return sum }` is checked
@@ -52,6 +52,10 @@ The grammar MUST accept `for (name in iterable) body` as a statement. The iterab
 
 #### Scenario: Body may shadow the loop variable
 - **WHEN** `fun f() { for (i in 0..10) { val i = "s" } }` is checked
+- **THEN** the program typechecks without errors
+
+#### Scenario: A list is iterable
+- **WHEN** `fun f(xs: List<Int>, ys: &List<Int>) { for (x in xs) {}; for (y in ys) {}; for (i in xs.indices) {} }` is checked
 - **THEN** the program typechecks without errors
 
 ### Requirement: Loop Bodies
@@ -158,3 +162,7 @@ Decisions from `statements-and-loops` (agreed with the user in the borrow-checke
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Loop evaluation follows the MIR shapes** (from `docs/architecture.md` §4). A `for` loop evaluates its range once into a hidden `Range` local and tests its latch against the last element before incrementing, so a range ending at the largest `Int` never overflows; `continue` in a `do`/`while` goes to its condition. These are runtime semantics shared by every tier.
+
+Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`for` iterates lists too, without a protocol** (D9, D10; supersedes "`for` iterates only the built-in `Range` for now" above). The iterable is a `Range` or a `List`, read through `&`, `&mut` and `Heap<T>` layers; over a list the variable is a `&T` (or `&mut T`) per element, and the list is borrowed for the whole loop. A user-visible iteration protocol waits for traits (`collections`, "Design Rationale").

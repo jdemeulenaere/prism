@@ -40,7 +40,7 @@ Every compiled function of a declaration MUST have a symbol derived from its dec
 - **THEN** `prism dump-clif lib/math.prism` prints the functions `lib/math::Int.double`, `lib/math::scale`, `lib/math::scale#default(b)`, `lib/math::BASE#init` and `lib/math::BASE#get`
 
 ### Requirement: Glue Has No Function Table Slot
-Drop, clone and equality glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<unit>#drop(<type>)`, `<unit>#clone(<type>)` or `<unit>#equals(<type>)` after that unit's name and the type it handles. A file's unit is named by its module, and an instance's unit by the instance's symbol.
+Drop, clone, equality and index-of glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<unit>#drop(<type>)`, `<unit>#clone(<type>)`, `<unit>#equals(<type>)` or `<unit>#indexOf(<type>)` after that unit's name and the type it handles. A file's unit is named by its module, and an instance's unit by the instance's symbol.
 
 #### Scenario: Glue of one type in two files
 - **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User): Unit {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
@@ -168,7 +168,7 @@ Each top-level `val` MUST have storage in its file's code unit and an accessor t
 - **THEN** it reports `E6001`, prints no IR, and exits with a failure status
 
 ### Requirement: Layout Dump
-`prism dump-layout <file.prism>` MUST print, as deterministic text, the layout of each struct and enum the file declares, in declaration order, then of every other struct, enum and nullable type that a compiled body of the file holds, by rendered name: size, alignment, and the offset of every field, tag and payload. A type without a layout yet MUST be listed with the construct it waits for. With type or borrow errors it MUST report them, print nothing and exit with a failure status.
+`prism dump-layout <file.prism>` MUST print, as deterministic text, the layout of each struct and enum the file declares, in declaration order, then of every other struct, enum, nullable and list type that a compiled body of the file holds, by rendered name: size, alignment, and the offset of every field, tag and payload. A type without a layout yet MUST be listed with the construct it waits for. With type or borrow errors it MUST report them, print nothing and exit with a failure status.
 
 #### Scenario: Dumping a file's layouts
 - **WHEN** `prism dump-layout main.prism` runs twice on a file that `prism check` accepts
@@ -240,7 +240,7 @@ The built-in `clone()` of a value whose type owns storage MUST run the clone glu
 - **THEN** it prints `7` twice, reports no live allocation and exits with status 0
 
 ### Requirement: Glue Is Local to Its Code Unit
-Each code unit, a file's or an instance's, MUST generate the drop, clone and equality glue of the types its bodies drop, clone, or compare through boxes or beyond the inline budget of equality, including types of other modules and the types those reach through boxes, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
+Each code unit, a file's or an instance's, MUST generate the drop, clone and equality glue of the types its bodies drop, clone, or compare through boxes, as lists or beyond the inline budget of equality, and the index-of glue of the lists its bodies search, including types of other modules and the types those reach through boxes and lists, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
 
 #### Scenario: Drop glue in the IR dump
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User { val name: String }` and `fun f(u: User) {}`
@@ -305,7 +305,7 @@ Comparing through equality glue MUST give the same result as the full inline exp
 - **THEN** `prism run --check-allocations` prints `true` for the equal values and for `!=` of the values of different variants, `false` for the others, and exits with status 0
 
 ### Requirement: Glue Checks the Stack
-Every drop, clone and equality glue function MUST check the stack on entry, as compiled bodies do, so that recursion through glue that exceeds the program's stack raises the runtime error "stack overflow".
+Every drop, clone, equality and index-of glue function MUST check the stack on entry, as compiled bodies do, so that recursion through glue that exceeds the program's stack raises the runtime error "stack overflow".
 
 #### Scenario: Dropping a very deep list
 - **WHEN** `struct Node { val next: Heap<Node>? }` is declared and `fun main() { var list: Heap<Node>? = null; var i = 0; while (i < 1000000) { list = Heap(Node(list)); i += 1 }; println(i) }` runs
@@ -472,6 +472,48 @@ When an owned environment's layout fits in one pointer-sized word and none of it
 - **WHEN** `struct Handle : Copy { val id: Int }`, `struct Button { val onClick: () -> Int }` and `fun button(h: Handle): Button = Button({ h.id * 2 })` are declared and `prism dump-clif main.prism` runs on a file holding them and `fun main() { val b = button(Handle(21)); println(b.onClick()) }`
 - **THEN** no function of the file calls the runtime's allocation function, and `prism run --check-allocations main.prism` prints `42` and exits with status 0
 
+### Requirement: Lists Are a Pointer, a Size and a Capacity
+A `List<T>` value MUST be 24 bytes with the alignment of a pointer: a pointer to its elements at offset 0, its size (the number of elements) at 8 and its capacity (the number of elements its buffer holds) at 16. Element `i` MUST be at `i` times the element's stride (its size rounded up to its alignment) from the pointer. Aggregates MUST lay out a list like any field of that size and alignment, and `prism dump-layout` MUST show list types with their fields `pointer`, `size` and `capacity`.
+
+#### Scenario: A struct holding a list
+- **WHEN** `struct Model { val todos: List<Int>, val count: Int }` is declared and used in `fun main() { val m = Model(listOf(1), 1); println(m.count) }`
+- **THEN** `prism dump-layout main.prism` shows `List<Int>` with size 24 and alignment 8, and `Model` with size 32, `todos` at offset 0 and `count` at 24, and `prism run main.prism` prints `1`
+
+### Requirement: A List Owns a Buffer Exactly When It Has Capacity for Sized Elements
+A list whose capacity is 0, or whose element type is zero-sized, MUST own no memory, and its pointer MUST then be the element type's alignment, never null. Any other list MUST alone own a buffer of capacity times stride bytes, with the element type's alignment, allocated through the runtime.
+
+#### Scenario: Empty lists and lists of zero-sized elements allocate nothing
+- **WHEN** `struct Marker : Copy {}` is declared and `fun main() { var a = listOf<Int>(); var b = listOf<Marker>(); for (i in 0..<3) b.add(Marker()); println(a.size + b.size) }` runs
+- **THEN** it prints `3` and makes no allocation
+
+### Requirement: Lists Grow by Doubling
+`listOf` with `n` arguments MUST allocate a buffer of capacity exactly `n`, or none for `n = 0`. An `add` or `insert` on a full list MUST first grow it to twice its capacity, or to 4 from 0, moving the elements bitwise through the runtime, so `add` takes amortized constant time; otherwise `add` MUST write in place without calling the runtime. `removeAt`, `removeLast` and `clear` MUST keep the capacity. A buffer size that does not fit in a machine word MUST be the runtime error "out of memory".
+
+#### Scenario: Growing during a million adds
+- **WHEN** `fun main() { var xs = listOf<Int>(); for (i in 0..<1000000) xs.add(i); var sum = 0; for (x in xs) sum += x; println(sum) }` runs with `--check-allocations`
+- **THEN** it prints `499999500000`, reports no live allocation and exits with status 0
+
+### Requirement: Element Accesses Are Bounds Checked
+Computing the address of an element place MUST compare its index, as an unsigned word, with the list's size, and call the runtime's list-index error when it is not smaller, located at the source of the access. `insert` MUST accept an index from 0 to the size inclusive, and `removeLast` MUST call the runtime's empty-list error on an empty list.
+
+#### Scenario: The bounds check in the IR dump
+- **WHEN** `fun get(xs: &List<Int>, i: Int): Int = xs[i]` is declared and `prism dump-clif main.prism` runs
+- **THEN** the body of `get` loads the size of the list, compares `i` with it, and calls the runtime's list-index error on the failing branch
+
+### Requirement: List Drop and Clone Glue Handle Every Element
+Every list type MUST have drop and clone glue, whatever its element type. Dropping a list MUST drop its elements in index order, with the element type's drop glue when it has one, and then free its buffer. Cloning a list MUST allocate a buffer of capacity equal to its size (none when it is empty), copy the elements bitwise, and then replace each element that owns storage, in order, by a clone of the source's. List glue MUST check the stack, as a type may reach itself through a list.
+
+#### Scenario: List glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `fun f(xs: List<String>) {}`
+- **THEN** after the file's functions it prints the drop glue of `List<String>`, headed `function main#drop(List<String>)`, which drops each element with the runtime's string drop before freeing the buffer, and `f` calls it on its argument directly
+
+### Requirement: List Equality and Search Are Glue
+`==` on lists MUST call equality glue, `<module>#equals(List<T>)`, which compares sizes and then elements in order, stopping at the first difference. `contains` and `indexOf` MUST call index-of glue, `<module>#indexOf(List<T>)`, which compares the given element with each element in order and gives the first equal index or -1. Element comparisons MUST use `==` of the element type, through its equality glue when it has one.
+
+#### Scenario: List equality glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `fun same(a: &List<Int>, b: &List<Int>): Bool = a == b`
+- **THEN** it prints the equality glue of `List<Int>`, headed `function main#equals(List<Int>)`, and `same` calls it directly
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -565,3 +607,11 @@ Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised 
 - **An owned environment is one exact-sized allocation, dropped through the descriptor** (D8). It holds owned captures by value and borrowed ones as pointers, laid out like a struct's fields, is allocated when the closure is built and freed by `<closure symbol>#drop-environment`, which drops the owned captures in capture order. The drop entry is a direct address, so a value built before a reload keeps the drop function of its layout. An owning closure never keeps its environment in the creating frame, since a closure rebuilt in a loop would overwrite captures an earlier value still owns. Rejected: a reference-counted environment (hidden ARC), an arena per frame (an escaping closure outlives its frame) and environments owned by the slot table (only composable code has one).
 - **A one-word environment without drops is held in the environment word** (D9). An owned layout of at most 8 bytes and alignment 8 whose captures need no drop is written into a zeroed word, the drop entry is null and building allocates nothing; the closure spills the word on entry. Equal captures give equal words, which compose's handler comparison needs, and the common handler capturing one `Copy` state handle allocates nothing. Rejected: always allocating (an allocation and a free per handler per recomposition), two-word inline environments (every function value would grow) and inline environments for borrowing closures.
 - **Closures of generic bodies decide once** (D16). Capture modes do not depend on type arguments (a capture of a `T` moves unless `T : Copy`), so the generic record carries them, and each instance gets its own environment layout, descriptor and drop function in its unit: `T = Int` may be inline where `T = String` allocates.
+
+Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **A list is `{ pointer, size, capacity }`** (D13), 24 bytes, as Rust's `Vec` and Prism's `String`, mirrored in the runtime as `PrismList`, so `size` is a load and element `i` is at `i * stride`. An empty list or one of zero-sized elements owns nothing and points at the element alignment, never null (the largest `Int` as a zero-sized list's capacity). `List<T>?` keeps the tagged layout: the never-null pointer is the first word of a memory value, which the scalar niche does not cover. Rejected: a header allocation holding size and capacity (an extra indirection per access).
+- **Doubling growth, exact construction, no shrinking** (D14). A full `add` or `insert` doubles the capacity, or takes 4 from 0, through `prism_rt_reallocate`, which may extend in place and keeps the allocation map; `listOf` and `clone()` allocate exactly; removals and `clear` keep the buffer, as Kotlin's `ArrayList` and Rust's `Vec` do. Rejected: 1.5x growth, allocate-copy-free growth.
+- **Fast paths inline, slow paths in the runtime, per-type work in glue** (D15). `size`, element addresses with their bounds check, `add`, `removeLast` and `listOf`'s stores are a few inline instructions; growing, gaps, reversal and freeing are type-erased runtime calls; dropping, cloning, comparing and searching are per-element-type glue loops (`#drop`, `#clone`, `#equals`, `#indexOf`) that check the stack, since a type may reach itself through a list. Rejected: everything in the runtime with drop-function pointers (an indirect call per element), everything inline (code size).
+- **Bounds checks carry their words through the frame** (D20). The index and size reach the cold error block through two frame words stored before the branch: a block value used in a cold block, which comes last in block order, stayed live over every block between, making Cranelift's single-pass register allocator quadratic (a body of 4096 `xs[0] += i` compiled in 1 s instead of 54 ms). Rejected: a runtime call per access, a non-cold block, an error without the index and size.
+- **Short-lived locals share Cranelift variables** (D23, every body). Cranelift's SSA builder keeps a map per variable indexed by block, so one variable per loop counter or call result over a long body cost their product (4096 pairs of range loops lowered in 434 ms). Scalar locals live in at most 16 blocks (found walking back from their upward-exposed reads to their whole writes) take one of the 16 variables of their machine type last given a local whose locals occupy none of their blocks; longer-lived locals, borrowed locals, arguments, captures and the result keep their own. Two locals of one variable never live in one block, so SSA construction keeps their values apart. Linear in the body; those loops now lower in 76 ms. Rejected: stack slots beyond a count (slower code), full interference-graph colouring (quadratic for many long-lived locals).
