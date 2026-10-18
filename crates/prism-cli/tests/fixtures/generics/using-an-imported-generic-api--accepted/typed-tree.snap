@@ -1,0 +1,23 @@
+module app/main
+package app
+import struct lib/box::Box<T> : Copy if T
+  field 0 val v: T
+fun app/main::f(): Int @5:1
+  local %0 b: Box<Int> (val)
+  local %1 c: Box<Int> (val)
+  block: Int @5:14
+    let %0 b @6:5
+      call lib/box::twice<Int>: Box<Int> @6:13
+        argument x: literal 3: Int @6:19
+    let %1 c @7:5
+      copy: Box<Int> @7:13
+        local %0 b: Box<Int> @7:13
+    tail: coerce diverge: Int @8:5
+      return: Nothing @8:5
+        binary +: Int @8:12
+          deref: Int @8:12
+            call lib/box::Box<T>.get<Int>: &Int @8:12
+              receiver: borrow (receiver): &Box<Int> @8:12
+                local %0 b: Box<Int> @8:12
+          field 0 v: Int @8:22
+            local %1 c: Box<Int> @8:22

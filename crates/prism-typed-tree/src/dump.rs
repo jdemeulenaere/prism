@@ -133,8 +133,16 @@ impl TypedFile {
                 continue;
             }
             let marker = marker_suffix(self.types.marker(id));
+            let generic_marker = |parameters: &[TypeParameter]| {
+                generic_marker_suffix(
+                    self.types.marker(id),
+                    parameters,
+                    self.types.marker_parameters(id),
+                )
+            };
             match self.types.definition(id) {
                 Some(TypeDef::Struct { parameters, fields }) => {
+                    let marker = generic_marker(parameters);
                     let parameters = TypeParameter::render_list(parameters);
                     writeln!(out, "import struct {}{}{}", nominal(id), parameters, marker).unwrap();
                     dump_fields(out, fields);
@@ -143,6 +151,7 @@ impl TypedFile {
                     parameters,
                     variants,
                 }) => {
+                    let marker = generic_marker(parameters);
                     let parameters = TypeParameter::render_list(parameters);
                     writeln!(out, "import enum {}{}{}", nominal(id), parameters, marker).unwrap();
                     dump_variants(out, variants);
