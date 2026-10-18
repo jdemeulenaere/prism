@@ -6,6 +6,7 @@
 
 use crate::builder::{BodyBuilder, FileBuilder};
 use crate::error::TypeError;
+use crate::exhaustiveness;
 use crate::inference::Unknowns;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::{
@@ -4304,7 +4305,11 @@ impl TypeChecker {
         }
 
         self.origin = branch_origin;
-        let covered = self.interim_coverage(subject_ty.as_ref(), &tree_branches, branches);
+        let missing = match subject_ty {
+            Some(Type::Error) => None,
+            _ => self.missing_value(subject_ty.as_ref(), &tree_branches),
+        };
+        let covered = missing.is_none();
         let build = |checker: &mut Self, branches, ty| {
             let kind = ExpressionKind::When {
                 subject,
@@ -4325,9 +4330,17 @@ impl TypeChecker {
         let is_exhaustive = covered || subject_ty == Some(Type::Error) || pattern_errors;
 
         if !is_exhaustive {
-            self.errors.push(TypeError::NonExhaustiveWhen {
-                message: "'when' expression in value position must have an 'else' branch or be exhaustive"
+            let message = match (&missing, target) {
+                (Some(missing), Some(_)) => format!(
+                    "'when' expression in value position is not exhaustive: '{}' is not covered",
+                    missing
+                ),
+                _ => "'when' expression without a subject in value position must have an 'else' branch"
                     .to_string(),
+            };
+            self.errors.push(TypeError::NonExhaustiveWhen {
+                message,
+                witness: missing.filter(|_| target.is_some()),
                 span,
             });
         }
@@ -4367,67 +4380,35 @@ impl TypeChecker {
         }
     }
 
-    /// Whether the branches cover every value of the subject: an unguarded `else`, wildcard,
-    /// binding or irrefutable struct pattern; every variant of an enum by an unguarded variant
-    /// pattern whose sub-patterns are irrefutable; or `true`, `false` (and `null` for a `Bool?`).
-    /// Interim rule until the usefulness check of `payload-patterns` 4.2 replaces it.
-    fn interim_coverage(
+    /// Whether the branches cover every value of the subject (D11 of `payload-patterns`): with
+    /// a subject, by the usefulness check, which also names a value no branch covers; without
+    /// one, only `else` covers everything, since conditions cover nothing.
+    fn missing_value(
         &self,
         subject_ty: Option<&Type>,
         tree_branches: &[prism_typed_tree::WhenBranch],
-        branches: &[WhenBranch],
-    ) -> bool {
-        fn irrefutable(pattern: &Pattern) -> bool {
-            match pattern {
-                Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Else => true,
-                Pattern::Struct { fields, .. } => fields.iter().all(irrefutable),
-                _ => false,
-            }
-        }
-        let mut variants = HashSet::new();
-        let mut literals = HashSet::new();
-        for (tree, branch) in tree_branches.iter().zip(branches) {
-            if tree.guard.is_some() {
-                continue;
-            }
-            for (pattern, written) in tree.patterns.iter().zip(&branch.patterns) {
-                if irrefutable(pattern) {
-                    return true;
-                }
-                if let Pattern::Variant { index, fields, .. } = pattern {
-                    if fields.iter().all(irrefutable) {
-                        variants.insert(*index);
-                    }
-                }
-                if let WhenPattern::Pattern(prism_ast::Pattern {
-                    kind: PatternKind::Value(value),
-                    ..
-                }) = written
-                {
-                    match &value.kind {
-                        ExprKind::Literal(Literal::Bool(value)) => {
-                            literals.insert(Some(*value));
-                        }
-                        ExprKind::Literal(Literal::Null) => {
-                            literals.insert(None);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        match subject_ty {
-            Some(Type::Enum { id, .. }) => self.enum_variants(id).is_some_and(|all| {
-                !all.is_empty() && (0..all.len()).all(|i| variants.contains(&i))
-            }),
-            Some(Type::Bool) => [Some(true), Some(false)]
+    ) -> Option<String> {
+        let Some(subject_ty) = subject_ty else {
+            let has_else = tree_branches
                 .iter()
-                .all(|literal| literals.contains(literal)),
-            Some(Type::Nullable(inner)) if **inner == Type::Bool => [Some(true), Some(false), None]
-                .iter()
-                .all(|literal| literals.contains(literal)),
-            _ => false,
-        }
+                .any(|b| b.patterns.iter().any(|p| matches!(p, Pattern::Else)));
+            return (!has_else).then(|| "_".to_string());
+        };
+        let rows: Vec<exhaustiveness::Row> = tree_branches
+            .iter()
+            .map(|branch| exhaustiveness::Row {
+                patterns: branch.patterns.iter().collect(),
+                guarded: branch.guard.is_some(),
+            })
+            .collect();
+        let literal = |mut id: ExpressionId| loop {
+            match self.builder.kind(id) {
+                ExpressionKind::Coerce { value, .. } => id = *value,
+                ExpressionKind::Literal(literal) => return Some(literal.clone()),
+                _ => return None,
+            }
+        };
+        exhaustiveness::missing_value(&self.types, subject_ty, &rows, &literal)
     }
 
     /// Infers the call `callee<type_arguments>(args)`, checked against `expected` when the call

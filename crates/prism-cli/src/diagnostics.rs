@@ -304,6 +304,15 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::CannotInferType { .. } => {
             out.push_str("   = help: add an explicit type annotation, or pass the closure where a function type is expected\n");
         }
+        TypeError::NonExhaustiveWhen {
+            witness: Some(witness),
+            ..
+        } => {
+            out.push_str(&format!(
+                "   = help: add a branch for '{}', or an 'else -> ...' branch\n",
+                witness
+            ));
+        }
         TypeError::NonExhaustiveWhen { .. } => {
             out.push_str(
                 "   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n",

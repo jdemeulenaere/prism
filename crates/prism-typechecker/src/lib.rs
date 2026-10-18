@@ -10,6 +10,7 @@
 mod builder;
 pub mod checker;
 pub mod error;
+pub mod exhaustiveness;
 pub mod inference;
 pub mod scope;
 pub mod types;

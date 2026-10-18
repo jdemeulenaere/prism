@@ -413,7 +413,26 @@ fn test_cli_binary_non_exhaustive_when_e4009() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error[E4009]: 'when' expression in value position must have an 'else' branch or be exhaustive"));
+    assert!(
+        stderr.contains("error[E4009]: 'when' expression in value position is not exhaustive: '_' is not covered"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: add a branch for '_', or an 'else -> ...' branch"),
+        "{stderr}"
+    );
+
+    fs::write(
+        &file,
+        "enum Shape { Circle(Double), Rect(Double, Double) }\nfun f(s: Shape): Double = when (s) { Shape.Circle(val r) -> r }\n",
+    )
+    .unwrap();
+    let output = prism().arg("check").arg(&file).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("'Shape.Rect(_, _)' is not covered"),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(&temp).ok();
 }

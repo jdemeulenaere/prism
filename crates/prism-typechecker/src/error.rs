@@ -106,7 +106,13 @@ pub enum TypeError {
     InvalidComposeContext { callee: String, span: Span },
 
     /// E4009: Non-exhaustive `when` expression in value position.
-    NonExhaustiveWhen { message: String, span: Span },
+    NonExhaustiveWhen {
+        message: String,
+        /// A value no branch covers, as a pattern (D11 of `payload-patterns`); `None` for a
+        /// `when` without a subject.
+        witness: Option<String>,
+        span: Span,
+    },
 
     /// E4010: Declaring a duplicate symbol within the identical lexical scope.
     DuplicateSymbol { name: String, span: Span },
