@@ -24,9 +24,9 @@
 use crate::error::{CaptureRefusal, TypeError};
 use prism_ast::Span;
 use prism_typed_tree::{
-    Argument, Body, BuiltinFunction, Callee, Capture, CaptureMode, ConstructKind, ExpressionId,
-    ExpressionKind, LocalId, LocalKind, OwnershipReason, OwnershipReasonKind, StatementId,
-    StatementKind, TypeTable,
+    Argument, BindingMode, Body, BuiltinFunction, Callee, Capture, CaptureMode, ConstructKind,
+    ExpressionId, ExpressionKind, LocalId, LocalKind, OwnershipReason, OwnershipReasonKind,
+    Pattern, StatementId, StatementKind, TypeTable,
 };
 
 /// What a body's value is, which names why a closure it returns owns its captures.
@@ -360,6 +360,12 @@ impl<'a> Graph<'a> {
                     for pattern in &branch.patterns {
                         for (local, _) in pattern.bindings() {
                             self.declare(local);
+                        }
+                        // A binding of the whole subject, or of a nullable subject's payload,
+                        // by value holds what the subject holds.
+                        if let (Some(subject), Some(local)) = (subject, whole_binding(pattern)) {
+                            let span = self.body.expressions[*subject].span;
+                            self.store(*subject, local, span);
                         }
                         pattern.expressions(&mut children);
                     }
@@ -853,6 +859,19 @@ impl<'a> Graph<'a> {
             }
         }
         extents
+    }
+}
+
+/// The binding of a pattern that binds the whole matched value by value, or the payload of a
+/// nullable one.
+fn whole_binding(pattern: &Pattern) -> Option<LocalId> {
+    match pattern {
+        Pattern::Binding {
+            local,
+            mode: BindingMode::Move | BindingMode::Copy,
+        } => Some(*local),
+        Pattern::NonNull(inner) => whole_binding(inner),
+        _ => None,
     }
 }
 

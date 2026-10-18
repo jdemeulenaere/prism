@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+// A 'when' that binds the whole subject, or a nullable subject's payload, passes on what the
+// subject holds, so a closure reaching an escape through the binding owns its captures.
+fun greet(s: &String): Int = s.length
+fun f(s: String): () -> Int {
+    val h = { greet(s) }
+    val x = when (h) { val k -> k }
+    return x
+}
+fun g(s: String): (() -> Int)? {
+    val h: (() -> Int)? = { greet(s) * 2 }
+    return when (h) { null -> null; val k -> k }
+}
+fun main() {
+    println(f("ab" + "c")())
+    val k = g("ab" + "c") ?: { 0 }
+    println(k())
+}
