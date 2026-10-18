@@ -1,0 +1,2 @@
+// expect: ok
+enum Color { Red, Green, Blue }

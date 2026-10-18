@@ -1,4 +1,4 @@
-//! `prism run` and `prism dump-clif` on the binary: the scenarios of the `execution`,
+//! `prism run`, `prism dump-clif` and `prism dump-layout` on the binary: the scenarios of the `execution`,
 //! `code-generation` and `compilation-and-abi` specs that look at the command line, timings or
 //! generated code rather than at a program's output alone (which the executable fixtures cover).
 
@@ -107,6 +107,7 @@ fn usage_errors_exit_with_status_1() {
         &["run", "--fast", "main.prism"],
         &["run", "main.prism", "extra"],
         &["dump-clif"],
+        &["dump-layout"],
     ] {
         let output = prism(arguments, &directory);
         assert_eq!(output.status.code(), Some(1), "{:?}", arguments);
@@ -319,4 +320,77 @@ fn the_reference_program_runs() {
         "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n"
     );
     assert_eq!(stderr(&output), "");
+}
+
+/// code-generation: "Signature of a function over structs" and "A field added keeps the
+/// signature".
+#[test]
+fn signatures_of_functions_over_structs() {
+    let source =
+        "struct Point : Copy { val x: Int, val y: Int }\nfun f(p: Point, n: Int): Point = p\n";
+    let directory = single_file("struct_signatures", source);
+    let signature_line = |directory: &Path| {
+        let dump = prism(&["dump-clif", "main.prism"], directory);
+        assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+        let dump = stdout(&dump);
+        function_ir(&dump, "main::f")
+            .lines()
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let before = signature_line(&directory);
+    // The result's address, the address of `p` and the 64-bit `n`; nothing is returned.
+    assert!(
+        before.starts_with("function %\"main::f\"(i64, i64, i64) "),
+        "{}",
+        before
+    );
+    assert!(!before.contains("->"), "{}", before);
+    write(
+        &directory.join("main.prism"),
+        &source.replace("val y: Int }", "val y: Int, val z: Int }"),
+    );
+    assert_eq!(signature_line(&directory), before);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Dumping a file's layouts".
+#[test]
+fn dumping_a_file_s_layouts() {
+    let directory = single_file(
+        "dump_layout",
+        "struct Point : Copy { val x: Double, val y: Double }\n\
+         enum Color { Red, Green }\n\
+         fun f(n: Int?): Int = n ?: 0\n",
+    );
+    let first = prism(&["dump-layout", "main.prism"], &directory);
+    let second = prism(&["dump-layout", "main.prism"], &directory);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    assert_eq!(stdout(&first), stdout(&second));
+    assert_eq!(
+        stdout(&first),
+        "struct main::Point : Copy (size 16, align 8)\n  x: Float at 0\n  y: Float at 8\n\
+         enum main::Color (size 1, align 1, tag u8 at 0)\n  Red\n  Green\n\
+         nullable Int? (size 16, align 8, tag u8 at 0)\n  payload Int at 8\n"
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Dumping a file with errors".
+#[test]
+fn dumping_the_layouts_of_a_file_with_errors() {
+    let directory = single_file(
+        "dump_layout_errors",
+        "struct P { val x: Int }\nfun f(): Int = nope\n",
+    );
+    let output = prism(&["dump-layout", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).contains("error[E4001]"),
+        "{}",
+        stderr(&output)
+    );
+    fs::remove_dir_all(&directory).ok();
 }

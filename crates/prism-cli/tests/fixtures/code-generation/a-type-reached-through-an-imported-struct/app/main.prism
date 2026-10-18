@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+// entry: app/main.prism
+package app
+import /geo/shapes
+fun main() { val c = unit(); val d = c; println(d.r); println(norm(c.center)) }

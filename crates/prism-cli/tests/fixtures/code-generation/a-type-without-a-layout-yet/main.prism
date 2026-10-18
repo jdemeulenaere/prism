@@ -1,0 +1,3 @@
+// expect: ok
+struct User { val name: String }
+struct Box<T>(val v: T)

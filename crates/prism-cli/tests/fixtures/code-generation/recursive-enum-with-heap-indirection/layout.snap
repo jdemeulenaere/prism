@@ -1,0 +1,3 @@
+enum main::Expr (size 24, align 8, tag u8 at 0)
+  Literal(Int at 8)
+  Add(Heap<Expr> at 8, Heap<Expr> at 16)

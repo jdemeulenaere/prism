@@ -1,4 +1,4 @@
-//! `prism run` and `prism dump-clif`: compiling a program with the Tier 1 backend and running it
+//! `prism run`, `prism dump-clif` and `prism dump-layout`: compiling a program with the Tier 1 backend and running it
 //! (the `execution` spec; D14, D20 and D23 of `codegen-core`).
 //!
 //! `prism run` checks the entry file and everything it transitively imports as `prism check`
@@ -12,10 +12,10 @@
 use crate::workspace::{
     assert_workspace_boundary, elaborate_file, extract_abis, validate_entry_file, WorkspaceError,
 };
-use prism_codegen::{check_file, dump_file, find_main, DumpError, Linker, Program};
+use prism_codegen::{check_file, dump_file, dump_layouts, find_main, DumpError, Linker, Program};
 use prism_mir::MirFile;
 use prism_resolver::DependencyGraph;
-use prism_typed_tree::DeclarationPath;
+use prism_typed_tree::{DeclarationPath, Item, NominalId};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -154,6 +154,28 @@ pub fn dump_clif(entry: &Path) -> Result<String, WorkspaceError> {
         },
         DumpError::Backend(error) => WorkspaceError::Backend(error),
     })
+}
+
+/// The layouts of the entry file `entry`, as `prism dump-layout` prints them (D18 of
+/// `codegen-aggregates`): its own structs and enums in declaration order, then every other
+/// struct, enum and nullable type its compiled bodies hold. The file is compiled alone against
+/// the ABIs of its direct imports, as for `prism dump-clif`; a file with type or borrow errors
+/// returns them instead.
+pub fn dump_layout(entry: &Path) -> Result<String, WorkspaceError> {
+    let (tree, mir) = crate::workspace::elaborate_entry(entry)?;
+    let declared: Vec<NominalId> = tree
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(item) => Some(item.id.clone()),
+            Item::Enum(item) => Some(item.id.clone()),
+            Item::Function(_) | Item::Value(_) => None,
+        })
+        .collect();
+    let pointer = prism_codegen::isa::isa()
+        .map_err(WorkspaceError::Backend)?
+        .pointer_type();
+    Ok(dump_layouts(&mir, &declared, pointer))
 }
 
 /// The path under which `graph` knows the entry file `entry`.

@@ -37,6 +37,9 @@ COMMANDS:
                            time of each stage before main runs; the arguments after '--' are
                            the program's
     dump-clif <file.prism> Print the Cranelift IR the backend generates for a source file
+    dump-layout <file.prism>
+                           Print the memory layout of every struct, enum and nullable type a
+                           source file declares or its compiled bodies hold
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
     fmt [--check] <path>...
                            Format files, and the .prism files under directories, in place and
@@ -121,6 +124,13 @@ fn main() {
             }
             run_dump_clif(&args[2]);
         }
+        "dump-layout" => {
+            if args.len() != 3 {
+                eprintln!("Error: 'dump-layout' command requires a file path argument");
+                process::exit(1);
+            }
+            run_dump_layout(&args[2]);
+        }
         "abi" => {
             if args.len() < 3 {
                 eprintln!("Error: 'abi' command requires a file path argument");
@@ -182,6 +192,16 @@ fn run_program(args: &[String], started: std::time::Instant) {
 
 fn run_dump_clif(path: &str) {
     match prism_cli::dump_clif(std::path::Path::new(path)) {
+        Ok(text) => print!("{}", text),
+        Err(err) => {
+            eprint!("{}", err.render());
+            process::exit(1);
+        }
+    }
+}
+
+fn run_dump_layout(path: &str) {
+    match prism_cli::dump_layout(std::path::Path::new(path)) {
         Ok(text) => print!("{}", text),
         Err(err) => {
             eprint!("{}", err.render());

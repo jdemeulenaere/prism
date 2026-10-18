@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+struct Counter { var n: Int }
+fun take(c: Counter): Int = c.n
+fun flag(): Bool = false
+fun main() { val c = Counter(4); if (flag()) println(take(c)); println(1) }

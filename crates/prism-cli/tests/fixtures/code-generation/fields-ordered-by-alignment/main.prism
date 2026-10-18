@@ -1,0 +1,2 @@
+// expect: ok
+struct S { val a: Bool, val n: Int, val b: Bool }

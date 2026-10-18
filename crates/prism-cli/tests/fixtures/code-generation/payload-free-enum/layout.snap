@@ -1,0 +1,4 @@
+enum main::Color (size 1, align 1, tag u8 at 0)
+  Red
+  Green
+  Blue

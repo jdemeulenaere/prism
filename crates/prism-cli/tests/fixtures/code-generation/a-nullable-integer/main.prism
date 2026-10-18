@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+fun orZero(n: Int?): Int = n ?: 0
+fun main() { println(orZero(null)); println(orZero(4)) }

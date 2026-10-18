@@ -1,0 +1,4 @@
+struct main::Pair<A, B> (generic: laid out per instance)
+struct main::Pair<Int, Bool> (size 16, align 8)
+  a: Int at 0
+  b: Bool at 8

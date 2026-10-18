@@ -1,0 +1,4 @@
+struct main::Point : Copy (size 8, align 8)
+  x: Int at 0
+nullable (&Point)? (size 8, align 8, null pointer)
+nullable (&mut Point)? (size 8, align 8, null pointer)

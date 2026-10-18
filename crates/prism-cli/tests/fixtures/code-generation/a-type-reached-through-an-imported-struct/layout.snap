@@ -1,0 +1,5 @@
+struct geo/core::Vec : Copy (size 8, align 8)
+  x: Int at 0
+struct geo/shapes::Circle : Copy (size 16, align 8)
+  center: Vec at 0
+  r: Int at 8

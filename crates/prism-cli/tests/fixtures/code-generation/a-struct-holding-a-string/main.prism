@@ -1,0 +1,5 @@
+// expect: ok
+// run: 1
+struct User { val name: String }
+fun age(u: &User): Int = 1
+fun main() { println(1) }

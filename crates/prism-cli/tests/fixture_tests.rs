@@ -51,6 +51,12 @@
 //! Checking" (`ELABORATED_SCENARIOS`) must hold one. `PRISM_BLESS=1` writes every kind of
 //! snapshot.
 //!
+//! ## Layout snapshots
+//!
+//! A case may also hold `layout.snap`: the expected output of `prism dump-layout` on its entry
+//! (`prism_cli::dump_layout`), which needs an entry without type or borrow errors. Every
+//! `code-generation` case of the layout scenarios (`LAYOUT_SCENARIOS`) must hold one.
+//!
 //! ## Executable cases
 //!
 //! A case whose header also has a `// run: <status>` line is a program: the runner spawns
@@ -333,6 +339,21 @@ const ELABORATED_SCENARIOS: &[&str] = &[
     "elaborated-drops-of-a-generic-body",
 ];
 
+/// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of
+/// the requirements on struct, enum, nullable and generic instance layouts, and "A type without
+/// a layout yet".
+const LAYOUT_SCENARIOS: &[&str] = &[
+    "value-struct-definition",
+    "fields-ordered-by-alignment",
+    "payload-free-enum",
+    "recursive-enum-with-heap-indirection",
+    "a-small-payload-follows-the-tag",
+    "a-nullable-integer",
+    "an-optional-borrow-is-one-pointer",
+    "a-generic-struct-at-concrete-types",
+    "a-type-without-a-layout-yet",
+];
+
 const SNAPSHOTS: &[Snapshot] = &[
     Snapshot {
         file: "typed-tree.snap",
@@ -365,6 +386,16 @@ const SNAPSHOTS: &[Snapshot] = &[
                 .map(|dump| dump.text)
                 .map_err(|err| err.render())
         },
+    },
+    Snapshot {
+        file: "layout.snap",
+        required_for: |spec, dir| {
+            spec == "code-generation"
+                && LAYOUT_SCENARIOS
+                    .iter()
+                    .any(|scenario| dir.split("--").next() == Some(scenario))
+        },
+        dump: |entry| prism_cli::dump_layout(entry).map_err(|err| err.render()),
     },
 ];
 

@@ -1,0 +1,5 @@
+package geo
+import /geo/core
+public struct Circle : Copy { val center: Vec, val r: Int }
+public fun unit(): Circle = Circle(Vec(3), 1)
+public fun norm(v: Vec): Int = v.x

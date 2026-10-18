@@ -1,0 +1,4 @@
+package lib
+struct Secret : Copy { val k: Int }
+public struct Outer : Copy { val s: Secret, val n: Int }
+public fun make(): Outer = Outer(Secret(1), 2)

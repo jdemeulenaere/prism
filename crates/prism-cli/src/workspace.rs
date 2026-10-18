@@ -771,16 +771,23 @@ pub fn dump_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
 /// errors has no elaborated MIR: its errors are returned instead (D1 of `borrowck-moves`). Only
 /// the entry is borrow-checked, from its own MIR.
 pub fn dump_elaborated_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
+    let (_, elaborated) = elaborate_entry(entry)?;
+    Ok(MirDump {
+        text: elaborated.dump(),
+        mir: elaborated,
+    })
+}
+
+/// The typed tree of the entry file `entry` and its elaborated MIR, as [`dump_elaborated_mir`]
+/// builds it, or its errors of any stage.
+pub(crate) fn elaborate_entry(entry: &Path) -> Result<(TypedFile, MirFile), WorkspaceError> {
     let (tree, type_errors) = typecheck_entry(entry)?;
     if let Some(errors) = type_errors {
         return Err(errors);
     }
     let mir = prism_mir::lower_file(&tree);
     match prism_borrowck::check_file(&mir) {
-        Ok(elaborated) => Ok(MirDump {
-            text: elaborated.dump(),
-            mir: elaborated,
-        }),
+        Ok(elaborated) => Ok((tree, elaborated)),
         Err(errors) => {
             let path = entry.to_path_buf();
             let source = fs::read_to_string(entry).unwrap_or_default();

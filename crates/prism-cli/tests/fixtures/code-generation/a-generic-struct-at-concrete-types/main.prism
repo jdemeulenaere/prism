@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+struct Pair<A, B>(val a: A, val b: B)
+fun main() { val p = Pair(1, true); println(p.b) }

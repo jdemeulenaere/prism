@@ -1,0 +1,4 @@
+struct main::S (size 16, align 8)
+  a: Bool at 8
+  n: Int at 0
+  b: Bool at 9
