@@ -55,21 +55,22 @@ Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is on
 ### Then: the road to Milestone 2
 Planned autonomously on 2026-10-17, when the user asked for iteration up to Milestone 2 (see [`docs/decisions-for-review.md`](docs/decisions-for-review.md)). Each item is one OpenSpec change, in this order; the order and scope may be revised as changes land, and any revision is logged there.
 
-10. [ ] `generics`: type parameters on functions, structs and enums, checked at declaration, with `Copy`/`Clone` bounds; monomorphization, and the ABI's monomorphization hashes for exported generics. Needed for `State<T>`. Adds type arguments to typed-tree calls and constructions, and may serialize an exported generic body's typed tree into the artifact cache (from `typed-tree`).
+10. [ ] `generics`: type parameters on functions, extensions, structs and enums (`fun <T> id`, `fun <T> Box<T>.get()`), checked once at declaration with `Copy`/`Clone` bounds; explicit (`f<Int>(x)`) and inferred type arguments; borrow-free type arguments; conditional markers on generic types; polymorphic typed trees and MIR, and generic signatures in the ABI. Needed for `State<T>`. Monomorphization was split out into its own change, item 17 (2026-10-18).
 11. [ ] `compound-assignment`: `+=`, `-=`, `*=`, `/=`, `%=` as statements.
 12. [ ] `abi-cache`: decide the ABI hash algorithm, write `.abi` and artifact caches, and verify compilation avoidance (body edits recompile no importer).
 13. [ ] `prism-fmt`: the `prism fmt` code formatter.
-14. [ ] `codegen-core` (Phase 3): a `prism-codegen` crate lowering MIR to Cranelift; `prism run` for `Int`/`Bool`/`Double`, functions, control flow and loops; a `print` built-in; an executable-fixture runner comparing stdout.
+14. [ ] `codegen-core` (Phase 3): a `prism-codegen` crate lowering MIR to Cranelift; `prism run` for `Int`/`Bool`/`Double`, functions, control flow and loops; a `print` built-in; an executable-fixture runner comparing stdout. Generic bodies wait for `monomorphization`.
 15. [ ] `codegen-aggregates`: structs, enums, nullables, references and `when` in the backend.
 16. [ ] `runtime-strings-and-drops`: owned `String`, drop glue (what dropping a `String`, a struct or a `Heap<T>` does, including a destructor dropping owned fields and heap allocations at scope exit), `clone()`, and `Heap<T>` construction. Drop elaboration on MIR was done by `borrowck-moves`.
-17. [ ] `closures`: closure conversion in the backend, then escaping move-capturing closures (needed for `onClick`).
-18. [ ] `hot-reload`: function-pointer tables in Tier 1 and `prism run --watch` patching changed functions while the program runs.
-19. [ ] `compose-runtime` (Phase 4): slot table, group keys and memoization.
-20. [ ] `compose-transform`: the compiler transform of `compose fun` (composer parameter, group keys, change-tracking bitmasks, skipping).
-21. [ ] `state-handles`: `remember`, `mutableStateOf` and `Copy` `State<T>` handles with generational indices; invalidation and recomposition.
-22. [ ] `ui-toolkit`: a UI node tree with layout (`Column`, `Row`, `Text`, `Button`), a desktop renderer and a headless renderer for tests, and event dispatch.
-23. [ ] `compose-hot-reload`: hot reload of composable bodies that keeps slot-table state.
-24. [ ] `reactive-app-verification`: real reactive example apps (counter, todo list) running natively, with tests that no allocation outlives its owner.
+17. [ ] `monomorphization`: instantiating generic MIR per type arguments (from `generics`): substitution, type-parameter drops resolved to drop glue or removed, flattened `T?` rewrites, rejecting polymorphic recursion, and cross-file instantiation, shipping each generic's elaborated polymorphic MIR, deciding where instances live and what the Monomorphization Hash covers, with re-monomorphization only where a generic body changed ([`docs/architecture.md`](docs/architecture.md) §1).
+18. [ ] `closures`: closure conversion in the backend, then escaping move-capturing closures (needed for `onClick`).
+19. [ ] `hot-reload`: function-pointer tables in Tier 1 and `prism run --watch` patching changed functions while the program runs.
+20. [ ] `compose-runtime` (Phase 4): slot table, group keys and memoization.
+21. [ ] `compose-transform`: the compiler transform of `compose fun` (composer parameter, group keys, change-tracking bitmasks, skipping).
+22. [ ] `state-handles`: `remember`, `mutableStateOf` and `Copy` `State<T>` handles with generational indices; invalidation and recomposition.
+23. [ ] `ui-toolkit`: a UI node tree with layout (`Column`, `Row`, `Text`, `Button`), a desktop renderer and a headless renderer for tests, and event dispatch.
+24. [ ] `compose-hot-reload`: hot reload of composable bodies that keeps slot-table state.
+25. [ ] `reactive-app-verification`: real reactive example apps (counter, todo list) running natively, with tests that no allocation outlives its owner.
 
 Deliberately left until after the borrow checker (from the same session):
 - [ ] `Heap<T>` construction and unboxing, including whether its contents can be moved out, whether `*h = v` writes a `Heap`'s contents, and whether `Heap<U>` to `Heap<T>` stays covariant, which changes the representation the way reference covariance did (from `reference-access`), and whether a `consuming` call may move its receiver out of a `Heap<T>`, `E4017` today (from `extension-methods`).

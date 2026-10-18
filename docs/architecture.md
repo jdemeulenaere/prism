@@ -52,6 +52,9 @@ Downstream call sites that instantiate an exported generic function MUST be re-m
 ### Open decision: ABI hash algorithm
 The original design called for a BLAKE3 cryptographic hash of exported declarations. `crates/prism-abi` currently uses a deterministic 128-bit FNV-1a hash. Decide which algorithm is authoritative before building the `.abi` cache.
 
+### Open decision: where generic instances live (`monomorphization`)
+`generics` checks each generic declaration once into elaborated polymorphic MIR, but ships no generic body to importers (its `design.md`, D15). The recommended direction: the exporter ships each generic function's elaborated polymorphic MIR, which is self-describing because calls record callee paths, declared parameter types and type arguments. Instances live in separate instance artifacts keyed by the generic's path, the type arguments and the generic's MIR hash, rather than in the importer's artifact. That keeps a file's artifact a function of its content and its direct imports' ABI hashes even when an instance calls generics of modules the importer does not import, and with import cycles, and regenerates only the instances whose generic body changed. It may make the Phase 1 body hash in the ABI hash unnecessary. Still to decide: whether exported generic bodies may reference private declarations (Rust ships what they reach; Swift's `@inlinable` allows only exported ones), how polymorphic recursion is rejected, and the MIR rewrites for `T?` instantiated with a nullable `T`, which flattens.
+
 ---
 
 ## 2. Two-Tier Native Execution
