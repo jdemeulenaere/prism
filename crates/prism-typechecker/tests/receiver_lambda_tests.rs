@@ -114,3 +114,39 @@ fn nested_scopes_name_the_outer_receiver() {
         help
     );
 }
+
+#[test]
+fn an_inner_scope_hides_the_outer_context() {
+    let prelude = "struct Modifier : Copy { val fraction: Double }\nstruct RowScope : Copy {}\nstruct BoxScope : Copy {}\nfun row(f: RowScope.() -> Unit) { f(RowScope()) }\nfun box(f: BoxScope.() -> Unit) { f(BoxScope()) }\ncontext(scope: RowScope) fun Modifier.weight(w: Double): Modifier = Modifier(w)\nfun use(m: Modifier) {}\n";
+    for body in [
+        "fun f() { row { box { use(Modifier(0.0).weight(1.0)) } } }",
+        "context(scope: RowScope) fun g() { box { use(Modifier(0.0).weight(1.0)) } }",
+    ] {
+        let error = only_error(&format!("{prelude}{body}"), "E4034");
+        let message = error.message();
+        assert!(
+            message.contains("'weight' needs a context of type 'RowScope'")
+                && message.contains("the innermost receiver here is 'BoxScope'"),
+            "{}",
+            message
+        );
+        assert!(error
+            .missing_context_help()
+            .is_some_and(|help| help.contains("'context(scope: RowScope)'")));
+    }
+}
+
+#[test]
+fn missing_context_names_the_declared_contexts() {
+    let error = only_error(
+        "struct Modifier : Copy { val fraction: Double }\nstruct RowScope : Copy {}\nstruct ColumnScope : Copy {}\ncontext(scope: RowScope) fun Modifier.weight(w: Double): Modifier = Modifier(w)\ncontext(scope: ColumnScope) fun Modifier.weight(w: Double): Modifier = Modifier(w)\nfun f(): Modifier = Modifier(0.0).weight(1.0)",
+        "E4034",
+    );
+    let message = error.message();
+    assert!(
+        message.contains("'weight' is declared for the contexts 'RowScope' and 'ColumnScope'")
+            && message.contains("this position has no receiver"),
+        "{}",
+        message
+    );
+}

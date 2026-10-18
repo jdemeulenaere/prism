@@ -1,0 +1,6 @@
+// expect: ok
+struct ColumnScope : Copy {}
+fun column(f: ColumnScope.() -> Unit) { f(ColumnScope()) }
+context(scope: ColumnScope)
+fun divider() {}
+fun f() { column { divider() } }

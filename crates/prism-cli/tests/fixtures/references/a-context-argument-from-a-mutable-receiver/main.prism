@@ -1,0 +1,13 @@
+// expect: ok
+struct Modifier : Copy { val fraction: Double }
+struct Builder { var count: Int }
+context(b: Builder)
+fun Modifier.counted(): Int = b.count
+fun build(f: mut Builder.() -> Int): Int {
+    var b = Builder(1)
+    return b.f()
+}
+fun g(): Int = build {
+    count += 1
+    Modifier(0.0).counted()
+}

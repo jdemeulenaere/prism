@@ -1,0 +1,10 @@
+// expect: E4010
+struct Modifier : Copy {}
+struct RowScope : Copy {}
+context(scope: RowScope)
+fun Modifier.weight(): Int = 1
+context(s: RowScope)
+fun Modifier.weight(): Int = 2
+context(scope: RowScope)
+fun divider() {}
+fun divider() {}

@@ -1,0 +1,8 @@
+// expect: ok
+struct Modifier : Copy { val fraction: Double }
+struct RowScope : Copy {}
+context(scope: RowScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w)
+fun RowScope.cell(): Modifier = Modifier(0.0).weight(1.0)
+context(scope: RowScope)
+fun Modifier.half(): Modifier = weight(0.5)

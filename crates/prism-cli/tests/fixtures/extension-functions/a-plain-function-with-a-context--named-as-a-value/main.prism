@@ -1,0 +1,6 @@
+// expect: E4034
+struct ColumnScope : Copy {}
+fun column(f: ColumnScope.() -> Unit) { f(ColumnScope()) }
+context(scope: ColumnScope)
+fun divider() {}
+fun h() { column { val d = divider } }

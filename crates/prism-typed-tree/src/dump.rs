@@ -56,6 +56,9 @@ impl TypedFile {
                 }
                 Item::Function(f) => {
                     let mut parameters = Vec::new();
+                    if let Some((name, ty)) = &f.context {
+                        parameters.push(format!("context {}: {}", name, ty));
+                    }
                     if let Some((mode, _)) = &f.receiver {
                         parameters.push(match mode {
                             ReceiverMode::Shared => "this".to_string(),
@@ -63,10 +66,11 @@ impl TypedFile {
                             ReceiverMode::Consuming => "consuming this".to_string(),
                         });
                     }
-                    // The body's parameter locals start with the receiver, if any.
+                    // The body's parameter locals start with the context and the receiver, if
+                    // any.
                     let declared = self.bodies[f.body]
                         .parameters
-                        .get(usize::from(f.receiver.is_some())..)
+                        .get(f.leading_parameters()..)
                         .unwrap_or_default();
                     for (index, (name, ty)) in f.parameters.iter().enumerate() {
                         let escaping = declared
@@ -836,6 +840,7 @@ pub(crate) mod tests {
                 is_compose: false,
                 type_parameters: Vec::new(),
                 receiver: None,
+                context: None,
                 parameters: vec![("a".to_string(), Type::Int)],
                 return_type: Type::Int,
                 body,

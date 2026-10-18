@@ -643,7 +643,8 @@ impl Validator<'_> {
                         if self.error_free
                             && (declared != call.parameters
                                 || function.is_compose != call.is_compose
-                                || function.receiver.is_some() != call.has_receiver)
+                                || function.receiver.is_some() != call.has_receiver
+                                || function.context.is_some() != call.has_context)
                         {
                             let message =
                                 format!("call {} of {} does not repeat its signature", id.0, path);
@@ -1419,8 +1420,18 @@ fn declared_parameters(function: &FunctionItem) -> Vec<(Option<String>, Type)> {
         };
         (Some("this".to_string()), ty)
     });
-    receiver
+    let context = function.context.as_ref().map(|(_, ty)| {
+        (
+            Some("context".to_string()),
+            Type::Reference {
+                mutable: false,
+                inner: Box::new(ty.clone()),
+            },
+        )
+    });
+    context
         .into_iter()
+        .chain(receiver)
         .chain(
             function
                 .parameters
@@ -1751,6 +1762,7 @@ mod tests {
                 type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
+                has_context: false,
                 is_compose: false,
             }),
             Type::Int,
@@ -1853,6 +1865,7 @@ mod tests {
                 type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
+                has_context: false,
                 is_compose: false,
             }),
             Type::Int,
@@ -1901,6 +1914,7 @@ mod tests {
                 type_arguments: vec![Type::Int],
                 evaluation_order: vec![0],
                 has_receiver: false,
+                has_context: false,
                 is_compose: false,
             }),
             boxed.clone(),
@@ -1915,6 +1929,7 @@ mod tests {
                 type_arguments: vec![],
                 evaluation_order: vec![0],
                 has_receiver: true,
+                has_context: false,
                 is_compose: false,
             }),
             contents,
@@ -1973,6 +1988,7 @@ mod tests {
                 type_arguments: vec![Type::String],
                 evaluation_order: vec![0],
                 has_receiver: false,
+                has_context: false,
                 is_compose: false,
             }),
             Type::Int,

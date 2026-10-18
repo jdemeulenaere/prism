@@ -40,6 +40,9 @@ pub enum SymbolKind {
         defining_package: Option<String>,
         /// The defining module.
         module: String,
+        /// The type of the context parameter (`context(scope: RowScope)`), which a call passes
+        /// from its context (D6 of `receiver-lambdas`).
+        context: Option<Type>,
     },
     /// Struct declaration. Its fields live in the checker's type table under `id`.
     Struct {
@@ -118,6 +121,7 @@ impl Symbol {
                 visibility,
                 defining_package,
                 module: String::new(),
+                context: None,
             },
             span,
         }
@@ -142,6 +146,7 @@ impl Symbol {
                 visibility,
                 defining_package,
                 module: String::new(),
+                context: None,
             },
             span,
         }
@@ -187,6 +192,22 @@ impl Symbol {
             *local = Some(id);
         }
         self
+    }
+
+    /// The symbol of a function with the context parameter type `context`.
+    pub fn with_context(mut self, context: Option<Type>) -> Self {
+        if let SymbolKind::Function { context: own, .. } = &mut self.kind {
+            *own = context;
+        }
+        self
+    }
+
+    /// The context parameter type of a function symbol, if it has one.
+    pub fn context(&self) -> Option<&Type> {
+        match &self.kind {
+            SymbolKind::Function { context, .. } => context.as_ref(),
+            _ => None,
+        }
     }
 
     /// The symbol of a generic function or variant constructor with `parameters`.

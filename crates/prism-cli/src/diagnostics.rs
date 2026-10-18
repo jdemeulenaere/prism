@@ -432,6 +432,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 ));
             }
         }
+        TypeError::MissingContext { .. } => {
+            if let Some(help) = err.missing_context_help() {
+                out.push_str(&format!("   = help: {}\n", help));
+            }
+        }
         TypeError::OuterReceiverName { .. } => {
             if let Some(help) = err.outer_receiver_help() {
                 out.push_str(&format!("   = help: {}\n", help));

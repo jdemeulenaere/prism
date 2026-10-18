@@ -1,0 +1,15 @@
+// expect: ok
+struct Modifier : Copy { val fraction: Double }
+struct RowScope : Copy {}
+struct ColumnScope : Copy {}
+fun row(f: RowScope.() -> Unit) { f(RowScope()) }
+fun column(f: ColumnScope.() -> Unit) { f(ColumnScope()) }
+context(scope: RowScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w)
+context(scope: ColumnScope)
+fun Modifier.weight(w: Double): Bool = true
+fun use(m: Modifier) {}
+fun f() {
+    row { use(Modifier(0.0).weight(1.0)) }
+    column { val b: Bool = Modifier(0.0).weight(1.0) }
+}

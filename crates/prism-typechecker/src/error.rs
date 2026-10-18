@@ -331,6 +331,42 @@ pub enum TypeError {
         help: String,
         span: Span,
     },
+
+    /// E4034: A call of a function with a context parameter, or a reference to one, where the
+    /// context has no candidate of a type it is declared for (D10 of `receiver-lambdas`).
+    /// `needed` holds the context types the function, or the extensions of its name on the
+    /// receiver, are declared for; `found` describes the context the position has.
+    MissingContext {
+        function: String,
+        needed: Vec<Type>,
+        found: String,
+        span: Span,
+    },
+}
+
+/// The types `types`, quoted and joined: `'A'`, `'A' and 'B'`, `'A', 'B' and 'C'`.
+fn quoted_list(types: &[Type]) -> String {
+    let quoted: Vec<String> = types.iter().map(|ty| format!("'{}'", ty)).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {}", rest.join(", "), last),
+    }
+}
+
+impl TypeError {
+    /// The help of [`TypeError::MissingContext`]: where the call would find its context.
+    /// `None` for every other error.
+    pub fn missing_context_help(&self) -> Option<String> {
+        let TypeError::MissingContext { needed, .. } = self else {
+            return None;
+        };
+        let first = needed.first()?;
+        Some(format!(
+            "call it inside a lambda with a '{}' receiver, or declare the enclosing function 'context(scope: {})'",
+            first, first
+        ))
+    }
 }
 
 /// Why a closure cannot take a binding by value (D5 of `escaping-closures`).
@@ -506,6 +542,7 @@ impl TypeError {
             TypeError::InvalidLibraryDeclaration { .. } => "E4029",
             TypeError::PolymorphicRecursion { .. } => "E4027",
             TypeError::CannotCaptureByValue { .. } => "E4028",
+            TypeError::MissingContext { .. } => "E4034",
         }
     }
 
@@ -555,6 +592,7 @@ impl TypeError {
             TypeError::InvalidLibraryDeclaration { span, .. } => *span,
             TypeError::PolymorphicRecursion { span, .. } => *span,
             TypeError::CannotCaptureByValue { span, .. } => *span,
+            TypeError::MissingContext { span, .. } => *span,
         }
     }
 
@@ -563,6 +601,28 @@ impl TypeError {
         match self {
             TypeError::UnresolvedSymbol { name, .. } => {
                 format!("unresolved symbol '{}'", name)
+            }
+            TypeError::MissingContext {
+                function,
+                needed,
+                found,
+                ..
+            } => {
+                if needed.len() == 1 {
+                    format!(
+                        "'{}' needs a context of type {}, and {}",
+                        function,
+                        quoted_list(needed),
+                        found
+                    )
+                } else {
+                    format!(
+                        "'{}' is declared for the contexts {}, and {}",
+                        function,
+                        quoted_list(needed),
+                        found
+                    )
+                }
             }
             TypeError::OuterReceiverName { name, .. } => format!(
                 "unresolved symbol '{}': only the innermost receiver is implicit",

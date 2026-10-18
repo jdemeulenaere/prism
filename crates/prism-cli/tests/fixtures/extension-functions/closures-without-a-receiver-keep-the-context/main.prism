@@ -1,0 +1,8 @@
+// expect: ok
+struct Modifier : Copy { val fraction: Double }
+struct RowScope : Copy {}
+fun row(f: RowScope.() -> Unit) { f(RowScope()) }
+context(scope: RowScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w)
+fun use(m: Modifier) {}
+fun f(xs: &List<Double>) { row { xs.forEach { use(Modifier(0.0).weight(it)) } } }

@@ -5,6 +5,7 @@
 //! |---|---|
 //! | function `name` of module `m` | `m::name` |
 //! | extension `name` on receiver `R` of module `m` | `m::R.name`, `R` as the ABI writes it |
+//! | extension `name` on `R` with context `C` | `m::R.name#context(C)`, `C` written as `R` is |
 //! | generator of the default of parameter `p` | `<function symbol>#default(p)` |
 //! | initializer and accessor of top-level `val` `name` | `m::name#init`, `m::name#get` |
 //! | instance of a generic function or extension for type arguments `A, B` | `<symbol><A, B>` |
@@ -28,10 +29,11 @@ use prism_typed_tree::{DeclarationPath, Type};
 pub fn function_symbol(path: &DeclarationPath) -> String {
     match &path.receiver {
         Some(receiver) => format!(
-            "{}::{}.{}",
+            "{}::{}.{}{}",
             path.module,
             receiver.receiver_constructor(),
-            path.name
+            path.name,
+            path.context_suffix(Type::receiver_constructor)
         ),
         None => format!("{}::{}", path.module, path.name),
     }

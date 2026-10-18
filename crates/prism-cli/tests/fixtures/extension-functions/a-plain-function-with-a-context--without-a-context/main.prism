@@ -1,0 +1,5 @@
+// expect: E4034
+struct ColumnScope : Copy {}
+context(scope: ColumnScope)
+fun divider() {}
+fun g() { divider() }

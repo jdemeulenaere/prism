@@ -57,6 +57,9 @@ const LIST_ELEMENT_HELP: &str =
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
 const THIS: &str = "this";
+
+/// The name a call records for a context parameter (D9 of `receiver-lambdas`).
+const CONTEXT: &str = "context";
 /// The name of a closure's implicit parameter (D1 of `implicit-it`).
 const IMPLICIT_PARAMETER: &str = "it";
 
@@ -313,6 +316,16 @@ pub(crate) struct Extension {
     pub(crate) builtin: Option<BuiltinFunction>,
     /// Whether the member is an intrinsic property, read without parentheses (`s.length`).
     pub(crate) property: bool,
+    /// The type of the extension's context parameter, if it has one (D8 of `receiver-lambdas`).
+    pub(crate) context: Option<Type>,
+}
+
+impl Extension {
+    /// The extension's declaration path.
+    fn path(&self, name: &str) -> DeclarationPath {
+        DeclarationPath::extension(self.module.clone(), self.receiver.clone(), name)
+            .with_context(self.context.clone())
+    }
 }
 
 /// What extensions are keyed by: the type constructor of their receiver, without type arguments
@@ -351,6 +364,10 @@ enum ExtensionLookup {
     },
     /// Several imports export a matching extension; holds their module paths (`E4012`).
     Ambiguous(Vec<String>),
+    /// The first layer declaring an extension of the receiver and name declares it only for
+    /// contexts the call does not have; holds those context types (`E4034`, D8 of
+    /// `receiver-lambdas`).
+    MissingContext(Vec<Type>),
 }
 
 /// How the receiver of an extension call is passed (D8 of `extension-methods`).
@@ -392,6 +409,28 @@ enum Layer {
     Heap,
 }
 
+/// A candidate of a position's context (D7 of `receiver-lambdas`): a binding, its type (a
+/// borrow of the receiver or context, or an owned `consuming` receiver), the type it refers
+/// to, and where it comes from, for diagnostics.
+#[derive(Debug, Clone)]
+struct ContextCandidate {
+    local: prism_typed_tree::LocalId,
+    ty: Type,
+    referent: Type,
+    source: ContextSource,
+}
+
+/// Where a context candidate comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContextSource {
+    /// The `this` of the innermost lambda with a receiver.
+    LambdaReceiver,
+    /// The receiver of the enclosing extension.
+    ExtensionReceiver,
+    /// The context parameter of the enclosing function, by name.
+    ContextParameter(String),
+}
+
 /// A function value with a receiver that a call passes a receiver to (D5 of
 /// `receiver-lambdas`): whether its receiver is mutable, the layers looked through to reach the
 /// receiver's type, and that type.
@@ -422,8 +461,12 @@ struct ReceiverSite<'a> {
 enum InferenceKey {
     /// A top-level function or `val`, by name.
     Declaration(String),
-    /// An extension function, by receiver type constructor and name.
-    Extension { receiver: ReceiverKey, name: String },
+    /// An extension function, by receiver type constructor, name and context type.
+    Extension {
+        receiver: ReceiverKey,
+        name: String,
+        context: Option<Type>,
+    },
 }
 
 /// Inference state of an unannotated private top-level declaration, whose type comes from its
@@ -507,7 +550,11 @@ pub struct TypeChecker {
     /// Declarations already reported as depending on themselves (`E4013`).
     recursive_inference: HashSet<InferenceKey>,
     /// The file's own extension functions, by receiver type and name.
-    own_extensions: HashMap<(ReceiverKey, String), Extension>,
+    own_extensions: HashMap<(ReceiverKey, String), Vec<Extension>>,
+    /// The candidates of the current position's context, the first matching one passed to a
+    /// function with a context parameter (D7 of `receiver-lambdas`): the innermost receiver
+    /// lambda's `this`, or the enclosing function's receiver and context parameter.
+    context_candidates: Vec<ContextCandidate>,
     /// Extension functions exported by direct imports, by receiver type and name, with one
     /// candidate per exporting module.
     imported_extensions: HashMap<(ReceiverKey, String), Vec<(String, Extension)>>,
@@ -592,6 +639,7 @@ impl TypeChecker {
             inference: HashMap::new(),
             recursive_inference: HashSet::new(),
             own_extensions: HashMap::new(),
+            context_candidates: Vec::new(),
             imported_extensions: HashMap::new(),
             members: HashMap::new(),
             intrinsic_functions: HashMap::new(),
@@ -647,7 +695,7 @@ impl TypeChecker {
         self,
     ) -> (
         HashMap<String, Symbol>,
-        HashMap<(ReceiverKey, String), Extension>,
+        HashMap<(ReceiverKey, String), Vec<Extension>>,
         HashMap<(ReceiverKey, String), Extension>,
         HashMap<(String, String), BuiltinFunction>,
         Vec<DeclarationPath>,
@@ -660,9 +708,9 @@ impl TypeChecker {
         let extensions = self
             .imported_extensions
             .into_iter()
-            .filter_map(|(key, candidates)| {
-                let (_, extension) = candidates.into_iter().next()?;
-                Some((key, extension))
+            .map(|(key, candidates)| {
+                let extensions = candidates.into_iter().map(|(_, e)| e).collect();
+                (key, extensions)
             })
             .collect();
         (
@@ -1842,7 +1890,7 @@ impl TypeChecker {
                     kind,
                     is_compose,
                     receiver,
-                    context: _,
+                    context,
                     name,
                     type_parameters,
                     params,
@@ -1894,21 +1942,29 @@ impl TypeChecker {
                                 symbol,
                                 builtin: Some(entry.builtin),
                                 property: false,
+                                context: None,
                             });
                         }
                         // An extension is reached through its receiver, never by its bare name.
                         Some(receiver) => {
                             let receiver_ty = type_from_abi(&receiver.ty, &type_parameters);
+                            let context_ty = context
+                                .as_ref()
+                                .map(|context| type_from_abi(context, &type_parameters));
                             let key = (ReceiverKey::of(&receiver_ty), name.clone());
                             let candidates = self.imported_extensions.entry(key).or_default();
-                            if !candidates.iter().any(|(m, _)| m == &abi.module) {
+                            if !candidates
+                                .iter()
+                                .any(|(m, e)| m == &abi.module && e.context == context_ty)
+                            {
                                 let extension = Extension {
                                     mode: receiver.mode,
                                     receiver: receiver_ty,
                                     module: abi.module.clone(),
-                                    symbol,
+                                    symbol: symbol.with_context(context_ty.clone()),
                                     builtin: None,
                                     property: false,
+                                    context: context_ty,
                                 };
                                 candidates.push((abi.module.clone(), extension));
                             }
@@ -1928,7 +1984,11 @@ impl TypeChecker {
                                     self.externals.push(path);
                                 }
                             }
-                            self.env.define_import(&abi.module, symbol)
+                            let context_ty = context
+                                .as_ref()
+                                .map(|context| type_from_abi(context, &type_parameters));
+                            self.env
+                                .define_import(&abi.module, symbol.with_context(context_ty))
                         }
                     }
                 }
@@ -1967,6 +2027,7 @@ impl TypeChecker {
                         symbol,
                         builtin: Some(entry.builtin),
                         property: true,
+                        context: None,
                     });
                 }
                 ExportedSymbol::Struct {
@@ -2496,6 +2557,7 @@ impl TypeChecker {
                 symbol,
                 builtin: Some(entry.builtin),
                 property: false,
+                context: None,
             },
         );
     }
@@ -2535,6 +2597,7 @@ impl TypeChecker {
                 symbol,
                 builtin: Some(entry.builtin),
                 property: true,
+                context: None,
             },
         );
     }
@@ -2577,9 +2640,20 @@ impl TypeChecker {
 
     /// [`Self::function_symbol`] with the function's type parameters in scope.
     fn function_signature_symbol(&mut self, f: &FunctionDecl) -> Symbol {
-        for annot in f.params.iter().map(|p| &p.ty).chain(&f.return_type) {
+        for annot in f
+            .params
+            .iter()
+            .map(|p| &p.ty)
+            .chain(&f.return_type)
+            .chain(f.context.as_ref().map(|c| &c.ty))
+        {
             self.check_annotation_names(annot);
         }
+        let context = f
+            .context
+            .as_ref()
+            .map(|c| self.lower_type(&c.ty))
+            .filter(|ty| ty != &Type::Error);
         let params: Vec<Type> = f.params.iter().map(|p| self.lower_type(&p.ty)).collect();
         let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
         let has_default: Vec<bool> = f.params.iter().map(|p| p.default_value.is_some()).collect();
@@ -2617,11 +2691,13 @@ impl TypeChecker {
             f.span,
         )
         .with_module(self.module_path.clone())
+        .with_context(context)
     }
 
     /// Registers the extension function `f` in the file's extension table (D7 of
     /// `extension-methods`). Its receiver type follows the rules of annotations. Two extensions
-    /// with the same receiver and name, an extension named like a field of its receiver struct,
+    /// with the same receiver, name and context (D8 of `receiver-lambdas`), an extension named
+    /// like a field of its receiver struct,
     /// an extension named `clone` on a `Clone` type, and one named like a built-in member
     /// (`toString` on `Int`, `Double`, `Bool` or `Char`, `length` on `String`) are rejected with
     /// `E4010`: all but the first could never be called, because members take precedence.
@@ -2648,7 +2724,12 @@ impl TypeChecker {
         // An intrinsic member of the library always takes precedence (D7 of
         // `standard-library`).
         let member_clash = self.member(&receiver_ty, &f.name).map(|m| m.module.clone());
-        if self.own_extensions.contains_key(&key) {
+        let context = symbol.context().cloned();
+        let duplicate = self
+            .own_extensions
+            .get(&key)
+            .is_some_and(|extensions| extensions.iter().any(|e| e.context == context));
+        if duplicate {
             // Extensions are keyed by the receiver's type constructor (D10 of `generics`), so
             // `Box<Int>.size` and `Box<T>.size` are one name.
             let constructor = match &key.0 {
@@ -2656,8 +2737,9 @@ impl TypeChecker {
                 ReceiverKey::List => LIST.to_string(),
                 ReceiverKey::Other(ty) => ty.to_string(),
             };
+            let context = context.map_or(String::new(), |c| format!(" with the context '{}'", c));
             self.errors.push(TypeError::DuplicateSymbol {
-                name: format!("{}.{}", constructor, f.name),
+                name: format!("{}.{}{}", constructor, f.name, context),
                 span: f.span,
             });
             return;
@@ -2694,8 +2776,9 @@ impl TypeChecker {
             symbol,
             builtin: None,
             property: false,
+            context,
         };
-        self.own_extensions.insert(key, extension);
+        self.own_extensions.entry(key).or_default().push(extension);
     }
 
     /// Pass 2: Typechecks the bodies of all top-level declarations in the module, returning the
@@ -2722,6 +2805,7 @@ impl TypeChecker {
                                 |c| c.lower_type(&receiver.ty),
                             )),
                             name: f.name.clone(),
+                            context: f.context.as_ref().map(|c| self.lower_type(&c.ty)),
                         },
                         None => InferenceKey::Declaration(f.name.clone()),
                     };
@@ -2936,7 +3020,7 @@ impl TypeChecker {
             Some(Inference::InProgress) if self.recursive_inference.insert(key.clone()) => {
                 let name = match key {
                     InferenceKey::Declaration(name) => name.clone(),
-                    InferenceKey::Extension { receiver, name } => match receiver {
+                    InferenceKey::Extension { receiver, name, .. } => match receiver {
                         ReceiverKey::Nominal(id) => format!("{}.{}", id.name, name),
                         ReceiverKey::List => format!("{}.{}", LIST, name),
                         ReceiverKey::Other(ty) => format!("{}.{}", ty, name),
@@ -3001,9 +3085,15 @@ impl TypeChecker {
 
     fn check_function_body_in_scope(&mut self, f: &FunctionDecl) {
         let receiver_ty = f.receiver.as_ref().map(|r| self.lower_type(&r.ty));
+        let context_ty = f
+            .context
+            .as_ref()
+            .map(|c| self.lower_type(&c.ty))
+            .filter(|ty| ty != &Type::Error);
         let path = match &receiver_ty {
             Some(receiver_ty) => {
                 DeclarationPath::extension(self.module_path.clone(), receiver_ty.clone(), &f.name)
+                    .with_context(context_ty.clone())
             }
             None => DeclarationPath::new(self.module_path.clone(), &f.name),
         };
@@ -3012,6 +3102,32 @@ impl TypeChecker {
         self.in_function = true;
         self.env.enter_scope();
         self.push_compose_context(f.is_compose);
+        // The function's own context: its receiver, then its context parameter (D7 of
+        // `receiver-lambdas`), bound below.
+        let outer_candidates = std::mem::take(&mut self.context_candidates);
+
+        // A context parameter is the first parameter, a shared borrow of its type, before the
+        // receiver (D6 of `receiver-lambdas`). It is no implicit receiver.
+        let mut context_candidate = None;
+        if let (Some(context), Some(context_ty)) = (&f.context, &context_ty) {
+            let sym = self.bind_local(
+                &context.name,
+                Type::Reference {
+                    mutable: false,
+                    inner: Box::new(context_ty.clone()),
+                },
+                Mutability::Val,
+                LocalKind::Parameter,
+                context.span,
+            );
+            let local = Self::local_of(&sym).expect("a bound local");
+            self.builder.body_mut().parameters.push(local);
+            context_candidate = Self::context_candidate(
+                &sym,
+                ContextSource::ContextParameter(context.name.clone()),
+            );
+            self.define_local(sym);
+        }
 
         // An extension binds its receiver as the `val` named `this`, before the parameters, so
         // defaults may read it (D4 of `extension-methods`). No user name can collide with it,
@@ -3037,8 +3153,13 @@ impl TypeChecker {
             );
             let local = Self::local_of(&sym).expect("a bound local");
             self.builder.body_mut().parameters.push(local);
+            self.context_candidates.extend(Self::context_candidate(
+                &sym,
+                ContextSource::ExtensionReceiver,
+            ));
             self.define_local(sym);
         }
+        self.context_candidates.extend(context_candidate);
 
         // Bind parameters in local scope. A default value is checked against its parameter type
         // before the parameter is bound, so it may refer to earlier parameters only.
@@ -3128,7 +3249,12 @@ impl TypeChecker {
                         match &receiver_ty {
                             Some(receiver_ty) => {
                                 let key = (ReceiverKey::of(receiver_ty), f.name.clone());
-                                if let Some(extension) = self.own_extensions.get_mut(&key) {
+                                let context = f.context.as_ref().map(|c| self.lower_type(&c.ty));
+                                if let Some(extension) = self
+                                    .own_extensions
+                                    .get_mut(&key)
+                                    .and_then(|all| all.iter_mut().find(|e| e.context == context))
+                                {
                                     if let SymbolKind::Function { fn_type, .. } =
                                         &mut extension.symbol.kind
                                     {
@@ -3151,6 +3277,7 @@ impl TypeChecker {
         self.pop_compose_context();
         self.env.exit_scope();
         self.in_function = prev_in_func;
+        self.context_candidates = outer_candidates;
         let receiver = f
             .receiver
             .as_ref()
@@ -3164,6 +3291,11 @@ impl TypeChecker {
                 is_compose: f.is_compose,
                 type_parameters,
                 receiver,
+                context: f
+                    .context
+                    .as_ref()
+                    .zip(context_ty)
+                    .map(|(c, ty)| (c.name.clone(), ty)),
                 parameters,
                 return_type,
                 body,
@@ -3555,6 +3687,7 @@ impl TypeChecker {
         };
         let prev = self.enter_closure(is_compose, expected_return.cloned(), missing);
         let mut parameters = Vec::new();
+        let mut receiver_context = None;
         for (index, ((name, parameter_span, kind), param_ty)) in
             declared.into_iter().zip(exp_params.iter()).enumerate()
         {
@@ -3569,8 +3702,19 @@ impl TypeChecker {
             self.builder.body_mut().locals[local].escaping =
                 exp_escaping.get(index).copied().unwrap_or(false);
             parameters.push(local);
+            // A lambda with a receiver is its body's context (D7 of `receiver-lambdas`).
+            if kind == LocalKind::ClosureReceiver {
+                receiver_context = Self::context_candidate(&sym, ContextSource::LambdaReceiver);
+            }
             self.define_local(sym);
         }
+        let outer_candidates = match receiver_context {
+            Some(candidate) => Some(std::mem::replace(
+                &mut self.context_candidates,
+                vec![candidate],
+            )),
+            None => None,
+        };
 
         // The body's value is what the closure returns.
         let body_id = self.with_origin(Origin::Return, |c| {
@@ -3585,6 +3729,9 @@ impl TypeChecker {
             _ => body_id,
         };
         let captures = self.exit_closure(prev);
+        if let Some(outer) = outer_candidates {
+            self.context_candidates = outer;
+        }
         let ty = Type::Fn {
             is_compose,
             receiver,
@@ -3745,6 +3892,19 @@ impl TypeChecker {
                 let module = module.clone().unwrap_or_else(|| self.module_path.clone());
                 let path = DeclarationPath::new(module, name);
                 self.add(ExpressionKind::TopLevelValue(path), ty.clone(), span)
+            }
+            SymbolKind::Function {
+                context: Some(context),
+                ..
+            } if !generic_callee => {
+                // Its value would need its context (D10 of `receiver-lambdas`).
+                self.errors.push(TypeError::MissingContext {
+                    function: name.to_string(),
+                    needed: vec![context.clone()],
+                    found: "a function with a context parameter can only be called, not used as a value".to_string(),
+                    span,
+                });
+                self.error_node(Vec::new(), span)
             }
             SymbolKind::Function {
                 fn_type, module, ..
@@ -4130,12 +4290,14 @@ impl TypeChecker {
                 self.find_extension_through_indirection(ty.clone(), TO_STRING, &mut layers);
             let extension = match lookup {
                 ExtensionLookup::None => return Some(NoTextFormReason::NoToString),
-                ExtensionLookup::Ambiguous(_) => return None,
+                // The call of the text form reports these.
+                ExtensionLookup::Ambiguous(_) | ExtensionLookup::MissingContext(_) => return None,
                 ExtensionLookup::Found { extension, own } => {
                     if own {
                         let key = InferenceKey::Extension {
                             receiver: ReceiverKey::of(&reached),
                             name: TO_STRING.to_string(),
+                            context: extension.context.clone(),
                         };
                         self.ensure_key_inferred(&key, span);
                     }
@@ -5729,6 +5891,7 @@ impl TypeChecker {
                     type_arguments: solution,
                     evaluation_order,
                     has_receiver: false,
+                    has_context: false,
                     is_compose: false,
                 };
                 self.add(ExpressionKind::Call(call), ty, span)
@@ -5795,6 +5958,7 @@ impl TypeChecker {
             parameters,
             type_arguments: Vec::new(),
             has_receiver: false,
+            has_context: false,
             is_compose: false,
         };
         self.add(ExpressionKind::Call(call), Type::Unit, span)
@@ -5864,6 +6028,7 @@ impl TypeChecker {
                     type_arguments: solution,
                     evaluation_order,
                     has_receiver: false,
+                    has_context: false,
                     is_compose: false,
                 };
                 self.add(ExpressionKind::Call(call), ty, span)
@@ -5942,6 +6107,42 @@ impl TypeChecker {
         (Vec::new(), Vec::new(), Vec::new())
     }
 
+    /// The context parameter type of the declared function `callee` names, if it has one.
+    fn callee_context(&self, callee: &Expr) -> Option<Type> {
+        let ExprKind::Ident(name) = &callee.kind else {
+            return None;
+        };
+        self.env.lookup(name)?.context().cloned()
+    }
+
+    /// Puts the context argument `context` and its parameter of type `&context_ty` before the
+    /// other arguments of a call (D9 of `receiver-lambdas`), evaluated first.
+    fn prepend_context(
+        context: (ExpressionId, Type),
+        arguments: &mut Vec<Argument>,
+        parameters: &mut Vec<(Option<String>, Type)>,
+        escaping: &mut Vec<bool>,
+        evaluation_order: &mut Vec<usize>,
+    ) {
+        let (argument, context_ty) = context;
+        arguments.insert(0, Argument::Written(argument));
+        parameters.insert(
+            0,
+            (
+                Some(CONTEXT.to_string()),
+                Type::Reference {
+                    mutable: false,
+                    inner: Box::new(context_ty),
+                },
+            ),
+        );
+        escaping.insert(0, false);
+        for index in evaluation_order.iter_mut() {
+            *index += 1;
+        }
+        evaluation_order.insert(0, 0);
+    }
+
     /// Checks a call of `callee`, of type `callee_ty`, with `args`: a function or function-typed
     /// value whose node is `callee_node`, or a struct constructor when `is_constructor`.
     #[allow(clippy::too_many_arguments)]
@@ -5995,6 +6196,24 @@ impl TypeChecker {
                         span,
                     );
                 }
+                // A function with a context parameter takes its context argument first (D7 of
+                // `receiver-lambdas`).
+                let context = match self.callee_context(callee) {
+                    Some(context_ty) => {
+                        match self.context_argument(&callee.to_string(), &context_ty, callee.span) {
+                            Some(argument) => Some((argument, context_ty)),
+                            None => {
+                                let mut children = vec![callee_node];
+                                for arg in args {
+                                    children.push(self.infer_expr(&arg.value));
+                                }
+                                return self.error_node(children, span);
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let has_context = context.is_some();
                 if type_parameters.is_empty() {
                     self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
                     let checked =
@@ -6006,11 +6225,21 @@ impl TypeChecker {
                             self.error_node(all, span)
                         }
                         Ok(NormalizedArguments {
-                            arguments,
-                            evaluation_order,
+                            mut arguments,
+                            mut evaluation_order,
                         }) => {
-                            let parameters = parameter_list(&param_names, &params);
-                            self.build_call(
+                            let mut parameters = parameter_list(&param_names, &params);
+                            let mut escaping = escaping;
+                            if let Some(context) = context {
+                                Self::prepend_context(
+                                    context,
+                                    &mut arguments,
+                                    &mut parameters,
+                                    &mut escaping,
+                                    &mut evaluation_order,
+                                );
+                            }
+                            self.build_call_with_context(
                                 callee_node,
                                 arguments,
                                 parameters,
@@ -6018,6 +6247,7 @@ impl TypeChecker {
                                 Vec::new(),
                                 evaluation_order,
                                 is_compose,
+                                has_context,
                                 *ret,
                                 span,
                             )
@@ -6048,16 +6278,26 @@ impl TypeChecker {
                     }
                     Ok((
                         NormalizedArguments {
-                            arguments,
-                            evaluation_order,
+                            mut arguments,
+                            mut evaluation_order,
                         },
                         solution,
                     )) => {
                         // The call records the declared parameter types and the type
                         // arguments (D9 of `generics`).
-                        let parameters = parameter_list(&param_names, &signature.params);
+                        let mut parameters = parameter_list(&param_names, &signature.params);
                         let ret = signature.ret.substitute(&solution);
-                        self.build_call(
+                        let mut escaping = escaping;
+                        if let Some(context) = context {
+                            Self::prepend_context(
+                                context,
+                                &mut arguments,
+                                &mut parameters,
+                                &mut escaping,
+                                &mut evaluation_order,
+                            );
+                        }
+                        self.build_call_with_context(
                             callee_node,
                             arguments,
                             parameters,
@@ -6065,6 +6305,7 @@ impl TypeChecker {
                             solution,
                             evaluation_order,
                             is_compose,
+                            has_context,
                             ret,
                             span,
                         )
@@ -6408,6 +6649,35 @@ impl TypeChecker {
         ret: Type,
         span: Span,
     ) -> ExpressionId {
+        self.build_call_with_context(
+            callee_node,
+            arguments,
+            parameters,
+            escaping,
+            type_arguments,
+            evaluation_order,
+            is_compose,
+            false,
+            ret,
+            span,
+        )
+    }
+
+    /// [`Self::build_call`], whose first argument is a context argument when `has_context`.
+    #[allow(clippy::too_many_arguments)]
+    fn build_call_with_context(
+        &mut self,
+        callee_node: ExpressionId,
+        arguments: Vec<Argument>,
+        parameters: Vec<(Option<String>, Type)>,
+        escaping: Vec<bool>,
+        type_arguments: Vec<Type>,
+        evaluation_order: Vec<usize>,
+        is_compose: bool,
+        has_context: bool,
+        ret: Type,
+        span: Span,
+    ) -> ExpressionId {
         match self.builder.kind(callee_node).clone() {
             ExpressionKind::FunctionReference(path) => {
                 // An external is called by its symbol (D5 of `standard-library`).
@@ -6424,6 +6694,7 @@ impl TypeChecker {
                     type_arguments,
                     evaluation_order,
                     has_receiver: false,
+                    has_context,
                     is_compose,
                 };
                 self.builder
@@ -6468,6 +6739,7 @@ impl TypeChecker {
                     type_arguments,
                     evaluation_order,
                     has_receiver: false,
+                    has_context: false,
                     is_compose,
                 };
                 self.add(ExpressionKind::Call(call), ret, span)
@@ -6885,6 +7157,17 @@ impl TypeChecker {
                 });
                 call
             }
+            ExtensionLookup::MissingContext(needed) => {
+                let call = self.give_up_call(receiver, args, span);
+                let found = self.describe_context();
+                self.errors.push(TypeError::MissingContext {
+                    function: member.to_string(),
+                    needed,
+                    found,
+                    span: callee.span,
+                });
+                call
+            }
             ExtensionLookup::Found { .. } if through_nullable && !is_safe_nav => {
                 let call = self.give_up_call(receiver, args, span);
                 self.errors.push(TypeError::UnknownField {
@@ -6903,6 +7186,7 @@ impl TypeChecker {
                     let key = InferenceKey::Extension {
                         receiver: ReceiverKey::of(&reached),
                         name: member.to_string(),
+                        context: extension.context.clone(),
                     };
                     self.ensure_key_inferred(&key, callee.span);
                     // Inference may have refined the return type.
@@ -7084,6 +7368,7 @@ impl TypeChecker {
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
+            has_context: false,
             is_compose: false,
         };
         self.add(ExpressionKind::Call(call), contents, span)
@@ -7442,6 +7727,21 @@ impl TypeChecker {
                 span,
             });
         }
+        // An extension with a context parameter takes its context argument first (D7 of
+        // `receiver-lambdas`).
+        let context = match &extension.context {
+            Some(context_ty) => match self.context_argument(member, context_ty, callee.span) {
+                Some(argument) => Some((argument, context_ty.clone())),
+                None => {
+                    let mut children = vec![receiver_argument];
+                    for arg in args {
+                        children.push(self.infer_expr(&arg.value));
+                    }
+                    return self.error_node(children, span);
+                }
+            },
+            None => None,
+        };
         // The receiver is never `escaping`.
         let escaping: Vec<bool> = std::iter::once(false)
             .chain(escaping.iter().copied())
@@ -7536,12 +7836,19 @@ impl TypeChecker {
                 }
                 let callee = match extension.builtin {
                     Some(builtin) => Callee::Builtin(builtin),
-                    None => Callee::Function(DeclarationPath::extension(
-                        extension.module.clone(),
-                        extension.receiver.clone(),
-                        member,
-                    )),
+                    None => Callee::Function(extension.path(member)),
                 };
+                let has_context = context.is_some();
+                let mut escaping = escaping;
+                if let Some(context) = context {
+                    Self::prepend_context(
+                        context,
+                        &mut all_arguments,
+                        &mut parameters,
+                        &mut escaping,
+                        &mut order,
+                    );
+                }
                 let call = Call {
                     callee,
                     arguments: all_arguments,
@@ -7550,6 +7857,7 @@ impl TypeChecker {
                     type_arguments,
                     evaluation_order: order,
                     has_receiver: true,
+                    has_context,
                     is_compose,
                 };
                 self.add(ExpressionKind::Call(call), ret, span)
@@ -7558,30 +7866,145 @@ impl TypeChecker {
     }
 
     /// The extension named `name` on receiver type `receiver` visible in this file: its own one,
-    /// which shadows imported ones, else the single import exporting one.
+    /// which shadows imported ones, else the single import exporting one, else the prelude's.
+    /// Within the first of these layers that declares an extension of the key, the one whose
+    /// context is a candidate of the current context is chosen, else the one without a context
+    /// (D8 of `receiver-lambdas`).
     fn find_extension(&self, receiver: &Type, name: &str) -> ExtensionLookup {
         let key = (ReceiverKey::of(receiver), name.to_string());
-        if let Some(extension) = self.own_extensions.get(&key) {
-            return ExtensionLookup::Found {
-                extension: Box::new(extension.clone()),
-                own: true,
-            };
+        if let Some(extensions) = self.own_extensions.get(&key).filter(|all| !all.is_empty()) {
+            let candidates: Vec<(&str, &Extension)> = extensions.iter().map(|e| ("", e)).collect();
+            return self.choose_by_context(&candidates, true);
         }
         match self.imported_extensions.get(&key).map(Vec::as_slice) {
             // A prelude extension is found last, so the file's own and imported ones shadow it
             // without `E4012` (D4 of `standard-library`).
-            None | Some([]) => match self.prelude.as_ref().and_then(|p| p.extension(&key)) {
-                Some(extension) => ExtensionLookup::Found {
-                    extension: Box::new(extension.clone()),
-                    own: false,
-                },
-                None => ExtensionLookup::None,
+            None | Some([]) => match self.prelude.as_ref().map(|p| p.extensions(&key)) {
+                Some(extensions) if !extensions.is_empty() => {
+                    let candidates: Vec<(&str, &Extension)> =
+                        extensions.iter().map(|e| (e.module.as_str(), e)).collect();
+                    self.choose_by_context(&candidates, false)
+                }
+                _ => ExtensionLookup::None,
             },
-            Some([(_, extension)]) => ExtensionLookup::Found {
-                extension: Box::new(extension.clone()),
-                own: false,
+            Some(imported) => {
+                let candidates: Vec<(&str, &Extension)> =
+                    imported.iter().map(|(m, e)| (m.as_str(), e)).collect();
+                self.choose_by_context(&candidates, false)
+            }
+        }
+    }
+
+    /// The context of the current position, for `E4034`: what its candidates are, or that it
+    /// has none.
+    fn describe_context(&self) -> String {
+        let Some(first) = self.context_candidates.first() else {
+            return "this position has no receiver".to_string();
+        };
+        if first.source == ContextSource::LambdaReceiver {
+            return format!(
+                "the innermost receiver here is '{}', the receiver of this lambda",
+                first.referent
+            );
+        }
+        let described: Vec<String> = self
+            .context_candidates
+            .iter()
+            .map(|candidate| match &candidate.source {
+                ContextSource::ContextParameter(name) => format!(
+                    "the context parameter '{}' has type '{}'",
+                    name, candidate.referent
+                ),
+                _ => format!(
+                    "the receiver of the enclosing extension is '{}'",
+                    candidate.referent
+                ),
+            })
+            .collect();
+        described.join(" and ")
+    }
+
+    /// The context argument of a call of `function`, whose context parameter has type
+    /// `context`: a shared borrow of the referent of the first context candidate of that type
+    /// (D7 of `receiver-lambdas`), or `None` after reporting `E4034`.
+    fn context_argument(
+        &mut self,
+        function: &str,
+        context: &Type,
+        span: Span,
+    ) -> Option<ExpressionId> {
+        let candidate = self
+            .context_candidates
+            .iter()
+            .find(|candidate| &candidate.referent == context)
+            .cloned();
+        let Some(candidate) = candidate else {
+            let found = self.describe_context();
+            self.errors.push(TypeError::MissingContext {
+                function: function.to_string(),
+                needed: vec![context.clone()],
+                found,
+                span,
+            });
+            return None;
+        };
+        self.builder.use_local(candidate.local, span);
+        let node = self.add(ExpressionKind::Local(candidate.local), candidate.ty, span);
+        let place = self.deref_until(node, &candidate.referent);
+        Some(self.borrow(false, BorrowOrigin::Argument, place))
+    }
+
+    /// The context candidate of the binding `symbol`, a receiver or context parameter.
+    fn context_candidate(symbol: &Symbol, source: ContextSource) -> Option<ContextCandidate> {
+        let SymbolKind::Variable {
+            ty,
+            local: Some(local),
+            ..
+        } = &symbol.kind
+        else {
+            return None;
+        };
+        Some(ContextCandidate {
+            local: *local,
+            ty: ty.clone(),
+            referent: peel_references(ty).clone(),
+            source,
+        })
+    }
+
+    /// The extension of one layer's `candidates`, each with its module, that a call in the
+    /// current context resolves to: the one whose context type is the referent of the first
+    /// context candidate that one has, else the one without a context, else none, naming the
+    /// layer's contexts. Several candidates of the chosen context are an ambiguity.
+    fn choose_by_context(&self, candidates: &[(&str, &Extension)], own: bool) -> ExtensionLookup {
+        let pick = |context: Option<&Type>| -> Vec<&(&str, &Extension)> {
+            candidates
+                .iter()
+                .filter(|(_, extension)| extension.context.as_ref() == context)
+                .collect()
+        };
+        let mut chosen = Vec::new();
+        for candidate in &self.context_candidates {
+            chosen = pick(Some(&candidate.referent));
+            if !chosen.is_empty() {
+                break;
+            }
+        }
+        if chosen.is_empty() {
+            chosen = pick(None);
+        }
+        match chosen.as_slice() {
+            [] => ExtensionLookup::MissingContext(
+                candidates
+                    .iter()
+                    .filter_map(|(_, extension)| extension.context.clone())
+                    .collect(),
+            ),
+            [(_, extension)] => ExtensionLookup::Found {
+                extension: Box::new((*extension).clone()),
+                own,
             },
-            Some(many) => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.clone()).collect()),
+            many => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.to_string()).collect()),
         }
     }
 
@@ -8586,6 +9009,7 @@ impl TypeChecker {
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
+            has_context: false,
             is_compose: false,
         };
         let call = self.add(ExpressionKind::Call(call), cloned, span);
@@ -8625,6 +9049,7 @@ impl TypeChecker {
             parameters,
             type_arguments: Vec::new(),
             has_receiver: true,
+            has_context: false,
             is_compose: false,
         };
         self.add(ExpressionKind::Call(call), result, span)
@@ -8653,6 +9078,7 @@ impl TypeChecker {
             type_arguments: vec![element],
             evaluation_order: vec![0],
             has_receiver: true,
+            has_context: false,
             is_compose: false,
         };
         self.add(ExpressionKind::Call(call), result, span)
@@ -8699,6 +9125,7 @@ impl TypeChecker {
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
+            has_context: false,
             is_compose: false,
         };
         let call = self.add(ExpressionKind::Call(call), Type::String, span);

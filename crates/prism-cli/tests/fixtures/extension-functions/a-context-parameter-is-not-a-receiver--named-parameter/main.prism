@@ -1,0 +1,4 @@
+// expect: ok
+struct RowScope : Copy { val gap: Int }
+context(scope: RowScope)
+fun a(): Int = scope.gap

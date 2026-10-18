@@ -133,11 +133,12 @@ pub fn instance_display(
     let shown: Vec<String> = type_arguments.iter().map(Type::qualified).collect();
     let default = default.map_or(String::new(), |name| format!("#default({})", name));
     format!(
-        "{}::{}{}<{}>{}",
+        "{}::{}{}<{}>{}{}",
         path.module,
         receiver,
         path.name,
         shown.join(", "),
+        path.context_suffix(Type::to_string),
         default
     )
 }

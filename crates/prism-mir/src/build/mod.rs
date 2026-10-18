@@ -125,7 +125,8 @@ fn lower_function(
         let body = builder.finish();
         bodies.fill(id, body);
     }
-    let receiver_count = usize::from(function.receiver.is_some());
+    // A default value reads the context, the receiver and the earlier parameters.
+    let receiver_count = function.leading_parameters();
     for (index, default) in tree.defaults.iter().enumerate() {
         if let Some(default) = default {
             let id = bodies.reserve();

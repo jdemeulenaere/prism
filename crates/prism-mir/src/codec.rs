@@ -541,16 +541,19 @@ impl Codec for DeclarationPath {
             module,
             receiver,
             name,
+            context,
         } = self;
         module.encode(encoder);
         receiver.encode(encoder);
         name.encode(encoder);
+        context.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(DeclarationPath {
             module: decoder.decode()?,
             receiver: decoder.decode()?,
             name: decoder.decode()?,
+            context: decoder.decode()?,
         })
     }
 }

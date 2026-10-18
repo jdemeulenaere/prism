@@ -1,0 +1,6 @@
+package a
+
+import /ui/scope
+
+context(scope: RowScope)
+public fun Modifier.weight(w: Double): Modifier = Modifier(w)

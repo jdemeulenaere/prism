@@ -1,0 +1,13 @@
+package ui
+
+public struct Modifier : Copy {
+    val fraction: Double
+}
+
+public struct RowScope : Copy {}
+
+public struct ColumnScope : Copy {}
+
+public fun row(f: RowScope.() -> Unit): Unit {
+    f(RowScope())
+}

@@ -61,12 +61,23 @@ pub struct FunctionItem {
     pub type_parameters: Vec<TypeParameter>,
     /// The receiver of an extension: its mode and its type (`User` for `fun User.greet()`).
     pub receiver: Option<(ReceiverMode, Type)>,
-    /// The declared parameters, without the receiver.
+    /// The context parameter: its name and type (`scope` and `RowScope` for
+    /// `context(scope: RowScope)`), passed as a shared borrow before the receiver (D9 of
+    /// `receiver-lambdas`).
+    pub context: Option<(String, Type)>,
+    /// The declared parameters, without the context and the receiver.
     pub parameters: Vec<(String, Type)>,
     /// The declared or inferred return type.
     pub return_type: Type,
     pub body: BodyId,
     pub span: Span,
+}
+
+impl FunctionItem {
+    /// How many parameters precede the declared ones: the context and the receiver.
+    pub fn leading_parameters(&self) -> usize {
+        usize::from(self.context.is_some()) + usize::from(self.receiver.is_some())
+    }
 }
 
 /// A struct declaration.
@@ -112,13 +123,17 @@ pub struct ValueItem {
 }
 
 /// The identity of a top-level function, extension or `val`: its defining module, the receiver
-/// type for an extension, and its name (D4). It is the ABI's identity for an exported symbol,
-/// unique because Prism has no overloading and one extension per receiver type and name.
+/// type for an extension, its name (D4), and the context type of an extension with a context
+/// parameter (D9 of `receiver-lambdas`). It is the ABI's identity for an exported symbol, unique
+/// because Prism has no overloading and one extension per receiver type, name and context.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeclarationPath {
     pub module: String,
     pub receiver: Option<Type>,
     pub name: String,
+    /// The context type of an extension with a context parameter; `None` for every other
+    /// declaration, a plain function with a context included, which is not overloaded by it.
+    pub context: Option<Type>,
 }
 
 impl DeclarationPath {
@@ -128,6 +143,7 @@ impl DeclarationPath {
             module: module.into(),
             receiver: None,
             name: name.into(),
+            context: None,
         }
     }
 
@@ -137,6 +153,24 @@ impl DeclarationPath {
             module: module.into(),
             receiver: Some(receiver),
             name: name.into(),
+            context: None,
+        }
+    }
+
+    /// The path with the context type `context`, which only an extension's path records.
+    pub fn with_context(mut self, context: Option<Type>) -> Self {
+        if self.receiver.is_some() {
+            self.context = context;
+        }
+        self
+    }
+
+    /// `#context(<type>)` after the path of an extension with a context, `render` writing the
+    /// type; empty for any other path.
+    pub fn context_suffix(&self, render: impl Fn(&Type) -> String) -> String {
+        match &self.context {
+            Some(context) => format!("#context({})", render(context)),
+            None => String::new(),
         }
     }
 }
@@ -144,7 +178,14 @@ impl DeclarationPath {
 impl fmt::Display for DeclarationPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.receiver {
-            Some(receiver) => write!(f, "{}::{}.{}", self.module, receiver, self.name),
+            Some(receiver) => write!(
+                f,
+                "{}::{}.{}{}",
+                self.module,
+                receiver,
+                self.name,
+                self.context_suffix(Type::to_string)
+            ),
             None => write!(f, "{}::{}", self.module, self.name),
         }
     }
@@ -502,7 +543,8 @@ pub enum TemplatePart {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub callee: Callee,
-    /// One argument per parameter, in parameter order, the receiver first when `has_receiver`.
+    /// One argument per parameter, in parameter order: the context first when `has_context`,
+    /// then the receiver when `has_receiver`.
     pub arguments: Vec<Argument>,
     /// The parameters as the callee declares them, in the same order: the name (`None` for a
     /// function-typed value) and the declared type, which mentions a generic callee's type
@@ -519,8 +561,11 @@ pub struct Call {
     /// The parameter indices of the written arguments, in source order, the receiver first.
     /// Defaults are evaluated after them.
     pub evaluation_order: Vec<usize>,
-    /// Whether the first argument is an extension's receiver.
+    /// Whether the first argument is an extension's receiver, the second one after a context.
     pub has_receiver: bool,
+    /// Whether the first argument is the context argument of a callee with a context parameter
+    /// (D9 of `receiver-lambdas`).
+    pub has_context: bool,
     /// Whether the callee is a `compose fun` or composable function value.
     pub is_compose: bool,
 }

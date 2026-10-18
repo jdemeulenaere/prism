@@ -52,10 +52,11 @@ pub fn grows(argument: &Type, parameter: u32) -> bool {
 pub fn generic_name(path: &DeclarationPath) -> String {
     match &path.receiver {
         Some(receiver) => format!(
-            "{}::{}.{}",
+            "{}::{}.{}{}",
             path.module,
             receiver.receiver_constructor(),
-            path.name
+            path.name,
+            path.context_suffix(Type::receiver_constructor)
         ),
         None => format!("{}::{}", path.module, path.name),
     }

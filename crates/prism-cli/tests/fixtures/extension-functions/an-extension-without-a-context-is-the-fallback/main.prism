@@ -1,0 +1,11 @@
+// expect: ok
+struct Modifier : Copy { val fraction: Double }
+struct RowScope : Copy {}
+fun row(f: RowScope.() -> Unit) { f(RowScope()) }
+context(scope: RowScope)
+fun Modifier.tag(): Int = 1
+fun Modifier.tag(): Bool = true
+fun f(m: Modifier) {
+    row { val a: Int = m.tag() }
+    val b: Bool = m.tag()
+}

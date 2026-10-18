@@ -1,0 +1,4 @@
+// expect: ok
+import /layout/scope
+fun Modifier.weight(w: Double): Bool = true
+fun f() { row { val b: Bool = Modifier(0.0).weight(1.0) } }

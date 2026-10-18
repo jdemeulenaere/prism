@@ -1,0 +1,9 @@
+// expect: E4034
+struct Modifier : Copy { val fraction: Double }
+struct RowScope : Copy {}
+struct ColumnScope : Copy {}
+context(scope: RowScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w)
+context(scope: ColumnScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w)
+fun f(): Modifier = Modifier(0.0).weight(1.0)

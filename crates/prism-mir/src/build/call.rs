@@ -72,21 +72,24 @@ impl Builder<'_> {
         let mut operands: Vec<Option<Operand>> = vec![None; count];
         let mut pending = None;
         let mut receiver_borrowed = false;
+        // The receiver follows the context argument, if any (D9 of `receiver-lambdas`).
+        let receiver_index = usize::from(call.has_context);
         if call.has_receiver {
-            if let Some(Argument::Written(receiver)) = call.arguments.first() {
+            if let Some(Argument::Written(receiver)) = call.arguments.get(receiver_index) {
                 pending = self.receiver_place(*receiver);
                 // A receiver reached through a `?.` test is borrowed right after its test, so
                 // that no argument can change the value tested (`n?.push(clear(&mut n))`).
                 if let Some(receiver) = pending
                     .take_if(|receiver| receiver.place.projections.contains(&Projection::Payload))
                 {
-                    operands[0] = Some(self.borrow_receiver(call, receiver));
+                    operands[receiver_index] =
+                        Some(self.borrow_receiver(call, receiver_index, receiver));
                     receiver_borrowed = true;
                 }
             }
         }
         for &index in &call.evaluation_order {
-            if index == 0 && (pending.is_some() || receiver_borrowed) {
+            if index == receiver_index && (pending.is_some() || receiver_borrowed) {
                 continue;
             }
             let Argument::Written(value) = call.arguments[index] else {
@@ -96,7 +99,7 @@ impl Builder<'_> {
             operands[index] = Some(self.argument(value, borrowed_by_default));
         }
         if let Some(pending) = pending {
-            operands[0] = Some(self.borrow_receiver(call, pending));
+            operands[receiver_index] = Some(self.borrow_receiver(call, receiver_index, pending));
         }
         for index in 0..count {
             if matches!(call.arguments[index], Argument::Default) {
@@ -162,11 +165,11 @@ impl Builder<'_> {
         self.current = target;
     }
 
-    /// The borrow of the receiver `pending` of `call`, in a temporary.
-    fn borrow_receiver(&mut self, call: &Call, pending: PendingReceiver) -> Operand {
+    /// The borrow of the receiver `pending` of `call`, its argument `index`, in a temporary.
+    fn borrow_receiver(&mut self, call: &Call, index: usize, pending: PendingReceiver) -> Operand {
         let receiver_ty = call
-            .parameter_type(0)
-            .expect("a receiver is the first parameter");
+            .parameter_type(index)
+            .expect("a receiver is the first parameter after the context");
         let local = self.new_temporary(receiver_ty, pending.span);
         let rvalue = Rvalue::Borrow {
             mutable: pending.mutable,
@@ -285,7 +288,7 @@ impl Builder<'_> {
         let result = self.new_temporary(parameter_ty, span);
         let callee = Callee::Default {
             function: function.clone(),
-            parameter: index - usize::from(call.has_receiver),
+            parameter: index - usize::from(call.has_receiver) - usize::from(call.has_context),
             name: name.unwrap_or_default(),
         };
         let escaping = vec![false; parameters.len()];

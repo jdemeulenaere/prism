@@ -1,0 +1,14 @@
+package layout
+
+public struct Modifier : Copy {
+    val fraction: Double
+}
+
+public struct RowScope : Copy {}
+
+public fun row(f: RowScope.() -> Unit): Unit {
+    f(RowScope())
+}
+
+context(scope: RowScope)
+public fun Modifier.weight(w: Double): Modifier = Modifier(w)
