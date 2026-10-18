@@ -86,6 +86,14 @@ pub enum WorkspaceError {
         source: String,
         errors: Vec<prism_borrowck::BorrowError>,
     },
+    /// The code generator's errors (`E6xxx`) in one file, which passed Phase 2.
+    Codegen {
+        path: PathBuf,
+        source: String,
+        errors: Vec<prism_codegen::CodegenError>,
+    },
+    /// A failure inside the backend, which a checked program never causes.
+    Backend(prism_codegen::BackendError),
     Io {
         path: PathBuf,
         message: String,
@@ -118,6 +126,14 @@ impl WorkspaceError {
                 source,
                 errors,
             } => diagnostics::format_borrow_errors(path, Some(source), errors),
+            WorkspaceError::Codegen {
+                path,
+                source,
+                errors,
+            } => diagnostics::format_codegen_errors(path, Some(source), errors),
+            WorkspaceError::Backend(error) => {
+                format!("error: internal compiler error in the backend: {}\n", error)
+            }
             WorkspaceError::Io { path, message } => {
                 format!(
                     "error[E1000]: IO error at '{}': {}\n",
@@ -159,7 +175,7 @@ pub fn check_file_with(
 }
 
 /// Rejects an entry that is not an existing `.prism` file.
-fn validate_entry_file(entry_file: &Path) -> Result<(), WorkspaceError> {
+pub(crate) fn validate_entry_file(entry_file: &Path) -> Result<(), WorkspaceError> {
     if !entry_file.exists() {
         return Err(WorkspaceError::Io {
             path: entry_file.to_path_buf(),
@@ -309,7 +325,7 @@ fn collect_dirs_with_prism_files(
 }
 
 /// Asserts that all files in the dependency graph reside within the discovered workspace root.
-fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceError> {
+pub(crate) fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceError> {
     let effective_root = if graph.workspace_root.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {
@@ -343,7 +359,7 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
 /// The module path of a source file: its root-relative path without extension, which is also its
 /// root-anchored import path (`a/lib` for `<root>/a/lib.prism`). The package segments are the
 /// file's directory relative to the workspace root.
-fn module_path(node: &SourceNode) -> String {
+pub(crate) fn module_path(node: &SourceNode) -> String {
     let stem = node
         .path
         .file_stem()
@@ -432,6 +448,27 @@ fn check_phase_two(
     abis: &HashMap<PathBuf, FileAbi>,
     file_path: &Path,
 ) -> Result<Vec<InstanceRequest>, WorkspaceError> {
+    let elaborated = elaborate_file(graph, abis, file_path)?;
+    let node = graph.get_node(file_path).expect("node must exist in graph");
+    let import_modules: Vec<String> = node
+        .direct_imports
+        .iter()
+        .filter_map(|dep| graph.get_node(dep))
+        .map(module_path)
+        .collect();
+    Ok(instance_requests(&elaborated, &import_modules))
+}
+
+/// The elaborated MIR of the file at `file_path` of `graph`: Phase 2 type-checks it against the
+/// ABIs of its direct imports, lowers it to MIR from its typed tree alone (D1 of
+/// `mir-lowering`) and borrow-checks that MIR alone, never another file's (D1 of
+/// `borrowck-moves`). Returns its type or borrow errors instead when it has any. The instance
+/// requests of `prism check` and the backend of `prism run` consume it.
+pub(crate) fn elaborate_file(
+    graph: &DependencyGraph,
+    abis: &HashMap<PathBuf, FileAbi>,
+    file_path: &Path,
+) -> Result<MirFile, WorkspaceError> {
     let (tree, errors) = typecheck_file(graph, abis, file_path);
     if !errors.is_empty() {
         let source = fs::read_to_string(file_path).unwrap_or_default();
@@ -441,31 +478,15 @@ fn check_phase_two(
             errors,
         });
     }
-    // Phase 2 lowers each file that typechecks to MIR from its typed tree alone (D1 of
-    // `mir-lowering`), and borrow-checks that MIR alone, never another file's (D1 of
-    // `borrowck-moves`). Nothing consumes the elaborated MIR yet but the instance requests: the
-    // backend will.
     let mir = prism_mir::lower_file(&tree);
-    match prism_borrowck::check_file(&mir) {
-        Ok(elaborated) => {
-            let node = graph.get_node(file_path).expect("node must exist in graph");
-            let import_modules: Vec<String> = node
-                .direct_imports
-                .iter()
-                .filter_map(|dep| graph.get_node(dep))
-                .map(module_path)
-                .collect();
-            Ok(instance_requests(&elaborated, &import_modules))
+    prism_borrowck::check_file(&mir).map_err(|errors| {
+        let source = fs::read_to_string(file_path).unwrap_or_default();
+        WorkspaceError::Borrow {
+            path: file_path.to_path_buf(),
+            source,
+            errors,
         }
-        Err(errors) => {
-            let source = fs::read_to_string(file_path).unwrap_or_default();
-            Err(WorkspaceError::Borrow {
-                path: file_path.to_path_buf(),
-                source,
-                errors,
-            })
-        }
-    }
+    })
 }
 
 /// The instances `mir` requests: its calls to generics of the modules `import_modules` (its
@@ -571,7 +592,9 @@ fn instance_outcomes(
 }
 
 /// Phase 1: extracts the ABI of every file of `graph` from its AST alone. No body is read.
-fn extract_abis(graph: &DependencyGraph) -> Result<HashMap<PathBuf, FileAbi>, WorkspaceError> {
+pub(crate) fn extract_abis(
+    graph: &DependencyGraph,
+) -> Result<HashMap<PathBuf, FileAbi>, WorkspaceError> {
     // Phase 1a: the structs and enums each file exports, with their kinds and markers, read from
     // its AST alone.
     let exported_types: HashMap<&Path, HashMap<&str, NominalHeader>> = graph

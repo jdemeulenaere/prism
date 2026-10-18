@@ -1,0 +1,4 @@
+// expect: ok
+// run: 1
+struct P { val x: Int }
+fun main() { val p = P(1); println(p.x) }

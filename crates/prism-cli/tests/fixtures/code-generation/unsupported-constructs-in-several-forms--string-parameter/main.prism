@@ -1,0 +1,4 @@
+// expect: ok
+// run: 1
+fun first(s: String): Int = 1
+fun main() {}

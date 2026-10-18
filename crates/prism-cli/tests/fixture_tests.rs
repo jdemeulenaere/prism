@@ -51,6 +51,19 @@
 //! Checking" (`ELABORATED_SCENARIOS`) must hold one. `PRISM_BLESS=1` writes every kind of
 //! snapshot.
 //!
+//! ## Executable cases
+//!
+//! A case whose header also has a `// run: <status>` line is a program: the runner spawns
+//! `prism run <entry>` with the case directory as working directory (so diagnostics show
+//! paths relative to it) and compares the exit status with `<status>` (`0` when `main` returns,
+//! `101` after a runtime error, `1` when the program does not compile), and stdout and stderr
+//! with `stdout.snap` and `stderr.snap`, an absent file meaning empty output (D21 of
+//! `codegen-core`). `PRISM_BLESS=1` writes both, removing the file of an empty output; read each
+//! against its scenario's THEN before committing it. The `// expect:` line still states what
+//! `prism check` reports, which is `ok` for a program the backend rejects. The `E6xxx` codes in a
+//! case's `stderr.snap` count as exercised for the catalog check. Every case of the `execution`
+//! spec must be executable.
+//!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
 //! catalog in `openspec/specs/diagnostics/spec.md`: every expected code must be a live catalog
@@ -70,9 +83,6 @@ const UNFIXTURED_CODES: &[(&str, &str)] = &[
         "E2002",
         "needs input nested more than 256 levels deep; see parser_tests.rs",
     ),
-    ("E6001", "fixtures come with the run mode"),
-    ("E6002", "fixtures come with the run mode"),
-    ("E6003", "fixtures come with the run mode"),
 ];
 
 struct Case {
@@ -81,6 +91,8 @@ struct Case {
     header: PathBuf,
     expected: BTreeSet<String>,
     pinned_current: bool,
+    /// The exit status `prism run` must give, for an executable case.
+    run_status: Option<i32>,
 }
 
 fn fixtures_root() -> PathBuf {
@@ -149,7 +161,15 @@ fn load_cases() -> Vec<Case> {
             let text = fs::read_to_string(&header).unwrap();
             let mut expected = BTreeSet::new();
             let mut pinned_current = false;
+            let mut run_status = None;
             for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("// run:") {
+                    let status = rest
+                        .trim()
+                        .parse::<i32>()
+                        .unwrap_or_else(|_| panic!("{}: bad run status '{}'", name, rest.trim()));
+                    run_status = Some(status);
+                }
                 if let Some(rest) = line.strip_prefix("// expect:") {
                     expected.extend(parse_codes(rest, &header));
                 } else if let Some(rest) = line.strip_prefix("// expect-current:") {
@@ -164,12 +184,18 @@ fn load_cases() -> Vec<Case> {
                     name
                 );
             }
+            assert!(
+                run_status.is_some() || !name.starts_with("execution/"),
+                "{}: every case of the execution spec needs a `// run:` line",
+                name
+            );
             cases.push(Case {
                 dir,
                 name,
                 header,
                 expected,
                 pinned_current,
+                run_status,
             });
         }
     }
@@ -231,7 +257,56 @@ fn run(case: &Case) -> Result<(), String> {
             case.name, case.expected, actual, rendered
         ));
     }
-    check_snapshot(case, &entry)
+    check_snapshot(case, &entry)?;
+    check_run(case, &entry)
+}
+
+/// Runs an executable case with `prism run` and compares its exit status and output.
+fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
+    let Some(expected_status) = case.run_status else {
+        return Ok(());
+    };
+    let relative = entry.strip_prefix(&case.dir).unwrap_or(entry);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
+        .arg("run")
+        .arg(relative)
+        .current_dir(&case.dir)
+        .output()
+        .map_err(|error| format!("{}: cannot run prism: {}", case.name, error))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let status = output.status.code();
+    let bless = std::env::var_os("PRISM_BLESS").is_some();
+    let mut problems = Vec::new();
+    if status != Some(expected_status) {
+        problems.push(format!(
+            "exit status {:?}, expected {}",
+            status, expected_status
+        ));
+    }
+    for (file, actual) in [("stdout.snap", &stdout), ("stderr.snap", &stderr)] {
+        let path = case.dir.join(file);
+        if bless {
+            if actual.is_empty() {
+                let _ = fs::remove_file(&path);
+            } else {
+                fs::write(&path, actual).unwrap();
+            }
+            continue;
+        }
+        let expected = fs::read_to_string(&path).unwrap_or_default();
+        if expected != *actual {
+            problems.push(format!(
+                "stale {} (re-bless with PRISM_BLESS=1):\n--- expected\n{}--- actual\n{}",
+                file, expected, actual
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{}: {}", case.name, problems.join("\n")))
+    }
 }
 
 /// A text snapshot a case may hold: its file name, and the dump it records.
@@ -379,6 +454,19 @@ fn fixture_codes_match_the_diagnostics_catalog() {
     let cases = load_cases();
     let mut used = BTreeSet::new();
     for case in &cases {
+        // The diagnostics `prism run` reports count as exercised (D21 of `codegen-core`).
+        if case.run_status.is_some() {
+            let stderr = fs::read_to_string(case.dir.join("stderr.snap")).unwrap_or_default();
+            for code in codes_in(&stderr) {
+                assert!(
+                    live.contains(&code),
+                    "{}: `{}` in stderr.snap is not a live code in the diagnostics catalog",
+                    case.name,
+                    code
+                );
+                used.insert(code);
+            }
+        }
         for code in &case.expected {
             assert!(
                 live.contains(code),

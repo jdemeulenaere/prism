@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+fun square(x: Int): Int = x * x
+fun main() { println(square(7)) }

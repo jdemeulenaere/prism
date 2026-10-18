@@ -1,0 +1,3 @@
+// expect: ok
+// run: 1
+val main: Int = 1

@@ -1,0 +1,5 @@
+error[E6003]: 'main' cannot be the entry point: it returns 'Int'; it must return 'Unit'
+  --> main.prism:3:1
+    3 | fun main(): Int = 0
+      | ^
+   = help: declare it as 'fun main() { ... }'

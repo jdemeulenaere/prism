@@ -1,0 +1,5 @@
+// expect: ok
+// run: 1
+fun f(): Int { val a = "x"; val b = "y"; return 1 }
+fun g(): Int { val c = "z"; return 2 }
+fun main() {}

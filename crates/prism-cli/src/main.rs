@@ -30,6 +30,13 @@ COMMANDS:
     dump-mir [--elaborated] <file.prism>
                            Print the MIR of a source file that typechecks; with
                            --elaborated, borrow-check it and print its elaborated MIR
+    run [--timings] <file.prism> [-- <argument>...]
+                           Compile the file and everything it imports in memory and run its
+                           'fun main()', exiting with the program's status (101 after a
+                           runtime error, 1 when it does not compile); --timings prints the
+                           time of each stage before main runs; the arguments after '--' are
+                           the program's
+    dump-clif <file.prism> Print the Cranelift IR the backend generates for a source file
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
     fmt [--check] <path>...
                            Format files, and the .prism files under directories, in place and
@@ -52,6 +59,7 @@ ENVIRONMENT:
 }
 
 fn main() {
+    let started = std::time::Instant::now();
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -105,6 +113,14 @@ fn main() {
                 }
             }
         }
+        "run" => run_program(&args[2..], started),
+        "dump-clif" => {
+            if args.len() != 3 {
+                eprintln!("Error: 'dump-clif' command requires a file path argument");
+                process::exit(1);
+            }
+            run_dump_clif(&args[2]);
+        }
         "abi" => {
             if args.len() < 3 {
                 eprintln!("Error: 'abi' command requires a file path argument");
@@ -123,6 +139,52 @@ fn main() {
         other => {
             eprintln!("Unknown command or option: '{}'", other);
             print_usage();
+            process::exit(1);
+        }
+    }
+}
+
+/// `prism run [--timings] <file.prism> [-- <argument>...]` (D14 of `codegen-core`): options
+/// before the file, and everything after `--` for the program.
+fn run_program(args: &[String], started: std::time::Instant) {
+    let usage = || -> ! {
+        eprintln!("Error: usage: prism run [--timings] <file.prism> [-- <argument>...]");
+        process::exit(1);
+    };
+    let mut timings = false;
+    let mut rest = args.iter();
+    let file = loop {
+        match rest.next().map(String::as_str) {
+            Some("--timings") => timings = true,
+            Some(option) if option.starts_with('-') => usage(),
+            Some(file) => break file,
+            None => usage(),
+        }
+    };
+    let arguments: Vec<String> = match rest.next().map(String::as_str) {
+        None => Vec::new(),
+        Some("--") => rest.cloned().collect(),
+        Some(_) => usage(),
+    };
+    let options = prism_cli::RunOptions {
+        timings,
+        arguments,
+        started,
+    };
+    match prism_cli::run_file(std::path::Path::new(file), &options) {
+        Ok(status) => process::exit(status),
+        Err(err) => {
+            eprint!("{}", err.render());
+            process::exit(1);
+        }
+    }
+}
+
+fn run_dump_clif(path: &str) {
+    match prism_cli::dump_clif(std::path::Path::new(path)) {
+        Ok(text) => print!("{}", text),
+        Err(err) => {
+            eprint!("{}", err.render());
             process::exit(1);
         }
     }

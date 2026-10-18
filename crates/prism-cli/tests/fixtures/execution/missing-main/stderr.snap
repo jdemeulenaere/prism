@@ -1,0 +1,5 @@
+error[E6002]: the entry file of 'prism run' must declare a function 'main'
+  --> main.prism:1:1
+    1 | // expect: ok
+      | ^
+   = help: add 'fun main() {}' to the entry file

@@ -1,0 +1,4 @@
+// expect: ok
+// run: 1
+compose fun Label() {}
+fun main() {}

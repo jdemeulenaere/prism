@@ -1,0 +1,5 @@
+error[E6001]: the Tier 1 backend does not support nullable values yet
+  --> main.prism:3:28
+    3 | fun main() { val n: Int? = null }
+      |                            ^
+   = note: support for nullable values is planned in the 'codegen-aggregates' change

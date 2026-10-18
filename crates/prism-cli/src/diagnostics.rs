@@ -1,6 +1,7 @@
 use prism_abi::AbiError;
 use prism_ast::Span;
 use prism_borrowck::{BorrowError, Label};
+use prism_codegen::CodegenError;
 use prism_parser::ParseError;
 use prism_resolver::ResolveError;
 use prism_typechecker::{Type, TypeError};
@@ -393,6 +394,38 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         _ => {}
     }
 
+    out
+}
+
+/// Formats the code generator's errors (`E6xxx`) in one file.
+pub fn format_codegen_errors(path: &Path, source: Option<&str>, errors: &[CodegenError]) -> String {
+    errors
+        .iter()
+        .map(|error| format_codegen_error(path, source, error))
+        .collect()
+}
+
+/// Formats one code generator error: its header, its location with a snippet, its notes and its
+/// help.
+pub fn format_codegen_error(path: &Path, source: Option<&str>, error: &CodegenError) -> String {
+    let mut out = format!("error[{}]: {}\n", error.code(), error.message);
+    out.push_str(&format!(
+        "  --> {}:{}:{}\n",
+        display_path(path),
+        error.span.line,
+        error.span.column
+    ));
+    if let Some(snippet) =
+        source.and_then(|src| render_code_snippet(src, error.span.line, error.span.column))
+    {
+        out.push_str(&format!("{}\n", snippet));
+    }
+    for note in &error.notes {
+        out.push_str(&format!("   = note: {}\n", note));
+    }
+    if let Some(help) = &error.help {
+        out.push_str(&format!("   = help: {}\n", help));
+    }
     out
 }
 

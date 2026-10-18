@@ -1,0 +1,5 @@
+error[E6003]: 'main' cannot be the entry point: it is 'compose'
+  --> main.prism:3:1
+    3 | compose fun main() {}
+      | ^
+   = help: declare it as 'fun main() { ... }'
