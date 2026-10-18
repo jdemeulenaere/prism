@@ -851,6 +851,23 @@ impl<A: Analysis> ResultsCursor<'_, A> {
         }
     }
 
+    /// Forward only: the state before `location`, for the caller to bring past the location
+    /// by applying its effect itself, in place: the cursor continues from after it. A caller
+    /// that replays a location's effects one by one, such as the use check, needs no copy.
+    pub fn seek_to_apply(&mut self, location: Location) -> &mut A::Domain {
+        assert_eq!(
+            self.results.analysis.direction(),
+            Direction::Forward,
+            "a backward cursor cannot be stepped in place"
+        );
+        self.seek_forward(location);
+        self.position = Some(Location {
+            block: location.block,
+            statement: location.statement + 1,
+        });
+        &mut self.state
+    }
+
     fn seek_forward(&mut self, location: Location) -> &A::Domain {
         let results = self.results;
         let reusable = self.position.is_some_and(|position| {
@@ -1228,6 +1245,32 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn a_cursor_stepped_in_place_continues_from_after_the_location() {
+        let body = chain_then_branch();
+        let results = solve(
+            &body,
+            BlocksRun {
+                size: 6,
+                direction: Direction::Forward,
+            },
+        );
+        let mut cursor = results.cursor(&body);
+        // The caller applies each terminator's effect: the next block, chained or not, starts
+        // from the state it left.
+        for block in [0, 1, 2] {
+            let terminator = Location::terminator(&body, BlockId(block));
+            let state = cursor.seek_to_apply(terminator);
+            assert_eq!(blocks(state), (0..block as usize).collect::<Vec<_>>());
+            state.insert(block as usize);
+        }
+        assert_eq!(
+            blocks(cursor.seek(Location::start(BlockId(3)))),
+            vec![0, 1, 2]
+        );
+        assert_eq!(blocks(cursor.seek(Location::start(BlockId(1)))), vec![0]);
     }
 
     #[test]

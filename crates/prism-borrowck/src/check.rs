@@ -40,21 +40,22 @@ pub(crate) fn check_body(
     let mut reported: HashSet<(MovePathId, Vec<Event>)> = HashSet::new();
     let mut errors = Vec::new();
     for location in locations(body) {
-        // Only a use is checked, so the effects after a location's last use need no replay, and
-        // a location without uses (a storage marker, a constant's assignment) needs no state.
+        // Only a use is checked, so a location without uses (a storage marker, a constant's
+        // assignment) needs no state. The cursors' states are brought past the location in
+        // place, effect by effect.
         let effects = data.effects(location);
-        let Some(last_use) = effects
+        if !effects
             .iter()
-            .rposition(|effect| matches!(effect, Effect::Use { .. }))
-        else {
+            .any(|effect| matches!(effect, Effect::Use { .. }))
+        {
             continue;
-        };
-        let mut maybe_state = maybe_cursor.seek(location).clone();
-        let mut reaching_state = reaching_cursor.seek(location).clone();
-        let mut acyclic_state = acyclic_cursor.seek(location).clone();
-        for effect in &effects[..=last_use] {
+        }
+        let maybe_state = maybe_cursor.seek_to_apply(location);
+        let reaching_state = reaching_cursor.seek_to_apply(location);
+        let acyclic_state = acyclic_cursor.seek_to_apply(location);
+        for effect in effects {
             if let Effect::Use { path, kind, span } = effect {
-                let events = reaching.analysis.reaching(&reaching_state, *path);
+                let events = reaching.analysis.reaching(reaching_state, *path);
                 if !events.is_empty() {
                     let reported_path = checker.reported_path(*path, &events);
                     if reported.insert((reported_path, events.clone())) {
@@ -64,14 +65,14 @@ pub(crate) fn check_body(
                             *span,
                             &events,
                             maybe_state.contains(reported_path.index()),
-                            &acyclic_state,
+                            acyclic_state,
                         ));
                     }
                 }
             }
-            maybe.analysis.apply_effect(&mut maybe_state, effect);
-            reaching.analysis.apply_effect(&mut reaching_state, effect);
-            acyclic.analysis.apply_effect(&mut acyclic_state, effect);
+            maybe.analysis.apply_effect(maybe_state, effect);
+            reaching.analysis.apply_effect(reaching_state, effect);
+            acyclic.analysis.apply_effect(acyclic_state, effect);
         }
     }
     errors
