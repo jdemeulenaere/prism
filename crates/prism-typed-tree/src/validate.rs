@@ -148,7 +148,9 @@ impl Validator<'_> {
             if local.escaping
                 && (!matches!(
                     local.kind,
-                    LocalKind::Parameter | LocalKind::ClosureParameter
+                    LocalKind::Parameter
+                        | LocalKind::ClosureParameter
+                        | LocalKind::ImplicitClosureParameter
                 ) || !(local.ty.is_function_value() || local.ty == Type::Error))
             {
                 let message = format!(

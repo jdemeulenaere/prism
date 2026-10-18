@@ -1,0 +1,6 @@
+// expect: ok
+fun keepIt(f: escaping () -> Unit) {}
+fun register(r: (escaping () -> Unit) -> Unit) {}
+fun f() {
+    register { keepIt(it) }
+}

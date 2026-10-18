@@ -81,11 +81,14 @@ No new capability: the header and the identifier status of `it` go to `syntax`, 
 
 `compile_timing.rs` gains two shapes: `n` sequential header-less closures using `it` passed to a one-parameter function, and `n` closures nested `n` deep, each with its own `it` and reading the enclosing one through a captured `val`. Both must stay roughly linear, as the existing `many_closures` and `nested_closures` shapes are; nothing in D1 to D6 adds work per closure beyond a constant.
 
+Measured while implementing (release build): `implicit-parameter-closures` grows x4.2 per x4 in type checking (7.8 ms at 4096 closures, as `many-closures`' 7.2 ms). `nested-implicit-parameter-closures` grows about x4 per doubling of the depth in type checking and in lowering (1.2 ms type and 2.2 ms lower at depth 120), and so does the same shape written with declared parameters (`apply { x -> ... }`), so the growth is not this change's: checking a call whose argument is a closure that itself ends in such a call costs time in the size of the argument somewhere in call checking and lowering, which the existing `nested-closures` shape (closures with no expected type, not passed as arguments) does not exercise. It is a ROADMAP follow-up; depths that matter in practice (under 10) cost microseconds.
+
 ## Risks / Trade-offs
 
 - [`it` silently refers to an outer `it` in a closure expecting zero parameters, where the author meant the closure's own] → this is Kotlin's behaviour; the type usually differs, and a lint can flag it once warnings exist.
 - [Formatter output changes for `{ -> body }`] → no fixture or example writes it, and the formatter's meaning check now compares headers.
 - [The arity message changes from "closure expected 1 parameters, but has 0"] → fixtures pinning the old text are updated; only the text changes, not the code.
+- [`E5007` for an `it` that cannot escape helps "declare it as 'it: escaping () -> Unit'", which a closure parameter cannot write] → the same help is given today for a declared closure parameter (`{ g -> keepIt(g) }`); a better help (make the function type's parameter `escaping`) belongs to the borrow checker and is a follow-up.
 
 ## Migration Plan
 

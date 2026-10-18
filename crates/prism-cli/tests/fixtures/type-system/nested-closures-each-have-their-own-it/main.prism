@@ -1,0 +1,4 @@
+// expect: ok
+fun apply(f: (Int) -> Int): Int = f(1)
+fun show(f: (String) -> Int): Int = f("ab")
+fun f(): Int = apply { it + show { it.length } }

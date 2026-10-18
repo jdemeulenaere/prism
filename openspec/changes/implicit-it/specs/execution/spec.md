@@ -14,7 +14,7 @@ A closure using its implicit `it` MUST run exactly as the closure `{ it -> ... }
 - **THEN** it prints `16`, `ab!` and `7?`, reports no live allocation and exits with status 0
 
 #### Scenario: An implicit reference parameter reads and lends its referent
-- **WHEN** `struct Todo { val title: String; var done: Bool }`, `fun <T> List<T>.forEach(f: (&T) -> Unit) { for (x in this) f(x) }`, `fun <T> List<T>.edit(f: (&mut List<T>) -> Unit) { f(&mut this) }` and `fun shout(s: &String): String = s + "!"` are declared, `edit` taking a `mut` receiver, and `main` builds `var todos = listOf(Todo("a", false))`, runs `todos.edit { it.add(Todo("b", true)) }` and `todos.forEach { println(shout(it.title)); println(it.done) }`
+- **WHEN** `struct Todo { val title: String; var done: Bool }`, `fun <T> List<T>.forEach(f: (&T) -> Unit) { for (x in this) f(x) }`, `mut fun <T> List<T>.edit(f: (&mut List<T>) -> Unit) { f(this) }` and `fun shout(s: &String): String = s + "!"` are declared, and `main` builds `var todos = listOf(Todo("a", false))`, runs `todos.edit { it.add(Todo("b", true)) }` and `todos.forEach { println(shout(it.title)); println(it.done) }`
 - **THEN** it prints `a!`, `false`, `b!` and `true`, reports no live allocation and exits with status 0
 
 #### Scenario: Nested closures with their own implicit parameters

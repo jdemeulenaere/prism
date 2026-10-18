@@ -286,9 +286,16 @@ fn erase_expression(expression: &mut Expr) {
                 erase_expression(value);
             }
         }
-        ExprKind::Closure { params, body } => {
+        ExprKind::Closure {
+            params,
+            arrow,
+            body,
+        } => {
             for parameter in params {
                 erase(&mut parameter.span);
+            }
+            if let Some(arrow) = arrow {
+                erase(arrow);
             }
             erase_block(body);
         }

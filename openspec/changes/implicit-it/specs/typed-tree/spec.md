@@ -7,4 +7,4 @@ A closure's implicit `it` MUST be recorded as the closure's one parameter: a bin
 
 #### Scenario: Implicit parameter in the tree
 - **WHEN** `fun apply(f: (Int) -> Int): Int = f(1)` is declared and `prism dump-typed-tree` runs on a file adding `fun g(k: Int): Int = apply { it + k }`
-- **THEN** the closure lists the parameter `it`, the body's locals list `it` of type `Int` as an implicit closure parameter at the closure's `{`, the closure captures `k` only, and `it` in the body is a use of that local
+- **THEN** the closure lists the parameter `it`, the body's locals list `it` of type `Int` as an implicit closure parameter, the closure captures `k` only, and `it` in the body is a use of that local

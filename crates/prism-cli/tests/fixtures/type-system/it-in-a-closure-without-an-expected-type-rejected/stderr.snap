@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'it'
+  --> main.prism:4:15
+    4 |     val f = { it + 1 }
+      |               ^
+   = help: this closure has no expected function type, so it has no implicit 'it'; only a closure without a header, passed where a function of one parameter is expected, has an implicit 'it'

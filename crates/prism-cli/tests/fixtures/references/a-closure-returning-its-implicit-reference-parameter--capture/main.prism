@@ -1,0 +1,8 @@
+// expect: E5009
+// run: 1
+fun app(g: (&Int) -> &Int): Int = 1
+fun h(): Int {
+    val n = 1
+    return app { if (it > 0) it else &n }
+}
+fun main() {}

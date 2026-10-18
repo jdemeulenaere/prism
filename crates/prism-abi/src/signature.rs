@@ -1044,8 +1044,14 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
         ExprKind::This => hasher.write_u8(30),
         ExprKind::Break => hasher.write_u8(28),
         ExprKind::Continue => hasher.write_u8(29),
-        ExprKind::Closure { params, body } => {
+        ExprKind::Closure {
+            params,
+            arrow,
+            body,
+        } => {
             hasher.write_u8(23);
+            // `{ -> x }` and `{ x }` differ: only the second may have an implicit `it`.
+            hasher.write_u8(u8::from(arrow.is_some()));
             hasher.write_u64(params.len() as u64);
             for p in params {
                 hasher.write_str(&p.name);

@@ -1,0 +1,25 @@
+// expect: ok
+// run: 0
+struct Todo {
+    val title: String
+    var done: Bool
+}
+
+fun <T> List<T>.forEach(f: (&T) -> Unit) {
+    for (x in this) f(x)
+}
+
+mut fun <T> List<T>.edit(f: (&mut List<T>) -> Unit) {
+    f(this)
+}
+
+fun shout(s: &String): String = s + "!"
+
+fun main() {
+    var todos = listOf(Todo("a", false))
+    todos.edit { it.add(Todo("b", true)) }
+    todos.forEach {
+        println(shout(it.title))
+        println(it.done)
+    }
+}

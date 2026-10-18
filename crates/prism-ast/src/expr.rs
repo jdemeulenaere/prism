@@ -308,10 +308,13 @@ pub enum ExprKind {
     /// `continue`: starts the next iteration of the innermost enclosing loop. It has type
     /// `Nothing`.
     Continue,
-    /// A closure `{ a, b -> ... }`, or `{ ... }` with no parameters. The body is
-    /// always a block, whatever the number of statements.
+    /// A closure `{ a, b -> ... }`, `{ -> ... }` declaring no parameters, or `{ ... }` with
+    /// no header, which the type checker may give the implicit parameter `it` (D1 of
+    /// `implicit-it`). The body is always a block, whatever the number of statements.
     Closure {
         params: Vec<ClosureParameter>,
+        /// The `->` ending the parameter header, `None` when the closure has no header.
+        arrow: Option<Span>,
         body: Block,
     },
     Index {
@@ -428,9 +431,15 @@ impl fmt::Display for Expr {
             ExprKind::Return(None) => write!(f, "return"),
             ExprKind::Break => write!(f, "break"),
             ExprKind::Continue => write!(f, "continue"),
-            ExprKind::Closure { params, body } => {
+            ExprKind::Closure {
+                params,
+                arrow,
+                body,
+            } => {
                 write!(f, "{{ ")?;
-                if !params.is_empty() {
+                if params.is_empty() && arrow.is_some() {
+                    write!(f, "-> ")?;
+                } else if !params.is_empty() {
                     let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
                     write!(f, "{} -> ", names.join(", "))?;
                 }

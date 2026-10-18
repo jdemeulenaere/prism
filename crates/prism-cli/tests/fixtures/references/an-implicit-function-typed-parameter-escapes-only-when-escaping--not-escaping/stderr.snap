@@ -1,0 +1,9 @@
+error[E5007]: the parameter 'it' cannot escape
+  --> main.prism:6:18
+    6 |     now { keepIt(it) }
+      |                  ^^ passed to an escaping parameter here
+  --> main.prism:6:9
+    6 |     now { keepIt(it) }
+      |         ^ 'it' is a parameter here
+   = note: an unmarked function-typed parameter may borrow its caller's variables
+   = help: declare it as 'it: escaping () -> Unit' if the function may keep it

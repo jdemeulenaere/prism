@@ -18,7 +18,10 @@ pub mod scope;
 pub mod types;
 
 pub use checker::TypeChecker;
-pub use error::{CaptureRefusal, NoTextFormReason, TypeError};
+pub use error::{
+    closure_parameter_count_help, CaptureRefusal, MissingImplicitParameter, NoTextFormReason,
+    TypeError,
+};
 pub use prism_typed_tree::TypedFile;
 pub use scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 pub use types::{

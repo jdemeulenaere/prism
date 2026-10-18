@@ -4,7 +4,7 @@ use prism_borrowck::{BorrowError, Label};
 use prism_codegen::CodegenError;
 use prism_parser::ParseError;
 use prism_resolver::ResolveError;
-use prism_typechecker::{Type, TypeError};
+use prism_typechecker::{closure_parameter_count_help, Type, TypeError};
 use std::path::Path;
 
 /// Formats a snippet with a line pointer when source text is provided.
@@ -288,6 +288,19 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         TypeError::ImmutabilityViolation { .. } => {
             out.push_str("   = help: use 'var' to declare a mutable binding or field\n");
+        }
+        TypeError::UnresolvedImplicitParameter { missing, .. } => {
+            out.push_str(&format!("   = help: {}\n", missing.help()));
+        }
+        TypeError::ClosureParameterCount {
+            expected,
+            has_header,
+            ..
+        } => {
+            out.push_str(&format!(
+                "   = help: {}\n",
+                closure_parameter_count_help(expected.len(), *has_header)
+            ));
         }
         TypeError::CallSignatureMismatch { .. } | TypeError::ArgumentTypeMismatch { .. } => {
             out.push_str(

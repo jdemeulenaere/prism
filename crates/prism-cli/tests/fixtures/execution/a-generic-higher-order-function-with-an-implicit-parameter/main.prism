@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun <T, R> map(x: T, f: (T) -> R): R = f(x)
+
+fun main() {
+    println(map(4) { it * it })
+    println(map("ab") { it + "!" })
+    println(map(7) { it.toString() + "?" })
+}

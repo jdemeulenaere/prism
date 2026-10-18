@@ -208,6 +208,10 @@ impl Printer<'_> {
                 LocalKind::ForVariable => "for",
                 LocalKind::ClosureParameter if local.escaping => "escaping closure parameter",
                 LocalKind::ClosureParameter => "closure parameter",
+                LocalKind::ImplicitClosureParameter if local.escaping => {
+                    "escaping implicit closure parameter"
+                }
+                LocalKind::ImplicitClosureParameter => "implicit closure parameter",
                 LocalKind::PatternBinding if local.mutable => "pattern var",
                 LocalKind::PatternBinding => "pattern val",
             };

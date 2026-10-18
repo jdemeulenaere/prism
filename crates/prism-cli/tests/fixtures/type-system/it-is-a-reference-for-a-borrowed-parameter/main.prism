@@ -1,0 +1,13 @@
+// expect: ok
+fun each(xs: &List<String>, f: (&String) -> Unit) {
+    for (x in xs) f(x)
+}
+fun count(s: &String): Int = s.length
+fun f(): Int {
+    var total = 0
+    each(listOf("a", "bc")) {
+        total += it.length
+        total += count(it)
+    }
+    return total
+}

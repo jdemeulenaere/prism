@@ -1,0 +1,8 @@
+// expect: E5007
+// run: 1
+fun keepIt(f: escaping () -> Unit) {}
+fun now(r: (() -> Unit) -> Unit) {}
+fun h() {
+    now { keepIt(it) }
+}
+fun main() {}

@@ -1,0 +1,3 @@
+// expect: ok
+fun apply(f: (Int) -> Int): Int = f(1)
+fun g(it: String): Int = apply { it + 1 }

@@ -1,0 +1,10 @@
+// expect: ok
+fun it(it: Int): Int = it
+fun g(it: Int) {}
+fun Int.it(): Int = this
+fun run(f: (Int) -> Int): Int = f(1)
+fun f(x: Int): Int {
+    val it = 1
+    g(it = it)
+    return x.it() + run { it -> it + 1 }
+}

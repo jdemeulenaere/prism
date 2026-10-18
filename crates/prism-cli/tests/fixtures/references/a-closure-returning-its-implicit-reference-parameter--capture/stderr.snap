@@ -1,0 +1,9 @@
+error[E5009]: the closure cannot return a borrow derived from captured 'n'
+  --> main.prism:6:38
+    6 |     return app { if (it > 0) it else &n }
+      |                                      ^^ returned here
+  --> main.prism:6:39
+    6 |     return app { if (it > 0) it else &n }
+      |                                       ^ 'n' is captured here
+   = note: the closure's type takes a borrowed input, so its returned borrow is tied to its reference parameters only (elision rules 1 and 3) and callers do not keep what it captures borrowed
+   = help: pass 'n' to the closure as a reference parameter instead

@@ -1,0 +1,5 @@
+// expect: E4004
+// run: 1
+fun apply(f: (Int) -> Int): Int = f(1)
+fun g(): Int = apply { -> 1 }
+fun main() {}

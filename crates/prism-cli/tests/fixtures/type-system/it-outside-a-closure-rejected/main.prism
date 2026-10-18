@@ -1,0 +1,4 @@
+// expect: E4001
+// run: 1
+fun f(): Int = it
+fun main() {}

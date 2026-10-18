@@ -212,6 +212,9 @@ pub enum LocalKind {
     ForVariable,
     /// A closure parameter.
     ClosureParameter,
+    /// The implicit parameter `it` of a closure without a header, declared at its `{` (D5 of
+    /// `implicit-it`).
+    ImplicitClosureParameter,
     /// A binding of a pattern (`val r` in `Shape.Circle(val r)`) or a destructuring
     /// declaration, whose type its [`BindingMode`] gives (D14 of `payload-patterns`).
     PatternBinding,

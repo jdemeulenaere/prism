@@ -1,0 +1,6 @@
+// expect: E4004
+// run: 1
+fun pairs(f: (Int, String) -> Unit) { f(1, "a") }
+fun main() {
+    pairs { println(it) }
+}

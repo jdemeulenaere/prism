@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+fun <T> List<T>.forEach(f: (&T) -> Unit) {
+    for (x in this) f(x)
+}
+
+fun run(f: () -> Unit) {
+    f()
+}
+
+fun main() {
+    val rows = listOf("ab", "c")
+    val columns = listOf(1, 2)
+    rows.forEach {
+        val row = it
+        columns.forEach { println(row + it.toString()) }
+        run { println(it.length) }
+    }
+}

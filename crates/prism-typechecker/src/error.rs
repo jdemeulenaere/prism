@@ -17,6 +17,13 @@ pub enum TypeError {
     /// E4001: `this` used outside an extension function, where nothing binds it.
     ThisOutsideExtension { span: Span },
 
+    /// E4001: `it` used where no closure binds it (D6 of `implicit-it`). `missing` says why the
+    /// innermost enclosing closure has no implicit `it`.
+    UnresolvedImplicitParameter {
+        missing: MissingImplicitParameter,
+        span: Span,
+    },
+
     /// E4001: An output built-in (`print` or `println`) named without being called, which only
     /// a call can do (D15 of `codegen-core`).
     BuiltinFunctionAsValue { name: String, span: Span },
@@ -57,6 +64,18 @@ pub enum TypeError {
 
     /// E4004: Function invocation argument count or parameter type incompatibility.
     CallSignatureMismatch { message: String, span: Span },
+
+    /// E4004: A closure declaring another number of parameters than its expected function type
+    /// has, or none without a header where two or more are expected (D6 of `implicit-it`).
+    ClosureParameterCount {
+        /// The expected function type's parameter types.
+        expected: Vec<Type>,
+        /// How many parameters the closure declares.
+        declared: usize,
+        /// Whether the closure has a `->` header.
+        has_header: bool,
+        span: Span,
+    },
 
     /// E4004: An argument of `print` or `println` of a type it cannot print (D15 of
     /// `codegen-core`).
@@ -330,6 +349,80 @@ impl CaptureRefusal {
     }
 }
 
+/// Why the innermost closure around a use of `it` has no implicit parameter (D6 of
+/// `implicit-it`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissingImplicitParameter {
+    /// The use is in no closure.
+    OutsideClosures,
+    /// The closure has a header, declaring these parameters (none for `{ -> }`).
+    DeclaredParameters(Vec<String>),
+    /// The closure has no expected function type.
+    NoExpectedType,
+    /// The closure's expected function type has no parameters.
+    NoExpectedParameters,
+}
+
+impl MissingImplicitParameter {
+    /// The help for an unbound `it`.
+    pub fn help(&self) -> String {
+        const WHERE: &str = "only a closure without a header, passed where a function of one parameter is expected, has an implicit 'it'";
+        match self {
+            MissingImplicitParameter::OutsideClosures => format!(
+                "'it' names the implicit parameter of a closure; {}",
+                WHERE
+            ),
+            MissingImplicitParameter::DeclaredParameters(names) if names.is_empty() => {
+                "this closure declares that it takes no parameters ('{ -> ... }'), so it has no implicit 'it'".to_string()
+            }
+            MissingImplicitParameter::DeclaredParameters(names) => {
+                let names: Vec<String> = names.iter().map(|n| format!("'{}'", n)).collect();
+                format!(
+                    "this closure declares its parameters ({}), so it has no implicit 'it'",
+                    names.join(", ")
+                )
+            }
+            MissingImplicitParameter::NoExpectedType => format!(
+                "this closure has no expected function type, so it has no implicit 'it'; {}",
+                WHERE
+            ),
+            MissingImplicitParameter::NoExpectedParameters => {
+                "this closure's expected function type has no parameters, so it has no implicit 'it'".to_string()
+            }
+        }
+    }
+}
+
+/// The names `a`, `b`, ... of `count` closure parameters, for a suggested header.
+fn suggested_parameters(count: usize) -> String {
+    let names: Vec<String> = (0..count)
+        .map(|index| match u8::try_from(index) {
+            Ok(index) if index < 26 => char::from(b'a' + index).to_string(),
+            _ => format!("p{}", index + 1),
+        })
+        .collect();
+    names.join(", ")
+}
+
+/// The help for a closure whose parameter count does not fit its expected type (D6 of
+/// `implicit-it`).
+pub fn closure_parameter_count_help(expected: usize, has_header: bool) -> String {
+    match (expected, has_header) {
+        (0, _) => "remove the header: the closure's expected function type has no parameters"
+            .to_string(),
+        (1, _) => "declare the parameter, as in '{ x -> ... }', or remove the header to use the implicit 'it'".to_string(),
+        (count, false) => format!(
+            "declare them in a header, as in '{{ {} -> ... }}'; only a closure expecting one parameter has an implicit 'it'",
+            suggested_parameters(count)
+        ),
+        (count, true) => format!(
+            "declare {} parameters, as in '{{ {} -> ... }}'",
+            count,
+            suggested_parameters(count)
+        ),
+    }
+}
+
 /// Why a string template part has no text form (D8 of `string-templates`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoTextFormReason {
@@ -353,12 +446,14 @@ impl TypeError {
             TypeError::UnresolvedSymbol { .. } => "E4001",
             TypeError::UnboundPatternName { .. } => "E4001",
             TypeError::ThisOutsideExtension { .. } => "E4001",
+            TypeError::UnresolvedImplicitParameter { .. } => "E4001",
             TypeError::BuiltinFunctionAsValue { .. } => "E4001",
             TypeError::TypeMismatch { .. } => "E4002",
             TypeError::OperatorMismatch { .. } => "E4002",
             TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
+            TypeError::ClosureParameterCount { .. } => "E4004",
             TypeError::UnprintableArgument { .. } => "E4004",
             TypeError::ArgumentTypeMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
@@ -401,11 +496,13 @@ impl TypeError {
             TypeError::CannotTakeApart { span, .. } => *span,
             TypeError::MoveInGuard { span, .. } => *span,
             TypeError::ThisOutsideExtension { span } => *span,
+            TypeError::UnresolvedImplicitParameter { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
             TypeError::OperatorMismatch { span, .. } => *span,
             TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
+            TypeError::ClosureParameterCount { span, .. } => *span,
             TypeError::UnprintableArgument { span, .. } => *span,
             TypeError::BuiltinFunctionAsValue { span, .. } => *span,
             TypeError::ArgumentTypeMismatch { span, .. } => *span,
@@ -497,6 +594,29 @@ impl TypeError {
             }
             TypeError::ImmutabilityViolation { message, .. } => message.clone(),
             TypeError::CallSignatureMismatch { message, .. } => message.clone(),
+            TypeError::UnresolvedImplicitParameter { .. } => "unresolved symbol 'it'".to_string(),
+            TypeError::ClosureParameterCount {
+                expected, declared, ..
+            } => {
+                let expected_text = match expected.len() {
+                    0 => "no parameters".to_string(),
+                    count => {
+                        let types: Vec<String> =
+                            expected.iter().map(|ty| format!("'{}'", ty)).collect();
+                        format!(
+                            "{} parameter{} ({})",
+                            count,
+                            if count == 1 { "" } else { "s" },
+                            types.join(", ")
+                        )
+                    }
+                };
+                let declared_text = match declared {
+                    0 => "declares none".to_string(),
+                    count => format!("declares {}", count),
+                };
+                format!("closure expected {}, but {}", expected_text, declared_text)
+            }
             TypeError::UnprintableArgument { function, ty, .. } => {
                 format!("'{}' cannot print a value of type '{}'", function, ty)
             }

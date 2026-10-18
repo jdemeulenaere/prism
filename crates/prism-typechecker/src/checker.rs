@@ -6,7 +6,7 @@
 
 use crate::builder::{BodyBuilder, FileBuilder};
 use crate::captures::{decide_captures, BodyKind};
-use crate::error::{NoTextFormReason, TypeError};
+use crate::error::{MissingImplicitParameter, NoTextFormReason, TypeError};
 use crate::exhaustiveness;
 use crate::inference::Unknowns;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
@@ -14,7 +14,7 @@ use crate::types::{
     type_from_abi, type_parameters_from_abi, NominalId, Type, TypeDef, TypeParameter,
     TypeRelations, BUILTIN_MODULE,
 };
-use prism_abi::{AbiType, AbiTypeMembers, ExportedSymbol, FileAbi};
+use prism_abi::{AbiType, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
     BinaryOp, CallArg, Expr, ExprKind, Literal, PatternKind, TemplatePart, UnaryOp, WhenBranch,
@@ -55,6 +55,8 @@ const LIST_ELEMENT_HELP: &str =
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
 const THIS: &str = "this";
+/// The name of a closure's implicit parameter (D1 of `implicit-it`).
+const IMPLICIT_PARAMETER: &str = "it";
 
 /// Helper to peel reference (`&T`, `&mut T`) and `Heap<T>` indirection layers to access the underlying nominal type.
 pub fn peel_indirection(mut ty: &Type) -> &Type {
@@ -458,11 +460,20 @@ struct BodyContext {
     locals: Vec<HashMap<String, Symbol>>,
     in_compose_stack: Vec<bool>,
     current_expected_return: Option<Type>,
+    missing_implicit_parameter: Option<MissingImplicitParameter>,
     in_function: bool,
     origin: Origin,
     consuming: bool,
     /// The tree of the body being checked, with its open closures and loops.
     builder: BodyBuilder,
+}
+
+/// What [`TypeChecker::enter_closure`] saves and [`TypeChecker::exit_closure`] restores.
+struct EnclosingClosureContext {
+    in_function: bool,
+    loops: Vec<StatementId>,
+    expected_return: Option<Type>,
+    missing_implicit_parameter: Option<MissingImplicitParameter>,
 }
 
 /// How the value of a `when` is used.
@@ -535,6 +546,9 @@ pub struct TypeChecker {
     pub in_compose_stack: Vec<bool>,
     /// Expected return type of the currently enclosing function.
     pub current_expected_return: Option<Type>,
+    /// Why the innermost enclosing closure has no implicit `it`, for the help of an unbound
+    /// `it`; `None` when it has one (D6 of `implicit-it`).
+    missing_implicit_parameter: Option<MissingImplicitParameter>,
     /// Private functions with omitted return types needing inference in Pass 2.
     pub unannotated_private_fns: Vec<String>,
     /// Whether the checker is currently evaluating within a function body.
@@ -584,6 +598,7 @@ impl TypeChecker {
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
+            missing_implicit_parameter: Some(MissingImplicitParameter::OutsideClosures),
             unannotated_private_fns: Vec::new(),
             in_function: false,
             builder: BodyBuilder::new(DeclarationPath::new("", "<none>")),
@@ -1157,6 +1172,17 @@ impl TypeChecker {
                 });
                 None
             }
+            Err(TypeError::UnresolvedSymbol { .. }) if name == IMPLICIT_PARAMETER => {
+                // No closure around this use binds `it`: say why the innermost one has none (D6
+                // of `implicit-it`).
+                let missing = self
+                    .missing_implicit_parameter
+                    .clone()
+                    .unwrap_or(MissingImplicitParameter::OutsideClosures);
+                self.errors
+                    .push(TypeError::UnresolvedImplicitParameter { missing, span });
+                None
+            }
             Err(TypeError::UnresolvedSymbol { .. })
                 if self.unimported_type_named(name).is_some() =>
             {
@@ -1583,32 +1609,9 @@ impl TypeChecker {
         // (D4 of `codegen-aggregates`): no name is defined, so a private type stays unnameable,
         // and using a member still needs its module imported (`E4014`).
         for definition in &abi.type_definitions {
-            let id = NominalId::new(definition.module.clone(), definition.name.clone());
-            self.types.insert_marker(
-                id.clone(),
-                definition.marker,
-                definition.marker_parameters.clone(),
-            );
-            let parameters = type_parameters_from_abi(&definition.type_parameters);
-            let convert = |ty: &AbiType| type_from_abi(ty, &parameters);
-            let type_definition = match &definition.members {
-                AbiTypeMembers::Fields(fields) => TypeDef::Struct {
-                    parameters: parameters.clone(),
-                    fields: fields
-                        .iter()
-                        .map(|(name, is_var, ty)| (name.clone(), *is_var, convert(ty)))
-                        .collect(),
-                },
-                AbiTypeMembers::Variants(variants) => TypeDef::Enum {
-                    parameters: parameters.clone(),
-                    variants: variants
-                        .iter()
-                        .map(|(name, payloads)| {
-                            (name.clone(), payloads.iter().map(convert).collect())
-                        })
-                        .collect(),
-                },
-            };
+            let (id, type_definition, marker) = crate::types::type_definition_from_abi(definition);
+            self.types
+                .insert_marker(id.clone(), marker.marker, marker.parameters);
             self.types.insert_definition(id, type_definition);
         }
         for ty in abi.symbols.iter().flat_map(abi_symbol_types) {
@@ -2437,6 +2440,9 @@ impl TypeChecker {
             locals: self.env.take_locals(),
             in_compose_stack: std::mem::replace(&mut self.in_compose_stack, vec![false]),
             current_expected_return: self.current_expected_return.take(),
+            missing_implicit_parameter: self
+                .missing_implicit_parameter
+                .replace(MissingImplicitParameter::OutsideClosures),
             in_function: std::mem::replace(&mut self.in_function, false),
             origin: std::mem::replace(&mut self.origin, Origin::Value),
             consuming: std::mem::replace(&mut self.parent_consuming, false),
@@ -2452,6 +2458,7 @@ impl TypeChecker {
         self.env.restore_locals(saved.locals);
         self.in_compose_stack = saved.in_compose_stack;
         self.current_expected_return = saved.current_expected_return;
+        self.missing_implicit_parameter = saved.missing_implicit_parameter;
         self.in_function = saved.in_function;
         self.origin = saved.origin;
         self.parent_consuming = saved.consuming;
@@ -2905,7 +2912,12 @@ impl TypeChecker {
         }
 
         // Special handling for closures checked against expected function type
-        if let ExprKind::Closure { params, body } = &expr.kind {
+        if let ExprKind::Closure {
+            params,
+            arrow,
+            body,
+        } = &expr.kind
+        {
             if let Type::Fn {
                 is_compose,
                 params: exp_params,
@@ -2915,6 +2927,7 @@ impl TypeChecker {
             {
                 return self.check_closure(
                     params,
+                    arrow.is_some(),
                     body,
                     *is_compose,
                     exp_params,
@@ -3007,11 +3020,14 @@ impl TypeChecker {
 
     /// Checks the closure `{ params -> body }` against a function type with parameter types
     /// `exp_params`, whose `escaping` flags `exp_escaping` its parameters take, and, when known,
-    /// return type `exp_ret`; without one the body's type is the closure's return type.
+    /// return type `exp_ret`; without one the body's type is the closure's return type. A closure
+    /// without a header (`has_header` false) expecting one parameter gets the implicit parameter
+    /// `it` (D1 of `implicit-it`), decided here from the expected type alone.
     #[allow(clippy::too_many_arguments)]
     fn check_closure(
         &mut self,
         params: &[prism_ast::ClosureParameter],
+        has_header: bool,
         body: &Block,
         is_compose: bool,
         exp_params: &[Type],
@@ -3019,27 +3035,51 @@ impl TypeChecker {
         exp_ret: Option<&Type>,
         span: Span,
     ) -> ExpressionId {
-        if params.len() != exp_params.len() {
-            self.errors.push(TypeError::CallSignatureMismatch {
-                message: format!(
-                    "closure expected {} parameters, but has {}",
-                    exp_params.len(),
-                    params.len()
-                ),
+        let implicit = !has_header && exp_params.len() == 1;
+        if !implicit && params.len() != exp_params.len() {
+            self.errors.push(TypeError::ClosureParameterCount {
+                expected: exp_params.to_vec(),
+                declared: params.len(),
+                has_header,
                 span,
             });
             return self.error_node(Vec::new(), span);
         }
 
-        let prev = self.enter_closure(is_compose, exp_ret.cloned());
+        // The implicit `it` is declared at the closure's `{` (D5 of `implicit-it`).
+        let declared: Vec<(&str, Span, LocalKind)> = if implicit {
+            let brace = Span::new(span.start, span.start + 1, span.line, span.column);
+            vec![(
+                IMPLICIT_PARAMETER,
+                brace,
+                LocalKind::ImplicitClosureParameter,
+            )]
+        } else {
+            params
+                .iter()
+                .map(|p| (p.name.as_str(), p.span, LocalKind::ClosureParameter))
+                .collect()
+        };
+        let missing = if implicit {
+            None
+        } else if has_header {
+            Some(MissingImplicitParameter::DeclaredParameters(
+                params.iter().map(|p| p.name.clone()).collect(),
+            ))
+        } else {
+            Some(MissingImplicitParameter::NoExpectedParameters)
+        };
+        let prev = self.enter_closure(is_compose, exp_ret.cloned(), missing);
         let mut parameters = Vec::new();
-        for (index, (parameter, param_ty)) in params.iter().zip(exp_params.iter()).enumerate() {
+        for (index, ((name, parameter_span, kind), param_ty)) in
+            declared.into_iter().zip(exp_params.iter()).enumerate()
+        {
             let sym = self.bind_local(
-                &parameter.name,
+                name,
                 param_ty.clone(),
                 Mutability::Val,
-                LocalKind::ClosureParameter,
-                parameter.span,
+                kind,
+                parameter_span,
             );
             let local = Self::local_of(&sym).expect("a bound local");
             self.builder.body_mut().locals[local].escaping =
@@ -3072,32 +3112,37 @@ impl TypeChecker {
     }
 
     /// Enters the body of a closure: a scope, a compose context, a fresh set of open loops (a
-    /// jump cannot leave the closure for a loop around it) and the expected return type. The
-    /// builder records the closure's captures (D11 of `typed-tree`). Returns what
-    /// [`Self::exit_closure`] restores.
+    /// jump cannot leave the closure for a loop around it), the expected return type, and why
+    /// the closure has no implicit `it` (`None` when it has one). The builder records the
+    /// closure's captures (D11 of `typed-tree`). Returns what [`Self::exit_closure`] restores.
     fn enter_closure(
         &mut self,
         is_compose: bool,
         expected_return: Option<Type>,
-    ) -> (bool, Vec<StatementId>, Option<Type>) {
+        missing_implicit_parameter: Option<MissingImplicitParameter>,
+    ) -> EnclosingClosureContext {
         self.env.enter_scope();
         self.push_compose_context(is_compose);
-        let prev_in_func = std::mem::replace(&mut self.in_function, true);
-        let prev_loops = std::mem::take(&mut self.builder.loops);
-        let prev_ret = std::mem::replace(&mut self.current_expected_return, expected_return);
+        let saved = EnclosingClosureContext {
+            in_function: std::mem::replace(&mut self.in_function, true),
+            loops: std::mem::take(&mut self.builder.loops),
+            expected_return: std::mem::replace(&mut self.current_expected_return, expected_return),
+            missing_implicit_parameter: std::mem::replace(
+                &mut self.missing_implicit_parameter,
+                missing_implicit_parameter,
+            ),
+        };
         self.builder.open_closure();
-        (prev_in_func, prev_loops, prev_ret)
+        saved
     }
 
     /// Leaves a closure body entered by [`Self::enter_closure`], returning its captures.
-    fn exit_closure(
-        &mut self,
-        (prev_in_func, prev_loops, prev_ret): (bool, Vec<StatementId>, Option<Type>),
-    ) -> Vec<prism_typed_tree::Capture> {
+    fn exit_closure(&mut self, saved: EnclosingClosureContext) -> Vec<prism_typed_tree::Capture> {
         let captures = self.builder.close_closure();
-        self.builder.loops = prev_loops;
-        self.current_expected_return = prev_ret;
-        self.in_function = prev_in_func;
+        self.builder.loops = saved.loops;
+        self.current_expected_return = saved.expected_return;
+        self.missing_implicit_parameter = saved.missing_implicit_parameter;
+        self.in_function = saved.in_function;
         self.pop_compose_context();
         self.env.exit_scope();
         captures
@@ -3354,8 +3399,19 @@ impl TypeChecker {
 
             ExprKind::Template(parts) => self.infer_template(parts, expr.span),
 
-            ExprKind::Closure { params, body } => {
-                let prev = self.enter_closure(false, None);
+            ExprKind::Closure {
+                params,
+                arrow,
+                body,
+            } => {
+                let missing = if arrow.is_some() {
+                    MissingImplicitParameter::DeclaredParameters(
+                        params.iter().map(|p| p.name.clone()).collect(),
+                    )
+                } else {
+                    MissingImplicitParameter::NoExpectedType
+                };
+                let prev = self.enter_closure(false, None, Some(missing));
 
                 // Without an expected function type, nothing gives the parameters a type (D6 of
                 // `typechecker-soundness`). They are bound to the error type so the body is still
@@ -5733,6 +5789,7 @@ impl TypeChecker {
             closure_signature(declared).expect("deferred closures have a function type");
         let ExprKind::Closure {
             params: written,
+            arrow,
             body,
         } = &expr.kind
         else {
@@ -5755,6 +5812,7 @@ impl TypeChecker {
         let expected_return = (!infer_return).then(|| ret.substitute(&partial));
         let node = self.check_closure(
             written,
+            arrow.is_some(),
             body,
             is_compose,
             &params,
@@ -9010,6 +9068,7 @@ mod tests {
                 name: "n".to_string(),
                 span: Span::dummy(),
             }],
+            arrow: Some(Span::dummy()),
             body: Block {
                 statements: Vec::new(),
                 tail: Some(Box::new(expr(ExprKind::Binary {
@@ -9779,6 +9838,7 @@ mod tests {
         // A standard (non-composable) closure: { MyView() }
         let closure = expr(ExprKind::Closure {
             params: Vec::new(),
+            arrow: None,
             body: Block {
                 statements: Vec::new(),
                 tail: Some(Box::new(expr(ExprKind::Call {

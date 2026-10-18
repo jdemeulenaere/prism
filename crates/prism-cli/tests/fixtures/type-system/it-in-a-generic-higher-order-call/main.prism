@@ -1,0 +1,7 @@
+// expect: ok
+fun <T, R> map(x: T, f: (T) -> R): R = f(x)
+fun f(): String {
+    val n: Int = map(2) { it * 3 }
+    val s: String = map(2) { it.toString() }
+    return s + n.toString()
+}

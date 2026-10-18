@@ -1,0 +1,7 @@
+// expect: ok
+fun <T> List<T>.forEach(f: (&T) -> Unit) {
+    for (x in this) f(x)
+}
+fun f(xs: &List<Int>) {
+    xs.forEach { println(it) }
+}

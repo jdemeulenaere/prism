@@ -1631,7 +1631,8 @@ impl Parser {
         has_arrow
     }
 
-    /// A closure `{ a, b -> ... }`, or `{ ... }` with zero parameters.
+    /// A closure `{ a, b -> ... }`, `{ -> ... }` declaring zero parameters, or `{ ... }` with no
+    /// header, whose parameters the type checker decides (D1 of `implicit-it`).
     fn parse_closure(&mut self) -> Result<Expr, ParseError> {
         let has_header = self.is_closure_with_arrow_ahead();
         let start = self.expect(TokenKind::LBrace)?.span;
@@ -1664,6 +1665,7 @@ impl Parser {
         Ok(Expr::new(
             ExprKind::Closure {
                 params,
+                arrow,
                 body: Block {
                     statements,
                     tail,

@@ -135,7 +135,11 @@ impl<'a> Printer<'a> {
                 Some(value) => concat(vec![text("return "), self.expression(value)]),
                 None => text("return"),
             },
-            ExprKind::Closure { params, body } => self.closure(params, body, expression.span),
+            ExprKind::Closure {
+                params,
+                arrow,
+                body,
+            } => self.closure(params, arrow.is_some(), body, expression.span),
             ExprKind::Template(parts) => self.template(expression, parts),
         }
     }
@@ -712,10 +716,19 @@ impl<'a> Printer<'a> {
 
     /// `{ a, b -> body }`: on one line when its body is a single statement or expression, it
     /// was written on one line and it fits; otherwise broken, with the parameters after the `{`
-    /// (D9).
-    fn closure(&mut self, parameters: &[ClosureParameter], body: &Block, span: Span) -> Document {
-        let header = if parameters.is_empty() {
+    /// (D9). A header is printed exactly when one was written, so `{ -> body }` keeps its empty
+    /// header and `{ body }` never gains one (D2 of `implicit-it`).
+    fn closure(
+        &mut self,
+        parameters: &[ClosureParameter],
+        has_header: bool,
+        body: &Block,
+        span: Span,
+    ) -> Document {
+        let header = if !has_header {
             String::new()
+        } else if parameters.is_empty() {
+            " ->".to_string()
         } else {
             let names: Vec<&str> = parameters.iter().map(|p| p.name.as_str()).collect();
             format!(" {} ->", names.join(", "))
@@ -724,7 +737,7 @@ impl<'a> Printer<'a> {
         let written_on_one_line = self.same_line(span.start, span.end);
         let items = self.block_items(body, body.close_brace.start);
         match items {
-            None if parameters.is_empty() => text("{}"),
+            None if header.is_empty() => text("{}"),
             None => text(format!("{{{} }}", header)),
             Some(items) if single_item && written_on_one_line => group(concat(vec![
                 text(format!("{{{}", header)),

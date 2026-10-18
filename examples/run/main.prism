@@ -23,7 +23,7 @@ fun button(label: String, onClick: escaping () -> Int): Button = Button(label, o
 
 fun press(b: &Button): Int = b.onClick()
 
-fun describer(name: String): (Int) -> String = { n -> "$name = $n" }
+fun describer(name: String): (Int) -> String = { "$name = $it" }
 
 fun main() {
     var primes = 0
@@ -72,7 +72,7 @@ fun main() {
     repeat(4) { steps += primes }
     println(steps)
     println(twice(triple, 2))
-    println(twice({ n -> n - steps }, 100))
+    println(twice({ it - steps }, 100))
 
     val greeting = "pressed"
     val bonus = steps

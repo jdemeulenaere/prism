@@ -171,6 +171,27 @@ fn many_closures(n: usize) -> String {
     format!("fun run(f: () -> Unit) {{ f() }}\nfun main() {{\n{body}println(total)\n}}\n")
 }
 
+/// `n` header-less closures in one body, each using its implicit `it` (D8 of `implicit-it`).
+fn implicit_parameter_closures(n: usize) -> String {
+    let mut body = String::from("var total = 0\n");
+    for i in 0..n {
+        writeln!(body, "each {{ total += it + {i} }}").unwrap();
+    }
+    format!("fun each(f: (Int) -> Unit) {{ f(1) }}\nfun main() {{\n{body}println(total)\n}}\n")
+}
+
+/// Header-less closures nested `n` deep, each with its own `it`, reading the enclosing one
+/// through a `val` it captures (D8 of `implicit-it`).
+fn nested_implicit_parameter_closures(n: usize) -> String {
+    let mut body = String::from("apply { val v0 = it; ");
+    for i in 1..n {
+        write!(body, "apply {{ val v{i} = it + v{}; ", i - 1).unwrap();
+    }
+    write!(body, "v{}", n - 1).unwrap();
+    body.push_str(&" }".repeat(n));
+    format!("fun apply(f: (Int) -> Int): Int = f(1)\nfun main() {{ println({body}) }}\n")
+}
+
 /// One closure capturing `n` locals.
 fn many_captures(n: usize) -> String {
     format!(
@@ -616,6 +637,18 @@ fn shapes() -> Vec<Shape> {
         shape("nested-blocks", true, DEPTHS, nested_blocks),
         shape("nested-closures", true, DEPTHS, nested_closures),
         shape("many-closures", true, SIZES, many_closures),
+        shape(
+            "implicit-parameter-closures",
+            true,
+            SIZES,
+            implicit_parameter_closures,
+        ),
+        shape(
+            "nested-implicit-parameter-closures",
+            true,
+            DEPTHS,
+            nested_implicit_parameter_closures,
+        ),
         shape("many-captures", true, SIZES, many_captures),
         shape("many-adapters", true, SIZES, many_adapters),
         shape("generic-closures", true, SIZES, generic_closures),

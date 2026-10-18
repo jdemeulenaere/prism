@@ -1,0 +1,5 @@
+error[E4004]: closure expected 1 parameter ('Int'), but declares none
+  --> main.prism:4:22
+    4 | fun g(): Int = apply { -> 1 }
+      |                      ^
+   = help: declare the parameter, as in '{ x -> ... }', or remove the header to use the implicit 'it'

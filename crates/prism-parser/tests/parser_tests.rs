@@ -249,7 +249,7 @@ mod tests {
                         // A parameterless trailing lambda is a closure, not a block.
                         assert!(matches!(
                             &args[1].value.kind,
-                            ExprKind::Closure { params, body } if params.is_empty() && items(body).len() == 1
+                            ExprKind::Closure { params, body, .. } if params.is_empty() && items(body).len() == 1
                         ));
                     } else {
                         panic!("Expected Call expr for Column");
@@ -275,7 +275,7 @@ mod tests {
                             panic!("Expected MemberAccess for forEach");
                         }
                         assert_eq!(args.len(), 1);
-                        if let ExprKind::Closure { params, body } = &args[0].value.kind {
+                        if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                             assert_eq!(names(params), vec!["item"]);
                             assert_eq!(items(body).len(), 2);
                         } else {
@@ -1040,7 +1040,7 @@ mod tests {
     #[track_caller]
     fn parameterless_closure_len(e: &Expr) -> usize {
         match &e.kind {
-            ExprKind::Closure { params, body } if params.is_empty() => items(body).len(),
+            ExprKind::Closure { params, body, .. } if params.is_empty() => items(body).len(),
             other => panic!("Expected a parameterless closure, found {:?}", other),
         }
     }
@@ -1088,7 +1088,7 @@ mod tests {
     #[test]
     fn single_expression_closure_body_is_a_block() {
         let e = expr_body("fun f() = run { x -> x + 1 }");
-        let ExprKind::Closure { params, body } = &call_args(&e)[0].value.kind else {
+        let ExprKind::Closure { params, body, .. } = &call_args(&e)[0].value.kind else {
             panic!("Expected closure");
         };
         assert_eq!(names(params), vec!["x"]);
@@ -1096,6 +1096,81 @@ mod tests {
         assert_eq!((params[0].span.line, params[0].span.column), (1, 17));
         assert_eq!(items(body).len(), 1);
         assert_eq!(items(body)[0].to_string(), "(x + 1)");
+    }
+
+    // --- implicit-it ---
+
+    /// syntax: "it as a declared name".
+    #[test]
+    fn it_as_a_declared_name() {
+        let file = parse_source(
+            "fun it(it: Int): Int = it\nfun f() { val it = 1; g(it = it) }\nfun h() = x.it()",
+        )
+        .unwrap();
+        let Declaration::Function(it) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        assert_eq!(it.name, "it");
+        assert_eq!(it.params[0].name, "it");
+        let stmts = block_stmts("fun f() { val it = 1; g(it = it) }");
+        let StatementKind::Local { name, .. } = &stmts[0].kind else {
+            panic!("Expected declaration");
+        };
+        assert_eq!(name, "it");
+        let args = call_args(expr_of(&stmts[1]));
+        assert_eq!(args[0].name.as_deref(), Some("it"));
+        let e = expr_body("fun f() = run { it -> it + 1 }");
+        let ExprKind::Closure { params, arrow, .. } = &call_args(&e)[0].value.kind else {
+            panic!("Expected closure");
+        };
+        assert_eq!(names(params), vec!["it"]);
+        assert!(arrow.is_some());
+    }
+
+    /// syntax: "A header-less closure has no parameters in the syntax tree".
+    #[test]
+    fn a_header_less_closure_has_no_parameters_in_the_syntax_tree() {
+        let stmts = block_stmts("fun f() { xs.forEach { println(it) } }");
+        let ExprKind::Closure {
+            params,
+            arrow,
+            body,
+        } = &call_args(expr_of(&stmts[0]))[0].value.kind
+        else {
+            panic!("Expected closure");
+        };
+        assert!(params.is_empty());
+        assert!(arrow.is_none());
+        let body_items = items(body);
+        let ExprKind::Call { args, .. } = &expr_of(&body_items[0]).kind else {
+            panic!("Expected call");
+        };
+        assert!(matches!(&args[0].value.kind, ExprKind::Ident(name) if name == "it"));
+    }
+
+    /// syntax: "An empty parameter header is recorded".
+    #[test]
+    fn an_empty_parameter_header_is_recorded() {
+        let stmts = block_stmts("fun f() {\n    run { -> 1 }\n    run { 1 }\n    run { -> }\n}");
+        let headers: Vec<(usize, Option<(u32, u32)>)> = stmts
+            .iter()
+            .map(
+                |statement| match &call_args(expr_of(statement))[0].value.kind {
+                    ExprKind::Closure { params, arrow, .. } => {
+                        (params.len(), arrow.map(|a| (a.line, a.column)))
+                    }
+                    other => panic!("Expected closure, found {:?}", other),
+                },
+            )
+            .collect();
+        assert_eq!(
+            headers,
+            vec![(0, Some((2, 11))), (0, None), (0, Some((4, 11)))]
+        );
+        assert_eq!(
+            expr_of(&stmts[0]).to_string(),
+            "run({ -> ... (0 statements, tail) })"
+        );
     }
 
     #[test]

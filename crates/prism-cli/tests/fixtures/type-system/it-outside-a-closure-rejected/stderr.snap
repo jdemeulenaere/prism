@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'it'
+  --> main.prism:3:16
+    3 | fun f(): Int = it
+      |                ^
+   = help: 'it' names the implicit parameter of a closure; only a closure without a header, passed where a function of one parameter is expected, has an implicit 'it'

@@ -1,0 +1,5 @@
+error[E4004]: closure expected 2 parameters ('Int', 'String'), but declares none
+  --> main.prism:5:11
+    5 |     pairs { println(it) }
+      |           ^
+   = help: declare them in a header, as in '{ a, b -> ... }'; only a closure expecting one parameter has an implicit 'it'

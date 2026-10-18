@@ -1,0 +1,15 @@
+module main
+fun main::apply(f: (Int) -> Int): Int @2:1
+  local %0 f: (Int) -> Int (parameter)
+  call value: Int @2:35
+    callee: local %0 f: (Int) -> Int @2:35
+    argument 0: literal 1: Int @2:37
+fun main::g(k: Int): Int @3:1
+  local %0 k: Int (parameter)
+  local %1 it: Int (implicit closure parameter)
+  call main::apply: Int @3:22
+    argument f: closure (%1 it) captures [borrow %0 k]: (Int) -> Int @3:28
+      block: Int @3:30
+        tail: binary +: Int @3:30
+          local %1 it: Int @3:30
+          local %0 k: Int @3:35

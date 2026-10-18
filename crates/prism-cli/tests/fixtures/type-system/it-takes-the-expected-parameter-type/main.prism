@@ -1,0 +1,7 @@
+// expect: ok
+fun apply(f: (Int) -> Int): Int = f(1)
+fun f(): Int {
+    val a = apply { it + 1 }
+    val g: (String) -> Int = { it.length }
+    return a + g("abc")
+}

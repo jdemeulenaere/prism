@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'it'
+  --> main.prism:4:22
+    4 | fun f(): Int = run { it }
+      |                      ^
+   = help: this closure's expected function type has no parameters, so it has no implicit 'it'

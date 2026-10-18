@@ -1,0 +1,4 @@
+// expect: ok
+fun apply(f: (Int) -> Int): Int = f(1)
+fun run(f: () -> Int): Int = f()
+fun f(): Int = apply { run { it + 1 } }
