@@ -1,0 +1,5 @@
+error[E4004]: 'f' takes a receiver of type 'Scope', and there is no 'this' here
+  --> main.prism:4:34
+    4 | fun a(f: Scope.() -> Int): Int = f()
+      |                                  ^
+   = help: pass one, as in 'f(scope)' or 'scope.f()'

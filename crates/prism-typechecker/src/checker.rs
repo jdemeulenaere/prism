@@ -1409,12 +1409,24 @@ impl TypeChecker {
                 {
                     // Name the closure's type, from the return type and compose flag its body is
                     // checked with, rather than keep it for every closure.
-                    MissingImplicitParameter::NoExpectedParameters(None) => {
-                        MissingImplicitParameter::NoExpectedParameters(
-                            self.current_expected_return
-                                .clone()
-                                .map(|ret| Type::function(self.is_in_compose(), Vec::new(), ret)),
-                        )
+                    MissingImplicitParameter::NoExpectedParameters {
+                        receiver,
+                        function_type: None,
+                    } => {
+                        let function_type = self.current_expected_return.clone().map(|ret| {
+                            let params: Vec<Type> = receiver.iter().cloned().collect();
+                            Type::Fn {
+                                is_compose: self.is_in_compose(),
+                                receiver: receiver.is_some(),
+                                escaping: vec![false; params.len()],
+                                params,
+                                ret: Box::new(ret),
+                            }
+                        });
+                        MissingImplicitParameter::NoExpectedParameters {
+                            receiver,
+                            function_type,
+                        }
                     }
                     other => other,
                 };
@@ -3726,7 +3738,10 @@ impl TypeChecker {
                 params.iter().map(|p| p.name.clone()).collect(),
             ))
         } else {
-            Some(MissingImplicitParameter::NoExpectedParameters(None))
+            Some(MissingImplicitParameter::NoExpectedParameters {
+                receiver: exp_params[..skipped].first().cloned(),
+                function_type: None,
+            })
         };
         let expected_return = match exp_ret {
             ClosureReturn::Expected(ret) => Some(ret),
@@ -7602,32 +7617,11 @@ impl TypeChecker {
             reached.is_assignable_to(&receiver_ty) && receiver_ty.is_assignable_to(reached)
         });
         if !matches {
-            let scope = receiver_ty.to_string();
-            let mut variable = scope.clone();
-            if let Some(first) = variable.get_mut(..1) {
-                first.make_ascii_lowercase();
-            }
-            let variable = variable
-                .split(|c: char| !c.is_alphanumeric())
-                .next()
-                .unwrap_or("receiver")
-                .to_string();
-            let found = match &reached {
-                Some(reached) => format!("the innermost 'this' has type '{}'", reached),
-                None => "there is no 'this' here".to_string(),
-            };
-            self.errors.push(TypeError::CallSignatureMismatch {
-                message: format!(
-                    "'{}' takes a receiver of type '{}', and {}: pass one, as in '{}({}{})' or '{}.{}()'",
-                    callee,
-                    scope,
-                    found,
-                    callee,
-                    if mutable { "&mut " } else { "" },
-                    variable,
-                    variable,
-                    callee
-                ),
+            self.errors.push(TypeError::MissingFunctionValueReceiver {
+                callee: callee.to_string(),
+                receiver: (*receiver_ty).clone(),
+                mutable,
+                innermost: reached.clone(),
                 span,
             });
             let mut children = vec![callee_node];

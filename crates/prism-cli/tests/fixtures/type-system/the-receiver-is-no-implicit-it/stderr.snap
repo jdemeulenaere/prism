@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'it'
+  --> main.prism:5:23
+    5 | fun g(): Int = none { it.depth }
+      |                       ^
+   = help: this closure's type 'Scope.() -> Int' has no parameters besides its receiver 'this', so it has no implicit 'it'

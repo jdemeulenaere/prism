@@ -1,0 +1,6 @@
+// expect: E4001
+// run: 1
+struct Scope : Copy { val depth: Int }
+fun none(f: Scope.() -> Int): Int = f(Scope(1))
+fun g(): Int = none { it.depth }
+fun main() {}

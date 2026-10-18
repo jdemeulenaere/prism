@@ -1,3 +1,5 @@
 // expect: E4004
+// run: 1
 struct Scope : Copy {}
 fun a(f: Scope.() -> Int): Int = f()
+fun main() {}

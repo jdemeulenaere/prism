@@ -1,0 +1,5 @@
+error[E4004]: 'f' takes a receiver of type 'Scope', and the innermost 'this' has type 'Other'
+  --> main.prism:5:40
+    5 | fun Other.b(f: Scope.() -> Int): Int = f()
+      |                                        ^
+   = help: pass one, as in 'f(scope)' or 'scope.f()'

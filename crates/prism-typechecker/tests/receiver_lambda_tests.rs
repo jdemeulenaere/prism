@@ -74,11 +74,14 @@ fn a_receiver_function_value_called_without_a_receiver() {
         assert!(
             error
                 .message()
-                .contains("'f' takes a receiver of type 'Scope'")
-                && error.message().contains("'f(scope)' or 'scope.f()'"),
+                .contains("'f' takes a receiver of type 'Scope'"),
             "{}",
             error.message()
         );
+        let help = error
+            .missing_function_value_receiver_help()
+            .expect("a help saying how to pass the receiver");
+        assert!(help.contains("'f(scope)' or 'scope.f()'"), "{}", help);
     }
 }
 

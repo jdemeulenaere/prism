@@ -76,6 +76,21 @@ pub enum TypeError {
     /// E4004: Function invocation argument count or parameter type incompatibility.
     CallSignatureMismatch { message: String, span: Span },
 
+    /// E4004: A value of a function type with a receiver called with one argument fewer than its
+    /// parameters where the innermost `this` is missing or of another type (D5 of
+    /// `receiver-lambdas`).
+    MissingFunctionValueReceiver {
+        /// The called value's name.
+        callee: String,
+        /// The receiver's type, after its reference.
+        receiver: Type,
+        /// Whether the receiver is mutable (`mut T.() -> R`).
+        mutable: bool,
+        /// The innermost `this`'s type after references, if there is one.
+        innermost: Option<Type>,
+        span: Span,
+    },
+
     /// E4004: A closure declaring another number of parameters than its expected function type
     /// has, or none without a header where two or more are expected (D6 of `implicit-it`).
     ClosureParameterCount {
@@ -410,9 +425,15 @@ pub enum MissingImplicitParameter {
     DeclaredParameters(Vec<String>),
     /// The closure has no expected function type.
     NoExpectedType,
-    /// The closure's expected function type has no parameters. It holds that function type when
-    /// its return type is known, which the checker fills in only when it reports the error.
-    NoExpectedParameters(Option<Type>),
+    /// The closure's expected function type has no parameters besides, possibly, its receiver.
+    NoExpectedParameters {
+        /// The receiver's parameter type (`&T` or `&mut T`) when the expected function type has
+        /// a receiver.
+        receiver: Option<Type>,
+        /// The expected function type when its return type is known, which the checker fills in
+        /// only when it reports the error.
+        function_type: Option<Type>,
+    },
 }
 
 impl MissingImplicitParameter {
@@ -438,11 +459,28 @@ impl MissingImplicitParameter {
                 "this closure has no expected function type, so it has no implicit 'it'; {}",
                 WHERE
             ),
-            MissingImplicitParameter::NoExpectedParameters(Some(function_type)) => format!(
-                "this closure's type '{}' has no parameters, so it has no implicit 'it'",
-                function_type
+            MissingImplicitParameter::NoExpectedParameters {
+                function_type: Some(function_type),
+                receiver,
+            } => format!(
+                "this closure's type '{}' has no parameters{}, so it has no implicit 'it'",
+                function_type,
+                if receiver.is_some() {
+                    " besides its receiver 'this'"
+                } else {
+                    ""
+                }
             ),
-            MissingImplicitParameter::NoExpectedParameters(None) => {
+            MissingImplicitParameter::NoExpectedParameters {
+                function_type: None,
+                receiver: Some(_),
+            } => {
+                "this closure's expected function type has no parameters besides its receiver 'this', so it has no implicit 'it'".to_string()
+            }
+            MissingImplicitParameter::NoExpectedParameters {
+                function_type: None,
+                receiver: None,
+            } => {
                 "this closure's expected function type has no parameters, so it has no implicit 'it'".to_string()
             }
         }
@@ -510,6 +548,7 @@ impl TypeError {
             TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
+            TypeError::MissingFunctionValueReceiver { .. } => "E4004",
             TypeError::ClosureParameterCount { .. } => "E4004",
             TypeError::ArgumentTypeMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
@@ -561,6 +600,7 @@ impl TypeError {
             TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
+            TypeError::MissingFunctionValueReceiver { span, .. } => *span,
             TypeError::ClosureParameterCount { span, .. } => *span,
             TypeError::BuiltinFunctionAsValue { span, .. } => *span,
             TypeError::ArgumentTypeMismatch { span, .. } => *span,
@@ -680,6 +720,20 @@ impl TypeError {
             }
             TypeError::ImmutabilityViolation { message, .. } => message.clone(),
             TypeError::CallSignatureMismatch { message, .. } => message.clone(),
+            TypeError::MissingFunctionValueReceiver {
+                callee,
+                receiver,
+                innermost,
+                ..
+            } => format!(
+                "'{}' takes a receiver of type '{}', and {}",
+                callee,
+                receiver,
+                match innermost {
+                    Some(innermost) => format!("the innermost 'this' has type '{}'", innermost),
+                    None => "there is no 'this' here".to_string(),
+                }
+            ),
             TypeError::UnresolvedImplicitParameter { .. } => "unresolved symbol 'it'".to_string(),
             TypeError::ClosureParameterCount {
                 expected, declared, ..
@@ -929,6 +983,39 @@ impl fmt::Display for TypeError {
 impl std::error::Error for TypeError {}
 
 impl TypeError {
+    /// The help of [`TypeError::MissingFunctionValueReceiver`]: the two ways to pass the
+    /// receiver, with a variable named after its type.
+    pub fn missing_function_value_receiver_help(&self) -> Option<String> {
+        let TypeError::MissingFunctionValueReceiver {
+            callee,
+            receiver,
+            mutable,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let mut variable: String = receiver
+            .to_string()
+            .chars()
+            .take_while(|c| c.is_alphanumeric())
+            .collect();
+        if variable.is_empty() {
+            variable = "receiver".to_string();
+        }
+        if let Some(first) = variable.get_mut(..1) {
+            first.make_ascii_lowercase();
+        }
+        Some(format!(
+            "pass one, as in '{}({}{})' or '{}.{}()'",
+            callee,
+            if *mutable { "&mut " } else { "" },
+            variable,
+            variable,
+            callee
+        ))
+    }
+
     /// The help of [`TypeError::OuterReceiverName`]: where the name was found, and how to reach
     /// it. `None` for every other error.
     pub fn outer_receiver_help(&self) -> Option<String> {

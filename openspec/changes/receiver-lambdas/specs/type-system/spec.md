@@ -43,6 +43,10 @@ A closure checked against a function type with a receiver MUST bind `this`, as a
 - **WHEN** `struct Scope : Copy { val depth: Int }` and `fun plain(f: (&Scope) -> Int): Int = f(Scope(1))` are declared and `fun f(): Int = plain { depth }` and `fun g(): Int = plain { this.depth }` are checked
 - **THEN** the type checker emits `E4001` at `depth` in `f` and at `this` in `g`, saying that `this` is only available in an extension function or a lambda with a receiver
 
+#### Scenario: The receiver is no implicit it
+- **WHEN** `struct Scope : Copy { val depth: Int }` and `fun none(f: Scope.() -> Int): Int = f(Scope(1))` are declared and `fun g(): Int = none { it.depth }` is checked
+- **THEN** the type checker emits `E4001` at `it`, with help saying that the closure's type `Scope.() -> Int` has no parameters besides its receiver, so it has no implicit `it`
+
 #### Scenario: Parameter counts exclude the receiver
 - **WHEN** `struct Scope : Copy {}` and `fun pair(f: Scope.(Int, Int) -> Int): Int = f(Scope(), 1, 2)` are declared and a body runs `pair { a, b -> a + b }` and `pair { it }`
 - **THEN** the type checker accepts the first closure and emits `E4004` for the second, saying that it expected 2 parameters of types `Int` and `Int` but declares none
