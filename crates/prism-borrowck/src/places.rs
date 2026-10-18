@@ -76,8 +76,9 @@ pub fn can_borrow_reference(ty: &Type) -> bool {
 }
 
 /// Whether the places `a` and `b` of one body overlap: they have the same root local, and one
-/// is a prefix of the other once equal projections are skipped. Two different fields are
-/// disjoint; two indices always overlap, since the indices are not known.
+/// is a prefix of the other once equal projections are skipped. Two different fields, or two
+/// different payloads of one variant, are disjoint; two indices always overlap, since the
+/// indices are not known.
 pub fn places_overlap(a: &Place, b: &Place) -> bool {
     if a.local != b.local {
         return false;
@@ -85,6 +86,18 @@ pub fn places_overlap(a: &Place, b: &Place) -> bool {
     for (left, right) in a.projections.iter().zip(&b.projections) {
         match (left, right) {
             (Projection::Field(i), Projection::Field(j)) if i != j => return false,
+            // Payloads of one variant are disjoint like fields; payloads of different variants
+            // share storage, so they overlap (D16 of `payload-patterns`).
+            (
+                Projection::VariantField {
+                    variant: v,
+                    field: i,
+                },
+                Projection::VariantField {
+                    variant: w,
+                    field: j,
+                },
+            ) if v == w && i != j => return false,
             _ => {}
         }
     }

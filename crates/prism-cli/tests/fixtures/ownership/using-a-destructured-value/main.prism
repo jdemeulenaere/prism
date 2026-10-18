@@ -1,0 +1,4 @@
+// expect: E5001
+struct User { val name: String, val id: Int }
+fun show(u: &User) {}
+fun f(u: User) { val (name) = u; show(u) }

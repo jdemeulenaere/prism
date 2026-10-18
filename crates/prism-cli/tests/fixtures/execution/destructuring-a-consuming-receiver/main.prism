@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+struct Account { val name: String, val bio: String, val id: Int }
+consuming fun Account.label(): String { val (name, id) = this; return name }
+fun main() { val a = Account("ada", "math", 1); println(a.label()) }

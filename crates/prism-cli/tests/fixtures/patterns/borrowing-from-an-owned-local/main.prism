@@ -1,0 +1,5 @@
+// expect: ok
+enum Msg { Text(String), Count(Int) }
+fun len(s: &String): Int = 1
+fun f(m: Msg): Int { val n = when (&m) { Msg.Text(val s) -> len(s); Msg.Count(_) -> 0 }; return n }
+fun g(m: Msg): Int { val n = f(m); return n }

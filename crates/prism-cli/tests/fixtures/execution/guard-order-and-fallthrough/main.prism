@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+enum Box { Of(Int), Empty }
+fun big(n: Int): Bool { println(n); return n > 9 }
+fun f(b: Box): Int = when (b) { Box.Empty -> 0; Box.Of(val n) if big(n) -> 1; Box.Of(_) -> 2 }
+fun main() {
+    println(f(Box.Empty))
+    println(f(Box.Of(10)))
+    println(f(Box.Of(3)))
+}

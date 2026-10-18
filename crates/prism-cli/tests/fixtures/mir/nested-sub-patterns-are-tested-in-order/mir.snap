@@ -1,0 +1,67 @@
+module main
+fun main::f(_1: Box): Int @3:1
+  local _0: Int (return)
+  local _1 b: Box (argument)
+  local _2: Bool (temporary)
+  local _3: Int (temporary)
+  local _4: Bool (temporary)
+  local _5 n: Int (user)
+  local _6: Bool (temporary)
+  local _7: Int (temporary)
+  local _8: Bool (temporary)
+  local _9: Int (temporary)
+  bb0:
+    storage_live _2 @3:22
+    storage_live _3 @3:28
+    _3 = discriminant _1 @3:28
+    _2 = move _3 == const 0 @3:22
+    storage_dead _3 @3:22
+    switch move _2 [0 -> bb2, otherwise -> bb1] @3:22
+  bb1:
+    storage_dead _2 @3:22
+    storage_live _4 @3:40
+    _4 = copy (_1 as Of).0 == const 0 @3:40
+    switch move _4 [0 -> bb4, otherwise -> bb3] @3:40
+  bb2:
+    storage_dead _2 @3:22
+    goto -> bb5 @3:22
+  bb3:
+    storage_dead _4 @3:40
+    _0 = const 1 @3:46
+    goto -> bb10 @3:22
+  bb4:
+    storage_dead _4 @3:40
+    goto -> bb5 @3:22
+  bb5:
+    storage_live _6 @3:22
+    storage_live _7 @3:28
+    _7 = discriminant _1 @3:28
+    _6 = move _7 == const 0 @3:22
+    storage_dead _7 @3:22
+    switch move _6 [0 -> bb7, otherwise -> bb6] @3:22
+  bb6:
+    storage_dead _6 @3:22
+    storage_live _5 @3:49
+    _5 = copy (_1 as Of).0 @3:56
+    _0 = copy _5 @3:66
+    storage_dead _5 @3:49
+    goto -> bb10 @3:22
+  bb7:
+    storage_dead _6 @3:22
+    storage_live _8 @3:22
+    storage_live _9 @3:28
+    _9 = discriminant _1 @3:28
+    _8 = move _9 == const 1 @3:22
+    storage_dead _9 @3:22
+    switch move _8 [0 -> bb9, otherwise -> bb8] @3:22
+  bb8:
+    storage_dead _8 @3:22
+    _0 = const 2 @3:82
+    goto -> bb10 @3:22
+  bb9:
+    storage_dead _8 @3:22
+    unreachable @3:22
+  bb10:
+    drop _1 -> bb11 @3:1
+  bb11:
+    return @3:1

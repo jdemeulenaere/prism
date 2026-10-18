@@ -1,0 +1,4 @@
+// expect: ok
+enum Msg { Text(String), Count(Int) }
+fun Msg.peek(): Int = when (this) { Msg.Count(val n) -> n; Msg.Text(val s) -> 0 }
+consuming fun Msg.text(): String = when (this) { Msg.Text(val s) -> s; Msg.Count(_) -> "" }

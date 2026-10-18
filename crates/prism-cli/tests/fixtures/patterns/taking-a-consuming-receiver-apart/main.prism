@@ -1,0 +1,4 @@
+// expect: ok
+struct Account { val name: String, val id: Int }
+struct User { val name: String }
+consuming fun Account.toUser(): User { val (name) = this; return User(name) }

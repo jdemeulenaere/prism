@@ -1,0 +1,3 @@
+// expect: ok
+fun f(x: Int): Int = when (x) { 0 -> 1; _ -> 2 }
+fun g(x: Int): Int = when (x) { 0 -> 1; val n -> n * 2 }

@@ -1,0 +1,4 @@
+// expect: ok
+struct User { val name: String, val bio: String }
+enum Event { Joined(User), Left }
+fun f(e: Event): String = when (e) { Event.Joined(User(val name, _)) -> name; Event.Left -> "" }

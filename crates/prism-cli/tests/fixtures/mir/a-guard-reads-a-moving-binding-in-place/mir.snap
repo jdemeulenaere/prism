@@ -1,0 +1,54 @@
+module main
+fun main::short(_1: &String): Bool @3:1
+  local _0: Bool (return)
+  local _1 s: &String (argument)
+  bb0:
+    _0 = const true @3:31
+    return @3:1
+fun main::f(_1: Msg): String @4:1
+  local _0: String (return)
+  local _1 m: Msg (argument)
+  local _2 s: String (user)
+  local _3: Bool (temporary)
+  local _4: Int (temporary)
+  local _5: Bool (temporary)
+  local _6: &String (temporary)
+  bb0:
+    storage_live _3 @4:25
+    storage_live _4 @4:31
+    _4 = discriminant _1 @4:31
+    _3 = move _4 == const 0 @4:25
+    storage_dead _4 @4:25
+    switch move _3 [0 -> bb2, otherwise -> bb1] @4:25
+  bb1:
+    storage_dead _3 @4:25
+    storage_live _2 @4:36
+    storage_live _5 @4:55
+    storage_live _6 @4:61
+    _6 = &(_1 as Text).0 (argument) @4:61
+    _5 = call main::short(move _6) -> bb3 @4:55
+  bb2:
+    storage_dead _3 @4:25
+    goto -> bb6 @4:25
+  bb3:
+    storage_dead _6 @4:55
+    switch move _5 [0 -> bb5, otherwise -> bb4] @4:55
+  bb4:
+    storage_dead _5 @4:55
+    destructure move _1 as Text => (0: _2) @4:45
+    _0 = move _2 @4:67
+    drop _2 -> bb7 @4:36
+  bb5:
+    storage_dead _5 @4:55
+    storage_dead _2 @4:36
+    goto -> bb6 @4:25
+  bb6:
+    _0 = const "long" @4:78
+    goto -> bb8 @4:25
+  bb7:
+    storage_dead _2 @4:36
+    goto -> bb8 @4:25
+  bb8:
+    drop _1 -> bb9 @4:1
+  bb9:
+    return @4:1

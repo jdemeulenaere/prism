@@ -4,6 +4,7 @@
 //! result lives in a scope of its own that the branch dissolves, marking the result dead at the
 //! start of each successor. Blocks are created on demand, so every block is reachable.
 
+use super::pattern::BranchLocals;
 use super::{Builder, ChainContext, LoopContext};
 use crate::mir::{
     BlockId, BorrowOrigin, Constant, LocalId, Operand, Place, Projection, Rvalue, StatementKind,
@@ -305,7 +306,9 @@ impl Builder<'_> {
     }
 
     /// A `when` (D8): the subject once; one switch on its discriminant when every pattern is a
-    /// payload-free variant or `else`; ordered tests otherwise, each in its own temporary scope.
+    /// variant pattern whose sub-patterns are wildcards and bindings, or `else`, and no branch has
+    /// a guard; ordered tests otherwise, each in its own temporary scope (D15 of
+    /// `payload-patterns`).
     pub(super) fn lower_when(
         &mut self,
         destination: Option<&Place>,
@@ -327,6 +330,13 @@ impl Builder<'_> {
             return;
         }
         let patterns = || branches.iter().flat_map(|b| b.patterns.iter());
+        let switchable = |p: &Pattern| match p {
+            Pattern::Else => true,
+            Pattern::Variant { fields, .. } => fields
+                .iter()
+                .all(|f| matches!(f, Pattern::Wildcard | Pattern::Binding { .. })),
+            _ => false,
+        };
         let ends = if patterns().all(|p| matches!(p, Pattern::Else)) {
             if let Some((place, _)) = &subject {
                 self.push_statement(StatementKind::Read(place.clone()), subject_span);
@@ -340,12 +350,14 @@ impl Builder<'_> {
                 None => vec![self.current],
             }
         } else if subject.is_some()
-            && patterns().all(|p| matches!(p, Pattern::Variant { .. } | Pattern::Else))
+            && branches.iter().all(|b| b.guard.is_none())
+            && patterns().all(switchable)
         {
-            let (place, _) = subject.clone().expect("checked above");
+            let (place, subject_ty) = subject.clone().expect("checked above");
             self.lower_variant_switch(
                 branch_destination,
                 place,
+                &subject_ty,
                 subject_span,
                 branches,
                 exhaustive,
@@ -369,12 +381,86 @@ impl Builder<'_> {
         }
     }
 
+    /// Lowers the body of a branch whose scope (holding its locals) is open, from `block`, then
+    /// closes that scope: returns the block it falls through to.
+    fn lower_branch_body(
+        &mut self,
+        block: BlockId,
+        destination: Option<&Place>,
+        branch: &WhenBranch,
+    ) -> Option<BlockId> {
+        let end = self.lower_branch(block, destination, branch.body);
+        self.current = end;
+        self.pop_scope();
+        self.current
+    }
+
+    /// On the current path, where `pattern` (the `index`-th of its branch) matched the subject
+    /// at `place`: marks the branch's locals live and makes the copying and borrowing bindings;
+    /// then lowers the guard, reading moving bindings' parts in place, whose `false` edge, with
+    /// the locals marked dead again, is pushed onto `failures`; then takes the subject apart.
+    #[allow(clippy::too_many_arguments)]
+    fn bind_branch_pattern(
+        &mut self,
+        place: &Place,
+        ty: &Type,
+        pattern: &Pattern,
+        index: usize,
+        branch: &WhenBranch,
+        locals: &BranchLocals,
+        failures: &mut Vec<BlockId>,
+        span: Span,
+    ) {
+        if self.current.is_none() {
+            return;
+        }
+        self.mark_branch_locals(locals, true, branch.span);
+        self.bind_copies_and_borrows(place, ty, pattern, span);
+        if let Some(guard) = branch.guard {
+            let mut in_place = Vec::new();
+            self.moving_binding_places(place, pattern, &mut in_place);
+            let saved: Vec<(TreeLocalId, Place)> = in_place
+                .into_iter()
+                .map(|(binding, part)| {
+                    let own = self
+                        .bindings
+                        .insert(binding, part)
+                        .expect("a declared binding");
+                    (binding, own)
+                })
+                .collect();
+            let tested = self.branch_on_expression(guard);
+            for (binding, own) in saved {
+                self.bindings.insert(binding, own);
+            }
+            let Some((on_true, on_false)) = tested else {
+                return;
+            };
+            self.current = Some(on_false);
+            self.mark_branch_locals(locals, false, branch.span);
+            failures.push(self.current.take().expect("the false edge"));
+            self.current = Some(on_true);
+        }
+        let move_span = self.first_move_span(pattern).unwrap_or(span);
+        let temporaries = locals.temporaries[index].clone();
+        self.take_apart(
+            place.clone(),
+            ty,
+            pattern,
+            &mut temporaries.iter(),
+            move_span,
+        );
+    }
+
     /// One switch on the subject's discriminant, to each variant's branch, `otherwise` to the
-    /// `else` branch, an unreachable terminator for an exhaustive `when`, or past the `when`.
+    /// `else` branch, an unreachable terminator for an exhaustive `when`, or past the `when`. A
+    /// branch with bindings gets one block per variant, which binds them before the body.
+    #[allow(clippy::too_many_arguments)]
     fn lower_variant_switch(
         &mut self,
         destination: Option<&Place>,
         subject: Place,
+        subject_ty: &Type,
         subject_span: Span,
         branches: &[WhenBranch],
         exhaustive: bool,
@@ -383,36 +469,49 @@ impl Builder<'_> {
         let discriminant = self.new_temporary(Type::Int, subject_span);
         self.assign(
             Place::local(discriminant),
-            Rvalue::Discriminant(subject),
+            Rvalue::Discriminant(subject.clone()),
             subject_span,
         );
         let mut targets: Vec<(u64, BlockId)> = Vec::new();
-        let mut bodies = Vec::new();
+        // Per taken branch: its body block, and the block of each pattern that binds.
+        type TakenBranch<'b> = (BlockId, &'b WhenBranch, Vec<(usize, BlockId)>);
+        let mut bodies: Vec<TakenBranch> = Vec::new();
         let mut otherwise = None;
         for branch in branches {
             if otherwise.is_some() {
                 break;
             }
+            let binds = branch.patterns.iter().any(|p| !p.bindings().is_empty());
             // A branch whose variants all match earlier branches is never taken: it gets no
             // block, so every block stays reachable.
-            let mut block = None;
-            for pattern in &branch.patterns {
-                match pattern {
+            let mut body = None;
+            let mut pattern_blocks = Vec::new();
+            for (index, pattern) in branch.patterns.iter().enumerate() {
+                let fresh = match pattern {
                     Pattern::Variant { index, .. } => {
-                        let value = *index as u64;
-                        if !targets.iter().any(|(v, _)| *v == value) {
-                            let target = *block.get_or_insert_with(|| self.new_block());
-                            targets.push((value, target));
-                        }
+                        !targets.iter().any(|(v, _)| *v == *index as u64)
                     }
-                    Pattern::Else => {
-                        otherwise = Some(*block.get_or_insert_with(|| self.new_block()));
-                    }
+                    Pattern::Else => true,
                     _ => unreachable!("a variant switch has only variants and else"),
+                };
+                if !fresh {
+                    continue;
+                }
+                let body_block = *body.get_or_insert_with(|| self.new_block());
+                let target = if binds {
+                    let block = self.new_block();
+                    pattern_blocks.push((index, block));
+                    block
+                } else {
+                    body_block
+                };
+                match pattern {
+                    Pattern::Variant { index, .. } => targets.push((*index as u64, target)),
+                    _ => otherwise = Some(target),
                 }
             }
-            if let Some(block) = block {
-                bodies.push((block, branch.body));
+            if let Some(body) = body {
+                bodies.push((body, branch, pattern_blocks));
             }
         }
         let mut ends = Vec::new();
@@ -437,13 +536,33 @@ impl Builder<'_> {
             otherwise,
         };
         self.terminate(kind, span);
-        for (block, body) in bodies {
-            ends.push(self.lower_branch(block, destination, body));
+        for (body, branch, pattern_blocks) in bodies {
+            self.push_scope(branch.span);
+            let patterns: Vec<&Pattern> = branch.patterns.iter().collect();
+            let locals = self.declare_branch_locals(&patterns, subject_ty);
+            for (index, block) in pattern_blocks {
+                self.current = Some(block);
+                let mut failures = Vec::new();
+                self.bind_branch_pattern(
+                    &subject,
+                    subject_ty,
+                    &branch.patterns[index],
+                    index,
+                    branch,
+                    &locals,
+                    &mut failures,
+                    span,
+                );
+                self.goto(body, branch.span);
+            }
+            ends.push(self.lower_branch_body(body, destination, branch));
         }
         ends
     }
 
-    /// The branches' patterns tested in order, each test in its own temporary scope.
+    /// The branches' patterns tested in order, each test in its own temporary scope; a pattern
+    /// that matched makes its bindings, runs its branch's guard and takes the subject apart
+    /// before jumping to the branch's body.
     #[allow(clippy::too_many_arguments)]
     fn lower_ordered_tests(
         &mut self,
@@ -463,7 +582,10 @@ impl Builder<'_> {
         let patterns_may_write = branches
             .iter()
             .flat_map(|b| b.patterns.iter())
-            .any(|p| self.pattern_may_write(p));
+            .any(|p| self.pattern_may_write(p))
+            || branches
+                .iter()
+                .any(|b| b.guard.is_some_and(|guard| self.may_write(guard)));
         let subject = subject.map(|(place, ty)| {
             if patterns_may_write && self.is_copy(&ty) {
                 let operand = Operand::Copy(place.clone(), subject_span);
@@ -475,6 +597,7 @@ impl Builder<'_> {
                 (place, ty)
             }
         });
+        let subject_ty = subject.as_ref().map(|(_, ty)| ty.clone());
         let subject = subject
             .map(|(place, ty)| self.comparison_subject(place, ty, compares_values, subject_span));
         let mut ends = Vec::new();
@@ -483,21 +606,26 @@ impl Builder<'_> {
             if self.current.is_none() {
                 break;
             }
+            self.push_scope(branch.span);
+            let patterns: Vec<&Pattern> = branch.patterns.iter().collect();
+            let locals = match &subject_ty {
+                Some(ty) => self.declare_branch_locals(&patterns, ty),
+                None => BranchLocals::default(),
+            };
             let mut matches = Vec::new();
-            for pattern in &branch.patterns {
+            for (index, pattern) in branch.patterns.iter().enumerate() {
                 if self.current.is_none() {
                     break;
                 }
+                let mut failures = Vec::new();
                 match pattern {
                     Pattern::Else => {
-                        matches.push(self.current.expect("checked above"));
-                        self.current = None;
-                        matched_all = true;
+                        matched_all = branch.guard.is_none();
                     }
                     Pattern::Condition(condition) => {
                         if let Some((on_true, on_false)) = self.branch_on_expression(*condition) {
-                            matches.push(on_true);
-                            self.current = Some(on_false);
+                            failures.push(on_false);
+                            self.current = Some(on_true);
                         }
                     }
                     Pattern::Value(value) => {
@@ -507,91 +635,67 @@ impl Builder<'_> {
                         let tested = self.branch_on(pattern_span, |builder, result| {
                             builder.equality_with_subject(result, &subject, value, pattern_span)
                         });
-                        if let Some((on_true, on_false)) = tested {
-                            matches.push(on_true);
-                            self.current = Some(on_false);
-                        }
-                    }
-                    Pattern::Variant { index, .. } => {
-                        let index = *index as i64;
-                        let place = subject.clone().expect("a variant pattern has a subject");
-                        let tested = self.branch_on(span, |builder, result| {
-                            let discriminant = builder.new_temporary(Type::Int, subject_span);
-                            builder.assign(
-                                Place::local(discriminant),
-                                Rvalue::Discriminant(place.subject_place().clone()),
-                                subject_span,
-                            );
-                            let rvalue = Rvalue::Binary(
-                                BinaryOperator::Equal,
-                                Operand::Move(Place::local(discriminant), subject_span),
-                                Operand::Constant(Constant::Int(index)),
-                            );
-                            builder.assign(result.clone(), rvalue, span);
-                        });
-                        if let Some((on_true, on_false)) = tested {
-                            matches.push(on_true);
-                            self.current = Some(on_false);
-                        }
-                    }
-                    Pattern::Struct { .. }
-                    | Pattern::NonNull(_)
-                    | Pattern::Wildcard
-                    | Pattern::Binding { .. } => {
-                        unimplemented!("payload patterns are lowered by payload-patterns 6.2")
-                    }
-                    Pattern::Range {
-                        start,
-                        end,
-                        end_inclusive,
-                    } => {
-                        let (start, end, end_inclusive) = (*start, *end, *end_inclusive);
-                        let subject = subject.clone().expect("a range pattern has a subject");
-                        let value = subject.subject_place().clone();
-                        let start_span = self.expression(start).span;
-                        let lower = self.branch_on(start_span, |builder, result| {
-                            let start = builder.operand(start);
-                            let rvalue = Rvalue::Binary(
-                                BinaryOperator::LessOrEqual,
-                                start,
-                                Operand::Copy(value.clone(), subject_span),
-                            );
-                            builder.assign(result.clone(), rvalue, start_span);
-                        });
-                        let Some((above_start, below_start)) = lower else {
-                            continue;
-                        };
-                        self.current = Some(above_start);
-                        let end_span = self.expression(end).span;
-                        let upper = self.branch_on(end_span, |builder, result| {
-                            let end = builder.operand(end);
-                            let operator = if end_inclusive {
-                                BinaryOperator::LessOrEqual
-                            } else {
-                                BinaryOperator::Less
-                            };
-                            let rvalue =
-                                Rvalue::Binary(operator, Operand::Copy(value, subject_span), end);
-                            builder.assign(result.clone(), rvalue, end_span);
-                        });
-                        match upper {
-                            Some((within, above_end)) => {
-                                matches.push(within);
-                                self.join(&[Some(below_start), Some(above_end)], span);
+                        match tested {
+                            Some((on_true, on_false)) => {
+                                failures.push(on_false);
+                                self.current = Some(on_true);
                             }
-                            None => self.current = Some(below_start),
+                            None => continue,
                         }
                     }
+                    pattern => {
+                        let place = subject
+                            .as_ref()
+                            .expect("a pattern has a subject")
+                            .subject_place()
+                            .clone();
+                        let ty = subject_ty.clone().expect("a pattern has a subject");
+                        self.test_pattern(&place, &ty, pattern, &mut failures, subject_span, span);
+                    }
+                }
+                if self.current.is_some() {
+                    if let (Some(subject), Some(ty)) = (&subject, &subject_ty) {
+                        let place = subject.subject_place().clone();
+                        self.bind_branch_pattern(
+                            &place,
+                            ty,
+                            pattern,
+                            index,
+                            branch,
+                            &locals,
+                            &mut failures,
+                            span,
+                        );
+                    } else if let Some(guard) = branch.guard {
+                        if let Some((on_true, on_false)) = self.branch_on_expression(guard) {
+                            failures.push(on_false);
+                            self.current = Some(on_true);
+                        }
+                    }
+                    if let Some(block) = self.current.take() {
+                        matches.push(block);
+                    }
+                }
+                let failed: Vec<Option<BlockId>> = failures.into_iter().map(Some).collect();
+                match failed.len() {
+                    0 => self.current = None,
+                    1 => self.current = failed[0],
+                    _ => self.join(&failed, span),
+                }
+                if matched_all {
+                    self.current = None;
                 }
             }
             let failed = self.current;
-            if !matches.is_empty() {
+            if matches.is_empty() {
+                self.discard_scope();
+            } else {
                 let body = self.new_block();
                 for block in matches {
                     self.current = Some(block);
                     self.goto(body, branch.span);
                 }
-                ends.push(self.lower_branch(body, destination, branch.body));
+                ends.push(self.lower_branch_body(body, destination, branch));
             }
             self.current = failed;
             if matched_all {

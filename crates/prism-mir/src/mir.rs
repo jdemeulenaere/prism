@@ -212,6 +212,16 @@ pub enum StatementKind {
     StorageDead(LocalId),
     /// The place is read and its value discarded, so the borrow checker sees the use.
     Read(Place),
+    /// Moves the whole local `source`, an enum holding variant `variant` or a struct (`None`),
+    /// into one local per listed part, `(index, target)`: payload or field `index` goes to the
+    /// whole local `target` (D15 of `payload-patterns`). Every non-`Copy` part is listed exactly
+    /// once, so nothing is left behind; `Copy` parts may be listed or not. It is one whole-value
+    /// move and one initialization per part, which is what the borrow checker sees.
+    Destructure {
+        source: LocalId,
+        variant: Option<usize>,
+        parts: Vec<(usize, LocalId)>,
+    },
 }
 
 impl StatementKind {
@@ -344,6 +354,9 @@ pub enum Projection {
     Field(usize),
     /// The payload of a nullable that is not `null`.
     Payload,
+    /// Payload `field` of variant `variant` of an enum, typed with the enum's type arguments
+    /// substituted (D15 of `payload-patterns`). Payloads of different variants share storage.
+    VariantField { variant: usize, field: usize },
     /// The element at the index held in the local. Reserved for collections whose elements are
     /// stored (`List<T>`): no MIR has one today, since a string's character is computed by the
     /// built-in `get`, and the validator rejects it (D5 of `runtime-strings-and-drops`).
@@ -506,6 +519,8 @@ pub enum BorrowOrigin {
     Operator,
     /// An input of a default value's generator, or the slot it may fill (D11).
     Default,
+    /// A pattern binding of a borrowed subject's part (D16 of `payload-patterns`).
+    Pattern,
 }
 
 impl From<prism_typed_tree::BorrowOrigin> for BorrowOrigin {
@@ -528,6 +543,7 @@ impl BorrowOrigin {
             BorrowOrigin::Conversion => "conversion",
             BorrowOrigin::Operator => "operator",
             BorrowOrigin::Default => "default",
+            BorrowOrigin::Pattern => "pattern",
         }
     }
 }

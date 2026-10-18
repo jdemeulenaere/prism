@@ -1,0 +1,35 @@
+module main
+struct main::Point : Copy @2:1
+  field 0 val x: Int
+  field 1 val y: Int
+enum main::Event @3:1
+  variant 0 Click(Point)
+  variant 1 Key(Char)
+fun main::f(e: Event): Int @4:1
+  local %0 e: Event (parameter)
+  local %1 x: Int (pattern val)
+  when exhaustive: Int @4:24
+    subject: local %0 e: Event @4:30
+    branch @4:35
+      pattern variant main::Event 0 Click
+        pattern struct main::Point
+          pattern wildcard
+          pattern value: literal 0: Int @4:57
+      body: literal 0: Int @4:64
+    branch @4:67
+      pattern variant main::Event 0 Click
+        pattern struct main::Point
+          pattern binding %1 x (copy): Int
+          pattern wildcard
+      guard: binary >: Bool @4:99
+        local %1 x: Int @4:99
+        literal 1: Int @4:103
+      body: copy: Int @4:108
+        local %1 x: Int @4:108
+    branch @4:111
+      pattern variant main::Event 1 Key
+        pattern wildcard
+      body: literal 2: Int @4:124
+    branch @4:127
+      pattern wildcard
+      body: literal 3: Int @4:132

@@ -1,0 +1,55 @@
+module main
+fun main::f(_1: Event): String @4:1
+  local _0: String (return)
+  local _1 e: Event (argument)
+  local _2 name: String (user)
+  local _3: User (temporary)
+  local _4: String (temporary)
+  local _5: Bool (temporary)
+  local _6: Int (temporary)
+  local _7: Bool (temporary)
+  local _8: Int (temporary)
+  bb0:
+    storage_live _5 @4:27
+    storage_live _6 @4:33
+    _6 = discriminant _1 @4:33
+    _5 = move _6 == const 0 @4:27
+    storage_dead _6 @4:27
+    switch move _5 [0 -> bb2, otherwise -> bb1] @4:27
+  bb1:
+    storage_dead _5 @4:27
+    storage_live _2 @4:38
+    storage_live _3 @4:38
+    storage_live _4 @4:38
+    destructure move _1 as Joined => (0: _3) @4:56
+    destructure move _3 => (0: _2, 1: _4) @4:56
+    _0 = move _2 @4:73
+    drop _4 -> bb3 @4:38
+  bb2:
+    storage_dead _5 @4:27
+    storage_live _7 @4:27
+    storage_live _8 @4:33
+    _8 = discriminant _1 @4:33
+    _7 = move _8 == const 1 @4:27
+    storage_dead _8 @4:27
+    switch move _7 [0 -> bb7, otherwise -> bb6] @4:27
+  bb3:
+    storage_dead _4 @4:38
+    drop _3 -> bb4 @4:38
+  bb4:
+    storage_dead _3 @4:38
+    drop _2 -> bb5 @4:38
+  bb5:
+    storage_dead _2 @4:38
+    goto -> bb8 @4:27
+  bb6:
+    storage_dead _7 @4:27
+    _0 = const "" @4:93
+    goto -> bb8 @4:27
+  bb7:
+    storage_dead _7 @4:27
+    unreachable @4:27
+  bb8:
+    drop _1 -> bb9 @4:1
+  bb9:
+    return @4:1

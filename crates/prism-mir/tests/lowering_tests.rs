@@ -270,3 +270,38 @@ fn defaults_and_closures_of_a_generic_function_share_its_type_parameters() {
         ]
     );
 }
+
+#[test]
+fn a_destructuring_that_misses_a_part_or_mistypes_a_target_is_reported() {
+    use prism_mir::StatementKind;
+    let source = "enum Pair { Of(String, String, Int) }\nfun f(p: Pair): String = when (p) { Pair.Of(val a, _, val n) -> a }\n";
+    // The well-formed MIR of the scenario "Destructuring with an unbound part".
+    mir(source);
+    type Parts = Vec<(usize, prism_mir::LocalId)>;
+    let edit = |change: &dyn Fn(&mut Parts)| {
+        let mut file = lowered(source);
+        for (_, body) in file.bodies.iter_mut() {
+            for (_, block) in body.blocks.iter_mut() {
+                for statement in &mut block.statements {
+                    if let StatementKind::Destructure { parts, .. } = &mut statement.kind {
+                        change(parts);
+                    }
+                }
+            }
+        }
+        file.validate().join("\n")
+    };
+    let missing = edit(&|parts| parts.retain(|(index, _)| *index != 1));
+    assert!(
+        missing.contains("lists part 1 of _1 0 times"),
+        "{}",
+        missing
+    );
+    // `_4` is `n`, an `Int`.
+    let mistyped = edit(&|parts| parts[0].1 = prism_mir::LocalId(4));
+    assert!(
+        mistyped.contains("moves part 0 (a String) into _4, a Int"),
+        "{}",
+        mistyped
+    );
+}

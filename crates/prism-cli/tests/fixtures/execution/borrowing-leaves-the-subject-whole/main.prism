@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+enum Note { Text(String), Empty }
+fun size(s: &String): Int = s.length
+fun main() { val n = Note.Text("abc"); val k = when (&n) { Note.Text(val s) -> size(s); Note.Empty -> 0 }; println(k); val m = n }

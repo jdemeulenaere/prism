@@ -16,7 +16,7 @@ use crate::location::locations;
 use crate::move_paths::{Effect, Event, MoveData, MovePathId};
 use crate::uses::UseKind;
 use prism_ast::{Span, TypeMarker};
-use prism_mir::{Body, MirFile, Place, Projection};
+use prism_mir::{Body, MirFile, Place, Projection, StatementKind};
 use prism_typed_tree::{ArenaId, Type, TypeDef};
 use std::collections::HashSet;
 
@@ -159,6 +159,26 @@ impl Checker<'_> {
             .to_string(),
         };
         let mut helps = Vec::new();
+        // A value a pattern took apart can be matched through a borrow instead, which leaves it
+        // whole (D16 of `payload-patterns`).
+        let taken_apart = moves.iter().any(|event| {
+            let location = self.data.event_location(*event);
+            self.body.blocks[location.block]
+                .statements
+                .get(location.statement)
+                .is_some_and(|statement| {
+                    matches!(
+                        statement.kind,
+                        StatementKind::Destructure { source, .. } if source == place.local
+                    )
+                })
+        });
+        if taken_apart && place.projections.is_empty() {
+            helps.push(format!(
+                "to keep '{}' whole, match on its borrow instead, as in 'when (&{})' or 'val (...) = &{}', which borrows its parts",
+                name, name, name
+            ));
+        }
         if let Some(help) = self.copy_help(&ty) {
             helps.push(help);
         }

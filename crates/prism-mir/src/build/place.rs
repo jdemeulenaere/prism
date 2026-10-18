@@ -419,6 +419,7 @@ impl Builder<'_> {
                 subject.is_some_and(|subject| self.may_write(subject))
                     || branches.iter().any(|branch| {
                         self.may_write(branch.body)
+                            || branch.guard.is_some_and(|guard| self.may_write(guard))
                             || branch
                                 .patterns
                                 .iter()
@@ -689,8 +690,8 @@ impl Builder<'_> {
                 self.lower_for(id, *variable, *range, *body, span);
                 self.pop_scope();
             }
-            TreeStatementKind::Destructure { .. } => {
-                unimplemented!("destructuring declarations are lowered by payload-patterns 6.2")
+            TreeStatementKind::Destructure { pattern, value } => {
+                self.lower_destructure(pattern, *value, span)
             }
         }
     }
@@ -714,6 +715,26 @@ impl Builder<'_> {
         self.schedule(id, span);
         self.bindings.insert(binding, Place::local(id));
         id
+    }
+
+    /// `val (a, b) = e` (D15 of `payload-patterns`): the bindings and the temporaries of the
+    /// unbound non-`Copy` fields belong to the block; the value is evaluated once, as a place,
+    /// then bound as an irrefutable struct pattern: copies and borrows first, then the
+    /// destructuring of a value taken apart.
+    fn lower_destructure(
+        &mut self,
+        pattern: &prism_typed_tree::Pattern,
+        value: ExpressionId,
+        span: Span,
+    ) {
+        let ty = self.expression(value).ty.clone();
+        let locals = self.declare_branch_locals(&[pattern], &ty);
+        self.mark_branch_locals(&locals, true, span);
+        let place = self.place(value);
+        self.bind_copies_and_borrows(&place, &ty, pattern, span);
+        let move_span = self.first_move_span(pattern).unwrap_or(span);
+        let temporaries = locals.temporaries[0].clone();
+        self.take_apart(place, &ty, pattern, &mut temporaries.iter(), move_span);
     }
 
     /// `val x = e`: the binding belongs to the block, the initializer is evaluated into it in

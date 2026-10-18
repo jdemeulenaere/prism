@@ -1,0 +1,3 @@
+// expect: ok
+enum Shape { Circle(Double), Square(Double), Empty }
+fun size(s: Shape): Double = when (s) { Shape.Circle(val d), Shape.Square(val d) -> d; Shape.Empty -> 0.0 }

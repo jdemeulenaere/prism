@@ -1,0 +1,35 @@
+module main
+enum main::Msg @2:1
+  variant 0 Text(String)
+  variant 1 Count(Int)
+fun main::a(m: Msg): Int @3:1
+  local %0 m: Msg (parameter)
+  local %1 s: String (pattern val)
+  local %2 n: Int (pattern val)
+  when exhaustive: Int @3:22
+    subject: local %0 m: Msg @3:28
+    branch @3:33
+      pattern variant main::Msg 0 Text
+        pattern binding %1 s (move): String
+      body: literal 1: Int @3:52
+    branch @3:55
+      pattern variant main::Msg 1 Count
+        pattern binding %2 n (copy): Int
+      body: copy: Int @3:75
+        local %2 n: Int @3:75
+fun main::b(m: &Msg): Int @4:1
+  local %0 m: &Msg (parameter)
+  local %1 s: &String (pattern val)
+  local %2 n: Int (pattern val)
+  when exhaustive: Int @4:23
+    subject: deref: Msg @4:29
+      local %0 m: &Msg @4:29
+    branch @4:34
+      pattern variant main::Msg 0 Text
+        pattern binding %1 s (shared borrow): &String
+      body: literal 1: Int @4:53
+    branch @4:56
+      pattern variant main::Msg 1 Count
+        pattern binding %2 n (copy): Int
+      body: copy: Int @4:76
+        local %2 n: Int @4:76

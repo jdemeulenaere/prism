@@ -1,0 +1,4 @@
+// expect: ok
+struct Point : Copy { val x: Int, val y: Int }
+enum Event { Click(Point), Key(Char) }
+fun f(e: Event): Int = when (e) { Event.Click(Point(val x, _)) -> x; Event.Key(_) -> 0 }

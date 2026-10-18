@@ -1,0 +1,30 @@
+module main
+fun main::f(_1: Shape): Float @3:1
+  local _0: Float (return)
+  local _1 s: Shape (argument)
+  local _2: Int (temporary)
+  local _3 r: Float (user)
+  local _4 w: Float (user)
+  bb0:
+    storage_live _2 @3:33
+    _2 = discriminant _1 @3:33
+    switch move _2 [0 -> bb1, 1 -> bb2, otherwise -> bb3] @3:27
+  bb1:
+    storage_live _3 @3:38
+    _3 = copy (_1 as Circle).0 @3:51
+    _0 = copy _3 @3:61
+    storage_dead _3 @3:38
+    goto -> bb4 @3:27
+  bb2:
+    storage_live _4 @3:64
+    _4 = copy (_1 as Rect).0 @3:75
+    _0 = copy _4 @3:88
+    storage_dead _4 @3:64
+    goto -> bb4 @3:27
+  bb3:
+    unreachable @3:27
+  bb4:
+    storage_dead _2 @3:27
+    drop _1 -> bb5 @3:1
+  bb5:
+    return @3:1

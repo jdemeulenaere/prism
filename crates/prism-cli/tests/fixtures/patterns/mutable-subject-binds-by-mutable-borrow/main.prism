@@ -1,0 +1,3 @@
+// expect: ok
+enum Msg { Text(String), Count(Int) }
+fun bump(m: &mut Msg) { when (m) { Msg.Count(val n) -> *n += 1; Msg.Text(val s) -> *s = "x" } }

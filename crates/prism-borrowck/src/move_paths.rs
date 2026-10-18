@@ -197,7 +197,8 @@ impl MoveData {
     }
 
     /// The path of `place`, creating its field paths: the local's root, then a child per field
-    /// projection, stopping at a payload (folded into its nullable), a dereference or an index.
+    /// projection, stopping at a payload (folded into its nullable or enum), a dereference or an
+    /// index.
     /// The second value is whether the place is behind a dereference.
     fn path_of(&mut self, place: &Place) -> (MovePathId, bool) {
         let mut path = self.roots[place.local.index()];
@@ -217,7 +218,11 @@ impl MoveData {
                         }
                     }
                 }
-                Projection::Payload | Projection::Index(_) => return (path, false),
+                // Nothing moves out of a payload except by a destructuring of its whole value
+                // (D16 of `payload-patterns`), so a variant's payload folds into its enum.
+                Projection::Payload | Projection::VariantField { .. } | Projection::Index(_) => {
+                    return (path, false)
+                }
                 Projection::Deref => return (path, true),
             }
         }

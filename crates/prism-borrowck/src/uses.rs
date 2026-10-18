@@ -48,6 +48,16 @@ pub fn statement_effects(statement: &Statement) -> Vec<PlaceEffect> {
         StatementKind::StorageLive(local) => effects.push(PlaceEffect::StorageLive(*local)),
         StatementKind::StorageDead(local) => effects.push(PlaceEffect::StorageDead(*local)),
         StatementKind::Read(place) => use_place(place, UseKind::Used, span, &mut effects),
+        // A whole-value move of the source, then an initialization of each part (D16 of
+        // `payload-patterns`).
+        StatementKind::Destructure { source, parts, .. } => {
+            let source = Place::local(*source);
+            use_place(&source, UseKind::Used, span, &mut effects);
+            effects.push(PlaceEffect::Move(source, span));
+            for (_, target) in parts {
+                effects.push(PlaceEffect::Init(*target));
+            }
+        }
     }
     effects
 }

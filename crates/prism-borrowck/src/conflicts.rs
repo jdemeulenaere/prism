@@ -96,6 +96,14 @@ pub(crate) fn location_events(
                 StatementKind::Read(place) => {
                     access(&mut events, place, AccessKind::Read, span);
                 }
+                // One whole-value move of the source, then a write of each part (D16 of
+                // `payload-patterns`).
+                StatementKind::Destructure { source, parts, .. } => {
+                    access(&mut events, &Place::local(*source), AccessKind::Move, span);
+                    for (_, target) in parts {
+                        destination_events(&Place::local(*target), span, &mut events);
+                    }
+                }
                 StatementKind::StorageDead(local) => events.push(Event::Access {
                     place: Place::local(*local),
                     kind: AccessKind::StorageDead,

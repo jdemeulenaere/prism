@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+enum Counter { Running(Int), Stopped }
+fun tick(c: &mut Counter) { when (c) { Counter.Running(val n) -> *n += 1; Counter.Stopped -> {} } }
+fun value(c: &Counter): Int = when (c) { Counter.Running(val n) -> n; Counter.Stopped -> -1 }
+fun main() { var c = Counter.Running(1); tick(&mut c); tick(&mut c); println(value(&c)) }

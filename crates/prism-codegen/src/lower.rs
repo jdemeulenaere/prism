@@ -269,6 +269,26 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_)
                 | StatementKind::Read(_) => {}
+                // Each listed part is moved into its target: a move is a byte copy, and the
+                // source is never read again (D17 of `payload-patterns`).
+                StatementKind::Destructure {
+                    source,
+                    variant,
+                    parts,
+                } => {
+                    for (index, target) in parts {
+                        let projection = match variant {
+                            Some(variant) => Projection::VariantField {
+                                variant: *variant,
+                                field: *index,
+                            },
+                            None => Projection::Field(*index),
+                        };
+                        let part = Place::local(*source).project(projection);
+                        let rvalue = Rvalue::Use(Operand::Move(part, statement.span));
+                        self.assign(&Place::local(*target), &rvalue, statement.span)?;
+                    }
+                }
             }
         }
         self.terminator(&block.terminator.kind, block.terminator.span)
@@ -323,6 +343,26 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         location = self.offset(location, payload.offset)?;
                     }
                     ty = inner;
+                }
+                // Payload `field` of variant `variant`, at its offset in the variant's payload
+                // layout, after the tag (D17 of `payload-patterns`).
+                Projection::VariantField { variant, field } => {
+                    let layout = self.layout(&ty)?;
+                    let member = match &layout.shape {
+                        Shape::Enum { variants, .. } => variants
+                            .get(*variant)
+                            .and_then(|v| v.payloads.get(*field))
+                            .cloned(),
+                        _ => None,
+                    }
+                    .ok_or_else(|| {
+                        BackendError::new(format!(
+                            "no payload {} of variant {} in {}",
+                            field, variant, ty
+                        ))
+                    })?;
+                    location = self.offset(location, member.offset)?;
+                    ty = member.ty;
                 }
                 Projection::Index(_) => {
                     return Err(BackendError::new("an index projection".to_string()))

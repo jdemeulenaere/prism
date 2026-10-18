@@ -1,0 +1,3 @@
+// expect: ok
+enum Pair { Of(String, String, Int) }
+fun f(p: Pair): String = when (p) { Pair.Of(val a, _, val n) -> a }

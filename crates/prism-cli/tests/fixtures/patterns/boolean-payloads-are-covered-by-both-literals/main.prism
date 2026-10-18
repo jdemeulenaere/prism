@@ -1,0 +1,3 @@
+// expect: ok
+enum Flag { On(Bool), Off }
+fun f(x: Flag): Int = when (x) { Flag.On(true) -> 1; Flag.On(false) -> 2; Flag.Off -> 3 }

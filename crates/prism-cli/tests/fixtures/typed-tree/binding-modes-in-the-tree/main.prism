@@ -1,0 +1,4 @@
+// expect: ok
+enum Msg { Text(String), Count(Int) }
+fun a(m: Msg): Int = when (m) { Msg.Text(val s) -> 1; Msg.Count(val n) -> n }
+fun b(m: &Msg): Int = when (m) { Msg.Text(val s) -> 1; Msg.Count(val n) -> n }

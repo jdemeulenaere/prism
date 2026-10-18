@@ -1,0 +1,3 @@
+// expect: ok
+enum Slot { Of(Int?) }
+fun f(s: Slot): Int = when (s) { Slot.Of(null) -> 0; Slot.Of(1) -> 1; Slot.Of(val n) -> 2 }

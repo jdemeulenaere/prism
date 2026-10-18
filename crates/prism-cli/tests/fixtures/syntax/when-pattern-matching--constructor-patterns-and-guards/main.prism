@@ -1,0 +1,3 @@
+// expect: ok
+enum Shape { Rect(Double, Double), Dot }
+fun f(s: Shape): String = when (s) { Shape.Rect(val w, _) if w > 1.0 -> "wide"; _ -> "other" }

@@ -1,0 +1,4 @@
+// expect: ok
+enum Inner { A, B }
+enum Outer { Wrap(Inner), Empty }
+fun f(o: Outer): Int = when (o) { Outer.Wrap(Inner.A) -> 1; Outer.Wrap(Inner.B) -> 2; Outer.Empty -> 3 }

@@ -270,6 +270,15 @@ impl Validator<'_> {
                 if place.projections.contains(&Projection::Deref) {
                     self.report(format!("{} moves out of a dereference", at));
                 }
+                // A payload moves only by a destructuring of its whole enum (D15 of
+                // `payload-patterns`).
+                if place
+                    .projections
+                    .iter()
+                    .any(|p| matches!(p, Projection::VariantField { .. }))
+                {
+                    self.report(format!("{} moves out of a variant's payload", at));
+                }
                 // A closure borrows its captures, so it cannot move out of one (D11 of
                 // `borrowck-exclusivity`).
                 if self
@@ -286,6 +295,81 @@ impl Validator<'_> {
                 self.place_type(place, at)
             }
             Operand::Constant(constant) => constant.ty(),
+        }
+    }
+
+    /// A destructuring moves a whole local of a struct, or of an enum with the variant, into
+    /// whole locals of its part types, listing every non-`Copy` part exactly once (D15 of
+    /// `payload-patterns`).
+    fn destructure(
+        &mut self,
+        source: LocalId,
+        variant: Option<usize>,
+        parts: &[(usize, LocalId)],
+        at: &str,
+    ) {
+        let Some(source_ty) = self.body.locals.get(source).map(|l| l.ty.clone()) else {
+            self.report(format!(
+                "{} destructures _{}, which is not declared",
+                at, source.0
+            ));
+            return;
+        };
+        let part_types: Option<Vec<Type>> = match (&source_ty, variant) {
+            (Type::Struct { id, arguments }, None) => self
+                .types
+                .instantiated_fields(id, arguments)
+                .map(|fields| fields.into_iter().map(|(_, _, ty)| ty).collect()),
+            (Type::Enum { id, arguments }, Some(variant)) => self
+                .types
+                .instantiated_variants(id, arguments)
+                .and_then(|variants| variants.into_iter().nth(variant))
+                .map(|(_, payloads)| payloads),
+            _ => None,
+        };
+        let Some(part_types) = part_types else {
+            self.report(format!(
+                "{} destructures _{}, a {}, as {}",
+                at,
+                source.0,
+                source_ty,
+                match variant {
+                    Some(variant) => format!("variant {}", variant),
+                    None => "a struct".to_string(),
+                }
+            ));
+            return;
+        };
+        let mut listed = vec![0usize; part_types.len()];
+        for (index, target) in parts {
+            let Some(part_ty) = part_types.get(*index) else {
+                self.report(format!(
+                    "{} destructures part {}, which does not exist",
+                    at, index
+                ));
+                continue;
+            };
+            listed[*index] += 1;
+            match self.body.locals.get(*target) {
+                Some(local) if &local.ty == part_ty => {}
+                Some(local) => self.report(format!(
+                    "{} moves part {} (a {}) into _{}, a {}",
+                    at, index, part_ty, target.0, local.ty
+                )),
+                None => self.report(format!(
+                    "{} moves into _{}, which is not declared",
+                    at, target.0
+                )),
+            }
+        }
+        for (index, part_ty) in part_types.iter().enumerate() {
+            let needs = !self.types.is_copy(part_ty);
+            if listed[index] > 1 || (needs && listed[index] == 0) {
+                self.report(format!(
+                    "{} lists part {} of _{} {} times",
+                    at, index, source.0, listed[index]
+                ));
+            }
         }
     }
 
@@ -324,6 +408,11 @@ impl Validator<'_> {
                 StatementKind::Read(place) => {
                     self.place_type(place, &at);
                 }
+                StatementKind::Destructure {
+                    source,
+                    variant,
+                    parts,
+                } => self.destructure(*source, *variant, parts, &at),
             }
         }
         let at = format!("bb{}[terminator]", block.0);
@@ -442,6 +531,10 @@ impl Validator<'_> {
                     used_by_rvalue(rvalue, &mut used);
                 }
                 StatementKind::Read(place) => used_by_place(place, &mut used),
+                StatementKind::Destructure { source, parts, .. } => {
+                    used.push(*source);
+                    used.extend(parts.iter().map(|(_, target)| *target));
+                }
                 StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
             }
             self.check_no_drop_flag(&used, &at);
@@ -702,6 +795,10 @@ impl Validator<'_> {
                         used_by_rvalue(rvalue, &mut used);
                     }
                     StatementKind::Read(place) => used_by_place(place, &mut used),
+                    StatementKind::Destructure { source, parts, .. } => {
+                        used.push(*source);
+                        used.extend(parts.iter().map(|(_, target)| *target));
+                    }
                 }
                 self.check_live(&used, &must, &at);
             }

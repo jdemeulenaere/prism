@@ -1,0 +1,4 @@
+// expect: ok
+enum Msg { Text(String), Empty }
+fun len(s: &String): Int = 1
+fun f(m: &Msg): Int = when (m) { Msg.Text(val s) -> len(s); Msg.Empty -> 0 }

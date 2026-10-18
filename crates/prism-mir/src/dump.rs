@@ -112,6 +112,11 @@ impl MirFile {
                     StatementKind::StorageLive(local) => format!("storage_live _{}", local.0),
                     StatementKind::StorageDead(local) => format!("storage_dead _{}", local.0),
                     StatementKind::Read(place) => format!("read {}", printer.place(place)),
+                    StatementKind::Destructure {
+                        source,
+                        variant,
+                        parts,
+                    } => printer.destructure(*source, *variant, parts),
                 };
                 writeln!(out, "    {} {}", text, position(statement.span)).unwrap();
             }
@@ -129,6 +134,37 @@ struct Printer<'a> {
 }
 
 impl Printer<'_> {
+    /// `destructure move _1 as Pair => (0: _4, 1: _5)`, or `destructure move _1 => (...)` for a
+    /// struct.
+    fn destructure(
+        &self,
+        source: crate::LocalId,
+        variant: Option<usize>,
+        parts: &[(usize, crate::LocalId)],
+    ) -> String {
+        let variant = variant.map(|variant| {
+            let name = match self.body.locals.get(source).map(|l| &l.ty) {
+                Some(Type::Enum { id, .. }) => self
+                    .types
+                    .enum_variants(id)
+                    .and_then(|variants| variants.get(variant))
+                    .map(|(name, _)| name.clone()),
+                _ => None,
+            };
+            format!(" as {}", name.unwrap_or_else(|| variant.to_string()))
+        });
+        let parts: Vec<String> = parts
+            .iter()
+            .map(|(index, target)| format!("{}: _{}", index, target.0))
+            .collect();
+        format!(
+            "destructure move _{}{} => ({})",
+            source.0,
+            variant.unwrap_or_default(),
+            parts.join(", ")
+        )
+    }
+
     fn place(&self, place: &Place) -> String {
         let mut text = format!("_{}", place.local.0);
         let mut ty = self.body.locals.get(place.local).map(|l| l.ty.clone());
@@ -150,6 +186,18 @@ impl Printer<'_> {
                     }
                 }
                 Projection::Payload => format!("({} as payload)", text),
+                Projection::VariantField { variant, field } => {
+                    let name = match &ty {
+                        Some(Type::Enum { id, .. }) => self
+                            .types
+                            .enum_variants(id)
+                            .and_then(|variants| variants.get(*variant))
+                            .map(|(name, _)| name.clone()),
+                        _ => None,
+                    };
+                    let name = name.unwrap_or_else(|| variant.to_string());
+                    format!("({} as {}).{}", text, name, field)
+                }
                 Projection::Index(local) => format!("{}[_{}]", text, local.0),
             };
             ty = ty.and_then(|ty| projection_type(&ty, *projection, self.types));

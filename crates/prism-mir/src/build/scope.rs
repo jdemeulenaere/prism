@@ -149,6 +149,18 @@ impl Builder<'_> {
         self.push_statement(StatementKind::StorageLive(local), span);
     }
 
+    /// Adds `local` to the innermost scope without marking it live: the caller marks it live on
+    /// each path that enters the scope (the locals of a `when` branch, D15 of
+    /// `payload-patterns`).
+    pub(super) fn schedule_unstarted(&mut self, local: LocalId) {
+        let scope = self.scopes.last_mut().expect("a scope is open");
+        scope.locals.push(ScopedLocal {
+            local,
+            moved: false,
+            marked: true,
+        });
+    }
+
     /// A new temporary of type `ty` in the innermost scope, marked live. After a diverging
     /// expression, where nothing is lowered, it is the return place, which nothing reads.
     pub(super) fn new_temporary(&mut self, ty: Type, span: Span) -> LocalId {

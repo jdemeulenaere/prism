@@ -1,0 +1,3 @@
+// expect: ok
+struct User { val name: String, val email: String, val age: Int }
+fun f(u: User, w: User) { val (name as n, email,) = u; var (age) = w; val as = 1 }

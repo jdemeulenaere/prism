@@ -1,0 +1,4 @@
+// expect: E5003
+enum Msg { Text(String), Empty }
+fun count(m: &Msg): Int = 1
+fun f(m: &mut Msg): Int = when (m) { Msg.Text(val s) -> { val n = count(m); *s = "x"; n }; Msg.Empty -> 0 }

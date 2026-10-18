@@ -51,6 +51,10 @@ pub fn projection_type(base: &Type, projection: Projection, types: &TypeTable) -
             .and_then(|fields| fields.get(index))
             .map(|(_, _, ty)| ty.substitute(arguments)),
         (Projection::Payload, Type::Nullable(inner)) => Some(inner.as_ref().clone()),
+        (Projection::VariantField { variant, field }, Type::Enum { id, arguments }) => types
+            .instantiated_variants(id, arguments)
+            .and_then(|variants| variants.into_iter().nth(variant))
+            .and_then(|(_, payloads)| payloads.into_iter().nth(field)),
         // An index applies to no type yet: a string's character is computed by the built-in
         // `get`, not stored (D5 of `runtime-strings-and-drops`). Collections will index places.
         _ => None,

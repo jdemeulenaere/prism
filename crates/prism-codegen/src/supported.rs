@@ -252,6 +252,13 @@ impl BodyChecker<'_> {
                 self.place(place).or_else(|| self.rvalue(place, rvalue))
             }
             StatementKind::Read(place) => self.place(place),
+            StatementKind::Destructure { source, parts, .. } => {
+                self.place(&Place::local(*source)).or_else(|| {
+                    parts
+                        .iter()
+                        .find_map(|(_, target)| self.place(&Place::local(*target)))
+                })
+            }
             StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => None,
         }
     }

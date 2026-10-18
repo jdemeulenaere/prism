@@ -700,3 +700,20 @@ fn a_leak_of_compiled_code_is_reported() {
     assert_eq!(allocation_statistics().live_allocations, 0);
     prism_runtime::start(Vec::new(), false);
 }
+
+#[test]
+fn payloads_are_read_at_their_variant_offsets() {
+    // `Wide`'s payloads follow the tag at offsets 8 and 16, `Small`'s at 1 (D17 of
+    // `payload-patterns`).
+    let program = compile(
+        "enum Value { Small(Bool), Wide(Int, Int), Empty }\n\
+         fun make(n: Int): Value = if (n < 0) Value.Small(n < -5) else if (n == 0) Value.Empty else Value.Wide(n, n * 10)\n\
+         fun read(n: Int): Int = when (make(n)) { Value.Wide(val a, val b) -> a + b; Value.Small(true) -> -1; Value.Small(false) -> -2; Value.Empty -> 0 }\n\
+         struct Pair { val first: Int, val second: Int }\n\
+         fun sum(n: Int): Int { val (second, first) = Pair(n, n + 1); return first * 100 + second }\n",
+    );
+    let read: IntToInt = function(&program, "main::read");
+    assert_eq!([read(3), read(0), read(-9), read(-1)], [33, 0, -1, -2]);
+    let sum: IntToInt = function(&program, "main::sum");
+    assert_eq!(sum(4), 405);
+}

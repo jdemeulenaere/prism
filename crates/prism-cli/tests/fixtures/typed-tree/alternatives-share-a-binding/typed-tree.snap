@@ -1,0 +1,16 @@
+module main
+enum main::Shape @2:1
+  variant 0 Circle(Float)
+  variant 1 Square(Float)
+fun main::f(s: Shape): Float @3:1
+  local %0 s: Shape (parameter)
+  local %1 d: Float (pattern val)
+  when exhaustive: Float @3:27
+    subject: local %0 s: Shape @3:33
+    branch @3:38
+      pattern variant main::Shape 0 Circle
+        pattern binding %1 d (copy): Float
+      pattern variant main::Shape 1 Square
+        pattern binding %1 d (copy): Float
+      body: copy: Float @3:82
+        local %1 d: Float @3:82

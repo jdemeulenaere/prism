@@ -1,0 +1,29 @@
+module main
+phase elaborated
+fun main::f(_1: Pair): String @3:1
+  local _0: String (return)
+  local _1 p: Pair (argument)
+  local _2: Int (temporary)
+  local _3 a: String (user)
+  local _4 n: Int (user)
+  local _5: String (temporary)
+  bb0:
+    storage_live _2 @3:32
+    _2 = discriminant _1 @3:32
+    switch move _2 [0 -> bb1, otherwise -> bb2] @3:26
+  bb1:
+    storage_live _3 @3:37
+    storage_live _4 @3:37
+    storage_live _5 @3:37
+    _4 = copy (_1 as Of).2 @3:55
+    destructure move _1 as Of => (0: _3, 1: _5) @3:45
+    _0 = move _3 @3:65
+    drop _5 -> bb3 @3:37
+  bb2:
+    unreachable @3:26
+  bb3:
+    storage_dead _5 @3:37
+    storage_dead _4 @3:37
+    storage_dead _3 @3:37
+    storage_dead _2 @3:26
+    return @3:1

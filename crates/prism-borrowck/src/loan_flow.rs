@@ -436,6 +436,15 @@ impl Analysis for LoanFlow<'_> {
                 self.clear(state, *local)
             }
             StatementKind::Read(_) => {}
+            // The parts carry the source's loans, fitted to their types; the source moved (D16
+            // of `payload-patterns`).
+            StatementKind::Destructure { source, parts, .. } => {
+                let items = self.held(state, *source);
+                self.clear(state, *source);
+                for (_, target) in parts {
+                    self.write(state, &Place::local(*target), &items);
+                }
+            }
         }
     }
 

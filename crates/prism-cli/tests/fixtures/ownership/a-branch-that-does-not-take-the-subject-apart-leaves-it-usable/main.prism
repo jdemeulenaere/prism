@@ -1,0 +1,4 @@
+// expect: ok
+enum Msg { Text(String), Empty }
+fun show(m: &Msg) {}
+fun f(m: Msg) { when (m) { Msg.Text(_) -> println(1); Msg.Empty -> {} }; show(m) }

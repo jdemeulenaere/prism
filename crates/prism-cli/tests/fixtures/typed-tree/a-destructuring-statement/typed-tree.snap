@@ -1,0 +1,18 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+  field 1 val id: Int
+fun main::f(u: User): Int @3:1
+  local %0 u: User (parameter)
+  local %1 name: String (pattern val)
+  local %2 n: Int (pattern val)
+  block: Int @3:21
+    destructure @3:23
+      value: local %0 u: User @3:45
+      pattern struct main::User
+        pattern binding %1 name (move): String
+        pattern binding %2 n (copy): Int
+    tail: coerce diverge: Int @3:48
+      return: Nothing @3:48
+        copy: Int @3:55
+          local %2 n: Int @3:55

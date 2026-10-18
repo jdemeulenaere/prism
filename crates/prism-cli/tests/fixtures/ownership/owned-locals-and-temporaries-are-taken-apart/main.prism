@@ -1,0 +1,5 @@
+// expect: ok
+enum Msg { Text(String), Empty }
+fun make(): Msg = Msg.Empty
+fun f(m: Msg): String = when (m) { Msg.Text(val s) -> s; Msg.Empty -> "" }
+fun g(): String = when (make()) { Msg.Text(val s) -> s; Msg.Empty -> "" }

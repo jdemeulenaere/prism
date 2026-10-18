@@ -1,0 +1,4 @@
+// expect: E5004
+enum Msg { Text(String), Empty }
+fun len(s: &String): Int = 1
+fun f(m: Msg): Int { var v = m; return when (&v) { Msg.Text(val s) -> { v = Msg.Empty; len(s) }; Msg.Empty -> 0 } }

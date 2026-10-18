@@ -1,0 +1,4 @@
+// expect: ok
+enum Pair { Of(String, Int) }
+struct Inbox { val last: Pair }
+fun f(i: Inbox): Int = when (i.last) { Pair.Of(_, val n) -> n }

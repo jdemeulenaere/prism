@@ -173,7 +173,7 @@ impl Builder<'_> {
 
     /// `destination = discriminant(place) <operator> 0`: a comparison with `null`, whose tag is
     /// read at the span of the compared value, `place_span`.
-    fn compare_tag(
+    pub(super) fn compare_tag(
         &mut self,
         destination: &Place,
         operator: BinaryOperator,

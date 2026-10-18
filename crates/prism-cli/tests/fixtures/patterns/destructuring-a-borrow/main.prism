@@ -1,0 +1,4 @@
+// expect: ok
+struct Account { val name: String, val id: Int }
+fun len(s: &String): Int = 1
+fun f(a: &Account): Int { val (name, id) = a; return len(name) + id }

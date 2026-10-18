@@ -1,0 +1,4 @@
+// expect: ok
+enum Msg { Text(String), Empty }
+fun short(s: &String): Bool = true
+fun f(m: Msg): String = when (m) { Msg.Text(val s) if short(s) -> s; else -> "long" }

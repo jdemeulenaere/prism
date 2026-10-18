@@ -1,0 +1,4 @@
+// expect: ok
+enum Pair { Of(String, String) }
+fun swap(a: &mut String, b: &mut String) {}
+fun f(p: &mut Pair) { when (p) { Pair.Of(val a, val b) -> swap(a, b) } }

@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+struct Point : Copy { val x: Int, val y: Int }
+enum Event : Copy { Click(Point), Key(Char) }
+fun f(e: Event): Int = when (e) { Event.Click(Point(0, val y)) -> y; Event.Click(Point(val x, _)) -> x * 10; Event.Key('q') -> -1; Event.Key(_) -> -2 }
+fun main() {
+    println(f(Event.Click(Point(0, 7))))
+    println(f(Event.Click(Point(2, 7))))
+    println(f(Event.Key('q')))
+    println(f(Event.Key('w')))
+}

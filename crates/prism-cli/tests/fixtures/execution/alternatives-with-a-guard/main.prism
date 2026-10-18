@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+enum Shape { Circle(Int), Square(Int) }
+fun f(s: Shape): Int = when (s) { Shape.Circle(val d), Shape.Square(val d) if d > 1 -> d; else -> 0 }
+fun main() {
+    println(f(Shape.Circle(5)))
+    println(f(Shape.Square(5)))
+    println(f(Shape.Square(1)))
+}

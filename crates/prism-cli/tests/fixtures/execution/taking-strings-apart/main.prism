@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+enum Note { Pair(String, String), Empty }
+fun first(n: Note): String = when (n) { Note.Pair(val a, _) -> a; Note.Empty -> "" }
+fun main() { println(first(Note.Pair("left", "right"))) }

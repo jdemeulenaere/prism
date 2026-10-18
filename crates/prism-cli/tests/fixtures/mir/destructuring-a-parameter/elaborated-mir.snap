@@ -1,0 +1,23 @@
+module main
+phase elaborated
+fun main::f(_1: User): Int @3:1
+  local _0: Int (return)
+  local _1 u: User (argument)
+  local _2 name: String (user)
+  local _3 id: Int (user)
+  local _4: String (temporary)
+  bb0:
+    storage_live _2 @3:23
+    storage_live _3 @3:23
+    storage_live _4 @3:23
+    _3 = copy _1.id @3:28
+    destructure move _1 => (0: _2, 1: _4) @3:32
+    _0 = copy _3 @3:50
+    drop _4 -> bb1 @3:43
+  bb1:
+    storage_dead _4 @3:43
+    storage_dead _3 @3:43
+    drop _2 -> bb2 @3:43
+  bb2:
+    storage_dead _2 @3:43
+    return @3:1

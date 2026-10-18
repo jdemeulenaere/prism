@@ -1,0 +1,3 @@
+// expect: ok
+enum Shape { Circle(Double), Named(String) }
+fun f(s: Shape, limit: Double): Int = when (s) { Shape.Circle(0.0) -> 0; Shape.Circle(limit) -> 1; Shape.Circle(in 0.0..1.0) -> 2; Shape.Named("x") -> 3; else -> 4 }

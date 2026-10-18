@@ -300,3 +300,18 @@ fn verify_accepts_a_null_nullable_that_is_not_dropped() {
     // The temporary holding `n` is moved out on the non-null path and owns nothing on the other.
     elaborate("fun f(n: String?): String = n ?: \"anon\"\n");
 }
+
+#[test]
+fn a_conditional_take_apart_drops_its_subject_under_a_flag() {
+    let file = elaborate(
+        "enum Msg { Text(String), Empty }\nfun f(c: Bool, m: Msg) { if (c) { when (m) { Msg.Text(val s) -> {}; Msg.Empty -> {} } } }\n",
+    );
+    let dump = body_dump(&file, "f");
+    assert!(dump.contains("(drop flag)"), "{}", dump);
+    assert!(dump.contains("destructure move _2 as Text"), "{}", dump);
+    // The flag is cleared where `m` is taken apart, and guards its drop at the return.
+    let clear = dump.find("= const false").expect("the flag is cleared");
+    let destructure = dump.find("destructure move _2").unwrap();
+    assert!(clear < destructure, "{}", dump);
+    assert!(dump.contains("drop _2"), "{}", dump);
+}
