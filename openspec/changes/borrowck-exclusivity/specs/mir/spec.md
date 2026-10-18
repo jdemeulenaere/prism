@@ -11,6 +11,25 @@ The drops and storage ends that a braced block runs when control reaches its end
 
 ## MODIFIED Requirements
 
+### Requirement: Call Arguments Are Evaluated in Order
+A call MUST evaluate its receiver first: a receiver that the call moves or copies (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, and a receiver that the call borrows has its place evaluated then and is borrowed after the written arguments, except a receiver that a `?.` test reaches, which MUST be borrowed right after its test, so that no argument can change the tested value while the receiver is reached through it. The written arguments MUST be evaluated in source order, then the omitted arguments in parameter order, and then the call made.
+
+#### Scenario: A mutable receiver is borrowed after the arguments
+- **WHEN** `struct Stack { var count: Int }`, `mut fun Stack.push(n: Int) {}` and `fun Stack.size(): Int = count` are declared and a body runs `var v = Stack(0); v.push(v.size())`
+- **THEN** `size` is called before the mutable receiver borrow of `v` is taken, and `push` is called with that borrow and the result of `size`
+
+#### Scenario: A consuming receiver is moved before the arguments
+- **WHEN** `struct Stack { var count: Int }`, `struct Point : Copy { val x: Int }`, `consuming fun Stack.into(n: Int): Int = n`, `consuming fun Point.moved(n: Int): Point = this` and `fun next(): Int = 1` are declared, and `fun f(s: Stack): Int = s.into(next())` and `fun g(p: &Point): Point = p.moved(next())` are lowered
+- **THEN** `s` is moved into a temporary, and the dereference of `p` copied into one, before `next` is called, and each call receives that temporary and the result of `next`
+
+#### Scenario: Named arguments are evaluated as written
+- **WHEN** `fun g(): Int = 1`, `fun h(): Int = 2` and `fun f(a: Int, b: Int = 2, c: Int = 3): Int = a` are declared and `fun k(): Int = f(c = g(), a = h())` is lowered
+- **THEN** `g` is called before `h`, then the generator of `b`, and `f` is called with the results of `h`, the generator and `g`, in that order
+
+#### Scenario: A safe-call receiver is borrowed after its test
+- **WHEN** `struct Stack { var count: Int }`, `mut fun Stack.push(n: Int) {}` and `fun next(): Int = 1` are declared and `fun f(s: Stack?) { var t = s; t?.push(next()) }` is lowered
+- **THEN** on the edge where `t` is present, the mutable receiver borrow of the payload of `t` is taken before `next` is called, and `push` is called with that borrow and the result of `next`
+
 ### Requirement: Temporaries Live Until the End of Their Scope
 A temporary MUST be dropped at the end of the innermost enclosing statement, block tail or body value, or of the innermost part that is evaluated conditionally or repeatedly: a condition, a `when` pattern test, a `for` range, a branch of `if` or `when`, the right operand of `&&` or `||`, the fallback of `?:`, or the rest of a `?.` chain after its first test. A temporary whose written borrow is the value of a branch of `if` or `when`, of the fallback of `?:` or of a block tail, through any nesting of these, MUST instead belong to the scope of the whole expression whose value that borrow becomes: its storage MUST start before that expression is evaluated, and it MUST be dropped at the end of that scope, on the paths where it was created.
 

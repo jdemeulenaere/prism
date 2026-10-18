@@ -51,7 +51,7 @@ A borrow MUST be live from where it is created until the last use of every refer
 - **THEN** the borrow checker emits `E5004` at `x` in `x = 2`, whose borrow is later used by `print(r)` in a later iteration of the loop
 
 ### Requirement: References Carry Their Borrows
-A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, reborrowed, or borrowed through for one of its referent's fields MUST keep the borrows it holds live for as long as the new reference is live. A value written through a reference MUST become held by what the reference points at. A call MUST be assumed to write the borrows of its other arguments through each `&mut R` argument (or `(&mut R)?` one) whose `R` holds borrows, through each function-typed argument and through a called function value, and a closure through each variable it captures mutably, so what these point at MUST hold those borrows afterwards, however the reference reached them. Re-pointing a `var` reference MUST end the borrows it held, from that point on.
+A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, reborrowed, or borrowed through for one of its referent's fields MUST keep the borrows it holds live for as long as the new reference is live. A value written through a reference MUST become held by what the reference points at. Re-pointing a `var` reference MUST end the borrows it held, from that point on.
 
 #### Scenario: A copied reference keeps the borrow
 - **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var x = 1; val r = &x; val r2 = r; x = 2; print(r2) }` is checked
@@ -77,6 +77,13 @@ A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, re
 - **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var a = 1; var b = 2; var r: &Int = &b; val rr = &mut r; *rr = &a; a = 3; print(r) }` is checked
 - **THEN** the borrow checker emits `E5004` at `a` in `a = 3`, because `r` now refers to `a`
 
+#### Scenario: An optional borrow keeps the borrow
+- **WHEN** `struct Profile { var nick: String? }` and `fun show(n: (&String)?) {}` are declared and a body runs `var p = Profile(null); val a: (&String)? = &p.nick; p.nick = null; show(a)`
+- **THEN** the borrow checker emits `E5004` at `p.nick` in `p.nick = null`
+
+### Requirement: Calls and Closures Write Borrows Through What They Are Given
+A call MUST be assumed to write the borrows of its other arguments through each `&mut R` or `(&mut R)?` argument whose `R` holds borrows, through each function-typed argument and through a called function value, and a closure the borrows of its other captures through each variable it captures mutably. What these point at MUST hold those borrows afterwards, however the reference reached them.
+
 #### Scenario: Writing a borrow through a closure
 - **WHEN** `fun print(n: &Int) {}`, `fun run(f: () -> Int): Int = f()` and `fun apply(g: (&Int) -> Int, v: &Int): Int = g(v)` are declared, and `fun f(c: Bool) { var b = 2; var r: &Int = &b; val rr = &mut r; if (c) { val a = 1; run { *rr = &a; 1 } }; print(r) }` and `fun g(c: Bool) { var b = 2; var r: &Int = &b; if (c) { val a = 1; apply({ v -> r = v; 1 }, &a) }; print(r) }` are checked
 - **THEN** the borrow checker emits `E5006` for `a` in `f`, because the closure may write a borrow of `a` into `r` through `rr`, and in `g`, because `apply` may pass `&a` to the closure that writes `r`
@@ -84,10 +91,6 @@ A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, re
 #### Scenario: Writing a borrow through a mutable reference argument
 - **WHEN** `fun print(n: &Int) {}`, `fun h(s: &mut &Int, v: &Int) {}` and `fun set(s: (&mut &Int)?, v: &Int) {}` are declared, and `fun g(s: &mut &Int) { val n = 1; val t = s; h(t, &n) }` and `fun f(c: Bool) { var b = 2; var r: &Int = &b; if (c) { val a = 1; set(&mut r, &a) }; print(r) }` are checked
 - **THEN** the borrow checker emits `E5006` for `n` in `g`, because `h` may write `&n` into the caller's reference that `s` points at, and for `a` in `f`, because `set` may write `&a` into `r`
-
-#### Scenario: An optional borrow keeps the borrow
-- **WHEN** `struct Profile { var nick: String? }` and `fun show(n: (&String)?) {}` are declared and a body runs `var p = Profile(null); val a: (&String)? = &p.nick; p.nick = null; show(a)`
-- **THEN** the borrow checker emits `E5004` at `p.nick` in `p.nick = null`
 
 ### Requirement: Disjoint Fields Are Borrowed Independently
 Borrows of different fields of one value MUST NOT conflict, whether the value is a local or is reached through a reference. A borrow of the value itself, or of a field, MUST conflict with a borrow of any place inside it.
@@ -106,6 +109,13 @@ The mutable borrow of a `mut fun` call's receiver MUST start when the call is ma
 #### Scenario: Two-phase receiver borrows
 - **WHEN** `struct Stack { var count: Int }`, `mut fun Stack.push(n: Int) {}`, `mut fun Stack.pushRef(n: &Int) {}` and `fun Stack.size(): Int = count` are declared, and a body runs `var v = Stack(0); v.push(v.size()); v.push(v.count)`, or `var w = Stack(0); w.pushRef(&w.count)`
 - **THEN** the borrow checker accepts `v.push(v.size())` and `v.push(v.count)`, and emits `E5003` at the receiver `w` of `pushRef`, because `&w.count` is still held by the call
+
+### Requirement: Safe-Call Receivers Are Borrowed at Their Test
+A receiver that a `?.` test reaches (the payload of a nullable), shared or mutable, MUST be borrowed right after its test, before the arguments, so an argument that changes or mutably borrows the tested value MUST conflict with that borrow, as MUST one that reads it while the receiver is borrowed mutably.
+
+#### Scenario: A safe-call receiver is borrowed at its test
+- **WHEN** `struct Stack { var count: Int }`, `mut fun Stack.push(n: Int) {}`, `fun Stack.show(n: Int) {}` and `fun clear(s: &mut Stack?): Int { *s = null; return 1 }` are declared, and a body runs `var n: Stack? = Stack(0); n?.push(clear(&mut n))`, or `var m: Stack? = Stack(0); m?.show(clear(&mut m))`
+- **THEN** the borrow checker emits `E5003` at `&mut n` and at `&mut m`, because the receiver is borrowed from the test of its tag, which `clear` could otherwise make `null` before the call
 
 ### Requirement: Calls Returning References Keep Their Inputs Borrowed
 The result of a call whose type contains a reference MUST hold every borrow passed to the call's input borrows (its parameters whose type contains a reference, other than function types), each in its own mode, so a `&mut` argument MUST stay frozen while the result is live. The result of calling a function value MUST also hold the borrows of the function value. The borrows a default value's generator takes of earlier by-value arguments MUST NOT be held by its result.

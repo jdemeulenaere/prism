@@ -1,0 +1,51 @@
+module main
+fun main::Stack.push(_1: &mut Stack, _2: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 this: &mut Stack (argument)
+  local _2 n: Int (argument)
+  bb0:
+    _0 = const () @3:28
+    return @3:1
+fun main::next(): Int @4:1
+  local _0: Int (return)
+  bb0:
+    _0 = const 1 @4:19
+    return @4:1
+fun main::f(_1: Stack?): Unit @5:1
+  local _0: Unit (return)
+  local _1 s: Stack? (argument)
+  local _2 t: Stack? (user, var)
+  local _3: Int (temporary)
+  local _4: &mut Stack (temporary)
+  local _5: Int (temporary)
+  local _6: Unit (temporary)
+  bb0:
+    storage_live _2 @6:5
+    _2 = move _1 @6:13
+    storage_live _3 @7:5
+    _3 = discriminant _2 @7:5
+    switch move _3 [0 -> bb2, otherwise -> bb1] @7:5
+  bb1:
+    storage_live _4 @7:5
+    _4 = &mut (_2 as payload) (receiver) @7:5
+    storage_live _5 @7:13
+    _5 = call main::next() -> bb3 @7:13
+  bb2:
+    goto -> bb5 @7:5
+  bb3:
+    storage_live _6 @7:5
+    _6 = call main::Stack.push(move _4, move _5) -> bb4 @7:5
+  bb4:
+    storage_dead _6 @7:5
+    storage_dead _5 @7:5
+    storage_dead _4 @7:5
+    goto -> bb5 @7:5
+  bb5:
+    storage_dead _3 @7:5
+    _0 = const () @5:18
+    drop _2 -> bb6 @8:1
+  bb6:
+    storage_dead _2 @8:1
+    drop _1 -> bb7 @5:1
+  bb7:
+    return @5:1

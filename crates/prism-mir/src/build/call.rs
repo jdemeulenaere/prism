@@ -12,7 +12,8 @@ use prism_typed_tree::{
 };
 
 /// A receiver that a call borrows: its place is evaluated before the written arguments and
-/// borrowed after them (D10 of `mir-lowering`). A receiver that the call moves or copies is
+/// borrowed after them (D10 of `mir-lowering`), unless a `?.` test reaches it, which is
+/// borrowed right after the test (`borrowck-exclusivity`). A receiver that the call moves or copies is
 /// evaluated as an ordinary argument, first (D10 of `borrowck-moves`).
 struct PendingReceiver {
     mutable: bool,
@@ -43,9 +44,10 @@ fn shared(ty: Type) -> Type {
 
 impl Builder<'_> {
     /// A call: the callee, then the receiver (moved or copied into a temporary when the call
-    /// takes it by value, or only its place evaluated when the call borrows it), the written
-    /// arguments in source order (each in a temporary, except constants no default borrows),
-    /// the borrowed receiver's borrow, the omitted arguments in parameter order by calling their
+    /// takes it by value, or only its place evaluated when the call borrows it, and borrowed
+    /// then when that place is a payload a `?.` test reaches), the written arguments in source
+    /// order (each in a temporary, except constants no default borrows), the borrowed
+    /// receiver's borrow, the omitted arguments in parameter order by calling their
     /// generators, then the call (D10 of `mir-lowering` and of `borrowck-moves`).
     pub(super) fn lower_call(
         &mut self,
@@ -68,13 +70,22 @@ impl Builder<'_> {
             .rposition(|argument| matches!(argument, Argument::Default));
         let mut operands: Vec<Option<Operand>> = vec![None; count];
         let mut pending = None;
+        let mut receiver_borrowed = false;
         if call.has_receiver {
             if let Some(Argument::Written(receiver)) = call.arguments.first() {
                 pending = self.receiver_place(*receiver);
+                // A receiver reached through a `?.` test is borrowed right after its test, so
+                // that no argument can change the value tested (`n?.push(clear(&mut n))`).
+                if let Some(receiver) = pending
+                    .take_if(|receiver| receiver.place.projections.contains(&Projection::Payload))
+                {
+                    operands[0] = Some(self.borrow_receiver(call, receiver));
+                    receiver_borrowed = true;
+                }
             }
         }
         for &index in &call.evaluation_order {
-            if index == 0 && pending.is_some() {
+            if index == 0 && (pending.is_some() || receiver_borrowed) {
                 continue;
             }
             let Argument::Written(value) = call.arguments[index] else {
@@ -84,15 +95,7 @@ impl Builder<'_> {
             operands[index] = Some(self.argument(value, borrowed_by_default));
         }
         if let Some(pending) = pending {
-            let receiver_ty = call.parameters[0].1.clone();
-            let local = self.new_temporary(receiver_ty, pending.span);
-            let rvalue = Rvalue::Borrow {
-                mutable: pending.mutable,
-                origin: BorrowOrigin::Receiver,
-                place: pending.place,
-            };
-            self.assign(Place::local(local), rvalue, pending.span);
-            operands[0] = Some(Operand::Move(Place::local(local), pending.span));
+            operands[0] = Some(self.borrow_receiver(call, pending));
         }
         for index in 0..count {
             if matches!(call.arguments[index], Argument::Default) {
@@ -150,6 +153,19 @@ impl Builder<'_> {
         };
         self.terminate(kind, span);
         self.current = target;
+    }
+
+    /// The borrow of the receiver `pending` of `call`, in a temporary.
+    fn borrow_receiver(&mut self, call: &Call, pending: PendingReceiver) -> Operand {
+        let receiver_ty = call.parameters[0].1.clone();
+        let local = self.new_temporary(receiver_ty, pending.span);
+        let rvalue = Rvalue::Borrow {
+            mutable: pending.mutable,
+            origin: BorrowOrigin::Receiver,
+            place: pending.place,
+        };
+        self.assign(Place::local(local), rvalue, pending.span);
+        Operand::Move(Place::local(local), pending.span)
     }
 
     /// Evaluates the place of a receiver that is borrowed after the arguments, or returns `None`

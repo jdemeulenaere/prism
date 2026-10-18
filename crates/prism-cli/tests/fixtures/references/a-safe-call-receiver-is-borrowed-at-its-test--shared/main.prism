@@ -1,0 +1,8 @@
+// expect: E5003
+struct Stack { var count: Int }
+fun Stack.show(n: Int) {}
+fun clear(s: &mut Stack?): Int { *s = null; return 1 }
+fun f() {
+    var m: Stack? = Stack(0)
+    m?.show(clear(&mut m))
+}
