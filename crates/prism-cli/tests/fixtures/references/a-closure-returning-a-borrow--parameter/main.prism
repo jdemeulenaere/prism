@@ -1,0 +1,3 @@
+// expect: ok
+fun app(g: (&Int) -> &Int): Int = 1
+fun f(): Int = app { k -> k }

@@ -1,0 +1,11 @@
+// expect: E5005
+// entry: app/main.prism
+package app
+import /lib/team
+fun greet(s: &String): Int = 1
+fun take(s: String) {}
+fun g(a: String, b: String): Int {
+    val r = first(&a, &b)
+    take(b)
+    return greet(r)
+}

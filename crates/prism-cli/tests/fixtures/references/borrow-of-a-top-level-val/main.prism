@@ -1,0 +1,10 @@
+// expect: ok
+struct User { val name: String }
+val DEFAULT = User("guest")
+fun greet(s: &String): Int = 1
+fun guest(): &User = &DEFAULT
+fun orGuest(u: &User, c: Bool): &User = if (c) u else &DEFAULT
+fun f(): Int {
+    val g = guest()
+    return greet(g.name)
+}

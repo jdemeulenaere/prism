@@ -1,0 +1,4 @@
+// expect: E5008
+struct Team { var lead: String }
+fun make(): String = "x"
+fun g(t: &Team): &String = &make()

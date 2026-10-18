@@ -1,0 +1,3 @@
+// expect: E5008
+fun make(): String = "x"
+val S: &String = &make()

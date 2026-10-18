@@ -1,0 +1,6 @@
+// expect: E5009
+fun app(g: (&Int) -> &Int): Int = 1
+fun f(): Int {
+    val n = 1
+    return app { k -> &n }
+}

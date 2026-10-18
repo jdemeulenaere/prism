@@ -1,0 +1,7 @@
+// expect: E5009
+struct User { var name: String }
+mut fun User.rename(n: &String = name) {}
+fun g() {
+    var u = User("a")
+    u.rename()
+}

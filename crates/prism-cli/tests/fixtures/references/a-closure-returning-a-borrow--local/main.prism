@@ -1,0 +1,3 @@
+// expect: E5008
+fun app(g: (&Int) -> &Int): Int = 1
+fun h(): Int = app { k -> val m = 2; &m }

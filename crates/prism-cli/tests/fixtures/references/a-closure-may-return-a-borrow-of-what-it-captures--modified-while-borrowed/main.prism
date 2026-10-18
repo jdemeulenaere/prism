@@ -1,0 +1,9 @@
+// expect: E5004
+fun greet(s: &String): Int = 1
+fun f(s: String): Int {
+    var t = s
+    val g = { &t }
+    val r = g()
+    t = "b"
+    return greet(r)
+}

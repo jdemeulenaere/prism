@@ -1,0 +1,10 @@
+// expect: ok
+fun greet(s: &String): Int = 1
+fun h(s: String): Int {
+    var t = s
+    val g = { &t }
+    val r = g()
+    greet(r)
+    t = "b"
+    return 1
+}

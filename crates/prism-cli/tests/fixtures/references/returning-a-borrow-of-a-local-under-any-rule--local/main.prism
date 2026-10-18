@@ -1,0 +1,6 @@
+// expect: E5008
+struct Team { var lead: String }
+fun f(t: &Team): &String {
+    val s = "x"
+    return &s
+}

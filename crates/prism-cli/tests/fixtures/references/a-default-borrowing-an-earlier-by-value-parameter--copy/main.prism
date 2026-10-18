@@ -1,0 +1,2 @@
+// expect: E5009
+fun k(a: Int, b: &Int = a): Int = 1

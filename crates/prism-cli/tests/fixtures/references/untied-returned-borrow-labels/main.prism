@@ -1,0 +1,3 @@
+// expect: E5009
+struct Team { var lead: String }
+fun Team.other(o: &String): &String = o

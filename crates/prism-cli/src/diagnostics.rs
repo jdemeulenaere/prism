@@ -706,6 +706,44 @@ error[E5006]: 'v' does not live long enough
         assert_eq!(out, expected);
     }
 
+    /// references: "Dangling returned borrow labels".
+    #[test]
+    fn test_dangling_returned_borrow_labels() {
+        let out = render_borrow_errors("fun f(): &Int { val n = 1; val r = &n; return r }\n");
+        let expected = "\
+error[E5008]: cannot return a borrow of local 'n'
+  --> main.prism:1:47
+    1 | fun f(): &Int { val n = 1; val r = &n; return r }
+      |                                               ^ returned here
+  --> main.prism:1:36
+    1 | fun f(): &Int { val n = 1; val r = &n; return r }
+      |                                    ^^ 'n' is borrowed here
+   = note: 'f' takes no borrowed input, so it can only return borrows of top-level values (elision rule 4)
+   = help: return the value itself instead of a borrow of it
+";
+        assert_eq!(out, expected);
+    }
+
+    /// references: "Untied returned borrow labels".
+    #[test]
+    fn test_untied_returned_borrow_labels() {
+        let out = render_borrow_errors(
+            "struct Team { var lead: String }\nfun Team.other(o: &String): &String = o\n",
+        );
+        let expected = "\
+error[E5009]: method 'other' cannot return a borrow derived from parameter 'o'
+  --> main.prism:2:39
+    2 | fun Team.other(o: &String): &String = o
+      |                                       ^ returned here
+  --> main.prism:2:16
+    2 | fun Team.other(o: &String): &String = o
+      |                ^^^^^^^^^^ 'o' is a parameter here
+   = note: a method's returned borrow is tied to its receiver only (elision rule 2), so callers keep only the receiver borrowed
+   = help: return a borrow derived from the receiver, or declare a function taking the receiver as a reference parameter, whose result is tied to every reference parameter (elision rule 3)
+";
+        assert_eq!(out, expected);
+    }
+
     /// references: "Escaping closure labels".
     #[test]
     fn test_escaping_closure_labels() {

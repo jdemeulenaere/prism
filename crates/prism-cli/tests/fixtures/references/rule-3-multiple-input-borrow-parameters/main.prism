@@ -1,0 +1,11 @@
+// expect: E5003
+fun longest(a: &String, b: &String, c: Bool): &String = if (c) a else b
+fun pick(a: &mut Int, b: &Int): &Int = b
+fun print(n: &Int) {}
+fun f() {
+    var x = 1
+    val y = 2
+    val r = pick(&mut x, &y)
+    print(x)
+    print(r)
+}

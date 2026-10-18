@@ -1,0 +1,3 @@
+// expect: E5009
+struct User { var name: String }
+fun f(m: &mut User, n: &String = m.name): Int = 1

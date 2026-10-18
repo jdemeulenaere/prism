@@ -1,0 +1,13 @@
+// expect: ok
+// entry: app/main.prism
+package app
+import /lib/team
+fun greet(s: &String): Int = 1
+fun take(s: String) {}
+fun f(t: Team, s: String): Int {
+    var u = t
+    var x = s
+    val c = u.captain(&x)
+    x = "y"
+    return greet(c)
+}
