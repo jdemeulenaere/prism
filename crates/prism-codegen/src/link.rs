@@ -109,7 +109,7 @@ impl FunctionTable {
 pub struct Linker {
     table: Arc<FunctionTable>,
     module: JITModule,
-    /// The ISA of the functions larger than [`crate::isa::LARGE_FUNCTION_INSTRUCTIONS`].
+    /// The ISA of large functions ([`crate::isa::is_large`]).
     large: OwnedTargetIsa,
     /// The functions the load defines, by symbol.
     defined: Vec<(String, FuncId)>,
@@ -180,9 +180,9 @@ impl Linker {
 }
 
 /// Compiles the function in `context` and defines it as `id` in `module`: with the module's ISA,
-/// or with `large`, the single-pass allocator's, when it is larger than
-/// [`crate::isa::LARGE_FUNCTION_INSTRUCTIONS`], so that compiling one function stays linear in
-/// its size however large it is. The error is the module's own, as `Module::define_function`'s.
+/// or with `large`, the single-pass allocator's, when it is large ([`crate::isa::is_large`]), so
+/// that compiling one function stays linear in its size however large it is. The error is the
+/// module's own, as `Module::define_function`'s.
 #[allow(clippy::result_large_err)]
 pub fn define_function<M: Module>(
     module: &mut M,
