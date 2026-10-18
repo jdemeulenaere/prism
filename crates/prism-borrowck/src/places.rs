@@ -59,6 +59,20 @@ pub fn is_shared_input_borrow(ty: &Type) -> bool {
     }
 }
 
+/// Whether a value of type `ty` can borrow a place whose type is itself a reference (`&T`,
+/// `(&T)?`): `ty` contains a reference whose referent contains a reference (`&&Int`,
+/// `&(&Int)?`), or a function type, whose closure may borrow any place. A value of any other
+/// type points past such a place, never at it: a `&Int` copied out of a `&&Int`, or a call's
+/// `&String` result, borrows what the reference refers to, not the reference.
+pub fn can_borrow_reference(ty: &Type) -> bool {
+    match ty {
+        Type::Fn { .. } => true,
+        Type::Reference { inner, .. } => is_input_borrow(inner) || can_borrow_reference(inner),
+        Type::Nullable(inner) | Type::Heap(inner) => can_borrow_reference(inner),
+        _ => false,
+    }
+}
+
 /// Whether the places `a` and `b` of one body overlap: they have the same root local, and one
 /// is a prefix of the other once equal projections are skipped. Two different fields are
 /// disjoint; two indices always overlap, since the indices are not known.
@@ -234,12 +248,25 @@ fun f(o: &mut Order, h: Heap<Point>, s: String) {
         assert!(!contains_function(&int_reference));
         assert!(is_input_borrow(&int_reference.clone().nullable()));
         assert!(!is_input_borrow(&function));
-        assert!(is_shared_input_borrow(&int_reference.nullable()));
+        assert!(is_shared_input_borrow(&int_reference.clone().nullable()));
         let mutable_reference = Type::Reference {
             mutable: true,
             inner: Box::new(Type::Int),
         };
         assert!(!is_shared_input_borrow(&mutable_reference));
         assert!(!is_shared_input_borrow(&Type::Int));
+        // A `&Int` cannot borrow a reference; a `&&Int`, a `&(&Int)?` and a function can.
+        let int_reference_reference = Type::Reference {
+            mutable: false,
+            inner: Box::new(int_reference.clone()),
+        };
+        assert!(!can_borrow_reference(&int_reference));
+        assert!(!can_borrow_reference(&mutable_reference.nullable()));
+        assert!(can_borrow_reference(&int_reference_reference));
+        assert!(can_borrow_reference(&Type::Reference {
+            mutable: false,
+            inner: Box::new(int_reference.clone().nullable()),
+        }));
+        assert!(can_borrow_reference(&function));
     }
 }

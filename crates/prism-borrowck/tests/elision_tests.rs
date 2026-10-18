@@ -196,3 +196,35 @@ fn a_closure_with_a_borrowed_parameter_cannot_return_a_captured_reference() {
         "the closure cannot return a borrow derived from captured 'r'"
     );
 }
+
+#[test]
+fn a_returned_consuming_receiver_suggests_a_shared_one() {
+    let actual =
+        rendered("struct Team { var lead: String }\nconsuming fun Team.lead2(): &String = &lead\n");
+    assert_eq!(actual, "\
+E5008 cannot return a borrow of parameter 'this.lead' @2:39 returned here
+  note: 'lead2' takes no borrowed input, so it can only return borrows of top-level values (elision rule 4)
+  help: declare the method with 'fun' instead of 'consuming fun', so that the receiver is a shared reference", "\n{}", actual);
+}
+
+#[test]
+fn a_returned_borrow_of_a_reference_parameter_suggests_returning_it() {
+    let actual = rendered("fun f(a: &Int): &&Int = &a\n");
+    assert_eq!(
+        actual,
+        "\
+E5008 cannot return a borrow of parameter 'a' @1:25 returned here
+  help: return the value itself instead of a borrow of it",
+        "\n{}",
+        actual
+    );
+}
+
+#[test]
+fn borrows_read_through_a_reference_or_a_closure_are_tied_to_it() {
+    // A `&Int` copied out of a `&&Int`, and the result of a closure capturing a reference,
+    // borrow what the reference refers to, not the reference itself.
+    passes("fun f(a: &Int): &Int { val rr = &a; val x: &Int = rr; return x }\n");
+    passes("struct Team { val lead: String }\nfun Team.x(): &String { val g = { &lead }; return g() }\n");
+    passes("fun run(f: () -> Int): Int = f()\nfun keep(slot: &mut &Int, v: &Int) { run { *slot = v; 1 } }\n");
+}

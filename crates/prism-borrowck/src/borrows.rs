@@ -43,6 +43,10 @@ pub struct Loan {
     /// The span of that statement: the borrow, or the closure.
     pub span: Span,
     pub kind: LoanKind,
+    /// Whether the borrowed place is itself a reference (its type is `&T`, `(&T)?`, ...): only
+    /// a value whose type can borrow a reference holds the loan
+    /// ([`places::can_borrow_reference`]).
+    pub of_reference: bool,
 }
 
 /// An item a loan-carrying local may hold: a loan, or an input.
@@ -91,6 +95,7 @@ impl BorrowSet {
                 inputs.push(local);
             }
         }
+        let is_reference = |place: &Place| places::is_input_borrow(&place.ty(body, &file.types));
         let mut loans = Arena::new();
         let mut by_location: HashMap<Location, Vec<LoanId>> = HashMap::new();
         for (block, data) in body.blocks.iter() {
@@ -114,6 +119,7 @@ impl BorrowSet {
                             location,
                             span: statement.span,
                             kind: LoanKind::Borrow(*origin),
+                            of_reference: is_reference(place),
                         });
                         by_location.entry(location).or_default().push(id);
                     }
@@ -133,6 +139,7 @@ impl BorrowSet {
                                     closure: *closure,
                                     index: capture,
                                 },
+                                of_reference: is_reference(place),
                             });
                             by_location.entry(location).or_default().push(id);
                         }

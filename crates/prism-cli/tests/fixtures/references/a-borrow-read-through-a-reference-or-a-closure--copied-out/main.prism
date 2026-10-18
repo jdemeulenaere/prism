@@ -1,0 +1,2 @@
+// expect: ok
+fun f(a: &Int): &Int { val rr = &a; val x: &Int = rr; return x }

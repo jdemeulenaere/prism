@@ -1,0 +1,3 @@
+// expect: ok
+fun set(s: &mut &Int, v: &&Int) {}
+fun put(slot: &mut &Int, v: &Int) { set(slot, &v) }

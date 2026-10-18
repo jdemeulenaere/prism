@@ -100,7 +100,12 @@ pub(crate) fn check_returns(
                 (items, block.terminator.span)
             }
         };
-        let items: Vec<Item> = items.into_iter().map(|item| borrows.item(item)).collect();
+        let items: Vec<Item> = flow
+            .analysis
+            .fitting(items, body.return_type())
+            .into_iter()
+            .map(|item| borrows.item(item))
+            .collect();
         errors.extend(checker.check_write(&items, span));
     }
     errors
@@ -321,6 +326,14 @@ impl Returns<'_> {
             ));
         }
         let help = match (&borrowed, &self.body.owner) {
+            // A `consuming fun` receiver: a `fun` one is a shared reference, tied by rule 2.
+            (Borrowed::Parameter(_), _) if declaration.name.as_deref() == Some("this") => {
+                "declare the method with 'fun' instead of 'consuming fun', so that the receiver is a shared reference".to_string()
+            }
+            // A reference parameter itself, borrowed: what it refers to may be returned.
+            (Borrowed::Parameter(_), _) if places::is_input_borrow(&declaration.ty) => {
+                "return the value itself instead of a borrow of it".to_string()
+            }
             (Borrowed::Parameter(_), _) => {
                 let parameter = declaration.name.clone().unwrap_or_default();
                 format!(

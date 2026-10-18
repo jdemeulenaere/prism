@@ -1,0 +1,4 @@
+// expect: ok
+struct Team { val lead: String }
+fun lead(t: &Team): &String = &t.lead
+fun g(t: &Team): &String { val h = { lead(t) }; return h() }

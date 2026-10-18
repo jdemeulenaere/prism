@@ -20,7 +20,10 @@
 //! operands. An argument through which loans can be written holds its own input at entry, so
 //! that a write through a copy of it reaches it. A move of a whole local, and the start and end of its storage,
 //! empty it. A local never holds a loan of a place rooted at itself, since a reference cannot
-//! point into itself.
+//! point into itself, and a written value holds a loan of a reference itself only when its type
+//! can refer to a reference or is a function type ([`places::can_borrow_reference`]): a `&Int`
+//! read through a `&&Int`, or returned by a closure that captures a reference, holds what that
+//! reference holds, not the borrow of the reference.
 
 use crate::borrows::{BorrowSet, Item, LoanKind};
 use crate::dataflow::{Analysis, BitSet};
@@ -102,6 +105,30 @@ impl<'a> LoanFlow<'a> {
         }
     }
 
+    /// `items` without the loans of references that a value of type `ty` cannot hold: a value
+    /// that cannot borrow a reference ([`places::can_borrow_reference`]) points past a
+    /// borrowed reference to what it refers to, whose loans the reference's root local holds.
+    pub fn fitting(&self, mut items: Vec<usize>, ty: &Type) -> Vec<usize> {
+        if !places::can_borrow_reference(ty) {
+            items.retain(|item| match self.borrows.item(*item) {
+                Item::Loan(loan) => !self.borrows.loans[loan].of_reference,
+                Item::Input(_) => true,
+            });
+        }
+        items
+    }
+
+    /// The type of the values a closure that captures `place` mutably may write to it: its own
+    /// type for a `var`, which the closure may re-point, and what it refers to for a `val`
+    /// reference, which it can only write through.
+    fn written_type(&self, place: &Place) -> Type {
+        let ty = place.ty(self.body, &self.file.types);
+        if self.body.locals[place.local].mutable || !place.projections.is_empty() {
+            return ty;
+        }
+        referent(&ty).unwrap_or(ty)
+    }
+
     /// Removes from every local the loans of places through a dereference of `local`, which no
     /// longer name what they borrowed once `local` is re-pointed.
     fn kill_through_dereference(&self, state: &mut BitSet, local: LocalId) {
@@ -153,6 +180,7 @@ impl<'a> LoanFlow<'a> {
                 .collect();
             others.sort_unstable();
             others.dedup();
+            let others = self.fitting(others, &self.written_type(place));
             let mut receivers = vec![place.local];
             receivers.extend(self.referents(&self.held(state, place.local), true));
             for receiver in receivers {
@@ -213,6 +241,7 @@ impl<'a> LoanFlow<'a> {
 
     /// Writes a value carrying `items` to `destination`.
     fn write(&self, state: &mut BitSet, destination: &Place, items: &[usize]) {
+        let items = &self.fitting(items.to_vec(), &destination.ty(self.body, &self.file.types));
         let root = destination.local;
         if destination.projections.is_empty() {
             if self.borrows.carrier(root).is_some() {
@@ -308,23 +337,29 @@ impl<'a> LoanFlow<'a> {
         arguments: &[Operand],
         parameters: &[Type],
     ) -> Vec<(LocalId, Vec<usize>)> {
-        // Each loan-carrying operand's items, and whether the call may write through it.
-        let mut sources: Vec<(Vec<usize>, bool)> = Vec::new();
+        // Each loan-carrying operand's items, and whether the call may write through it, with
+        // the type of what it writes when that is known: `R` for a `&mut R` argument.
+        let mut sources: Vec<(Vec<usize>, Option<Option<Type>>)> = Vec::new();
         for (argument, parameter) in arguments.iter().zip(parameters) {
             if places::carries_loans(parameter) {
-                let writes =
-                    places::writes_loans_through(parameter) || places::contains_function(parameter);
+                let writes = if places::writes_loans_through(parameter) {
+                    Some(referent(parameter))
+                } else if places::contains_function(parameter) {
+                    Some(None)
+                } else {
+                    None
+                };
                 sources.push((self.operand_items(state, argument), writes));
             }
         }
         if let Callee::Value(place, _) = callee {
-            sources.push((self.held(state, place.local), true));
+            sources.push((self.held(state, place.local), Some(None)));
         }
         let mut writes = Vec::new();
         for (index, (items, through)) in sources.iter().enumerate() {
-            if !through {
+            let Some(written) = through else {
                 continue;
-            }
+            };
             let mut others: Vec<usize> = sources
                 .iter()
                 .enumerate()
@@ -333,11 +368,23 @@ impl<'a> LoanFlow<'a> {
                 .collect();
             others.sort_unstable();
             others.dedup();
+            if let Some(written) = written {
+                others = self.fitting(others, written);
+            }
             for referent in self.referents(items, true) {
                 writes.push((referent, others.clone()));
             }
         }
         writes
+    }
+}
+
+/// What a reference type refers to, under nullables: `R` for `&mut R` or `(&mut R)?`.
+fn referent(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Reference { inner, .. } => Some(inner.as_ref().clone()),
+        Type::Nullable(inner) => referent(inner),
+        _ => None,
     }
 }
 
@@ -552,6 +599,28 @@ fun run(f: () -> Int): Int = f()
                 "x = 2"
             ),
             vec!["r", "x"]
+        );
+    }
+
+    #[test]
+    fn a_reference_read_through_another_holds_what_it_refers_to() {
+        // `c` is a copy of `r`'s value: it holds the loan of `a`, not the borrow of `r`.
+        assert_eq!(
+            held(
+                "fun f() { var a = 1; var b = 2; var r: &Int = &a; val rr = &r; val c: &Int = rr; r = &b; print(c) }\n",
+                "c",
+                "print(c)"
+            ),
+            vec!["a"]
+        );
+        // So is the result of a closure that captures `r`.
+        assert_eq!(
+            held(
+                "fun f() { var a = 1; var r: &Int = &a; val g = { r }; val q = g(); print(q) }\n",
+                "q",
+                "print(q)"
+            ),
+            vec!["a"]
         );
     }
 

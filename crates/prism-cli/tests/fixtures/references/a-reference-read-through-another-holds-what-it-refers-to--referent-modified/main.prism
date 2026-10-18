@@ -1,0 +1,3 @@
+// expect: E5004
+fun print(n: &Int) {}
+fun k() { var a = 1; var r: &Int = &a; val rr = &r; val c: &Int = rr; a = 3; print(c) }

@@ -1,0 +1,3 @@
+// expect: ok
+struct Team { val lead: String }
+fun Team.name(): &String { val h = { &lead }; return h() }

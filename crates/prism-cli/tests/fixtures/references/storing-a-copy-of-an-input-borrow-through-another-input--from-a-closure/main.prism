@@ -1,0 +1,3 @@
+// expect: ok
+fun run(f: () -> Int): Int = f()
+fun keep(slot: &mut &Int, v: &Int) { run { *slot = v; 1 } }

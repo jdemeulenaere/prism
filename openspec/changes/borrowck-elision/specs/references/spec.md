@@ -44,6 +44,10 @@ A body MUST return only borrows of top-level `val`s, which are valid everywhere,
 - **WHEN** `fun make(): String = "x"`, `val LIMIT = 10`, `val REF: &Int = &LIMIT`, `val R: &Int = &1` and `val S: &String = &make()` are checked
 - **THEN** the borrow checker accepts `REF` and emits `E5008` at `&1` and at `&make()`, borrows of temporaries that end with the initializer
 
+#### Scenario: A borrow read through a reference or a closure
+- **WHEN** `struct Team { val lead: String }` and `fun lead(t: &Team): &String = &t.lead` are declared, and `fun f(a: &Int): &Int { val rr = &a; val x: &Int = rr; return x }`, `fun g(t: &Team): &String { val h = { lead(t) }; return h() }` and `fun Team.name(): &String { val h = { &lead }; return h() }` are checked
+- **THEN** the file passes `prism check`: each returned borrow derives from the input its rule ties the result to, not from the local reference or the closure's borrow of the parameter it was read through
+
 ### Requirement: Function Types Elide by the Same Rules
 A function type MUST elide by rules 1, 3 and 4: a call of a function value MUST tie its result to every input-borrow argument, or, when its type has no input borrow, to the function value's own borrows. So a closure MUST return only borrows of top-level `val`s or derived from its reference parameters (`E5009` otherwise), or, when its type has no input borrow, also of what it captures; a borrow of its own local or temporary is `E5008`.
 
@@ -89,6 +93,10 @@ A body MAY store a borrow derived from its inputs through a `&mut R` parameter w
 - **WHEN** `fun run2(f: (Int) -> Int): Int = f(1)` and `fun print(n: &Int) {}` are declared, and `fun keep(slot: &mut &Int, v: Int) { *slot = &v }` and `fun g() { var a = 1; var r: &Int = &a; run2 { x -> r = &x; 1 }; print(r) }` are checked
 - **THEN** the borrow checker emits `E5006` at `&v`, which `keep`'s caller would see through `slot` after `v` ends, and at `&x`, which `r` would keep after the closure returns
 
+#### Scenario: Storing a copy of an input borrow through another input
+- **WHEN** `fun run(f: () -> Int): Int = f()` and `fun set(s: &mut &Int, v: &&Int) {}` are declared, and `fun keep(slot: &mut &Int, v: &Int) { run { *slot = v; 1 } }` and `fun put(slot: &mut &Int, v: &Int) { set(slot, &v) }` are checked
+- **THEN** the file passes `prism check`, because what is written through `slot` is a copy of `v`, never a borrow of the parameter `v`, which ends when the function returns
+
 ### Requirement: Returned Borrow Diagnostics Name the Source
 An `E5008` diagnostic MUST point at where the borrow is returned, name the local, temporary or parameter it borrows, and label where it is borrowed when that is elsewhere; for a function with no input borrow it MUST note that only borrows of top-level values can be returned. An `E5009` diagnostic MUST point at where the borrow is returned, name the parameter it derives from with a related location at that parameter, and note the rule that does not tie the result to it.
 
@@ -116,6 +124,41 @@ A place of type `&mut T` passed as an argument where `&mut T` or `&T` is expecte
 #### Scenario: Mutable borrow of a val reference binding rejected
 - **WHEN** `fun f(r: &mut Int) { val m = &mut r }` is checked
 - **THEN** the type checker emits `E4003`, because `&mut r` borrows the `val` binding `r` itself
+
+### Requirement: References Carry Their Borrows
+A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, reborrowed, or borrowed through for one of its referent's fields MUST keep the borrows it holds live for as long as the new reference is live. A value written through a reference MUST become held by what the reference points at. Re-pointing a `var` reference MUST end the borrows it held, from that point on. A value MUST hold a borrow of a reference itself only when its type can refer to a reference (`&&T`, `&(&T)?`) or is a function type: a reference copied out through another, a call's result and what is written through a `&mut &T` hold the borrows of what the reference refers to, not a borrow of the reference.
+
+#### Scenario: A copied reference keeps the borrow
+- **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var x = 1; val r = &x; val r2 = r; x = 2; print(r2) }` is checked
+- **THEN** the borrow checker emits `E5004` at `x` in `x = 2`
+
+#### Scenario: Re-pointing a reference variable ends its old borrow
+- **WHEN** `fun print(n: &Int) {}` is declared, and `fun f() { var a = 1; var b = 2; var r: &Int = &a; r = &b; a = 3; print(r) }` and `fun g() { var a = 1; var b = 2; var r: &Int = &a; r = &b; b = 3; print(r) }` are checked
+- **THEN** the borrow checker accepts `f` and emits `E5004` at `b` in `b = 3` of `g`
+
+#### Scenario: Re-pointing a mutable reference at the value it borrowed
+- **WHEN** `fun bump(r: &mut Int) {}` is declared, and `fun f() { var x = 1; var r: &mut Int = &mut x; bump(r); r = &mut x; bump(r) }` and `fun g(c: Bool) { var x = 1; var r: &mut Int = &mut x; while (c) { bump(r); r = &mut x } }` are checked
+- **THEN** the file passes `prism check`, because the new borrow of `x` replaces the old one, which `r` no longer holds once it is assigned
+
+#### Scenario: A reborrow keeps its source borrowed
+- **WHEN** `struct User { var name: String }` is declared and a body runs `var u = User("a"); val m = &mut u; val n = &mut m.name; u.name = "b"; *n = "c"`
+- **THEN** the borrow checker emits `E5004` at `u.name`, because `n` borrows through `m`, which borrows `u`
+
+#### Scenario: References of references
+- **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var x = 1; var r = &x; val rr = &r; x = 2; print(rr) }` is checked
+- **THEN** the borrow checker emits `E5004` at `x` in `x = 2`
+
+#### Scenario: Writing a borrow through a reference
+- **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var a = 1; var b = 2; var r: &Int = &b; val rr = &mut r; *rr = &a; a = 3; print(r) }` is checked
+- **THEN** the borrow checker emits `E5004` at `a` in `a = 3`, because `r` now refers to `a`
+
+#### Scenario: An optional borrow keeps the borrow
+- **WHEN** `struct Profile { var nick: String? }` and `fun show(n: (&String)?) {}` are declared and a body runs `var p = Profile(null); val a: (&String)? = &p.nick; p.nick = null; show(a)`
+- **THEN** the borrow checker emits `E5004` at `p.nick` in `p.nick = null`
+
+#### Scenario: A reference read through another holds what it refers to
+- **WHEN** `fun print(n: &Int) {}` is declared, and `fun f() { var a = 1; var b = 2; var r: &Int = &a; val rr = &r; val c: &Int = rr; r = &b; print(c) }`, `fun g() { var a = 1; var b = 2; var r: &Int = &a; val h = { r }; val q = h(); r = &b; print(q) }` and `fun k() { var a = 1; var r: &Int = &a; val rr = &r; val c: &Int = rr; a = 3; print(c) }` are checked
+- **THEN** the borrow checker accepts `f` and `g`, where `c` and `q` are copies of `r`'s value that do not borrow `r`, and emits `E5004` at `a` in `a = 3` of `k`, because `c` still refers to `a`
 
 ### Requirement: Calls Returning References Keep Their Inputs Borrowed
 The result of a call whose type contains a reference outside a function type MUST hold the borrows passed to the inputs its elision rule ties it to (see "The Elision Rules Tie a Returned Borrow to Inputs"), each in its own mode, so a `&mut` argument it is tied to MUST stay frozen while the result is live: for a method with a borrowed receiver, the receiver's borrows only; for any other function, the borrows of every input borrow (its parameters whose type contains a reference, other than function types). The result of calling a function value MUST hold the borrows of every input-borrow argument or, when its type has no input borrow, those of the function value (see "Function Types Elide by the Same Rules"). The result of a default value MUST hold the borrows of its slot and what the earlier shared reference arguments, and a `fun` receiver, borrow, and nothing else: not the default's own borrows of the earlier arguments.
