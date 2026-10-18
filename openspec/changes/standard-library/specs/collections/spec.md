@@ -66,7 +66,7 @@ A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have member
 
 #### Scenario: Wrong element types rejected
 - **WHEN** `fun f() { var xs = listOf(1); xs.add("a"); xs.insert("b", 1) }` is checked
-- **THEN** the type checker emits `E4004` for `"a"`, for `"b"` and for the second argument `1`
+- **THEN** the type checker emits `E4004` for `"a"` and for the index `"b"`, while the element `1` fits
 
 #### Scenario: Searching borrows the element
 - **WHEN** `fun f(xs: &List<String>, name: String): Bool = xs.contains(name) && xs.indexOf(name) >= 0 && !xs.isEmpty()` is checked
