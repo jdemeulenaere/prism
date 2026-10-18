@@ -1,9 +1,11 @@
 //! Dominators of a body's blocks and the back edges they define (D7 of `borrowck-moves`).
 //!
-//! Computed by the iterative algorithm of Cooper, Harvey and Kennedy over reverse postorder. MIR
-//! lowered from structured source is reducible, so every cycle enters through a block that
-//! dominates it, and the back edges are exactly the edges to a dominator of their source.
-//! `borrowck-exclusivity` reuses them.
+//! Computed by the algorithm of Lengauer and Tarjan, with path compression, in time almost
+//! linear in the body's edges however deep the dominator tree is (the iterative algorithm of
+//! Cooper, Harvey and Kennedy walks the tree once per predecessor of a merge, quadratic in a
+//! body of many sequential branches). MIR lowered from structured source is reducible, so every
+//! cycle enters through a block that dominates it, and the back edges are exactly the edges to a
+//! dominator of their source. `borrowck-exclusivity` reuses them.
 
 use crate::location::{predecessors, reverse_postorder};
 use prism_mir::{BlockId, Body};
@@ -30,35 +32,11 @@ impl Dominators {
             order[block.index()] = position;
         }
         let predecessors = predecessors(body);
-        let mut immediate: Vec<Option<BlockId>> = vec![None; count];
-        if count == 0 {
-            return Self {
-                immediate,
-                order,
-                intervals: Vec::new(),
-            };
-        }
-        immediate[0] = Some(BlockId(0));
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &block in rpo.iter().skip(1) {
-                let mut new = None;
-                for &predecessor in &predecessors[block.index()] {
-                    if immediate[predecessor.index()].is_none() {
-                        continue;
-                    }
-                    new = Some(match new {
-                        None => predecessor,
-                        Some(current) => intersect(&immediate, &order, predecessor, current),
-                    });
-                }
-                if new.is_some() && immediate[block.index()] != new {
-                    immediate[block.index()] = new;
-                    changed = true;
-                }
-            }
-        }
+        let immediate = if count == 0 {
+            Vec::new()
+        } else {
+            lengauer_tarjan(body, &predecessors)
+        };
         let intervals = tree_intervals(&immediate);
         Self {
             immediate,
@@ -127,19 +105,95 @@ fn tree_intervals(immediate: &[Option<BlockId>]) -> Vec<(usize, usize)> {
     intervals
 }
 
-/// The nearest common dominator of `a` and `b`, walking up from the later of the two in reverse
-/// postorder.
-fn intersect(immediate: &[Option<BlockId>], order: &[usize], a: BlockId, b: BlockId) -> BlockId {
-    let (mut a, mut b) = (a, b);
-    while a != b {
-        while order[a.index()] > order[b.index()] {
-            a = immediate[a.index()].expect("a processed block has a dominator");
+/// The immediate dominator of each block of `body` reachable from `bb0` (`bb0` its own), by
+/// Lengauer and Tarjan's algorithm: semidominators computed in reverse depth-first order over a
+/// forest linked as it goes, evaluated with path compression, then corrected in depth-first
+/// order. Every step is iterative, so a deep tree cannot overflow the stack.
+fn lengauer_tarjan(body: &Body, predecessors: &[Vec<BlockId>]) -> Vec<Option<BlockId>> {
+    const NONE: usize = usize::MAX;
+    let count = body.blocks.len();
+    // The depth-first preorder: the number of each block, the block of each number and the
+    // number of each block's parent in the depth-first tree.
+    let mut number = vec![NONE; count];
+    let mut vertex: Vec<usize> = Vec::with_capacity(count);
+    let mut parent: Vec<usize> = Vec::with_capacity(count);
+    let mut stack: Vec<(usize, usize)> = vec![(0, NONE)];
+    while let Some((block, from)) = stack.pop() {
+        if number[block] != NONE {
+            continue;
         }
-        while order[b.index()] > order[a.index()] {
-            b = immediate[b.index()].expect("a processed block has a dominator");
+        number[block] = vertex.len();
+        vertex.push(block);
+        parent.push(from);
+        let successors = body.blocks[BlockId(block as u32)]
+            .terminator
+            .kind
+            .successors();
+        for successor in successors.iter().rev() {
+            if number[successor.index()] == NONE {
+                stack.push((successor.index(), number[block]));
+            }
         }
     }
-    a
+    let reached = vertex.len();
+    // By number: the semidominator, the forest's ancestor and the label of the smallest
+    // semidominator on the compressed path, and the numbers whose semidominator each one is.
+    let mut semi: Vec<usize> = (0..reached).collect();
+    let mut ancestor = vec![NONE; reached];
+    let mut label: Vec<usize> = (0..reached).collect();
+    let mut bucket: Vec<Vec<usize>> = vec![Vec::new(); reached];
+    let mut idom = vec![NONE; reached];
+    let mut path = Vec::new();
+    // The number with the smallest semidominator on the forest path from `v` to its root.
+    let mut eval = |v: usize, ancestor: &mut Vec<usize>, label: &mut Vec<usize>, semi: &[usize]| {
+        if ancestor[v] == NONE {
+            return v;
+        }
+        path.clear();
+        let mut x = v;
+        while ancestor[ancestor[x]] != NONE {
+            path.push(x);
+            x = ancestor[x];
+        }
+        for &x in path.iter().rev() {
+            let up = ancestor[x];
+            if semi[label[up]] < semi[label[x]] {
+                label[x] = label[up];
+            }
+            ancestor[x] = ancestor[up];
+        }
+        label[v]
+    };
+    for w in (1..reached).rev() {
+        for predecessor in &predecessors[vertex[w]] {
+            let v = number[predecessor.index()];
+            if v == NONE {
+                continue;
+            }
+            let u = eval(v, &mut ancestor, &mut label, &semi);
+            if semi[u] < semi[w] {
+                semi[w] = semi[u];
+            }
+        }
+        bucket[semi[w]].push(w);
+        let p = parent[w];
+        ancestor[w] = p;
+        for v in std::mem::take(&mut bucket[p]) {
+            let u = eval(v, &mut ancestor, &mut label, &semi);
+            idom[v] = if semi[u] < semi[v] { u } else { p };
+        }
+    }
+    for w in 1..reached {
+        if idom[w] != semi[w] {
+            idom[w] = idom[idom[w]];
+        }
+    }
+    let mut immediate = vec![None; count];
+    immediate[0] = Some(BlockId(0));
+    for w in 1..reached {
+        immediate[vertex[w]] = Some(BlockId(vertex[idom[w]] as u32));
+    }
+    immediate
 }
 
 #[cfg(test)]
@@ -158,6 +212,56 @@ mod tests {
             }
         }
         edges
+    }
+
+    /// Whether `a` dominates `b` by definition: `b` is unreachable from `bb0` without `a`.
+    fn dominates_by_definition(body: &Body, a: usize, b: usize) -> bool {
+        if a == b || a == 0 {
+            return true;
+        }
+        let mut seen = vec![false; body.blocks.len()];
+        let mut stack = vec![0usize];
+        while let Some(block) = stack.pop() {
+            if block == a || seen[block] {
+                continue;
+            }
+            seen[block] = true;
+            for successor in body.blocks[BlockId(block as u32)]
+                .terminator
+                .kind
+                .successors()
+            {
+                stack.push(successor.index());
+            }
+        }
+        !seen[b]
+    }
+
+    #[test]
+    fn dominance_matches_its_definition() {
+        let bodies = [
+            // A chain of diamonds, a loop with two exits, and an unreachable block.
+            body_with_edges(&[&[1, 2], &[3], &[3], &[4, 5], &[6], &[6], &[]]),
+            body_with_edges(&[&[1], &[2, 4], &[3, 1], &[1, 4], &[5], &[]]),
+            body_with_edges(&[&[1, 2], &[3], &[1, 3], &[], &[3]]),
+            // Edges into the middle of a cycle from both sides.
+            body_with_edges(&[&[1, 2], &[2, 3], &[1, 3], &[0]]),
+        ];
+        for body in &bodies {
+            let dominators = Dominators::compute(body);
+            let reachable: Vec<usize> = reverse_postorder(body).iter().map(|b| b.index()).collect();
+            for &a in &reachable {
+                for &b in &reachable {
+                    assert_eq!(
+                        dominators.dominates(BlockId(a as u32), BlockId(b as u32)),
+                        dominates_by_definition(body, a, b),
+                        "bb{} dominates bb{}",
+                        a,
+                        b
+                    );
+                }
+            }
+        }
     }
 
     #[test]
