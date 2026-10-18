@@ -9,7 +9,7 @@ The diagnostics specification is the single catalog of compiler error codes. Eac
 Every error the compiler reports MUST carry a code from the catalog below. A code MUST keep its meaning once assigned, and a retired code MUST NOT be reused.
 
 #### Scenario: Rendered diagnostic header
-- **WHEN** `prism check` reports an error
+- **WHEN** `prism check` or `prism run` reports an error
 - **THEN** the diagnostic starts with `error[<code>]: <title>`, followed by the source location when one is known
 
 #### Scenario: Syntax error location and lexer message
@@ -18,11 +18,15 @@ Every error the compiler reports MUST carry a code from the catalog below. A cod
 
 #### Scenario: Code range identifies the stage
 - **WHEN** a diagnostic is reported
-- **THEN** its code falls in the range of the stage that produced it: `E1xxx` resolution and I/O, `E2xxx` lexing and parsing, `E3xxx` Phase 1 ABI extraction, `E4xxx` Phase 2 type checking, `E5xxx` Phase 2 borrow checking
+- **THEN** its code falls in the range of the stage that produced it: `E1xxx` resolution and I/O, `E2xxx` lexing and parsing, `E3xxx` Phase 1 ABI extraction, `E4xxx` Phase 2 type checking, `E5xxx` Phase 2 borrow checking, `E6xxx` code generation and the program's entry point
 
 #### Scenario: New error kind gets a new code
 - **WHEN** a change introduces a new kind of error
 - **THEN** it takes the next unused code in its stage's range, adds it to this catalog, and does not reuse a retired code
+
+#### Scenario: Runtime errors carry no code
+- **WHEN** a running program raises a runtime error (see `execution`)
+- **THEN** it is reported as `panic: <message>` with its location, without an `error[<code>]` header, because it is not a compiler error
 
 ### Requirement: Diagnostics Show Related Locations
 When a diagnostic has a label for its primary location or related locations, such as where a used value was moved, the CLI MUST render the primary location's snippet with its label, then each related location in source order with its own location line, snippet and label, then the diagnostic's notes and help lines.
@@ -126,3 +130,7 @@ A `public` or `package` function without a return type is reported as `E3001` wh
 Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Three new codes, by fix.** `E4020` for the wrong number of type arguments (including none on a generic type in an annotation and any on a non-generic callee), `E4021` for an unsatisfied `Copy` or `Clone` bound, `E4022` for a borrow in a type argument; arity, bounds and borrows each have a different fix. The rest widens existing codes: `E2001` for the grammar, `E4006` for members of type parameters and mismatched receivers, `E4010` for type parameter names and one extension per receiver constructor, `E4013` for uninferable type arguments, `E4016` for conditional markers, `E4018` with a bound suggestion, and `E5007` for generic slots. Rejected: one code for every generic error.
+
+Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`E6xxx` for code generation and the entry point, one code per fix** (D13 and D25): `E6001` (wait for the backend change its note names, or avoid the construct), `E6002` (add a `main`) and `E6003` (fix its signature). The entry point is checked at `prism run` rather than by the type checker, because `prism check` checks libraries, which have no `main`. Runtime errors are not diagnostics and carry no code.

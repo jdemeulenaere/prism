@@ -11,14 +11,7 @@ This document holds the **planned** design of Prism subsystems that are **not im
 
 ## 1. Compilation Pipeline & Compilation Avoidance
 
-Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, deterministic 256-bit BLAKE3 ABI and interface hashes, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)), and then for borrow conflicts and escaping closures on the elaborated MIR (`borrowck-exclusivity`, [`references`](../openspec/specs/references/spec.md)). Generic declarations are checked once, against their bounds, into polymorphic typed trees and MIR, with their signatures and marker parameters in the ABI ([`generics`](../openspec/specs/generics/spec.md)); instantiating them is planned for `monomorphization`. `prism check` avoids work through a per-user build cache ([`build-cache`](../openspec/specs/build-cache/spec.md), `abi-cache`): a file's Phase 2 is skipped when the cache holds a passing verdict for its content, module path and direct imports' interface hashes, and instance records stand in for the instances a generic body change invalidates. Object-code entries, keyed like check entries plus the target triple, come with `codegen-core`. The callee's side of returned borrows is planned in section 3. Everything below is planned.
-
-### Requirement: Single File as Compilation Unit
-Every `.prism` source file MUST be compiled into native machine code independently, with interface boundaries defined strictly by exported declarations.
-
-#### Scenario: Compiling independent source files
-- **WHEN** compiling multiple source files in a package
-- **THEN** each file is lowered and code-generated as a standalone compilation unit
+Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, deterministic 256-bit BLAKE3 ABI and interface hashes, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)), and then for borrow conflicts and escaping closures on the elaborated MIR (`borrowck-exclusivity`, [`references`](../openspec/specs/references/spec.md)). Generic declarations are checked once, against their bounds, into polymorphic typed trees and MIR, with their signatures and marker parameters in the ABI ([`generics`](../openspec/specs/generics/spec.md)); instantiating them is planned for `monomorphization`. `prism check` avoids work through a per-user build cache ([`build-cache`](../openspec/specs/build-cache/spec.md), `abi-cache`): a file's Phase 2 is skipped when the cache holds a passing verdict for its content, module path and direct imports' interface hashes, and instance records stand in for the instances a generic body change invalidates. Phase 3 generates each file's code from its own elaborated MIR, as one code unit per file (`codegen-core`, [`code-generation`](../openspec/specs/code-generation/spec.md)); caching that code, in object-code entries keyed like check entries plus the target triple, is planned. The callee's side of returned borrows is planned in section 3. Everything below is planned.
 
 ### Requirement: Parallel Phase 2 Body Compilation
 After Phase 1 completes, function bodies MUST be lowered and compiled in parallel against the imported ABI interface hashes.
@@ -41,12 +34,10 @@ The instances of an exported generic function MUST be generated again when what 
 
 ## 2. Two-Tier Native Execution
 
+Implemented today (`codegen-core`, [`code-generation`](../openspec/specs/code-generation/spec.md) and [`execution`](../openspec/specs/execution/spec.md)): the Tier 1 Cranelift JIT behind `prism run`, for programs over `Int`, `Double`, `Bool`, `Char` and references to them, reaching `main` well under 15 ms; every call goes through a patchable function table and nothing is inlined, which hot reload needs. Aggregates, strings, drops, generics, closures and composable functions are rejected with `E6001` until their changes land. Hot reload and Tier 2 are planned below.
+
 ### Requirement: Two-Tier Native Execution Engine
 The compiler MUST support two distinct native execution backends: Tier 1 (Cranelift JIT) for development and Tier 2 (LLVM AOT) for release.
-
-#### Scenario: Tier 1 instant script execution
-- **WHEN** the user runs `prism run <file.prism>`
-- **THEN** the compiler compiles the file into memory using Cranelift JIT in under 15ms without invoking an external toolchain
 
 #### Scenario: Tier 1 hot reload with disabled cross-file inlining
 - **WHEN** code is running in development mode under Tier 1
@@ -97,7 +88,7 @@ Why the requirements above were chosen; each change's `design.md` repeats the de
 
 ## 4. Runtime Semantics Awaiting Code Generation
 
-The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs a backend. The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement), and its elaborated form which drops run, some under a drop flag; the scenarios below are what the backend must make observable at run time.
+The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs the backend to support them: the Tier 1 backend runs scalar programs today, and the runtime semantics of scalars, `when`, loops and ranges are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`). The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement), and its elaborated form which drops run, some under a drop flag; the scenarios below are what the backend must make observable at run time.
 
 ### Requirement: Inline Value Struct Layout
 Struct instances MUST be stored inline by value without heap indirection, and recursive enums MUST have a finite layout through `Heap<T>`.
@@ -111,42 +102,11 @@ Struct instances MUST be stored inline by value without heap indirection, and re
 - **THEN** the enum layout is finite
 
 ### Requirement: Expression Evaluation Semantics
-`when` branches MUST evaluate in order, and null-safe operators MUST short-circuit at runtime.
-
-#### Scenario: When pattern matching
-- **WHEN** a `when` expression matches over values or ranges (`when (x) { 0 -> "zero", in 1..10 -> "small", else -> "large" }`)
-- **THEN** the branches are evaluated in order and the matching branch expression is returned
+Null-safe operators MUST short-circuit at runtime.
 
 #### Scenario: Safe navigation and Elvis operator
 - **WHEN** code evaluates `val len = name?.length ?: 0` and `name` is null
 - **THEN** the expression evaluates to 0
-
-### Requirement: Loop and Range Evaluation Semantics
-A `while` loop MUST evaluate its condition before each iteration and a `do`/`while` loop after each iteration. A `for` loop MUST evaluate its range once and bind the loop variable to each `Int` in it in ascending order. `break` MUST leave the innermost enclosing loop and `continue` MUST go to its next condition check or element. `a..b` MUST include `b`, and `a..<b` MUST exclude it.
-
-#### Scenario: Half-open range iteration
-- **WHEN** `for (i in 0..<3)` runs, and `for (i in 3..<3)` runs
-- **THEN** the first loop's body runs with `i` equal to 0, 1 and 2, and the second loop's body never runs
-
-#### Scenario: Closed range iteration
-- **WHEN** `for (i in 1..3)` runs
-- **THEN** its body runs with `i` equal to 1, 2 and 3
-
-#### Scenario: Do-while body runs once
-- **WHEN** `do { n = n + 1 } while (false)` runs with `n` equal to 0
-- **THEN** `n` is 1
-
-#### Scenario: Continue skips to the next element
-- **WHEN** `for (i in 0..<5) { if (i == 2) continue; sum = sum + i }` runs with `sum` equal to 0
-- **THEN** `sum` is 8
-
-#### Scenario: Break leaves only the innermost loop
-- **WHEN** a `break` runs inside a `while` loop nested in a `for` loop
-- **THEN** the `while` loop ends and the `for` loop continues with its next element
-
-#### Scenario: Range bounds evaluated once
-- **WHEN** `for (i in 0..<next())` runs, where `next()` returns 3
-- **THEN** `next()` is called once, before the first iteration
 
 ### Requirement: Clone Evaluation Semantics
 `x.clone()` MUST produce a value that owns no storage shared with `x`, and MUST run no user code. A `Copy` value is copied bitwise. A `String` clone allocates a new buffer with the same contents. A `Heap<T>` clone allocates a new box holding a clone of its contents. A `T?` clone is `null` when `x` is, and otherwise a clone of its contents. A user struct or enum clones each field or payload in declaration order.

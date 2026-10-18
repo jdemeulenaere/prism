@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Calls Name Their Callee
-A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable. An extension's declaration path names its receiver type, so the first operand of a call of an extension or of the built-in `clone`, and the first argument of an extension's body, MUST be its receiver; no other call has one, so the argument of `print` or `println` is not a receiver.
+A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable. The first operand of a call of an extension or of `clone`, and the first argument of an extension's body, MUST be the receiver, whose type the path names; no other call has one.
 
 #### Scenario: Imported function named by its module
 - **WHEN** `models/user.prism` declares `public fun greet(n: Int): Int = n`, and a file importing `/models/user` declares `fun hello(): Int = greet(1)`

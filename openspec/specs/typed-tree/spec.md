@@ -149,11 +149,15 @@ An extension call MUST be a call whose first argument is the receiver, passed as
 - **THEN** the body's value is a chain whose body is the call of `greet`, with a receiver borrow of the payload of `u` and the call of `next` as arguments
 
 ### Requirement: Built-In Operations Are Identified
-The built-in `clone()` MUST be a call of the built-in clone function with a shared receiver borrow, never a call of a declaration. A range `a..b` or `a..<b` MUST be a range node of the built-in `Range` type that records whether its end is included.
+The built-in `clone()` MUST be a call of the built-in clone function with a shared receiver borrow, never a call of a declaration. A call of `print` or `println` (see `type-system`) MUST be a call of the built-in print or print-line function, its argument copied out of a reference when `Copy` and borrowed when a `String`. A range `a..b` or `a..<b` MUST be a range node of the built-in `Range` type that records whether its end is included.
 
 #### Scenario: Built-in clone
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: &User): String = u.name.clone()` is checked
 - **THEN** the body's value is a call of the built-in clone function whose receiver is a shared receiver borrow of field 0 of the dereferenced binding `u`
+
+#### Scenario: Built-in output calls
+- **WHEN** `fun f(r: &Int, s: String) { println(r); print(s) }` is checked
+- **THEN** the body calls the built-in print-line function with a copy-out of the binding `r`, then the built-in print function with a shared argument borrow of the binding `s`
 
 #### Scenario: Half-open range
 - **WHEN** a body of `fun f(n: Int)` runs `for (i in 0..<n) {}`
@@ -284,3 +288,7 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Compound assignment is its own statement over a place.** `CompoundAssign { operator, target, value }` keeps the target once, read in place and written, and the operator visible to a backend that wants to append in place. Rejected: desugaring to `Assign { target, value: Binary(op, target', v) }`, which the single-parent rule forbids sharing and a copy would evaluate twice, and a "same place as the target" node every consumer would have to understand anyway.
+
+Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Output calls are built-in calls** (D15). `print` and `println` are `Callee::Builtin(BuiltinFunction::Print | PrintLine)` with their adjusted argument's type as the parameter type, so the backend picks a runtime function from the call alone.

@@ -481,6 +481,32 @@ A compound assignment whose target is a binding of reference type MUST be reject
 - **WHEN** `fun f(r: &mut Int) { r += 1 }` and `fun g(a: Int) { var x = 1; var r: &mut Int = &mut x; r += a }` are checked
 - **THEN** the type checker emits `E4003` for `f` and `E4002` for `g`, with help suggesting `*r += 1` and `*r += a`
 
+### Requirement: Output Built-Ins Are Found Last
+A call whose callee is the bare name `print` or `println` MUST call the output built-in of that name only when no local, parameter, top-level declaration or import of that name is in scope; otherwise the name resolves as usual. The built-ins MUST only be called: naming one without a call MUST be rejected with `E4001`.
+
+#### Scenario: A declaration shadows the built-in
+- **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { print(1); println(2) }` is checked
+- **THEN** the file typechecks, `print(1)` calls `main::print` and `println(2)` calls the output built-in
+
+#### Scenario: A built-in is not a value
+- **WHEN** `fun f() { val p = println }` is checked
+- **THEN** the type checker emits `E4001` for `println`
+
+### Requirement: Output Built-In Arguments
+`print` MUST take exactly one argument and `println` zero or one, given positionally, of type `Int`, `Double`, `Bool`, `Char` or `String`, or a reference to one. A `Copy` argument MUST be passed by value, copied out of a reference, and a `String` MUST be borrowed implicitly, as an argument of a `&String` parameter is, without being moved. Any other count, a named argument or another type MUST be rejected with `E4004`. A call MUST have type `Unit`.
+
+#### Scenario: Printing scalars and strings
+- **WHEN** `fun f(r: &Int, s: String) { print(1); println(2.5); println(true); println('c'); println(r); println(s); println(s); println() }` is checked
+- **THEN** the file typechecks, and `s` is not moved by either call
+
+#### Scenario: Printing an unsupported value
+- **WHEN** `struct P { val x: Int }` is declared and `fun f(n: Int?) { println(P(1)); println(n); println({ 1 }) }` is checked
+- **THEN** the type checker emits `E4004` for each of the three arguments, with help listing the printable types
+
+#### Scenario: Wrong argument count or form
+- **WHEN** `fun f() { print(); println(1, 2); println(value = 1) }` is checked
+- **THEN** the type checker emits `E4004` for each of the three calls
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -530,3 +556,7 @@ Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refine
 - **`t op= v` evaluates the place, reads it, then evaluates the value.** This is Kotlin's and Java's order (`a[i] += f()` reads `a[i]` before calling `f`) and what `t = t op v` already does under "Operands Are Evaluated in Order", so `n += inc(&mut n)` adds the old `n`. Rejected: Rust's order for primitives (value first, place last), which Rust reverses for overloaded operators; desugaring with the target duplicated, which evaluates a call or an index twice. Plain `=` still evaluates its value first; it never reads the old value, so the orders cannot be confused.
 - **The operator follows the binary operator rules, and the value is a non-consumed operand.** `Int` with `Int`, `Float` with `Float`, and for `+=` `String` with `String`; the result always has the target's type, so no extra assignability check is needed. The value is read through references and in place (`s += t` leaves `t` usable), as Kotlin's `s += "x"` suggests. `String += String` means `s = s + t`; an in-place append is observably identical, so the backend may implement it later (ROADMAP). Rejected: consuming the value; rejecting `String +=` until an append exists.
 - **Compound-assignment diagnostics reuse existing codes.** Non-writable targets share `=`'s target typing and its `E4003` messages. An operator that does not apply is `E4002` through `OperatorMismatch`, whose message names the operator and both operand types, with help naming the accepted operand types, instead of `TypeMismatch`'s "expected 'String', found 'String'"; it is the same kind of error as an operand mismatch, so no new code. A reference binding target (`r += 1`) is rejected as `r = 5` is, with help suggesting `*r += 1`. The binary operators still report `TypeMismatch`; moving them is a follow-up (ROADMAP).
+
+Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`print` and `println` are compiler built-ins, found last** (D15). Prism has no overloading, traits or prelude through which a library function could accept several types, so the type checker resolves a bare `print` or `println` callee as the built-in only when no local, top-level declaration or import of that name exists, like the built-in `Range` type; fixtures declaring their own `fun print(n: &Int)` keep their meaning. A `Copy` argument is copied out of references, a `String` borrowed like a `&String` argument, anything else is `E4004` with help listing the printable types, and a built-in named without a call is `E4001`. `String` arguments typecheck now and wait for `runtime-strings-and-drops` in the backend. Rejected: a Prism-written prelude (needs overloading or traits), string templates (need strings).

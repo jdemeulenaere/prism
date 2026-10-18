@@ -110,6 +110,41 @@ A `break` or `continue` that has no enclosing loop in the same function or closu
 - **WHEN** `fun run(f: () -> Unit) { }` and `fun g() { run { while (true) { break } } }` are checked
 - **THEN** the program typechecks without errors
 
+### Requirement: Loop and Range Evaluation Semantics
+A `while` loop MUST evaluate its condition before each iteration and a `do`/`while` loop after each iteration. A `for` loop MUST evaluate its range once and bind the loop variable to each `Int` in it in ascending order, without overflowing at the end of the `Int` range. `break` MUST leave the innermost enclosing loop and `continue` MUST go to its next condition check or element. `a..b` MUST include `b`, and `a..<b` MUST exclude it.
+
+#### Scenario: Half-open range iteration
+- **WHEN** `for (i in 0..<3)` runs, and `for (i in 3..<3)` runs
+- **THEN** the first loop's body runs with `i` equal to 0, 1 and 2, and the second loop's body never runs
+
+#### Scenario: Closed range iteration
+- **WHEN** `for (i in 1..3)` runs
+- **THEN** its body runs with `i` equal to 1, 2 and 3
+
+#### Scenario: Range ending at the largest Int
+- **WHEN** `for (i in 9223372036854775806..9223372036854775807)` runs
+- **THEN** its body runs twice, and no integer overflow is raised
+
+#### Scenario: Do-while body runs once
+- **WHEN** `do { n = n + 1 } while (false)` runs with `n` equal to 0
+- **THEN** `n` is 1
+
+#### Scenario: While condition checked first
+- **WHEN** `while (n < 3) { n = n + 1 }` runs with `n` equal to 5
+- **THEN** its body never runs and `n` is still 5
+
+#### Scenario: Continue skips to the next element
+- **WHEN** `for (i in 0..<5) { if (i == 2) continue; sum = sum + i }` runs with `sum` equal to 0
+- **THEN** `sum` is 8
+
+#### Scenario: Break leaves only the innermost loop
+- **WHEN** a `break` runs inside a `while` loop nested in a `for` loop
+- **THEN** the `while` loop ends and the `for` loop continues with its next element
+
+#### Scenario: Range bounds evaluated once
+- **WHEN** `for (i in 0..<next())` runs, where `next()` returns 3
+- **THEN** `next()` is called once, before the first iteration
+
 ## Design Rationale
 Decisions from `statements-and-loops` (agreed with the user in the borrow-checker roadmap exploration):
 
@@ -119,3 +154,7 @@ Decisions from `statements-and-loops` (agreed with the user in the borrow-checke
 - **Loops are not diverging.** `while (true)` with no `break` is still `Unit`, so a non-`Unit` function needs a value or `return` after it. Treating a literal-`true` loop as `Nothing` would only relax this, so it can be added later without breaking code.
 - **`break` and `continue` are `Nothing`-typed expressions,** so `xs ?: break` works as in Kotlin. The type checker tracks loop depth per body, and a closure body starts at zero, so a jump can't leave a closure (`E4015`). Doing this in the checker keeps the parser free of context stacks and puts the rule next to the closure-boundary logic for compose contexts.
 - **Labels (`break@outer`) are deferred.** They're additive, and Kotlin's syntax for them is fixed.
+
+Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Loop evaluation follows the MIR shapes** (from `docs/architecture.md` §4). A `for` loop evaluates its range once into a hidden `Range` local and tests its latch against the last element before incrementing, so a range ending at the largest `Int` never overflows; `continue` in a `do`/`while` goes to its condition. These are runtime semantics shared by every tier.

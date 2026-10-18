@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Built-In Operations Are Identified
-The built-in `clone()` MUST be a call of the built-in clone function with a shared receiver borrow, never a call of a declaration. A call of the output built-in `print` or `println` (see `type-system`) MUST be a call of the built-in print or print-line function with its argument, if any, adjusted as for a parameter of its type: copied out of a reference when it is `Copy`, and borrowed when it is a `String`. A range `a..b` or `a..<b` MUST be a range node of the built-in `Range` type that records whether its end is included.
+The built-in `clone()` MUST be a call of the built-in clone function with a shared receiver borrow, never a call of a declaration. A call of `print` or `println` (see `type-system`) MUST be a call of the built-in print or print-line function, its argument copied out of a reference when `Copy` and borrowed when a `String`. A range `a..b` or `a..<b` MUST be a range node of the built-in `Range` type that records whether its end is included.
 
 #### Scenario: Built-in clone
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: &User): String = u.name.clone()` is checked
