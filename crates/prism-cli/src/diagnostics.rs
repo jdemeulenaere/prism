@@ -621,6 +621,92 @@ error[E5001]: use of moved value 's'
         assert_eq!(out, expected);
     }
 
+    /// references: "Conflict points at the borrow and its later use".
+    #[test]
+    fn test_conflict_points_at_the_borrow_and_its_later_use() {
+        let out = render_borrow_errors(
+            "fun print(n: &Int) {}\nfun f() { var x = 1; val r = &x; x = 2; print(r) }\n",
+        );
+        let expected = "\
+error[E5004]: cannot assign to 'x' because it is borrowed
+  --> main.prism:2:34
+    2 | fun f() { var x = 1; val r = &x; x = 2; print(r) }
+      |                                  ^ 'x' is assigned here while borrowed
+  --> main.prism:2:30
+    2 | fun f() { var x = 1; val r = &x; x = 2; print(r) }
+      |                              ^^ 'x' is borrowed here
+  --> main.prism:2:47
+    2 | fun f() { var x = 1; val r = &x; x = 2; print(r) }
+      |                                               ^ borrow later used here
+";
+        assert_eq!(out, expected);
+    }
+
+    /// references: "Closure borrow labels".
+    #[test]
+    fn test_closure_borrow_labels() {
+        let out = render_borrow_errors(
+            "struct User { var name: String }\nfun greet(s: &String): Int = 1\nfun run(f: () -> Int): Int = f()\nfun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }\n",
+        );
+        let expected = "\
+error[E5003]: cannot borrow 'u.name' as shared because 'u' is borrowed as mutable
+  --> main.prism:4:65
+    4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
+      |                                                                 ^^^^^^ shared borrow occurs here
+  --> main.prism:4:38
+    4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
+      |                                      ^^^^^^^^^^^^^^^^^^^ closure borrows 'u' mutably here
+  --> main.prism:4:40
+    4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
+      |                                        ^^^^^^ borrow occurs due to this use of 'u' in the closure
+  --> main.prism:4:78
+    4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
+      |                                                                              ^ mutable borrow later used here
+";
+        assert_eq!(out, expected);
+    }
+
+    /// references: "Dropped value labels".
+    #[test]
+    fn test_dropped_value_labels() {
+        let out = render_borrow_errors(
+            "fun print(n: &Int) {}\nfun f(c: Bool) { var a = 1; var r: &Int = &a; if (c) { val n = 1; r = &n }; print(r) }\n",
+        );
+        let expected = "\
+error[E5006]: 'n' does not live long enough
+  --> main.prism:2:71
+    2 | fun f(c: Bool) { var a = 1; var r: &Int = &a; if (c) { val n = 1; r = &n }; print(r) }
+      |                                                                       ^^ borrowed value does not live long enough
+  --> main.prism:2:74
+    2 | fun f(c: Bool) { var a = 1; var r: &Int = &a; if (c) { val n = 1; r = &n }; print(r) }
+      |                                                                          ^ 'n' dropped here while still borrowed
+  --> main.prism:2:83
+    2 | fun f(c: Bool) { var a = 1; var r: &Int = &a; if (c) { val n = 1; r = &n }; print(r) }
+      |                                                                                   ^ borrow later used here
+";
+        assert_eq!(out, expected);
+    }
+
+    /// references: "Escaping closure labels".
+    #[test]
+    fn test_escaping_closure_labels() {
+        let out = render_borrow_errors(
+            "fun greet(s: &String): Int = 1\nfun f(s: String): () -> Int = { greet(s) }\n",
+        );
+        let expected = "\
+error[E5007]: a closure that captures 's' cannot escape
+  --> main.prism:2:31
+    2 | fun f(s: String): () -> Int = { greet(s) }
+      |                               ^^^^^^^^^^^^ returned here
+  --> main.prism:2:39
+    2 | fun f(s: String): () -> Int = { greet(s) }
+      |                                       ^ 's' is captured here
+   = note: a closure borrows what it captures, so it can only be called or passed to functions while that is in scope; escaping closures that capture by move are not designed yet
+   = help: pass 's' to the closure as a parameter instead of capturing it
+";
+        assert_eq!(out, expected);
+    }
+
     /// ownership: "Possibly moved value".
     #[test]
     fn test_possibly_moved_value() {
