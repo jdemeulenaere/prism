@@ -17,6 +17,7 @@ pub mod representation;
 pub mod supported;
 pub mod symbols;
 pub mod unit;
+mod variables;
 
 #[cfg(test)]
 mod lowering_tests;

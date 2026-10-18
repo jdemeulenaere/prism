@@ -523,6 +523,81 @@ fn nested_generic_types(n: usize) -> String {
     source
 }
 
+/// One `listOf` call with `n` arguments: one generic call whose element type joins `n` bounds
+/// (D4 of `collections`).
+fn list_literal(n: usize) -> String {
+    format!(
+        "fun main() {{\n    val xs = listOf({})\n    println(xs.size)\n}}\n",
+        join(n, ", ", |i| i.to_string())
+    )
+}
+
+/// `n` statements of list member calls and element places on one list (D6 and D7 of
+/// `collections`).
+fn list_operations(n: usize) -> String {
+    let mut body = String::from("    var xs = listOf(0)\n    var total = 0\n");
+    for i in 0..n {
+        match i % 4 {
+            0 => writeln!(body, "    xs.add({i})").unwrap(),
+            1 => writeln!(body, "    xs[0] += {i}").unwrap(),
+            2 => writeln!(body, "    total += xs.size + xs[xs.size - 1]").unwrap(),
+            _ => writeln!(body, "    if (xs.contains({i})) total += xs.indexOf({i})").unwrap(),
+        }
+    }
+    format!("fun main() {{\n{body}    println(total)\n}}\n")
+}
+
+/// `n` pairs of range loops, as [`list_loops`] has list loops: its baseline.
+fn range_loops(n: usize) -> String {
+    let mut body = String::from("    var total = 0\n");
+    for i in 0..n {
+        writeln!(
+            body,
+            "    for (x in 0..<3) total += x + {i}\n    for (y in 0..<3) total += y"
+        )
+        .unwrap();
+    }
+    format!("fun main() {{\n{body}    println(total)\n}}\n")
+}
+
+/// `n` loops over one list, each holding its borrow (D9 and D16 of `collections`).
+fn list_loops(n: usize) -> String {
+    let mut body = String::from("    var xs = listOf(1, 2, 3)\n    var total = 0\n");
+    for i in 0..n {
+        writeln!(
+            body,
+            "    for (x in xs) total += x + {i}\n    for (y in &mut xs) *y += 1"
+        )
+        .unwrap();
+    }
+    format!("fun main() {{\n{body}    println(total)\n}}\n")
+}
+
+/// Lists of `n` struct element types, each dropped, cloned and compared: `n` sets of list glue
+/// (D15 of `collections`).
+fn list_element_types(n: usize) -> String {
+    let mut source = String::new();
+    for i in 0..n {
+        writeln!(source, "struct S{i} : Clone {{ val s: String }}").unwrap();
+    }
+    source.push_str("fun main() {\n    var same = true\n");
+    for i in 0..n {
+        writeln!(
+            source,
+            "    val l{i} = listOf(S{i}(\"a\".clone()))\n    same = same && l{i}.clone() == l{i}"
+        )
+        .unwrap();
+    }
+    source.push_str("    println(same)\n}\n");
+    source
+}
+
+/// A list of lists nested `n` deep: glue `n` types deep.
+fn nested_lists(n: usize) -> String {
+    let value = (0..n).fold("1".to_string(), |inner, _| format!("listOf({inner})"));
+    format!("fun main() {{\n    val xs = {value}\n    println(xs == xs.clone())\n}}\n")
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -577,6 +652,12 @@ fn shapes() -> Vec<Shape> {
         shape("generic-call-chain", true, SIZES, generic_call_chain),
         shape("nested-generic-calls", true, DEPTHS, nested_generic_calls),
         shape("nested-generic-types", true, SIZES, nested_generic_types),
+        shape("list-literal", true, SIZES, list_literal),
+        shape("list-operations", true, SIZES, list_operations),
+        shape("range-loops", true, SIZES, range_loops),
+        shape("list-loops", true, SIZES, list_loops),
+        shape("list-element-types", true, SIZES, list_element_types),
+        shape("nested-lists", true, DEPTHS, nested_lists),
     ]
 }
 

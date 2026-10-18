@@ -1,0 +1,9 @@
+// The program of the list benchmark (`list_timing.rs`): a million adds to an empty list, then
+// their sum (the `execution` delta of `collections`, "A million adds").
+fun main() {
+    var xs = listOf<Int>()
+    for (i in 0..<1000000) xs.add(i)
+    var sum = 0
+    for (x in xs) sum += x
+    println(sum)
+}

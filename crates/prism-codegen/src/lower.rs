@@ -39,6 +39,7 @@ use crate::representation::{
 };
 use crate::symbols::{accessor_symbol, callee_symbol};
 use crate::unit::{data_global, UnitContext};
+use crate::variables::shared_variables;
 use cranelift_codegen::ir::{
     self,
     condcodes::{FloatCC, IntCC},
@@ -180,7 +181,13 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     /// The span of the statement, terminator or operand being lowered, where a list's bounds
     /// check reports an index out of range (D8 of `collections`).
     span: Span,
+    /// The frame words through which a bounds check passes the index and the size to its cold
+    /// block, created on first use ([`BodyLowering::fail_if`]).
+    failure_words: Option<ir::StackSlot>,
 }
+
+/// How many words [`BodyLowering::fail_if`] carries to a cold block.
+const FAILURE_WORDS: usize = 2;
 
 impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
     /// Lowers `body` into `function`, whose signature is the body's.
@@ -210,6 +217,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             environment_layout: None,
             environments: HashMap::new(),
             span: body.span,
+            failure_words: None,
         };
         lowering.lower_body()?;
         let config = lowering.context.module.target_config();
@@ -331,7 +339,35 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
     /// memory (`received`), a stack slot for any other value in memory and for a borrowed
     /// scalar, otherwise a variable.
     fn declare_locals(&mut self, received: &HashMap<LocalId, Value>) -> Result<(), BackendError> {
+        // The scalars held in variables share them when their live blocks never meet, except
+        // the result and the arguments, which the entry writes ([`crate::variables`]).
+        let candidates: Vec<Option<ir::Type>> = self
+            .body
+            .locals
+            .iter()
+            .map(
+                |(local, declaration)| match self.representation(&declaration.ty) {
+                    Some(Representation::Scalar(machine))
+                        if matches!(declaration.kind, LocalKind::User | LocalKind::Temporary)
+                            && !self.borrowed.contains(&local)
+                            && !self.block_local[local.0 as usize] =>
+                    {
+                        Some(machine)
+                    }
+                    _ => None,
+                },
+            )
+            .collect();
+        let (classes, class_types) = shared_variables(self.body, &candidates);
+        let shared: Vec<Variable> = class_types
+            .into_iter()
+            .map(|machine| self.builder.declare_var(machine))
+            .collect();
         for (local, declaration) in self.body.locals.iter() {
+            if let Some(class) = classes[local.0 as usize] {
+                self.locals.push(Storage::Variable(shared[class]));
+                continue;
+            }
             let storage = match self.representation(&declaration.ty) {
                 None | Some(Representation::Empty) => Storage::Empty,
                 // Capture locals follow the arguments, in capture order.
@@ -1775,12 +1811,17 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .builder
             .ins()
             .icmp(IntCC::UnsignedGreaterThanOrEqual, index, size);
-        self.fail_if(outside, span, |lowering, location| {
-            let mut arguments = vec![index, size];
-            arguments.extend(location);
-            lowering.call_runtime("prism_rt_list_index_out_of_range", &arguments)?;
-            Ok(())
-        })?;
+        self.fail_if(
+            outside,
+            &[index, size],
+            span,
+            |lowering, carried, location| {
+                let mut arguments = carried.to_vec();
+                arguments.extend(location);
+                lowering.call_runtime("prism_rt_list_index_out_of_range", &arguments)?;
+                Ok(())
+            },
+        )?;
         let layout = self.element_layout(element)?;
         let base = self.builder.ins().load(
             pointer,
@@ -1793,14 +1834,45 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
     }
 
     /// Continues in a new block when `condition` is false; when it is true, runs `failure` in a
-    /// cold block, with the file, its length, the line and the column of `span` as values, and
-    /// ends that block, `failure` having called a runtime function that never returns.
+    /// cold block, with the words `carried` and the file, its length, the line and the column
+    /// of `span` as values, and ends that block, `failure` having called a runtime function that
+    /// never returns.
+    ///
+    /// The carried words reach the cold block through the frame, stored before the branch, never
+    /// as values of the branching block: the single-pass register allocator keeps a value used
+    /// in a block placed later live over every block in between, and cold blocks are placed at
+    /// the end, so a body of many bounds checks compiled in quadratic time.
     fn fail_if(
         &mut self,
         condition: Value,
+        carried: &[Value],
         span: Span,
-        failure: impl FnOnce(&mut Self, [Value; 4]) -> Result<(), BackendError>,
+        failure: impl FnOnce(&mut Self, &[Value], [Value; 4]) -> Result<(), BackendError>,
     ) -> Result<(), BackendError> {
+        let pointer = self.pointer();
+        let slot = match self.failure_words {
+            Some(slot) if carried.len() <= FAILURE_WORDS => Some(slot),
+            _ if carried.is_empty() => None,
+            _ if carried.len() <= FAILURE_WORDS => {
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    FAILURE_WORDS as u32 * pointer.bytes(),
+                    pointer.bytes().trailing_zeros() as u8,
+                ));
+                self.failure_words = Some(slot);
+                Some(slot)
+            }
+            _ => return Err(BackendError::new("too many words for a runtime error")),
+        };
+        let mut types = Vec::with_capacity(carried.len());
+        for (index, value) in carried.iter().enumerate() {
+            let slot = slot.expect("a slot for the carried words");
+            let offset = index as i32 * pointer.bytes() as i32;
+            types.push(self.builder.func.dfg.value_type(*value));
+            self.builder
+                .ins()
+                .stack_store(pointer, *value, slot, offset);
+        }
         let failed = self.builder.create_block();
         let success = self.builder.create_block();
         self.builder.set_cold_block(failed);
@@ -1808,8 +1880,17 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .ins()
             .brif(condition, failed, &[], success, &[]);
         self.builder.switch_to_block(failed);
+        let received: Vec<Value> = types
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                let slot = slot.expect("a slot for the carried words");
+                let offset = index as i32 * pointer.bytes() as i32;
+                self.builder.ins().stack_load(pointer, ty, slot, offset)
+            })
+            .collect();
         let location = self.location_values(span);
-        failure(self, location)?;
+        failure(self, &received, location)?;
         self.builder.ins().trap(UNREACHABLE);
         self.builder.switch_to_block(success);
         Ok(())
@@ -1981,7 +2062,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             BuiltinFunction::ListRemoveLast => {
                 let size = self.list_word(list, ListField::Size);
                 let empty = self.builder.ins().icmp_imm_s(IntCC::Equal, size, 0);
-                self.fail_if(empty, span, |lowering, location| {
+                self.fail_if(empty, &[], span, |lowering, _, location| {
                     lowering.call_runtime("prism_rt_list_empty", &location)?;
                     Ok(())
                 })?;

@@ -2,8 +2,9 @@
 // time it with `prism run --timings examples/run/main.prism`. It uses scalars, a struct, an enum
 // with payloads matched by patterns, a destructuring declaration, a nullable, strings and string
 // templates, an expression tree built from boxes, generic functions and extensions, closures
-// and function values, and closures that own their captures: a handler kept in a struct and a
-// closure returned from a function.
+// and function values, closures that own their captures (a handler kept in a struct and a
+// closure returned from a function), and lists built, updated by index, iterated, shrunk and
+// cloned.
 package run
 
 import /run/generic/labels
@@ -80,4 +81,19 @@ fun main() {
     println(ok.label)
     val describeLimit = describer("limit")
     println(describeLimit(LIMIT))
+
+    var squares = listOf<Int>()
+    for (n in 1..5) squares.add(n * n)
+    squares[0] = 100
+    for (s in &mut squares) {
+        *s += 1
+    }
+    val removed = squares.removeAt(1)
+    val kept = squares.clone()
+    squares.clear()
+    var total = 0
+    for (s in kept) total += s
+    println("$removed removed, ${kept.size} left, total $total, ${squares.isEmpty()}")
+    val labels = listOf(ok.label.clone(), describeLimit(1))
+    println(labels.contains("ok") && labels.indexOf("limit = 1") == 1)
 }

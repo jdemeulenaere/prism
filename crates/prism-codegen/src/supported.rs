@@ -183,7 +183,9 @@ fn classify_at(
         // A box is named by its contents (D3 of `heap-boxes`), and a list by its elements (D13
         // of `collections`), each looked into once.
         Type::Heap(inner) | Type::List(inner) => {
-            if boxed.insert(inner.as_ref().clone()) {
+            // Only a struct or an enum can reach itself again; remembering any other contents
+            // would copy a nested type at each of its levels.
+            if !holds_nominal(inner) || boxed.insert(inner.as_ref().clone()) {
                 classify_at(inner, types, boxed, depth + 1)
             } else {
                 None
@@ -208,6 +210,16 @@ fn classify_at(
         Type::Parameter(parameter) => Some(Construct::TypeParameter(parameter.name.clone())),
         Type::Opaque(name) => Some(Construct::UnknownType(name.clone())),
         Type::Error => Some(Construct::UnknownType("<error>".to_string())),
+    }
+}
+
+/// Whether `ty` is a struct or an enum, or a nullable of one: the contents through which a type
+/// can reach itself.
+fn holds_nominal(ty: &Type) -> bool {
+    match ty {
+        Type::Nullable(inner) => holds_nominal(inner),
+        Type::Struct { .. } | Type::Enum { .. } => true,
+        _ => false,
     }
 }
 
