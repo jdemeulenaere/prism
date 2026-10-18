@@ -309,7 +309,7 @@ Modifiers such as `compose`, `consuming` and `escaping` MUST function contextual
 - **THEN** each `escaping` parses as a function, parameter, variable, argument, member or type name, not as a modifier
 
 ### Requirement: Braces Are Closures in Expression Position
-A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST have zero parameters, and every closure body MUST be a block.
+A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST declare no parameters, and the syntax tree MUST record whether a closure has a header, so that the empty header `{ -> body }` stays distinct from no header. Every closure body MUST be a block.
 
 #### Scenario: Trailing lambda without parameters is a closure
 - **WHEN** parsing `Column { Item() }` and `Button(onClick = handler) { Text("Click") }`
@@ -330,6 +330,10 @@ A `{` in expression position MUST start a closure, with or without a parameter h
 #### Scenario: Expression-bodied function returning a closure
 - **WHEN** parsing `fun f() = { 1 }`
 - **THEN** the function body is a closure with zero parameters, as in Kotlin
+
+#### Scenario: An empty parameter header is recorded
+- **WHEN** parsing `run { -> 1 }`, `run { 1 }` and `run { -> }`
+- **THEN** the first and third closures have a header declaring zero parameters, and the second has no header
 
 ### Requirement: Function Type Syntax
 The type grammar MUST accept function types `(A, B) -> R`, including the zero-parameter form `() -> R`, optionally prefixed by `compose` to mark a composable function type. `()` alone is the unit type, a single parenthesized type without an arrow is that type, and `->` is right-associative.
@@ -717,6 +721,17 @@ A parameter of a function declaration, or a parameter in a function type's param
 - **WHEN** parsing `fun f(n: escaping Int) {}`, `fun g(x: escaping (Int)) {}`, `fun h() { val k: escaping () -> Unit = {} }` or `fun m(): escaping () -> Unit = {}`
 - **THEN** the parser reports `E2001` at `escaping` for each, saying that `escaping` marks parameters of function type
 
+### Requirement: The Name it Is an Identifier
+`it` MUST be an ordinary identifier, never a keyword: it MAY name a variable, parameter, closure parameter, function, field or argument, and a closure MAY declare a parameter named `it` in its header. The syntax tree MUST NOT add an implicit parameter to a closure; whether a closure has one is decided by the type checker.
+
+#### Scenario: it as a declared name
+- **WHEN** parsing `fun it(it: Int): Int = it`, `fun f() { val it = 1; g(it = it) }`, `x.it()` and `run { it -> it + 1 }`
+- **THEN** each `it` parses as a function, parameter, variable, argument, member or closure parameter name, and the closure has the one declared parameter `it`
+
+#### Scenario: A header-less closure has no parameters in the syntax tree
+- **WHEN** parsing `xs.forEach { println(it) }`
+- **THEN** the closure has no header and no parameters, and `it` in its body is an identifier expression
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -791,3 +806,8 @@ Decisions from `string-templates` (planned autonomously on 2026-10-17, refined w
 Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **`escaping` is a contextual modifier at the start of a parameter's function type** (D3), only directly before `(` or `compose`, so `escaping` stays usable as a name and even as a type name; before any other type, or in any other type position, it is `E2001`, since a local, field or result already owns its value. The bare-modifier spelling follows `compose`, as Prism has no attribute syntax.
+
+Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The tree records a closure's header** (D2). `ExprKind::Closure` holds `arrow: Option<Span>`, the header's `->`, so `{ -> body }` declares zero parameters and never gets an implicit `it`, while `{ body }` has no header and gets one against a one-parameter type, as in Kotlin. A span rather than a flag serves the formatter's comment placement and a future LSP, and the span-free body hash covers whether a closure has a header. Rejected: reading `{ -> body }` as `{ body }`, which leaves no way to say "this closure takes nothing"; `params: Option<Vec<ClosureParameter>>`, which changes the meaning of an existing field.
+- **`it` is an ordinary identifier** (D3): no token, keyword or reserved name, so `val it`, `fun it`, a field or parameter `it` and `{ it -> ... }` stay valid, and the parser never adds a parameter (it does not know the expected type). Rejected: a contextual keyword, which needs a rule for every place a name may appear and buys nothing, since lookup is already lexical.

@@ -249,6 +249,13 @@ The formatter MUST print `escaping` before each parameter type that has it, in d
 - **WHEN** formatting `fun b(o:escaping ()->Unit,f:escaping (()->Unit)?=null){}` and `fun c(content:escaping compose ()->Unit,r:(escaping ()->Unit)->Unit){}`
 - **THEN** the results are `fun b(o: escaping () -> Unit, f: escaping (() -> Unit)? = null) {}` and `fun c(content: escaping compose () -> Unit, r: (escaping () -> Unit) -> Unit) {}`
 
+### Requirement: Closure Headers Are Kept as Written
+The formatter MUST print a closure's header exactly when it was written, including the empty header `{ -> }`, and MUST NOT add, remove or rename a closure parameter, so a closure using the implicit `it` stays without a header.
+
+#### Scenario: Empty headers and implicit it kept
+- **WHEN** formatting `val f: (Int) -> Int = {it+1}`, `run {->1}`, `run {  -> }` and `xs.forEach {it -> println(it)}` inside a function
+- **THEN** the results are `val f: (Int) -> Int = { it + 1 }`, `run { -> 1 }`, `run { -> }` and `xs.forEach { it -> println(it) }`
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -270,3 +277,7 @@ Decisions from `string-templates` (planned autonomously on 2026-10-17, refined w
 
 - **Templates are printed as written, on one line** (D14). Text runs and `$name` parts come from their tokens, escapes included, and `${x}` is never rewritten to `$x` or back (that is a lint). Each `${...}` expression is printed by the usual rules inside a `flat` document, so a template never breaks across lines, as Prettier does for JavaScript template literals; a template whose parts hold a comment, were written over several lines or always break (blocks, `when`, closures of several statements) is printed verbatim, with the comment cursor moved past its comments. The corpus variants insert and squeeze nothing between the text-level tokens of a template. Rejected: always verbatim (inconsistent spacing), and breaking inside `${}` (moves text).
 - **A multi-line template stays on the line of its `=`** (D16). Such a verbatim template forces its groups to break, so it is kept on the line of the `=`, `return` or assignment operator, as a `when` or braced `if` is; a one-line template that does not fit still moves to the next line, as a long string literal does. Moving a multi-line one would misalign its later lines, printed as written. Cost: one check of the template's source span per initializer.
+
+Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Closure headers are kept as written** (D2, BREAKING): since `{ -> 1 }` declares zero parameters and `{ 1 }` may have an implicit `it`, the printer prints a header whenever the tree records one, including `{ -> }`, and never adds, removes or renames a parameter; the meaning check compares headers and erases only the arrow's span. Before, an empty header was printed as `{ 1 }`, which no fixture or example wrote.

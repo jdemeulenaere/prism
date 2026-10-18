@@ -349,6 +349,13 @@ A computed `String` part, including the result of the `toString()` call that giv
 - **WHEN** `fun f(xs: &List<Int>, i: Int): Int { var ys = listOf(1, 2); ys.add(xs[i]); return ys.size + xs[0] }` is checked
 - **THEN** `listOf(1, 2)` is a call of the built-in list-construction function with type argument `Int`; `ys.add(...)` is a call of the built-in `add` with a mutable receiver borrow of the binding `ys` and a copy of the index node of the dereferenced binding `xs` by the binding `i`; `ys.size` is a call of the built-in `size` with a shared receiver borrow of `ys`; and `xs[0]`, an operand read in place, is an index node of the dereferenced binding `xs` by the literal `0`
 
+### Requirement: Implicit Closure Parameters Are Locals
+A closure's implicit `it` MUST be recorded as the closure's one parameter: a binding named `it`, of the expected parameter's type, marked as an implicit closure parameter, declared at the closure's `{`. Its uses MUST be ordinary uses of that binding, and nothing else in the tree MUST differ from the closure `{ it -> ... }`.
+
+#### Scenario: Implicit parameter in the tree
+- **WHEN** `fun apply(f: (Int) -> Int): Int = f(1)` is declared and `prism dump-typed-tree` runs on a file adding `fun g(k: Int): Int = apply { it + k }`
+- **THEN** the closure lists the parameter `it`, the body's locals list `it` of type `Int` as an implicit closure parameter, the closure captures `k` only, and `it` in the body is a use of that local
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -403,3 +410,7 @@ Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised 
 Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **A `for` loop records how it iterates** (D16). `StatementKind::For` holds an `iterable` and a `ForIteration` (`Range`, or `List { mutable }`); a list's iterable is an explicit `Borrow` node of origin `BorrowOrigin::Iteration`, so the borrow checker sees the loop's borrow as any other. `listOf` is `BuiltinFunction::ListOf` with type argument `[T]` and each member a built-in function named as written, so the bundled library can later replace them with declarations. Elements are `Index` nodes over the list place.
+
+Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The implicit `it` is a local of its own kind** (D5): the closure's one parameter, named `it`, of kind `LocalKind::ImplicitClosureParameter` (dumped `(implicit closure parameter)`), declared at the closure's `{`, and every use is an ordinary local read, so MIR, the borrow checker and the backend see the closure `{ it -> ... }` and need no change. Rejected: a plain `ClosureParameter`, which diagnostics and an LSP could not tell from a written `it`; desugaring in the parser, which lacks the expected type and would make the formatter print a header nobody wrote.
