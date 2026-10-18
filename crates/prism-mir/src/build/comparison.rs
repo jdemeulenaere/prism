@@ -87,7 +87,10 @@ impl Builder<'_> {
     ) {
         let target_expression = self.expression(target);
         let (ty, target_span) = (target_expression.ty.clone(), target_expression.span);
-        let place = self.place(target);
+        let mut place = self.place(target);
+        if self.may_repoint(target, value) {
+            place = self.pin_referent(target, place, target_span);
+        }
         let (left, right) = if self.is_copy(&ty) {
             let mut left = Operand::Copy(place.clone(), target_span);
             if self.may_write(value) {
@@ -117,6 +120,54 @@ impl Builder<'_> {
             self.assign(place, Rvalue::Use(moved), target_span);
         } else {
             self.assign(place, rvalue, target_span);
+        }
+    }
+
+    /// `place`, the place of the compound assignment target `target`, reached through a mutable
+    /// borrow of the referent of its last dereference, held in a temporary: `(*_t).n` for
+    /// `(*_1).n`. The place is then evaluated once even when the value re-points the reference
+    /// it is reached through (`*r += if (c) { r = &mut b; 1 } else 1` writes what `r` referred
+    /// to when the statement started, D2 of `compound-assignment`).
+    fn pin_referent(&mut self, target: ExpressionId, place: Place, span: Span) -> Place {
+        let Some(referent) = self.outermost_dereference_type(target) else {
+            return place;
+        };
+        let Some(position) = place
+            .projections
+            .iter()
+            .rposition(|p| *p == Projection::Deref)
+        else {
+            return place;
+        };
+        let reference = Type::Reference {
+            mutable: true,
+            inner: Box::new(referent),
+        };
+        let pointer = self.new_temporary(reference, span);
+        let rvalue = Rvalue::Borrow {
+            mutable: true,
+            origin: BorrowOrigin::Operator,
+            place: Place {
+                local: place.local,
+                projections: place.projections[..=position].to_vec(),
+            },
+        };
+        self.assign(Place::local(pointer), rvalue, span);
+        let mut pinned = Self::deref(Place::local(pointer));
+        pinned
+            .projections
+            .extend_from_slice(&place.projections[position + 1..]);
+        pinned
+    }
+
+    /// The type of the outermost dereference along the place expression `id` (the referent
+    /// last reached through a reference), if it has one.
+    fn outermost_dereference_type(&self, id: ExpressionId) -> Option<Type> {
+        let expression = self.expression(id);
+        match &expression.kind {
+            ExpressionKind::Deref { .. } => Some(expression.ty.clone()),
+            ExpressionKind::Field { base, .. } => self.outermost_dereference_type(*base),
+            _ => None,
         }
     }
 

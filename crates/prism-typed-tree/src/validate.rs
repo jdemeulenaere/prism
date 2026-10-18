@@ -877,7 +877,7 @@ impl Validator<'_> {
             declared.extend(parameters.iter().copied());
         }
         let mut statements = Vec::new();
-        for child in children(&expression.kind, &mut statements) {
+        for child in expression.kind.children(&mut statements) {
             self.collect_bindings(child, declared, used);
         }
         while let Some(statement) = statements.pop() {
@@ -984,85 +984,6 @@ fn declared_parameters(function: &FunctionItem) -> Vec<(Option<String>, Type)> {
                 .map(|(name, ty)| (Some(name.clone()), ty.clone())),
         )
         .collect()
-}
-
-/// The expression children of `kind`, and its statements pushed onto `statements`.
-fn children(kind: &ExpressionKind, statements: &mut Vec<StatementId>) -> Vec<ExpressionId> {
-    match kind {
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Local(_)
-        | ExpressionKind::TopLevelValue(_)
-        | ExpressionKind::FunctionReference(_)
-        | ExpressionKind::VariantConstructor { .. }
-        | ExpressionKind::Break { .. }
-        | ExpressionKind::Continue { .. } => Vec::new(),
-        ExpressionKind::Field { base, .. } => vec![*base],
-        ExpressionKind::Deref { pointer } => vec![*pointer],
-        ExpressionKind::Index { base, index } => vec![*base, *index],
-        ExpressionKind::NonNullPayload { nullable } => vec![*nullable],
-        ExpressionKind::Temporary { value }
-        | ExpressionKind::Coerce { value, .. }
-        | ExpressionKind::Move { place: value }
-        | ExpressionKind::Copy { place: value }
-        | ExpressionKind::Borrow { place: value, .. }
-        | ExpressionKind::SafeNavigation { chain: value, .. }
-        | ExpressionKind::Unary { operand: value, .. } => vec![*value],
-        ExpressionKind::Call(call) => {
-            let callee = match call.callee {
-                Callee::Value(callee) => Some(callee),
-                _ => None,
-            };
-            callee
-                .into_iter()
-                .chain(call.arguments.iter().filter_map(|a| match a {
-                    Argument::Written(value) => Some(*value),
-                    Argument::Default => None,
-                }))
-                .collect()
-        }
-        ExpressionKind::Construct { fields, .. } => fields.iter().map(|f| f.value).collect(),
-        ExpressionKind::Range { start, end, .. } => vec![*start, *end],
-        ExpressionKind::Binary { left, right, .. }
-        | ExpressionKind::Logical { left, right, .. } => {
-            vec![*left, *right]
-        }
-        ExpressionKind::Elvis { nullable, fallback } => vec![*nullable, *fallback],
-        ExpressionKind::Block {
-            statements: s,
-            tail,
-            ..
-        } => {
-            statements.extend(s.iter().copied());
-            tail.iter().copied().collect()
-        }
-        ExpressionKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => [Some(*condition), Some(*then_branch), *else_branch]
-            .into_iter()
-            .flatten()
-            .collect(),
-        ExpressionKind::When {
-            subject, branches, ..
-        } => {
-            let mut children: Vec<ExpressionId> = subject.iter().copied().collect();
-            for branch in branches {
-                for pattern in &branch.patterns {
-                    match pattern {
-                        Pattern::Value(value) | Pattern::Condition(value) => children.push(*value),
-                        Pattern::Range { start, end, .. } => children.extend([*start, *end]),
-                        Pattern::Variant { .. } | Pattern::Else => {}
-                    }
-                }
-                children.push(branch.body);
-            }
-            children
-        }
-        ExpressionKind::Return { value } => value.iter().copied().collect(),
-        ExpressionKind::Closure { body, .. } => vec![*body],
-        ExpressionKind::Error { children } => children.clone(),
-    }
 }
 
 /// Whether `ty` is or contains the error type.

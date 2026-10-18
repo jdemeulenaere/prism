@@ -429,6 +429,89 @@ impl Builder<'_> {
         }
     }
 
+    /// Whether evaluating `value` may re-point a reference that the place expression `target`
+    /// is reached through (D2 of `compound-assignment`): whether `value`, a closure in it
+    /// included, assigns or mutably borrows a place that holds such a reference, which is a
+    /// prefix of the pointer of one of `target`'s dereferences (`r` for `*r` or `r.n`, `c` or
+    /// `c.r` for `c.r.n`). A write through the reference (`*r = 1`) does not re-point it.
+    pub(super) fn may_repoint(&self, target: ExpressionId, value: ExpressionId) -> bool {
+        let mut pointers = Vec::new();
+        let mut current = target;
+        loop {
+            match &self.expression(current).kind {
+                ExpressionKind::Field { base, .. } => current = *base,
+                ExpressionKind::Deref { pointer } => {
+                    pointers.extend(self.place_path(*pointer));
+                    current = *pointer;
+                }
+                _ => break,
+            }
+        }
+        if pointers.is_empty() {
+            return false;
+        }
+        let mut written = Vec::new();
+        self.collect_written_paths(value, &mut written);
+        written.iter().any(|(local, steps)| {
+            pointers.iter().any(|(pointer_local, pointer_steps)| {
+                local == pointer_local && pointer_steps.starts_with(steps)
+            })
+        })
+    }
+
+    /// The place expression `id` as its binding and the projections applied to it, from the
+    /// binding outwards (`None` for an index, or a place rooted at a temporary or a top-level
+    /// value, which the user cannot assign).
+    fn place_path(&self, id: ExpressionId) -> Option<(prism_typed_tree::LocalId, Vec<Projection>)> {
+        match &self.expression(id).kind {
+            ExpressionKind::Local(local) => Some((*local, Vec::new())),
+            ExpressionKind::Field { base, index, .. } => {
+                let (local, mut steps) = self.place_path(*base)?;
+                steps.push(Projection::Field(*index));
+                Some((local, steps))
+            }
+            ExpressionKind::Deref { pointer } => {
+                let (local, mut steps) = self.place_path(*pointer)?;
+                steps.push(Projection::Deref);
+                Some((local, steps))
+            }
+            _ => None,
+        }
+    }
+
+    /// Pushes onto `written` the paths of the places that evaluating `id` assigns, compound
+    /// assigns or borrows mutably, closures' bodies included.
+    fn collect_written_paths(
+        &self,
+        id: ExpressionId,
+        written: &mut Vec<(prism_typed_tree::LocalId, Vec<Projection>)>,
+    ) {
+        let kind = &self.expression(id).kind;
+        if let ExpressionKind::Borrow {
+            mutable: true,
+            place,
+            ..
+        } = kind
+        {
+            written.extend(self.place_path(*place));
+        }
+        let mut statements = Vec::new();
+        for child in kind.children(&mut statements) {
+            self.collect_written_paths(child, written);
+        }
+        for statement in statements {
+            let statement = &self.tree.statements[statement].kind;
+            if let TreeStatementKind::Assign { target, .. }
+            | TreeStatementKind::CompoundAssign { target, .. } = statement
+            {
+                written.extend(self.place_path(*target));
+            }
+            for child in statement.children() {
+                self.collect_written_paths(child, written);
+            }
+        }
+    }
+
     /// Whether testing `pattern` may write a place.
     pub(super) fn pattern_may_write(&self, pattern: &prism_typed_tree::Pattern) -> bool {
         use prism_typed_tree::Pattern;

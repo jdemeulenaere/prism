@@ -497,7 +497,8 @@ pub enum BorrowOrigin {
     /// Made by a nullable conversion (`&(T?)` read as `(&T)?`).
     Conversion,
     /// An operand of an operator over a type that is not `Copy`, which reads it in place
-    /// (D14): `==`, `!=` or string concatenation.
+    /// (D14): `==`, `!=` or string concatenation; or the pinned target of a compound
+    /// assignment whose value may re-point it (D5 of `compound-assignment`).
     Operator,
     /// An input of a default value's generator, or the slot it may fill (D11).
     Default,

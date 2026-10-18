@@ -1,0 +1,11 @@
+// expect: ok
+fun f(): Int {
+    var a = 1
+    var b = 10
+    var r = &mut a
+    *r += if (b > 0) {
+        r = &mut b
+        1
+    } else 0
+    return a
+}
