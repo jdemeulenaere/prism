@@ -56,7 +56,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 10. Integration
 
-- [ ] 10.1 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` with no new warnings, `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), and `openspec validate codegen-core --strict`. Also run `prism run examples/run/main.prism` and confirm `prism run` on each `examples/demo` file reports a diagnostic (`E6002` or `E6001`) rather than crashing. Verify all pass.
+- [x] 10.1 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` with no new warnings, `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), and `openspec validate codegen-core --strict`. Also run `prism run examples/run/main.prism` and confirm `prism run` on each `examples/demo` file reports a diagnostic (`E6002` or `E6001`) rather than crashing. Verify all pass.
 
 ## Workflow follow-up
 
