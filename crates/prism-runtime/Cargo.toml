@@ -1,0 +1,10 @@
+[package]
+name = "prism-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# No dependencies: Tier 2 will link this crate into native executables without Cranelift (D1 of
+# `codegen-core`).
+[dependencies]

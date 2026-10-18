@@ -12,6 +12,7 @@ members = [
     "crates/prism-mir",
     "crates/prism-borrowck",
     "crates/prism-formatter",
+    "crates/prism-runtime",
 ]
 
 [workspace.package]

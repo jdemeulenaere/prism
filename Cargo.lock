@@ -147,6 +147,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-runtime"
+version = "0.1.0"
+
+[[package]]
 name = "prism-typechecker"
 version = "0.1.0"
 dependencies = [
