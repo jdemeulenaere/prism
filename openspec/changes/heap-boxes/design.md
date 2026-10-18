@@ -171,6 +171,16 @@ Iterative drop of long chains (D14); placement construction (D3); `Heap<...>` ex
 
 `Heap<T>` has a single owner. Sharing (`Rc`, `Arc`) is hidden or explicit reference counting, which the zero-cost memory safety invariant excludes. Graphs use typed handles (`docs/architecture.md` §3). Nothing in this change prepares for sharing.
 
+### D21. Owned boxes lend only to reference parameters (autonomous, at implementation)
+
+D4 says that "`Heap<T>?` converts to `(&T)?`". Read literally, an owned box would then be borrowed implicitly in any position, while an owned `T` is borrowed implicitly only as an argument of a reference parameter (`reference-access` D1: `val r: &T = x` needs `&x`). So an owned `Heap<T>` or `Heap<T>?` lends its contents only to a shared `&T` or `(&T)?` parameter, from where it lives or from a temporary, and never to a `&mut T` parameter (a mutable borrow is never implicit). A borrowed box (`&Heap<T>`, `&mut Heap<T>`, `&(Heap<T>?)`) converts wherever such a type is expected, mutably only through `&mut` layers. `val r: &T = h` is `E4002`, with help suggesting `&h`. Rejected: implicit borrows of owned boxes in value positions, which would make boxes the one owned value borrowed without `&`.
+
+### Scenario fixes at implementation
+
+- "Wrong arguments of Heap rejected": `Heap<Int>("x")` is an argument that does not fit its parameter, so it is `E4004` like the other three calls, not `E4002`.
+- "Measuring a tree" passed `t.right?.left` to a `(&Tree)?` parameter. A safe navigation is a temporary, so that argument moves the field out of the borrow (`E4017`), for boxes as for any `T?` (`f(w.u?.n)` for `f(s: (&String)?)` is rejected the same way today). Lending a chain of fields read in place is not part of this change; the scenario now reads `t.left?.left?.value` and `t.right?.left?.value` instead, and the limitation is a `ROADMAP.md` follow-up on archive.
+- "Box built-ins are calls" said `builtin Heap` takes "a copy of `n`": MIR passes the value of `n` through an argument temporary, and prints the type argument, `builtin Heap<Int>`.
+
 ### Reconciliation with the main specs (2026-10-18, at implementation)
 
 The packet was proposed before `runtime-strings-and-drops` and `payload-patterns` were archived and before the main specs were shortened (8e5cc47). Its deltas were re-based so that each expresses only this change's edits against the current main text, and archiving restores no long text:

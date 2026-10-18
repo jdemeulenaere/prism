@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+enum Expr { Lit(Int), Name(String), Add(Heap<Expr>, Heap<Expr>) }
+
+fun simplify(e: Expr): Expr = when (e) {
+    Expr.Add(Expr.Lit(0), val r) -> r.unbox()
+    Expr.Add(Expr.Name(val n), Expr.Lit(0)) -> Expr.Name(n)
+    else -> e
+}
+
+fun main() {
+    val a = simplify(Expr.Add(Heap(Expr.Lit(0)), Heap(Expr.Lit(7))))
+    val b = simplify(Expr.Add(Heap(Expr.Name(1.toString())), Heap(Expr.Lit(0))))
+    println(a == Expr.Lit(7))
+    println(b == Expr.Name("1"))
+}

@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+struct Tree { val value: Int, val left: Heap<Tree>?, val right: Heap<Tree>? }
+
+fun leaf(v: Int): Heap<Tree> = Heap(Tree(v, null, null))
+
+fun Tree.depth(): Int {
+    val l = left?.depth() ?: 0
+    val r = right?.depth() ?: 0
+    return 1 + (if (l > r) l else r)
+}
+
+fun valueOf(t: (&Tree)?): Int = t?.value ?: 0
+
+fun main() {
+    val t = Tree(1, Heap(Tree(2, leaf(3), null)), leaf(4))
+    println(t.depth())
+    println(valueOf(t.left))
+    println(t.left?.left?.value ?: 0)
+    println(t.right?.left?.value ?: 0)
+}

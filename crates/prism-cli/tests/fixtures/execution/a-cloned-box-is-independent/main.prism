@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Node : Clone { var value: Int, val next: Heap<Node>? }
+
+fun main() {
+    var a = Heap(Node(1, Heap(Node(2, null))))
+    val b = a.clone()
+    a.value = 5
+    println(a.value)
+    println(b.value)
+    println(b.next?.value ?: 0)
+}

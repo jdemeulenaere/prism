@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }
+
+fun sum(a: Int, b: Int): Expr = Expr.Add(Heap(Expr.Lit(a)), Heap(Expr.Lit(b)))
+
+fun main() {
+    println(sum(1, 2) == sum(1, 2))
+    println(sum(1, 2) == sum(2, 1))
+    println(sum(1, 2) != Expr.Lit(3))
+}

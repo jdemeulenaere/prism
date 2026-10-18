@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Marker : Copy {}
+
+fun main() {
+    val h = Heap(Marker())
+    val g = h.clone()
+    val m = g.unbox()
+    println(h == Heap(m))
+}

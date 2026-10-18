@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+struct User { val name: String }
+
+consuming fun User.take(): String {
+    val (name) = this
+    return name
+}
+
+fun main() {
+    val u = Heap(User(1.toString())).unbox()
+    println(u.name)
+    val h = Heap(Heap(User(2.toString())))
+    println(h.take())
+    val n: Heap<User>? = null
+    println(n?.unbox() == null)
+}

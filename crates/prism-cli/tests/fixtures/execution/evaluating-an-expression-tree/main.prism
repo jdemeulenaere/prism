@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>), Mul(Heap<Expr>, Heap<Expr>) }
+
+fun eval(e: &Expr): Int = when (e) {
+    Expr.Lit(val n) -> n
+    Expr.Add(val l, val r) -> eval(l) + eval(r)
+    Expr.Mul(val l, val r) -> eval(l) * eval(r)
+}
+
+fun main() {
+    val e = Expr.Add(Heap(Expr.Lit(2)), Heap(Expr.Mul(Heap(Expr.Lit(3)), Heap(Expr.Lit(4)))))
+    println(eval(e))
+}

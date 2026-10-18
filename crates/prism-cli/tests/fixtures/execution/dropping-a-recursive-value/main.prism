@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+enum Doc { Text(String), Pair(Heap<Doc>, Heap<Doc>) }
+
+fun main() {
+    var i = 0
+    while (i < 100) {
+        val d = Doc.Pair(Heap(Doc.Text(i.toString())), Heap(Doc.Pair(Heap(Doc.Text("x")), Heap(Doc.Text(i.toString())))))
+        i += 1
+    }
+    println(i)
+}

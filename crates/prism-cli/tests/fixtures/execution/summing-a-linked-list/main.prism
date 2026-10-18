@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+struct Node { val value: Int, val next: Heap<Node>? }
+
+fun Node.sum(): Int = value + (next?.sum() ?: 0)
+
+fun main() {
+    var list: Heap<Node>? = null
+    for (i in 1..4) {
+        list = Heap(Node(i, list))
+    }
+    println(list?.sum() ?: 0)
+}

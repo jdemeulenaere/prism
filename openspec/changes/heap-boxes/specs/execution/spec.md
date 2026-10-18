@@ -14,8 +14,8 @@
 - **THEN** it prints `10`, writes nothing to stderr and exits with status 0
 
 #### Scenario: Measuring a tree
-- **WHEN** `struct Tree { val value: Int, val left: Heap<Tree>?, val right: Heap<Tree>? }`, `fun leaf(v: Int): Heap<Tree> = Heap(Tree(v, null, null))`, `fun Tree.depth(): Int { val l = left?.depth() ?: 0; val r = right?.depth() ?: 0; return 1 + (if (l > r) l else r) }` and `fun valueOf(t: (&Tree)?): Int = t?.value ?: 0` are declared and `fun main() { val t = Tree(1, Heap(Tree(2, leaf(3), null)), leaf(4)); println(t.depth()); println(valueOf(t.left)); println(valueOf(t.right?.left)) }` runs with `--check-allocations`
-- **THEN** it prints `3`, `2` and `0`, writes nothing to stderr and exits with status 0
+- **WHEN** `struct Tree { val value: Int, val left: Heap<Tree>?, val right: Heap<Tree>? }`, `fun leaf(v: Int): Heap<Tree> = Heap(Tree(v, null, null))`, `fun Tree.depth(): Int { val l = left?.depth() ?: 0; val r = right?.depth() ?: 0; return 1 + (if (l > r) l else r) }` and `fun valueOf(t: (&Tree)?): Int = t?.value ?: 0` are declared and `fun main() { val t = Tree(1, Heap(Tree(2, leaf(3), null)), leaf(4)); println(t.depth()); println(valueOf(t.left)); println(t.left?.left?.value ?: 0); println(t.right?.left?.value ?: 0) }` runs with `--check-allocations`
+- **THEN** it prints `3`, `2`, `3` and `0`, writes nothing to stderr and exits with status 0
 
 #### Scenario: Reading boxed scalars
 - **WHEN** `fun show(n: &Int): Int = n * 10` is declared and `fun main() { val h = Heap(4); val n: Int = h; println(h + n); println(show(h)); println(h.toString() + "!"); println(h == Heap(4)) }` runs with `--check-allocations`

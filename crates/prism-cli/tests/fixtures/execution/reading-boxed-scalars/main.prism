@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun show(n: &Int): Int = n * 10
+
+fun main() {
+    val h = Heap(4)
+    val n: Int = h
+    println(h + n)
+    println(show(h))
+    println(h.toString() + "!")
+    println(h == Heap(4))
+}

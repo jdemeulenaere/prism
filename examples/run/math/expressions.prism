@@ -1,0 +1,31 @@
+package run.math
+
+// Expression trees for the reference program of `prism run` (examples/run/main.prism): a
+// recursive enum whose operands are boxed, evaluated and simplified by patterns that look
+// through the boxes.
+
+public enum Expr : Clone {
+    Number(Int)
+    Add(Heap<Expr>, Heap<Expr>)
+    Multiply(Heap<Expr>, Heap<Expr>)
+}
+
+// The value of `e`, evaluated recursively: each operand lends its contents to `eval`.
+public fun eval(e: &Expr): Int = when (e) {
+    Expr.Number(val n) -> n
+    Expr.Add(val left, val right) -> eval(left) + eval(right)
+    Expr.Multiply(val left, val right) -> eval(left) * eval(right)
+}
+
+// `e` without additions of 0 and multiplications by 1 at its top, taking it apart.
+public fun simplify(e: Expr): Expr = when (e) {
+    Expr.Add(Expr.Number(0), val right) -> right.unbox()
+    Expr.Multiply(Expr.Number(1), val right) -> right.unbox()
+    else -> e
+}
+
+// `(a + b) * c`.
+public fun sumTimes(a: Int, b: Int, c: Int): Expr = Expr.Multiply(
+    Heap(Expr.Add(Heap(Expr.Number(a)), Heap(Expr.Number(b)))),
+    Heap(Expr.Number(c)),
+)

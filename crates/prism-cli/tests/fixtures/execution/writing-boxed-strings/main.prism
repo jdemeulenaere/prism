@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+fun set(r: &mut Heap<String>, v: String) {
+    **r = v
+}
+
+fun main() {
+    var h = Heap(1.toString())
+    *h = 2.toString()
+    set(&mut h, 3.toString())
+    println(h)
+    h = Heap(4.toString())
+    println(h)
+}
