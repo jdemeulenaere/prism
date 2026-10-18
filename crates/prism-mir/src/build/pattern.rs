@@ -27,6 +27,10 @@ use prism_typed_tree::{
 pub(super) struct BranchLocals {
     pub(super) all: Vec<LocalId>,
     pub(super) temporaries: Vec<Vec<LocalId>>,
+    /// Per pattern of a guarded branch, the local holding a shared borrow of the subject while
+    /// the guard runs, for a pattern that takes the subject apart after it (see
+    /// [`Builder::declare_guard_borrows`]).
+    pub(super) guard_borrows: Vec<Option<LocalId>>,
 }
 
 impl Builder<'_> {
@@ -80,6 +84,39 @@ impl Builder<'_> {
             locals.temporaries.push(temporaries);
         }
         locals
+    }
+
+    /// Declares, for each pattern of a guarded branch that takes its subject (of type `ty`)
+    /// apart, a local holding a shared borrow of the subject from before the guard runs until the
+    /// subject is taken apart (D9 of `payload-patterns`). Its loan makes the borrow checker reject
+    /// a guard that assigns, moves or mutably borrows the subject, which would leave the branch
+    /// taking apart a value that no longer holds the variant its pattern matched.
+    pub(super) fn declare_guard_borrows(
+        &mut self,
+        locals: &mut BranchLocals,
+        patterns: &[&Pattern],
+        ty: &Type,
+    ) {
+        for pattern in patterns {
+            if !pattern.moves() {
+                locals.guard_borrows.push(None);
+                continue;
+            }
+            let id = self.add_local(LocalDeclaration {
+                ty: Type::Reference {
+                    mutable: false,
+                    inner: Box::new(ty.clone()),
+                },
+                kind: LocalKind::Temporary,
+                mutable: false,
+                name: None,
+                binding: None,
+                span: self.span,
+            });
+            self.schedule_unstarted(id);
+            locals.all.push(id);
+            locals.guard_borrows.push(Some(id));
+        }
     }
 
     /// Marks the branch's locals live, or dead, on the current path.

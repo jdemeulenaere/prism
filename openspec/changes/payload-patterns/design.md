@@ -95,6 +95,8 @@ When a value is taken apart, each non-`Copy` part no binding takes (`_`, a value
 
 Inside a guard the branch's bindings are read-only (`E4003` for an assignment through one, `&mut`, or a `mut fun` receiver), and a moving binding cannot be moved (`E4017`), because the guard may be false and the next branch must still find the subject whole. In MIR, copying and borrowing bindings are made before the guard and moving ones after it, while the guard reads a moving binding's part in place (D15), which is Rust's "bind by reference in the guard, by move in the arm" without a second set of locals.
 
+A guard could still change the subject itself (`if clear(&mut v)`) between the pattern's test and the take-apart that follows it, which would then move parts out of a value no longer holding the matched variant. So for each guarded pattern that takes its subject apart, MIR holds a shared borrow of the subject (`BorrowOrigin::Guard`) from before the guard to the take-apart, and the borrow checker reports an assignment, move or mutable borrow of the subject in the guard as for any borrow, labelled at the binding where the pattern takes it apart (found at review). Copying and borrowing patterns need nothing: a copy is already made, and a borrowing binding's own loan conflicts with a write while it is live, as Rust's shallow "fake borrows" do for every guard.
+
 Rejected: Rust's guards with mutable access through bindings, which need the "fake borrows" of the subject during guards; guards only on single-pattern branches (Kotlin's restriction), which buys nothing once alternatives must bind alike (D10).
 
 ### D10. Alternatives bind the same names (autonomous)

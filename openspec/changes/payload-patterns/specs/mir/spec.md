@@ -60,11 +60,11 @@ Where a pattern takes its subject apart, MIR MUST move the whole subject local i
 - **THEN** `e` is destructured into a temporary holding its `User`, which is destructured into `name` and a temporary for `bio`
 
 ### Requirement: Bindings Are Made After the Tests and the Guard
-A branch MUST make its copying and borrowing bindings after its pattern's tests succeed and before its guard. Its moving bindings MUST be made only once the guard is true. While the guard runs, a moving binding MUST read its part in place. A guard MUST be lowered once per pattern of its branch, and a false guard MUST continue with the next pattern.
+A branch MUST make its copying and borrowing bindings after its pattern's tests succeed and before its guard. Its moving bindings MUST be made only once the guard is true. While the guard runs, a moving binding MUST read its part in place, and a shared borrow of the subject (origin `guard`) MUST be held from before the guard until the subject is taken apart. A guard MUST be lowered once per pattern of its branch, and a false guard MUST continue with the next pattern.
 
 #### Scenario: A guard reads a moving binding in place
 - **WHEN** `enum Msg { Text(String), Empty }` and `fun short(s: &String): Bool = true` are declared and `fun f(m: Msg): String = when (m) { Msg.Text(val s) if short(s) -> s; else -> "long" }` is lowered
-- **THEN** the guard calls `short` with a shared borrow of payload 0 of `Text` of `m`; on its `true` edge `m` is destructured into `s`, and on its `false` edge control reaches the `else` branch with `m` whole
+- **THEN** `m` is borrowed with origin `guard` before the guard, which calls `short` with a shared borrow of payload 0 of `Text` of `m`; on its `true` edge that borrow is read and `m` is destructured into `s`, and on its `false` edge control reaches the `else` branch with `m` whole
 
 ### Requirement: Destructuring Declarations Lower Like Patterns
 A destructuring declaration MUST evaluate its value once, as a place when it is one and otherwise into a temporary, then bind its entries as an irrefutable struct pattern would, its bindings and the temporaries of unbound non-`Copy` fields being locals of the enclosing block.

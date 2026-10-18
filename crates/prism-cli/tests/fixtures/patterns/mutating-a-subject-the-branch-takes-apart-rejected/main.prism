@@ -1,0 +1,4 @@
+// expect: E5003
+enum Msg { Text(String) }
+fun clear(m: &mut Msg): Bool = true
+fun f(m: Msg): String { var v = m; return when (v) { Msg.Text(val s) if clear(&mut v) -> s; else -> "" } }

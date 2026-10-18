@@ -416,7 +416,17 @@ impl Builder<'_> {
         }
         self.mark_branch_locals(locals, true, branch.span);
         self.bind_copies_and_borrows(place, ty, pattern, span);
+        let move_span = self.first_move_span(pattern).unwrap_or(span);
+        let guard_borrow = locals.guard_borrows.get(index).copied().flatten();
         if let Some(guard) = branch.guard {
+            if let Some(borrow) = guard_borrow {
+                let rvalue = Rvalue::Borrow {
+                    mutable: false,
+                    origin: BorrowOrigin::Guard,
+                    place: place.clone(),
+                };
+                self.assign(Place::local(borrow), rvalue, move_span);
+            }
             let mut in_place = Vec::new();
             self.moving_binding_places(place, pattern, &mut in_place);
             let saved: Vec<(TreeLocalId, Place)> = in_place
@@ -440,8 +450,10 @@ impl Builder<'_> {
             self.mark_branch_locals(locals, false, branch.span);
             failures.push(self.current.take().expect("the false edge"));
             self.current = Some(on_true);
+            if let Some(borrow) = guard_borrow {
+                self.push_statement(StatementKind::Read(Place::local(borrow)), move_span);
+            }
         }
-        let move_span = self.first_move_span(pattern).unwrap_or(span);
         let temporaries = locals.temporaries[index].clone();
         self.take_apart(
             place.clone(),
@@ -609,7 +621,13 @@ impl Builder<'_> {
             self.push_scope(branch.span);
             let patterns: Vec<&Pattern> = branch.patterns.iter().collect();
             let locals = match &subject_ty {
-                Some(ty) => self.declare_branch_locals(&patterns, ty),
+                Some(ty) => {
+                    let mut locals = self.declare_branch_locals(&patterns, ty);
+                    if branch.guard.is_some() {
+                        self.declare_guard_borrows(&mut locals, &patterns, ty);
+                    }
+                    locals
+                }
                 None => BranchLocals::default(),
             };
             let mut matches = Vec::new();

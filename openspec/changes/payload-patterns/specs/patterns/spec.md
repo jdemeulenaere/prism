@@ -142,7 +142,7 @@ A branch of a `when` with a subject MUST accept a guard, `if condition`, after i
 - **THEN** the parser reports `E2001` for each
 
 ### Requirement: Guards Do Not Move or Mutate Bindings
-Inside a guard, every binding of its branch MUST be read-only and MUST NOT be moved. A move of a by-value binding there MUST be `E4017` naming the binding "in a guard", and an assignment, `&mut` or `mut fun` receiver through any binding MUST be `E4003`, since the guard may fail and later branches still test the subject.
+Inside a guard, every binding of its branch MUST be read-only and MUST NOT be moved. A move of a by-value binding there MUST be `E4017` naming the binding "in a guard", and an assignment, `&mut` or `mut fun` receiver through any binding MUST be `E4003`, since the guard may fail and later branches still test the subject. A guard MUST NOT assign, move or mutably borrow a subject that its pattern takes apart after it, which the borrow checker reports as for any shared borrow of the subject held from the pattern to the take-apart (`E5003` to `E5005`).
 
 #### Scenario: Moving a binding in a guard rejected
 - **WHEN** `enum Msg { Text(String) }` and `fun take(s: String): Bool = true` are declared and `fun f(m: Msg): Int = when (m) { Msg.Text(val s) if take(s) -> 1; else -> 2 }` is checked
@@ -151,6 +151,10 @@ Inside a guard, every binding of its branch MUST be read-only and MUST NOT be mo
 #### Scenario: Mutating a binding in a guard rejected
 - **WHEN** `enum Box { Of(Int) }` and `fun set(n: &mut Int): Bool = true` are declared and `fun f(b: &mut Box): Int = when (b) { Box.Of(val n) if set(n) -> 1; else -> 2 }` is checked
 - **THEN** the type checker emits `E4003` for `n`, stating that a binding cannot be mutated in a guard
+
+#### Scenario: Mutating a subject the branch takes apart rejected
+- **WHEN** with that `Msg`, `fun clear(m: &mut Msg): Bool = true` and `fun f(m: Msg): String { var v = m; return when (v) { Msg.Text(val s) if clear(&mut v) -> s; else -> "" } }` are checked
+- **THEN** the borrow checker emits `E5003` at `&mut v`, labelling `val s` as where the pattern takes `v` apart after the guard
 
 #### Scenario: Reading a binding in a guard
 - **WHEN** with that `Msg`, `fun short(s: &String): Bool = true` and `fun f(m: Msg): String = when (m) { Msg.Text(val s) if short(s) -> s; Msg.Text(_) -> "long" }` are checked

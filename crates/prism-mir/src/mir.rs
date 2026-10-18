@@ -521,6 +521,10 @@ pub enum BorrowOrigin {
     Default,
     /// A pattern binding of a borrowed subject's part (D16 of `payload-patterns`).
     Pattern,
+    /// The subject of a guarded pattern that takes it apart, held while the guard runs so that
+    /// the guard cannot assign, move or mutably borrow what the branch then takes apart (D9 of
+    /// `payload-patterns`).
+    Guard,
 }
 
 impl From<prism_typed_tree::BorrowOrigin> for BorrowOrigin {
@@ -544,6 +548,7 @@ impl BorrowOrigin {
             BorrowOrigin::Operator => "operator",
             BorrowOrigin::Default => "default",
             BorrowOrigin::Pattern => "pattern",
+            BorrowOrigin::Guard => "guard",
         }
     }
 }

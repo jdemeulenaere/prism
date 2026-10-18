@@ -603,6 +603,33 @@ impl Checker<'_> {
                     });
                 }
             }
+            // The subject of a guarded pattern that takes it apart (D9 of `payload-patterns`):
+            // its loan lasts from the pattern's test to the take-apart, which is the only
+            // later use worth naming.
+            LoanKind::Borrow(BorrowOrigin::Guard) => {
+                related.push(Label {
+                    span: loan.span,
+                    message: format!(
+                        "the pattern takes {} apart here, after the guard",
+                        places::quoted(&borrowed)
+                    ),
+                });
+                helps.push(
+                    "a guard cannot assign, move or mutably borrow the value its pattern takes apart; do it in the branch body instead"
+                        .to_string(),
+                );
+                sort_labels(&mut related);
+                return BorrowError {
+                    kind: kind_of_error,
+                    primary: Label {
+                        span,
+                        message: primary,
+                    },
+                    related,
+                    notes: Vec::new(),
+                    helps,
+                };
+            }
             LoanKind::Borrow(_) => related.push(Label {
                 span: loan.span,
                 message: if !conflict {
