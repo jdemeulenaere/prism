@@ -196,6 +196,8 @@ impl Printer<'_> {
                 LocalKind::Let => "val",
                 LocalKind::ForVariable => "for",
                 LocalKind::ClosureParameter => "closure parameter",
+                LocalKind::PatternBinding if local.mutable => "pattern var",
+                LocalKind::PatternBinding => "pattern val",
             };
             writeln!(
                 self.out,
@@ -458,40 +460,10 @@ impl Printer<'_> {
                 for branch in branches {
                     self.line(depth, "", &format!("branch {}", position(branch.span)));
                     for pattern in &branch.patterns {
-                        match pattern {
-                            Pattern::Variant {
-                                enum_id,
-                                index,
-                                name,
-                            } => self.line(
-                                depth + 1,
-                                "",
-                                &format!("pattern variant {} {} {}", nominal(enum_id), index, name),
-                            ),
-                            Pattern::Value(value) => {
-                                self.expression(*value, depth + 1, "pattern value")
-                            }
-                            Pattern::Range {
-                                start,
-                                end,
-                                end_inclusive,
-                            } => {
-                                self.line(
-                                    depth + 1,
-                                    "",
-                                    &format!(
-                                        "pattern range {}",
-                                        if *end_inclusive { ".." } else { "..<" }
-                                    ),
-                                );
-                                self.expression(*start, depth + 2, "start");
-                                self.expression(*end, depth + 2, "end");
-                            }
-                            Pattern::Condition(condition) => {
-                                self.expression(*condition, depth + 1, "pattern condition")
-                            }
-                            Pattern::Else => self.line(depth + 1, "", "pattern else"),
-                        }
+                        self.pattern(pattern, depth + 1);
+                    }
+                    if let Some(guard) = branch.guard {
+                        self.expression(guard, depth + 1, "guard");
                     }
                     self.expression(branch.body, depth + 1, "body");
                 }
@@ -507,6 +479,86 @@ impl Printer<'_> {
                     self.expression(*child, depth, "");
                 }
             }
+        }
+    }
+
+    /// A pattern, its sub-patterns indented under it (D14 of `payload-patterns`).
+    fn pattern(&mut self, pattern: &Pattern, depth: usize) {
+        match pattern {
+            Pattern::Variant {
+                enum_id,
+                index,
+                name,
+                arguments,
+                fields,
+            } => {
+                let text = format!(
+                    "pattern variant {}{} {} {}",
+                    nominal(enum_id),
+                    type_arguments_text(arguments),
+                    index,
+                    name
+                );
+                self.line(depth, "", &text);
+                for field in fields {
+                    self.pattern(field, depth + 1);
+                }
+            }
+            Pattern::Struct {
+                id,
+                arguments,
+                fields,
+            } => {
+                let text = format!(
+                    "pattern struct {}{}",
+                    nominal(id),
+                    type_arguments_text(arguments)
+                );
+                self.line(depth, "", &text);
+                for field in fields {
+                    self.pattern(field, depth + 1);
+                }
+            }
+            Pattern::NonNull(inner) => {
+                self.line(depth, "", "pattern non-null");
+                self.pattern(inner, depth + 1);
+            }
+            Pattern::Wildcard => self.line(depth, "", "pattern wildcard"),
+            Pattern::Binding { local, mode } => {
+                let ty = self
+                    .body
+                    .locals
+                    .get(*local)
+                    .map_or_else(|| "<unknown>".to_string(), |local| local.ty.to_string());
+                let text = format!(
+                    "pattern binding {} ({}): {}",
+                    self.local_name(*local),
+                    mode.as_str(),
+                    ty
+                );
+                self.line(depth, "", &text);
+            }
+            Pattern::Value(value) => self.expression(*value, depth, "pattern value"),
+            Pattern::Range {
+                start,
+                end,
+                end_inclusive,
+            } => {
+                self.line(
+                    depth,
+                    "",
+                    &format!(
+                        "pattern range {}",
+                        if *end_inclusive { ".." } else { "..<" }
+                    ),
+                );
+                self.expression(*start, depth + 1, "start");
+                self.expression(*end, depth + 1, "end");
+            }
+            Pattern::Condition(condition) => {
+                self.expression(*condition, depth, "pattern condition")
+            }
+            Pattern::Else => self.line(depth, "", "pattern else"),
         }
     }
 
@@ -561,6 +613,11 @@ impl Printer<'_> {
                 self.expression(*range, depth + 1, "range");
                 self.expression(*body, depth + 1, "body");
             }
+            StatementKind::Destructure { pattern, value } => {
+                self.line(depth, "", &format!("destructure {}", at));
+                self.expression(*value, depth + 1, "value");
+                self.pattern(pattern, depth + 1);
+            }
         }
     }
 }
@@ -596,6 +653,16 @@ fn literal_text(literal: &Literal) -> String {
         Literal::Char(v) => format!("{:?}", v),
         Literal::Bool(v) => v.to_string(),
         Literal::Null => "null".to_string(),
+    }
+}
+
+/// `<A, B>` for type arguments, empty for none.
+fn type_arguments_text(arguments: &[Type]) -> String {
+    if arguments.is_empty() {
+        String::new()
+    } else {
+        let arguments: Vec<String> = arguments.iter().map(ToString::to_string).collect();
+        format!("<{}>", arguments.join(", "))
     }
 }
 

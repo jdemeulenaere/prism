@@ -534,6 +534,12 @@ impl Builder<'_> {
                             self.current = Some(on_false);
                         }
                     }
+                    Pattern::Struct { .. }
+                    | Pattern::NonNull(_)
+                    | Pattern::Wildcard
+                    | Pattern::Binding { .. } => {
+                        unimplemented!("payload patterns are lowered by payload-patterns 6.2")
+                    }
                     Pattern::Range {
                         start,
                         end,

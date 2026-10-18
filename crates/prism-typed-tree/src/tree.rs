@@ -209,6 +209,9 @@ pub enum LocalKind {
     ForVariable,
     /// A closure parameter.
     ClosureParameter,
+    /// A binding of a pattern (`val r` in `Shape.Circle(val r)`) or a destructuring
+    /// declaration, whose type its [`BindingMode`] gives (D14 of `payload-patterns`).
+    PatternBinding,
 }
 
 /// An expression node: its kind, its type and the span of the source it stands for.
@@ -444,14 +447,9 @@ impl ExpressionKind {
                 let mut children: Vec<ExpressionId> = subject.iter().copied().collect();
                 for branch in branches {
                     for pattern in &branch.patterns {
-                        match pattern {
-                            Pattern::Value(value) | Pattern::Condition(value) => {
-                                children.push(*value)
-                            }
-                            Pattern::Range { start, end, .. } => children.extend([*start, *end]),
-                            Pattern::Variant { .. } | Pattern::Else => {}
-                        }
+                        pattern.expressions(&mut children);
                     }
+                    children.extend(branch.guard);
                     children.push(branch.body);
                 }
                 children
@@ -623,20 +621,41 @@ pub struct ConstructField {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Vec<Pattern>,
+    /// The guard `if condition` after the patterns, which sees the branch's bindings (D9 of
+    /// `payload-patterns`).
+    pub guard: Option<ExpressionId>,
     pub body: ExpressionId,
     pub span: Span,
 }
 
-/// A resolved `when` pattern.
+/// A resolved pattern (D14 of `payload-patterns`). The patterns of one branch share one binding
+/// per name.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
-    /// A payload-free variant of the subject's enum, which covers the whole variant.
+    /// A variant of the matched enum, with one sub-pattern per payload: none for a payload-free
+    /// variant, all wildcards for a payload variant named alone. `arguments` are the enum's type
+    /// arguments, from the matched value's type.
     Variant {
         enum_id: NominalId,
         index: usize,
         name: String,
+        arguments: Vec<Type>,
+        fields: Vec<Pattern>,
     },
-    /// A value compared with the subject.
+    /// The matched struct, with one sub-pattern per field, in declaration order.
+    Struct {
+        id: NominalId,
+        arguments: Vec<Type>,
+        fields: Vec<Pattern>,
+    },
+    /// A nullable that is not `null`, whose payload matches the inner pattern: a constructor
+    /// pattern of `T` matching a `T?`.
+    NonNull(Box<Pattern>),
+    /// `_`, or a part no pattern names.
+    Wildcard,
+    /// A binding of the matched part, by `mode`.
+    Binding { local: LocalId, mode: BindingMode },
+    /// A value compared with the matched part.
     Value(ExpressionId),
     /// `in start..end` or `in start..<end`.
     Range {
@@ -648,6 +667,86 @@ pub enum Pattern {
     Condition(ExpressionId),
     /// `else`.
     Else,
+}
+
+impl Pattern {
+    /// Pushes the expressions the pattern holds onto `out`, in source order.
+    pub fn expressions(&self, out: &mut Vec<ExpressionId>) {
+        match self {
+            Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
+                for field in fields {
+                    field.expressions(out);
+                }
+            }
+            Pattern::NonNull(inner) => inner.expressions(out),
+            Pattern::Value(value) | Pattern::Condition(value) => out.push(*value),
+            Pattern::Range { start, end, .. } => out.extend([*start, *end]),
+            Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Else => {}
+        }
+    }
+
+    /// The bindings of the pattern, in source order, with their modes.
+    pub fn bindings(&self) -> Vec<(LocalId, BindingMode)> {
+        let mut out = Vec::new();
+        self.collect_bindings(&mut out);
+        out
+    }
+
+    fn collect_bindings(&self, out: &mut Vec<(LocalId, BindingMode)>) {
+        match self {
+            Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
+                for field in fields {
+                    field.collect_bindings(out);
+                }
+            }
+            Pattern::NonNull(inner) => inner.collect_bindings(out),
+            Pattern::Binding { local, mode } => out.push((*local, *mode)),
+            _ => {}
+        }
+    }
+
+    /// Whether a binding of the pattern moves its part, which takes the matched value apart
+    /// (D6 of `payload-patterns`).
+    pub fn moves(&self) -> bool {
+        self.bindings()
+            .iter()
+            .any(|(_, mode)| *mode == BindingMode::Move)
+    }
+}
+
+/// How a pattern binding holds its part (D5 of `payload-patterns`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BindingMode {
+    /// A copy of a `Copy` part; the binding has the part's type.
+    Copy,
+    /// The part, moved out of an owned value taken apart; the binding has the part's type.
+    Move,
+    /// A shared borrow `&T` of the part.
+    SharedBorrow,
+    /// A mutable borrow `&mut T` of the part.
+    MutableBorrow,
+}
+
+impl BindingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BindingMode::Copy => "copy",
+            BindingMode::Move => "move",
+            BindingMode::SharedBorrow => "shared borrow",
+            BindingMode::MutableBorrow => "mutable borrow",
+        }
+    }
+
+    /// The type of a binding of a part of type `part` in this mode.
+    pub fn binding_type(self, part: &Type) -> Type {
+        match self {
+            BindingMode::Copy | BindingMode::Move => part.clone(),
+            BindingMode::SharedBorrow | BindingMode::MutableBorrow => Type::Reference {
+                mutable: self == BindingMode::MutableBorrow,
+                inner: Box::new(part.clone()),
+            },
+        }
+    }
 }
 
 /// A binding of an enclosing scope that a closure uses.
@@ -785,6 +884,13 @@ pub enum StatementKind {
         range: ExpressionId,
         body: ExpressionId,
     },
+    /// A destructuring declaration `val (a, b) = value` (D14 of `payload-patterns`): `value` read
+    /// in place, and a [`Pattern::Struct`] of its struct binding the named fields, its other
+    /// fields wildcards.
+    Destructure {
+        pattern: Pattern,
+        value: ExpressionId,
+    },
 }
 
 impl StatementKind {
@@ -798,6 +904,7 @@ impl StatementKind {
             StatementKind::While { condition, body } => vec![*condition, *body],
             StatementKind::DoWhile { body, condition } => vec![*body, *condition],
             StatementKind::For { range, body, .. } => vec![*range, *body],
+            StatementKind::Destructure { value, .. } => vec![*value],
         }
     }
 

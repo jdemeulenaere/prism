@@ -514,12 +514,9 @@ impl Builder<'_> {
 
     /// Whether testing `pattern` may write a place.
     pub(super) fn pattern_may_write(&self, pattern: &prism_typed_tree::Pattern) -> bool {
-        use prism_typed_tree::Pattern;
-        match pattern {
-            Pattern::Value(value) | Pattern::Condition(value) => self.may_write(*value),
-            Pattern::Range { start, end, .. } => self.may_write(*start) || self.may_write(*end),
-            Pattern::Variant { .. } | Pattern::Else => false,
-        }
+        let mut expressions = Vec::new();
+        pattern.expressions(&mut expressions);
+        expressions.into_iter().any(|value| self.may_write(value))
     }
 
     pub(super) fn constant(literal: &Literal, ty: &Type) -> Constant {
@@ -691,6 +688,9 @@ impl Builder<'_> {
                 self.push_scope(span);
                 self.lower_for(id, *variable, *range, *body, span);
                 self.pop_scope();
+            }
+            TreeStatementKind::Destructure { .. } => {
+                unimplemented!("destructuring declarations are lowered by payload-patterns 6.2")
             }
         }
     }

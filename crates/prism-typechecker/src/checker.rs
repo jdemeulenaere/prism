@@ -4233,10 +4233,16 @@ impl TypeChecker {
                                 .iter()
                                 .position(|(name, _)| name == &v_name)
                                 .expect("a covered variant is a variant");
+                            let arguments = match &subject_ty {
+                                Some(Type::Enum { arguments, .. }) => arguments.clone(),
+                                _ => Vec::new(),
+                            };
                             patterns.push(Pattern::Variant {
                                 enum_id,
                                 index,
                                 name: v_name.clone(),
+                                arguments,
+                                fields: Vec::new(),
                             });
                             matched_variants.insert(v_name);
                         } else if let Some(s_ty) = &subject_ty {
@@ -4339,6 +4345,7 @@ impl TypeChecker {
             };
             tree_branches.push(prism_typed_tree::WhenBranch {
                 patterns,
+                guard: None,
                 body,
                 span: branch.span,
             });

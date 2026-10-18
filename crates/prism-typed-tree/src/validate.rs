@@ -3,10 +3,11 @@
 
 use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
-    Argument, Body, Callee, CoercionKind, ConstructKind, DeclarationPath, ExpressionKind,
-    FunctionItem, Item, Pattern, StatementKind, StructItem, TypedFile, UnaryOperator,
+    Argument, BindingMode, Body, Callee, CoercionKind, ConstructKind, DeclarationPath,
+    ExpressionKind, FunctionItem, Item, LocalKind, Pattern, StatementKind, StructItem, TypedFile,
+    UnaryOperator,
 };
-use crate::types::{NominalId, Type, TypeParameter};
+use crate::types::{NominalId, Type, TypeParameter, TypeTable};
 use prism_ast::ReceiverMode;
 use std::collections::{HashMap, HashSet};
 
@@ -98,6 +99,7 @@ impl TypedFile {
                 functions: &functions,
                 structs: &structs,
                 type_parameters,
+                types: &self.types,
                 violations: Vec::new(),
             };
             validator.body_roots(item);
@@ -125,6 +127,8 @@ struct Validator<'a> {
     structs: &'a HashMap<&'a NominalId, &'a StructItem>,
     /// The type parameters of the item whose body this is, the only ones its types may mention.
     type_parameters: &'a [TypeParameter],
+    /// The file's type table, against which patterns are checked.
+    types: &'a TypeTable,
     violations: Vec<String>,
 }
 
@@ -317,6 +321,26 @@ impl Validator<'_> {
                 self.loops.pop();
                 self.expression(*condition);
                 self.expect_type(*condition, &Type::Bool, "condition");
+            }
+            StatementKind::Destructure { pattern, value } => {
+                self.expression(*value);
+                match (pattern, self.type_of(*value).cloned()) {
+                    (Pattern::Struct { .. }, Some(ty)) => {
+                        let ty = match ty {
+                            Type::Reference { inner, .. } => *inner,
+                            ty => ty,
+                        };
+                        self.pattern(pattern, &ty, ExpressionId(0));
+                    }
+                    _ if self.error_free => self.report(format!(
+                        "destructuring statement {} has no struct pattern",
+                        id.0
+                    )),
+                    _ => {}
+                }
+                if pattern.moves() {
+                    self.expect_whole_value(*value, "destructured value");
+                }
             }
             StatementKind::For {
                 variable,
@@ -682,41 +706,30 @@ impl Validator<'_> {
                 let subject_ty = subject.and_then(|s| self.type_of(s).cloned());
                 for branch in branches.clone() {
                     for pattern in &branch.patterns {
-                        match pattern {
-                            Pattern::Variant { enum_id, .. } => {
-                                let matches_enum = subject_ty
-                                    .as_ref()
-                                    .and_then(Type::nominal_id)
-                                    .is_some_and(|id| id == enum_id)
-                                    && matches!(subject_ty, Some(Type::Enum { .. }));
-                                if self.error_free && !matches_enum {
-                                    let message = format!(
-                                        "when {} matches a variant of {}",
-                                        id.0, enum_id.name
-                                    );
-                                    self.report(message);
-                                }
-                            }
-                            Pattern::Else => {}
-                            Pattern::Value(value) => {
-                                self.expression(*value);
-                                if let Some(subject_ty) = &subject_ty {
-                                    self.expect_type(*value, subject_ty, "pattern value");
-                                }
-                            }
-                            Pattern::Range { start, end, .. } => {
-                                self.expression(*start);
-                                self.expression(*end);
-                                if let Some(subject_ty) = &subject_ty {
-                                    self.expect_type(*start, subject_ty, "pattern range start");
-                                    self.expect_type(*end, subject_ty, "pattern range end");
-                                }
-                            }
-                            Pattern::Condition(condition) => {
+                        match (pattern, &subject_ty) {
+                            (Pattern::Else, _) => {}
+                            (Pattern::Condition(condition), None) => {
                                 self.expression(*condition);
                                 self.expect_type(*condition, &Type::Bool, "condition");
                             }
+                            (pattern, Some(subject_ty)) => {
+                                self.pattern(pattern, subject_ty, id);
+                            }
+                            (_, None) => self.report(format!(
+                                "when {} without a subject has a pattern that is not a condition",
+                                id.0
+                            )),
                         }
+                    }
+                    self.alternatives_bind_alike(&branch.patterns, id);
+                    if branch.patterns.iter().any(Pattern::moves) {
+                        if let Some(subject) = subject {
+                            self.expect_whole_value(*subject, "when subject");
+                        }
+                    }
+                    if let Some(guard) = branch.guard {
+                        self.expression(guard);
+                        self.expect_type(guard, &Type::Bool, "guard");
                     }
                     self.expression(branch.body);
                     if ty != Type::Unit {
@@ -860,6 +873,192 @@ impl Validator<'_> {
         }
     }
 
+    /// Checks `pattern` against a matched part of type `part` (D14 of `payload-patterns`):
+    /// sub-pattern counts follow the definitions, bindings are pattern bindings whose types fit
+    /// their modes, and values and ranges have the part's type. `when` names the `when` node in
+    /// messages.
+    fn pattern(&mut self, pattern: &Pattern, part: &Type, when: ExpressionId) {
+        match pattern {
+            Pattern::Variant {
+                enum_id,
+                index,
+                arguments,
+                fields,
+                ..
+            } => {
+                let matches = matches!(part, Type::Enum { id, arguments: a } if id == enum_id && a == arguments);
+                if !matches {
+                    if self.error_free {
+                        self.report(format!(
+                            "when {} matches a variant of {} against a {}",
+                            when.0, enum_id.name, part
+                        ));
+                    }
+                    return;
+                }
+                let payloads = self
+                    .types
+                    .instantiated_variants(enum_id, arguments)
+                    .and_then(|variants| variants.get(*index).map(|(_, p)| p.clone()));
+                self.sub_patterns(fields, payloads, when, &enum_id.name);
+            }
+            Pattern::Struct {
+                id,
+                arguments,
+                fields,
+            } => {
+                let matches = matches!(part, Type::Struct { id: s, arguments: a } if s == id && a == arguments);
+                if !matches {
+                    if self.error_free {
+                        self.report(format!(
+                            "when {} matches struct {} against a {}",
+                            when.0, id.name, part
+                        ));
+                    }
+                    return;
+                }
+                let field_types = self
+                    .types
+                    .instantiated_fields(id, arguments)
+                    .map(|fields| fields.into_iter().map(|(_, _, ty)| ty).collect());
+                self.sub_patterns(fields, field_types, when, &id.name);
+            }
+            Pattern::NonNull(inner) => match part {
+                Type::Nullable(payload) => self.pattern(inner, payload, when),
+                _ if self.error_free => self.report(format!(
+                    "when {} matches a non-null pattern against a {}",
+                    when.0, part
+                )),
+                _ => {}
+            },
+            Pattern::Wildcard => {}
+            Pattern::Binding { local, mode } => {
+                self.check_local(*local);
+                let Some(binding) = self.body.locals.get(*local) else {
+                    return;
+                };
+                if binding.kind != LocalKind::PatternBinding {
+                    self.report(format!(
+                        "pattern binding {} is not a pattern binding",
+                        local
+                    ));
+                }
+                if !self.error_free {
+                    return;
+                }
+                let expected = mode.binding_type(part);
+                if binding.ty != expected {
+                    let message = format!(
+                        "pattern binding {} ({}) has type {}, but its part is a {}",
+                        local,
+                        mode.as_str(),
+                        binding.ty,
+                        part
+                    );
+                    self.report(message);
+                }
+                if *mode == BindingMode::Copy && !self.types.is_copy(part) {
+                    self.report(format!(
+                        "pattern binding {} copies a {}, which is not Copy",
+                        local, part
+                    ));
+                }
+            }
+            Pattern::Value(value) => {
+                self.expression(*value);
+                self.expect_type(*value, part, "pattern value");
+            }
+            Pattern::Range { start, end, .. } => {
+                self.expression(*start);
+                self.expression(*end);
+                self.expect_type(*start, part, "pattern range start");
+                self.expect_type(*end, part, "pattern range end");
+            }
+            Pattern::Condition(condition) => {
+                self.expression(*condition);
+                self.report(format!("when {} has a condition with a subject", when.0));
+            }
+            Pattern::Else => self.report(format!("when {} has a nested else pattern", when.0)),
+        }
+    }
+
+    /// Checks one sub-pattern per part of `parts`, the part types of a variant or struct named
+    /// `owner`, when its definition is known.
+    fn sub_patterns(
+        &mut self,
+        fields: &[Pattern],
+        parts: Option<Vec<Type>>,
+        when: ExpressionId,
+        owner: &str,
+    ) {
+        let Some(parts) = parts else {
+            if self.error_free {
+                self.report(format!(
+                    "when {} matches {}, which has no definition",
+                    when.0, owner
+                ));
+            }
+            return;
+        };
+        if parts.len() != fields.len() {
+            self.report(format!(
+                "when {} matches {} with {} sub-patterns for {} parts",
+                when.0,
+                owner,
+                fields.len(),
+                parts.len()
+            ));
+            return;
+        }
+        for (field, part) in fields.iter().zip(&parts) {
+            self.pattern(field, part, when);
+        }
+    }
+
+    /// Reports alternatives of one branch that do not bind the same bindings.
+    fn alternatives_bind_alike(&mut self, patterns: &[Pattern], when: ExpressionId) {
+        if !self.error_free {
+            return;
+        }
+        let mut sets = patterns
+            .iter()
+            .filter(|p| !matches!(p, Pattern::Else))
+            .map(|pattern| {
+                let mut locals: Vec<LocalId> =
+                    pattern.bindings().into_iter().map(|(l, _)| l).collect();
+                locals.sort();
+                locals
+            });
+        if let Some(first) = sets.next() {
+            if sets.any(|other| other != first) {
+                self.report(format!(
+                    "when {} has alternatives binding different bindings",
+                    when.0
+                ));
+            }
+        }
+    }
+
+    /// Reports a value that a moving binding takes apart and that is not a whole binding or a
+    /// temporary (D6 of `payload-patterns`).
+    fn expect_whole_value(&mut self, id: ExpressionId, role: &str) {
+        if !self.error_free {
+            return;
+        }
+        let whole = self.body.expressions.get(id).is_some_and(|e| {
+            matches!(
+                e.kind,
+                ExpressionKind::Local(_) | ExpressionKind::Temporary { .. }
+            )
+        });
+        if !whole {
+            self.report(format!(
+                "{} (node {}) is taken apart but is not a whole binding or a temporary",
+                role, id.0
+            ));
+        }
+    }
+
     /// Collects the bindings that the subtree of `id` declares and those it uses.
     fn collect_bindings(
         &self,
@@ -875,6 +1074,13 @@ impl Validator<'_> {
         }
         if let ExpressionKind::Closure { parameters, .. } = &expression.kind {
             declared.extend(parameters.iter().copied());
+        }
+        if let ExpressionKind::When { branches, .. } = &expression.kind {
+            for branch in branches {
+                for pattern in &branch.patterns {
+                    declared.extend(pattern.bindings().into_iter().map(|(local, _)| local));
+                }
+            }
         }
         let mut statements = Vec::new();
         for child in expression.kind.children(&mut statements) {
@@ -901,6 +1107,10 @@ impl Validator<'_> {
                 } => {
                     declared.insert(*variable);
                     vec![*range, *body]
+                }
+                StatementKind::Destructure { pattern, value } => {
+                    declared.extend(pattern.bindings().into_iter().map(|(local, _)| local));
+                    vec![*value]
                 }
             };
             for child in expressions {
@@ -1475,6 +1685,165 @@ mod tests {
         assert!(
             found.iter().any(|v| v
                 .contains("binding 'a' mentions type parameter T, which main::f does not declare")),
+            "{:?}",
+            found
+        );
+    }
+
+    /// `enum Box { Of(Int, String) }` and `fun f(b: Box): Int = when (b) { Box.Of(<pattern>) ->
+    /// n }`, built by hand with the sub-patterns `fields`, whose binding `n` has type `n_type`.
+    /// The nodes of the original body are left unreached.
+    fn when_file(fields: impl FnOnce(LocalId) -> Vec<Pattern>, n_type: Type) -> TypedFile {
+        use crate::types::{NominalId, TypeDef};
+        let mut file = file();
+        let id = NominalId::new("main", "Box");
+        file.types.insert_definition(
+            id.clone(),
+            TypeDef::Enum {
+                parameters: Vec::new(),
+                variants: vec![("Of".to_string(), vec![Type::Int, Type::String])],
+            },
+        );
+        let enum_type = Type::Enum {
+            id: id.clone(),
+            arguments: Vec::new(),
+        };
+        let body = body(&mut file);
+        let b = body.parameters[0];
+        body.locals[b].ty = enum_type.clone();
+        let n = body.locals.alloc(Local {
+            name: "n".to_string(),
+            ty: n_type,
+            mutable: false,
+            kind: LocalKind::PatternBinding,
+            span: Span::dummy(),
+        });
+        let subject = ExpressionId(0);
+        body.expressions[subject].ty = enum_type;
+        let read = add(body, ExpressionKind::Local(n), Type::Int);
+        let pattern = Pattern::Variant {
+            enum_id: id,
+            index: 0,
+            name: "Of".to_string(),
+            arguments: Vec::new(),
+            fields: fields(n),
+        };
+        let when = add(
+            body,
+            ExpressionKind::When {
+                subject: Some(subject),
+                branches: vec![WhenBranch {
+                    patterns: vec![pattern],
+                    guard: None,
+                    body: read,
+                    span: Span::dummy(),
+                }],
+                exhaustive: true,
+            },
+            Type::Int,
+        );
+        body.value = Some(when);
+        file
+    }
+
+    #[test]
+    fn patterns_are_checked_against_their_definitions() {
+        let binding = |mode| move |n| vec![Pattern::Binding { local: n, mode }, Pattern::Wildcard];
+        let unreached = |found: &[String]| {
+            found
+                .iter()
+                .filter(|v| !v.contains("not reached"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let well_formed = when_file(binding(BindingMode::Copy), Type::Int);
+        assert_eq!(unreached(&violations(&well_formed)), Vec::<String>::new());
+
+        let mistyped = when_file(binding(BindingMode::SharedBorrow), Type::Int);
+        let found = unreached(&violations(&mistyped));
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("(shared borrow) has type Int")),
+            "{:?}",
+            found
+        );
+
+        let short = when_file(
+            |n| {
+                vec![Pattern::Binding {
+                    local: n,
+                    mode: BindingMode::Copy,
+                }]
+            },
+            Type::Int,
+        );
+        let found = unreached(&violations(&short));
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("1 sub-patterns for 2 parts")),
+            "{:?}",
+            found
+        );
+
+        let copied_string = when_file(
+            |n| {
+                vec![
+                    Pattern::Wildcard,
+                    Pattern::Binding {
+                        local: n,
+                        mode: BindingMode::Copy,
+                    },
+                ]
+            },
+            Type::String,
+        );
+        let found = unreached(&violations(&copied_string));
+        assert!(
+            found.iter().any(|v| v.contains("which is not Copy")),
+            "{:?}",
+            found
+        );
+    }
+
+    #[test]
+    fn taking_apart_a_field_is_reported() {
+        let mut file = when_file(
+            |n| {
+                vec![
+                    Pattern::Binding {
+                        local: n,
+                        mode: BindingMode::Copy,
+                    },
+                    Pattern::Binding {
+                        local: n,
+                        mode: BindingMode::Move,
+                    },
+                ]
+            },
+            Type::Int,
+        );
+        let body = body(&mut file);
+        let when = body.value.unwrap();
+        let ty = body.expressions[ExpressionId(0)].ty.clone();
+        let field = add(
+            body,
+            ExpressionKind::Field {
+                base: ExpressionId(0),
+                index: 0,
+                name: "inner".to_string(),
+            },
+            ty,
+        );
+        if let ExpressionKind::When { subject, .. } = &mut body.expressions[when].kind {
+            *subject = Some(field);
+        }
+        let found = violations(&file);
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("is taken apart but is not a whole binding")),
             "{:?}",
             found
         );
