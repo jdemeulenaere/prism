@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k -> }
+    setCompositionContent(c) { k ->
+        println(currentScope(k) == rootScope(c))
+        startRestartGroup(k, 1)
+        println(currentScope(k) == rootScope(c))
+        endRestartGroup(k) { r -> }
+    }
+    disposeComposition(c)
+}

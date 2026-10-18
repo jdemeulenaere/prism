@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k ->
+        println(startNodeGroup(k, 1, 7))
+        endGroup(k)
+    }
+    invalidate(rootScope(c))
+    recomposeComposition(c)
+    disposeComposition(c)
+}

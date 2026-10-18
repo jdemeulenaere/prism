@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k -> println("composed") }
+    println(recomposeComposition(c))
+    disposeComposition(c)
+}

@@ -1,0 +1,23 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Label(k: Int, n: Int) {
+    startRestartGroup(k, 10)
+    if (changedInt(k, 0, n) || !skipping(k)) {
+        println("label $n")
+    } else {
+        skipToGroupEnd(k)
+    }
+    endRestartGroup(k) { c -> Label(c, n) }
+}
+
+fun main() {
+    val c = startComposition { k ->
+        println("root")
+        Label(k, 1)
+    }
+    invalidate(rootScope(c))
+    recomposeComposition(c)
+    disposeComposition(c)
+}

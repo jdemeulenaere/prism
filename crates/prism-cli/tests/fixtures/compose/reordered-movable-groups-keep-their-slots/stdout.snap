@@ -1,0 +1,11 @@
+computed 1
+computed 2
+computed 3
+root
+  movable 1 (3)
+    word 0 = 30
+  movable 1 (1)
+    word 0 = 10
+  movable 1 (2)
+    word 0 = 20
+nodes

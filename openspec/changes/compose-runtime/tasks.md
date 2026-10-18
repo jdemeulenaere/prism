@@ -70,7 +70,7 @@ Prerequisites (design, "Baseline"): groups 1 to 6 need only `closures`' function
 
 ## 8. Executable fixtures
 
-- [ ] 8.1 Add `compose` fixtures, one executable case per scenario, with `stdout.snap` and, for errors, `stderr.snap`. Groups and slots:
+- [x] 8.1 Add `compose` fixtures, one executable case per scenario, with `stdout.snap` and, for errors, `stderr.snap`. Groups and slots:
   - "Starting a composition composes its content once";
   - "A remembered value survives recomposition";
   - "New content recomposes the root";
@@ -85,7 +85,7 @@ Prerequisites (design, "Baseline"): groups 1 to 6 need only `closures`' function
   - "Two tags at two positions".
 
   Read each snapshot against its scenario's THEN. Verify with `cargo test -p prism-cli --test fixture_tests`.
-- [ ] 8.2 Add the `compose` fixtures of scopes and nodes:
+- [x] 8.2 Add the `compose` fixtures of scopes and nodes:
   - "An invalidated scope recomposes alone";
   - "The root is the current scope outside restart groups";
   - "Equal arguments skip a restart scope";
@@ -102,8 +102,8 @@ Prerequisites (design, "Baseline"): groups 1 to 6 need only `closures`' function
   - "Disposing a composition frees what it holds".
 
   Verify as in 8.1.
-- [ ] 8.3 Add the `compose` fixtures of misuse, each with `// run: 101` and an exact `stderr.snap`: "A composer used after its pass", "Disposing a composition twice", "Ending a group that was not started", "A group left open" and "A composition operation during a pass". Add both forms of "The protocol module is imported": `--without-import` (`// expect: E4001`) and `--with-import` (`// run: 0`). Verify as in 8.1.
-- [ ] 8.4 Add the `execution` fixtures "A composition that is never disposed" (`// run: 102`, with the exact `stderr.snap`) and "A composition misuse has no location" (`// run: 101`). Verify as in 8.1.
+- [x] 8.3 Add the `compose` fixtures of misuse, each with `// run: 101` and an exact `stderr.snap`: "A composer used after its pass", "Disposing a composition twice", "Ending a group that was not started", "A group left open" and "A composition operation during a pass". Add both forms of "The protocol module is imported": `--without-import` (`// expect: E4001`) and `--with-import` (`// run: 0`). Verify as in 8.1.
+- [x] 8.4 Add the `execution` fixtures "A composition that is never disposed" (`// run: 102`, with the exact `stderr.snap`) and "A composition misuse has no location" (`// run: 101`). Verify as in 8.1.
 
 ## 9. Integration
 

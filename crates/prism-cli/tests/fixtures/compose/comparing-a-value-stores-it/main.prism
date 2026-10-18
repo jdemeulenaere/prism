@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k -> println(changedInt(k, 0, 1)) }
+    setCompositionContent(c) { k -> println(changedInt(k, 0, 1)) }
+    setCompositionContent(c) { k -> println(changedInt(k, 0, 2)) }
+    disposeComposition(c)
+}

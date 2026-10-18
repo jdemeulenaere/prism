@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k -> println("content") }
+    println(rootScope(c) == rootScope(c))
+    invalidate(rootScope(c))
+    println(recomposeComposition(c))
+    disposeComposition(c)
+}

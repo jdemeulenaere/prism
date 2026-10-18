@@ -1,0 +1,28 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun View(k: Int, on: Bool) {
+    if (on) {
+        startGroup(k, 1)
+        val a = rememberInt(k, 0) {
+            println("on")
+            1
+        }
+        endGroup(k)
+    } else {
+        startGroup(k, 2)
+        val b = rememberInt(k, 0) {
+            println("off")
+            2
+        }
+        endGroup(k)
+    }
+}
+
+fun main() {
+    val c = startComposition { k -> View(k, true) }
+    setCompositionContent(c) { k -> View(k, false) }
+    setCompositionContent(c) { k -> View(k, true) }
+    disposeComposition(c)
+}

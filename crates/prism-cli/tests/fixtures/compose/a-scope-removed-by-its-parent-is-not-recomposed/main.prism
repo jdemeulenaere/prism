@@ -1,0 +1,27 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Child(k: Int) {
+    startRestartGroup(k, 2)
+    val first = changedInt(k, 0, 1)
+    println("child")
+    if (first) {
+        invalidate(currentScope(k))
+    }
+    endRestartGroup(k) { c -> Child(c) }
+}
+
+fun Screen(k: Int, show: Bool) {
+    println("screen $show")
+    if (show) {
+        Child(k)
+    }
+}
+
+fun main() {
+    val c = startComposition { k -> Screen(k, true) }
+    setCompositionContent(c) { k -> Screen(k, false) }
+    println(recomposeComposition(c))
+    disposeComposition(c)
+}

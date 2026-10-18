@@ -1,0 +1,23 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Ticker(k: Int) {
+    startRestartGroup(k, 20)
+    val first = changedInt(k, 0, 1)
+    println("ticker")
+    if (first) {
+        invalidate(currentScope(k))
+    }
+    endRestartGroup(k) { c -> Ticker(c) }
+}
+
+fun main() {
+    val c = startComposition { k ->
+        println("root")
+        Ticker(k)
+    }
+    println(recomposeComposition(c))
+    println(recomposeComposition(c))
+    disposeComposition(c)
+}

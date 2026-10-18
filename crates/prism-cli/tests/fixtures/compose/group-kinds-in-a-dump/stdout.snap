@@ -1,0 +1,7 @@
+root
+  restart 1
+    replaceable 2
+      movable 3 (30)
+        node 4 #1 kind 9
+nodes
+  #1 kind 9

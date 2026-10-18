@@ -1,0 +1,7 @@
+// expect: ok
+// run: 101
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k -> endGroup(k) }
+}

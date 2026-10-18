@@ -1,0 +1,7 @@
+// expect: ok
+// run: 102
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k -> println("ok") }
+}

@@ -1,0 +1,9 @@
+calc 10
+calc 20
+30
+30
+root
+  replaceable 1
+    word 1 = 10
+    word 2 = 20
+nodes

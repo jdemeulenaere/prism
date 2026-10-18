@@ -1,0 +1,25 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Cell(k: Int, n: Int) {
+    startGroup(k, 5)
+    val v = rememberInt(k, 0) {
+        println("cell $n")
+        n
+    }
+    endGroup(k)
+}
+
+fun main() {
+    val c = startComposition { k ->
+        Cell(k, 1)
+        Cell(k, 2)
+    }
+    setCompositionContent(c) { k ->
+        Cell(k, 1)
+        Cell(k, 2)
+        Cell(k, 3)
+    }
+    disposeComposition(c)
+}

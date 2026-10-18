@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun main() {
+    val c = startComposition { k ->
+        val node = startNodeGroup(k, 1, 1)
+        endGroup(k)
+    }
+    setCompositionContent(c) { k -> }
+    setCompositionContent(c) { k ->
+        val node = startNodeGroup(k, 1, 1)
+        endGroup(k)
+    }
+    print(dumpComposition(c))
+    disposeComposition(c)
+}

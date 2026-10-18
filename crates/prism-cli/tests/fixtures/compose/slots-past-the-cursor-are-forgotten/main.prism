@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Pair(k: Int, both: Bool) {
+    startGroup(k, 1)
+    val a = rememberInt(k, 0) { 1 }
+    if (both) {
+        val b = rememberInt(k, 0) { 2 }
+    }
+    endGroup(k)
+}
+
+fun main() {
+    val c = startComposition { k -> Pair(k, true) }
+    print(dumpComposition(c))
+    setCompositionContent(c) { k -> Pair(k, false) }
+    print(dumpComposition(c))
+    disposeComposition(c)
+}

@@ -1,0 +1,7 @@
+root
+  restart 10
+    word 0 = 3
+    replaceable 20
+      node 30 #1 kind 5
+nodes
+  #1 kind 5

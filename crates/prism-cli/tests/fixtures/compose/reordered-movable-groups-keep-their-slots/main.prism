@@ -1,0 +1,31 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Item(k: Int, id: Int) {
+    startMovableGroup(k, 1, id)
+    val n = rememberInt(k, 0) {
+        println("computed $id")
+        id * 10
+    }
+    endGroup(k)
+}
+
+fun Items(k: Int, order: Int) {
+    if (order == 0) {
+        Item(k, 1)
+        Item(k, 2)
+        Item(k, 3)
+    } else {
+        Item(k, 3)
+        Item(k, 1)
+        Item(k, 2)
+    }
+}
+
+fun main() {
+    val c = startComposition { k -> Items(k, 0) }
+    setCompositionContent(c) { k -> Items(k, 1) }
+    print(dumpComposition(c))
+    disposeComposition(c)
+}

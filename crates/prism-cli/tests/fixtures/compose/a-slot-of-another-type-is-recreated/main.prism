@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+import /prism/composer
+
+fun Value(k: Int, tag: Int) {
+    startGroup(k, 1)
+    val v = rememberInt(k, tag) {
+        println("tag $tag")
+        tag
+    }
+    endGroup(k)
+}
+
+fun main() {
+    val c = startComposition { k -> Value(k, 1) }
+    setCompositionContent(c) { k -> Value(k, 2) }
+    print(dumpComposition(c))
+    disposeComposition(c)
+}
