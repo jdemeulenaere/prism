@@ -162,13 +162,7 @@ impl Checker<'_> {
         if let Some(help) = self.copy_help(&ty) {
             helps.push(help);
         }
-        if self.file.types.is_clone(&ty) {
-            let clone = match ty {
-                Type::Nullable(_) => format!("{}?.clone()", name),
-                _ => format!("{}.clone()", name),
-            };
-            helps.push(format!("clone it where it moves: '{}'", clone));
-        }
+        helps.extend(clone_help(self.file, &name, &ty));
         let mutable = place.projections.is_empty() && self.body.locals[place.local].mutable;
         if in_previous_iteration && mutable {
             helps.push(format!(
@@ -252,7 +246,20 @@ impl Checker<'_> {
     }
 }
 
+/// The help suggesting to clone the value `name` of type `ty` where it moves, for a `Clone`
+/// type.
+pub(crate) fn clone_help(file: &MirFile, name: &str, ty: &Type) -> Option<String> {
+    if !file.types.is_clone(ty) {
+        return None;
+    }
+    let clone = match ty {
+        Type::Nullable(_) => format!("{}?.clone()", name),
+        _ => format!("{}.clone()", name),
+    };
+    Some(format!("clone it where it moves: '{}'", clone))
+}
+
 /// Sorts labels in source order.
-fn sort_labels(labels: &mut [Label]) {
+pub(crate) fn sort_labels(labels: &mut [Label]) {
     labels.sort_by_key(|label| (label.span.line, label.span.column, label.span.start));
 }

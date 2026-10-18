@@ -1,28 +1,39 @@
 //! `prism-borrowck`: the borrow checker, which checks the MIR of one file and elaborates its
-//! drops (`borrowck-moves`).
+//! drops (`borrowck-moves`, `borrowck-exclusivity`).
 //!
 //! [`check_file`] reads nothing but the file's [`MirFile`]: the type table travels in it, and
-//! every operand already says whether it moves, so no other file's bodies, MIR or ABI is read
-//! (the single-file compilation units and deterministic hermetic builds invariants). For each
-//! body it builds move paths over places, solves initialization dataflows over the body's
-//! control-flow graph, and checks every use of a place against them: a use of a moved value is
-//! `E5001`, a read of an uninitialized one `E5002`. When no body has an error, it elaborates the
-//! drops of every body, so that a moved value is never dropped and a conditionally moved one is
-//! dropped under a drop flag, and returns the elaborated MIR.
+//! every operand already says whether it moves and every call its parameter types, so no other
+//! file's bodies, MIR or ABI is read (the single-file compilation units and deterministic
+//! hermetic builds invariants). It runs in two stages (D16 of `borrowck-exclusivity`):
 //!
-//! Later stages extend the crate (D16 of `borrowck-moves`): `borrowck-exclusivity` adds borrow
-//! conflicts on the elaborated MIR, with liveness as a backward analysis of [`dataflow`] and
-//! disjoint fields from the move paths' field projections; `borrowck-elision` adds returned
-//! borrows. Their errors join [`BorrowErrorKind`] with the next `E5xxx` codes.
+//! 1. **Moves.** For each body as lowered it builds move paths over places, solves
+//!    initialization dataflows over the body's control-flow graph, and checks every use of a
+//!    place against them: a use of a moved value is `E5001`, a read of an uninitialized one
+//!    `E5002`. If any body has an error, those errors alone are returned, since conflicts on
+//!    moved values would be noise. Otherwise it elaborates the drops of every body, so that a
+//!    moved value is never dropped and a conditionally moved one is dropped under a drop flag,
+//!    and infers how each closure borrows its captures ([`captures`]).
+//! 2. **Exclusivity.** For each elaborated body it gathers the loans ([`borrows`]), solves the
+//!    liveness of loan-carrying locals ([`liveness`], backward) and the loans each may hold
+//!    ([`loan_flow`], forward), then checks every access against the live loans of overlapping
+//!    places (`E5003` to `E5006`) and every write of a function value that may hold a capture
+//!    or a function-typed parameter to a place it escapes through (`E5007`). Without errors it
+//!    returns the elaborated MIR, whose closure bodies record their capture modes.
+//!
+//! `borrowck-elision` extends the loan flow with an origin fact per input borrow and checks
+//! what each body returns against the elision rules (D21 of `borrowck-exclusivity`), with the
+//! next `E5xxx` codes.
 
 pub mod analyses;
 pub mod borrows;
 pub mod captures;
 mod check;
+mod conflicts;
 pub mod dataflow;
 pub mod dominators;
 mod elaborate;
 mod error;
+mod escapes;
 pub mod liveness;
 pub mod loan_flow;
 pub mod location;
@@ -32,7 +43,7 @@ pub mod places;
 mod test_bodies;
 pub mod uses;
 
-pub use error::{BorrowError, BorrowErrorKind, Label};
+pub use error::{AccessKind, BorrowError, BorrowErrorKind, Label};
 pub use location::Location;
 
 use analyses::{MaybeInitialized, ReachingUninitializations};
@@ -41,11 +52,33 @@ use move_paths::MoveData;
 use prism_mir::{MirFile, MirPhase};
 use prism_typed_tree::Arena;
 
-/// Checks every body of `file`, as lowered, for uses of moved and uninitialized values, and
-/// returns the file with its drops elaborated ([`MirPhase::Elaborated`]) when no body has an
-/// error, or the errors sorted by primary location, then code.
+/// Checks every body of `file`, as lowered, for uses of moved and uninitialized values, then
+/// its elaborated MIR for borrow conflicts and escaping closures, and returns the file with its
+/// drops elaborated and its capture modes recorded ([`MirPhase::Elaborated`]) when no body has
+/// an error, or the errors sorted by primary location, then code.
 pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
-    let (elaborated, _) = check_moves_and_elaborate(file)?;
+    let (elaborated, captures) = check_moves_and_elaborate(file)?;
+    let mut errors = Vec::new();
+    for (_, body) in elaborated.bodies.iter() {
+        let borrows = borrows::BorrowSet::gather(&elaborated, body);
+        let liveness = solve(body, liveness::Liveness::new(body, &borrows));
+        let flow = solve(body, loan_flow::LoanFlow::new(&elaborated, body, &borrows));
+        let (escapes, escaped) = escapes::check_escapes(&elaborated, body, &borrows, &flow);
+        errors.extend(conflicts::check_conflicts(
+            &elaborated,
+            body,
+            &captures,
+            &borrows,
+            &liveness,
+            &flow,
+            &escaped,
+        ));
+        errors.extend(escapes);
+    }
+    if !errors.is_empty() {
+        sort_errors(&mut errors);
+        return Err(errors);
+    }
     Ok(elaborated)
 }
 

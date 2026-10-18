@@ -17,6 +17,29 @@ use crate::places;
 use crate::uses::{statement_effects, terminator_effects, PlaceEffect};
 use prism_mir::{Body, LocalId, LocalKind, Statement, Terminator, TerminatorKind};
 
+/// The locals every `Return` of `body` uses: its loan-carrying capture locals and its
+/// arguments of type `&mut R` whose `R` carries loans, which the caller sees afterwards.
+pub fn returned_locals(body: &Body, borrows: &BorrowSet) -> Vec<LocalId> {
+    body.locals
+        .iter()
+        .filter(|(local, declaration)| {
+            borrows.carrier(*local).is_some()
+                && match declaration.kind {
+                    LocalKind::Capture => true,
+                    LocalKind::Argument => match &declaration.ty {
+                        prism_typed_tree::Type::Reference {
+                            mutable: true,
+                            inner,
+                        } => places::carries_loans(inner),
+                        _ => false,
+                    },
+                    _ => false,
+                }
+        })
+        .map(|(local, _)| local)
+        .collect()
+}
+
 /// The loan-carrying locals that may be used later.
 pub struct Liveness<'a> {
     pub borrows: &'a BorrowSet,
@@ -26,26 +49,10 @@ pub struct Liveness<'a> {
 
 impl<'a> Liveness<'a> {
     pub fn new(body: &Body, borrows: &'a BorrowSet) -> Self {
-        let returned = body
-            .locals
-            .iter()
-            .filter(|(local, declaration)| {
-                borrows.carrier(*local).is_some()
-                    && match declaration.kind {
-                        LocalKind::Capture => true,
-                        LocalKind::Argument => match &declaration.ty {
-                            prism_typed_tree::Type::Reference {
-                                mutable: true,
-                                inner,
-                            } => places::carries_loans(inner),
-                            _ => false,
-                        },
-                        _ => false,
-                    }
-            })
-            .map(|(local, _)| local)
-            .collect();
-        Self { borrows, returned }
+        Self {
+            borrows,
+            returned: returned_locals(body, borrows),
+        }
     }
 
     /// Applies `effects`, in evaluation order, backward.
