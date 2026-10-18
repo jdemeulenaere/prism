@@ -211,6 +211,17 @@ struct MethodCall<'a> {
     expected: Option<&'a Type>,
 }
 
+/// A call `target.unbox()` whose receiver, already typed as the node `receiver`, is a box.
+struct UnboxCall<'a> {
+    target: &'a Expr,
+    receiver: ExpressionId,
+    /// Whether the receiver is a place, read in place, rather than a consumed temporary.
+    is_place: bool,
+    is_safe_nav: bool,
+    type_arguments: &'a [prism_ast::types::Type],
+    args: &'a [CallArg],
+}
+
 /// An argument inferred before its parameter type was known (D8 of `generics`, step 4).
 struct SynthesizedArgument<'a> {
     index: usize,
@@ -300,8 +311,11 @@ enum ReceiverPass {
     MutableBorrow,
     /// `consuming fun`: the receiver is moved in (or copied, when it is `Copy`).
     Move,
-    /// `consuming fun` through references: a `Copy` receiver is copied out.
+    /// `consuming fun` through references or boxes: a `Copy` receiver is copied out.
     CopyOut,
+    /// `consuming fun` through boxes only: the outermost box is moved and unboxed once per box
+    /// layer (D7 of `heap-boxes`).
+    Unbox,
 }
 
 /// A layer looked through to reach an extension's receiver type.
@@ -5501,7 +5515,8 @@ impl TypeChecker {
 
     /// Checks a call `target.member(args)` (or `target?.member(args)`) whose target is a value,
     /// resolving `member` in the order of D6 of `extension-methods`: a field of the receiver's
-    /// struct, the built-in `clone()` of a `Clone` type, the file's own extension, the single
+    /// struct, the built-in `clone()` of a `Clone` type, the built-in `toString()` of a scalar
+    /// and `unbox()` of a box (D6 of `heap-boxes`), the file's own extension, the single
     /// import exporting one, and otherwise the built-in `clone()` (`E4018`) or an unknown member
     /// (`E4006`).
     ///
@@ -5555,6 +5570,18 @@ impl TypeChecker {
             && has_builtin_to_string(peel_indirection(&clone_target(&receiver_ty, is_safe_nav).0))
         {
             return self.infer_to_string_call(receiver, is_safe_nav, type_arguments, args, span);
+        }
+        // The built-in `unbox()` of a box behind references (D6 of `heap-boxes`).
+        if member == UNBOX && matches!(clone_target(&receiver_ty, is_safe_nav).0, Type::Heap(_)) {
+            let call = UnboxCall {
+                target,
+                receiver,
+                is_place,
+                is_safe_nav,
+                type_arguments,
+                args,
+            };
+            return self.infer_unbox_call(call, span);
         }
 
         // 3. An extension on the receiver's type, behind any `&`, `&mut` and `Heap<T>`.
@@ -5715,6 +5742,88 @@ impl TypeChecker {
         }
     }
 
+    /// Types a call of the built-in `unbox()` of a box, `h.unbox()` or `h?.unbox()` on a
+    /// `Heap<T>?` (D6 of `heap-boxes`): the receiver is a consuming position, so a whole local,
+    /// parameter or temporary is moved and a field or top-level `val` is `E4017`, and a box
+    /// behind a reference is `E4017` naming the borrow. The call moves the contents out and frees
+    /// the box, and has the contents' type. It takes no arguments (`E4004`).
+    fn infer_unbox_call(&mut self, call: UnboxCall, span: Span) -> ExpressionId {
+        let UnboxCall {
+            target,
+            receiver,
+            is_place,
+            is_safe_nav,
+            type_arguments,
+            args,
+        } = call;
+        self.reject_type_arguments("'unbox'", type_arguments);
+        if !args.is_empty() {
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!("'unbox()' takes no arguments, found {}", args.len()),
+                span,
+            });
+            return self.give_up_call(receiver, args, span);
+        }
+        let receiver_ty = self.ty(receiver);
+        let (boxed, nullable) = clone_target(&receiver_ty, is_safe_nav);
+        let behind_reference = match &receiver_ty {
+            Type::Reference { .. } => true,
+            Type::Nullable(inner) if nullable => matches!(**inner, Type::Reference { .. }),
+            _ => false,
+        };
+        if behind_reference {
+            let clone = self.is_clone(&boxed).then(|| match nullable {
+                true => format!("{}?.clone()?.unbox()", target),
+                false => format!("{}.clone().unbox()", target),
+            });
+            self.errors.push(TypeError::CannotMoveOut {
+                source: format!("borrow '{}'", target),
+                ty: boxed,
+                borrow: None,
+                clone,
+                destructure: None,
+                unbox: None,
+                span: target.span,
+            });
+            return self.error_node(vec![receiver], span);
+        }
+        // A temporary was consumed when it was inferred.
+        if is_place {
+            self.check_move_source(target, &receiver_ty);
+        }
+        let (joined, base) = if nullable {
+            self.open_chain(receiver)
+        } else {
+            (None, receiver)
+        };
+        let moved = self.consume(base);
+        let call = self.unbox(moved, span);
+        if nullable {
+            self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
+        } else {
+            call
+        }
+    }
+
+    /// A call of the built-in `unbox` on `moved`, a moved box or a temporary one.
+    fn unbox(&mut self, moved: ExpressionId, span: Span) -> ExpressionId {
+        let boxed = self.ty(moved);
+        let contents = match &boxed {
+            Type::Heap(contents) => contents.as_ref().clone(),
+            other => other.clone(),
+        };
+        let call = Call {
+            callee: Callee::Builtin(BuiltinFunction::Unbox),
+            arguments: vec![Argument::Written(moved)],
+            parameters: vec![(Some(THIS.to_string()), boxed)],
+            type_arguments: Vec::new(),
+            evaluation_order: vec![0],
+            has_receiver: true,
+            is_compose: false,
+        };
+        self.add(ExpressionKind::Call(call), contents, span)
+    }
+
     /// Gives up on a call whose callee cannot be resolved: its arguments are still checked, and
     /// the call is an error node keeping the receiver and them.
     fn give_up_call(
@@ -5744,6 +5853,14 @@ impl TypeChecker {
         } else {
             (None, receiver)
         };
+        if adjustment.pass == ReceiverPass::Unbox {
+            let span = self.builder.span_of(base);
+            let mut argument = self.consume(base);
+            for _ in 0..adjustment.dereferences {
+                argument = self.unbox(argument, span);
+            }
+            return (joined, argument);
+        }
         let place = self.deref_until(base, reached);
         let argument = match adjustment.pass {
             ReceiverPass::SharedBorrow => self.borrow(false, BorrowOrigin::Receiver, place),
@@ -5751,6 +5868,7 @@ impl TypeChecker {
             // A whole receiver is moved (or copied); a temporary is the consumed value itself.
             ReceiverPass::Move => self.consume(place),
             ReceiverPass::CopyOut => self.copy(place),
+            ReceiverPass::Unbox => unreachable!("unboxed above"),
         };
         (joined, argument)
     }
@@ -5958,17 +6076,18 @@ impl TypeChecker {
                     other => other,
                 })
                 .clone();
-                if !self.is_copy(&reached) {
-                    let through_heap = receiver.layers.contains(&Layer::Heap);
-                    let source = if through_heap {
-                        format!(
-                            "the contents of 'Heap' '{}' (moving out of a 'Heap' is not supported yet)",
-                            expr
-                        )
-                    } else {
-                        format!("borrow '{}'", expr)
-                    };
-                    let clone = (!through_heap && self.is_clone(&reached)).then(|| {
+                let through_boxes_only = receiver.layers.iter().all(|layer| layer == &Layer::Heap);
+                if self.is_copy(&reached) {
+                    ReceiverPass::CopyOut
+                } else if through_boxes_only {
+                    // An owned receiver behind boxes is moved and unboxed, once per box (D7 of
+                    // `heap-boxes`).
+                    if receiver.is_place {
+                        self.check_move_source(expr, receiver.ty);
+                    }
+                    ReceiverPass::Unbox
+                } else {
+                    let clone = self.is_clone(&reached).then(|| {
                         if receiver.through_nullable {
                             format!("{}?.clone()", expr)
                         } else {
@@ -5976,7 +6095,7 @@ impl TypeChecker {
                         }
                     });
                     self.errors.push(TypeError::CannotMoveOut {
-                        source,
+                        source: format!("borrow '{}'", expr),
                         ty: reached,
                         borrow: None,
                         clone,
@@ -5984,8 +6103,8 @@ impl TypeChecker {
                         unbox: None,
                         span: expr.span,
                     });
+                    ReceiverPass::CopyOut
                 }
-                ReceiverPass::CopyOut
             }
         };
         ReceiverAdjustment {
@@ -7519,6 +7638,9 @@ const STRING_LENGTH: &str = "length";
 
 /// The name of the built-in `toString()` of the scalar types.
 const TO_STRING: &str = "toString";
+
+/// The name of the built-in `unbox()` of `Heap<T>` (D6 of `heap-boxes`).
+const UNBOX: &str = "unbox";
 
 /// Whether values of `ty` have the built-in `toString()`: `Int`, `Double`, `Bool` and `Char`.
 fn has_builtin_to_string(ty: &Type) -> bool {

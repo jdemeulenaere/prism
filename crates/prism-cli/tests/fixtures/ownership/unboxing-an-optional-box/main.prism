@@ -1,0 +1,4 @@
+// expect: ok
+struct Node { val value: Int, val next: Heap<Node>? }
+
+fun f(n: Heap<Node>?): Node? = n?.unbox()

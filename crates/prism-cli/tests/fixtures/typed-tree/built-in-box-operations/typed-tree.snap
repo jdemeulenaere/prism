@@ -1,0 +1,18 @@
+module main
+struct main::User @2:1
+  field 0 val name: String
+fun main::User.close(consuming this): Int @4:1
+  local %0 this: User (receiver)
+  literal 1: Int @4:35
+fun main::f(u: User): User @6:1
+  local %0 u: User (parameter)
+  call builtin unbox: User @6:24
+    receiver: call builtin Heap<User>: Heap<User> @6:24
+      argument value: move: User @6:29
+        local %0 u: User @6:29
+fun main::g(h: Heap<User>): Int @8:1
+  local %0 h: Heap<User> (parameter)
+  call main::User.close: Int @8:29
+    receiver: call builtin unbox: User @8:29
+      receiver: move: Heap<User> @8:29
+        local %0 h: Heap<User> @8:29

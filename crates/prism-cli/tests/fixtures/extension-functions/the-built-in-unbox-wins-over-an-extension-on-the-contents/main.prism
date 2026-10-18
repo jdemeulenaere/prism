@@ -1,0 +1,11 @@
+// expect: ok
+struct Gift { val n: Int }
+
+fun Gift.unbox(): Int = n
+
+fun f(h: Heap<Gift>): Gift = h.unbox()
+
+fun g(h: Heap<Gift>): Int {
+    val r: &Gift = &h
+    return r.unbox()
+}

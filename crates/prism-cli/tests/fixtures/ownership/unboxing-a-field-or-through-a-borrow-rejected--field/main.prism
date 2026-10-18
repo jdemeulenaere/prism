@@ -1,0 +1,4 @@
+// expect: E4017
+struct Holder { val h: Heap<Int> }
+
+fun f(o: Holder): Int = o.h.unbox()

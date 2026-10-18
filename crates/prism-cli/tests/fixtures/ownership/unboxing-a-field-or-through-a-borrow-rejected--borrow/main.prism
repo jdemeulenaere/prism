@@ -1,0 +1,4 @@
+// expect: E4017
+struct Node : Clone { val value: Int, val next: Heap<Node>? }
+
+fun g(r: &Heap<Node>): Node = r.unbox()

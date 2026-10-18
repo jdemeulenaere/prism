@@ -1,0 +1,8 @@
+// expect: ok
+struct User { val name: String }
+
+consuming fun User.close(): Int = 1
+
+fun f(u: User): User = Heap(u).unbox()
+
+fun g(h: Heap<User>): Int = h.close()

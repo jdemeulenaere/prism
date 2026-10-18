@@ -1,0 +1,6 @@
+// expect: ok
+struct User { val name: String }
+struct Account { val owner: User }
+consuming fun User.toAccount(): Account = Account(this)
+
+fun f(h: Heap<User>): Account = h.toAccount()

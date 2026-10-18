@@ -1,0 +1,8 @@
+// expect: ok
+struct User { val name: String }
+
+fun f(h: Heap<User>): User = h.unbox()
+
+fun g(): Int = Heap(1).unbox()
+
+fun k(hh: Heap<Heap<Int>>): Heap<Int> = hh.unbox()
