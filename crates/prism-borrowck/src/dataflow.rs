@@ -393,23 +393,38 @@ impl<A: Analysis> ResultsCursor<'_, A> {
             position.block == location.block && position.statement <= location.statement
         });
         if !reusable {
-            let chained_from = results.chained_from[location.block.index()];
-            match (self.position, chained_from) {
-                // Carried on from the end of the predecessor the block is chained to.
-                (Some(position), Some(predecessor)) if position.block == predecessor => {
-                    let terminator = Location::terminator(self.body, predecessor);
-                    let mut position = position;
-                    while position.statement <= terminator.statement {
-                        self.apply(position);
-                        position.statement += 1;
-                    }
-                    results
-                        .analysis
-                        .apply_edge(&mut self.state, predecessor, location.block);
+            // The chain back from the block to the block the cursor is in, when the cursor is
+            // earlier in the same chain, or else to the first block whose state is stored:
+            // `location.block`, its predecessor, ...
+            let mut chain = vec![location.block];
+            let mut resumed = None;
+            while let Some(predecessor) = results.chained_from[chain[chain.len() - 1].index()] {
+                chain.push(predecessor);
+                if let Some(position) = self.position.filter(|p| p.block == predecessor) {
+                    resumed = Some(position);
+                    break;
                 }
-                _ => self.state = results.block_state(location.block, self.body),
             }
-            self.position = Some(Location::start(location.block));
+            let head = chain[chain.len() - 1];
+            let mut position = match resumed {
+                Some(position) => position,
+                None => {
+                    self.state = results.block_state(head, self.body);
+                    Location::start(head)
+                }
+            };
+            // Each block of the chain but the last, from where the cursor is to its end.
+            for pair in chain.windows(2).rev() {
+                let (to, from) = (pair[0], pair[1]);
+                let terminator = Location::terminator(self.body, from);
+                while position.statement <= terminator.statement {
+                    self.apply(position);
+                    position.statement += 1;
+                }
+                results.analysis.apply_edge(&mut self.state, from, to);
+                position = Location::start(to);
+            }
+            self.position = Some(position);
         }
         let mut position = self.position.expect("the cursor has a position");
         while position.statement < location.statement {
@@ -583,9 +598,17 @@ mod tests {
             blocks(&results.block_state(BlockId(5), &body)),
             vec![0, 1, 2, 3, 4]
         );
-        // In order, the cursor carries the state across the chain; out of order, it replays it.
+        // In order, the cursor carries the state along the chain, past blocks it skips; out of
+        // order, it replays the chain from its start.
         let mut cursor = results.cursor(&body);
-        for (block, expected) in [(0, vec![]), (1, vec![0]), (2, vec![0, 1]), (1, vec![0])] {
+        for (block, expected) in [
+            (0, vec![]),
+            (2, vec![0, 1]),
+            (1, vec![0]),
+            (2, vec![0, 1]),
+            (5, vec![0, 1, 2, 3, 4]),
+            (2, vec![0, 1]),
+        ] {
             assert_eq!(
                 blocks(cursor.seek(Location::start(BlockId(block)))),
                 expected
