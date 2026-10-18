@@ -15,20 +15,21 @@
 //!   copies the value bitwise and then replaces each owning part, in the same order, by a clone
 //!   of the source's; a box's clone glue allocates a new box and clones the contents into it.
 //!
-//! Comparing the contents of two boxes of a struct, an enum or a nullable of one calls the
-//! equality glue of the contents' type, `<unit module>#equals(<type>)`, which takes the two
-//! values' addresses and returns a `Bool` ([`crate::equality`]).
+//! Comparing the contents of two boxes of a struct, an enum or a nullable of one, or a struct,
+//! enum or nullable part beyond the inline budget of a comparison, calls the equality glue of
+//! its type, `<unit module>#equals(<type>)`, which takes the two values' addresses and returns a
+//! `Bool` ([`crate::equality`]).
 //!
 //! Each part is handled by calling its own glue, so glue is a set of small functions, one per
 //! type, recursive for a type that reaches itself through boxes. Each code unit generates the
-//! glue of the types its bodies drop, clone and compare through boxes, and of the parts those
-//! reach, as functions local to the unit and called directly, never through the function table:
+//! glue of the types its bodies drop, clone and compare through boxes or beyond the inline
+//! budget, and of the parts those reach, as functions local to the unit and called directly, never through the function table:
 //! a unit's code depends only on its own MIR, and instances of generic types get glue where they
 //! are used. Glue is queued when first asked for and lowered after the unit's bodies. It runs no
 //! user code. It checks the stack on entry, as bodies do, raising "stack overflow" without a
 //! location when a structure is deeper than the stack allows.
 
-use crate::equality::{Compared, Comparison};
+use crate::equality::Comparison;
 use crate::error::BackendError;
 use crate::layout::{Layout, Member, Shape};
 use crate::unit::{data_global, LoweredFunction, UnitContext};
@@ -175,7 +176,7 @@ impl<M: Module> UnitContext<'_, M> {
         Ok(Some(Glue::Generated(self.generated_glue(kind, ty)?)))
     }
 
-    /// The equality glue of `ty`, a struct, an enum or a nullable of one, declared and queued
+    /// The equality glue of `ty`, a struct, an enum or a nullable in memory, declared and queued
     /// the first time it is asked for (D13 of `heap-boxes`).
     pub fn equality_glue(&mut self, ty: &Type) -> Result<FuncId, BackendError> {
         self.generated_glue(GlueKind::Equals, ty)
@@ -293,14 +294,12 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             }
             (GlueKind::Equals, _) => {
                 let mut functions = HashMap::new();
-                let mut comparison = Comparison {
-                    builder: &mut lowering.builder,
-                    context: &mut *lowering.context,
-                    functions: &mut functions,
-                };
-                let left = Compared::Memory(parameters[0]);
-                let right = Compared::Memory(parameters[1]);
-                let equal = comparison.equality(ty, left, right)?;
+                let mut comparison = Comparison::new(
+                    &mut lowering.builder,
+                    &mut *lowering.context,
+                    &mut functions,
+                );
+                let equal = comparison.glue_body(ty, parameters[0], parameters[1])?;
                 lowering.builder.ins().return_(&[equal]);
             }
         }

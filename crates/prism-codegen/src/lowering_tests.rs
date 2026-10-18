@@ -806,3 +806,48 @@ fn boxes_compare_their_contents() {
         checked(|| assert_eq!(test(), 1, "{}", name));
     }
 }
+
+/// A struct of `width` `Int` fields named `f0`, ..., built by `make(n)` with every field `n`
+/// except the last, which is `last`.
+fn wide_struct(width: usize) -> String {
+    let fields: Vec<String> = (0..width)
+        .map(|index| format!("val f{}: Int", index))
+        .collect();
+    let mut arguments = vec!["n"; width];
+    arguments[width - 1] = "last";
+    format!(
+        "struct Wide : Copy {{ {} }}\nfun make(n: Int, last: Int): Wide = Wide({})\n",
+        fields.join(", "),
+        arguments.join(", ")
+    )
+}
+
+#[test]
+fn large_aggregates_compare_like_their_full_expansion() {
+    // The scenario "Equality of a large aggregate" of the `code-generation` spec, over parts
+    // beyond the inline budget in every position: a struct field, an enum payload, a nullable's
+    // payload, a referent and a box's contents.
+    let source = format!(
+        "{}\
+         struct Holder {{ val name: String, val wide: Wide, val count: Int? }}\n\
+         enum Choice : Copy {{ Empty, One(Wide), Two(Wide, Double) }}\n\
+         fun holder(name: String, last: Int, count: Int?): Holder = Holder(name, make(1, last), count)\n\
+         fun holders(): Bool = holder(\"a\", 2, 3) == holder(\"a\", 2, 3) && holder(\"a\", 2, 3) != holder(\"a\", 4, 3)\n\
+             && holder(\"a\", 2, 3) != holder(\"b\", 2, 3) && holder(\"a\", 2, null) != holder(\"a\", 2, 3)\n\
+         fun choices(): Bool = Choice.One(make(1, 2)) == Choice.One(make(1, 2)) && Choice.One(make(1, 2)) != Choice.One(make(1, 3))\n\
+             && Choice.Two(make(1, 2), 0.5) != Choice.Two(make(1, 2), 1.5) && Choice.Two(make(1, 2), 0.5) != Choice.One(make(1, 2))\n\
+             && Choice.Empty == Choice.Empty && Choice.Two(make(1, 2), 0.0 / 0.0) != Choice.Two(make(1, 2), 0.0 / 0.0)\n\
+         fun optional(a: Wide?, b: Wide?): Bool = a == b\n\
+         fun optionals(): Bool = optional(null, null) && !optional(make(1, 2), null) && !optional(null, make(1, 2))\n\
+             && optional(make(1, 2), make(1, 2)) && !optional(make(1, 2), make(1, 3))\n\
+         fun same(a: &Wide, b: &Wide): Bool = a == b\n\
+         fun references(): Bool = same(&make(1, 2), &make(1, 2)) && !same(&make(1, 2), &make(2, 2))\n\
+         fun boxes(): Bool = Heap(make(1, 2)) == Heap(make(1, 2)) && Heap(make(1, 2)) != Heap(make(1, 3))\n",
+        wide_struct(40)
+    );
+    let program = compile(&source);
+    for name in ["holders", "choices", "optionals", "references", "boxes"] {
+        let test: ToBool = function(&program, &format!("main::{}", name));
+        checked(|| assert_eq!(test(), 1, "{}", name));
+    }
+}

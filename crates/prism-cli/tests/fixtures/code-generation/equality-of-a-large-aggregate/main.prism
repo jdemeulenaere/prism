@@ -1,0 +1,33 @@
+// expect: ok
+// run: 0
+struct Pair : Copy { val a: Int, val b: Int }
+
+enum Mark : Copy { Plain, Weight(Double), Point(Pair) }
+
+struct Row { val left: Pair, val right: Pair, val name: String, val count: Int?, val mark: Mark }
+
+struct Table { val first: Row, val second: Row, val third: Row, val fourth: Row, val fifth: Row }
+
+fun row(name: String, count: Int?, mark: Mark): Row = Row(Pair(1, 2), Pair(3, 4), name, count, mark)
+
+fun table(first: Row, last: Row): Table = Table(
+    first,
+    row("b", null, Mark.Weight(0.5)),
+    row("c", 3, Mark.Point(Pair(5, 6))),
+    row("d", 4, Mark.Plain),
+    last,
+)
+
+fun sample(): Table = table(row("a", 1, Mark.Plain), row("e", 5, Mark.Point(Pair(7, 8))))
+
+fun main() {
+    val a = sample()
+    println(a == sample())
+    println(a == table(row("a", 2, Mark.Plain), row("e", 5, Mark.Point(Pair(7, 8)))))
+    println(a == table(row("a", 1, Mark.Plain), row("e", 5, Mark.Point(Pair(7, 9)))))
+    println(a == table(row("a", 1, Mark.Plain), row("f", 5, Mark.Point(Pair(7, 8)))))
+    println(a == table(row("a", 1, Mark.Plain), row("e", null, Mark.Point(Pair(7, 8)))))
+    println(a != table(row("a", 1, Mark.Plain), row("e", 5, Mark.Weight(1.0))))
+    val nan = table(row("a", 1, Mark.Plain), row("e", 5, Mark.Weight(0.0 / 0.0)))
+    println(nan == nan)
+}

@@ -845,11 +845,11 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         left: Lowered,
         right: Lowered,
     ) -> Result<Value, BackendError> {
-        let mut comparison = Comparison {
-            builder: &mut self.builder,
-            context: &mut *self.context,
-            functions: &mut self.compared_functions,
-        };
+        let mut comparison = Comparison::new(
+            &mut self.builder,
+            &mut *self.context,
+            &mut self.compared_functions,
+        );
         comparison.equality(ty, left.compared(), right.compared())
     }
 

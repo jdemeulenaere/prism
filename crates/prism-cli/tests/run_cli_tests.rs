@@ -694,6 +694,47 @@ fn equality_glue_in_the_ir_dump() {
     fs::remove_dir_all(&directory).ok();
 }
 
+/// code-generation: "A large struct is compared by equality glue".
+#[test]
+fn a_large_struct_is_compared_by_equality_glue() {
+    let directory = single_file(
+        "large_equality_glue",
+        "struct P : Copy { val a: Int, val b: Int, val c: Int, val d: Int }\n\
+         struct Q : Copy { val a: P, val b: P, val c: P, val d: P }\n\
+         struct R : Copy { val a: Q, val b: Q, val c: Q }\n\
+         fun same(x: R, y: R): Bool = x == y\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let same = function_ir(&dump, "main::same");
+    assert!(calls_directly(same, "main#equals(main::R)"), "{}", same);
+    let large = function_ir(&dump, "main#equals(main::R)");
+    // `a` and `b` use the whole budget of 32 comparisons: 16 pairs of `Int`s are loaded from
+    // each value and only `c` is compared by a call.
+    assert_eq!(
+        calls_of(large, "main#equals(main::Q)").len(),
+        1,
+        "{}",
+        large
+    );
+    assert_eq!(
+        large.matches("load.i64 notrap aligned v0").count(),
+        32,
+        "{}",
+        large
+    );
+    let part = function_ir(&dump, "main#equals(main::Q)");
+    assert!(!part.contains("= %\"main#equals("), "{}", part);
+    assert_eq!(
+        part.matches("load.i64 notrap aligned v0").count(),
+        16,
+        "{}",
+        part
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
 /// code-generation: "Glue of an imported recursive type".
 #[test]
 fn glue_of_an_imported_recursive_type() {
