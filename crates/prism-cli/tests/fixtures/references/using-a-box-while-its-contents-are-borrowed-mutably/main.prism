@@ -1,0 +1,10 @@
+// expect: E5003
+struct P { var x: Int }
+
+fun f(h: Heap<P>): Int {
+    var m = h
+    val q = &mut m.x
+    val z = m.x
+    *q = 1
+    return z
+}

@@ -1,0 +1,14 @@
+module main
+fun main::f(_1: Heap<String>): String @2:1
+  local _0: String (return)
+  local _1 h: Heap<String> (argument)
+  local _2: Heap<String> (temporary)
+  bb0:
+    storage_live _2 @2:34
+    _2 = move _1 @2:34
+    _0 = call builtin unbox(move _2) -> bb1 @2:34
+  bb1:
+    storage_dead _2 @2:34
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1

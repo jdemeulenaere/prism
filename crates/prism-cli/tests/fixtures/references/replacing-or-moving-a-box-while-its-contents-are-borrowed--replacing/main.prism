@@ -1,0 +1,9 @@
+// expect: E5004
+struct P { var x: Int }
+
+fun f(h: Heap<P>): Int {
+    var m = h
+    val r = &m.x
+    m = Heap(P(2))
+    return r
+}

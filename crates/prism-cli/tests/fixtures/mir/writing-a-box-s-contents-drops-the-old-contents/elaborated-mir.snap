@@ -1,0 +1,17 @@
+module main
+phase elaborated
+fun main::f(_1: Heap<String>): Unit @2:1
+  local _0: Unit (return)
+  local _1 h: Heap<String> (argument)
+  local _2 m: Heap<String> (user, var)
+  bb0:
+    storage_live _2 @3:5
+    _2 = move _1 @3:13
+    drop (*_2) -> bb1 @4:5
+  bb1:
+    (*_2) = const "b" @4:6
+    _0 = const () @2:24
+    drop _2 -> bb2 @5:1
+  bb2:
+    storage_dead _2 @5:1
+    return @2:1

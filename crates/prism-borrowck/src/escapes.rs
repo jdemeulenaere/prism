@@ -6,7 +6,8 @@
 //! initializer), used as an operand of an aggregate (a struct field or an enum payload),
 //! written to a place with a projection (a field, or through a reference) or written to a
 //! capture local, or passed for a parameter whose declared type has a type parameter outside a
-//! function type, since the generic body may store, return or keep it (D7 of `generics`). It is
+//! function type, since the generic body may store, return or keep it (D7 of `generics`), which
+//! includes boxing it with `Heap(...)` (D11 of `heap-boxes`). It is
 //! rejected as `EscapingClosure` (`E5007`) when, by the loan flow, it may hold a closure
 //! capture's loan or a function input. Passing a closure to any other parameter of a call is not
 //! an escape, and a closure without captures holds neither.
@@ -19,9 +20,10 @@ use crate::location::locations;
 use crate::places;
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, Body, BodyOwner, LocalId, LocalKind, MirFile, Operand, Place, Projection,
-    Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, Body, BodyOwner, Callee, LocalId, LocalKind, MirFile, Operand, Place,
+    Projection, Rvalue, StatementKind, TerminatorKind,
 };
+use prism_typed_tree::BuiltinFunction;
 use std::collections::HashSet;
 
 /// The escapes of `body` of `file`, with the capture loans of the escaping values, whose end
@@ -42,12 +44,19 @@ pub(crate) fn check_escapes(
         else {
             let terminator = &body.blocks[location.block].terminator;
             let TerminatorKind::Call {
+                callee,
                 arguments,
                 parameters,
                 ..
             } = &terminator.kind
             else {
                 continue;
+            };
+            // A box is an owned container that can be returned or stored anywhere, like a struct
+            // (D11 of `heap-boxes`); its constructor's parameter is generic.
+            let position = match callee {
+                Callee::Builtin(BuiltinFunction::HeapAllocate) => "stored in a box here",
+                _ => "passed to a generic parameter here",
             };
             let state = cursor.seek(location).clone();
             let checker = Escapes {
@@ -70,7 +79,7 @@ pub(crate) fn check_escapes(
                 escaped.extend(checker.capture_loans(&items));
                 errors.extend(checker.error(
                     &items,
-                    "passed to a generic parameter here",
+                    position,
                     operand_span(operand, terminator.span),
                 ));
             }

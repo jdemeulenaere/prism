@@ -8,7 +8,7 @@ use crate::mir::{
 };
 use crate::types::{needs_drop, projection_type};
 use prism_typed_tree::{
-    foreign_parameters, ArenaId, BinaryOperator, Type, TypeTable, UnaryOperator,
+    foreign_parameters, ArenaId, BinaryOperator, BuiltinFunction, Type, TypeTable, UnaryOperator,
 };
 use std::collections::VecDeque;
 
@@ -485,6 +485,9 @@ impl Validator<'_> {
                         );
                         self.report(message);
                     }
+                    if let Callee::Builtin(builtin) = callee {
+                        self.box_builtin(&at, *builtin, arguments, type_arguments, &ty);
+                    }
                 }
             }
             TerminatorKind::Drop { place, .. } => {
@@ -502,6 +505,50 @@ impl Validator<'_> {
                     self.report(format!("{} drops the capture _{}", at, local.0));
                 }
             }
+        }
+    }
+
+    /// Checks a call of a box built-in (D10 of `heap-boxes`): `Heap` takes one operand of its
+    /// type argument `T` into a `Heap<T>`, and `unbox` moves one `Heap<T>` into a `T`.
+    fn box_builtin(
+        &mut self,
+        at: &str,
+        builtin: BuiltinFunction,
+        arguments: &[Operand],
+        type_arguments: &[Type],
+        destination: &Type,
+    ) {
+        match builtin {
+            BuiltinFunction::HeapAllocate => {
+                let ([_], [contents]) = (arguments, type_arguments) else {
+                    self.report(format!("{} calls builtin Heap with a wrong shape", at));
+                    return;
+                };
+                let boxed = Type::Heap(Box::new(contents.clone()));
+                self.expect(
+                    Some(destination.clone()),
+                    &boxed,
+                    &format!("{} destination", at),
+                );
+            }
+            BuiltinFunction::Unbox => {
+                let [argument] = arguments else {
+                    self.report(format!("{} calls builtin unbox with a wrong shape", at));
+                    return;
+                };
+                if !matches!(argument, Operand::Move(..)) {
+                    self.report(format!("{} unboxes an operand that is not moved", at));
+                }
+                match argument.try_ty(self.body, self.types) {
+                    Some(Type::Heap(contents)) => {
+                        let at = format!("{} destination", at);
+                        self.expect(Some(destination.clone()), &contents, &at);
+                    }
+                    Some(other) => self.report(format!("{} unboxes a {}", at, other)),
+                    None => {}
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1049,6 +1096,38 @@ mod tests {
             &file,
             "_2 mentions type parameter T, which the body does not declare",
         );
+    }
+
+    #[test]
+    fn ill_typed_box_built_ins_are_reported() {
+        let call = |builtin, argument, parameter, type_arguments| {
+            terminator(TerminatorKind::Call {
+                callee: Callee::Builtin(builtin),
+                arguments: vec![argument],
+                parameters: vec![parameter],
+                type_arguments,
+                destination: Place::local(LocalId(2)),
+                target: Some(BlockId(1)),
+                is_compose: false,
+            })
+        };
+        let mut file = small_file();
+        body(&mut file).blocks[BlockId(0)].terminator = call(
+            prism_typed_tree::BuiltinFunction::HeapAllocate,
+            Operand::Constant(Constant::Int(1)),
+            parameter_t(),
+            vec![Type::Int],
+        );
+        assert_reports(&file, "destination has type String, expected Heap<Int>");
+        let mut file = small_file();
+        body(&mut file).blocks[BlockId(0)].terminator = call(
+            prism_typed_tree::BuiltinFunction::Unbox,
+            Operand::Constant(Constant::Int(1)),
+            Type::Int,
+            vec![],
+        );
+        assert_reports(&file, "unboxes an operand that is not moved");
+        assert_reports(&file, "unboxes a Int");
     }
 
     #[test]

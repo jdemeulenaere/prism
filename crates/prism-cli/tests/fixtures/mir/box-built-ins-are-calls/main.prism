@@ -1,0 +1,5 @@
+// expect: ok
+fun f(n: Int): Int {
+    val h = Heap(n)
+    return h.unbox()
+}

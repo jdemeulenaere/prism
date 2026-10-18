@@ -1,0 +1,23 @@
+module main
+fun main::f(_1: Int): Int @2:1
+  local _0: Int (return)
+  local _1 n: Int (argument)
+  local _2 h: Heap<Int> (user)
+  local _3: Int (temporary)
+  local _4: Heap<Int> (temporary)
+  bb0:
+    storage_live _2 @3:5
+    storage_live _3 @3:18
+    _3 = copy _1 @3:18
+    _2 = call builtin Heap<Int>(move _3) -> bb1 @3:13
+  bb1:
+    storage_dead _3 @3:5
+    storage_live _4 @4:12
+    _4 = move _2 @4:12
+    _0 = call builtin unbox(move _4) -> bb2 @4:12
+  bb2:
+    storage_dead _4 @4:5
+    drop _2 -> bb3 @4:5
+  bb3:
+    storage_dead _2 @4:5
+    return @2:1

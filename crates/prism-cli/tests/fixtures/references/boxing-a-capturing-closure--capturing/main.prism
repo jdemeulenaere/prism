@@ -1,0 +1,7 @@
+// expect: E5007
+fun greet(s: &String): Int = 1
+
+fun f(s: String): Int {
+    val h = Heap({ greet(s) })
+    return 1
+}

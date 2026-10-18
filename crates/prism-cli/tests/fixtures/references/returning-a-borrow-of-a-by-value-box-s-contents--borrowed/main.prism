@@ -1,0 +1,4 @@
+// expect: ok
+struct P { var x: Int }
+
+fun g(h: &Heap<P>): &Int = &h.x

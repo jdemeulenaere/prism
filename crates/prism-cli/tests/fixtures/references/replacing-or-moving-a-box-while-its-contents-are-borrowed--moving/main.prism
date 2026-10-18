@@ -1,0 +1,10 @@
+// expect: E5005
+struct P { var x: Int }
+
+fun take(h: Heap<P>) {}
+
+fun g(h: Heap<P>): Int {
+    val r = &h.x
+    take(h)
+    return r
+}

@@ -50,4 +50,4 @@ The first operand of a call of an extension or of `clone`, `length`, `get`, `toS
 
 #### Scenario: Box built-ins are calls
 - **WHEN** `fun f(n: Int): Int { val h = Heap(n); return h.unbox() }` is lowered
-- **THEN** the MIR of `f` calls `builtin Heap` with a copy of `n`, which is not a receiver, into `h`, then `builtin unbox` with a move of `h` as its receiver
+- **THEN** the MIR of `f` calls `builtin Heap<Int>` with the value of `n`, which is not a receiver, into `h`, then `builtin unbox` with a move of `h` as its receiver
