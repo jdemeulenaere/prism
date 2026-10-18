@@ -61,6 +61,10 @@ A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, re
 - **WHEN** `fun print(n: &Int) {}` is declared, and `fun f() { var a = 1; var b = 2; var r: &Int = &a; r = &b; a = 3; print(r) }` and `fun g() { var a = 1; var b = 2; var r: &Int = &a; r = &b; b = 3; print(r) }` are checked
 - **THEN** the borrow checker accepts `f` and emits `E5004` at `b` in `b = 3` of `g`
 
+#### Scenario: Re-pointing a mutable reference at the value it borrowed
+- **WHEN** `fun bump(r: &mut Int) {}` is declared, and `fun f() { var x = 1; var r: &mut Int = &mut x; bump(r); r = &mut x; bump(r) }` and `fun g(c: Bool) { var x = 1; var r: &mut Int = &mut x; while (c) { bump(r); r = &mut x } }` are checked
+- **THEN** the file passes `prism check`, because the new borrow of `x` replaces the old one, which `r` no longer holds once it is assigned
+
 #### Scenario: A reborrow keeps its source borrowed
 - **WHEN** `struct User { var name: String }` is declared and a body runs `var u = User("a"); val m = &mut u; val n = &mut m.name; u.name = "b"; *n = "c"`
 - **THEN** the borrow checker emits `E5004` at `u.name`, because `n` borrows through `m`, which borrows `u`

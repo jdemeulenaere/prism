@@ -1,0 +1,17 @@
+// expect: ok
+fun bump(r: &mut Int) {}
+fun f() {
+    var x = 1
+    var r: &mut Int = &mut x
+    bump(r)
+    r = &mut x
+    bump(r)
+}
+fun g(c: Bool) {
+    var x = 1
+    var r: &mut Int = &mut x
+    while (c) {
+        bump(r)
+        r = &mut x
+    }
+}

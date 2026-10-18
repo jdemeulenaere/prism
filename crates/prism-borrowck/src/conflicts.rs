@@ -287,19 +287,9 @@ pub(crate) fn check_conflicts(
             let Event::Access { place, kind, span } = event else {
                 continue;
             };
-            let mut in_scope: Vec<LocalId> = borrows
-                .carriers
-                .iter()
-                .copied()
-                .filter(|local| liveness.analysis.is_live(&live_after, *local))
-                .collect();
-            for later in &events[index + 1..] {
-                if let Event::Use { local, .. } = later {
-                    if borrows.carrier(*local).is_some() {
-                        in_scope.push(*local);
-                    }
-                }
-            }
+            let in_scope = live_after_event(&events[index + 1..], borrows, |local| {
+                liveness.analysis.is_live(&live_after, local)
+            });
             let mut loans: Vec<LoanId> = in_scope
                 .iter()
                 .flat_map(|local| flow.analysis.holds(&state, *local))
@@ -323,6 +313,46 @@ pub(crate) fn check_conflicts(
         }
     }
     errors
+}
+
+/// The loan-carrying locals live just after an event, given the events that follow it in its
+/// location and the locals live after the location: liveness applied backward through those
+/// events, so that a local the location wholly reassigns does not keep its old loans in scope.
+fn live_after_event(
+    later: &[Event],
+    borrows: &BorrowSet,
+    live_after_location: impl Fn(LocalId) -> bool,
+) -> Vec<LocalId> {
+    let mut live: Vec<bool> = borrows
+        .carriers
+        .iter()
+        .map(|local| live_after_location(*local))
+        .collect();
+    for event in later.iter().rev() {
+        match event {
+            Event::Use { local, .. } => {
+                if let Some(bit) = borrows.carrier(*local) {
+                    live[bit] = true;
+                }
+            }
+            Event::Access {
+                place,
+                kind: AccessKind::Write | AccessKind::StorageDead,
+                ..
+            } if place.projections.is_empty() => {
+                if let Some(bit) = borrows.carrier(place.local) {
+                    live[bit] = false;
+                }
+            }
+            Event::Access { .. } => {}
+        }
+    }
+    borrows
+        .carriers
+        .iter()
+        .zip(live)
+        .filter_map(|(local, live)| live.then_some(*local))
+        .collect()
 }
 
 struct Checker<'a> {
