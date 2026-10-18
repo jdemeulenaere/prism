@@ -394,3 +394,117 @@ fn dumping_the_layouts_of_a_file_with_errors() {
     );
     fs::remove_dir_all(&directory).ok();
 }
+
+/// The headers of the functions of the `prism dump-clif` output `dump`, in order.
+fn function_headers(dump: &str) -> Vec<&str> {
+    dump.lines()
+        .filter_map(|line| line.strip_prefix("function "))
+        .filter(|rest| !rest.starts_with('%'))
+        .collect()
+}
+
+/// Whether the IR `ir` calls `symbol` directly: imports it as a function and calls that.
+fn calls_directly(ir: &str, symbol: &str) -> bool {
+    let import = format!(" = %\"{}\" ", symbol);
+    ir.lines()
+        .find_map(|line| {
+            let (name, _) = line.trim().split_once(&import)?;
+            Some(name.to_string())
+        })
+        .is_some_and(|name| ir.contains(&format!("call {}(", name)))
+}
+
+/// code-generation: "Drop glue in the IR dump".
+#[test]
+fn drop_glue_in_the_ir_dump() {
+    let directory = single_file(
+        "drop_glue",
+        "struct User { val name: String }\nfun f(u: User) {}\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    assert_eq!(
+        function_headers(&dump),
+        ["main::f", "main#drop(main::User)"]
+    );
+    assert!(
+        calls_directly(function_ir(&dump, "main::f"), "main#drop(main::User)"),
+        "{}",
+        dump
+    );
+    // The glue drops the string field through the runtime, and has no slot.
+    let glue = function_ir(&dump, "main#drop(main::User)");
+    assert!(calls_directly(glue, "prism_rt_string_drop"), "{}", glue);
+    assert!(!dump.contains("main#drop(main::User)#slot"), "{}", dump);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Clone glue in the IR dump".
+#[test]
+fn clone_glue_in_the_ir_dump() {
+    let directory = single_file(
+        "clone_glue",
+        "struct User : Clone { val name: String, val id: Int }\nfun f(u: &User): User = u.clone()\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    assert_eq!(
+        function_headers(&dump),
+        ["main::f", "main#clone(main::User)"]
+    );
+    assert!(
+        calls_directly(function_ir(&dump, "main::f"), "main#clone(main::User)"),
+        "{}",
+        dump
+    );
+    let glue = function_ir(&dump, "main#clone(main::User)");
+    assert!(calls_directly(glue, "prism_rt_string_clone"), "{}", glue);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Glue of one type in two files".
+#[test]
+fn glue_of_one_type_in_two_files() {
+    let directory = temporary_directory("glue_two_files");
+    write(
+        &directory.join("lib/user.prism"),
+        "package lib\npublic struct User { val name: String }\npublic fun drop(u: User): Unit {}\n",
+    );
+    write(
+        &directory.join("app/main.prism"),
+        "package app\nimport /lib/user\nfun keep(u: User) {}\nfun main() { drop(User(\"a\")); keep(User(\"b\")) }\n",
+    );
+    for (file, glue) in [
+        ("lib/user.prism", "lib/user#drop(lib/user::User)"),
+        ("app/main.prism", "app/main#drop(lib/user::User)"),
+    ] {
+        let dump = prism(&["dump-clif", file], &directory);
+        assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+        let dump = stdout(&dump);
+        assert_eq!(function_headers(&dump).last(), Some(&glue), "{}", dump);
+    }
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Signature of a function over strings".
+#[test]
+fn signature_of_a_function_over_strings() {
+    let directory = single_file(
+        "string_signature",
+        "fun greet(name: String, n: Int): String = name\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let signature = function_ir(&dump, "main::greet").lines().next().unwrap();
+    // The result's address, the address of `name` and the 64-bit `n`; nothing is returned.
+    assert!(
+        signature.starts_with("function %\"main::greet\"(i64, i64, i64) "),
+        "{}",
+        signature
+    );
+    assert!(!signature.contains("->"), "{}", signature);
+    fs::remove_dir_all(&directory).ok();
+}

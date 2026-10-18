@@ -5,6 +5,7 @@
 pub mod dump;
 pub mod entry;
 pub mod error;
+pub mod glue;
 pub mod isa;
 pub mod layout;
 pub mod link;

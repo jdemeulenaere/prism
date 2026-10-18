@@ -127,11 +127,15 @@ What a drop does depends only on the dropped type:
 
 Rejected: glue expanded inline at each drop (code grows with the type's size at every drop, and the recursive types of `heap-boxes` cannot be expanded); glue in the defining file's unit, called through the function table (an indirect call per drop, and no file defines the glue of `Pair<String, Int>`); one runtime function interpreting a layout description at run time (slow, and the description would be one more representation to keep in sync); unnamed (anonymous) Cranelift functions (`prism dump-clif` could not name them).
 
+Implementation notes: glue is called through a non-colocated function reference, as data is addressed (`codegen-core`), since the JIT does not promise that two functions of a load are within reach of a PC-relative call; a unit's `CodeUnit` holds its glue apart from its functions, so the linker defines it without a slot. Glue symbols write every struct and enum qualified by its module, also inside type arguments (`main#clone(main::Pair<lib/user::User?, String>)`), so two types never share a glue function.
+
 Glue does not check the stack: nothing recursive can be dropped yet. `heap-boxes` makes glue recursive (dropping a `Heap<Expr>` drops an `Expr`), and must add the stack check of `codegen-core` D27, or drop long chains iteratively.
 
 ### D10. Clone glue follows drop glue
 
 The built-in `clone()` already writes a fresh value of the receiver's referent type to its destination. A type that owns no storage is copied (`codegen-aggregates` D15). A `String` is cloned by `prism_rt_string_clone`: a value owning no buffer is copied (D3), one owning a buffer gets a new, exactly sized buffer with the same text. A struct, enum or nullable that owns storage is cloned by a generated **clone glue function** `<unit module>#clone(<type>)` taking the source and destination addresses: each field in declaration order, copied when it owns nothing and otherwise cloned by its own glue; an enum writes the tag and clones the payloads of that variant; a nullable writes `null` or clones its payload. Glue is generated only for `Clone` types, since the type checker rejects every other `clone()`, and lives in the unit's `GlueTable` like drop glue.
+
+Implementation note: the clone glue of a struct, enum or nullable first copies the whole value bitwise, which writes every part that owns nothing, the tag and the padding, and then replaces each owning part of the current variant or payload, in declaration order, by a clone made by its own glue; this is what "copied when it owns nothing, cloned otherwise" means, with one copy instead of one per field.
 
 Cloning evaluates no user code (custom clone bodies wait for traits, the `ownership` spec), and a clone shares no owned memory with its source, which the allocation check (D13) makes observable: dropping both frees each buffer once.
 

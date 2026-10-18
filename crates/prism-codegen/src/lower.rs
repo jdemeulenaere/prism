@@ -13,9 +13,13 @@
 //! from its slot of the function table (D4), and a read of a top-level value calls its accessor
 //! the same way, panicking on the null pointer of a value read during its own initialization
 //! (D18). Each body starts by comparing the stack pointer with the runtime's stack limit, raising
-//! "stack overflow" below it (D27). A drop does nothing: no supported value owns storage (D14).
+//! "stack overflow" below it (D27). A drop of a value that owns storage, and a clone of one, call
+//! its type's glue directly ([`crate::glue`], D9 and D10 of `runtime-strings-and-drops`); a drop
+//! of any other value does nothing (D14 of `codegen-aggregates`), and its clone is a copy. Strings
+//! are built inline from literals and otherwise by the runtime's string functions (D7).
 
 use crate::error::BackendError;
+use crate::glue::{Glue, GlueKind};
 use crate::layout::{Layout, Member, Shape, StringField};
 use crate::representation::{is_pointer, representation, signature, Representation};
 use crate::symbols::{accessor_symbol, callee_symbol};
@@ -110,6 +114,8 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     /// The locals whose address is taken.
     borrowed: HashSet<LocalId>,
     runtime: HashMap<&'static str, ir::FuncRef>,
+    /// The glue functions the function calls.
+    glue: HashMap<Glue, ir::FuncRef>,
     /// The global value of each data object the function addresses.
     globals: HashMap<DataId, ir::GlobalValue>,
 }
@@ -131,6 +137,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             locals: Vec::new(),
             borrowed: borrowed_locals(body),
             runtime: HashMap::new(),
+            glue: HashMap::new(),
             globals: HashMap::new(),
         };
         lowering.lower_body()?;
@@ -1079,6 +1086,29 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         Ok(function)
     }
 
+    /// Calls the glue of `kind` for `ty`, which owns storage, on `arguments`.
+    fn call_glue(
+        &mut self,
+        kind: GlueKind,
+        ty: &Type,
+        arguments: &[Value],
+    ) -> Result<(), BackendError> {
+        let glue = self
+            .context
+            .glue(kind, ty)?
+            .ok_or_else(|| BackendError::new(format!("no glue for {}", ty)))?;
+        let reference = match self.glue.get(&glue) {
+            Some(reference) => *reference,
+            None => {
+                let reference = self.context.glue_reference(glue, self.builder.func)?;
+                self.glue.insert(glue, reference);
+                reference
+            }
+        };
+        self.builder.ins().call(reference, arguments);
+        Ok(())
+    }
+
     /// Continues in a new block when `condition` is false, and raises the runtime error `kind`
     /// at `span` in a cold block when it is true.
     fn check(
@@ -1247,11 +1277,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.write_place(destination, Lowered::Memory(temporary), false)?;
                 }
             }
-            Callee::Builtin(BuiltinFunction::Clone) if result_type == Type::String => {
+            Callee::Builtin(BuiltinFunction::Clone)
+                if self.context.glue(GlueKind::Clone, &result_type)?.is_some() =>
+            {
+                // A value that owns storage is cloned by its glue, into the destination.
                 let receiver = self.receiver(arguments, span)?;
                 let destination = self.address(destination)?;
-                let function = self.runtime_function("prism_rt_string_clone")?;
-                self.builder.ins().call(function, &[destination, receiver]);
+                self.call_glue(GlueKind::Clone, &result_type, &[destination, receiver])?;
             }
             Callee::Builtin(BuiltinFunction::Clone) => {
                 // The clone of a value that owns nothing is a copy of the receiver's referent
@@ -1444,8 +1476,14 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 }
             }
             TerminatorKind::Unreachable => self.panic(PanicKind::Unreachable, "", span)?,
-            // No supported value owns storage, so its drop does nothing (D14).
-            TerminatorKind::Drop { target, .. } => {
+            // A value that owns storage runs its drop glue; any other drop does nothing (D14 of
+            // `codegen-aggregates`). Drop flags are tested before the drop, in the MIR.
+            TerminatorKind::Drop { place, target } => {
+                let ty = place.ty(self.body, self.types());
+                if self.context.glue(GlueKind::Drop, &ty)?.is_some() {
+                    let address = self.address(place)?;
+                    self.call_glue(GlueKind::Drop, &ty, &[address])?;
+                }
                 self.builder.ins().jump(self.blocks[target.0 as usize], &[]);
             }
         }

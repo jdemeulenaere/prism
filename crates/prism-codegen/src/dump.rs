@@ -2,7 +2,8 @@
 //! `codegen-core`).
 //!
 //! The file is support-checked and lowered into a unit that is never linked, and each function
-//! is printed in body order, headed by `function <symbol>`, with every external name (the
+//! is printed in body order, then the unit's drop and clone glue in order of its symbols, each
+//! headed by `function <symbol>`, with every external name (the
 //! function itself, the slots it loads, the runtime functions it calls and its data) shown by
 //! symbol. The text is deterministic for one compiler and host.
 
@@ -37,7 +38,8 @@ pub fn dump_file(file: &MirFile) -> Result<String, DumpError> {
     let mut module = JITModule::new(JITBuilder::with_isa(isa()?, default_libcall_names()));
     let unit = CodeUnit::lower(file, &mut module)?;
     let mut text = String::new();
-    for (index, function) in unit.functions.iter().enumerate() {
+    // The functions in body order, then the glue in order of its symbols.
+    for (index, function) in unit.functions.iter().chain(&unit.glue).enumerate() {
         if index > 0 {
             text.push('\n');
         }

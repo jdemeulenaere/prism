@@ -141,7 +141,13 @@ impl Linker {
     pub fn add_file(&mut self, file: &MirFile) -> Result<(), BackendError> {
         let unit = CodeUnit::lower(file, &mut self.module)?;
         let mut context = self.module.make_context();
-        for function in unit.functions {
+        let glue = unit.glue.into_iter().map(|function| (function, false));
+        for (function, has_slot) in unit
+            .functions
+            .into_iter()
+            .map(|function| (function, true))
+            .chain(glue)
+        {
             context.func = function.function;
             self.module
                 .define_function(function.id, &mut context)
@@ -149,7 +155,10 @@ impl Linker {
                     BackendError::new(format!("compiling {}: {:?}", function.symbol, error))
                 })?;
             self.module.clear_context(&mut context);
-            self.defined.push((function.symbol, function.id));
+            // Glue is called directly within its unit and has no slot.
+            if has_slot {
+                self.defined.push((function.symbol, function.id));
+            }
         }
         Ok(())
     }

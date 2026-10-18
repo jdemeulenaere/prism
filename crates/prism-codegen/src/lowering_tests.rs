@@ -570,3 +570,98 @@ fn string_operations_give_their_results() {
         drop_string(sm);
     });
 }
+
+// Drop and clone glue (D9, D10 and D12 of `runtime-strings-and-drops`).
+
+#[test]
+fn drops_free_every_allocation_once() {
+    let program = compile(
+        "struct User { val name: String, val nick: String?, val age: Int }\n\
+         struct Team { val lead: User, val size: Int, val motto: String }\n\
+         enum Message { Text(String, Int), Pair(Int, String?), Empty }\n\
+         fun text(n: Int): String = n.toString() + \"!\"\n\
+         fun user(): Int { val u = User(text(1), text(2), 36); return u.age }\n\
+         fun anonymous(): Int { val u = User(text(1), null, 7); return u.age }\n\
+         fun team(): Int { val t = Team(User(text(1), text(2), 3), 4, text(5)); return t.size + t.lead.age }\n\
+         fun message(n: Int): Int {\n\
+             val m = if (n == 0) Message.Text(text(n), n) else if (n == 1) Message.Pair(n, text(n)) else if (n == 2) Message.Pair(n, null) else Message.Empty\n\
+             return n\n\
+         }\n\
+         fun nullable(n: Int): Bool { val s: String? = if (n == 0) null else text(n); return s == null }\n\
+         fun take(s: String): Int = s.length\n\
+         fun flag(c: Bool): Int { val s = text(1); if (c) return take(s); return 0 }\n\
+         fun reassign(): Int { var s = text(1); s = text(22); s += text(3); return s.length }\n\
+         fun set(r: &mut String, v: String) { *r = v }\n\
+         fun written(): Int { var s = text(1); set(&mut s, text(2)); return s.length }\n\
+         fun temporaries(): Int = take(text(1)) + text(23).length\n",
+    );
+    let user: ToInt = function(&program, "main::user");
+    let anonymous: ToInt = function(&program, "main::anonymous");
+    let team: ToInt = function(&program, "main::team");
+    let message: IntToInt = function(&program, "main::message");
+    let nullable: extern "C" fn(i64) -> u8 = function(&program, "main::nullable");
+    let flag: extern "C" fn(u8) -> i64 = function(&program, "main::flag");
+    let reassign: ToInt = function(&program, "main::reassign");
+    let written: ToInt = function(&program, "main::written");
+    let temporaries: ToInt = function(&program, "main::temporaries");
+    let made = checked(|| {
+        assert_eq!(user(), 36);
+        assert_eq!(anonymous(), 7);
+        assert_eq!(team(), 7);
+        assert_eq!(
+            [message(0), message(1), message(2), message(3)],
+            [0, 1, 2, 3]
+        );
+        assert_eq!([nullable(0), nullable(4)], [1, 0]);
+        assert_eq!([flag(1), flag(0)], [2, 0]);
+        assert_eq!(reassign(), 5);
+        assert_eq!(written(), 2);
+        assert_eq!(temporaries(), 5);
+    });
+    // Each `toString()` allocates, and each concatenation with a non-empty operand.
+    assert!(made > 20, "{}", made);
+}
+
+#[test]
+fn clones_own_their_buffers() {
+    let program = compile(
+        "struct User : Clone { var name: String, val nick: String?, val id: Int }\n\
+         enum Message : Clone { Text(String, Int), Empty }\n\
+         fun text(n: Int): String = n.toString() + \"!\"\n\
+         fun users(): Bool {\n\
+             var a = User(text(1), text(2), 7); val b = a.clone(); val same = a == b\n\
+             a.name = text(3)\n\
+             return same && a != b && b.nick == a.nick && b.name == text(1)\n\
+         }\n\
+         fun messages(): Bool {\n\
+             val a = Message.Text(text(1), 2); val b = a.clone(); val e = Message.Empty; val f = e.clone()\n\
+             return a == b && e == f\n\
+         }\n\
+         fun nullables(): Bool {\n\
+             val a: String? = text(1); val b = a.clone(); val n: String? = null; val m = n.clone()\n\
+             return a == b && m == null\n\
+         }\n\
+         fun strings(): Bool { var a = text(1); val b = a.clone(); a = text(2); return a != b }\n",
+    );
+    for name in ["users", "messages", "nullables", "strings"] {
+        let test: ToBool = function(&program, &format!("main::{}", name));
+        checked(|| assert_eq!(test(), 1, "{}", name));
+    }
+}
+
+#[test]
+fn top_level_values_are_released_before_the_check() {
+    let program = compile(
+        "val NAME: String = 4.toString() + \"2\"\n\
+         fun read(): Int = NAME.length + NAME.length\n",
+    );
+    let read: ToInt = function(&program, "main::read");
+    let _lock = prism_runtime::test_lock();
+    prism_runtime::start(Vec::new(), true);
+    assert_eq!(read(), 4);
+    assert_eq!(allocation_statistics().live_allocations, 1);
+    // `finish` drops the registered value, leaving nothing to report.
+    assert_eq!(prism_runtime::finish(), 0);
+    assert_eq!(allocation_statistics().live_allocations, 0);
+    prism_runtime::start(Vec::new(), false);
+}

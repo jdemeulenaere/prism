@@ -8,6 +8,7 @@
 //! values) is named after its module, so the units of a program never collide.
 
 use crate::error::BackendError;
+use crate::glue::{GlueKind, GlueTable};
 use crate::layout::LayoutTable;
 use crate::lower::BodyLowering;
 use crate::representation::{body_signature, representation, signature, Representation};
@@ -38,7 +39,11 @@ pub struct CodeUnit {
     /// The file's module path.
     pub module: String,
     /// Its functions, in body order, each top-level value's accessor after its initializer.
+    /// Each has a slot in the function table.
     pub functions: Vec<LoweredFunction>,
+    /// The drop and clone glue its functions call, in order of their symbols: local to the unit,
+    /// with no slot (D9 of `runtime-strings-and-drops`).
+    pub glue: Vec<LoweredFunction>,
 }
 
 /// The values of a top-level `val`'s initialization state byte (D18).
@@ -79,9 +84,11 @@ impl CodeUnit {
                 functions.push(accessor);
             }
         }
+        let glue = context.lower_glue(&mut builder_context)?;
         Ok(CodeUnit {
             module: file.module.clone(),
             functions,
+            glue,
         })
     }
 }
@@ -95,6 +102,8 @@ pub(crate) struct UnitContext<'m, M: Module> {
     pub call_conv: CallConv,
     /// The layouts of the file's types, shared by its bodies.
     pub layouts: LayoutTable<'m>,
+    /// The unit's drop and clone glue.
+    pub glue: GlueTable,
     /// The file's path relative to the workspace root, which runtime errors report.
     file_name: (DataId, usize),
     texts: HashMap<String, DataId>,
@@ -114,6 +123,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             pointer,
             call_conv,
             layouts: LayoutTable::new(&file.types, pointer),
+            glue: GlueTable::default(),
             file_name: (DataId::from_u32(0), 0),
             texts: HashMap::new(),
             runtime: HashMap::new(),
@@ -238,7 +248,9 @@ impl<'m, M: Module> UnitContext<'m, M> {
     /// address of the value's storage, running the initializer through its slot on the first
     /// call, and a null pointer when called again while the initializer runs. A value in memory
     /// is built in place: the storage's address is the initializer's result address (D17 of
-    /// `codegen-aggregates`).
+    /// `codegen-aggregates`). A value that owns storage is never dropped, but registered with the
+    /// runtime with its drop glue once initialized, so the allocation check can release it before
+    /// it reports what is still live (D12 and D13 of `runtime-strings-and-drops`).
     fn accessor(
         &mut self,
         path: &DeclarationPath,
@@ -260,6 +272,11 @@ impl<'m, M: Module> UnitContext<'m, M> {
             Function::with_name_signature(UserFuncName::user(0, id.as_u32()), accessor_signature);
         let initializer_signature = signature(&[], ty, self.call_conv, self.pointer);
         let value_representation = representation(ty, self.pointer);
+        let drop_glue = self.glue(GlueKind::Drop, ty)?;
+        let register = match drop_glue {
+            Some(_) => Some(self.runtime_function("prism_rt_register_top_level_value")?),
+            None => None,
+        };
         {
             let pointer = self.pointer;
             let mut builder = FunctionBuilder::new(&mut function, builder_context);
@@ -315,6 +332,14 @@ impl<'m, M: Module> UnitContext<'m, M> {
                 Some(Representation::Empty) | None => {
                     builder.ins().call_indirect(signature_ref, target, &[]);
                 }
+            }
+            if let (Some(glue), Some(register)) = (drop_glue, register) {
+                let glue = self.glue_reference(glue, builder.func)?;
+                let glue_address = builder.ins().func_addr(pointer, glue);
+                let register = self.module.declare_func_in_func(register, builder.func);
+                builder
+                    .ins()
+                    .call(register, &[storage_address, glue_address]);
             }
             let marker = builder.ins().iconst(types::I8, state::INITIALIZED);
             builder.ins().store(flags, marker, state_address, 0);
