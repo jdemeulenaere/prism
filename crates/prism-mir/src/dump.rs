@@ -23,13 +23,23 @@ impl MirFile {
     pub fn dump(&self) -> String {
         let mut out = String::new();
         writeln!(out, "module {}", self.module).unwrap();
-        if self.phase == MirPhase::Elaborated {
-            writeln!(out, "phase elaborated").unwrap();
+        match self.phase {
+            MirPhase::Built => {}
+            MirPhase::Elaborated => writeln!(out, "phase elaborated").unwrap(),
+            MirPhase::Composed => writeln!(out, "phase composed").unwrap(),
         }
         for (id, body) in self.bodies.iter() {
             self.dump_body(&mut out, id, body);
         }
         out
+    }
+
+    /// Whether body `id` is a skippable composable: one with a restart function (D10 of
+    /// `compose-transform`).
+    pub fn is_skippable(&self, id: BodyId) -> bool {
+        self.bodies.iter().any(
+            |(_, body)| matches!(body.owner, BodyOwner::Restart { function } if function == id),
+        )
     }
 
     /// Renders the bodies alone, without the `module` and `phase` lines, as a program's
@@ -61,6 +71,10 @@ impl MirFile {
             BodyOwner::Closure { parent, index } => {
                 format!("{}#closure{}", self.body_name(*parent), index)
             }
+            BodyOwner::Restart { function } => format!("{}#restart", self.body_name(*function)),
+            BodyOwner::RootContent { parent } => {
+                format!("{}#root-content", self.body_name(*parent))
+            }
         }
     }
 
@@ -69,13 +83,26 @@ impl MirFile {
             .arguments()
             .map(|local| format!("_{}: {}", local.0, body.locals[local].ty))
             .collect();
-        let compose = if body.is_compose { "compose " } else { "" };
+        // Composed MIR marks its composable bodies, and the skippable ones (D19 of
+        // `compose-transform`).
+        let compose = match (body.is_compose, self.phase) {
+            (false, _) => String::new(),
+            (true, MirPhase::Composed) if self.is_skippable(id) => {
+                "compose composed skippable ".to_string()
+            }
+            (true, MirPhase::Composed) => "compose composed ".to_string(),
+            (true, _) => "compose ".to_string(),
+        };
         let at = position(body.span);
         match &body.owner {
             BodyOwner::Value(path) => {
                 writeln!(out, "val {}: {} {}", path, body.return_type(), at).unwrap()
             }
-            BodyOwner::Function(_) | BodyOwner::Default { .. } | BodyOwner::Closure { .. } => {
+            BodyOwner::Function(_)
+            | BodyOwner::Default { .. }
+            | BodyOwner::Closure { .. }
+            | BodyOwner::Restart { .. }
+            | BodyOwner::RootContent { .. } => {
                 let keyword = match body.owner {
                     BodyOwner::Function(_) => "fun",
                     BodyOwner::Default { .. } => "default",
@@ -306,6 +333,12 @@ impl Printer<'_> {
             Rvalue::Unary(operator, operand) => {
                 format!("{}{}", operator.as_str(), self.operand(operand))
             }
+            Rvalue::Bits(operator, left, right) => format!(
+                "bits {} {} {}",
+                self.operand(left),
+                operator.as_str(),
+                self.operand(right)
+            ),
             Rvalue::Discriminant(place) => format!("discriminant {}", self.place(place)),
             Rvalue::Aggregate(kind, operands) => {
                 let name = match kind {
@@ -338,7 +371,7 @@ impl Printer<'_> {
                 // An owned capture is an operand, `move _1` or `copy _2`; elaborated MIR prints
                 // how the closure borrows each other capture (D10 of `borrowck-exclusivity`).
                 let modes = match self.file.phase {
-                    MirPhase::Elaborated => self
+                    MirPhase::Elaborated | MirPhase::Composed => self
                         .file
                         .bodies
                         .get(*body)
@@ -410,6 +443,7 @@ impl Printer<'_> {
                         render_type_arguments(type_arguments),
                         name
                     ),
+                    Callee::Composer(operation) => composer_operation(operation),
                 };
                 let target = match target {
                     Some(target) => format!(" -> bb{}", target.0),
@@ -429,8 +463,39 @@ impl Printer<'_> {
             }
             TerminatorKind::Return => "return".to_string(),
             TerminatorKind::Unreachable => "unreachable".to_string(),
+            TerminatorKind::Remembered {
+                composer,
+                slot_type,
+                destination,
+                found,
+                missing,
+            } => format!(
+                "{} = remembered<{}>({}) -> [found: bb{}, missing: bb{}]",
+                self.place(destination),
+                slot_type.qualified(),
+                self.operand(composer),
+                found.0,
+                missing.0
+            ),
         }
     }
+}
+
+/// A composer operation as a callee: `composer start_group key 0x3f9a0c12d4e5b678 /* if 0
+/// then */`, `composer changed<Int>`, `composer kept_parameter 0<Int>`.
+fn composer_operation(operation: &crate::mir::ComposerOperation) -> String {
+    use crate::mir::ComposerOperation as Operation;
+    let detail = match operation {
+        Operation::StartRestartGroup { key }
+        | Operation::StartGroup { key }
+        | Operation::StartMovableGroup { key } => {
+            format!(" key 0x{:016x} /* {} */", key.hash, key.label)
+        }
+        Operation::Changed(ty) | Operation::SetSlot(ty) => format!("<{}>", ty.qualified()),
+        Operation::KeptParameter { index, ty } => format!(" {}<{}>", index, ty.qualified()),
+        _ => String::new(),
+    };
+    format!("composer {}{}", operation.name(), detail)
 }
 
 /// Renders a body's type parameters as declared, followed by a space (`<T : Copy> `), or nothing

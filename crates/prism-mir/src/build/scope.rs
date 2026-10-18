@@ -264,7 +264,7 @@ impl Builder<'_> {
             | Rvalue::Unary(_, operand)
             | Rvalue::WrapNullable(operand)
             | Rvalue::Subtype(operand) => self.record_operand_moved(operand),
-            Rvalue::Binary(_, left, right) => {
+            Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
                 self.record_operand_moved(left);
                 self.record_operand_moved(right);
             }

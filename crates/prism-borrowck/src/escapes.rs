@@ -191,7 +191,10 @@ impl Escapes<'_> {
     fn position(&self, destination: &Place) -> Option<&'static str> {
         if *destination == Place::return_place() {
             return Some(match self.body.owner {
-                BodyOwner::Function(_) | BodyOwner::Closure { .. } => "returned here",
+                BodyOwner::Function(_)
+                | BodyOwner::Closure { .. }
+                | BodyOwner::Restart { .. }
+                | BodyOwner::RootContent { .. } => "returned here",
                 BodyOwner::Value(_) => "assigned to a top-level value here",
                 BodyOwner::Default { .. } => "returned as a default value here",
             });

@@ -128,6 +128,14 @@ pub fn symbol_of(body: &Body, file: &MirFile) -> String {
                 index
             )
         }
+        // Named by what they belong to, so inserting a closure never shifts them (D19 of
+        // `compose-transform`).
+        BodyOwner::Restart { function } => {
+            format!("{}#restart", symbol_of(&file.bodies[*function], file))
+        }
+        BodyOwner::RootContent { parent } => {
+            format!("{}#root-content", symbol_of(&file.bodies[*parent], file))
+        }
     }
 }
 
@@ -141,7 +149,9 @@ pub fn symbols_of(file: &MirFile) -> Vec<String> {
         // The bodies from `id` up to the first whose symbol is known or that is no closure,
         // named outermost first.
         let mut chain = vec![id];
-        while let BodyOwner::Closure { parent, .. } = file.bodies[*chain.last().unwrap()].owner {
+        while let Some(parent) =
+            prism_mir::record::parent_of(&file.bodies[*chain.last().unwrap()].owner)
+        {
             if symbols[parent.index()].is_some() {
                 break;
             }
@@ -152,14 +162,20 @@ pub fn symbols_of(file: &MirFile) -> Vec<String> {
                 continue;
             }
             let body = &file.bodies[body_id];
+            let parent_symbol = |parent: &prism_mir::BodyId| {
+                symbols[parent.index()]
+                    .as_deref()
+                    .expect("a parent is named before its closures")
+                    .to_string()
+            };
             let symbol = match &body.owner {
-                BodyOwner::Closure { parent, index } => format!(
-                    "{}#closure{}",
-                    symbols[parent.index()]
-                        .as_deref()
-                        .expect("a parent is named before its closures"),
-                    index
-                ),
+                BodyOwner::Closure { parent, index } => {
+                    format!("{}#closure{}", parent_symbol(parent), index)
+                }
+                BodyOwner::Restart { function } => format!("{}#restart", parent_symbol(function)),
+                BodyOwner::RootContent { parent } => {
+                    format!("{}#root-content", parent_symbol(parent))
+                }
                 _ => symbol_of(body, file),
             };
             symbols[body_id.index()] = Some(symbol);
@@ -181,7 +197,7 @@ pub fn callee_symbol(callee: &Callee, type_arguments: &[Type]) -> Option<String>
         Callee::Default { function, name, .. } => {
             Some(default_instance_symbol(function, type_arguments, name))
         }
-        Callee::Builtin(_) | Callee::External(_) | Callee::Value(..) => None,
+        Callee::Builtin(_) | Callee::External(_) | Callee::Value(..) | Callee::Composer(_) => None,
     }
 }
 
@@ -196,6 +212,38 @@ mod tests {
             .iter()
             .map(|(_, body)| symbol_of(body, file))
             .collect()
+    }
+
+    /// D19 of `compose-transform`: a restart function and a root content adapter are named
+    /// after the body they belong to, an instance's after the instance.
+    #[test]
+    fn restart_and_root_content_symbols() {
+        let mut file = lower_source("fun <T> show(x: T) {}\nfun main() {}\n");
+        let show = prism_mir::BodyId(0);
+        let main = prism_mir::BodyId(1);
+        let mut restart = file.bodies[show].clone();
+        restart.owner = BodyOwner::Restart { function: show };
+        file.bodies.alloc(restart);
+        let mut adapter = file.bodies[main].clone();
+        adapter.owner = BodyOwner::RootContent { parent: main };
+        file.bodies.alloc(adapter);
+        let mut instance = file.bodies[show].clone();
+        instance.type_parameters.clear();
+        instance.type_arguments = vec![Type::Int];
+        let instance = file.bodies.alloc(instance);
+        let mut instance_restart = file.bodies[show].clone();
+        instance_restart.owner = BodyOwner::Restart { function: instance };
+        file.bodies.alloc(instance_restart);
+        let expected = [
+            "main::show",
+            "main::main",
+            "main::show#restart",
+            "main::main#root-content",
+            "main::show<Int>",
+            "main::show<Int>#restart",
+        ];
+        assert_eq!(symbols(&file), expected);
+        assert_eq!(symbols_of(&file), expected);
     }
 
     #[test]

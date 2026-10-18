@@ -398,6 +398,7 @@ impl<'a> LoanFlow<'a> {
                 .collect(),
             // A template's result is a new string, holding no borrow of its parts.
             Rvalue::Binary(..)
+            | Rvalue::Bits(..)
             | Rvalue::Unary(..)
             | Rvalue::Discriminant(_)
             | Rvalue::Aggregate(..)
@@ -584,7 +585,7 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
         | Rvalue::Unary(_, operand)
         | Rvalue::WrapNullable(operand)
         | Rvalue::Subtype(operand) => vec![operand],
-        Rvalue::Binary(_, left, right) => vec![left, right],
+        Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => vec![left, right],
         Rvalue::Aggregate(_, operands) => operands.iter().collect(),
         Rvalue::Template(_) => rvalue.template_operands().collect(),
         // A closure value moves or copies the captures it owns (D2 of `escaping-closures`).

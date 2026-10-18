@@ -114,7 +114,9 @@ impl InstanceRequest {
                     name: name.clone(),
                 }),
             ),
-            Callee::External(_) | Callee::Builtin(_) | Callee::Value(..) => return None,
+            Callee::External(_) | Callee::Builtin(_) | Callee::Value(..) | Callee::Composer(_) => {
+                return None
+            }
         };
         Some(Self {
             callee,
@@ -227,7 +229,7 @@ fn generic_summary(record: &GenericRecord, record_hash: [u8; 32]) -> GenericSumm
         })
         .collect();
     for (closure, id) in record.closures.iter().zip(&record.closure_ids) {
-        let BodyOwner::Closure { parent, .. } = closure.owner else {
+        let Some(parent) = crate::record::parent_of(&closure.owner) else {
             continue;
         };
         let Some(root) = roots.get(&parent).copied() else {

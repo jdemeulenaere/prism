@@ -1222,6 +1222,18 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     _ => self.binary(*operator, &ty, left, right, span),
                 }
             }
+            // Change words: plain machine operations, without overflow checks (D20 of
+            // `compose-transform`).
+            Rvalue::Bits(operator, left, right) => {
+                let left = self.operand(left, span)?.scalar()?;
+                let right = self.operand(right, span)?.scalar()?;
+                Ok(Lowered::Scalar(match operator {
+                    prism_mir::BitOperator::And => self.builder.ins().band(left, right),
+                    prism_mir::BitOperator::Or => self.builder.ins().bor(left, right),
+                    prism_mir::BitOperator::ShiftLeft => self.builder.ins().ishl(left, right),
+                    prism_mir::BitOperator::ShiftRight => self.builder.ins().ushr(left, right),
+                }))
+            }
             Rvalue::Unary(operator, operand) => {
                 let ty = self
                     .operand_type(operand)
@@ -1815,8 +1827,39 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Callee::Builtin(builtin) => {
                 self.list_call(*builtin, arguments, type_arguments, destination, span)?
             }
+            Callee::Composer(operation) => {
+                self.composer_call(operation, arguments, parameters, destination, span)?
+            }
         }
         self.finish_call(target)
+    }
+
+    /// A call of a composer operation (D20 of `compose-transform`).
+    fn composer_call(
+        &mut self,
+        operation: &prism_mir::ComposerOperation,
+        _arguments: &[Operand],
+        _parameters: &[Type],
+        _destination: &Place,
+        _span: Span,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::new(format!(
+            "the composer operation {} is not lowered yet",
+            operation.name()
+        )))
+    }
+
+    /// A read of the slot at the composer's cursor (D19 of `compose-transform`).
+    fn remembered(
+        &mut self,
+        _composer: &Operand,
+        _slot_type: &Type,
+        _destination: &Place,
+        _found: prism_mir::BlockId,
+        _missing: prism_mir::BlockId,
+        _span: Span,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::new("slot reads are not lowered yet"))
     }
 
     /// Ends the block of a call: a jump to `target`, or a trap after a callee that returns
@@ -2277,6 +2320,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 }
             }
             TerminatorKind::Unreachable => self.panic(PanicKind::Unreachable, "", span)?,
+            TerminatorKind::Remembered {
+                composer,
+                slot_type,
+                destination,
+                found,
+                missing,
+            } => self.remembered(composer, slot_type, destination, *found, *missing, span)?,
             // A value that owns storage runs its drop glue; any other drop does nothing (D14 of
             // `codegen-aggregates`). Drop flags are tested before the drop, in the MIR.
             TerminatorKind::Drop { place, target } => {
@@ -2389,7 +2439,7 @@ fn block_local_temporaries(body: &Body) -> Vec<bool> {
                         | Rvalue::Unary(_, operand)
                         | Rvalue::WrapNullable(operand)
                         | Rvalue::Subtype(operand) => used.extend(operand_place(operand)),
-                        Rvalue::Binary(_, left, right) => {
+                        Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
                             used.extend(operand_place(left));
                             used.extend(operand_place(right));
                         }
@@ -2450,6 +2500,16 @@ fn block_local_temporaries(body: &Body) -> Vec<bool> {
                 seen[destination.local.0 as usize] = Seen::Disqualified;
             }
             TerminatorKind::Drop { place, .. } => mention(&mut seen, place.local, block, false),
+            TerminatorKind::Remembered {
+                composer,
+                destination,
+                ..
+            } => {
+                if let Some(place) = operand_place(composer) {
+                    mention(&mut seen, place.local, block, false);
+                }
+                seen[destination.local.0 as usize] = Seen::Disqualified;
+            }
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
         }
     }

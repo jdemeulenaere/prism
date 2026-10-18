@@ -70,7 +70,11 @@ impl GenericRecord {
                     }
                     record
                 }
-                BodyOwner::Closure { parent, .. } => {
+                // A restart function and a root content adapter belong to the record of the
+                // body they belong to, like its closures (D19 of `compose-transform`).
+                BodyOwner::Closure { parent, .. }
+                | BodyOwner::Restart { function: parent }
+                | BodyOwner::RootContent { parent } => {
                     let record = owners.get(parent.index()).copied().flatten();
                     if let Some(record) = record {
                         records[record].closures.push(body.clone());
@@ -108,7 +112,9 @@ impl GenericRecord {
                     matches!(&body.owner, BodyOwner::Default { parameter: p, .. } if p == parameter)
                 })
                 .map(|(body, id)| (*id, body)),
-            Callee::External(_) | Callee::Builtin(_) | Callee::Value(..) => None,
+            Callee::External(_) | Callee::Builtin(_) | Callee::Value(..) | Callee::Composer(_) => {
+                None
+            }
         }
     }
 
@@ -127,7 +133,7 @@ impl GenericRecord {
         let mut numbers: HashMap<BodyId, BodyId> = HashMap::from([(id, BodyId(0))]);
         let mut bodies = vec![instantiate(body, type_arguments, types)];
         for (closure, closure_id) in self.closures.iter().zip(&self.closure_ids) {
-            let BodyOwner::Closure { parent, .. } = closure.owner else {
+            let Some(parent) = parent_of(&closure.owner) else {
                 continue;
             };
             if numbers.contains_key(&parent) {
@@ -145,7 +151,10 @@ impl GenericRecord {
 /// Renames the bodies `body` names, its closure parent and the closures it builds, by
 /// `numbers`.
 fn renumber_bodies(body: &mut Body, numbers: &HashMap<BodyId, BodyId>) {
-    if let BodyOwner::Closure { parent, .. } = &mut body.owner {
+    if let BodyOwner::Closure { parent, .. }
+    | BodyOwner::Restart { function: parent }
+    | BodyOwner::RootContent { parent } = &mut body.owner
+    {
         *parent = numbers[parent];
     }
     for (_, block) in body.blocks.iter_mut() {
@@ -156,6 +165,16 @@ fn renumber_bodies(body: &mut Body, numbers: &HashMap<BodyId, BodyId>) {
                 }
             }
         }
+    }
+}
+
+/// The body a closure, restart function or root content adapter belongs to.
+pub fn parent_of(owner: &BodyOwner) -> Option<BodyId> {
+    match owner {
+        BodyOwner::Closure { parent, .. }
+        | BodyOwner::Restart { function: parent }
+        | BodyOwner::RootContent { parent } => Some(*parent),
+        BodyOwner::Function(_) | BodyOwner::Value(_) | BodyOwner::Default { .. } => None,
     }
 }
 
@@ -180,7 +199,7 @@ pub fn mentioned_ids(body: &Body, ids: &mut Vec<NominalId>) {
                 | Rvalue::Unary(_, o)
                 | Rvalue::WrapNullable(o)
                 | Rvalue::Subtype(o) => operand(o, ids),
-                Rvalue::Binary(_, left, right) => {
+                Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
                     operand(left, ids);
                     operand(right, ids);
                 }
@@ -223,6 +242,9 @@ pub fn mentioned_ids(body: &Body, ids: &mut Vec<NominalId>) {
                 }
             }
             arguments.iter().for_each(|o| operand(o, ids));
+        }
+        if let TerminatorKind::Remembered { slot_type, .. } = &block.terminator.kind {
+            slot_type.collect_nominal_ids(ids);
         }
     }
 }

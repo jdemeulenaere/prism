@@ -87,6 +87,11 @@ pub enum MirPhase {
     /// Borrow-checked, with drops elaborated: a drop runs only where its value is present,
     /// statically or under a drop flag.
     Elaborated,
+    /// Elaborated MIR the compose transform rewrote (D19 of `compose-transform`): composable
+    /// bodies take the composer and their change words and run in groups, composable calls pass
+    /// them, region markers became composer operations, and the compose runtime's intrinsics
+    /// are composer operations too. What records, instances and the backend read.
+    Composed,
 }
 
 /// What a body is the code of.
@@ -105,9 +110,26 @@ pub enum BodyOwner {
     },
     /// The `index`-th closure lowered in the body `parent` (D13).
     Closure { parent: BodyId, index: usize },
+    /// The restart function of the skippable composable `function`, a closure capturing
+    /// nothing of type `(Int) -> Unit` that reads the kept arguments and calls the composable
+    /// with the force bit (D10 of `compose-transform`).
+    Restart { function: BodyId },
+    /// The adapter through which the runtime calls a composition's content, given to
+    /// `composition` and `setContent` in the body `parent`: a closure of type `(Int) -> Unit`
+    /// owning the content, which it calls with the composer and the force bit (D15).
+    RootContent { parent: BodyId },
 }
 
 impl BodyOwner {
+    /// Whether the body's code is a closure's, called through a function value with its
+    /// environment: a closure, a restart function or a root content adapter.
+    pub fn is_closure(&self) -> bool {
+        matches!(
+            self,
+            BodyOwner::Closure { .. } | BodyOwner::Restart { .. } | BodyOwner::RootContent { .. }
+        )
+    }
+
     /// Whether the body's first argument is a receiver: exactly for the body of an extension,
     /// whose declaration path names its receiver type (D3 of `borrowck-elision`).
     pub fn has_receiver(&self) -> bool {
@@ -425,6 +447,16 @@ pub enum TerminatorKind {
     },
     Return,
     Unreachable,
+    /// Reads the slot at the composer's cursor (D19 of `compose-transform`): when it holds a
+    /// value of `slot_type`, copies it to `destination`, moves the cursor past it and continues
+    /// at `found`; otherwise continues at `missing`. Only in composed MIR.
+    Remembered {
+        composer: Operand,
+        slot_type: Type,
+        destination: Place,
+        found: BlockId,
+        missing: BlockId,
+    },
 }
 
 impl TerminatorKind {
@@ -456,6 +488,25 @@ impl TerminatorKind {
                 .collect(),
             TerminatorKind::Call { target, .. } => target.iter().copied().collect(),
             TerminatorKind::Drop { target, .. } => vec![*target],
+            TerminatorKind::Remembered { found, missing, .. } => vec![*found, *missing],
+            TerminatorKind::Return | TerminatorKind::Unreachable => Vec::new(),
+        }
+    }
+
+    /// The blocks this terminator may jump to, mutably, in the order of [`Self::successors`].
+    pub fn successors_mut(&mut self) -> Vec<&mut BlockId> {
+        match self {
+            TerminatorKind::Goto(target) => vec![target],
+            TerminatorKind::SwitchInt {
+                targets, otherwise, ..
+            } => targets
+                .iter_mut()
+                .map(|(_, target)| target)
+                .chain(std::iter::once(otherwise))
+                .collect(),
+            TerminatorKind::Call { target, .. } => target.iter_mut().collect(),
+            TerminatorKind::Drop { target, .. } => vec![target],
+            TerminatorKind::Remembered { found, missing, .. } => vec![found, missing],
             TerminatorKind::Return | TerminatorKind::Unreachable => Vec::new(),
         }
     }
@@ -573,6 +624,31 @@ pub enum Rvalue {
     /// `string-templates`): constant text, and values, each a `&String` (a shared `Operator`
     /// borrow) or an `Int`, `Double`, `Bool` or `Char`.
     Template(Vec<TemplatePart>),
+    /// A bitwise operation on two `Int`s, without overflow checks: how composed MIR builds
+    /// change words (D19 of `compose-transform`). No source operator lowers to it yet.
+    Bits(BitOperator, Operand, Operand),
+}
+
+/// A bitwise operator of [`Rvalue::Bits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BitOperator {
+    And,
+    Or,
+    ShiftLeft,
+    /// A logical shift: zeros come in from the left.
+    ShiftRight,
+}
+
+impl BitOperator {
+    /// The operator as the dump prints it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BitOperator::And => "&",
+            BitOperator::Or => "|",
+            BitOperator::ShiftLeft => "<<",
+            BitOperator::ShiftRight => ">>>",
+        }
+    }
 }
 
 /// How a closure value takes one captured binding (D2 of `escaping-closures`).
@@ -683,6 +759,114 @@ pub enum Callee {
         parameter: usize,
         name: String,
     },
+    /// An operation of the composition protocol, a call of a compose runtime entry point (D19
+    /// of `compose-transform`). Only in composed MIR.
+    Composer(ComposerOperation),
+}
+
+/// A group key: its 64-bit hash, and what it is the key of, for dumps (D5 of
+/// `compose-transform`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GroupKey {
+    pub hash: u64,
+    /// `body main::Counter`, `if 0 then`, `key 0`.
+    pub label: String,
+}
+
+/// An operation of the composition protocol (D19 of `compose-transform`). The composer is the
+/// first operand of every operation of a pass; the composition operations take the
+/// composition or the scope instead.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComposerOperation {
+    /// `(composer)`: starts the restart group of a skippable body.
+    StartRestartGroup { key: GroupKey },
+    /// `(composer)`: starts a replaceable group.
+    StartGroup { key: GroupKey },
+    /// `(composer, data key)`: starts the movable group of a `key` call.
+    StartMovableGroup { key: GroupKey },
+    /// `(composer)`: ends a replaceable or movable group.
+    EndGroup,
+    /// `(composer, restart function moved)`: ends a restart group, which keeps the function.
+    EndRestartGroup,
+    /// `(composer) -> Bool`: whether the innermost restart group may skip its body.
+    Skipping,
+    /// `(composer)`: keeps the rest of the innermost group as it is.
+    SkipToGroupEnd,
+    /// `(composer, value moved) -> Bool`: compares the value with the slot at the cursor,
+    /// storing it when it differs.
+    Changed(Type),
+    /// `(composer, value moved)`: stores the value in the slot at the cursor.
+    SetSlot(Type),
+    /// `(composer) -> T`: during a restart, the value kept in slot `index` of the scope's
+    /// group, copied out or duplicated.
+    KeptParameter { index: u32, ty: Type },
+    /// `(&function value) -> Bool`: whether the function value can be kept and compared.
+    Keepable,
+    /// `(&function value) -> function value`: a duplicate of a keepable function value.
+    Duplicate,
+    /// `(composer) -> RecomposeScope`: the current scope.
+    CurrentScope,
+    /// `(root content adapter moved) -> Composition`: starts a composition.
+    StartComposition,
+    /// `(&Composition, root content adapter moved)`: sets a composition's content.
+    SetContent,
+    /// `(&Composition) -> Bool`: recomposes a composition's invalid scopes.
+    Recompose,
+    /// `(&Composition) -> String`: dumps a composition.
+    Dump,
+    /// `(&RecomposeScope)`: invalidates a scope.
+    Invalidate,
+}
+
+impl ComposerOperation {
+    /// The operation's name in dumps.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ComposerOperation::StartRestartGroup { .. } => "start_restart_group",
+            ComposerOperation::StartGroup { .. } => "start_group",
+            ComposerOperation::StartMovableGroup { .. } => "start_movable_group",
+            ComposerOperation::EndGroup => "end_group",
+            ComposerOperation::EndRestartGroup => "end_restart_group",
+            ComposerOperation::Skipping => "skipping",
+            ComposerOperation::SkipToGroupEnd => "skip_to_group_end",
+            ComposerOperation::Changed(_) => "changed",
+            ComposerOperation::SetSlot(_) => "set_slot",
+            ComposerOperation::KeptParameter { .. } => "kept_parameter",
+            ComposerOperation::Keepable => "keepable",
+            ComposerOperation::Duplicate => "duplicate",
+            ComposerOperation::CurrentScope => "current_scope",
+            ComposerOperation::StartComposition => "start_composition",
+            ComposerOperation::SetContent => "set_content",
+            ComposerOperation::Recompose => "recompose",
+            ComposerOperation::Dump => "dump",
+            ComposerOperation::Invalidate => "invalidate",
+        }
+    }
+
+    /// Whether the operation works on a composition or a scope rather than on a pass, so it
+    /// may be called outside composable bodies.
+    pub fn is_composition_operation(&self) -> bool {
+        matches!(
+            self,
+            ComposerOperation::StartComposition
+                | ComposerOperation::SetContent
+                | ComposerOperation::Recompose
+                | ComposerOperation::Dump
+                | ComposerOperation::Invalidate
+                | ComposerOperation::Keepable
+                | ComposerOperation::Duplicate
+        )
+    }
+
+    /// The slot type the operation names, if any.
+    pub fn slot_type(&self) -> Option<&Type> {
+        match self {
+            ComposerOperation::Changed(ty)
+            | ComposerOperation::SetSlot(ty)
+            | ComposerOperation::KeptParameter { ty, .. } => Some(ty),
+            _ => None,
+        }
+    }
 }
 
 impl Callee {
@@ -698,7 +882,10 @@ impl Callee {
         match self {
             Callee::Function(path) => path.receiver.is_some(),
             Callee::Builtin(builtin) => builtin.has_receiver(),
-            Callee::External(_) | Callee::Value(..) | Callee::Default { .. } => false,
+            Callee::External(_)
+            | Callee::Value(..)
+            | Callee::Default { .. }
+            | Callee::Composer(_) => false,
         }
     }
 

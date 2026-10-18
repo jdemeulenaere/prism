@@ -195,6 +195,10 @@ pub(crate) fn location_events(
                         });
                     }
                 }
+                // Composed MIR is never borrow-checked; a slot read writes its destination.
+                TerminatorKind::Remembered { destination, .. } => {
+                    destination_events(destination, span, &mut events)
+                }
                 TerminatorKind::Goto(_) | TerminatorKind::Unreachable => {}
             }
         }
@@ -252,7 +256,7 @@ fn rvalue_events(
         | Rvalue::Unary(_, operand)
         | Rvalue::WrapNullable(operand)
         | Rvalue::Subtype(operand) => operand_events(file, body, operand, events),
-        Rvalue::Binary(_, left, right) => {
+        Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
             operand_events(file, body, left, events);
             operand_events(file, body, right, events);
         }

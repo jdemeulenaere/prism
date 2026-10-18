@@ -96,6 +96,14 @@ pub(crate) fn shared_variables(
             TerminatorKind::Drop { place, .. } => {
                 place_reads(place, &mut |local| note(local, false))
             }
+            TerminatorKind::Remembered {
+                composer,
+                destination,
+                ..
+            } => {
+                operand_reads(composer, &mut |local| note(local, false));
+                write(destination, &mut note);
+            }
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
         }
         mentions[index] = order
@@ -220,7 +228,7 @@ fn rvalue_reads(rvalue: &Rvalue, read: &mut impl FnMut(LocalId)) {
         | Rvalue::Unary(_, operand)
         | Rvalue::WrapNullable(operand)
         | Rvalue::Subtype(operand) => operand_reads(operand, read),
-        Rvalue::Binary(_, left, right) => {
+        Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
             operand_reads(left, read);
             operand_reads(right, read);
         }

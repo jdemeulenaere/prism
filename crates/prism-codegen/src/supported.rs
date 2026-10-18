@@ -321,7 +321,9 @@ impl BodyChecker<'_> {
             Rvalue::Use(operand) | Rvalue::Unary(_, operand) | Rvalue::WrapNullable(operand) => {
                 self.operand(operand)
             }
-            Rvalue::Binary(_, left, right) => self.operand(left).or_else(|| self.operand(right)),
+            Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
+                self.operand(left).or_else(|| self.operand(right))
+            }
             Rvalue::Borrow { place, .. } | Rvalue::Discriminant(place) => self.place(place),
             Rvalue::Aggregate(kind, operands) => self
                 .classify(&kind.ty())
@@ -353,6 +355,7 @@ impl BodyChecker<'_> {
             // A supported value's drop runs its drop glue, if it has any (D9 of
             // `runtime-strings-and-drops`).
             TerminatorKind::Drop { place, .. } => self.place(place),
+            TerminatorKind::Remembered { destination, .. } => self.place(destination),
             TerminatorKind::Call {
                 callee,
                 arguments,
@@ -370,7 +373,8 @@ impl BodyChecker<'_> {
                     Callee::Builtin(_)
                     | Callee::Function(_)
                     | Callee::External(_)
-                    | Callee::Default { .. } => None,
+                    | Callee::Default { .. }
+                    | Callee::Composer(_) => None,
                 };
                 callee_place
                     .or_else(|| arguments.iter().find_map(|argument| self.operand(argument)))

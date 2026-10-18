@@ -143,6 +143,9 @@ impl Instance<'_> {
             Rvalue::Binary(operator, left, right) => {
                 Rvalue::Binary(*operator, self.operand(left), self.operand(right))
             }
+            Rvalue::Bits(operator, left, right) => {
+                Rvalue::Bits(*operator, self.operand(left), self.operand(right))
+            }
             Rvalue::Unary(operator, operand) => Rvalue::Unary(*operator, self.operand(operand)),
             Rvalue::Discriminant(place) => Rvalue::Discriminant(self.place(place)),
             Rvalue::Aggregate(kind, operands) => Rvalue::Aggregate(
@@ -214,6 +217,23 @@ impl Instance<'_> {
         }
     }
 
+    /// The instance of a composer operation: its slot type substituted.
+    fn operation(
+        &self,
+        operation: &crate::mir::ComposerOperation,
+    ) -> crate::mir::ComposerOperation {
+        use crate::mir::ComposerOperation as Operation;
+        match operation {
+            Operation::Changed(ty) => Operation::Changed(self.substitute(ty)),
+            Operation::SetSlot(ty) => Operation::SetSlot(self.substitute(ty)),
+            Operation::KeptParameter { index, ty } => Operation::KeptParameter {
+                index: *index,
+                ty: self.substitute(ty),
+            },
+            other => other.clone(),
+        }
+    }
+
     /// The instance of `terminator`, where `instance` holds the substituted locals.
     fn terminator(&self, terminator: &TerminatorKind, instance: &Body) -> TerminatorKind {
         match terminator {
@@ -239,6 +259,9 @@ impl Instance<'_> {
                 escaping: escaping.clone(),
                 callee: match callee {
                     Callee::Value(place, span) => Callee::Value(self.place(place), *span),
+                    // A composed generic's slot types mention its type parameters (D21 of
+                    // `compose-transform`).
+                    Callee::Composer(operation) => Callee::Composer(self.operation(operation)),
                     other => other.clone(),
                 },
                 arguments: arguments
@@ -275,6 +298,19 @@ impl Instance<'_> {
                     TerminatorKind::Goto(*target)
                 }
             }
+            TerminatorKind::Remembered {
+                composer,
+                slot_type,
+                destination,
+                found,
+                missing,
+            } => TerminatorKind::Remembered {
+                composer: self.operand(composer),
+                slot_type: self.substitute(slot_type),
+                destination: self.place(destination),
+                found: *found,
+                missing: *missing,
+            },
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {
                 terminator.clone()
             }

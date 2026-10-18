@@ -2,9 +2,9 @@
 //! fixture and example.
 
 use crate::mir::{
-    AggregateKind, BasicBlock, BlockId, Body, BodyId, BodyOwner, Callee, Capture, CaptureMode,
-    Constant, LocalId, LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue,
-    StatementKind, TemplatePart, TerminatorKind,
+    AggregateKind, BasicBlock, BlockId, Body, BodyId, Callee, Capture, CaptureMode, Constant,
+    LocalId, LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind,
+    TemplatePart, TerminatorKind,
 };
 use crate::types::{needs_drop, projection_type};
 use prism_typed_tree::{
@@ -96,6 +96,10 @@ impl Validator<'_> {
         if !crate::regions::has_markers(self.body) {
             return;
         }
+        if self.file.phase == MirPhase::Composed {
+            self.report("a region marker in composed MIR".to_string());
+            return;
+        }
         if !self.body.is_compose {
             self.report("a region marker outside a composable body".to_string());
             return;
@@ -114,11 +118,11 @@ impl Validator<'_> {
         if first.kind != LocalKind::Return {
             self.report("_0 is not the return place".to_string());
         }
-        let is_closure = matches!(body.owner, BodyOwner::Closure { .. });
+        let is_closure = body.owner.is_closure();
         if body.capture_count > 0 && !is_closure {
             self.report(format!("{} captures outside a closure", body.capture_count));
         }
-        if let BodyOwner::Closure { parent, .. } = body.owner {
+        if let Some(parent) = crate::record::parent_of(&body.owner) {
             if parent >= id {
                 self.report(format!(
                     "the closure's parent body {} does not precede it",
@@ -190,7 +194,7 @@ impl Validator<'_> {
         // elaborated (D10 of `borrowck-exclusivity`).
         let expected_modes = match self.file.phase {
             MirPhase::Built => 0,
-            MirPhase::Elaborated => body.capture_count,
+            MirPhase::Elaborated | MirPhase::Composed => body.capture_count,
         };
         if body.capture_modes.len() != expected_modes {
             self.report(format!(
@@ -200,6 +204,7 @@ impl Validator<'_> {
                 match self.file.phase {
                     MirPhase::Built => "built",
                     MirPhase::Elaborated => "elaborated",
+                    MirPhase::Composed => "composed",
                 }
             ));
         }
@@ -207,7 +212,7 @@ impl Validator<'_> {
             if declaration.kind != LocalKind::DropFlag {
                 continue;
             }
-            if self.file.phase != MirPhase::Elaborated {
+            if self.file.phase == MirPhase::Built {
                 self.report(format!(
                     "_{} is a drop flag in MIR that is not elaborated",
                     local.0
@@ -468,6 +473,20 @@ impl Validator<'_> {
         let at = format!("bb{}[terminator]", block.0);
         match &data.terminator.kind {
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
+            TerminatorKind::Remembered {
+                composer,
+                slot_type,
+                destination,
+                ..
+            } => {
+                if self.file.phase != MirPhase::Composed {
+                    self.report(format!("{} reads a slot in MIR that is not composed", at));
+                }
+                let found = self.operand_type(composer, &at);
+                self.expect(found, &Type::Int, &format!("{} composer", at));
+                let destination = self.place_type(destination, &at);
+                self.expect(destination, slot_type, &format!("{} destination", at));
+            }
             TerminatorKind::SwitchInt { value, .. } => {
                 if let Some(ty) = self.operand_type(value, &at) {
                     if ty != Type::Bool && ty != Type::Int {
@@ -493,10 +512,45 @@ impl Validator<'_> {
                         parameters.len()
                     ));
                 }
+                if let Callee::Composer(_) = callee {
+                    if self.file.phase != MirPhase::Composed {
+                        self.report(format!(
+                            "{} calls the composer in MIR that is not composed",
+                            at
+                        ));
+                    }
+                }
+                // In composed MIR a composable function value also takes the composer and its
+                // change words, `Int`s after its declared parameters (D19 of
+                // `compose-transform`).
+                let (parameters, escaping) = match callee {
+                    Callee::Value(place, _) if self.file.phase == MirPhase::Composed => {
+                        match place.try_ty(self.body, self.types) {
+                            Some(Type::Fn {
+                                is_compose: true,
+                                params,
+                                ..
+                            }) if parameters.len() > params.len() => {
+                                if parameters[params.len()..].iter().any(|ty| *ty != Type::Int) {
+                                    self.report(format!(
+                                        "{} passes a composable function value other than Int words",
+                                        at
+                                    ));
+                                }
+                                (
+                                    &parameters[..params.len()],
+                                    &escaping[..params.len().min(escaping.len())],
+                                )
+                            }
+                            _ => (&parameters[..], &escaping[..]),
+                        }
+                    }
+                    _ => (&parameters[..], &escaping[..]),
+                };
                 if let Callee::Value(place, _) = callee {
                     let callee_ty = self.place_type(place, &at);
                     match callee_ty {
-                        Some(Type::Fn { params, .. }) if &params != parameters => {
+                        Some(Type::Fn { params, .. }) if params != parameters => {
                             self.report(format!(
                                 "{} calls a function value of other parameters",
                                 at
@@ -504,7 +558,7 @@ impl Validator<'_> {
                         }
                         Some(Type::Fn {
                             escaping: flags, ..
-                        }) if &flags != escaping => {
+                        }) if flags != escaping => {
                             self.report(format!(
                                 "{} calls a function value with other escaping flags",
                                 at
@@ -733,6 +787,14 @@ impl Validator<'_> {
                 used_by_place(destination, &mut used);
             }
             TerminatorKind::Drop { place, .. } => used_by_place(place, &mut used),
+            TerminatorKind::Remembered {
+                composer,
+                destination,
+                ..
+            } => {
+                used_by_operand(composer, &mut used);
+                used_by_place(destination, &mut used);
+            }
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
         }
         self.check_no_drop_flag(&used, &at);
@@ -753,6 +815,13 @@ impl Validator<'_> {
                     };
                     self.expect(Some(found), ty, &what);
                 }
+            }
+            Rvalue::Bits(_, left, right) => {
+                for operand in [left, right] {
+                    let found = self.operand_type(operand, at);
+                    self.expect(found, &Type::Int, &what);
+                }
+                self.expect(Some(Type::Int), ty, &what);
             }
             Rvalue::Binary(operator, left, right) => {
                 let left = self.operand_type(left, at);
@@ -880,7 +949,7 @@ impl Validator<'_> {
                     })
                     .collect();
                 match self.file.bodies.get(*body) {
-                    Some(closure) if matches!(closure.owner, BodyOwner::Closure { .. }) => {
+                    Some(closure) if closure.owner.is_closure() => {
                         // Each capture has its capture local's type, and in elaborated MIR the
                         // closure records `Owned` exactly for the captures it moves or copies.
                         for (index, (capture, found)) in captures.iter().zip(&found).enumerate() {
@@ -1047,6 +1116,14 @@ impl Validator<'_> {
                     used_by_place(destination, &mut used);
                 }
                 TerminatorKind::Drop { place, .. } => used_by_place(place, &mut used),
+                TerminatorKind::Remembered {
+                    composer,
+                    destination,
+                    ..
+                } => {
+                    used_by_operand(composer, &mut used);
+                    used_by_place(destination, &mut used);
+                }
                 TerminatorKind::Return => {
                     for (local, live) in maybe.iter().enumerate() {
                         if *live && !body.is_unmarked(LocalId(local as u32)) {
@@ -1095,7 +1172,7 @@ fn used_by_rvalue(rvalue: &Rvalue, used: &mut Vec<LocalId>) {
         | Rvalue::Unary(_, operand)
         | Rvalue::WrapNullable(operand)
         | Rvalue::Subtype(operand) => used_by_operand(operand, used),
-        Rvalue::Binary(_, left, right) => {
+        Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
             used_by_operand(left, used);
             used_by_operand(right, used);
         }
@@ -1617,5 +1694,120 @@ mod tests {
         let mut file = small_file();
         with_region(&mut file, true);
         assert_reports(&file, "a region marker outside a composable body");
+    }
+
+    /// A composed body by hand: `compose fun f($composer: Int, $changed: Int)` that starts a
+    /// group, builds a word with `Rvalue::Bits`, reads a remembered `Int` into `_3`, ends its
+    /// group and returns.
+    fn composed_file() -> MirFile {
+        use crate::dump::tests::{local, small_file};
+        let mut file = small_file();
+        file.phase = MirPhase::Composed;
+        let body = body(&mut file);
+        body.is_compose = true;
+        let mut locals = prism_typed_tree::Arena::new();
+        locals.alloc(local(Type::Unit, LocalKind::Return, None));
+        locals.alloc(local(Type::Int, LocalKind::Argument, Some("$composer")));
+        locals.alloc(local(Type::Int, LocalKind::Argument, Some("$changed")));
+        locals.alloc(local(Type::Int, LocalKind::Temporary, None));
+        locals.alloc(local(Type::Int, LocalKind::Temporary, None));
+        body.locals = locals;
+        body.argument_count = 2;
+        let composer = || Operand::Copy(Place::local(LocalId(1)), prism_ast::Span::default());
+        let key = GroupKey {
+            hash: 0x3f9a_0c12_d4e5_b678,
+            label: "body main::f".to_string(),
+        };
+        let call = |operation: ComposerOperation, arguments: Vec<Operand>, target: u32| {
+            terminator(TerminatorKind::Call {
+                callee: Callee::Composer(operation),
+                parameters: vec![Type::Int; arguments.len()],
+                escaping: vec![false; arguments.len()],
+                arguments,
+                type_arguments: Vec::new(),
+                destination: Place::return_place(),
+                target: Some(BlockId(target)),
+                is_compose: false,
+            })
+        };
+        let mut blocks = prism_typed_tree::Arena::new();
+        blocks.alloc(BasicBlock {
+            statements: vec![
+                statement(StatementKind::StorageLive(LocalId(3))),
+                statement(StatementKind::StorageLive(LocalId(4))),
+            ],
+            terminator: call(ComposerOperation::StartGroup { key }, vec![composer()], 1),
+        });
+        blocks.alloc(BasicBlock {
+            statements: vec![statement(StatementKind::assign(
+                Place::local(LocalId(4)),
+                Rvalue::Bits(
+                    BitOperator::Or,
+                    Operand::Copy(Place::local(LocalId(2)), prism_ast::Span::default()),
+                    Operand::Constant(Constant::Int(1)),
+                ),
+            ))],
+            terminator: terminator(TerminatorKind::Remembered {
+                composer: composer(),
+                slot_type: Type::Int,
+                destination: Place::local(LocalId(3)),
+                found: BlockId(2),
+                missing: BlockId(2),
+            }),
+        });
+        blocks.alloc(BasicBlock {
+            statements: Vec::new(),
+            terminator: call(ComposerOperation::EndGroup, vec![composer()], 3),
+        });
+        blocks.alloc(BasicBlock {
+            statements: vec![
+                statement(StatementKind::StorageDead(LocalId(4))),
+                statement(StatementKind::StorageDead(LocalId(3))),
+            ],
+            terminator: terminator(TerminatorKind::Return),
+        });
+        body.blocks = blocks;
+        file
+    }
+
+    #[test]
+    fn composed_constructs_validate_and_print() {
+        let file = composed_file();
+        assert_eq!(violations(&file), "");
+        let dump = file.dump();
+        for expected in [
+            "phase composed",
+            "compose composed fun main::f(_1: Int, _2: Int)",
+            "call composer start_group key 0x3f9a0c12d4e5b678 /* body main::f */(copy _1)",
+            "_4 = bits copy _2 | const 1",
+            "_3 = remembered<Int>(copy _1) -> [found: bb2, missing: bb2]",
+            "call composer end_group(copy _1)",
+        ] {
+            assert!(
+                dump.contains(expected),
+                "{} is missing from\n{}",
+                expected,
+                dump
+            );
+        }
+    }
+
+    #[test]
+    fn composer_operations_outside_composed_mir_are_reported() {
+        let mut file = composed_file();
+        file.phase = MirPhase::Elaborated;
+        assert_reports(&file, "calls the composer in MIR that is not composed");
+        assert_reports(&file, "reads a slot in MIR that is not composed");
+    }
+
+    #[test]
+    fn a_remembered_value_of_another_type_is_reported() {
+        let mut file = composed_file();
+        if let TerminatorKind::Remembered { slot_type, .. } =
+            &mut body(&mut file).blocks[BlockId(1)].terminator.kind
+        {
+            *slot_type = Type::Bool;
+        }
+        assert_reports(&file, "destination");
     }
 }

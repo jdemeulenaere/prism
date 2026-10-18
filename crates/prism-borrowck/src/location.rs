@@ -49,6 +49,11 @@ pub fn successor(kind: &TerminatorKind, index: usize) -> Option<BlockId> {
             None => (index == targets.len()).then_some(*otherwise),
         },
         TerminatorKind::Call { target, .. } => target.filter(|_| index == 0),
+        TerminatorKind::Remembered { found, missing, .. } => match index {
+            0 => Some(*found),
+            1 => Some(*missing),
+            _ => None,
+        },
         TerminatorKind::Return | TerminatorKind::Unreachable => None,
     }
 }

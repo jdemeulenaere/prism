@@ -66,6 +66,11 @@ impl Signature {
             },
             Callee::Value(..) => Signature::FunctionValue,
             Callee::Default { .. } => Signature::Default,
+            // Composed MIR is never borrow-checked; a composer operation is a plain function.
+            Callee::Composer(_) => Signature::Function {
+                has_receiver: false,
+                has_context: false,
+            },
         }
     }
 
@@ -77,7 +82,9 @@ impl Signature {
                 has_receiver: body.owner.has_receiver(),
                 has_context: body.owner.has_context(),
             },
-            BodyOwner::Closure { .. } => Signature::FunctionValue,
+            BodyOwner::Closure { .. }
+            | BodyOwner::Restart { .. }
+            | BodyOwner::RootContent { .. } => Signature::FunctionValue,
             BodyOwner::Default { .. } => Signature::Default,
         }
     }

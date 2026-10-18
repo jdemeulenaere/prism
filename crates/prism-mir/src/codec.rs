@@ -849,6 +849,14 @@ impl Codec for BodyOwner {
                 parent.encode(encoder);
                 index.encode(encoder);
             }
+            BodyOwner::Restart { function } => {
+                encoder.u8(4);
+                function.encode(encoder);
+            }
+            BodyOwner::RootContent { parent } => {
+                encoder.u8(5);
+                parent.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -863,6 +871,12 @@ impl Codec for BodyOwner {
             3 => BodyOwner::Closure {
                 parent: decoder.decode()?,
                 index: decoder.decode()?,
+            },
+            4 => BodyOwner::Restart {
+                function: decoder.decode()?,
+            },
+            5 => BodyOwner::RootContent {
+                parent: decoder.decode()?,
             },
             _ => return None,
         })
@@ -1234,6 +1248,12 @@ impl Codec for Rvalue {
                 encoder.u8(9);
                 parts.encode(encoder);
             }
+            Rvalue::Bits(operator, left, right) => {
+                encoder.u8(10);
+                operator.encode(encoder);
+                left.encode(encoder);
+                right.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1255,6 +1275,120 @@ impl Codec for Rvalue {
                 captures: decoder.decode()?,
             },
             9 => Rvalue::Template(decoder.decode()?),
+            10 => Rvalue::Bits(decoder.decode()?, decoder.decode()?, decoder.decode()?),
+            _ => return None,
+        })
+    }
+}
+
+impl Codec for crate::mir::BitOperator {
+    fn encode(&self, encoder: &mut Encoder) {
+        use crate::mir::BitOperator;
+        encoder.u8(match self {
+            BitOperator::And => 0,
+            BitOperator::Or => 1,
+            BitOperator::ShiftLeft => 2,
+            BitOperator::ShiftRight => 3,
+        });
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        use crate::mir::BitOperator;
+        Some(match decoder.u8()? {
+            0 => BitOperator::And,
+            1 => BitOperator::Or,
+            2 => BitOperator::ShiftLeft,
+            3 => BitOperator::ShiftRight,
+            _ => return None,
+        })
+    }
+}
+
+impl Codec for crate::mir::GroupKey {
+    fn encode(&self, encoder: &mut Encoder) {
+        self.hash.encode(encoder);
+        self.label.encode(encoder);
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(crate::mir::GroupKey {
+            hash: decoder.decode()?,
+            label: decoder.decode()?,
+        })
+    }
+}
+
+impl Codec for crate::mir::ComposerOperation {
+    fn encode(&self, encoder: &mut Encoder) {
+        use crate::mir::ComposerOperation as Operation;
+        match self {
+            Operation::StartRestartGroup { key } => {
+                encoder.u8(0);
+                key.encode(encoder);
+            }
+            Operation::StartGroup { key } => {
+                encoder.u8(1);
+                key.encode(encoder);
+            }
+            Operation::StartMovableGroup { key } => {
+                encoder.u8(2);
+                key.encode(encoder);
+            }
+            Operation::EndGroup => encoder.u8(3),
+            Operation::EndRestartGroup => encoder.u8(4),
+            Operation::Skipping => encoder.u8(5),
+            Operation::SkipToGroupEnd => encoder.u8(6),
+            Operation::Changed(ty) => {
+                encoder.u8(7);
+                ty.encode(encoder);
+            }
+            Operation::SetSlot(ty) => {
+                encoder.u8(8);
+                ty.encode(encoder);
+            }
+            Operation::KeptParameter { index, ty } => {
+                encoder.u8(9);
+                index.encode(encoder);
+                ty.encode(encoder);
+            }
+            Operation::Keepable => encoder.u8(10),
+            Operation::Duplicate => encoder.u8(11),
+            Operation::CurrentScope => encoder.u8(12),
+            Operation::StartComposition => encoder.u8(13),
+            Operation::SetContent => encoder.u8(14),
+            Operation::Recompose => encoder.u8(15),
+            Operation::Dump => encoder.u8(16),
+            Operation::Invalidate => encoder.u8(17),
+        }
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        use crate::mir::ComposerOperation as Operation;
+        Some(match decoder.u8()? {
+            0 => Operation::StartRestartGroup {
+                key: decoder.decode()?,
+            },
+            1 => Operation::StartGroup {
+                key: decoder.decode()?,
+            },
+            2 => Operation::StartMovableGroup {
+                key: decoder.decode()?,
+            },
+            3 => Operation::EndGroup,
+            4 => Operation::EndRestartGroup,
+            5 => Operation::Skipping,
+            6 => Operation::SkipToGroupEnd,
+            7 => Operation::Changed(decoder.decode()?),
+            8 => Operation::SetSlot(decoder.decode()?),
+            9 => Operation::KeptParameter {
+                index: decoder.decode()?,
+                ty: decoder.decode()?,
+            },
+            10 => Operation::Keepable,
+            11 => Operation::Duplicate,
+            12 => Operation::CurrentScope,
+            13 => Operation::StartComposition,
+            14 => Operation::SetContent,
+            15 => Operation::Recompose,
+            16 => Operation::Dump,
+            17 => Operation::Invalidate,
             _ => return None,
         })
     }
@@ -1460,6 +1594,10 @@ impl Codec for Callee {
                 encoder.u8(4);
                 path.encode(encoder);
             }
+            Callee::Composer(operation) => {
+                encoder.u8(5);
+                operation.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1473,6 +1611,7 @@ impl Codec for Callee {
                 name: decoder.decode()?,
             },
             4 => Callee::External(decoder.decode()?),
+            5 => Callee::Composer(decoder.decode()?),
             _ => return None,
         })
     }
@@ -1522,6 +1661,20 @@ impl Codec for TerminatorKind {
             }
             TerminatorKind::Return => encoder.u8(4),
             TerminatorKind::Unreachable => encoder.u8(5),
+            TerminatorKind::Remembered {
+                composer,
+                slot_type,
+                destination,
+                found,
+                missing,
+            } => {
+                encoder.u8(6);
+                composer.encode(encoder);
+                slot_type.encode(encoder);
+                destination.encode(encoder);
+                found.encode(encoder);
+                missing.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1548,6 +1701,13 @@ impl Codec for TerminatorKind {
             },
             4 => TerminatorKind::Return,
             5 => TerminatorKind::Unreachable,
+            6 => TerminatorKind::Remembered {
+                composer: decoder.decode()?,
+                slot_type: decoder.decode()?,
+                destination: decoder.decode()?,
+                found: decoder.decode()?,
+                missing: decoder.decode()?,
+            },
             _ => return None,
         })
     }

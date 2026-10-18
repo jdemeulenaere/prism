@@ -85,6 +85,14 @@ pub fn terminator_effects(terminator: &Terminator) -> Vec<PlaceEffect> {
             }
             destination_effects(destination, span, &mut effects);
         }
+        TerminatorKind::Remembered {
+            composer,
+            destination,
+            ..
+        } => {
+            operand_effects(composer, &mut effects);
+            destination_effects(destination, span, &mut effects);
+        }
         TerminatorKind::Goto(_)
         | TerminatorKind::Drop { .. }
         | TerminatorKind::Return
@@ -131,7 +139,7 @@ fn rvalue_effects(rvalue: &Rvalue, span: Span, effects: &mut Vec<PlaceEffect>) {
         | Rvalue::Unary(_, operand)
         | Rvalue::WrapNullable(operand)
         | Rvalue::Subtype(operand) => operand_effects(operand, effects),
-        Rvalue::Binary(_, left, right) => {
+        Rvalue::Binary(_, left, right) | Rvalue::Bits(_, left, right) => {
             operand_effects(left, effects);
             operand_effects(right, effects);
         }

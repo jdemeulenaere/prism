@@ -260,6 +260,11 @@ pub enum BodyKind {
     Initializer,
     Accessor,
     Closure,
+    /// A restart function, whose contract also covers its composable's (D8 of
+    /// `compose-hot-reload`, adopted by `compose-transform`).
+    Restart,
+    /// A root content adapter.
+    RootContent,
 }
 
 impl BodyKind {
@@ -270,6 +275,8 @@ impl BodyKind {
             BodyOwner::Value(_) => BodyKind::Initializer,
             BodyOwner::Default { .. } => BodyKind::Default,
             BodyOwner::Closure { .. } => BodyKind::Closure,
+            BodyOwner::Restart { .. } => BodyKind::Restart,
+            BodyOwner::RootContent { .. } => BodyKind::RootContent,
         }
     }
 
@@ -280,6 +287,8 @@ impl BodyKind {
             BodyKind::Initializer => 3,
             BodyKind::Accessor => 4,
             BodyKind::Closure => 5,
+            BodyKind::Restart => 6,
+            BodyKind::RootContent => 7,
         }
     }
 }
@@ -302,7 +311,7 @@ pub fn slot_contract(
         hasher.write_hash(&fingerprints.fingerprint(&body.locals[local].ty));
     }
     hasher.write_hash(&fingerprints.fingerprint(body.return_type()));
-    if let BodyOwner::Closure { .. } = body.owner {
+    if body.owner.is_closure() {
         hasher.write_u64(body.capture_count as u64);
         for index in 0..body.capture_count {
             let local = LocalId((body.argument_count + 1 + index) as u32);

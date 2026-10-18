@@ -221,23 +221,8 @@ fn merge_blocks(mut blocks: Vec<BasicBlock>) -> Arena<BlockId, BasicBlock> {
         if removed[index] {
             continue;
         }
-        match &mut block.terminator.kind {
-            TerminatorKind::Goto(target) => renumber(target),
-            TerminatorKind::SwitchInt {
-                targets, otherwise, ..
-            } => {
-                for (_, target) in targets.iter_mut() {
-                    renumber(target);
-                }
-                renumber(otherwise);
-            }
-            TerminatorKind::Call { target, .. } => {
-                if let Some(target) = target {
-                    renumber(target);
-                }
-            }
-            TerminatorKind::Drop { target, .. } => renumber(target),
-            TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        for target in block.terminator.kind.successors_mut() {
+            renumber(target);
         }
         arena.alloc(block);
     }
