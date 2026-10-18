@@ -320,6 +320,59 @@ pub(crate) struct Extension {
     pub(crate) context: Option<Type>,
 }
 
+/// The extensions of one receiver type constructor and name in one layer (the file's own, the
+/// imports', the prelude's), by context type, `None` for the one without a context, each with
+/// the modules declaring it (D8 of `receiver-lambdas`). A call finds its extension with one map
+/// lookup per context candidate, whatever the number of contexts.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExtensionsOfName {
+    by_context: HashMap<Option<Type>, Vec<(String, Extension)>>,
+    /// The contexts in the order they were first declared, for diagnostics.
+    order: Vec<Option<Type>>,
+}
+
+impl ExtensionsOfName {
+    /// Adds `extension` of `module`, unless that module already declares one of its context;
+    /// returns whether it was added.
+    pub(crate) fn insert(&mut self, module: &str, extension: Extension) -> bool {
+        if !self.by_context.contains_key(&extension.context) {
+            self.order.push(extension.context.clone());
+        }
+        let declared = self
+            .by_context
+            .entry(extension.context.clone())
+            .or_default();
+        if declared.iter().any(|(m, _)| m == module) {
+            return false;
+        }
+        declared.push((module.to_string(), extension));
+        true
+    }
+
+    /// Whether an extension of the context `context` is declared.
+    fn declares(&self, context: &Option<Type>) -> bool {
+        self.by_context.contains_key(context)
+    }
+
+    /// The extensions of the context `context`, with their modules.
+    fn of_context(&self, context: &Option<Type>) -> &[(String, Extension)] {
+        self.by_context.get(context).map_or(&[], Vec::as_slice)
+    }
+
+    /// The extension of the context `context`, mutably, when one module declares it.
+    fn of_context_mut(&mut self, context: &Option<Type>) -> Option<&mut Extension> {
+        match self.by_context.get_mut(context)?.as_mut_slice() {
+            [(_, extension)] => Some(extension),
+            _ => None,
+        }
+    }
+
+    /// The context types declared, in the order they were first declared.
+    fn contexts(&self) -> Vec<Type> {
+        self.order.iter().flatten().cloned().collect()
+    }
+}
+
 impl Extension {
     /// The extension's declaration path.
     fn path(&self, name: &str) -> DeclarationPath {
@@ -550,14 +603,14 @@ pub struct TypeChecker {
     /// Declarations already reported as depending on themselves (`E4013`).
     recursive_inference: HashSet<InferenceKey>,
     /// The file's own extension functions, by receiver type and name.
-    own_extensions: HashMap<(ReceiverKey, String), Vec<Extension>>,
+    own_extensions: HashMap<(ReceiverKey, String), ExtensionsOfName>,
     /// The candidates of the current position's context, the first matching one passed to a
     /// function with a context parameter (D7 of `receiver-lambdas`): the innermost receiver
     /// lambda's `this`, or the enclosing function's receiver and context parameter.
     context_candidates: Vec<ContextCandidate>,
     /// Extension functions exported by direct imports, by receiver type and name, with one
     /// candidate per exporting module.
-    imported_extensions: HashMap<(ReceiverKey, String), Vec<(String, Extension)>>,
+    imported_extensions: HashMap<(ReceiverKey, String), ExtensionsOfName>,
     /// The intrinsic extensions of the bundled library the file declares or imports, members of
     /// their receiver types (D7 of `standard-library`), by receiver type and name. The
     /// prelude's members are in [`Self::prelude`].
@@ -695,7 +748,7 @@ impl TypeChecker {
         self,
     ) -> (
         HashMap<String, Symbol>,
-        HashMap<(ReceiverKey, String), Vec<Extension>>,
+        HashMap<(ReceiverKey, String), ExtensionsOfName>,
         HashMap<(ReceiverKey, String), Extension>,
         HashMap<(String, String), BuiltinFunction>,
         Vec<DeclarationPath>,
@@ -705,14 +758,7 @@ impl TypeChecker {
         HashSet<String>,
     ) {
         let names = self.env.imported_names();
-        let extensions = self
-            .imported_extensions
-            .into_iter()
-            .map(|(key, candidates)| {
-                let extensions = candidates.into_iter().map(|(_, e)| e).collect();
-                (key, extensions)
-            })
-            .collect();
+        let extensions = self.imported_extensions;
         (
             names,
             extensions,
@@ -1952,22 +1998,19 @@ impl TypeChecker {
                                 .as_ref()
                                 .map(|context| type_from_abi(context, &type_parameters));
                             let key = (ReceiverKey::of(&receiver_ty), name.clone());
-                            let candidates = self.imported_extensions.entry(key).or_default();
-                            if !candidates
-                                .iter()
-                                .any(|(m, e)| m == &abi.module && e.context == context_ty)
-                            {
-                                let extension = Extension {
-                                    mode: receiver.mode,
-                                    receiver: receiver_ty,
-                                    module: abi.module.clone(),
-                                    symbol: symbol.with_context(context_ty.clone()),
-                                    builtin: None,
-                                    property: false,
-                                    context: context_ty,
-                                };
-                                candidates.push((abi.module.clone(), extension));
-                            }
+                            let extension = Extension {
+                                mode: receiver.mode,
+                                receiver: receiver_ty,
+                                module: abi.module.clone(),
+                                symbol: symbol.with_context(context_ty.clone()),
+                                builtin: None,
+                                property: false,
+                                context: context_ty,
+                            };
+                            self.imported_extensions
+                                .entry(key)
+                                .or_default()
+                                .insert(&abi.module, extension);
                         }
                         None => {
                             match intrinsic {
@@ -2728,7 +2771,7 @@ impl TypeChecker {
         let duplicate = self
             .own_extensions
             .get(&key)
-            .is_some_and(|extensions| extensions.iter().any(|e| e.context == context));
+            .is_some_and(|extensions| extensions.declares(&context));
         if duplicate {
             // Extensions are keyed by the receiver's type constructor (D10 of `generics`), so
             // `Box<Int>.size` and `Box<T>.size` are one name.
@@ -2778,7 +2821,11 @@ impl TypeChecker {
             property: false,
             context,
         };
-        self.own_extensions.entry(key).or_default().push(extension);
+        let module = self.module_path.clone();
+        self.own_extensions
+            .entry(key)
+            .or_default()
+            .insert(&module, extension);
     }
 
     /// Pass 2: Typechecks the bodies of all top-level declarations in the module, returning the
@@ -3253,7 +3300,7 @@ impl TypeChecker {
                                 if let Some(extension) = self
                                     .own_extensions
                                     .get_mut(&key)
-                                    .and_then(|all| all.iter_mut().find(|e| e.context == context))
+                                    .and_then(|all| all.of_context_mut(&context))
                                 {
                                     if let SymbolKind::Function { fn_type, .. } =
                                         &mut extension.symbol.kind
@@ -7872,26 +7919,17 @@ impl TypeChecker {
     /// (D8 of `receiver-lambdas`).
     fn find_extension(&self, receiver: &Type, name: &str) -> ExtensionLookup {
         let key = (ReceiverKey::of(receiver), name.to_string());
-        if let Some(extensions) = self.own_extensions.get(&key).filter(|all| !all.is_empty()) {
-            let candidates: Vec<(&str, &Extension)> = extensions.iter().map(|e| ("", e)).collect();
-            return self.choose_by_context(&candidates, true);
+        if let Some(extensions) = self.own_extensions.get(&key) {
+            return self.choose_by_context(extensions, true);
         }
-        match self.imported_extensions.get(&key).map(Vec::as_slice) {
-            // A prelude extension is found last, so the file's own and imported ones shadow it
-            // without `E4012` (D4 of `standard-library`).
-            None | Some([]) => match self.prelude.as_ref().map(|p| p.extensions(&key)) {
-                Some(extensions) if !extensions.is_empty() => {
-                    let candidates: Vec<(&str, &Extension)> =
-                        extensions.iter().map(|e| (e.module.as_str(), e)).collect();
-                    self.choose_by_context(&candidates, false)
-                }
-                _ => ExtensionLookup::None,
-            },
-            Some(imported) => {
-                let candidates: Vec<(&str, &Extension)> =
-                    imported.iter().map(|(m, e)| (m.as_str(), e)).collect();
-                self.choose_by_context(&candidates, false)
-            }
+        // A prelude extension is found last, so the file's own and imported ones shadow it
+        // without `E4012` (D4 of `standard-library`).
+        if let Some(extensions) = self.imported_extensions.get(&key) {
+            return self.choose_by_context(extensions, false);
+        }
+        match self.prelude.as_ref().and_then(|p| p.extensions(&key)) {
+            Some(extensions) => self.choose_by_context(extensions, false),
+            None => ExtensionLookup::None,
         }
     }
 
@@ -7972,39 +8010,24 @@ impl TypeChecker {
         })
     }
 
-    /// The extension of one layer's `candidates`, each with its module, that a call in the
-    /// current context resolves to: the one whose context type is the referent of the first
-    /// context candidate that one has, else the one without a context, else none, naming the
-    /// layer's contexts. Several candidates of the chosen context are an ambiguity.
-    fn choose_by_context(&self, candidates: &[(&str, &Extension)], own: bool) -> ExtensionLookup {
-        let pick = |context: Option<&Type>| -> Vec<&(&str, &Extension)> {
-            candidates
-                .iter()
-                .filter(|(_, extension)| extension.context.as_ref() == context)
-                .collect()
-        };
-        let mut chosen = Vec::new();
-        for candidate in &self.context_candidates {
-            chosen = pick(Some(&candidate.referent));
-            if !chosen.is_empty() {
-                break;
-            }
-        }
-        if chosen.is_empty() {
-            chosen = pick(None);
-        }
-        match chosen.as_slice() {
-            [] => ExtensionLookup::MissingContext(
-                candidates
-                    .iter()
-                    .filter_map(|(_, extension)| extension.context.clone())
-                    .collect(),
-            ),
+    /// The extension of one layer's `extensions` that a call in the current context resolves
+    /// to: the one whose context type is the referent of the first context candidate that has
+    /// one, else the one without a context, else none, naming the layer's contexts. A context
+    /// several modules declare is an ambiguity (`E4012`).
+    fn choose_by_context(&self, extensions: &ExtensionsOfName, own: bool) -> ExtensionLookup {
+        let chosen = self
+            .context_candidates
+            .iter()
+            .map(|candidate| extensions.of_context(&Some(candidate.referent.clone())))
+            .find(|declared| !declared.is_empty())
+            .unwrap_or_else(|| extensions.of_context(&None));
+        match chosen {
+            [] => ExtensionLookup::MissingContext(extensions.contexts()),
             [(_, extension)] => ExtensionLookup::Found {
-                extension: Box::new((*extension).clone()),
+                extension: Box::new(extension.clone()),
                 own,
             },
-            many => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.to_string()).collect()),
+            many => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.clone()).collect()),
         }
     }
 

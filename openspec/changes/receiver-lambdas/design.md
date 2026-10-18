@@ -168,6 +168,8 @@ Rejected: the context on the declaration's line (`ui-toolkit` D22's sketch), whi
 - `nested-receiver-lambdas`: receiver lambdas nested 16 to 128 deep, alternating two scope types, each level calling a context extension of its scope and the innermost reading a captured local of the outermost, at most x2.5 per doubling of the depth as the existing depth shapes;
 - `context-overloads`: `n` scope types, an extension of one name and receiver per scope, and `n` calls each in its own scope's lambda.
 
+Measured on a release build (2026-10-19, `PRISM_ASSERT_TIMING=1`, passing): `receiver-lambdas` grows at most x4.2 per x4 (MIR; type checking 3.2, 13.2 and 38.0 ms at 256, 1024 and 4096 lambdas); `nested-receiver-lambdas` grows x1.97 (type), x2.15 (MIR), x2.03 (borrow), x2.08 (lower) and x1.97 (Cranelift) per doubling of the depth on average; `context-overloads` grows at most x4.7 per x4 (MIR; type checking 3.0, 13.1 and 58.2 ms), so resolving among 4096 extensions of one name costs a lookup per call, not a scan. The extension tables index each name's extensions by context type to keep it so.
+
 ### D14. Spec placement
 
 No new capability: syntax to `syntax`; the type, its conversions and calls of its values to `type-system`; `this` in receiver lambdas, method-call resolution, context parameters and their overloading to `extension-functions`, where extension bodies' `this` lives; borrows and elision to `references`; the tree to `typed-tree`; operand order to `mir`; the ABI to `compilation-and-abi`; symbols to `code-generation`; printing to `formatting`; running to `execution`. `diagnostics/spec.md` is edited directly at apply time, as every change does. A `receiver-lambdas` capability was rejected because it would split each subject across two specs.

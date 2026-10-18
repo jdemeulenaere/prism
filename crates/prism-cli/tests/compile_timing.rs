@@ -78,8 +78,9 @@ const BORROW_GROWTH: f64 = 4.6;
 /// the deepest. A step quadratic in the depth grows x4; the closures' symbols, which name every
 /// enclosing closure (`main::f#closure0#closure0`), leave the backend's growth slightly above
 /// x2.
-const LINEAR_DEPTH: [&str; 5] = [
+const LINEAR_DEPTH: [&str; 6] = [
     "nested-trailing-lambdas",
+    "nested-receiver-lambdas",
     "nested-lambdas-with-parameters",
     "nested-generic-lambdas",
     "nested-generic-implicit-lambdas",
@@ -196,6 +197,37 @@ fn many_closures(n: usize) -> String {
     format!("fun run(f: () -> Unit) {{ f() }}\nfun main() {{\n{body}println(total)\n}}\n")
 }
 
+/// `n` lambdas with a receiver in sequence, each reading a field and calling an extension
+/// through its `this` and calling a context extension (D13 of `receiver-lambdas`).
+fn receiver_lambdas(n: usize) -> String {
+    let mut body = String::from("var total = 0\n");
+    for i in 0..n {
+        writeln!(body, "total += nest {{ depth + twice() + {i}.weight() }}").unwrap();
+    }
+    format!(
+        "struct Scope : Copy {{ val depth: Int }}\nfun Scope.twice(): Int = depth * 2\ncontext(scope: Scope)\nfun Int.weight(): Int = this + scope.depth\nfun nest(f: Scope.() -> Int): Int = f(Scope(1))\nfun main() {{\n{body}println(total)\n}}\n"
+    )
+}
+
+/// `n` scope types, a context extension of one name and receiver per scope, and `n` calls,
+/// each in a lambda with its own scope's receiver (D13 of `receiver-lambdas`).
+fn context_overloads(n: usize) -> String {
+    let mut source = String::new();
+    for i in 0..n {
+        writeln!(
+            source,
+            "struct S{i} : Copy {{}}\nfun s{i}(f: S{i}.() -> Int): Int = f(S{i}())\ncontext(s: S{i})\nfun Int.tag(): Int = this + {i}"
+        )
+        .unwrap();
+    }
+    let mut body = String::from("var total = 0\n");
+    for i in 0..n {
+        writeln!(body, "total += s{i} {{ {i}.tag() }}").unwrap();
+    }
+    write!(source, "fun main() {{\n{body}println(total)\n}}\n").unwrap();
+    source
+}
+
 /// `n` header-less closures in one body, each using its implicit `it` (D8 of `implicit-it`).
 fn implicit_parameter_closures(n: usize) -> String {
     let mut body = String::from("var total = 0\n");
@@ -246,6 +278,27 @@ fn nested_trailing_lambdas(n: usize) -> String {
                 write!(body, "column {{ val v{i} = {i}; ").unwrap();
             }
             body.push_str("println(1)");
+            body.push_str(&" }".repeat(n));
+            format!("fun f{k}() {{ {body} }}\n")
+        },
+    )
+}
+
+/// Lambdas with a receiver nested `n` deep, alternating two scope types, each level calling a
+/// context extension of its scope and the innermost reading a captured local of the outermost
+/// (D13 of `receiver-lambdas`).
+fn nested_receiver_lambdas(n: usize) -> String {
+    nests(
+        "struct A : Copy { val depth: Int }\nstruct B : Copy { val depth: Int }\nfun a(f: A.() -> Unit) { f(A(1)) }\nfun b(f: B.() -> Unit) { f(B(2)) }\ncontext(s: A)\nfun Int.ma(): Int = this + s.depth\ncontext(s: B)\nfun Int.mb(): Int = this + s.depth\n",
+        "fun main() { f0() }\n",
+        n,
+        |n, k| {
+            let mut body = format!("val outer = {k}; ");
+            for i in 0..n {
+                let (scope, extension) = if i % 2 == 0 { ("a", "ma") } else { ("b", "mb") };
+                write!(body, "{scope} {{ val v{i} = {i}.{extension}(); ").unwrap();
+            }
+            body.push_str("println(outer)");
             body.push_str(&" }".repeat(n));
             format!("fun f{k}() {{ {body} }}\n")
         },
@@ -903,6 +956,14 @@ fn shapes() -> Vec<Shape> {
         shape("nested-lists", true, DEPTHS, nested_lists),
         shape("contract-fingerprints", true, SIZES, contract_fingerprints),
         shape("prelude-calls", false, SIZES, prelude_calls),
+        shape("receiver-lambdas", true, SIZES, receiver_lambdas),
+        shape(
+            "nested-receiver-lambdas",
+            true,
+            CALL_DEPTHS,
+            nested_receiver_lambdas,
+        ),
+        shape("context-overloads", true, SIZES, context_overloads),
     ]
 }
 

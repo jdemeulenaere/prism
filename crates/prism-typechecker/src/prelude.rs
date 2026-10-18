@@ -7,7 +7,7 @@
 //! done once. A file then pays a pointer copy to install it, plus one hash lookup on each name
 //! or extension lookup that misses everything else: nothing proportional to the prelude's size.
 
-use crate::checker::{Extension, ReceiverKey, TypeChecker};
+use crate::checker::{Extension, ExtensionsOfName, ReceiverKey, TypeChecker};
 use crate::scope::Symbol;
 use crate::types::{NominalId, BUILTIN_MODULE};
 use prism_abi::FileAbi;
@@ -26,7 +26,7 @@ pub struct PreludeScope {
     names: Arc<HashMap<String, Symbol>>,
     /// Their extensions that are not members, by receiver type constructor and name, one per
     /// context (D8 of `receiver-lambdas`).
-    extensions: HashMap<(ReceiverKey, String), Vec<Extension>>,
+    extensions: HashMap<(ReceiverKey, String), ExtensionsOfName>,
     /// Their intrinsic extensions and properties, members of their receiver types.
     members: HashMap<(ReceiverKey, String), Extension>,
     /// Their plain intrinsic functions, by module and name, with their built-ins.
@@ -93,8 +93,8 @@ impl PreludeScope {
                 .any(|(_, extension)| extension == name)
     }
 
-    pub(crate) fn extensions(&self, key: &(ReceiverKey, String)) -> &[Extension] {
-        self.extensions.get(key).map_or(&[], Vec::as_slice)
+    pub(crate) fn extensions(&self, key: &(ReceiverKey, String)) -> Option<&ExtensionsOfName> {
+        self.extensions.get(key)
     }
 
     pub(crate) fn member(&self, key: &(ReceiverKey, String)) -> Option<&Extension> {

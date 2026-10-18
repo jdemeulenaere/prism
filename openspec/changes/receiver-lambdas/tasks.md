@@ -38,7 +38,7 @@ Baseline: compare the main specs with this change's MODIFIED blocks (`syntax`, `
 
 ## 7. Integration (D13)
 
-- [ ] 7.1 Add D13's shapes to `crates/prism-cli/tests/compile_timing.rs` and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`; verify that `receiver-lambdas` and `context-overloads` grow roughly linearly and `nested-receiver-lambdas` at most x2.5 per doubling of the depth, and record the measurements in D13.
+- [x] 7.1 Add D13's shapes to `crates/prism-cli/tests/compile_timing.rs` and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`; verify that `receiver-lambdas` and `context-overloads` grow roughly linearly and `nested-receiver-lambdas` at most x2.5 per doubling of the depth, and record the measurements in D13.
 - [ ] 7.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check`, `prism fmt --check` and `prism run --check-allocations examples/run/main.prism` on `examples/` (only files needing an unbuilt subsystem may fail), and `openspec validate receiver-lambdas --strict`. Verify all pass.
 
 ## Workflow follow-up
