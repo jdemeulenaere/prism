@@ -12,12 +12,15 @@
 //! [`crate::Program`] rather than being a global, so a test process can link several programs.
 
 use crate::error::BackendError;
-use crate::isa::isa;
+use crate::isa::{is_large, isa, large_function_isa};
 use crate::program::Program;
 use crate::symbols::slot_owner;
 use crate::unit::CodeUnit;
+use cranelift_codegen::control::ControlPlane;
+use cranelift_codegen::isa::{OwnedTargetIsa, TargetIsa};
+use cranelift_codegen::Context;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{default_libcall_names, FuncId, Module};
+use cranelift_module::{default_libcall_names, FuncId, Module, ModuleReloc, ModuleResult};
 use prism_mir::MirFile;
 use prism_runtime::{
     prism_rt_unlinked_function, RUNTIME_FUNCTIONS, STACK_LIMIT, STACK_LIMIT_SYMBOL,
@@ -106,6 +109,8 @@ impl FunctionTable {
 pub struct Linker {
     table: Arc<FunctionTable>,
     module: JITModule,
+    /// The ISA of the functions larger than [`crate::isa::LARGE_FUNCTION_INSTRUCTIONS`].
+    large: OwnedTargetIsa,
     /// The functions the load defines, by symbol.
     defined: Vec<(String, FuncId)>,
 }
@@ -132,6 +137,7 @@ impl Linker {
         Ok(Self {
             table,
             module: JITModule::new(builder),
+            large: large_function_isa()?,
             defined: Vec::new(),
         })
     }
@@ -149,11 +155,9 @@ impl Linker {
             .chain(glue)
         {
             context.func = function.function;
-            self.module
-                .define_function(function.id, &mut context)
-                .map_err(|error| {
-                    BackendError::new(format!("compiling {}: {:?}", function.symbol, error))
-                })?;
+            define_function(&mut self.module, &*self.large, function.id, &mut context).map_err(
+                |error| BackendError::new(format!("compiling {}: {:?}", function.symbol, error)),
+            )?;
             self.module.clear_context(&mut context);
             // Glue is called directly within its unit and has no slot.
             if has_slot {
@@ -173,4 +177,35 @@ impl Linker {
         }
         Ok(Program::new(self.table, self.module))
     }
+}
+
+/// Compiles the function in `context` and defines it as `id` in `module`: with the module's ISA,
+/// or with `large`, the single-pass allocator's, when it is larger than
+/// [`crate::isa::LARGE_FUNCTION_INSTRUCTIONS`], so that compiling one function stays linear in
+/// its size however large it is. The error is the module's own, as `Module::define_function`'s.
+#[allow(clippy::result_large_err)]
+pub fn define_function<M: Module>(
+    module: &mut M,
+    large: &dyn TargetIsa,
+    id: FuncId,
+    context: &mut Context,
+) -> ModuleResult<()> {
+    if !is_large(&context.func) {
+        return module.define_function(id, context);
+    }
+    context
+        .compile(large, &mut ControlPlane::default())
+        .map_err(|error| cranelift_module::ModuleError::Compilation(error.inner))?;
+    let compiled = context
+        .compiled_code()
+        .expect("a function just compiled has code");
+    let alignment = u64::from(compiled.buffer.alignment);
+    let bytes = compiled.code_buffer();
+    let relocations: Vec<ModuleReloc> = compiled
+        .buffer
+        .relocs()
+        .iter()
+        .map(|relocation| ModuleReloc::from_mach_reloc(relocation, &context.func, id))
+        .collect();
+    module.define_function_bytes(id, alignment, bytes, &relocations)
 }

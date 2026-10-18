@@ -24,8 +24,8 @@
 //! ```
 //!
 //! `PRISM_TIMING_SHAPES=<name>,<name>` runs only the shapes whose names contain one of the
-//! names; `PRISM_TIMING_OPT_LEVEL=none|speed|speed_and_size` overrides Cranelift's `opt_level`
-//! for the `clif` column. It reports each stage's time and the growth of the slowest stage
+//! names; `PRISM_TIMING_CRANELIFT=<name>=<value>,...` overrides Cranelift settings for the
+//! `clif` column (`opt_level=speed`, `regalloc_algorithm=single_pass`). It reports each stage's time and the growth of the slowest stage
 //! from one size to the next, skips the larger sizes of a shape once one size takes over 20 s,
 //! and fails when any stage of at least 5 ms grows more than twice as fast as the size, only
 //! when `PRISM_ASSERT_TIMING=1` is set.
@@ -275,17 +275,23 @@ const STAGES: [&str; 8] = [
     "lex", "parse", "abi", "type", "mir", "borrow", "lower", "clif",
 ];
 
-/// The host ISA with the backend's settings, `opt_level` overridden by
-/// `PRISM_TIMING_OPT_LEVEL`.
-fn isa() -> cranelift_codegen::isa::OwnedTargetIsa {
+/// The host ISA with the backend's settings, then `extra`, overridden by
+/// `PRISM_TIMING_CRANELIFT`.
+fn isa(extra: &[(&str, &str)]) -> cranelift_codegen::isa::OwnedTargetIsa {
     let mut flags = settings::builder();
-    let override_level = std::env::var("PRISM_TIMING_OPT_LEVEL").ok();
-    for (name, value) in prism_codegen::isa::settings() {
-        let value = match (&override_level, name) {
-            (Some(level), "opt_level") => level.as_str(),
-            _ => value,
-        };
+    for (name, value) in prism_codegen::isa::settings()
+        .into_iter()
+        .chain(extra.iter().copied())
+    {
         flags.set(name, value).unwrap();
+    }
+    if let Ok(overrides) = std::env::var("PRISM_TIMING_CRANELIFT") {
+        for setting in overrides.split(',').filter(|setting| !setting.is_empty()) {
+            let (name, value) = setting
+                .split_once('=')
+                .unwrap_or_else(|| panic!("not a name=value setting: {}", setting));
+            flags.set(name, value).unwrap();
+        }
     }
     cranelift_native::builder()
         .unwrap()
@@ -328,7 +334,9 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 8] {
     if !compiled {
         return times;
     }
-    let mut module = JITModule::new(JITBuilder::with_isa(isa(), default_libcall_names()));
+    let mut module = JITModule::new(JITBuilder::with_isa(isa(&[]), default_libcall_names()));
+    // The ISA the backend compiles large functions with (`prism_codegen::isa::is_large`).
+    let large = isa(&[("regalloc_algorithm", "single_pass")]);
     let (unit, time) = timed(|| {
         prism_codegen::check_file(&elaborated)
             .unwrap_or_else(|errors| panic!("unsupported: {:?}", errors));
@@ -339,7 +347,8 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 8] {
         let mut context = module.make_context();
         for function in unit.functions.into_iter().chain(unit.glue) {
             context.func = function.function;
-            module.define_function(function.id, &mut context).unwrap();
+            prism_codegen::link::define_function(&mut module, &*large, function.id, &mut context)
+                .unwrap();
             module.clear_context(&mut context);
         }
     });

@@ -851,3 +851,23 @@ fn large_aggregates_compare_like_their_full_expansion() {
         checked(|| assert_eq!(test(), 1, "{}", name));
     }
 }
+
+#[test]
+fn a_large_function_is_compiled_with_the_single_pass_allocator() {
+    // 1000 sequential `if`s, well over the instructions of `LARGE_FUNCTION_INSTRUCTIONS`.
+    let mut source = String::from("fun f(x: Int): Int {\n    var r = 0\n");
+    for i in 0..1000 {
+        source.push_str(&format!("    if (x == {i}) r += {i} else r -= 1\n"));
+    }
+    source.push_str("    return r\n}\n");
+    let file = lower_source(&source);
+    let mut module = cranelift_jit::JITModule::new(cranelift_jit::JITBuilder::with_isa(
+        crate::isa::isa().unwrap(),
+        cranelift_module::default_libcall_names(),
+    ));
+    let unit = crate::CodeUnit::lower(&file, &mut module).unwrap();
+    assert!(crate::isa::is_large(&unit.functions[0].function));
+    let program = compile(&source);
+    let f: IntToInt = function(&program, "main::f");
+    assert_eq!([f(3), f(-1), f(999)], [3 - 999, -1000, 999 - 999]);
+}
