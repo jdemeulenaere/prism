@@ -123,7 +123,7 @@ fn program_instances(
     files: &[(PathBuf, MirFile)],
     check: bool,
 ) -> Result<Vec<InstanceUnit>, WorkspaceError> {
-    let mirs: Vec<MirFile> = files.iter().map(|(_, mir)| mir.clone()).collect();
+    let mirs: Vec<&MirFile> = files.iter().map(|(_, mir)| mir).collect();
     let instances = collect_instances(&mirs).map_err(|errors| instance_errors(files, errors))?;
     if check {
         check_instances(&instances).map_err(|errors| instance_errors(files, errors))?;
@@ -202,7 +202,7 @@ pub fn dump_instance_mir(entry: &Path) -> Result<String, WorkspaceError> {
 pub fn dump_instance_clif(entry: &Path) -> Result<String, WorkspaceError> {
     let (_, files) = elaborate_program(entry)?;
     check_files(&files)?;
-    let mirs: Vec<MirFile> = files.iter().map(|(_, mir)| mir.clone()).collect();
+    let mirs: Vec<&MirFile> = files.iter().map(|(_, mir)| mir).collect();
     dump_instances(&mirs).map_err(|error| match error {
         InstanceDumpError::Rejected(errors) => instance_errors(&files, errors),
         InstanceDumpError::Backend(error) => WorkspaceError::Backend(error),

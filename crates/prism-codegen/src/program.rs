@@ -31,7 +31,7 @@ impl Program {
     /// Compiles and links `files`, each of which passed [`crate::check_file`], with the
     /// instances of generics they need, which must pass [`crate::check_instances`].
     pub fn compile(files: &[MirFile]) -> Result<Program, BackendError> {
-        let instances = collect_instances(files)
+        let instances = collect_instances(&files.iter().collect::<Vec<_>>())
             .map_err(|errors| BackendError::new(format!("instances rejected: {:?}", errors)))?;
         check_instances(&instances)
             .map_err(|errors| BackendError::new(format!("instances rejected: {:?}", errors)))?;

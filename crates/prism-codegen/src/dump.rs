@@ -53,7 +53,7 @@ pub fn dump_file(file: &MirFile) -> Result<String, DumpError> {
 /// The Cranelift IR of every instance unit the program of `files` needs (D11 of
 /// `monomorphization`), in order of the instances' symbols: each unit's function, then its glue
 /// in order of its symbols, each headed by `function <symbol>`.
-pub fn dump_instances(files: &[MirFile]) -> Result<String, InstanceDumpError> {
+pub fn dump_instances(files: &[&MirFile]) -> Result<String, InstanceDumpError> {
     let instances = collect_instances(files).map_err(InstanceDumpError::Rejected)?;
     check_instances(&instances).map_err(InstanceDumpError::Rejected)?;
     let mut module = JITModule::new(JITBuilder::with_isa(isa()?, default_libcall_names()));

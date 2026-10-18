@@ -14,10 +14,7 @@ use crate::error::{CodegenError, CodegenErrorKind};
 use crate::supported::{check_file, is_compiled};
 use crate::symbols::callee_symbol;
 use prism_ast::Span;
-use prism_mir::{
-    instantiate, Body, Callee, GenericRecord, MirFile, MirPhase, Rvalue, StatementKind,
-    TerminatorKind,
-};
+use prism_mir::{instantiate, Body, Callee, GenericRecord, MirFile, MirPhase, TerminatorKind};
 use prism_typed_tree::instantiation::{edges_of, generic_name, growing_cycles};
 use prism_typed_tree::{Arena, Type, TypeTable};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -51,7 +48,7 @@ struct Request {
 
 /// The instance units the program of `files`, each elaborated, needs, sorted by symbol, or the
 /// `E6004` errors of its cross-file polymorphic recursions.
-pub fn collect_instances(files: &[MirFile]) -> Result<Vec<InstanceUnit>, Vec<InstanceError>> {
+pub fn collect_instances(files: &[&MirFile]) -> Result<Vec<InstanceUnit>, Vec<InstanceError>> {
     let mut records: HashMap<String, GenericRecord> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     for file in files {
@@ -164,8 +161,8 @@ fn holds_closure(bodies: &Arena<prism_mir::BodyId, Body>) -> bool {
     bodies.iter().any(|(_, body)| {
         body.blocks.iter().any(|(_, block)| {
             block.statements.iter().any(|statement| {
-                matches!(&statement.kind, StatementKind::Assign(_, rvalue)
-                    if matches!(rvalue.as_ref(), Rvalue::Closure { .. }))
+                matches!(&statement.kind, prism_mir::StatementKind::Assign(_, rvalue)
+                    if matches!(rvalue.as_ref(), prism_mir::Rvalue::Closure { .. }))
             })
         })
     })
@@ -283,8 +280,12 @@ mod tests {
     use super::*;
     use crate::test_support::lower_files;
 
+    fn collect(files: &[MirFile]) -> Result<Vec<InstanceUnit>, Vec<InstanceError>> {
+        collect_instances(&files.iter().collect::<Vec<_>>())
+    }
+
     fn symbols(files: &[MirFile]) -> Vec<String> {
-        collect_instances(files)
+        collect(files)
             .unwrap_or_else(|errors| panic!("{:?}", errors))
             .into_iter()
             .map(|unit| unit.symbol)
@@ -314,7 +315,7 @@ mod tests {
             symbols(&files),
             ["lib/box::first<Int>", "lib/util::twin<Int>"]
         );
-        let units = collect_instances(&files).unwrap();
+        let units = collect(&files).unwrap();
         // The instance of `twin` knows `Pair`, which `app/main` never names.
         let pair = prism_typed_tree::NominalId::new("lib/util", "Pair");
         assert!(units[1].file.types.definition(&pair).is_some());
@@ -364,7 +365,7 @@ mod tests {
                 "package a\nimport /a/x\npublic fun <T> pong(x: T, n: Int): Int = ping(x, n)\n",
             ),
         ]);
-        let errors = collect_instances(&files).unwrap_err();
+        let errors = collect(&files).unwrap_err();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].module, "a/x");
         assert_eq!(errors[0].error.code(), "E6004");
@@ -383,7 +384,7 @@ mod tests {
             "fun <T> later(x: T): Int { val f = { 1 }; return 1 }\n\
              fun main() { println(later(1)); println(later(true)) }\n",
         )]);
-        let units = collect_instances(&files).unwrap();
+        let units = collect(&files).unwrap();
         assert_eq!(units.len(), 2);
         let errors = check_instances(&units).unwrap_err();
         assert_eq!(errors.len(), 1);

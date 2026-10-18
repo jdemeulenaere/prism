@@ -11,7 +11,10 @@
 //! - `type`: Phase 2's type checker, which builds the typed tree;
 //! - `mir`: MIR lowering;
 //! - `borrow`: the borrow checker, with drop elaboration and capture inference;
-//! - `lower`: the backend's support check and lowering to Cranelift IR;
+//! - `inst`: the collection of the instances of generics the file needs, from its generic
+//!   records, with the cross-file recursion check and the support check of every instance;
+//! - `lower`: the backend's support check and lowering to Cranelift IR, of the file's unit and
+//!   of every instance unit;
 //! - `clif`: Cranelift's compilation of every function and glue function.
 //!
 //! Closures are not compiled by the Tier 1 backend (`E6001`), so the shapes that use them stop
@@ -300,6 +303,74 @@ fn nested_templates(n: usize) -> String {
     format!("fun f(n: Int): String = {template}\nfun main() {{ println(f(1)) }}\n")
 }
 
+/// `n` calls of one generic function, at one type: one instance.
+fn generic_call_sites(n: usize) -> String {
+    let mut body = String::from("    var x = 0\n");
+    for i in 0..n {
+        writeln!(body, "    x += keep({i})").unwrap();
+    }
+    format!("fun <T> keep(x: T): T = x\nfun main() {{\n{body}    println(x)\n}}\n")
+}
+
+/// One generic function called at `n` struct types: `n` instances.
+fn many_instances(n: usize) -> String {
+    let mut source = String::from("fun <T> keep(x: T): T = x\n");
+    for i in 0..n {
+        writeln!(source, "struct S{i}(val v: Int)").unwrap();
+    }
+    source.push_str("fun main() {\n    var x = 0\n");
+    for i in 0..n {
+        writeln!(source, "    x += keep(S{i}({i})).v").unwrap();
+    }
+    source.push_str("    println(x)\n}\n");
+    source
+}
+
+/// A chain of `n` generic functions, each calling the next at its own type parameter, called
+/// once: `n` instances reached transitively.
+fn generic_call_chain(n: usize) -> String {
+    let mut source = String::new();
+    for i in 0..n - 1 {
+        writeln!(
+            source,
+            "fun <T> g{i}(x: T, n: Int): Int = g{}(x, n + 1)",
+            i + 1
+        )
+        .unwrap();
+    }
+    writeln!(source, "fun <T> g{}(x: T, n: Int): Int = n", n - 1).unwrap();
+    source.push_str("fun main() { println(g0(\"a\", 0)) }\n");
+    source
+}
+
+/// Generic calls nested `n` deep: `keep(keep(...keep(1)))`.
+fn nested_generic_calls(n: usize) -> String {
+    let call = (0..n).fold("1".to_string(), |inner, _| format!("keep({inner})"));
+    format!("fun <T> keep(x: T): T = x\nfun main() {{ println({call}) }}\n")
+}
+
+/// `n` generic structs, each holding the one before at its own type parameter, instantiated
+/// at the last: the type graph of the polymorphic recursion check, and `n` nested layouts.
+fn nested_generic_types(n: usize) -> String {
+    let mut source = String::from("struct S0<T>(val v: T)\n");
+    for i in 1..n {
+        writeln!(
+            source,
+            "struct S{i}<T>(val v: S{}<T>, val w: Heap<S{}<T>>?)",
+            i - 1,
+            i - 1
+        )
+        .unwrap();
+    }
+    writeln!(
+        source,
+        "fun <T> keep(x: S{}<T>): Int = 1\nfun main() {{ println(1) }}",
+        n - 1
+    )
+    .unwrap();
+    source
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -335,11 +406,16 @@ fn shapes() -> Vec<Shape> {
         shape("template-long-text", true, SIZES, template_long_text),
         shape("many-templates", true, SIZES, many_templates),
         shape("nested-templates", true, DEPTHS, nested_templates),
+        shape("generic-call-sites", true, SIZES, generic_call_sites),
+        shape("many-instances", true, SIZES, many_instances),
+        shape("generic-call-chain", true, SIZES, generic_call_chain),
+        shape("nested-generic-calls", true, DEPTHS, nested_generic_calls),
+        shape("nested-generic-types", true, SIZES, nested_generic_types),
     ]
 }
 
-const STAGES: [&str; 8] = [
-    "lex", "parse", "abi", "type", "mir", "borrow", "lower", "clif",
+const STAGES: [&str; 9] = [
+    "lex", "parse", "abi", "type", "mir", "borrow", "inst", "lower", "clif",
 ];
 
 /// The host ISA with the backend's settings, then `extra`, overridden by
@@ -374,8 +450,8 @@ fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
 }
 
 /// The time of each stage of `program`, `None` for the stages it does not reach.
-fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 8] {
-    let mut times = [None; 8];
+fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
+    let mut times = [None; 9];
     let source = program.source.as_str();
     let (tokens, time) = timed(|| prism_lexer::Lexer::new(source).tokenize_all());
     times[0] = Some(time);
@@ -401,30 +477,53 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 8] {
     if !compiled {
         return times;
     }
+    let files = [elaborated];
+    let (instances, time) = timed(|| {
+        let instances = prism_codegen::collect_instances(&[&files[0]])
+            .unwrap_or_else(|errors| panic!("instances rejected: {:?}", errors));
+        prism_codegen::check_instances(&instances)
+            .unwrap_or_else(|errors| panic!("unsupported instances: {:?}", errors));
+        instances
+    });
+    times[6] = Some(time);
     let mut module = JITModule::new(JITBuilder::with_isa(isa(&[]), default_libcall_names()));
     // The ISA the backend compiles large functions with (`prism_codegen::isa::is_large`).
     let large = isa(&[("regalloc_algorithm", "single_pass")]);
-    let (unit, time) = timed(|| {
-        prism_codegen::check_file(&elaborated)
+    let (units, time) = timed(|| {
+        prism_codegen::check_file(&files[0])
             .unwrap_or_else(|errors| panic!("unsupported: {:?}", errors));
-        prism_codegen::CodeUnit::lower(&elaborated, &mut module).unwrap()
-    });
-    times[6] = Some(time);
-    let ((), time) = timed(|| {
-        let mut context = module.make_context();
-        for function in unit.functions.into_iter().chain(unit.glue) {
-            context.func = function.function;
-            prism_codegen::link::define_function(&mut module, &*large, function.id, &mut context)
-                .unwrap();
-            module.clear_context(&mut context);
+        let mut units = vec![prism_codegen::CodeUnit::lower(&files[0], &mut module).unwrap()];
+        for instance in &instances {
+            units.push(
+                prism_codegen::CodeUnit::lower_named(&instance.file, &instance.symbol, &mut module)
+                    .unwrap(),
+            );
         }
+        units
     });
     times[7] = Some(time);
+    let ((), time) = timed(|| {
+        let mut context = module.make_context();
+        for unit in units {
+            for function in unit.functions.into_iter().chain(unit.glue) {
+                context.func = function.function;
+                prism_codegen::link::define_function(
+                    &mut module,
+                    &*large,
+                    function.id,
+                    &mut context,
+                )
+                .unwrap();
+                module.clear_context(&mut context);
+            }
+        }
+    });
+    times[8] = Some(time);
     times
 }
 
 /// The fastest time of each stage over three runs, or of one run when it takes over a second.
-fn best_of(program: &Generated, compiled: bool) -> [Option<Duration>; 8] {
+fn best_of(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
     let mut best = compile(program, compiled);
     let total: Duration = best.iter().flatten().sum();
     if total < Duration::from_secs(1) {
@@ -464,7 +563,7 @@ fn run_benchmark() {
                 continue;
             }
         }
-        let mut previous: Option<(usize, [Option<Duration>; 8])> = None;
+        let mut previous: Option<(usize, [Option<Duration>; 9])> = None;
         for size in shape.sizes {
             let program = Generated {
                 size,
