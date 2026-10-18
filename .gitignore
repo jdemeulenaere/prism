@@ -9,3 +9,6 @@ Thumbs.db
 
 # Local tools
 .tools/
+
+# Agent worktrees
+.claude/worktrees/
