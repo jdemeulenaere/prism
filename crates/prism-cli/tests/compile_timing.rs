@@ -4,7 +4,9 @@
 //!
 //! Each shape is generated at three sizes four times apart (256, 1024 and 4096 of the thing it
 //! repeats; nesting shapes at depths 30, 60 and 120, since the parser rejects nesting deeper
-//! than 256 with `E2002`). One file is compiled stage by stage, as `prism run` compiles it:
+//! than 256 with `E2002`), and the shapes nesting calls through their trailing lambdas at four
+//! depths each twice the one before (16 to 128, each program holding [`NESTS`] such nests). One
+//! file is compiled stage by stage, as `prism run` compiles it:
 //!
 //! - `lex` and `parse`: the lexer's tokens, then the parser's AST;
 //! - `abi`: Phase 1, the file's ABI;
@@ -29,7 +31,9 @@
 //! from one size to the next, skips the larger sizes of a shape once one size takes over 20 s,
 //! and fails when any stage of at least 5 ms grows more than twice as fast as the size, or when
 //! the `borrow` stage of a shape of [`LINEAR_BORROW`] grows on average faster than x4.6 per x4
-//! (`n^1.1`), only when `PRISM_ASSERT_TIMING=1` is set.
+//! (`n^1.1`), or when a stage of at least 5 ms of a shape of [`LINEAR_DEPTH`] grows on average
+//! faster than x2.5 per doubling of the depth (`n^1.3`), only when `PRISM_ASSERT_TIMING=1` is
+//! set.
 
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -47,11 +51,11 @@ struct Generated {
 struct Shape {
     name: &'static str,
     compiled: bool,
-    sizes: [usize; 3],
+    sizes: &'static [usize],
     generate: fn(usize) -> String,
 }
 
-const SIZES: [usize; 3] = [256, 1024, 4096];
+const SIZES: &[usize] = &[256, 1024, 4096];
 
 /// The shapes whose borrow check is held to near-linear growth: many loans live at once, or
 /// made one after the other over a body, each held by a local (the loan flow's states, and the
@@ -68,7 +72,28 @@ const LINEAR_BORROW: [&str; 7] = [
     "when-patterns",
 ];
 const BORROW_GROWTH: f64 = 4.6;
-const DEPTHS: [usize; 3] = [30, 60, 120];
+/// The shapes nesting calls through their trailing lambdas, every stage of which is held to
+/// near-linear growth in the depth: each stage taking at least 5 ms at the deepest nest may
+/// grow at most `DEPTH_GROWTH` per doubling of the depth on average, from the shallowest to
+/// the deepest. A step quadratic in the depth grows x4; the closures' symbols, which name every
+/// enclosing closure (`main::f#closure0#closure0`), leave the backend's growth slightly above
+/// x2.
+const LINEAR_DEPTH: [&str; 5] = [
+    "nested-trailing-lambdas",
+    "nested-lambdas-with-parameters",
+    "nested-generic-lambdas",
+    "nested-generic-implicit-lambdas",
+    "nested-compose-ui",
+];
+const DEPTH_GROWTH: f64 = 2.5;
+const DEPTHS: &[usize] = &[30, 60, 120];
+/// The depths of the shapes nesting calls through their trailing lambdas, as a compose UI does
+/// (`Column { Row { Button(onClick = { ... }) { Text("...") } } }`): each doubles the one
+/// before, up to the parser's limit of 256 nesting levels, which a call through its lambda
+/// takes two of (its closure and the closure's body).
+const CALL_DEPTHS: &[usize] = &[16, 32, 64, 128];
+/// How many nests a program of a depth shape holds, one per function.
+const NESTS: usize = 32;
 
 fn join(count: usize, separator: &str, item: impl Fn(usize) -> String) -> String {
     (0..count).map(item).collect::<Vec<_>>().join(separator)
@@ -190,6 +215,123 @@ fn nested_implicit_parameter_closures(n: usize) -> String {
     write!(body, "v{}", n - 1).unwrap();
     body.push_str(&" }".repeat(n));
     format!("fun apply(f: (Int) -> Int): Int = f(1)\nfun main() {{ println({body}) }}\n")
+}
+
+/// `NESTS` functions, each holding the nest `nest(n, k)` for its index `k`: enough copies that
+/// the stages of the depth shapes take measurable time.
+fn nests(
+    declarations: &str,
+    main: &str,
+    n: usize,
+    nest: impl Fn(usize, usize) -> String,
+) -> String {
+    let mut source = String::from(declarations);
+    for k in 0..NESTS {
+        source.push_str(&nest(n, k));
+    }
+    source.push_str(main);
+    source
+}
+
+/// Calls nested `n` deep through their trailing lambdas, which take no parameter, as a compose
+/// UI nests its layouts.
+fn nested_trailing_lambdas(n: usize) -> String {
+    nests(
+        "fun column(content: () -> Unit) { content() }\n",
+        "fun main() { f0() }\n",
+        n,
+        |n, k| {
+            let mut body = String::new();
+            for i in 0..n {
+                write!(body, "column {{ val v{i} = {i}; ").unwrap();
+            }
+            body.push_str("println(1)");
+            body.push_str(&" }".repeat(n));
+            format!("fun f{k}() {{ {body} }}\n")
+        },
+    )
+}
+
+/// Calls nested `n` deep through their trailing lambdas, each declaring its parameter.
+fn nested_lambdas_with_parameters(n: usize) -> String {
+    nests(
+        "fun apply(x: Int, f: (Int) -> Int): Int = f(x)\n",
+        "fun main() { println(f0()) }\n",
+        n,
+        |n, k| {
+            let mut body = String::from("apply(0) { a0 -> ");
+            for i in 1..n {
+                write!(body, "apply(a{} + 1) {{ a{i} -> ", i - 1).unwrap();
+            }
+            write!(body, "a{}", n - 1).unwrap();
+            body.push_str(&" }".repeat(n));
+            format!("fun f{k}(): Int = {body}\n")
+        },
+    )
+}
+
+/// Generic calls nested `n` deep through their trailing lambdas, each declaring its parameter,
+/// whose type the call infers from its first argument.
+fn nested_generic_lambdas(n: usize) -> String {
+    nests(
+        "fun <T> applyTo(x: T, f: (T) -> T): T = f(x)\n",
+        "fun main() { println(f0()) }\n",
+        n,
+        |n, k| {
+            let mut body = String::from("applyTo(0) { a0 -> ");
+            for i in 1..n {
+                write!(body, "applyTo(a{} + 1) {{ a{i} -> ", i - 1).unwrap();
+            }
+            write!(body, "a{}", n - 1).unwrap();
+            body.push_str(&" }".repeat(n));
+            format!("fun f{k}(): Int = {body}\n")
+        },
+    )
+}
+
+/// Generic calls nested `n` deep through their trailing lambdas, each using its implicit `it`
+/// and returning a type the call infers from the lambda's body, so each lambda is checked
+/// after the call's other arguments (D17 of `generics`).
+fn nested_generic_implicit_lambdas(n: usize) -> String {
+    nests(
+        "fun <T, R> map(x: T, f: (T) -> R): R = f(x)\n",
+        "fun main() { println(f0()) }\n",
+        n,
+        |n, k| {
+            let mut body = String::from("map(0) { ");
+            for _ in 1..n {
+                body.push_str("map(it + 1) { ");
+            }
+            body.push_str("it");
+            body.push_str(&" }".repeat(n));
+            format!("fun f{k}(): Int = {body}\n")
+        },
+    )
+}
+
+/// A compose UI nested `n` deep: layouts and buttons with a click handler, a text in each.
+/// The backend does not compile composables yet, so only the front end is timed.
+fn nested_compose_ui(n: usize) -> String {
+    nests(
+        "compose fun Column(content: compose () -> Unit) { content() }\n\
+         compose fun Button(onClick: () -> Unit, content: compose () -> Unit) { content() }\n\
+         compose fun Text(text: String) {}\n",
+        "",
+        n,
+        |n, k| {
+            let mut body = String::new();
+            for i in 0..n {
+                if i % 2 == 0 {
+                    write!(body, "Column {{ Text(\"{i}\"); ").unwrap();
+                } else {
+                    write!(body, "Button({{ println({i}) }}) {{ ").unwrap();
+                }
+            }
+            body.push_str("Text(\"end\")");
+            body.push_str(&" }".repeat(n));
+            format!("compose fun Screen{k}() {{ {body} }}\n")
+        },
+    )
 }
 
 /// One closure capturing `n` locals.
@@ -649,6 +791,31 @@ fn shapes() -> Vec<Shape> {
             DEPTHS,
             nested_implicit_parameter_closures,
         ),
+        shape(
+            "nested-trailing-lambdas",
+            true,
+            CALL_DEPTHS,
+            nested_trailing_lambdas,
+        ),
+        shape(
+            "nested-lambdas-with-parameters",
+            true,
+            CALL_DEPTHS,
+            nested_lambdas_with_parameters,
+        ),
+        shape(
+            "nested-generic-lambdas",
+            true,
+            CALL_DEPTHS,
+            nested_generic_lambdas,
+        ),
+        shape(
+            "nested-generic-implicit-lambdas",
+            true,
+            CALL_DEPTHS,
+            nested_generic_implicit_lambdas,
+        ),
+        shape("nested-compose-ui", false, CALL_DEPTHS, nested_compose_ui),
         shape("many-captures", true, SIZES, many_captures),
         shape("many-adapters", true, SIZES, many_adapters),
         shape("generic-closures", true, SIZES, generic_closures),
@@ -846,7 +1013,9 @@ fn run_benchmark() {
         let mut previous: Option<(usize, [Option<Duration>; 9])> = None;
         // The size and `borrow` time of each program.
         let mut borrow_times: Vec<(usize, Duration)> = Vec::new();
-        for size in shape.sizes {
+        // The size and stage times of each program.
+        let mut all_times: Vec<(usize, [Option<Duration>; 9])> = Vec::new();
+        for &size in shape.sizes {
             let program = Generated {
                 size,
                 source: (shape.generate)(size),
@@ -880,6 +1049,7 @@ fn run_benchmark() {
             }
             println!("{}", line);
             borrow_times.extend(times[5].map(|time| (program.size, time)));
+            all_times.push((program.size, times));
             let total: Duration = times.iter().flatten().sum();
             previous = Some((program.size, times));
             if total > Duration::from_secs(20) {
@@ -899,6 +1069,29 @@ fn run_benchmark() {
             );
             if growth > BORROW_GROWTH && milliseconds(*last) >= 5.0 {
                 too_fast_growth.push(format!("{} (borrow x{:.2} per x4)", shape.name, growth));
+            }
+        }
+        if let (true, [(first_size, first), .., (last_size, last)]) =
+            (LINEAR_DEPTH.contains(&shape.name), &all_times[..])
+        {
+            // The average growth per doubling of the depth of each stage: the geometric mean
+            // of each step's.
+            let steps = (*last_size as f64 / *first_size as f64).log2();
+            for (stage, (first, last)) in STAGES.iter().zip(first.iter().zip(last)) {
+                let (Some(first), Some(last)) = (first, last) else {
+                    continue;
+                };
+                let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
+                if milliseconds(*last) >= 5.0 {
+                    println!(
+                        "  {:<28} {} x{:.2} per x2 on average",
+                        shape.name, stage, growth
+                    );
+                    if growth > DEPTH_GROWTH {
+                        too_fast_growth
+                            .push(format!("{} ({} x{:.2} per x2)", shape.name, stage, growth));
+                    }
+                }
             }
         }
     }

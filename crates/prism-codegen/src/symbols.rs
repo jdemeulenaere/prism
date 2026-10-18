@@ -21,6 +21,7 @@
 
 use crate::glue::qualified_name;
 use prism_mir::{Body, BodyOwner, Callee, MirFile};
+use prism_typed_tree::ArenaId;
 use prism_typed_tree::{DeclarationPath, Type};
 
 /// The symbol of the function or extension `path`.
@@ -126,6 +127,46 @@ pub fn symbol_of(body: &Body, file: &MirFile) -> String {
             )
         }
     }
+}
+
+/// The symbol of every body of `file`, indexed by its id. Each symbol is built once, a
+/// closure's by extending its parent's, so naming every body of closures nested `d` deep costs
+/// the length of their symbols, where calling [`symbol_of`] for each would rebuild every
+/// parent's symbol again for each of its closures.
+pub fn symbols_of(file: &MirFile) -> Vec<String> {
+    let mut symbols: Vec<Option<String>> = vec![None; file.bodies.len()];
+    for (id, _) in file.bodies.iter() {
+        // The bodies from `id` up to the first whose symbol is known or that is no closure,
+        // named outermost first.
+        let mut chain = vec![id];
+        while let BodyOwner::Closure { parent, .. } = file.bodies[*chain.last().unwrap()].owner {
+            if symbols[parent.index()].is_some() {
+                break;
+            }
+            chain.push(parent);
+        }
+        for body_id in chain.into_iter().rev() {
+            if symbols[body_id.index()].is_some() {
+                continue;
+            }
+            let body = &file.bodies[body_id];
+            let symbol = match &body.owner {
+                BodyOwner::Closure { parent, index } => format!(
+                    "{}#closure{}",
+                    symbols[parent.index()]
+                        .as_deref()
+                        .expect("a parent is named before its closures"),
+                    index
+                ),
+                _ => symbol_of(body, file),
+            };
+            symbols[body_id.index()] = Some(symbol);
+        }
+    }
+    symbols
+        .into_iter()
+        .map(|symbol| symbol.expect("every body is named"))
+        .collect()
 }
 
 /// The symbol a call of `callee` with `type_arguments` calls through its slot, an instance's for

@@ -257,12 +257,33 @@ impl Symbol {
 }
 
 /// Lexical scope environment tracking nested block scopes and shadowing.
+///
+/// A scoped symbol table: each name maps to its bindings, innermost last, each with the level
+/// that declares it, so looking a name up hashes it once however deeply the use is nested
+/// (closures nested through their calls' trailing lambdas nest scopes as deep as the source).
+/// Each level lists the names it declares, which leaving it unbinds.
 #[derive(Debug, Clone)]
 pub struct ScopeStack {
-    scopes: Vec<HashMap<String, Symbol>>,
+    /// Each name's bindings, ordered by level, innermost last. Level 0 is the module scope.
+    bindings: HashMap<String, Vec<(usize, Symbol)>>,
+    /// The names each open level declares, the module scope first.
+    levels: Vec<Vec<String>>,
+    /// The innermost level [`Self::take_locals`] hides, `0` when none is hidden: a binding is
+    /// visible when it is the module scope's or declared deeper than this.
+    hidden_through: usize,
     /// Symbols exported by direct imports, below the module scope. Each name maps to one
     /// candidate per exporting module; a name with several candidates is ambiguous at use.
     imports: HashMap<String, Vec<(String, Symbol)>>,
+}
+
+/// The nested levels [`ScopeStack::take_locals`] hid, which [`ScopeStack::restore_locals`]
+/// shows again.
+#[derive(Debug)]
+pub struct DetachedLocals {
+    /// The levels open when they were hidden.
+    depth: usize,
+    /// The innermost level hidden before.
+    hidden_through: usize,
 }
 
 /// The result of looking a name up among the imports.
@@ -279,7 +300,9 @@ impl ScopeStack {
     /// Initializes an environment with a global/module-level scope.
     pub fn new() -> Self {
         Self {
-            scopes: vec![HashMap::new()],
+            bindings: HashMap::new(),
+            levels: vec![Vec::new()],
+            hidden_through: 0,
             imports: HashMap::new(),
         }
     }
@@ -309,19 +332,49 @@ impl ScopeStack {
 
     /// Pushes a new nested lexical scope level (e.g. entering a block or function body).
     pub fn enter_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.levels.push(Vec::new());
     }
 
-    /// Pops the innermost lexical scope level.
+    /// Pops the innermost lexical scope level, unbinding the names it declares. The module
+    /// scope and the levels [`Self::take_locals`] hides are never popped.
     pub fn exit_scope(&mut self) {
-        if self.scopes.len() > 1 {
-            self.scopes.pop();
+        let level = self.current_level();
+        if level == 0 || level <= self.hidden_through {
+            return;
+        }
+        for name in self.levels.pop().expect("a nested level") {
+            if let Some(bindings) = self.bindings.get_mut(&name) {
+                // A name `remove` already unbound, or declared twice after a removal, may
+                // have no binding of this level left.
+                if bindings.last().is_some_and(|(at, _)| *at == level) {
+                    bindings.pop();
+                }
+            }
         }
     }
 
     /// Number of active scope levels (1 = module level).
     pub fn depth(&self) -> usize {
-        self.scopes.len()
+        self.levels.len()
+    }
+
+    /// The level of the innermost scope.
+    fn current_level(&self) -> usize {
+        self.levels.len() - 1
+    }
+
+    /// Whether a binding declared at `level` is visible.
+    fn is_visible(&self, level: usize) -> bool {
+        level == 0 || level > self.hidden_through
+    }
+
+    /// The visible bindings of `name`, innermost first, with their levels.
+    fn visible(&self, name: &str) -> impl Iterator<Item = &(usize, Symbol)> {
+        self.bindings
+            .get(name)
+            .into_iter()
+            .flat_map(|bindings| bindings.iter().rev())
+            .filter(|(level, _)| self.is_visible(*level))
     }
 
     /// Defines a symbol in the current (innermost) scope level.
@@ -330,14 +383,16 @@ impl ScopeStack {
     /// Shadowing a declaration from an enclosing outer scope is permitted.
     #[allow(clippy::result_large_err)]
     pub fn define(&mut self, symbol: Symbol) -> Result<(), TypeError> {
-        let current_scope = self.scopes.last_mut().expect("scope stack cannot be empty");
-        if current_scope.contains_key(&symbol.name) {
+        let level = self.current_level();
+        let bindings = self.bindings.entry(symbol.name.clone()).or_default();
+        if bindings.last().is_some_and(|(at, _)| *at == level) {
             return Err(TypeError::DuplicateSymbol {
                 name: symbol.name,
                 span: symbol.span,
             });
         }
-        current_scope.insert(symbol.name.clone(), symbol);
+        self.levels[level].push(symbol.name.clone());
+        bindings.push((level, symbol));
         Ok(())
     }
 
@@ -346,10 +401,8 @@ impl ScopeStack {
     /// Falls back to the imports when no scope declares the name; an ambiguous import gives
     /// `None` (use [`Self::resolve`] to report it).
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(symbol) = scope.get(name) {
-                return Some(symbol);
-            }
+        if let Some((_, symbol)) = self.visible(name).next() {
+            return Some(symbol);
         }
         match self.lookup_import(name, |_| true) {
             ImportLookup::One(symbol) => Some(symbol),
@@ -362,10 +415,8 @@ impl ScopeStack {
     /// An ambiguous imported type name gives `None` (see [`Self::lookup_import`]).
     pub fn lookup_type(&self, name: &str) -> Option<&Symbol> {
         let in_scope = self
-            .scopes
-            .iter()
-            .rev()
-            .filter_map(|scope| scope.get(name))
+            .visible(name)
+            .map(|(_, symbol)| symbol)
             .find(|symbol| is_type_symbol(symbol));
         match in_scope {
             Some(symbol) => Some(symbol),
@@ -383,10 +434,8 @@ impl ScopeStack {
     /// imports export it.
     #[allow(clippy::result_large_err)]
     pub fn resolve(&self, name: &str, span: Span) -> Result<&Symbol, TypeError> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(symbol) = scope.get(name) {
-                return Ok(symbol);
-            }
+        if let Some((_, symbol)) = self.visible(name).next() {
+            return Ok(symbol);
         }
         match self.lookup_import(name, |_| true) {
             ImportLookup::One(symbol) => Ok(symbol),
@@ -402,60 +451,71 @@ impl ScopeStack {
         }
     }
 
-    /// Detaches every scope level nested inside the module scope, leaving only the module scope.
-    /// [`Self::restore_locals`] puts them back. Used to check a declaration's body on demand
-    /// while another body is being checked.
-    pub fn take_locals(&mut self) -> Vec<HashMap<String, Symbol>> {
-        self.scopes.split_off(1)
+    /// Hides every scope level nested inside the module scope, so only the module scope's names
+    /// resolve and the levels entered next start fresh. [`Self::restore_locals`] shows them
+    /// again. Used to check a declaration's body on demand while another body is being checked.
+    /// It costs nothing per hidden binding.
+    pub fn take_locals(&mut self) -> DetachedLocals {
+        let detached = DetachedLocals {
+            depth: self.levels.len(),
+            hidden_through: self.hidden_through,
+        };
+        self.hidden_through = self.current_level();
+        detached
     }
 
-    /// Re-attaches scope levels detached by [`Self::take_locals`].
-    pub fn restore_locals(&mut self, locals: Vec<HashMap<String, Symbol>>) {
-        self.scopes.truncate(1);
-        self.scopes.extend(locals);
+    /// Shows the levels hidden by [`Self::take_locals`] again, leaving any level entered since.
+    pub fn restore_locals(&mut self, detached: DetachedLocals) {
+        while self.levels.len() > detached.depth {
+            self.exit_scope();
+        }
+        self.hidden_through = detached.hidden_through;
     }
 
     /// Removes a symbol from the current (innermost) scope level, returning it if it was there.
     pub fn remove(&mut self, name: &str) -> Option<Symbol> {
-        self.scopes
-            .last_mut()
-            .expect("scope stack cannot be empty")
-            .remove(name)
+        let level = self.current_level();
+        let bindings = self.bindings.get_mut(name)?;
+        if bindings.last().is_some_and(|(at, _)| *at == level) {
+            // The level's list keeps the name; leaving the level skips it (`exit_scope`).
+            bindings.pop().map(|(_, symbol)| symbol)
+        } else {
+            None
+        }
     }
 
     /// Whether `name` currently resolves to a module-level symbol (it is declared at module
     /// level and no nested scope shadows it).
     pub fn resolves_at_module_level(&self, name: &str) -> bool {
-        let innermost = self
-            .scopes
-            .iter()
-            .rposition(|scope| scope.contains_key(name));
-        innermost == Some(0)
+        matches!(self.visible(name).next(), Some((0, _)))
     }
 
     /// Whether `name` currently resolves to a local: a symbol of a scope nested inside the module
     /// scope (a parameter, a local binding, a loop variable).
     pub fn resolves_to_local(&self, name: &str) -> bool {
-        matches!(
-            self.scopes.iter().rposition(|scope| scope.contains_key(name)),
-            Some(level) if level > 0
-        )
+        matches!(self.visible(name).next(), Some((level, _)) if *level > 0)
     }
 
     /// Updates the type of an existing symbol in the innermost scope that defines it
     /// (useful for inferred private expression bodies).
     pub fn update_type(&mut self, name: &str, new_type: Type) -> bool {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(symbol) = scope.get_mut(name) {
-                match &mut symbol.kind {
-                    SymbolKind::Variable { ty, .. } => *ty = new_type,
-                    SymbolKind::Function { fn_type, .. } => *fn_type = new_type,
-                    _ => {}
-                }
-                return true;
-            }
+        let hidden_through = self.hidden_through;
+        let Some(bindings) = self.bindings.get_mut(name) else {
+            return false;
+        };
+        let visible = bindings
+            .iter_mut()
+            .rev()
+            .find(|(level, _)| *level == 0 || *level > hidden_through);
+        let Some((_, symbol)) = visible else {
+            return false;
+        };
+        match &mut symbol.kind {
+            SymbolKind::Variable { ty, .. } => *ty = new_type,
+            SymbolKind::Function { fn_type, .. } => *fn_type = new_type,
+            _ => {}
         }
-        false
+        true
     }
 }
 
@@ -544,6 +604,58 @@ mod tests {
         let ty_sym = env.lookup_type("User").unwrap();
         assert!(matches!(ty_sym.kind, SymbolKind::Struct { .. }));
         assert!(env.lookup_type("Missing").is_none());
+    }
+
+    #[test]
+    fn test_taken_locals_are_hidden_until_restored() {
+        let mut env = ScopeStack::new();
+        env.define(Symbol::variable(
+            "x",
+            Type::Int,
+            Mutability::Val,
+            Span::dummy(),
+        ))
+        .unwrap();
+        env.enter_scope();
+        env.define(Symbol::variable(
+            "x",
+            Type::String,
+            Mutability::Val,
+            Span::dummy(),
+        ))
+        .unwrap();
+        env.define(Symbol::variable(
+            "y",
+            Type::Int,
+            Mutability::Val,
+            Span::dummy(),
+        ))
+        .unwrap();
+
+        let detached = env.take_locals();
+        // Only the module scope resolves, and a fresh level may declare the hidden names.
+        assert_eq!(env.lookup("x").unwrap().ty(), Type::Int);
+        assert!(env.lookup("y").is_none());
+        assert!(env.resolves_at_module_level("x"));
+        env.enter_scope();
+        env.define(Symbol::variable(
+            "y",
+            Type::String,
+            Mutability::Val,
+            Span::dummy(),
+        ))
+        .unwrap();
+        assert!(env.resolves_to_local("y"));
+        env.exit_scope();
+        // Leaving more levels than were entered never pops a hidden one.
+        env.exit_scope();
+        env.restore_locals(detached);
+
+        assert_eq!(env.lookup("x").unwrap().ty(), Type::String);
+        assert_eq!(env.lookup("y").unwrap().ty(), Type::Int);
+        env.exit_scope();
+        assert_eq!(env.lookup("x").unwrap().ty(), Type::Int);
+        assert!(env.lookup("y").is_none());
     }
 
     #[test]

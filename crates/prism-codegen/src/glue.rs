@@ -48,7 +48,7 @@ use crate::equality::Comparison;
 use crate::error::BackendError;
 use crate::layout::{FunctionField, Layout, ListField, Member, Shape};
 use crate::representation::{representation, Representation};
-use crate::symbols::{environment_drop_symbol, symbol_of};
+use crate::symbols::environment_drop_symbol;
 use crate::unit::{data_global, LoweredFunction, UnitContext};
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, Block, Function, InstBuilder, MemFlagsData, TrapCode,
@@ -266,7 +266,7 @@ impl<M: Module> UnitContext<'_, M> {
         if let Some(id) = self.glue.environment_drops.get(&body) {
             return Ok(*id);
         }
-        let symbol = environment_drop_symbol(&symbol_of(&self.file.bodies[body], self.file));
+        let symbol = environment_drop_symbol(self.symbol(body));
         let signature = self.glue_signature(GlueKind::Drop);
         let id = self
             .module

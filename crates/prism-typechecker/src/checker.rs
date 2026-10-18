@@ -9,7 +9,9 @@ use crate::captures::{decide_captures, BodyKind};
 use crate::error::{MissingImplicitParameter, NoTextFormReason, TypeError};
 use crate::exhaustiveness;
 use crate::inference::Unknowns;
-use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
+use crate::scope::{
+    is_type_symbol, DetachedLocals, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind,
+};
 use crate::types::{
     type_from_abi, type_parameters_from_abi, NominalId, Type, TypeDef, TypeParameter,
     TypeRelations, BUILTIN_MODULE,
@@ -457,7 +459,7 @@ enum PendingDecl {
 /// The state of the body being checked, swapped out while another declaration is inferred on
 /// demand.
 struct BodyContext {
-    locals: Vec<HashMap<String, Symbol>>,
+    locals: DetachedLocals,
     in_compose_stack: Vec<bool>,
     current_expected_return: Option<Type>,
     missing_implicit_parameter: Option<MissingImplicitParameter>,

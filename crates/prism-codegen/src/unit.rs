@@ -19,7 +19,7 @@ use crate::representation::{
 use crate::supported::is_compiled;
 use crate::symbols::{
     accessor_symbol, descriptor_symbol, initializer_symbol, slot_symbol, state_symbol,
-    storage_symbol, symbol_of,
+    storage_symbol, symbols_of,
 };
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, UserFuncName,
@@ -29,7 +29,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use prism_mir::{BodyId, BodyOwner, MirFile};
 use prism_runtime::{RuntimeType, RUNTIME_FUNCTIONS, STACK_LIMIT_SYMBOL};
-use prism_typed_tree::{DeclarationPath, Type};
+use prism_typed_tree::{ArenaId, DeclarationPath, Type};
 use std::collections::HashMap;
 
 /// A function of a unit, lowered to Cranelift IR and declared in the module, not yet compiled.
@@ -83,11 +83,11 @@ impl CodeUnit {
         let mut context = UnitContext::new(file, name, module)?;
         let mut builder_context = FunctionBuilderContext::new();
         let mut functions = Vec::new();
-        for (_, body) in file.bodies.iter() {
+        for (body_id, body) in file.bodies.iter() {
             if !is_compiled(body) {
                 continue;
             }
-            let symbol = symbol_of(body, file);
+            let symbol = context.symbol(body_id).to_string();
             let signature = match body.owner {
                 BodyOwner::Closure { .. } => {
                     closure_signature(body, context.call_conv, context.pointer)
@@ -138,6 +138,8 @@ pub(crate) struct UnitContext<'m, M: Module> {
     slots: HashMap<String, DataId>,
     /// The descriptor of each closure body the unit builds a value of.
     descriptors: HashMap<BodyId, DataId>,
+    /// The symbol of each body of the file, by id, built once ([`symbols_of`]).
+    symbols: Vec<String>,
     stack_limit: Option<DataId>,
 }
 
@@ -159,11 +161,17 @@ impl<'m, M: Module> UnitContext<'m, M> {
             runtime: HashMap::new(),
             slots: HashMap::new(),
             descriptors: HashMap::new(),
+            symbols: symbols_of(file),
             stack_limit: None,
         };
         let id = context.define_bytes(&format!("{}#file", unit_name), name.as_bytes())?;
         context.file_name = (id, name.len());
         Ok(context)
+    }
+
+    /// The symbol of the body `body` of the unit's file.
+    pub fn symbol(&self, body: BodyId) -> &str {
+        &self.symbols[body.index()]
     }
 
     fn declare_function(
@@ -284,7 +292,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
         if let Some(id) = self.descriptors.get(&body) {
             return Ok(*id);
         }
-        let symbol = symbol_of(&self.file.bodies[body], self.file);
+        let symbol = self.symbol(body).to_string();
         let slot = self.slot(&symbol)?;
         let id =
             self.module

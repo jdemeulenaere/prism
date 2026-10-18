@@ -83,6 +83,8 @@ No new capability: the header and the identifier status of `it` go to `syntax`, 
 
 Measured while implementing (release build): `implicit-parameter-closures` grows x4.2 per x4 in type checking (7.8 ms at 4096 closures, as `many-closures`' 7.2 ms). `nested-implicit-parameter-closures` grows about x4 per doubling of the depth in type checking and in lowering (1.2 ms type and 2.2 ms lower at depth 120), and so does the same shape written with declared parameters (`apply { x -> ... }`), so the growth is not this change's: checking a call whose argument is a closure that itself ends in such a call costs time in the size of the argument somewhere in call checking and lowering, which the existing `nested-closures` shape (closures with no expected type, not passed as arguments) does not exercise. It is a ROADMAP follow-up; depths that matter in practice (under 10) cost microseconds.
 
+Fixed in review (plain fix "Make nested trailing-lambda calls compile in linear time"): the type checker's scope stack hashed a name once per enclosing scope at every lookup, and the backend rebuilt a closure's symbol from all its enclosing closures' at every use. A scoped symbol table and symbols built once per file make both linear in the depth; `compile_timing.rs` gains five depth shapes (16 to 128 nested trailing-lambda calls, plain, with declared parameters, generic, generic with `it`, and a compose UI) held to at most x2.5 per doubling of the depth under `PRISM_ASSERT_TIMING=1`.
+
 ## Risks / Trade-offs
 
 - [`it` silently refers to an outer `it` in a closure expecting zero parameters, where the author meant the closure's own] → this is Kotlin's behaviour; the type usually differs, and a lint can flag it once warnings exist.
