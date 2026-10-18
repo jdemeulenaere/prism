@@ -74,9 +74,9 @@ A reference-typed parameter's default MUST return only a borrow of the temporary
 - **WHEN** `struct User { var name: String }` is declared, and `mut fun User.rename(n: &String = name) {}`, `fun f(m: &mut User, n: &String = m.name): Int = 1` and `fun g() { var u = User("a"); u.rename() }` are checked
 - **THEN** the borrow checker emits `E5009` at `name` in the default of `rename` and at `m.name` in the default of `f`, and nothing at the call `u.rename()`
 
-#### Scenario: A default reading through a shared receiver keeps it borrowed
-- **WHEN** `struct User { var name: String }`, `fun User.hi(n: &String = name): &String = n` and `fun greet(s: &String): Int = 1` are declared, and `fun f(): Int { var u = User("a"); val h = u.hi(); return greet(h) }` and `fun g(): Int { var u = User("a"); val h = u.hi(); u.name = "b"; return greet(h) }` are checked
-- **THEN** the borrow checker accepts `f` and emits `E5004` at `u.name` in `g`, because `h` borrows `u` through the default
+#### Scenario: A default reading through a shared reference keeps it borrowed
+- **WHEN** `struct User { var name: String }`, `fun User.hi(n: &String = name): &String = &name`, `fun hello(u: &User, n: &String = u.name): &String = n`, `fun greet(s: &String): Int = 1` and `fun pair(s: &String, u: &mut User): Int = 1` are declared, and `fun f(): Int { var u = User("a"); val h = u.hi(); greet(h); return greet(hello(&u)) }`, `fun g(): Int { var u = User("a"); return pair(hello(&u), &mut u) }` and `fun k(): Int { var u = User("a"); val h = hello(&u); return greet(h) }` are checked
+- **THEN** the borrow checker accepts both defaults and `f`, where `h` keeps only the receiver `u` borrowed; emits `E5003` at `&mut u` in `g`, because the result of `hello` borrows `u` through its argument and its default; and emits `E5006` at `hello(&u)` in `k`, because that result is also tied to the default's slot, which ends with the caller's statement
 
 ### Requirement: Borrows Stored Through Inputs Outlive the Call
 A body MAY store a borrow derived from its inputs through a `&mut R` parameter whose `R` holds borrows, and a closure into a variable it captures, since callers keep what such a parameter or variable points at borrowed by every other operand (see "Calls and Closures Write Borrows Through What They Are Given"). A by-value parameter MUST end when its body returns, so storing a borrow of a local, a temporary or a by-value parameter there MUST be rejected with `DroppedWhileBorrowed` (`E5006`).

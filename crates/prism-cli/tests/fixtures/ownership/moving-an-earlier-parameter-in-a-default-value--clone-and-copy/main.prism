@@ -1,4 +1,3 @@
 // expect: ok
 fun h(a: String, b: String = a.clone()): Int = 1
 fun k(a: Int, b: Int = a): Int = b
-fun m(a: String, b: &String = a): Int = 1

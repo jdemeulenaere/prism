@@ -6,7 +6,7 @@
 //! through it), and defined, which kills it, by a whole-local assignment, a call destination
 //! or `StorageDead`. Drops are not uses: only closure values among loan carriers are dropped,
 //! and dropping one reads nothing it borrowed. The return place is not used by `Return`, since
-//! what a body returns is the callee's side of elision (`borrowck-elision`); but a closure's
+//! what a body returns is checked against the elision rules instead (`returns`); but a closure's
 //! capture locals and the arguments of type `&mut R` (or `(&mut R)?`) whose `R` carries loans
 //! are used at every return, because the caller sees them afterwards.
 

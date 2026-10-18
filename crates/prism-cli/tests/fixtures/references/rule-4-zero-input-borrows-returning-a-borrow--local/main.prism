@@ -1,0 +1,5 @@
+// expect: E5008
+fun f(): &Int {
+    val n = 1
+    return &n
+}

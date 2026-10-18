@@ -41,8 +41,8 @@ use crate::location::{locations, Location};
 use crate::places;
 use prism_ast::Span;
 use prism_mir::{
-    Body, BodyOwner, Callee, LocalId, LocalKind, MirFile, Operand, Place, Rvalue, StatementKind,
-    TerminatorKind,
+    Body, BodyOwner, BorrowOrigin, Callee, LocalId, LocalKind, MirFile, Operand, Place, Rvalue,
+    StatementKind, TerminatorKind,
 };
 use std::collections::{HashSet, VecDeque};
 
@@ -452,6 +452,8 @@ impl Checker<'_> {
         let (kind_of_error, primary) = match kind {
             AccessKind::Drop | AccessKind::StorageDead => {
                 let name = place_name.clone();
+                let default_slot =
+                    loan.mutable && loan.kind == LoanKind::Borrow(BorrowOrigin::Default);
                 let ends_with_body = place.projections.is_empty()
                     && self.body.locals[place.local].kind == LocalKind::Argument;
                 let (primary, at_end) = match &name {
@@ -471,16 +473,25 @@ impl Checker<'_> {
                         "borrowed value does not live long enough".to_string(),
                         format!("'{}' dropped here while still borrowed", name),
                     ),
+                    // The slot of an omitted reference argument, which its default may fill.
+                    None if default_slot => (
+                        "the default value of an omitted reference argument is held in a temporary here"
+                            .to_string(),
+                        "temporary value is freed at the end of this statement".to_string(),
+                    ),
                     None => (
                         "this borrows a temporary value".to_string(),
                         "temporary value is freed at the end of this statement".to_string(),
                     ),
                 };
                 if name.is_none() {
-                    helps.push(
+                    helps.push(if default_slot {
+                        "pass the argument explicitly, bound to a local with 'val', so that it lives as long as its block"
+                            .to_string()
+                    } else {
                         "bind the value to a local with 'val' before borrowing it, so that it lives as long as its block"
-                            .to_string(),
-                    );
+                            .to_string()
+                    });
                 }
                 // An argument ends with the body, so it is labelled at its declaration (D12 of
                 // `borrowck-elision`).

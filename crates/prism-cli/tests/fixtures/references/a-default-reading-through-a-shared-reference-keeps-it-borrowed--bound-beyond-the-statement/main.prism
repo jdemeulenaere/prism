@@ -1,9 +1,9 @@
-// expect: ok
+// expect: E5006
 struct User { var name: String }
-fun User.hi(n: &String = name): &String = n
+fun hello(u: &User, n: &String = u.name): &String = n
 fun greet(s: &String): Int = 1
-fun f(): Int {
+fun k(): Int {
     var u = User("a")
-    val h = u.hi()
+    val h = hello(&u)
     return greet(h)
 }

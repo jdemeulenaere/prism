@@ -1,0 +1,8 @@
+// expect: E5003
+struct User { var name: String }
+fun hello(u: &User, n: &String = u.name): &String = n
+fun pair(s: &String, u: &mut User): Int = 1
+fun g(): Int {
+    var u = User("a")
+    return pair(hello(&u), &mut u)
+}

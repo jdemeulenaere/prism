@@ -1,5 +1,5 @@
 //! `prism-borrowck`: the borrow checker, which checks the MIR of one file and elaborates its
-//! drops (`borrowck-moves`, `borrowck-exclusivity`).
+//! drops (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`).
 //!
 //! [`check_file`] reads nothing but the file's [`MirFile`]: the type table travels in it, and
 //! every operand already says whether it moves and every call its parameter types, so no other
@@ -17,12 +17,18 @@
 //!    liveness of loan-carrying locals ([`liveness`], backward) and the loans each may hold
 //!    ([`loan_flow`], forward), then checks every access against the live loans of overlapping
 //!    places (`E5003` to `E5006`) and every write of a function value that may hold a capture
-//!    or a function-typed parameter to a place it escapes through (`E5007`). Without errors it
+//!    or a function-typed parameter to a place it escapes through (`E5007`), then each write of
+//!    its return place against the lifetime elision rules ([`elision`]): a returned borrow of a
+//!    local, a temporary or a by-value parameter is `E5008`, one derived from an input the
+//!    rule does not tie the result to `E5009` (D14 of `borrowck-elision`). Without errors it
 //!    returns the elaborated MIR, whose closure bodies record their capture modes.
 //!
-//! `borrowck-elision` extends the loan flow with an origin fact per input borrow and checks
-//! what each body returns against the elision rules (D21 of `borrowck-exclusivity`), with the
-//! next `E5xxx` codes.
+//! The elision rules decide, from a signature alone, which inputs a returned borrow is tied to,
+//! and both halves use the same function: a caller keeps those inputs borrowed while the result
+//! is live, and a callee may only return borrows derived from them, each argument and capture
+//! that carries loans holding an input that stands for what the caller passed. Since an imported
+//! callee's signature comes from its ABI, caller and callee agree across files with no lifetime
+//! annotation (the zero-cost memory-safety invariant).
 
 pub mod analyses;
 pub mod borrows;
@@ -40,6 +46,7 @@ pub mod loan_flow;
 pub mod location;
 pub mod move_paths;
 pub mod places;
+mod returns;
 #[cfg(test)]
 mod test_bodies;
 pub mod uses;
@@ -75,6 +82,7 @@ pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
             &escaped,
         ));
         errors.extend(escapes);
+        errors.extend(returns::check_returns(&elaborated, body, &borrows, &flow));
     }
     if !errors.is_empty() {
         sort_errors(&mut errors);
