@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+struct User { val name: String, val nick: String?, val age: Int }
+fun main() { val u = User("A" + "da", "a".clone() + "da", 36); println(u.age) }

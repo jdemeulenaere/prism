@@ -485,6 +485,12 @@ fn glue_of_one_type_in_two_files() {
         let dump = stdout(&dump);
         assert_eq!(function_headers(&dump).last(), Some(&glue), "{}", dump);
     }
+    let run = prism(
+        &["run", "--check-allocations", "app/main.prism"],
+        &directory,
+    );
+    assert_eq!(run.status.code(), Some(0), "{}", stderr(&run));
+    assert_eq!(stderr(&run), "");
     fs::remove_dir_all(&directory).ok();
 }
 
@@ -506,5 +512,66 @@ fn signature_of_a_function_over_strings() {
         signature
     );
     assert!(!signature.contains("->"), "{}", signature);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// execution: "A program that frees what it allocates".
+#[test]
+fn a_program_that_frees_what_it_allocates() {
+    let directory = single_file(
+        "frees",
+        "fun main() { val s = \"a\" + \"b\"; println(s) }\n",
+    );
+    let output = prism(&["run", "--check-allocations", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "ab\n");
+    assert_eq!(stderr(&output), "");
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// execution: "A runtime error is not checked".
+#[test]
+fn a_runtime_error_is_not_checked() {
+    let directory = single_file(
+        "runtime_error_unchecked",
+        "fun zero(): Int = 0\nfun main() { val s = \"a\" + \"b\"; println(1 / zero()) }\n",
+    );
+    let output = prism(&["run", "--check-allocations", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(101));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(
+        stderr(&output),
+        "panic: division by zero\n  at main.prism:2:41\n"
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// `--check-allocations` combines with `--timings` and with the program's arguments.
+#[test]
+fn the_allocation_check_combines_with_the_other_options() {
+    let directory = single_file(
+        "check_and_timings",
+        "fun main() { println(1.toString()) }\n",
+    );
+    let output = prism(
+        &[
+            "run",
+            "--timings",
+            "--check-allocations",
+            "main.prism",
+            "--",
+            "--check-allocations",
+        ],
+        &directory,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "1\n");
+    assert!(
+        stderr(&output).contains("timing: total to main"),
+        "{}",
+        stderr(&output)
+    );
+    let output = prism(&["run", "main.prism", "--check-allocations"], &directory);
+    assert_eq!(output.status.code(), Some(1), "an option after the file");
     fs::remove_dir_all(&directory).ok();
 }

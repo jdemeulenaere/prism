@@ -47,9 +47,17 @@ impl Program {
     }
 
     /// Runs the program from `main`, a function without parameters or result, on a thread of
-    /// its own with a fixed stack, with `arguments` recorded by the runtime. Returns the exit
-    /// status: 0 when `main` returns. A runtime error ends the process with status 101 instead.
-    pub fn run(&self, main: &DeclarationPath, arguments: Vec<String>) -> Result<i32, BackendError> {
+    /// its own with a fixed stack, with `arguments` recorded by the runtime and the allocation
+    /// check on when `check_allocations` is. Returns the exit status the runtime's `finish`
+    /// gives: 0 when `main` returns, 102 when the check finds allocations still live. A runtime
+    /// error ends the process with status 101 instead, and an invalid free under the check with
+    /// status 102.
+    pub fn run(
+        &self,
+        main: &DeclarationPath,
+        arguments: Vec<String>,
+        check_allocations: bool,
+    ) -> Result<i32, BackendError> {
         let symbol = function_symbol(main);
         let address = self
             .function_address(&symbol)
@@ -64,7 +72,7 @@ impl Program {
                 let top = 0u8;
                 let top = std::hint::black_box(std::ptr::addr_of!(top)) as usize;
                 prism_runtime::set_stack_limit(top, PROGRAM_STACK_SIZE);
-                prism_runtime::start(arguments, false);
+                prism_runtime::start(arguments, check_allocations);
                 // SAFETY: `address` is the compiled `main`, whose signature `find_main` checked:
                 // no parameters, no result, the host's C calling convention.
                 let main: extern "C" fn() = unsafe { std::mem::transmute(address) };

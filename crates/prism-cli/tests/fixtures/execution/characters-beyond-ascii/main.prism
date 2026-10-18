@@ -1,0 +1,3 @@
+// expect: ok
+// run: 0
+fun main() { val s = "héllo"; println(s.length); println(s[1]); println(s[4]) }

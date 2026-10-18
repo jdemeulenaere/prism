@@ -60,15 +60,18 @@
 //! ## Executable cases
 //!
 //! A case whose header also has a `// run: <status>` line is a program: the runner spawns
-//! `prism run <entry>` with the case directory as working directory (so diagnostics show
-//! paths relative to it) and compares the exit status with `<status>` (`0` when `main` returns,
-//! `101` after a runtime error, `1` when the program does not compile), and stdout and stderr
+//! `prism run --check-allocations <entry>` with the case directory as working directory (so
+//! diagnostics show paths relative to it) and compares the exit status with `<status>` (`0` when
+//! `main` returns, `101` after a runtime error, `1` when the program does not compile, `102` when
+//! the allocation check fails), and stdout and stderr
 //! with `stdout.snap` and `stderr.snap`, an absent file meaning empty output (D21 of
 //! `codegen-core`). `PRISM_BLESS=1` writes both, removing the file of an empty output; read each
 //! against its scenario's THEN before committing it. The `// expect:` line still states what
 //! `prism check` reports, which is `ok` for a program the backend rejects. The `E6xxx` codes in a
 //! case's `stderr.snap` count as exercised for the catalog check. Every case of the `execution`
-//! spec must be executable.
+//! spec must be executable. Since every program runs under the allocation check (D13 of
+//! `runtime-strings-and-drops`), each one also asserts that no allocation outlives its owner and
+//! none is freed twice: a leak or an invalid free changes its status to `102`.
 //!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
@@ -267,7 +270,8 @@ fn run(case: &Case) -> Result<(), String> {
     check_run(case, &entry)
 }
 
-/// Runs an executable case with `prism run` and compares its exit status and output.
+/// Runs an executable case with `prism run --check-allocations` and compares its exit status and
+/// output, so that every program also asserts it leaks nothing and frees nothing twice.
 fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
     let Some(expected_status) = case.run_status else {
         return Ok(());
@@ -275,6 +279,7 @@ fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
     let relative = entry.strip_prefix(&case.dir).unwrap_or(entry);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
         .arg("run")
+        .arg("--check-allocations")
         .arg(relative)
         .current_dir(&case.dir)
         .output()

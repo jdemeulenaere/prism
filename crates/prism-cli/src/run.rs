@@ -25,6 +25,10 @@ use std::time::{Duration, Instant};
 pub struct RunOptions {
     /// Whether to print the time of each stage to stderr before `main` runs.
     pub timings: bool,
+    /// Whether the runtime tracks every allocation and checks, when `main` returns, that none is
+    /// still live and none was freed invalidly (`--check-allocations`, D13 of
+    /// `runtime-strings-and-drops`).
+    pub check_allocations: bool,
     /// The arguments after `--`, passed to the program.
     pub arguments: Vec<String>,
     /// When the `prism` process started, from which the total time to `main` counts.
@@ -35,6 +39,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             timings: false,
+            check_allocations: false,
             arguments: Vec::new(),
             started: Instant::now(),
         }
@@ -116,7 +121,9 @@ pub fn compile_program(entry: &Path) -> Result<CompiledProgram, WorkspaceError> 
 }
 
 /// Compiles and runs the program whose entry file is `entry`, returning its exit status: 0 when
-/// `main` returns. A runtime error ends the process with status 101 instead of returning.
+/// `main` returns, or 102 when the allocation check finds allocations still live. A runtime
+/// error ends the process with status 101 instead of returning, and an invalid free under the
+/// allocation check with status 102.
 pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceError> {
     let compiled = compile_program(entry)?;
     if options.timings {
@@ -138,7 +145,11 @@ pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceErro
     }
     compiled
         .program
-        .run(&compiled.main, options.arguments.clone())
+        .run(
+            &compiled.main,
+            options.arguments.clone(),
+            options.check_allocations,
+        )
         .map_err(WorkspaceError::Backend)
 }
 

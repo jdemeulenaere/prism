@@ -1,0 +1,4 @@
+package lib
+
+public struct User { val name: String, val nick: String? }
+public val ADMIN: String = "ro" + "ot"

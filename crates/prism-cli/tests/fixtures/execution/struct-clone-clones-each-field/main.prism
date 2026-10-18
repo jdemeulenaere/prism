@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+struct User : Clone { var name: String, val nick: String? }
+fun main() { var a = User(1.toString(), 2.toString()); val b = a.clone(); a.name = 3.toString(); println(a.name); println(b.name); println(b.nick == a.nick) }

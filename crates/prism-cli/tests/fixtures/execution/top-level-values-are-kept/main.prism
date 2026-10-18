@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+val NAME: String = 4.toString() + "2"
+fun main() { println(NAME); println(NAME.length) }

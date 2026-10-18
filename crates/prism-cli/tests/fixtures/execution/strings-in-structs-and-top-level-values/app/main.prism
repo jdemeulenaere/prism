@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+// entry: app/main.prism
+package app
+
+import /lib/names
+
+fun main() { val u = User(ADMIN.clone(), null); println(u.name); println(u.nick == null); println(ADMIN) }

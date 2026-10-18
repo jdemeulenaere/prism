@@ -30,12 +30,14 @@ COMMANDS:
     dump-mir [--elaborated] <file.prism>
                            Print the MIR of a source file that typechecks; with
                            --elaborated, borrow-check it and print its elaborated MIR
-    run [--timings] <file.prism> [-- <argument>...]
+    run [--timings] [--check-allocations] <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
                            'fun main()', exiting with the program's status (101 after a
                            runtime error, 1 when it does not compile); --timings prints the
-                           time of each stage before main runs; the arguments after '--' are
-                           the program's
+                           time of each stage before main runs; --check-allocations tracks
+                           every allocation and, when main returns, reports those still live
+                           and any invalid free, exiting with 102; the arguments after '--'
+                           are the program's
     dump-clif <file.prism> Print the Cranelift IR the backend generates for a source file
     dump-layout <file.prism>
                            Print the memory layout of every struct, enum and nullable type a
@@ -154,18 +156,23 @@ fn main() {
     }
 }
 
-/// `prism run [--timings] <file.prism> [-- <argument>...]` (D14 of `codegen-core`): options
-/// before the file, and everything after `--` for the program.
+/// `prism run [--timings] [--check-allocations] <file.prism> [-- <argument>...]` (D14 of
+/// `codegen-core`, D13 of `runtime-strings-and-drops`): options before the file, and everything
+/// after `--` for the program.
 fn run_program(args: &[String], started: std::time::Instant) {
     let usage = || -> ! {
-        eprintln!("Error: usage: prism run [--timings] <file.prism> [-- <argument>...]");
+        eprintln!(
+            "Error: usage: prism run [--timings] [--check-allocations] <file.prism> [-- <argument>...]"
+        );
         process::exit(1);
     };
     let mut timings = false;
+    let mut check_allocations = false;
     let mut rest = args.iter();
     let file = loop {
         match rest.next().map(String::as_str) {
             Some("--timings") => timings = true,
+            Some("--check-allocations") => check_allocations = true,
             Some(option) if option.starts_with('-') => usage(),
             Some(file) => break file,
             None => usage(),
@@ -178,6 +185,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
     };
     let options = prism_cli::RunOptions {
         timings,
+        check_allocations,
         arguments,
         started,
     };

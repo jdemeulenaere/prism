@@ -1,0 +1,3 @@
+// expect: ok
+// run: 0
+fun main() { val a = "pri"; val b = a + "sm"; println(b); println(a); println(b == "prism"); println(a != "pri") }

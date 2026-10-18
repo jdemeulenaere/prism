@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+enum Message { Text(String, Int), Empty }
+fun main() { val a = Message.Text(1.toString(), 2); val b = Message.Empty; println(1) }

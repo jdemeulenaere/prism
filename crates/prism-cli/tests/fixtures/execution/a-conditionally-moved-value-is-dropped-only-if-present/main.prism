@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+fun take(s: String): Int = s.length
+fun f(c: Bool) { val s = 1.toString(); if (c) println(take(s)) }
+fun main() { f(true); f(false) }

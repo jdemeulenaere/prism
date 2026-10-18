@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+fun make(): String = 5.toString()
+fun greet(n: &String): Int = n.length
+fun main() { println(greet(make())); println(greet(make())) }
