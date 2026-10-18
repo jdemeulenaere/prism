@@ -13,8 +13,11 @@ use crate::error::TypeError;
 use crate::scope::{Mutability, Symbol, SymbolKind};
 use crate::types::{NominalId, Type};
 use prism_ast::expr::{Expr, ExprKind, PatternArgument, PatternKind};
+use prism_ast::statement::DestructureEntry;
 use prism_ast::Span;
-use prism_typed_tree::{BindingMode, LocalId, LocalKind, Pattern};
+use prism_typed_tree::{
+    BindingMode, LocalId, LocalKind, Pattern, StatementId, StatementKind as TreeStatementKind,
+};
 
 /// How the subject of a pattern is held, after the type checker peels its references (D5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -657,6 +660,144 @@ impl TypeChecker {
         }
     }
 
+    /// Checks a destructuring declaration `val (entries) = initializer` (D13 of
+    /// `payload-patterns`): the value is read in place, each entry binds the field it names as a
+    /// pattern binding would, in the mode the value's type gives, and the bindings are defined in
+    /// the current scope.
+    pub(super) fn check_destructure(
+        &mut self,
+        is_var: bool,
+        entries: &[DestructureEntry],
+        initializer: &Expr,
+        span: Span,
+    ) -> StatementId {
+        let mut layers = Vec::new();
+        let mut value = self.infer_expr(initializer);
+        while let Type::Reference { mutable, .. } = self.builder.type_of(value) {
+            layers.push(*mutable);
+            value = self.deref(value);
+        }
+        let mode = Self::subject_mode(&layers);
+        let ty = self.ty(value);
+        let mut bindings = PatternBindings::default();
+        let fields = match &ty {
+            Type::Struct { id, arguments }
+                if !self.reject_unimported_members(&ty, initializer.span) =>
+            {
+                self.types.instantiated_fields(id, arguments)
+            }
+            Type::Struct { .. } | Type::Error => None,
+            other => {
+                let help = matches!(other, Type::Enum { .. }).then(|| {
+                    "use a 'when' to match the variants of an enum, binding their payloads with 'val'"
+                        .to_string()
+                });
+                self.errors.push(TypeError::InvalidPattern {
+                    message: format!(
+                        "only a struct can be destructured, but this value has type '{}'",
+                        other
+                    ),
+                    span: initializer.span,
+                    help,
+                });
+                None
+            }
+        };
+        let pattern = match (fields, &ty) {
+            (Some(fields), Type::Struct { id, arguments }) => {
+                let mut slots: Vec<Option<&DestructureEntry>> = vec![None; fields.len()];
+                for (position, entry) in entries.iter().enumerate() {
+                    match fields.iter().position(|(name, _, _)| name == &entry.field) {
+                        Some(index) if slots[index].is_some() => {
+                            self.errors.push(TypeError::InvalidPattern {
+                                message: format!("field '{}' is destructured twice", entry.field),
+                                span: entry.field_span,
+                                help: Some(format!(
+                                    "bind it once; to bind a field under another name, write '{} as name'",
+                                    entry.field
+                                )),
+                            });
+                            self.bind_pattern_name(
+                                &entry.name,
+                                is_var,
+                                &Type::Error,
+                                mode,
+                                entry.name_span,
+                                &mut bindings,
+                            );
+                        }
+                        Some(index) => slots[index] = Some(entry),
+                        None => {
+                            // Written the Kotlin way: positions are not fields (D13).
+                            let help = fields.get(position).map(|(field, _, _)| {
+                                format!(
+                                    "a destructuring declaration binds fields by name: to bind field '{}', write '{} as {}'",
+                                    field, field, entry.name
+                                )
+                            });
+                            self.errors.push(TypeError::UnknownField {
+                                target_type: ty.clone(),
+                                field_name: entry.field.clone(),
+                                span: entry.field_span,
+                                help,
+                            });
+                            self.bind_pattern_name(
+                                &entry.name,
+                                is_var,
+                                &Type::Error,
+                                mode,
+                                entry.name_span,
+                                &mut bindings,
+                            );
+                        }
+                    }
+                }
+                let sub_patterns = slots
+                    .into_iter()
+                    .zip(&fields)
+                    .map(|(entry, (_, _, field_ty))| match entry {
+                        Some(entry) => self.bind_pattern_name(
+                            &entry.name,
+                            is_var,
+                            field_ty,
+                            mode,
+                            entry.name_span,
+                            &mut bindings,
+                        ),
+                        None => Pattern::Wildcard,
+                    })
+                    .collect();
+                Pattern::Struct {
+                    id: id.clone(),
+                    arguments: arguments.clone(),
+                    fields: sub_patterns,
+                }
+            }
+            _ => {
+                for entry in entries {
+                    self.bind_pattern_name(
+                        &entry.name,
+                        is_var,
+                        &Type::Error,
+                        mode,
+                        entry.name_span,
+                        &mut bindings,
+                    );
+                }
+                Pattern::Wildcard
+            }
+        };
+        if pattern.moves() {
+            self.check_take_apart_source(initializer, "destructure");
+            value = self.as_place(value);
+        }
+        for binding in &bindings.bound {
+            self.define_local(binding.symbol(false));
+        }
+        self.builder
+            .add_statement(TreeStatementKind::Destructure { pattern, value }, span)
+    }
+
     /// Reports `E4025` when the alternative whose bindings are `bindings` does not bind exactly
     /// the names of the branch's first pattern, `first`, with the same types and modes (D10).
     /// Only the first difference is reported.
@@ -1120,6 +1261,81 @@ mod tests {
         assert_codes(
             "enum Pair { Of(String, Int) }\nstruct Inbox { val last: Pair }\nfun f(i: Inbox): Int = when (i.last) { Pair.Of(_, val n) -> n }\n",
             &[],
+        );
+    }
+
+    const USER: &str = "struct User { val name: String, val email: String, val age: Int }\n";
+    const ACCOUNT: &str = "struct Account { val name: String, val id: Int }\n";
+
+    #[test]
+    fn destructuring_declarations_name_fields() {
+        let dump = assert_codes(
+            &format!(
+                "{}fun f(u: User): String {{ val (email, name) = u; return name }}\n",
+                USER
+            ),
+            &[],
+        );
+        assert!(dump.contains("destructure"), "{}", dump);
+        assert_codes(
+            &format!(
+                "{}fun f(a: User, b: User): Int {{ val (age) = a; val (age as other) = b; return age + other }}\n",
+                USER
+            ),
+            &[],
+        );
+        for (entries, code) in [
+            ("nick", "E4006"),
+            ("age, age as a", "E4024"),
+            ("name, email as name", "E4010"),
+        ] {
+            assert_codes(
+                &format!("{}fun f(u: User) {{ val ({}) = u }}\n", USER, entries),
+                &[code],
+            );
+        }
+        assert_codes(
+            "struct Pair(val first: Int, val second: Int)\nfun f(p: Pair): Int { val (a, b) = p; return a }\n",
+            &["E4006", "E4006"],
+        );
+        assert_codes(
+            "enum Box { Of(Int) }\nfun f(b: Box) { val (x) = b }\n",
+            &["E4024"],
+        );
+    }
+
+    #[test]
+    fn destructuring_follows_the_binding_modes() {
+        let users = "struct User { val name: String }\n";
+        let dump = assert_codes(
+            &format!(
+                "{}{}consuming fun Account.toUser(): User {{ val (name) = this; return User(name) }}\n",
+                ACCOUNT, users
+            ),
+            &[],
+        );
+        assert!(dump.contains("name (move): String"), "{}", dump);
+        let dump = assert_codes(
+            &format!(
+                "{}fun len(s: &String): Int = 1\nfun f(a: &Account): Int {{ val (name, id) = a; return len(name) + id }}\n",
+                ACCOUNT
+            ),
+            &[],
+        );
+        assert!(dump.contains("name (shared borrow): &String"), "{}", dump);
+        assert_codes(
+            &format!(
+                "{}fun f(a: Account): Int {{ val (id) = a; val (name) = a; return id }}\n",
+                ACCOUNT
+            ),
+            &[],
+        );
+        assert_codes(
+            &format!(
+                "{}struct Holder {{ val account: Account }}\nfun f(h: Holder): String {{ val (name) = h.account; return name }}\n",
+                ACCOUNT
+            ),
+            &["E4017"],
         );
     }
 }

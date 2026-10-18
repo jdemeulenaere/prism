@@ -1,0 +1,3 @@
+// expect: E4006
+struct Pair(val first: Int, val second: Int)
+fun f(p: Pair): Int { val (a, b) = p; return a }

@@ -3981,16 +3981,11 @@ impl TypeChecker {
                 ty,
                 initializer,
             } => self.check_local(*is_var, name, ty.as_ref(), initializer, statement.span),
-            StatementKind::Destructure { .. } => {
-                self.errors.push(TypeError::InvalidPattern {
-                    message: "destructuring declarations are not supported yet".to_string(),
-                    span: statement.span,
-                    help: None,
-                });
-                let value = self.error_node(Vec::new(), statement.span);
-                self.builder
-                    .add_statement(TreeStatementKind::Expression { value }, statement.span)
-            }
+            StatementKind::Destructure {
+                is_var,
+                entries,
+                initializer,
+            } => self.check_destructure(*is_var, entries, initializer, statement.span),
             StatementKind::Assign { target, value } => {
                 self.check_assignment(target, value, statement.span)
             }

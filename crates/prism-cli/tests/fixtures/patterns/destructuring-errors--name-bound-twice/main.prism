@@ -1,0 +1,3 @@
+// expect: E4010
+struct User { val name: String, val email: String, val age: Int }
+fun f(u: User) { val (name, email as name) = u }
