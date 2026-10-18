@@ -40,10 +40,19 @@ pub(crate) fn check_body(
     let mut reported: HashSet<(MovePathId, Vec<Event>)> = HashSet::new();
     let mut errors = Vec::new();
     for location in locations(body) {
+        // Only a use is checked, so the effects after a location's last use need no replay, and
+        // a location without uses (a storage marker, a constant's assignment) needs no state.
+        let effects = data.effects(location);
+        let Some(last_use) = effects
+            .iter()
+            .rposition(|effect| matches!(effect, Effect::Use { .. }))
+        else {
+            continue;
+        };
         let mut maybe_state = maybe_cursor.seek(location).clone();
         let mut reaching_state = reaching_cursor.seek(location).clone();
         let mut acyclic_state = acyclic_cursor.seek(location).clone();
-        for effect in data.effects(location) {
+        for effect in &effects[..=last_use] {
             if let Effect::Use { path, kind, span } = effect {
                 let events = reaching.analysis.reaching(&reaching_state, *path);
                 if !events.is_empty() {
