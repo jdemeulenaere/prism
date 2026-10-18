@@ -1,4 +1,5 @@
-//! What the Tier 1 backend compiles, and `E6001` for the rest (D9 of `codegen-core`).
+//! What the Tier 1 backend compiles, and `E6001` for the rest (D9 of `codegen-core`, D19 of
+//! `codegen-aggregates`).
 //!
 //! [`check_file`] runs on a file's elaborated MIR before any code is generated. Generic bodies
 //! and closure bodies are never compiled ([`is_compiled`]); their uses are what it rejects. For
@@ -6,36 +7,42 @@
 //! return type at the declaration, a composable body at the declaration, then the first
 //! statement or terminator, in block order, that uses an unsupported type or operation. A body
 //! that passes is one [`crate::lower`] can lower.
+//!
+//! Scalars, `Unit`, references, structs, enums and nullables are supported, unless a struct,
+//! enum or nullable holds something that is not: a type is named by the first construct its
+//! fields or payloads need, in declaration order, as a reference is named by its referent.
 
 use crate::error::{CodegenError, CodegenErrorKind};
+use crate::representation::{representation, Representation};
+use cranelift_codegen::ir::types;
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, Body, BodyOwner, Callee, Constant, MirFile, Operand, Place, Projection, Rvalue,
-    StatementKind, TerminatorKind,
+    Body, BodyOwner, Callee, Constant, MirFile, Operand, Place, Projection, Rvalue, StatementKind,
+    TerminatorKind,
 };
-use prism_typed_tree::{BuiltinFunction, NominalId, Type, TypeTable};
+use prism_typed_tree::{BuiltinFunction, Type, TypeTable};
+
+/// How deep [`classify`] looks into nested structs and enums. Infinitely sized types are
+/// rejected by the type checker (`E4023`) and `Heap<T>` ends the walk, so only a broken type
+/// table reaches it.
+const MAXIMUM_DEPTH: usize = 256;
 
 /// A construct the backend does not compile yet, as `E6001` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Construct {
-    Structs,
-    Enums,
-    NullableValues,
-    /// A `Range` parameter, result, borrow or top-level value: only `Range` locals, which are
-    /// scalar-replaced, are supported.
-    RangeOutsideLocals,
     Strings,
     HeapValues,
-    Drops,
     FunctionValues,
     GenericCalls,
     ComposableFunctions,
-    /// A conversion between two types neither of which is otherwise rejected.
+    /// A conversion between two types that are otherwise supported, which the backend does not
+    /// lower; the type system produces none over supported types.
     Conversion {
         from: String,
         to: String,
     },
-    /// A value of an opaque type, which names no declaration.
+    /// A value of an opaque type, which names no declaration, or of a struct or enum whose
+    /// definition the file does not know.
     UnknownType(String),
 }
 
@@ -43,13 +50,8 @@ impl Construct {
     /// How the diagnostic names the construct.
     pub fn description(&self) -> String {
         match self {
-            Construct::Structs => "structs".to_string(),
-            Construct::Enums => "enums".to_string(),
-            Construct::NullableValues => "nullable values".to_string(),
-            Construct::RangeOutsideLocals => "'Range' values outside local variables".to_string(),
             Construct::Strings => "strings".to_string(),
             Construct::HeapValues => "'Heap' values".to_string(),
-            Construct::Drops => "drops".to_string(),
             Construct::FunctionValues => "function values and closures".to_string(),
             Construct::GenericCalls => "calls of generic functions".to_string(),
             Construct::ComposableFunctions => "composable functions".to_string(),
@@ -63,18 +65,11 @@ impl Construct {
     /// The planned change that will support the construct, if one is planned.
     pub fn change(&self) -> Option<&'static str> {
         match self {
-            Construct::Structs
-            | Construct::Enums
-            | Construct::NullableValues
-            | Construct::RangeOutsideLocals
-            | Construct::Conversion { .. } => Some("codegen-aggregates"),
-            Construct::Strings | Construct::HeapValues | Construct::Drops => {
-                Some("runtime-strings-and-drops")
-            }
+            Construct::Strings | Construct::HeapValues => Some("runtime-strings-and-drops"),
             Construct::FunctionValues => Some("closures"),
             Construct::GenericCalls => Some("monomorphization"),
             Construct::ComposableFunctions => Some("compose-transform"),
-            Construct::UnknownType(_) => None,
+            Construct::Conversion { .. } | Construct::UnknownType(_) => None,
         }
     }
 
@@ -128,7 +123,7 @@ pub fn first_unsupported(body: &Body, types: &TypeTable) -> Option<(Construct, S
         .arguments()
         .map(|local| &body.locals[local].ty)
         .chain(std::iter::once(body.return_type()))
-        .find_map(|ty| classify(ty, false));
+        .find_map(|ty| classify(ty, types));
     if let Some(construct) = signature {
         return Some((construct, body.span));
     }
@@ -149,24 +144,39 @@ pub fn first_unsupported(body: &Body, types: &TypeTable) -> Option<(Construct, S
     None
 }
 
-/// The construct that makes a value of `ty` unsupported, if any. A `Range` is supported only as
-/// a local (`range_allowed`).
-pub fn classify(ty: &Type, range_allowed: bool) -> Option<Construct> {
+/// The construct that makes a value of `ty` unsupported, if any: for a struct, an enum or a
+/// nullable, the first one its fields or payloads need, in declaration order (D14 and D19 of
+/// `codegen-aggregates`).
+pub fn classify(ty: &Type, types: &TypeTable) -> Option<Construct> {
+    classify_at(ty, types, 0)
+}
+
+fn classify_at(ty: &Type, types: &TypeTable, depth: usize) -> Option<Construct> {
+    let unknown = || Some(Construct::UnknownType(ty.to_string()));
+    if depth > MAXIMUM_DEPTH {
+        return unknown();
+    }
     match ty {
         Type::Int | Type::Float | Type::Bool | Type::Char | Type::Unit | Type::Nothing => None,
         Type::String => Some(Construct::Strings),
-        // A reference is named by what it refers to.
-        Type::Reference { inner, .. } => match inner.as_ref() {
-            Type::Unit => None,
-            inner => classify(inner, false),
-        },
-        Type::Nullable(_) => Some(Construct::NullableValues),
-        Type::Heap(_) => Some(Construct::HeapValues),
-        Type::Struct { id, .. } if *id == NominalId::builtin_range() => {
-            (!range_allowed).then_some(Construct::RangeOutsideLocals)
+        // A reference and a nullable are named by what they hold.
+        Type::Reference { inner, .. } | Type::Nullable(inner) => {
+            classify_at(inner, types, depth + 1)
         }
-        Type::Struct { .. } => Some(Construct::Structs),
-        Type::Enum { .. } => Some(Construct::Enums),
+        Type::Heap(_) => Some(Construct::HeapValues),
+        Type::Struct { id, arguments } => match types.instantiated_fields(id, arguments) {
+            Some(fields) => fields
+                .iter()
+                .find_map(|(_, _, field)| classify_at(field, types, depth + 1)),
+            None => unknown(),
+        },
+        Type::Enum { id, arguments } => match types.instantiated_variants(id, arguments) {
+            Some(variants) => variants
+                .iter()
+                .flat_map(|(_, payloads)| payloads)
+                .find_map(|payload| classify_at(payload, types, depth + 1)),
+            None => unknown(),
+        },
         Type::Fn { .. } => Some(Construct::FunctionValues),
         Type::Parameter(_) => Some(Construct::GenericCalls),
         Type::Opaque(name) => Some(Construct::UnknownType(name.clone())),
@@ -174,8 +184,21 @@ pub fn classify(ty: &Type, range_allowed: bool) -> Option<Construct> {
     }
 }
 
-fn is_range(ty: &Type) -> bool {
-    matches!(ty, Type::Struct { id, .. } if *id == NominalId::builtin_range())
+/// Whether the backend lowers the `Subtype` step from `from` to `to` (D11 of
+/// `codegen-aggregates`): between two types of one machine representation (`&mut T` to `&T`,
+/// also inside a nullable), from `Nothing?` to any nullable (writing `null`), and from `Nothing`,
+/// which has no value.
+pub fn is_lowered_subtype(from: &Type, to: &Type) -> bool {
+    // Pointer width does not matter to whether two types share a representation.
+    let pointer = types::I64;
+    match (from, to) {
+        (Type::Nothing, _) => true,
+        (Type::Nullable(inner), Type::Nullable(_)) if **inner == Type::Nothing => true,
+        _ => matches!(
+            (representation(from, pointer), representation(to, pointer)),
+            (Some(Representation::Scalar(a)), Some(Representation::Scalar(b))) if a == b
+        ),
+    }
 }
 
 struct BodyChecker<'a> {
@@ -192,23 +215,18 @@ impl BodyChecker<'_> {
         place.try_ty(self.body, self.types)
     }
 
-    /// A place is supported when its local is (a `Range` local included) and its projections
-    /// are dereferences of references or field reads of a `Range` local.
+    /// A place is supported when its local is and it indexes no string.
     fn place(&self, place: &Place) -> Option<Construct> {
-        let root = self.local_type(place);
-        if let Some(construct) = classify(root, true) {
+        if let Some(construct) = classify(self.local_type(place), self.types) {
             return Some(construct);
         }
-        for (index, projection) in place.projections.iter().enumerate() {
-            match projection {
-                Projection::Deref => {}
-                Projection::Field(_) if index == 0 && is_range(root) => {}
-                Projection::Field(_) => return Some(Construct::Structs),
-                Projection::Payload => return Some(Construct::NullableValues),
-                Projection::Index(_) => return Some(Construct::Strings),
-            }
-        }
-        None
+        place
+            .projections
+            .iter()
+            .find_map(|projection| match projection {
+                Projection::Deref | Projection::Field(_) | Projection::Payload => None,
+                Projection::Index(_) => Some(Construct::Strings),
+            })
     }
 
     fn operand(&self, operand: &Operand) -> Option<Construct> {
@@ -222,9 +240,12 @@ impl BodyChecker<'_> {
                 | Constant::Unit
                 | Constant::TopLevelValue(_) => None,
                 Constant::String(_) => Some(Construct::Strings),
-                Constant::Null(_) => Some(Construct::NullableValues),
-                Constant::Function(_) => Some(Construct::FunctionValues),
-                Constant::VariantConstructor { .. } => Some(Construct::Enums),
+                Constant::Null(ty) => classify(ty, self.types),
+                // A variant constructor reaches the backend only as a value; its calls are
+                // aggregates.
+                Constant::Function(_) | Constant::VariantConstructor { .. } => {
+                    Some(Construct::FunctionValues)
+                }
             },
         }
     }
@@ -241,46 +262,20 @@ impl BodyChecker<'_> {
 
     fn rvalue(&self, destination: &Place, rvalue: &Rvalue) -> Option<Construct> {
         match rvalue {
-            Rvalue::Use(operand) | Rvalue::Unary(_, operand) => self.operand(operand),
-            Rvalue::Binary(_, left, right) => self.operand(left).or_else(|| self.operand(right)),
-            Rvalue::Borrow { place, .. } => self.place(place).or_else(|| {
-                // A `Range` local is scalar-replaced, so neither it nor its fields have an
-                // address.
-                let borrows_range = is_range(self.local_type(place))
-                    && place.projections.first() != Some(&Projection::Deref);
-                borrows_range.then_some(Construct::RangeOutsideLocals)
-            }),
-            Rvalue::Discriminant(place) => match self.place_type(place) {
-                Some(Type::Nullable(_)) => Some(Construct::NullableValues),
-                _ => Some(Construct::Enums),
-            },
-            Rvalue::Aggregate(AggregateKind::Struct { id, .. }, operands)
-                if *id == NominalId::builtin_range() =>
-            {
-                operands.iter().find_map(|operand| self.operand(operand))
+            Rvalue::Use(operand) | Rvalue::Unary(_, operand) | Rvalue::WrapNullable(operand) => {
+                self.operand(operand)
             }
-            Rvalue::Aggregate(AggregateKind::Struct { .. }, _) => Some(Construct::Structs),
-            Rvalue::Aggregate(AggregateKind::Variant { .. }, _) => Some(Construct::Enums),
-            Rvalue::WrapNullable(_) => Some(Construct::NullableValues),
+            Rvalue::Binary(_, left, right) => self.operand(left).or_else(|| self.operand(right)),
+            Rvalue::Borrow { place, .. } | Rvalue::Discriminant(place) => self.place(place),
+            Rvalue::Aggregate(kind, operands) => classify(&kind.ty(), self.types)
+                .or_else(|| operands.iter().find_map(|operand| self.operand(operand))),
             Rvalue::Subtype(operand) => self.operand(operand).or_else(|| {
                 let from = operand.try_ty(self.body, self.types)?;
                 let to = self.place_type(destination)?;
-                match (&from, &to) {
-                    (
-                        Type::Reference {
-                            mutable: true,
-                            inner: from_inner,
-                        },
-                        Type::Reference {
-                            mutable: false,
-                            inner: to_inner,
-                        },
-                    ) if from_inner == to_inner => None,
-                    _ => Some(Construct::Conversion {
-                        from: from.to_string(),
-                        to: to.to_string(),
-                    }),
-                }
+                (!is_lowered_subtype(&from, &to)).then(|| Construct::Conversion {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                })
             }),
             Rvalue::Closure { .. } => Some(Construct::FunctionValues),
         }
@@ -290,7 +285,8 @@ impl BodyChecker<'_> {
         match terminator {
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => None,
             TerminatorKind::SwitchInt { value, .. } => self.operand(value),
-            TerminatorKind::Drop { .. } => Some(Construct::Drops),
+            // A supported value owns no storage, so its drop does nothing (D14).
+            TerminatorKind::Drop { place, .. } => self.place(place),
             TerminatorKind::Call {
                 callee,
                 arguments,
@@ -317,11 +313,11 @@ impl BodyChecker<'_> {
                 arguments
                     .iter()
                     .find_map(|argument| self.operand(argument))
-                    .or_else(|| parameters.iter().find_map(|ty| classify(ty, false)))
+                    .or_else(|| parameters.iter().find_map(|ty| classify(ty, self.types)))
                     .or_else(|| self.place(destination))
                     .or_else(|| {
                         self.place_type(destination)
-                            .and_then(|ty| classify(&ty, false))
+                            .and_then(|ty| classify(&ty, self.types))
                     })
             }
         }
@@ -383,39 +379,41 @@ mod tests {
     #[test]
     fn a_struct_is_rejected_at_its_construction() {
         let (message, line, column) =
-            single("struct P { val x: Int }\nfun main() { val p = P(1); println(p.x) }\n");
-        names(&message, "structs");
+            single("struct P { val name: String }\nfun main() { val p = P(\"a\"); println(1) }\n");
+        names(&message, "strings");
         assert_eq!((line, column), (2, 22));
     }
 
     #[test]
     fn every_row_of_the_table() {
         let cases: &[(&str, &str)] = &[
-            ("enum E { A, B }\nfun f() { val e = E.A }\n", "enums"),
-            ("fun f() { val n: Int? = null }\n", "nullable values"),
-            ("fun f(n: Int?) {}\n", "nullable values"),
-            (
-                "fun f(r: Range): Int = 1\n",
-                "'Range' values outside local variables",
-            ),
-            (
-                "fun f(): Range = 1..2\n",
-                "'Range' values outside local variables",
-            ),
-            (
-                "fun f() { val r = 1..2; val b = &r }\n",
-                "'Range' values outside local variables",
-            ),
             ("fun f() { val s = \"x\" }\n", "strings"),
             ("fun f(s: &String) {}\n", "strings"),
             ("fun f() { println(\"hi\") }\n", "strings"),
+            (
+                "struct P { val name: String }\nfun f(p: &P): Int = 1\n",
+                "strings",
+            ),
+            (
+                "struct P { val n: Int, val name: String?, val h: Heap<Int> }\nfun f(p: &P): Int = 1\n",
+                "strings",
+            ),
             ("fun f(h: Heap<Int>) {}\n", "'Heap' values"),
+            ("fun f() { val h: Heap<Int>? = null }\n", "'Heap' values"),
+            (
+                "enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }\nfun f() { val e = Expr.Literal(1) }\n",
+                "'Heap' values",
+            ),
             (
                 "fun f() { val g = { 1 } }\n",
                 "function values and closures",
             ),
             (
                 "fun g() {}\nfun f() { val h = g }\n",
+                "function values and closures",
+            ),
+            (
+                "struct C { val f: () -> Int }\nfun f(c: &C) {}\n",
                 "function values and closures",
             ),
             (
@@ -429,6 +427,31 @@ mod tests {
             let (message, _, _) = single(source);
             names(&message, construct);
         }
+    }
+
+    #[test]
+    fn aggregates_are_supported() {
+        let source = "struct Point : Copy { var x: Int, var y: Int }\n\
+             struct Counter { var n: Int }\n\
+             enum Shape : Copy { Circle(Double), Square(Double), Empty }\n\
+             struct Pair<A, B>(val a: A, val b: B)\n\
+             val ORIGIN: Point = Point(0, 0)\n\
+             fun count(r: Range): Int { var n = 0; for (i in r) n += 1; return n }\n\
+             fun span(): Range = 1..3\n\
+             fun mirror(p: Point): Point = Point(p.y, p.x)\n\
+             fun take(c: Counter): Int = c.n\n\
+             fun area(s: Shape): Double = when (s) { Shape.Circle(1.0) -> 1.0; else -> 0.0 }\n\
+             fun age(n: Int?): Int = n ?: 0\n\
+             fun view(r: (&Point)?): Int = r?.x ?: 0\n\
+             fun main() {\n\
+                 var p = Point(1, 2); p.y = 5; p = mirror(p)\n\
+                 val c = Counter(4); println(take(c))\n\
+                 val q = Pair(1, true); println(q.b)\n\
+                 println(p == ORIGIN); println(Shape.Empty != Shape.Circle(1.0))\n\
+                 println(count(span())); println(age(null)); println(view(&p))\n\
+                 val t = p.clone(); println(t.x)\n\
+             }\n";
+        assert_eq!(errors(source), []);
     }
 
     #[test]

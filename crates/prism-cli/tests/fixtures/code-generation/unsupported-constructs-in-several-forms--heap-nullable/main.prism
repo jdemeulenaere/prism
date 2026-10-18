@@ -1,0 +1,3 @@
+// expect: ok
+// run: 1
+fun main() { val h: Heap<Int>? = null }

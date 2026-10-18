@@ -880,11 +880,6 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
 /// The passing `loops` cases that use a construct the Tier 1 backend rejects, and the construct.
 const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[
     ("loops/body-may-shadow-the-loop-variable", "strings"),
-    ("loops/break-on-the-right-of-elvis", "nullable values"),
-    (
-        "loops/counting-loop-over-a-half-open-range--borrowed-range",
-        "'Range' values outside local variables",
-    ),
     (
         "loops/loop-inside-a-closure",
         "function values and closures",
@@ -892,8 +887,8 @@ const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[
 ];
 
 /// code-generation: "Unsupported Constructs Are Rejected Before Code Generation". Every passing
-/// case of the `loops` spec that uses only scalars passes the backend's support check; the
-/// others are rejected naming the construct they use.
+/// case of the `loops` spec that uses only scalars, nullables and ranges passes the backend's
+/// support check; the others are rejected naming the construct they use.
 #[test]
 fn scalar_loop_fixtures_are_supported() {
     let mut supported = 0;
@@ -924,5 +919,5 @@ fn scalar_loop_fixtures_are_supported() {
             (Err(errors), None) => panic!("{} is rejected: {:?}", case.name, errors),
         }
     }
-    assert!(supported >= 9, "only {} loops cases supported", supported);
+    assert!(supported >= 11, "only {} loops cases supported", supported);
 }

@@ -8,8 +8,9 @@
 //! values) is named after its module, so the units of a program never collide.
 
 use crate::error::BackendError;
+use crate::layout::LayoutTable;
 use crate::lower::BodyLowering;
-use crate::representation::{body_signature, memory_layout, signature};
+use crate::representation::{body_signature, representation, signature, Representation};
 use crate::supported::is_compiled;
 use crate::symbols::{
     accessor_symbol, initializer_symbol, slot_symbol, state_symbol, storage_symbol, symbol_of,
@@ -92,6 +93,8 @@ pub(crate) struct UnitContext<'m, M: Module> {
     pub file: &'m MirFile,
     pub pointer: ir::Type,
     pub call_conv: CallConv,
+    /// The layouts of the file's types, shared by its bodies.
+    pub layouts: LayoutTable<'m>,
     /// The file's path relative to the workspace root, which runtime errors report.
     file_name: (DataId, usize),
     texts: HashMap<String, DataId>,
@@ -110,6 +113,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             file,
             pointer,
             call_conv,
+            layouts: LayoutTable::new(&file.types, pointer),
             file_name: (DataId::from_u32(0), 0),
             texts: HashMap::new(),
             runtime: HashMap::new(),
@@ -232,15 +236,20 @@ impl<'m, M: Module> UnitContext<'m, M> {
 
     /// The generated accessor of the top-level `val` `path` of type `ty` (D18): it returns the
     /// address of the value's storage, running the initializer through its slot on the first
-    /// call, and a null pointer when called again while the initializer runs.
+    /// call, and a null pointer when called again while the initializer runs. A value in memory
+    /// is built in place: the storage's address is the initializer's result address (D17 of
+    /// `codegen-aggregates`).
     fn accessor(
         &mut self,
         path: &DeclarationPath,
         ty: &Type,
         builder_context: &mut FunctionBuilderContext,
     ) -> Result<LoweredFunction, BackendError> {
-        let (size, align) = memory_layout(ty, self.pointer);
-        let storage = self.define_zeroed(&storage_symbol(path), size, align)?;
+        let layout = self.layouts.layout(ty).map_err(|construct| {
+            BackendError::new(format!("no layout for {}: {}", ty, construct.description()))
+        })?;
+        let storage =
+            self.define_zeroed(&storage_symbol(path), layout.storage_size(), layout.align)?;
         let state = self.define_zeroed(&state_symbol(path), 1, 1)?;
         let initializer = self.slot(&initializer_symbol(path))?;
         let symbol = accessor_symbol(path);
@@ -250,7 +259,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
         let mut function =
             Function::with_name_signature(UserFuncName::user(0, id.as_u32()), accessor_signature);
         let initializer_signature = signature(&[], ty, self.call_conv, self.pointer);
-        let value_type = crate::representation::machine_type(ty, self.pointer);
+        let value_representation = representation(ty, self.pointer);
         {
             let pointer = self.pointer;
             let mut builder = FunctionBuilder::new(&mut function, builder_context);
@@ -292,10 +301,20 @@ impl<'m, M: Module> UnitContext<'m, M> {
             let slot_address = data_address(&mut builder, initializer, pointer);
             let target = builder.ins().load(pointer, flags, slot_address, 0);
             let signature_ref = builder.import_signature(initializer_signature);
-            let call = builder.ins().call_indirect(signature_ref, target, &[]);
-            if value_type.is_some() {
-                let value = builder.inst_results(call)[0];
-                builder.ins().store(flags, value, storage_address, 0);
+            match value_representation {
+                Some(Representation::Memory) => {
+                    builder
+                        .ins()
+                        .call_indirect(signature_ref, target, &[storage_address]);
+                }
+                Some(Representation::Scalar(_)) => {
+                    let call = builder.ins().call_indirect(signature_ref, target, &[]);
+                    let value = builder.inst_results(call)[0];
+                    builder.ins().store(flags, value, storage_address, 0);
+                }
+                Some(Representation::Empty) | None => {
+                    builder.ins().call_indirect(signature_ref, target, &[]);
+                }
             }
             let marker = builder.ins().iconst(types::I8, state::INITIALIZED);
             builder.ins().store(flags, marker, state_address, 0);

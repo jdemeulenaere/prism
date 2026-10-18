@@ -282,3 +282,162 @@ fn a_slot_nothing_defines_holds_the_unlinked_stub() {
     assert_eq!(program.function_address("lib/b::g"), Some(stub));
     assert_ne!(program.function_address("lib/a::f"), Some(stub));
 }
+
+// Aggregates (D9 to D17 of `codegen-aggregates`).
+
+type ToInt = extern "C" fn() -> i64;
+type ToBool = extern "C" fn() -> u8;
+
+#[test]
+fn fields_are_read_and_written_in_place() {
+    let program = compile(
+        "struct Point : Copy { var x: Int, var y: Int }\n\
+         struct Line : Copy { var from: Point, var to: Point }\n\
+         fun bump(r: &mut Int) { *r = r + 1 }\n\
+         fun shift(l: &mut Line) { l.to.y = 40; l.from = Point(7, 8) }\n\
+         fun replace(r: &mut Point, v: Point) { *r = v }\n\
+         fun fields(n: Int): Int {\n\
+             var l = Line(Point(1, 2), Point(3, n))\n\
+             l.from.x = 10; bump(&mut l.to.x); shift(&mut l); val y = l.to.y; replace(&mut l.to, Point(y, 5))\n\
+             return l.from.x * 1000 + l.from.y * 100 + l.to.x + l.to.y\n\
+         }\n\
+         fun make(x: Int): Point = Point(x, x + 1)\n",
+    );
+    let fields: IntToInt = function(&program, "main::fields");
+    assert_eq!(fields(4), 7000 + 800 + 40 + 5);
+    // A result in memory is written through the address passed first.
+    let make: extern "C" fn(*mut [i64; 2], i64) = function(&program, "main::make");
+    let mut point = [0i64; 2];
+    make(&mut point, 41);
+    assert_eq!(point, [41, 42]);
+}
+
+#[test]
+fn enums_and_nullables_of_both_kinds() {
+    let program = compile(
+        "enum Color { Red, Green, Blue }\n\
+         enum Shape : Copy { Circle(Double), Rect(Int, Bool), Empty }\n\
+         fun index(c: Color): Int = when (c) { Red -> 0; Green -> 1; Blue -> 2 }\n\
+         fun pick(n: Int): Color = if (n == 0) Color.Red else if (n == 1) Color.Green else Color.Blue\n\
+         fun shape(n: Int): Shape = if (n == 0) Shape.Circle(1.5) else if (n == 1) Shape.Rect(n, true) else Shape.Empty\n\
+         fun same_shape(a: Int, b: Int): Bool = shape(a) == shape(b)\n\
+         fun color(n: Int): Int = index(pick(n))\n\
+         fun half(n: Int): Int? = if (n % 2 == 0) n / 2 else null\n\
+         fun or_minus(n: Int): Int = half(n) ?: -1\n\
+         fun view(r: (&Int)?): Int = r ?: &-1\n\
+         fun viewed(n: Int): Int { val h = half(n); val a = 5; val r: (&Int)? = if (h == null) null else &a; return view(r) + view(null) }\n",
+    );
+    let color: IntToInt = function(&program, "main::color");
+    assert_eq!([color(0), color(1), color(2)], [0, 1, 2]);
+    let same_shape: extern "C" fn(i64, i64) -> u8 = function(&program, "main::same_shape");
+    assert_eq!(
+        [
+            same_shape(0, 0),
+            same_shape(1, 1),
+            same_shape(2, 2),
+            same_shape(0, 2),
+            same_shape(1, 0)
+        ],
+        [1, 1, 1, 0, 0]
+    );
+    let or_minus: IntToInt = function(&program, "main::or_minus");
+    assert_eq!([or_minus(8), or_minus(3)], [4, -1]);
+    let viewed: IntToInt = function(&program, "main::viewed");
+    assert_eq!([viewed(2), viewed(3)], [4, -2]);
+    // `Int?` is a tag byte and the payload at offset 8.
+    let half: extern "C" fn(*mut [i64; 2], i64) = function(&program, "main::half");
+    let mut value = [-1i64; 2];
+    half(&mut value, 10);
+    assert_eq!((value[0] & 0xff, value[1]), (1, 5));
+    half(&mut value, 3);
+    assert_eq!(value[0] & 0xff, 0);
+}
+
+#[test]
+fn large_structs_are_copied_and_compared() {
+    let program = compile(
+        "struct Big : Copy { var a: Int, var b: Int, var c: Int, var d: Int, var e: Int, var f: Double }\n\
+         struct Two : Copy { var first: Big, var second: Big }\n\
+         fun big(n: Int): Big = Big(n, n, n, n, n, 0.5)\n\
+         fun copies(n: Int): Bool { val a = big(n); var b = a; val same = a == b; b.e = 0; return same && a != b && a.e == n }\n\
+         fun swap(n: Int): Int { var t = Two(big(1), big(n)); t = Two(t.second, t.first); return t.first.a * 10 + t.second.e }\n",
+    );
+    let copies: extern "C" fn(i64) -> u8 = function(&program, "main::copies");
+    assert_eq!(copies(7), 1);
+    let swap: IntToInt = function(&program, "main::swap");
+    assert_eq!(swap(3), 31);
+}
+
+#[test]
+fn arguments_and_results_are_values() {
+    let program = compile(
+        "struct Point : Copy { var x: Int, var y: Int }\n\
+         struct Counter { var n: Int }\n\
+         fun mirror(p: Point): Point = Point(p.y, p.x)\n\
+         fun mirrored(): Int { var p = Point(1, 2); p = mirror(p); return p.x * 10 + p.y }\n\
+         fun f(p: Point, r: &mut Point): Int { r.x = 9; return p.x }\n\
+         fun aliased(): Int { var a = Point(1, 0); val seen = f(a, &mut a); return seen * 10 + a.x }\n\
+         fun take(c: Counter): Int = c.n\n\
+         fun moved(flag: Bool): Int { val c = Counter(4); if (flag) return take(c); return 1 }\n",
+    );
+    let mirrored: ToInt = function(&program, "main::mirrored");
+    assert_eq!(mirrored(), 21);
+    let aliased: ToInt = function(&program, "main::aliased");
+    assert_eq!(aliased(), 19);
+    let moved: extern "C" fn(u8) -> i64 = function(&program, "main::moved");
+    assert_eq!([moved(1), moved(0)], [4, 1]);
+}
+
+#[test]
+fn equality_of_structs_enums_and_nullables() {
+    let program = compile(
+        "struct Point : Copy { val x: Int, val y: Int }\n\
+         enum Shape : Copy { Circle(Double), Square(Double), Empty }\n\
+         struct D : Copy { val v: Double }\n\
+         struct Counter { val n: Int }\n\
+         fun points(): Bool = Point(1, 2) == Point(1, 2) && Point(1, 2) != Point(2, 1)\n\
+         fun shapes(): Bool = Shape.Circle(1.0) != Shape.Circle(2.0) && Shape.Circle(1.0) != Shape.Square(1.0) && Shape.Empty == Shape.Empty\n\
+         fun nullables(): Bool { val a: Int? = null; val b: Int? = 1; val c: Int? = 1; return a == null && a != b && b == c && b != null }\n\
+         fun doubles(): Bool = D(0.0 / 0.0) != D(0.0 / 0.0) && D(0.0) == D(-0.0)\n\
+         fun same(a: Counter, b: Counter): Bool = a == b\n\
+         fun counters(): Bool = same(Counter(1), Counter(1)) && !same(Counter(1), Counter(2))\n\
+         fun optional(a: Counter?, b: Counter?): Bool = a == b\n\
+         fun optionals(): Bool = optional(null, null) && !optional(Counter(1), null) && !optional(null, Counter(1)) && optional(Counter(3), Counter(3)) && !optional(Counter(3), Counter(4))\n",
+    );
+    for name in [
+        "points",
+        "shapes",
+        "nullables",
+        "doubles",
+        "counters",
+        "optionals",
+    ] {
+        let test: ToBool = function(&program, &format!("main::{}", name));
+        assert_eq!(test(), 1, "{}", name);
+    }
+}
+
+static AGGREGATE_INITIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn counting_point_initializer(result: *mut [i64; 2]) {
+    AGGREGATE_INITIALIZATIONS.fetch_add(1, Ordering::SeqCst);
+    // SAFETY: the accessor passes the value's storage, 16 bytes aligned to 8.
+    unsafe { *result = [3, 4] };
+}
+
+#[test]
+fn a_top_level_struct_initializes_once() {
+    let program = compile(
+        "struct Point : Copy { val x: Int, val y: Int }\n\
+         val ORIGIN: Point = Point(0, 7)\n\
+         fun read(): Int { val p = ORIGIN; return ORIGIN.x * 100 + p.y * 10 + ORIGIN.y }\n",
+    );
+    program.table().set(
+        "main::ORIGIN#init",
+        counting_point_initializer as extern "C" fn(*mut [i64; 2]) as *const u8,
+    );
+    let read: ToInt = function(&program, "main::read");
+    assert_eq!(read(), 344);
+    assert_eq!(read(), 344);
+    assert_eq!(AGGREGATE_INITIALIZATIONS.load(Ordering::SeqCst), 1);
+}

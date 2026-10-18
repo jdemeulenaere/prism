@@ -1,5 +1,5 @@
-error[E6001]: the Tier 1 backend does not support structs yet
+error[E6001]: the Tier 1 backend does not support strings yet
   --> main.prism:4:22
-    4 | fun main() { val p = P(1); println(p.x) }
+    4 | fun main() { val p = P("a"); println(1) }
       |                      ^
-   = note: support for structs is planned in the 'codegen-aggregates' change
+   = note: support for strings is planned in the 'runtime-strings-and-drops' change

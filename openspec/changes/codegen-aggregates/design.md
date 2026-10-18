@@ -89,7 +89,7 @@ Rejected: scalar replacement of aggregates that are never borrowed (`codegen-cor
 
 ### D10. Aggregates are passed by address, results through a caller address (autonomous)
 
-In a signature, a parameter of memory representation is one pointer parameter, and a result of memory representation is a pointer parameter placed first, before the arguments, with no return value; scalars stay as `codegen-core`'s D6 says. Both callers and bodies derive this from MIR types alone, as today (`signature`, `body_signature`). The caller:
+In a signature, a parameter of memory representation is one pointer parameter, and a result of memory representation is a pointer parameter placed first, before the arguments, with no return value; scalars stay as `codegen-core`'s D6 says. Both callers and bodies derive this from MIR types alone, as today (`signature`, `body_signature`): whether a type is in memory follows from its form (a struct, an enum, or a nullable of anything but a reference or `Heap<T>`), never from its layout, so an enum without variants is in memory too, with a zero-sized layout. The caller:
 
 - passes the address of the operand's place for a `Move` operand: the place is dead after the move (the borrow checker forbids moving a borrowed value, and the argument temporaries of MIR are already distinct locals);
 - copies a `Copy` operand into a fresh stack slot and passes that slot, so a callee writing through another argument (`f(p, &mut p)` passing `copy p` directly) can never change the value it received;
@@ -109,7 +109,7 @@ A place's location is computed from its local's storage and its projections, car
 
 ### D12. Copy and move are both bitwise copies
 
-At run time a move and a copy of the same value are the same bytes copied: `Copy` only decides, at check time, whether the source may be used again, and no value has drop glue yet (D14). A whole aggregate is copied with Cranelift's `emit_small_memory_copy` (inline loads and stores up to its threshold, `memcpy` above, which `cranelift-jit` resolves from the host's C library), and with `emit_small_memmove` when source and destination may overlap: when they share their root local, or either is reached through a dereference. An `Aggregate` whose operands include a memory-represented place that may overlap the destination (`s = S(s.b, s.a)` for struct-typed fields) first copies those operands into temporary slots. A moved-from place is never touched afterwards, so nothing is zeroed or flagged at run time.
+At run time a move and a copy of the same value are the same bytes copied: `Copy` only decides, at check time, whether the source may be used again, and no value has drop glue yet (D14). A whole aggregate is copied with Cranelift's `emit_small_memory_copy` (inline loads and stores up to its threshold, `memcpy` above, which `cranelift-jit` resolves from the host's C library), and with its overlapping form (`non_overlapping: false`: inline loads before the stores, `memmove` above the threshold; this Cranelift version has no separate `emit_small_memmove`) when source and destination may overlap: when they share their root local, or either is reached through a dereference. An `Aggregate` whose operands include a memory-represented place that may overlap the destination (`s = S(s.b, s.a)` for struct-typed fields) first copies those operands into temporary slots. A moved-from place is never touched afterwards, so nothing is zeroed or flagged at run time.
 
 ### D13. Structural equality, expanded inline (autonomous)
 

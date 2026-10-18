@@ -1,19 +1,23 @@
-//! Lowering one body of elaborated MIR to Cranelift IR (D6 to D11 and D18 of `codegen-core`).
+//! Lowering one body of elaborated MIR to Cranelift IR (D6 to D11 and D18 of `codegen-core`, D9
+//! to D17 of `codegen-aggregates`).
 //!
-//! A local that is borrowed lives in a stack slot; every other local is a Cranelift variable,
-//! from which Cranelift builds SSA, and a `Range` local is three variables (D7). `Unit` and
-//! `Nothing` have no storage. Operators check `Int` overflow and division by zero in cold blocks
-//! that call `prism_rt_panic` at the operator's span (D10); `Double` follows IEEE 754, its `%`
-//! calling the runtime (D11). Every call of a generated function loads its target from its slot
-//! of the function table (D4), and a read of a top-level value calls its accessor the same way,
-//! panicking on the null pointer of a value read during its own initialization (D18). Each body
-//! starts by comparing the stack pointer with the runtime's stack limit, raising "stack overflow"
-//! below it (D27).
+//! A scalar local is a Cranelift variable, from which Cranelift builds SSA, unless it is
+//! borrowed, in which case it lives in a stack slot. A struct, an enum or a nullable with a tag
+//! lives in memory: a stack slot sized by its layout, or, for an argument and for the result, the
+//! memory whose address the caller passed (D9, D10). `Unit` and `Nothing` have no storage.
+//! Reading a place in memory yields its address, and writing one copies its bytes (D12);
+//! aggregates, nullables, discriminants and `==` over them are expanded inline over their
+//! layouts (D11, D13). Operators check `Int` overflow and division by zero in cold blocks that
+//! call `prism_rt_panic` at the operator's span (D10 of `codegen-core`); `Double` follows IEEE
+//! 754, its `%` calling the runtime (D11). Every call of a generated function loads its target
+//! from its slot of the function table (D4), and a read of a top-level value calls its accessor
+//! the same way, panicking on the null pointer of a value read during its own initialization
+//! (D18). Each body starts by comparing the stack pointer with the runtime's stack limit, raising
+//! "stack overflow" below it (D27). A drop does nothing: no supported value owns storage (D14).
 
 use crate::error::BackendError;
-use crate::representation::{
-    machine_type, memory_layout, representation, signature, Representation,
-};
+use crate::layout::{Layout, Member, Shape};
+use crate::representation::{is_pointer, representation, signature, Representation};
 use crate::symbols::{accessor_symbol, callee_symbol};
 use crate::unit::{data_global, UnitContext};
 use cranelift_codegen::ir::{
@@ -30,10 +34,9 @@ use prism_mir::{
     StatementKind, TerminatorKind,
 };
 use prism_runtime::PanicKind;
-use prism_typed_tree::{
-    BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, Type, UnaryOperator,
-};
+use prism_typed_tree::{BinaryOperator, BuiltinFunction, DeclarationPath, Type, UnaryOperator};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// The trap that ends a block after a call that never returns; it is never reached.
 const UNREACHABLE: TrapCode = match TrapCode::user(1) {
@@ -47,10 +50,10 @@ enum Storage {
     /// `Unit`, `Nothing`, or a type no use of which reaches the backend.
     Empty,
     Variable(Variable),
-    /// A `Range` local: `start`, `end` and `endInclusive`.
-    Range([Variable; 3]),
-    /// A borrowed local, in memory.
+    /// A value in memory, or a borrowed scalar.
     Slot(ir::StackSlot),
+    /// Memory whose address the function received: an argument in memory, or the result.
+    Address(Value),
 }
 
 /// A value of some MIR type, lowered.
@@ -58,7 +61,8 @@ enum Storage {
 enum Lowered {
     Empty,
     Scalar(Value),
-    Range([Value; 3]),
+    /// A value in memory, at the address: what reading a place in memory gives.
+    Memory(Value),
 }
 
 impl Lowered {
@@ -78,9 +82,22 @@ impl Lowered {
 enum Location {
     Empty,
     Variable(Variable),
-    Range([Variable; 3]),
     /// In memory, at the address.
     Memory(Value),
+}
+
+/// Whether two places may share bytes: when they have one root local, or either is reached
+/// through a dereference (D12 of `codegen-aggregates`).
+fn may_overlap(a: &Place, b: &Place) -> bool {
+    a.local == b.local
+        || a.projections.contains(&Projection::Deref)
+        || b.projections.contains(&Projection::Deref)
+}
+
+/// The flags of a load or store of a scalar at its natural alignment, which every field, payload
+/// and tag has.
+fn aligned() -> MemFlagsData {
+    MemFlagsData::trusted()
 }
 
 /// The lowering of one body into one function.
@@ -90,6 +107,8 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     builder: FunctionBuilder<'a>,
     blocks: Vec<Block>,
     locals: Vec<Storage>,
+    /// The locals whose address is taken.
+    borrowed: HashSet<LocalId>,
     runtime: HashMap<&'static str, ir::FuncRef>,
     /// The global value of each data object the function addresses.
     globals: HashMap<DataId, ir::GlobalValue>,
@@ -110,6 +129,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             builder,
             blocks: Vec::new(),
             locals: Vec::new(),
+            borrowed: borrowed_locals(body),
             runtime: HashMap::new(),
             globals: HashMap::new(),
         };
@@ -128,6 +148,20 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         &self.context.file.types
     }
 
+    fn representation(&self, ty: &Type) -> Option<Representation> {
+        representation(ty, self.pointer())
+    }
+
+    fn is_memory(&self, ty: &Type) -> bool {
+        self.representation(ty) == Some(Representation::Memory)
+    }
+
+    fn layout(&self, ty: &Type) -> Result<Rc<Layout>, BackendError> {
+        self.context.layouts.layout(ty).map_err(|construct| {
+            BackendError::new(format!("no layout for {}: {}", ty, construct.description()))
+        })
+    }
+
     fn lower_body(&mut self) -> Result<(), BackendError> {
         let entry = self.builder.create_block();
         self.builder.append_block_params_for_function_params(entry);
@@ -138,19 +172,32 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .map(|_| self.builder.create_block())
             .collect();
         self.builder.switch_to_block(entry);
-        self.declare_locals();
-        // The arguments arrive as the entry block's parameters, in order, those without a
-        // representation left out.
+        // The parameters are the result's address when it is in memory, then the arguments in
+        // order, those without a representation left out (D10).
         let parameters = self.builder.block_params(entry).to_vec();
         let mut parameters = parameters.into_iter();
-        for local in self.body.arguments() {
-            if machine_type(&self.body.locals[local].ty, self.pointer()).is_none() {
-                continue;
-            }
-            let value = parameters
+        let mut next = || {
+            parameters
                 .next()
-                .ok_or_else(|| BackendError::new("fewer parameters than arguments"))?;
-            self.write_place(&Place::local(local), Lowered::Scalar(value))?;
+                .ok_or_else(|| BackendError::new("fewer parameters than arguments"))
+        };
+        let mut received = HashMap::new();
+        if self.is_memory(self.body.return_type()) {
+            received.insert(LocalId::RETURN, next()?);
+        }
+        let mut scalars = Vec::new();
+        for local in self.body.arguments() {
+            match self.representation(&self.body.locals[local].ty) {
+                Some(Representation::Memory) => {
+                    received.insert(local, next()?);
+                }
+                Some(Representation::Scalar(_)) => scalars.push((local, next()?)),
+                Some(Representation::Empty) | None => {}
+            }
+        }
+        self.declare_locals(&received)?;
+        for (local, value) in scalars {
+            self.write_place(&Place::local(local), Lowered::Scalar(value), false)?;
         }
         self.check_stack()?;
         self.builder.ins().jump(self.blocks[0], &[]);
@@ -161,25 +208,23 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         Ok(())
     }
 
-    /// Gives each local its storage: a stack slot when it is borrowed, otherwise variables.
-    fn declare_locals(&mut self) {
-        let borrowed = borrowed_locals(self.body);
-        let pointer = self.pointer();
+    /// Gives each local its storage: the memory the caller passed for an argument or result in
+    /// memory (`received`), a stack slot for any other value in memory and for a borrowed
+    /// scalar, otherwise a variable.
+    fn declare_locals(&mut self, received: &HashMap<LocalId, Value>) -> Result<(), BackendError> {
         for (local, declaration) in self.body.locals.iter() {
-            let storage = match representation(&declaration.ty, pointer) {
+            let storage = match self.representation(&declaration.ty) {
                 None | Some(Representation::Empty) => Storage::Empty,
-                Some(Representation::Range) => Storage::Range([
-                    self.builder.declare_var(types::I64),
-                    self.builder.declare_var(types::I64),
-                    self.builder.declare_var(types::I8),
-                ]),
-                Some(Representation::Scalar(_)) if borrowed.contains(&local) => {
-                    let (size, align) = memory_layout(&declaration.ty, pointer);
-                    Storage::Slot(self.builder.create_sized_stack_slot(StackSlotData::new(
-                        StackSlotKind::ExplicitSlot,
-                        size,
-                        align.trailing_zeros() as u8,
-                    )))
+                Some(Representation::Memory) => match received.get(&local) {
+                    Some(address) => Storage::Address(*address),
+                    None => {
+                        let layout = self.layout(&declaration.ty)?;
+                        Storage::Slot(self.slot(&layout))
+                    }
+                },
+                Some(Representation::Scalar(_)) if self.borrowed.contains(&local) => {
+                    let layout = self.layout(&declaration.ty)?;
+                    Storage::Slot(self.slot(&layout))
                 }
                 Some(Representation::Scalar(machine)) => {
                     Storage::Variable(self.builder.declare_var(machine))
@@ -187,14 +232,31 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             };
             self.locals.push(storage);
         }
+        Ok(())
+    }
+
+    /// A new stack slot for a value of `layout`.
+    fn slot(&mut self, layout: &Layout) -> ir::StackSlot {
+        self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            layout.storage_size(),
+            layout.align.trailing_zeros() as u8,
+        ))
+    }
+
+    /// The address of a new stack slot for a value of `ty`.
+    fn temporary(&mut self, ty: &Type) -> Result<Value, BackendError> {
+        let layout = self.layout(ty)?;
+        let slot = self.slot(&layout);
+        let pointer = self.pointer();
+        Ok(self.builder.ins().stack_addr(pointer, slot, 0))
     }
 
     fn lower_block(&mut self, block: &BasicBlock) -> Result<(), BackendError> {
         for statement in &block.statements {
             match &statement.kind {
                 StatementKind::Assign(place, rvalue) => {
-                    let value = self.rvalue(place, rvalue, statement.span)?;
-                    self.write_place(place, value)?;
+                    self.assign(place, rvalue, statement.span)?
                 }
                 // Storage markers and reads only matter to the borrow checker.
                 StatementKind::StorageLive(_)
@@ -213,60 +275,87 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         let mut location = match self.locals[place.local.0 as usize] {
             Storage::Empty => Location::Empty,
             Storage::Variable(variable) => Location::Variable(variable),
-            Storage::Range(variables) => Location::Range(variables),
             Storage::Slot(slot) => {
                 Location::Memory(self.builder.ins().stack_addr(pointer, slot, 0))
             }
+            Storage::Address(address) => Location::Memory(address),
         };
         for projection in &place.projections {
-            match (projection, location) {
-                (Projection::Deref, _) => {
+            match projection {
+                Projection::Deref => {
                     let address = self.read_location(location, &ty)?.scalar()?;
                     location = Location::Memory(address);
                     ty = match ty {
-                        Type::Reference { inner, .. } => *inner,
+                        Type::Reference { inner, .. } | Type::Heap(inner) => *inner,
                         other => {
                             return Err(BackendError::new(format!("dereference of {}", other)))
                         }
                     };
                 }
-                (Projection::Field(index), Location::Range(variables)) if *index < 3 => {
-                    location = Location::Variable(variables[*index]);
-                    ty = if *index == prism_mir::types::RANGE_END_INCLUSIVE {
-                        Type::Bool
-                    } else {
-                        Type::Int
-                    };
+                Projection::Field(index) => {
+                    let layout = self.layout(&ty)?;
+                    let field = match &layout.shape {
+                        Shape::Struct { fields } => fields.get(*index).cloned(),
+                        _ => None,
+                    }
+                    .ok_or_else(|| BackendError::new(format!("no field {} in {}", index, ty)))?;
+                    location = self.offset(location, field.offset)?;
+                    ty = field.ty;
                 }
-                (projection, _) => {
-                    return Err(BackendError::new(format!(
-                        "unsupported projection {:?}",
-                        projection
-                    )))
+                Projection::Payload => {
+                    let inner = match &ty {
+                        Type::Nullable(inner) => inner.as_ref().clone(),
+                        other => return Err(BackendError::new(format!("payload of {}", other))),
+                    };
+                    // A nullable pointer is its payload; a tagged nullable holds it after the tag.
+                    if !is_pointer(&inner) {
+                        let layout = self.layout(&ty)?;
+                        let Shape::Nullable { payload } = &layout.shape else {
+                            return Err(BackendError::new(format!("payload of {}", ty)));
+                        };
+                        location = self.offset(location, payload.offset)?;
+                    }
+                    ty = inner;
+                }
+                Projection::Index(_) => {
+                    return Err(BackendError::new("an index projection".to_string()))
                 }
             }
         }
         Ok(location)
     }
 
+    /// The location `offset` bytes into the memory location `location`.
+    fn offset(&mut self, location: Location, offset: u32) -> Result<Location, BackendError> {
+        match location {
+            Location::Memory(address) => Ok(Location::Memory(self.add(address, offset))),
+            other => Err(BackendError::new(format!(
+                "a member of {:?}, which is not in memory",
+                other
+            ))),
+        }
+    }
+
+    /// `address + offset`.
+    fn add(&mut self, address: Value, offset: u32) -> Value {
+        if offset == 0 {
+            address
+        } else {
+            self.builder.ins().iadd_imm_s(address, i64::from(offset))
+        }
+    }
+
     fn read_location(&mut self, location: Location, ty: &Type) -> Result<Lowered, BackendError> {
         Ok(match location {
             Location::Empty => Lowered::Empty,
             Location::Variable(variable) => Lowered::Scalar(self.builder.use_var(variable)),
-            Location::Range([start, end, inclusive]) => Lowered::Range([
-                self.builder.use_var(start),
-                self.builder.use_var(end),
-                self.builder.use_var(inclusive),
-            ]),
-            Location::Memory(address) => match machine_type(ty, self.pointer()) {
-                Some(machine) => Lowered::Scalar(self.builder.ins().load(
-                    machine,
-                    MemFlagsData::trusted(),
-                    address,
-                    0,
-                )),
+            Location::Memory(address) => match self.representation(ty) {
+                Some(Representation::Scalar(machine)) => {
+                    Lowered::Scalar(self.builder.ins().load(machine, aligned(), address, 0))
+                }
+                Some(Representation::Memory) => Lowered::Memory(address),
                 // A `Unit` referent has nothing to read.
-                None => Lowered::Empty,
+                Some(Representation::Empty) | None => Lowered::Empty,
             },
         })
     }
@@ -277,21 +366,26 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         self.read_location(location, &ty)
     }
 
-    fn write_place(&mut self, place: &Place, value: Lowered) -> Result<(), BackendError> {
-        match (self.location(place)?, value) {
+    /// Writes `value`, of type `ty`, to `location`; a value in memory is copied, with a copy
+    /// that allows overlap when `may_overlap` says source and destination may share bytes.
+    fn write_location(
+        &mut self,
+        location: Location,
+        ty: &Type,
+        value: Lowered,
+        may_overlap: bool,
+    ) -> Result<(), BackendError> {
+        match (location, value) {
             (Location::Empty, _) | (_, Lowered::Empty) => {}
             (Location::Variable(variable), Lowered::Scalar(value)) => {
                 self.builder.def_var(variable, value)
             }
-            (Location::Range(variables), Lowered::Range(values)) => {
-                for (variable, value) in variables.into_iter().zip(values) {
-                    self.builder.def_var(variable, value);
-                }
-            }
             (Location::Memory(address), Lowered::Scalar(value)) => {
-                self.builder
-                    .ins()
-                    .store(MemFlagsData::trusted(), value, address, 0);
+                self.builder.ins().store(aligned(), value, address, 0);
+            }
+            (Location::Memory(destination), Lowered::Memory(source)) => {
+                let layout = self.layout(ty)?;
+                self.copy(destination, source, &layout, may_overlap);
             }
             (location, value) => {
                 return Err(BackendError::new(format!(
@@ -303,12 +397,43 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         Ok(())
     }
 
-    /// The address of `place`, which is in memory: a borrowed local or a dereference.
+    fn write_place(
+        &mut self,
+        place: &Place,
+        value: Lowered,
+        may_overlap: bool,
+    ) -> Result<(), BackendError> {
+        let ty = place.ty(self.body, self.types());
+        let location = self.location(place)?;
+        self.write_location(location, &ty, value, may_overlap)
+    }
+
+    /// Copies the bytes of a value of `layout` from `source` to `destination`: inline loads and
+    /// stores for a small value, `memcpy` or, when they may overlap, `memmove` above (D12).
+    fn copy(&mut self, destination: Value, source: Value, layout: &Layout, may_overlap: bool) {
+        let config = self.context.module.target_config();
+        let align = layout.align.min(u32::from(u8::MAX)) as u8;
+        let mut flags = MemFlagsData::new();
+        flags.set_notrap();
+        self.builder.emit_small_memory_copy(
+            config,
+            destination,
+            source,
+            u64::from(layout.size),
+            align,
+            align,
+            !may_overlap,
+            flags,
+        );
+    }
+
+    /// The address of `place`, which is in memory: a value in memory, a borrowed local or a
+    /// dereference.
     fn address(&mut self, place: &Place) -> Result<Value, BackendError> {
         match self.location(place)? {
             Location::Memory(address) => Ok(address),
             other => Err(BackendError::new(format!(
-                "borrow of {:?}, which is not in memory",
+                "address of {:?}, which is not in memory",
                 other
             ))),
         }
@@ -338,6 +463,16 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 ),
                 Constant::Unit => Lowered::Empty,
                 Constant::TopLevelValue(path) => Lowered::Scalar(self.top_level_value(path, span)?),
+                // A `null` in memory is built in a temporary.
+                Constant::Null(ty) if self.is_memory(ty) => {
+                    let address = self.temporary(ty)?;
+                    self.write_null(Location::Memory(address), ty)?;
+                    Lowered::Memory(address)
+                }
+                Constant::Null(_) => {
+                    let pointer = self.pointer();
+                    Lowered::Scalar(self.builder.ins().iconst(pointer, 0))
+                }
                 other => {
                     return Err(BackendError::new(format!(
                         "unsupported constant {:?}",
@@ -346,6 +481,143 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 }
             },
         })
+    }
+
+    /// The operand's value, copied into a temporary when it is in memory and may share bytes
+    /// with `destination`, which is written before the value is used up (D12).
+    fn operand_apart_from(
+        &mut self,
+        operand: &Operand,
+        destination: &Place,
+        span: Span,
+    ) -> Result<Lowered, BackendError> {
+        let value = self.operand(operand, span)?;
+        match (value, operand.place()) {
+            (Lowered::Memory(source), Some(place)) if may_overlap(place, destination) => {
+                let ty = place.ty(self.body, self.types());
+                let temporary = self.temporary(&ty)?;
+                let layout = self.layout(&ty)?;
+                self.copy(temporary, source, &layout, true);
+                Ok(Lowered::Memory(temporary))
+            }
+            _ => Ok(value),
+        }
+    }
+
+    /// Writes `null` of the nullable type `ty` to `location`: tag 0, or the null pointer.
+    fn write_null(&mut self, location: Location, ty: &Type) -> Result<(), BackendError> {
+        if self.is_memory(ty) {
+            let zero = self.builder.ins().iconst(types::I8, 0);
+            self.write_location(location, &Type::Bool, Lowered::Scalar(zero), false)
+        } else {
+            let pointer = self.pointer();
+            let zero = self.builder.ins().iconst(pointer, 0);
+            self.write_location(location, ty, Lowered::Scalar(zero), false)
+        }
+    }
+
+    fn assign(&mut self, place: &Place, rvalue: &Rvalue, span: Span) -> Result<(), BackendError> {
+        let ty = place.ty(self.body, self.types());
+        match rvalue {
+            Rvalue::Aggregate(kind, operands) => self.aggregate(place, &ty, kind, operands, span),
+            Rvalue::WrapNullable(operand) => {
+                let inner = match &ty {
+                    Type::Nullable(inner) => inner.as_ref().clone(),
+                    other => return Err(BackendError::new(format!("wrap into {}", other))),
+                };
+                let value = self.operand_apart_from(operand, place, span)?;
+                if !self.is_memory(&ty) {
+                    // A nullable pointer is its payload.
+                    return self.write_place(place, value, false);
+                }
+                let layout = self.layout(&ty)?;
+                let Shape::Nullable { payload } = &layout.shape else {
+                    return Err(BackendError::new(format!("wrap into {}", ty)));
+                };
+                let address = self.address(place)?;
+                let one = self.builder.ins().iconst(types::I8, 1);
+                self.builder.ins().store(aligned(), one, address, 0);
+                let payload_address = self.add(address, payload.offset);
+                self.write_location(Location::Memory(payload_address), &inner, value, false)
+            }
+            Rvalue::Use(Operand::Constant(Constant::Null(_))) => {
+                let location = self.location(place)?;
+                self.write_null(location, &ty)
+            }
+            Rvalue::Subtype(operand) => match self.operand_type(operand) {
+                // `Nothing?` to any nullable is `null`.
+                Some(Type::Nullable(inner)) if *inner == Type::Nothing => {
+                    let location = self.location(place)?;
+                    self.write_null(location, &ty)
+                }
+                // `Nothing` has no value.
+                Some(Type::Nothing) => Ok(()),
+                _ => self.copy_operand(place, operand, span),
+            },
+            Rvalue::Use(operand) => self.copy_operand(place, operand, span),
+            other => {
+                let value = self.rvalue(place, other, span)?;
+                self.write_place(place, value, false)
+            }
+        }
+    }
+
+    /// Writes the value of `operand` to `place`.
+    fn copy_operand(
+        &mut self,
+        place: &Place,
+        operand: &Operand,
+        span: Span,
+    ) -> Result<(), BackendError> {
+        let value = self.operand(operand, span)?;
+        let overlap = operand
+            .place()
+            .is_some_and(|source| may_overlap(source, place));
+        self.write_place(place, value, overlap)
+    }
+
+    /// Builds the struct or variant `kind` of type `ty` from `operands` in `place`, every operand
+    /// evaluated before any byte of `place` is written (D11, D12).
+    fn aggregate(
+        &mut self,
+        place: &Place,
+        ty: &Type,
+        kind: &AggregateKind,
+        operands: &[Operand],
+        span: Span,
+    ) -> Result<(), BackendError> {
+        let mut values = Vec::new();
+        for operand in operands {
+            values.push(self.operand_apart_from(operand, place, span)?);
+        }
+        let layout = self.layout(ty)?;
+        let address = self.address(place)?;
+        let members: Vec<Member> = match (kind, &layout.shape) {
+            (AggregateKind::Struct { .. }, Shape::Struct { fields }) => fields.clone(),
+            (AggregateKind::Variant { index, .. }, Shape::Enum { tag, variants }) => {
+                let tag = self.builder.ins().iconst(*tag, *index as i64);
+                self.builder.ins().store(aligned(), tag, address, 0);
+                variants
+                    .get(*index)
+                    .ok_or_else(|| BackendError::new(format!("no variant {} of {}", index, ty)))?
+                    .payloads
+                    .clone()
+            }
+            _ => return Err(BackendError::new(format!("an aggregate of {}", ty))),
+        };
+        if members.len() != values.len() {
+            return Err(BackendError::new(format!(
+                "{} operands for the {} members of {}",
+                values.len(),
+                members.len(),
+                ty
+            )));
+        }
+        for (member, value) in members.iter().zip(values) {
+            let member_address = self.add(address, member.offset);
+            self.write_location(Location::Memory(member_address), &member.ty, value, false)?;
+        }
+        Ok(())
     }
 
     fn rvalue(
@@ -357,13 +629,27 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         match rvalue {
             Rvalue::Use(operand) | Rvalue::Subtype(operand) => self.operand(operand, span),
             Rvalue::Borrow { place, .. } => Ok(Lowered::Scalar(self.address(place)?)),
+            Rvalue::Discriminant(place) => Ok(Lowered::Scalar(self.discriminant(place)?)),
             Rvalue::Binary(operator, left, right) => {
                 let ty = self
                     .operand_type(left)
                     .ok_or_else(|| BackendError::new("operand of unknown type"))?;
                 let left = self.operand(left, span)?;
                 let right = self.operand(right, span)?;
-                self.binary(*operator, &ty, left, right, span)
+                let structural = !matches!(
+                    ty,
+                    Type::Int | Type::Float | Type::Bool | Type::Char | Type::Unit
+                );
+                match operator {
+                    BinaryOperator::Equal if structural => {
+                        Ok(Lowered::Scalar(self.equality(&ty, left, right)?))
+                    }
+                    BinaryOperator::NotEqual if structural => {
+                        let equal = self.equality(&ty, left, right)?;
+                        Ok(Lowered::Scalar(self.builder.ins().bxor_imm_s(equal, 1)))
+                    }
+                    _ => self.binary(*operator, &ty, left, right, span),
+                }
             }
             Rvalue::Unary(operator, operand) => {
                 let ty = self
@@ -381,20 +667,223 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     }
                 }))
             }
-            Rvalue::Aggregate(AggregateKind::Struct { id, .. }, operands)
-                if *id == NominalId::builtin_range() && operands.len() == 3 =>
-            {
-                let mut values = [self.builder.ins().iconst(types::I64, 0); 3];
-                for (index, operand) in operands.iter().enumerate() {
-                    values[index] = self.operand(operand, span)?.scalar()?;
-                }
-                Ok(Lowered::Range(values))
-            }
             other => Err(BackendError::new(format!(
                 "unsupported rvalue {:?} for {:?}",
                 other, destination
             ))),
         }
+    }
+
+    /// The variant index of an enum place, or the tag of a nullable one, as an `Int` (D11).
+    fn discriminant(&mut self, place: &Place) -> Result<Value, BackendError> {
+        let ty = place.ty(self.body, self.types());
+        let tag = match &ty {
+            Type::Nullable(inner) if is_pointer(inner) => {
+                let value = self.read_place(place)?.scalar()?;
+                self.builder.ins().icmp_imm_s(IntCC::NotEqual, value, 0)
+            }
+            Type::Nullable(_) => {
+                let address = self.address(place)?;
+                self.builder.ins().load(types::I8, aligned(), address, 0)
+            }
+            Type::Enum { .. } => {
+                let layout = self.layout(&ty)?;
+                let Shape::Enum { tag, .. } = layout.shape else {
+                    return Err(BackendError::new(format!("discriminant of {}", ty)));
+                };
+                let address = self.address(place)?;
+                self.builder.ins().load(tag, aligned(), address, 0)
+            }
+            other => return Err(BackendError::new(format!("discriminant of {}", other))),
+        };
+        Ok(self.builder.ins().uextend(types::I64, tag))
+    }
+
+    // Equality.
+
+    /// `left == right` over values of `ty`, as a `Bool` (D13): structs field by field, enums by
+    /// tag and then the current variant's payloads, nullables by presence and then payload,
+    /// references by what they refer to, each scalar as its type compares.
+    fn equality(
+        &mut self,
+        ty: &Type,
+        left: Lowered,
+        right: Lowered,
+    ) -> Result<Value, BackendError> {
+        let result = self.builder.declare_var(types::I8);
+        let unequal = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.compare(ty, left, right, unequal)?;
+        let one = self.builder.ins().iconst(types::I8, 1);
+        self.builder.def_var(result, one);
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(unequal);
+        let zero = self.builder.ins().iconst(types::I8, 0);
+        self.builder.def_var(result, zero);
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(done);
+        Ok(self.builder.use_var(result))
+    }
+
+    /// Continues in a new block when `condition` holds, and jumps to `otherwise` when not.
+    fn continue_if(&mut self, condition: Value, otherwise: Block) {
+        let next = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(condition, next, &[], otherwise, &[]);
+        self.builder.switch_to_block(next);
+    }
+
+    /// The value of `member` of the value in memory at `address`.
+    fn member(&mut self, address: Value, member: &Member) -> Result<Lowered, BackendError> {
+        let member_address = self.add(address, member.offset);
+        self.read_location(Location::Memory(member_address), &member.ty)
+    }
+
+    /// Emits the comparison of `left` and `right`, of type `ty`, jumping to `unequal` as soon as
+    /// they differ and falling through when they are equal.
+    fn compare(
+        &mut self,
+        ty: &Type,
+        left: Lowered,
+        right: Lowered,
+        unequal: Block,
+    ) -> Result<(), BackendError> {
+        let memory = |value: Lowered| match value {
+            Lowered::Memory(address) => Ok(address),
+            other => Err(BackendError::new(format!(
+                "expected a value in memory, found {:?}",
+                other
+            ))),
+        };
+        match ty {
+            Type::Unit | Type::Nothing => {}
+            Type::Int | Type::Bool | Type::Char => {
+                let equal = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::Equal, left.scalar()?, right.scalar()?);
+                self.continue_if(equal, unequal);
+            }
+            Type::Float => {
+                let equal =
+                    self.builder
+                        .ins()
+                        .fcmp(FloatCC::Equal, left.scalar()?, right.scalar()?);
+                self.continue_if(equal, unequal);
+            }
+            // References compare what they refer to, never their addresses.
+            Type::Reference { inner, .. } | Type::Heap(inner) => {
+                let left = self.read_location(Location::Memory(left.scalar()?), inner)?;
+                let right = self.read_location(Location::Memory(right.scalar()?), inner)?;
+                self.compare(inner, left, right, unequal)?;
+            }
+            Type::Nullable(inner) if is_pointer(inner) => {
+                let (left, right) = (left.scalar()?, right.scalar()?);
+                let left_present = self.builder.ins().icmp_imm_s(IntCC::NotEqual, left, 0);
+                let right_present = self.builder.ins().icmp_imm_s(IntCC::NotEqual, right, 0);
+                let same = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::Equal, left_present, right_present);
+                self.continue_if(same, unequal);
+                self.compare_if_present(left_present, |lowering| {
+                    lowering.compare(
+                        inner,
+                        Lowered::Scalar(left),
+                        Lowered::Scalar(right),
+                        unequal,
+                    )
+                })?;
+            }
+            Type::Nullable(inner) => {
+                let (left, right) = (memory(left)?, memory(right)?);
+                let layout = self.layout(ty)?;
+                let Shape::Nullable { payload } = layout.shape.clone() else {
+                    return Err(BackendError::new(format!("a comparison of {}", ty)));
+                };
+                let left_tag = self.builder.ins().load(types::I8, aligned(), left, 0);
+                let right_tag = self.builder.ins().load(types::I8, aligned(), right, 0);
+                let same = self.builder.ins().icmp(IntCC::Equal, left_tag, right_tag);
+                self.continue_if(same, unequal);
+                self.compare_if_present(left_tag, |lowering| {
+                    let left = lowering.member(left, &payload)?;
+                    let right = lowering.member(right, &payload)?;
+                    lowering.compare(inner, left, right, unequal)
+                })?;
+            }
+            Type::Struct { .. } => {
+                let (left, right) = (memory(left)?, memory(right)?);
+                let layout = self.layout(ty)?;
+                let Shape::Struct { fields } = &layout.shape else {
+                    return Err(BackendError::new(format!("a comparison of {}", ty)));
+                };
+                for field in fields {
+                    let left = self.member(left, field)?;
+                    let right = self.member(right, field)?;
+                    self.compare(&field.ty, left, right, unequal)?;
+                }
+            }
+            Type::Enum { .. } => {
+                let (left, right) = (memory(left)?, memory(right)?);
+                let layout = self.layout(ty)?;
+                let (tag, variants) = match &layout.shape {
+                    Shape::Enum { tag, variants } => (*tag, variants),
+                    // No value of an enum without variants exists.
+                    Shape::Uninhabited => return Ok(()),
+                    _ => return Err(BackendError::new(format!("a comparison of {}", ty))),
+                };
+                let left_tag = self.builder.ins().load(tag, aligned(), left, 0);
+                let right_tag = self.builder.ins().load(tag, aligned(), right, 0);
+                let same = self.builder.ins().icmp(IntCC::Equal, left_tag, right_tag);
+                self.continue_if(same, unequal);
+                if variants.iter().all(|variant| variant.payloads.is_empty()) {
+                    return Ok(());
+                }
+                // The tags are equal: compare the payloads of the current variant.
+                let equal = self.builder.create_block();
+                let mut switch = Switch::new();
+                let mut cases = Vec::new();
+                for (index, variant) in variants.iter().enumerate() {
+                    if variant.payloads.is_empty() {
+                        continue;
+                    }
+                    let case = self.builder.create_block();
+                    switch.set_entry(index as u128, case);
+                    cases.push((case, variant.payloads.clone()));
+                }
+                switch.emit(&mut self.builder, left_tag, equal);
+                for (case, payloads) in cases {
+                    self.builder.switch_to_block(case);
+                    for payload in &payloads {
+                        let left = self.member(left, payload)?;
+                        let right = self.member(right, payload)?;
+                        self.compare(&payload.ty, left, right, unequal)?;
+                    }
+                    self.builder.ins().jump(equal, &[]);
+                }
+                self.builder.switch_to_block(equal);
+            }
+            other => return Err(BackendError::new(format!("a comparison of {}", other))),
+        }
+        Ok(())
+    }
+
+    /// Runs `compare_payloads` only when `present` is not zero, continuing in one block either
+    /// way: two `null`s are equal.
+    fn compare_if_present(
+        &mut self,
+        present: Value,
+        compare_payloads: impl FnOnce(&mut Self) -> Result<(), BackendError>,
+    ) -> Result<(), BackendError> {
+        let payloads = self.builder.create_block();
+        let after = self.builder.create_block();
+        self.builder.ins().brif(present, payloads, &[], after, &[]);
+        self.builder.switch_to_block(payloads);
+        compare_payloads(self)?;
+        self.builder.ins().jump(after, &[]);
+        self.builder.switch_to_block(after);
+        Ok(())
     }
 
     fn binary(
@@ -626,17 +1115,35 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         target: Option<prism_mir::BlockId>,
         span: Span,
     ) -> Result<(), BackendError> {
-        let mut values = Vec::new();
-        for argument in arguments {
-            match self.operand(argument, span)? {
-                Lowered::Empty => {}
-                Lowered::Scalar(value) => values.push(value),
-                Lowered::Range(_) => return Err(BackendError::new("a Range argument")),
-            }
-        }
         let result_type = destination.ty(self.body, self.types());
-        let result = match callee {
+        match callee {
             Callee::Function(_) | Callee::Default { .. } => {
+                let mut values = Vec::new();
+                // A result in memory is written through an address passed first: the
+                // destination's own when the callee cannot reach it otherwise, else a temporary
+                // copied to the destination after the call (D10).
+                let mut result_temporary = None;
+                if self.is_memory(&result_type) {
+                    let direct = destination.projections.is_empty()
+                        && !self.borrowed.contains(&destination.local)
+                        && !arguments.iter().any(|argument| {
+                            argument.place().map(|p| p.local) == Some(destination.local)
+                        });
+                    let address = if direct {
+                        self.address(destination)?
+                    } else {
+                        let address = self.temporary(&result_type)?;
+                        result_temporary = Some(address);
+                        address
+                    };
+                    values.push(address);
+                }
+                for argument in arguments {
+                    match self.argument(argument, span)? {
+                        Lowered::Empty => {}
+                        Lowered::Scalar(value) | Lowered::Memory(value) => values.push(value),
+                    }
+                }
                 let symbol = callee_symbol(callee).expect("a generated function has a symbol");
                 let target = self.slot_target(&symbol)?;
                 let signature = signature(
@@ -647,24 +1154,30 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 );
                 let signature = self.builder.import_signature(signature);
                 let call = self.builder.ins().call_indirect(signature, target, &values);
-                self.builder.inst_results(call).first().copied()
-            }
-            Callee::Builtin(BuiltinFunction::Clone) => {
-                // The clone of a scalar is a copy of the receiver's referent.
-                let receiver = *values
-                    .first()
-                    .ok_or_else(|| BackendError::new("clone without a receiver"))?;
-                match machine_type(&result_type, self.pointer()) {
-                    Some(machine) => Some(self.builder.ins().load(
-                        machine,
-                        MemFlagsData::trusted(),
-                        receiver,
-                        0,
-                    )),
-                    None => None,
+                if let Some(result) = self.builder.inst_results(call).first().copied() {
+                    self.write_place(destination, Lowered::Scalar(result), false)?;
+                }
+                if let Some(temporary) = result_temporary {
+                    self.write_place(destination, Lowered::Memory(temporary), false)?;
                 }
             }
+            Callee::Builtin(BuiltinFunction::Clone) => {
+                // The clone of a value that owns nothing is a copy of the receiver's referent
+                // (D15), which may be the destination itself.
+                let receiver = arguments
+                    .first()
+                    .ok_or_else(|| BackendError::new("clone without a receiver"))?;
+                let receiver = self.operand(receiver, span)?.scalar()?;
+                let referent = self.read_location(Location::Memory(receiver), &result_type)?;
+                self.write_place(destination, referent, true)?;
+            }
             Callee::Builtin(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
+                let mut values = Vec::new();
+                for argument in arguments {
+                    if let Lowered::Scalar(value) = self.operand(argument, span)? {
+                        values.push(value);
+                    }
+                }
                 if let (Some(value), Some(ty)) = (values.first(), parameters.first()) {
                     let name = match ty {
                         Type::Int => "prism_rt_print_int",
@@ -680,12 +1193,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     let function = self.runtime_function("prism_rt_print_newline")?;
                     self.builder.ins().call(function, &[]);
                 }
-                None
             }
             Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
-        };
-        if let Some(result) = result {
-            self.write_place(destination, Lowered::Scalar(result))?;
         }
         match target {
             Some(target) => {
@@ -697,6 +1206,27 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             }
         }
         Ok(())
+    }
+
+    /// The value passed for `argument`: a scalar, or the address of memory the callee owns for
+    /// the call (D10). A moved whole local is passed in place, being dead after the move; any
+    /// other value in memory is copied into a fresh temporary, so a write through another
+    /// argument cannot change it.
+    fn argument(&mut self, argument: &Operand, span: Span) -> Result<Lowered, BackendError> {
+        let value = self.operand(argument, span)?;
+        match (value, argument) {
+            (Lowered::Memory(_), Operand::Move(place, _)) if place.projections.is_empty() => {
+                Ok(value)
+            }
+            (Lowered::Memory(source), Operand::Copy(place, _) | Operand::Move(place, _)) => {
+                let ty = place.ty(self.body, self.types());
+                let temporary = self.temporary(&ty)?;
+                let layout = self.layout(&ty)?;
+                self.copy(temporary, source, &layout, false);
+                Ok(Lowered::Memory(temporary))
+            }
+            _ => Ok(value),
+        }
     }
 
     fn terminator(&mut self, terminator: &TerminatorKind, span: Span) -> Result<(), BackendError> {
@@ -751,11 +1281,10 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 ..
             } => self.call(callee, arguments, parameters, destination, *target, span)?,
             TerminatorKind::Return => {
-                let result = self.read_place(&Place::return_place())?;
-                match result {
-                    Lowered::Scalar(value)
-                        if machine_type(self.body.return_type(), self.pointer()).is_some() =>
-                    {
+                // A result in memory is already in the caller's memory.
+                match self.representation(self.body.return_type()) {
+                    Some(Representation::Scalar(_)) => {
+                        let value = self.read_place(&Place::return_place())?.scalar()?;
                         self.builder.ins().return_(&[value]);
                     }
                     _ => {
@@ -764,7 +1293,10 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 }
             }
             TerminatorKind::Unreachable => self.panic(PanicKind::Unreachable, "", span)?,
-            TerminatorKind::Drop { .. } => return Err(BackendError::new("a drop")),
+            // No supported value owns storage, so its drop does nothing (D14).
+            TerminatorKind::Drop { target, .. } => {
+                self.builder.ins().jump(self.blocks[target.0 as usize], &[]);
+            }
         }
         Ok(())
     }
