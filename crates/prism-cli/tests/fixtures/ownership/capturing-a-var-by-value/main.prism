@@ -1,0 +1,8 @@
+// expect: E4028
+struct Button { val onClick: () -> Int }
+fun f(): Button {
+    var n = 1
+    val b = Button({ n })
+    n = 2
+    return b
+}

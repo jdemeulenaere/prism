@@ -8,6 +8,7 @@
 //! - First-class compose invariant: composable function context constraints (`E4008`).
 
 mod builder;
+mod captures;
 pub mod checker;
 pub mod error;
 pub mod exhaustiveness;
@@ -17,7 +18,7 @@ pub mod scope;
 pub mod types;
 
 pub use checker::TypeChecker;
-pub use error::{NoTextFormReason, TypeError};
+pub use error::{CaptureRefusal, NoTextFormReason, TypeError};
 pub use prism_typed_tree::TypedFile;
 pub use scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 pub use types::{

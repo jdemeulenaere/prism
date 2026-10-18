@@ -6,10 +6,10 @@ fun main::run(f: () -> Int): Int @2:1
 fun main::g(a: Int): Int @3:1
   local %0 a: Int (parameter)
   call main::run: Int @3:22
-    argument f: closure () captures %0 a: () -> Int @3:26
+    argument f: closure () captures [borrow %0 a]: () -> Int @3:26
       block: Int @3:28
         tail: call main::run: Int @3:28
-          argument f: closure () captures %0 a: () -> Int @3:32
+          argument f: closure () captures [borrow %0 a]: () -> Int @3:32
             block: Int @3:34
               tail: copy: Int @3:34
                 local %0 a: Int @3:34

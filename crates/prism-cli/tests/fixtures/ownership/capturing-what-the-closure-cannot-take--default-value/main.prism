@@ -1,0 +1,3 @@
+// expect: E4028
+fun greet(s: &String): Int = 1
+fun g(a: String, p: () -> Int = { greet(a) }): Int = p()

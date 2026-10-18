@@ -24,6 +24,7 @@ impl Builder<'_> {
             body,
             is_compose,
             captures,
+            ..
         } = &expression.kind
         else {
             unreachable!("a closure node");

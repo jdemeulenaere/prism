@@ -10,7 +10,7 @@ fun main::g(a: Int, b: Int): Int @3:1
     tail: coerce diverge: Int @4:5
       return: Nothing @4:5
         call main::run: Int @4:12
-          argument f: closure () captures %1 b, %0 a: () -> Int @4:16
+          argument f: closure () captures [borrow %1 b, borrow %0 a]: () -> Int @4:16
             block: Int @4:18
               tail: binary +: Int @4:18
                 binary +: Int @4:18

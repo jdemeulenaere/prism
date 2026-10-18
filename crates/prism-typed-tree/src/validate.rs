@@ -3,9 +3,9 @@
 
 use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
-    Argument, BindingMode, Body, BuiltinFunction, Call, Callee, CoercionKind, ConstructKind,
-    DeclarationPath, ExpressionKind, FunctionItem, Item, LocalKind, Pattern, StatementKind,
-    StructItem, TemplatePart, TypedFile, UnaryOperator,
+    Argument, BindingMode, Body, BuiltinFunction, Call, Callee, CaptureMode, CoercionKind,
+    ConstructKind, DeclarationPath, ExpressionKind, FunctionItem, Item, LocalKind, Pattern,
+    StatementKind, StructItem, TemplatePart, TypedFile, UnaryOperator,
 };
 use crate::types::{NominalId, Type, TypeParameter, TypeTable};
 use prism_ast::ReceiverMode;
@@ -832,6 +832,7 @@ impl Validator<'_> {
                 parameters,
                 body,
                 captures,
+                ownership_reason,
                 ..
             } => {
                 for parameter in parameters.clone() {
@@ -839,6 +840,26 @@ impl Validator<'_> {
                 }
                 for capture in captures.clone() {
                     self.check_local(capture.local);
+                    if capture.mode == CaptureMode::Copied {
+                        if let Some(local) = self.body.locals.get(capture.local) {
+                            if !self.types.is_copy(&local.ty) {
+                                let message = format!(
+                                    "closure {} copies '{}', whose type {} is not Copy",
+                                    id.0, local.name, local.ty
+                                );
+                                self.report(message);
+                            }
+                        }
+                    }
+                }
+                let owns = captures.iter().any(|c| c.mode.is_owned());
+                if owns != ownership_reason.is_some() {
+                    let message = if owns {
+                        format!("closure {} owns captures but records no reason", id.0)
+                    } else {
+                        format!("closure {} records a reason but owns no capture", id.0)
+                    };
+                    self.report(message);
                 }
                 let ret = match &ty {
                     Type::Fn { params, ret, .. } => {
@@ -1613,6 +1634,7 @@ mod tests {
                 body: sum,
                 is_compose: false,
                 captures: vec![],
+                ownership_reason: None,
             },
             fn_ty,
         );
@@ -1622,6 +1644,7 @@ mod tests {
                 callee: Callee::Value(closure),
                 arguments: vec![],
                 parameters: vec![],
+                escaping: vec![],
                 type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
@@ -1723,6 +1746,7 @@ mod tests {
                 callee: Callee::Function(DeclarationPath::new("main", "g")),
                 arguments: vec![],
                 parameters: vec![(Some("a".to_string()), Type::Int)],
+                escaping: vec![false],
                 type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
@@ -1770,6 +1794,7 @@ mod tests {
                     Some("value".to_string()),
                     BuiltinFunction::heap_contents_parameter().as_type(),
                 )],
+                escaping: vec![false],
                 type_arguments: vec![Type::Int],
                 evaluation_order: vec![0],
                 has_receiver: false,
@@ -1783,6 +1808,7 @@ mod tests {
                 callee: Callee::Builtin(BuiltinFunction::Unbox),
                 arguments: vec![Argument::Written(heap)],
                 parameters: vec![(Some("this".to_string()), boxed)],
+                escaping: vec![false],
                 type_arguments: vec![],
                 evaluation_order: vec![0],
                 has_receiver: true,
@@ -1840,6 +1866,7 @@ mod tests {
                 callee: Callee::Function(DeclarationPath::new("main", "g")),
                 arguments: vec![Argument::Written(one)],
                 parameters: vec![(Some("x".to_string()), parameter_t())],
+                escaping: vec![false],
                 type_arguments: vec![Type::String],
                 evaluation_order: vec![0],
                 has_receiver: false,

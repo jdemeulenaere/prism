@@ -282,6 +282,49 @@ pub enum TypeError {
         is_type: bool,
         span: Span,
     },
+
+    /// E4028: A closure that owns its captures captures a binding it cannot take by value: a
+    /// `var`, or a non-`Copy` capture of the enclosing closure or earlier parameter read in a
+    /// default value (D5 of `escaping-closures`). `span` is the capture inside the closure, and
+    /// `reason` why the closure owns it.
+    CannotCaptureByValue {
+        name: String,
+        refusal: CaptureRefusal,
+        reason: prism_typed_tree::OwnershipReason,
+        help: String,
+        span: Span,
+    },
+}
+
+/// Why a closure cannot take a binding by value (D5 of `escaping-closures`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureRefusal {
+    /// The binding is a `var`, whose later writes the closure would not see.
+    Variable,
+    /// The binding is a capture of the enclosing closure, which may be called again.
+    EnclosingClosure,
+    /// The binding is an earlier parameter, which a default value only borrows.
+    DefaultValueInput,
+}
+
+impl CaptureRefusal {
+    /// The note explaining the refusal.
+    pub fn note(self, name: &str) -> String {
+        match self {
+            CaptureRefusal::Variable => format!(
+                "a closure that owns its captures would keep the value '{}' had when it was built, and not see later writes to the 'var'",
+                name
+            ),
+            CaptureRefusal::EnclosingClosure => format!(
+                "'{}' is captured by the enclosing closure, which may be called more than once, so it cannot give '{}' away",
+                name, name
+            ),
+            CaptureRefusal::DefaultValueInput => format!(
+                "a default value only borrows the earlier parameters, so it cannot give '{}' away",
+                name
+            ),
+        }
+    }
 }
 
 /// Why a string template part has no text form (D8 of `string-templates`).
@@ -343,6 +386,7 @@ impl TypeError {
             TypeError::InconsistentAlternativeBindings { .. } => "E4025",
             TypeError::NoTextForm { .. } => "E4026",
             TypeError::PolymorphicRecursion { .. } => "E4027",
+            TypeError::CannotCaptureByValue { .. } => "E4028",
         }
     }
 
@@ -388,6 +432,7 @@ impl TypeError {
             TypeError::InconsistentAlternativeBindings { span, .. } => *span,
             TypeError::NoTextForm { span, .. } => *span,
             TypeError::PolymorphicRecursion { span, .. } => *span,
+            TypeError::CannotCaptureByValue { span, .. } => *span,
         }
     }
 
@@ -635,6 +680,14 @@ impl TypeError {
             ),
             TypeError::PolymorphicRecursion { message, .. } => {
                 format!("polymorphic recursion: {}", message)
+            }
+            TypeError::CannotCaptureByValue {
+                name,
+                refusal: CaptureRefusal::Variable,
+                ..
+            } => format!("cannot capture the variable '{}' by value", name),
+            TypeError::CannotCaptureByValue { name, .. } => {
+                format!("cannot move '{}' into the closure", name)
             }
         }
     }

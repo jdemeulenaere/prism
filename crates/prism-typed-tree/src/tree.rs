@@ -366,8 +366,13 @@ pub enum ExpressionKind {
         parameters: Vec<LocalId>,
         body: ExpressionId,
         is_compose: bool,
-        /// The bindings of enclosing scopes its body uses, each once, in first-use order.
+        /// The bindings of enclosing scopes its body uses, each once, in first-use order, with
+        /// how the closure takes each (D2 of `escaping-closures`).
         captures: Vec<Capture>,
+        /// Why the closure owns some of its captures, when it does: the first position, in
+        /// source order, that makes its value escape, or the store that keeps it outside the
+        /// block of a captured binding.
+        ownership_reason: Option<OwnershipReason>,
     },
 
     /// Where checking failed: of the error type, keeping the nodes that were checked (D12).
@@ -496,6 +501,9 @@ pub struct Call {
     /// parameters. An extension's receiver is `this`, of the type it is passed as (`&T`, `&mut T`
     /// or `T`). The type of argument `i` is [`Call::parameter_type`].
     pub parameters: Vec<(Option<String>, Type)>,
+    /// Whether each parameter is `escaping`, in the same order: the callee may keep what is
+    /// passed for it (D3 of `escaping-closures`). The receiver of an extension never is.
+    pub escaping: Vec<bool>,
     /// The type arguments of a generic callee, written or inferred, in the order of its type
     /// parameters; empty for any other callee. Inside a generic body they may mention the
     /// body's own type parameters (D9 of `generics`).
@@ -808,6 +816,108 @@ pub struct Capture {
     pub local: LocalId,
     /// The first use.
     pub span: Span,
+    /// How the closure takes the binding when it is built.
+    pub mode: CaptureMode,
+}
+
+/// How a closure takes a captured binding (D2 of `escaping-closures`). Whether a borrow is
+/// shared or mutable is not decided here: the borrow checker infers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMode {
+    /// The closure borrows the binding for as long as it is live.
+    Borrowed,
+    /// The closure owns the binding, moved into it where the closure is built.
+    Moved,
+    /// The closure owns a copy of the binding, whose type is `Copy`.
+    Copied,
+}
+
+impl CaptureMode {
+    /// Whether the closure owns what it captures.
+    pub fn is_owned(self) -> bool {
+        !matches!(self, CaptureMode::Borrowed)
+    }
+}
+
+/// Why a closure owns some of its captures (D1 of `escaping-closures`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnershipReason {
+    /// Where the closure's value escapes, or is stored outside a captured binding's block.
+    pub span: Span,
+    pub kind: OwnershipReasonKind,
+}
+
+/// The position that makes a closure own its captures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnershipReasonKind {
+    /// The result of a function, closure or default value, or the operand of a `return`.
+    Returned,
+    /// The initializer of a top-level `val`.
+    TopLevelValue,
+    /// A field argument of a struct construction, or the value assigned to a field.
+    StoredInField,
+    /// A payload argument of an enum variant.
+    StoredInPayload,
+    /// The argument of `Heap(...)`.
+    StoredInBox,
+    /// The value written through a reference or a box.
+    WrittenThroughReference,
+    /// The value assigned to a variable that the enclosing closure captures.
+    AssignedToCapturedVariable,
+    /// An argument for a parameter whose type has a type parameter outside a function type.
+    PassedToGenericParameter,
+    /// An argument for an `escaping` parameter.
+    PassedToEscapingParameter,
+    /// A capture of a closure that owns its captures.
+    CapturedByOwningClosure,
+    /// A store into a binding declared outside the block of the captured binding `name`; the
+    /// closure owns only the captures it outlives this way.
+    StoredOutsideBlock { name: String },
+}
+
+impl OwnershipReason {
+    /// The label of the reason in a diagnostic: "the closure owns its captures because it is
+    /// returned here", or "the closure is stored here, in a variable that outlives 's'".
+    pub fn label(&self) -> String {
+        let position = match &self.kind {
+            OwnershipReasonKind::StoredOutsideBlock { name } => {
+                return format!(
+                    "the closure is stored here, in a variable that outlives '{}'",
+                    name
+                )
+            }
+            OwnershipReasonKind::Returned => "returned here",
+            OwnershipReasonKind::TopLevelValue => "stored in a top-level value here",
+            OwnershipReasonKind::StoredInField => "stored in a field here",
+            OwnershipReasonKind::StoredInPayload => "stored in an enum payload here",
+            OwnershipReasonKind::StoredInBox => "stored in a box here",
+            OwnershipReasonKind::WrittenThroughReference => "written through a reference here",
+            OwnershipReasonKind::AssignedToCapturedVariable => {
+                "assigned to a captured variable here"
+            }
+            OwnershipReasonKind::PassedToGenericParameter => "passed to a generic parameter here",
+            OwnershipReasonKind::PassedToEscapingParameter => {
+                "passed to an escaping parameter here"
+            }
+            OwnershipReasonKind::CapturedByOwningClosure => {
+                "captured here by a closure that owns its captures"
+            }
+        };
+        format!("the closure owns its captures because it is {}", position)
+    }
+
+    /// The short form the typed-tree dump prints: "returned here", "stored outside 's'".
+    pub fn short(&self) -> String {
+        match &self.kind {
+            OwnershipReasonKind::StoredOutsideBlock { name } => {
+                format!("stored outside the block of '{}'", name)
+            }
+            _ => self
+                .label()
+                .trim_start_matches("the closure owns its captures because it is ")
+                .to_string(),
+        }
+    }
 }
 
 /// An arithmetic or comparison operator.

@@ -8,8 +8,8 @@
 
 use prism_ast::Span;
 use prism_typed_tree::{
-    Arena, Body, BodyId, Capture, DeclarationPath, Expression, ExpressionId, ExpressionKind, Item,
-    Local, LocalId, Statement, StatementId, StatementKind, Type,
+    Arena, Body, BodyId, Capture, CaptureMode, DeclarationPath, Expression, ExpressionId,
+    ExpressionKind, Item, Local, LocalId, Statement, StatementId, StatementKind, Type,
 };
 use std::collections::HashMap;
 
@@ -28,6 +28,9 @@ pub(crate) struct BodyBuilder {
     /// The loops enclosing the current point, innermost last. A closure body starts with none,
     /// since a jump cannot leave a closure.
     pub(crate) loops: Vec<StatementId>,
+    /// The number of closures opened in the body, so that a body without any skips deciding
+    /// captures.
+    opened_closures: usize,
 }
 
 impl BodyBuilder {
@@ -36,6 +39,7 @@ impl BodyBuilder {
             body: Body::new(owner),
             closures: Vec::new(),
             loops: Vec::new(),
+            opened_closures: 0,
         }
     }
 
@@ -99,7 +103,11 @@ impl BodyBuilder {
             if (id.0 as usize) < closure.first_local
                 && !closure.captures.iter().any(|c| c.local == id)
             {
-                closure.captures.push(Capture { local: id, span });
+                closure.captures.push(Capture {
+                    local: id,
+                    span,
+                    mode: CaptureMode::Borrowed,
+                });
             }
         }
     }
@@ -112,7 +120,13 @@ impl BodyBuilder {
             .is_some_and(|closure| (id.0 as usize) < closure.first_local)
     }
 
+    /// Whether the body has a closure.
+    pub(crate) fn has_closures(&self) -> bool {
+        self.opened_closures > 0
+    }
+
     pub(crate) fn open_closure(&mut self) {
+        self.opened_closures += 1;
         self.closures.push(OpenClosure {
             first_local: self.body.locals.len(),
             captures: Vec::new(),

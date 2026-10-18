@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+fun run(f: () -> Int): Int = f()
+fun f(): Int {
+    var n = 1
+    run {
+        n += 1
+        n
+    }
+    return n
+}
+fun main() {
+    println(f())
+}

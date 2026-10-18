@@ -234,6 +234,27 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
     }
 
     match err {
+        TypeError::CannotCaptureByValue {
+            name,
+            refusal,
+            reason,
+            help,
+            ..
+        } => {
+            out.push_str(&format!(
+                "  --> {}:{}:{}\n",
+                display_path(path),
+                reason.span.line,
+                reason.span.column
+            ));
+            if let Some(snippet) =
+                source.and_then(|src| render_labelled_snippet(src, reason.span, &reason.label()))
+            {
+                out.push_str(&format!("{}\n", snippet));
+            }
+            out.push_str(&format!("   = note: {}\n", refusal.note(name)));
+            out.push_str(&format!("   = help: {}\n", help));
+        }
         TypeError::ImmutabilityViolation {
             help: Some(help), ..
         }
@@ -796,6 +817,43 @@ mod tests {
         );
         assert!(out.contains("help: clone it: 'this.clone()'"), "{out}");
         assert!(!out.contains("borrow it instead"), "{out}");
+    }
+
+    #[test]
+    fn test_capturing_a_var_by_value_labels() {
+        let out = render_type_errors(
+            "struct Button { val onClick: () -> Int }\nfun f(): Button { var n = 1; val b = Button({ n }); n = 2; return b }\n",
+        );
+        assert!(
+            out.contains("error[E4028]: cannot capture the variable 'n' by value"),
+            "{out}"
+        );
+        assert!(
+            out.contains("the closure owns its captures because it is stored in a field here"),
+            "{out}"
+        );
+        assert!(out.contains("help: copy it into a 'val' before the closure and capture that instead: 'val m = n'"), "{out}");
+    }
+
+    #[test]
+    fn test_capturing_what_the_closure_cannot_take_labels() {
+        let out = render_type_errors(
+            "fun store(f: escaping () -> Int): Int = 1\nfun run(f: () -> Int): Int = f()\nfun greet(s: &String): Int = 1\nfun f(s: String): Int = run { store { greet(s) } }\nfun g(a: String, p: () -> Int = { greet(a) }): Int = p()\n",
+        );
+        assert!(
+            out.contains("error[E4028]: cannot move 's' into the closure"),
+            "{out}"
+        );
+        assert!(
+            out.contains("note: 's' is captured by the enclosing closure"),
+            "{out}"
+        );
+        assert!(
+            out.contains("note: a default value only borrows the earlier parameters"),
+            "{out}"
+        );
+        assert!(out.contains("help: clone it into a 'val' before the closure and capture that instead: 'val m = s.clone()'"), "{out}");
+        assert!(out.contains("help: give 'a' to the closure when it is called, as a parameter, instead of capturing it"), "{out}");
     }
 
     #[test]

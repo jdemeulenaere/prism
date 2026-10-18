@@ -9,8 +9,8 @@
 
 use crate::arena::{ExpressionId, StatementId};
 use crate::tree::{
-    Argument, Body, BorrowOrigin, Callee, CoercionKind, ConstructKind, ExpressionKind, Item,
-    LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TemplatePart, TypedFile,
+    Argument, Body, BorrowOrigin, Callee, CaptureMode, CoercionKind, ConstructKind, ExpressionKind,
+    Item, LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TemplatePart, TypedFile,
 };
 use crate::types::{NominalId, Type, TypeDef, TypeParameter, BUILTIN_MODULE};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
@@ -364,6 +364,7 @@ impl Printer<'_> {
                 parameters,
                 is_compose,
                 captures,
+                ownership_reason,
                 ..
             } => {
                 let parameters: Vec<String> =
@@ -374,9 +375,27 @@ impl Printer<'_> {
                     parameters.join(", ")
                 );
                 if !captures.is_empty() {
-                    let captures: Vec<String> =
-                        captures.iter().map(|c| self.local_name(c.local)).collect();
-                    write!(text, " captures {}", captures.join(", ")).unwrap();
+                    let captures: Vec<String> = captures
+                        .iter()
+                        .map(|c| {
+                            let mode = match c.mode {
+                                CaptureMode::Borrowed => "borrow",
+                                CaptureMode::Moved => "move",
+                                CaptureMode::Copied => "copy",
+                            };
+                            format!("{} {}", mode, self.local_name(c.local))
+                        })
+                        .collect();
+                    write!(text, " captures [{}]", captures.join(", ")).unwrap();
+                }
+                if let Some(reason) = ownership_reason {
+                    write!(
+                        text,
+                        " (owning: {} {})",
+                        reason.short(),
+                        position(reason.span)
+                    )
+                    .unwrap();
                 }
                 text
             }

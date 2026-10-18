@@ -5,6 +5,7 @@
 //! point that decides something (a coercion, a move, a borrow, a receiver pass) records it.
 
 use crate::builder::{BodyBuilder, FileBuilder};
+use crate::captures::{decide_captures, BodyKind};
 use crate::error::{NoTextFormReason, TypeError};
 use crate::exhaustiveness;
 use crate::inference::Unknowns;
@@ -2269,14 +2270,23 @@ impl TypeChecker {
 
     /// Finishes the body being built, restoring `previous`, and records it with `item`, which
     /// gets the body's id.
+    /// Before that, it decides which captures each of its closures owns (D2 of
+    /// `escaping-closures`).
     fn finish_body(
         &mut self,
         previous: BodyBuilder,
+        kind: BodyKind,
         span: Span,
         item: impl FnOnce(prism_typed_tree::BodyId) -> Item,
     ) {
         let built = std::mem::replace(&mut self.builder, previous);
-        let body = self.file.bodies.alloc(built.finish());
+        let has_closures = built.has_closures();
+        let mut built = built.finish();
+        if has_closures {
+            let errors = decide_captures(&mut built, &self.types, kind);
+            self.errors.extend(errors);
+        }
+        let body = self.file.bodies.alloc(built);
         self.file.items.entry(span).or_insert_with(|| item(body));
     }
 
@@ -2299,7 +2309,7 @@ impl TypeChecker {
         };
         self.builder.body_mut().value = Some(value);
         let path = DeclarationPath::new(self.module_path.clone(), &v.name);
-        self.finish_body(previous, v.span, |body| {
+        self.finish_body(previous, BodyKind::TopLevelValue, v.span, |body| {
             Item::Value(ValueItem {
                 path,
                 visibility: v.visibility,
@@ -2585,7 +2595,7 @@ impl TypeChecker {
             .zip(receiver_ty)
             .map(|(receiver, ty)| (receiver.mode, ty));
         let type_parameters = self.type_parameter_scope.clone();
-        self.finish_body(previous, f.span, |body| {
+        self.finish_body(previous, BodyKind::Function, f.span, |body| {
             Item::Function(FunctionItem {
                 path,
                 visibility: f.visibility,
@@ -2950,6 +2960,7 @@ impl TypeChecker {
             body: body_id,
             is_compose,
             captures,
+            ownership_reason: None,
         };
         self.add(kind, ty, span)
     }
@@ -3308,6 +3319,7 @@ impl TypeChecker {
                     body: body_id,
                     is_compose: false,
                     captures,
+                    ownership_reason: None,
                 };
                 self.add(kind, ty, expr.span)
             }
@@ -4945,6 +4957,7 @@ impl TypeChecker {
         let call = Call {
             callee: Callee::Builtin(builtin),
             evaluation_order: (0..arguments.len()).collect(),
+            escaping: vec![false; parameters.len()],
             arguments,
             parameters,
             type_arguments: Vec::new(),
@@ -5014,6 +5027,7 @@ impl TypeChecker {
                     callee: Callee::Builtin(BuiltinFunction::HeapAllocate),
                     arguments,
                     parameters: parameter_list(&names, &signature.params),
+                    escaping: vec![false; signature.params.len()],
                     type_arguments: solution,
                     evaluation_order,
                     has_receiver: false,
@@ -5114,8 +5128,8 @@ impl TypeChecker {
             Type::Fn {
                 is_compose,
                 params,
+                escaping,
                 ret,
-                ..
             } => {
                 // Composable context enforcement (first-class compose invariant, E4008)
                 if is_compose && !self.is_in_compose() {
@@ -5152,6 +5166,7 @@ impl TypeChecker {
                                 callee_node,
                                 arguments,
                                 parameters,
+                                escaping,
                                 Vec::new(),
                                 evaluation_order,
                                 is_compose,
@@ -5198,6 +5213,7 @@ impl TypeChecker {
                             callee_node,
                             arguments,
                             parameters,
+                            escaping,
                             solution,
                             evaluation_order,
                             is_compose,
@@ -5522,6 +5538,7 @@ impl TypeChecker {
         callee_node: ExpressionId,
         arguments: Vec<Argument>,
         parameters: Vec<(Option<String>, Type)>,
+        escaping: Vec<bool>,
         type_arguments: Vec<Type>,
         evaluation_order: Vec<usize>,
         is_compose: bool,
@@ -5534,6 +5551,7 @@ impl TypeChecker {
                     callee: Callee::Function(path),
                     arguments,
                     parameters,
+                    escaping,
                     type_arguments,
                     evaluation_order,
                     has_receiver: false,
@@ -5577,6 +5595,7 @@ impl TypeChecker {
                     callee: Callee::Value(callee_node),
                     arguments,
                     parameters,
+                    escaping,
                     type_arguments,
                     evaluation_order,
                     has_receiver: false,
@@ -6120,6 +6139,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::Unbox),
             arguments: vec![Argument::Written(moved)],
             parameters: vec![(Some(THIS.to_string()), boxed)],
+            escaping: vec![false],
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
@@ -6223,8 +6243,8 @@ impl TypeChecker {
                 Type::Fn {
                     is_compose,
                     params,
+                    escaping,
                     ret,
-                    ..
                 },
             param_names,
             has_default,
@@ -6240,6 +6260,10 @@ impl TypeChecker {
                 span,
             });
         }
+        // The receiver is never `escaping`.
+        let escaping: Vec<bool> = std::iter::once(false)
+            .chain(escaping.iter().copied())
+            .collect();
         let (is_compose, params, param_names, has_default, ret) = (
             *is_compose,
             params.clone(),
@@ -6317,6 +6341,7 @@ impl TypeChecker {
                     callee: Callee::Function(path),
                     arguments: all_arguments,
                     parameters,
+                    escaping,
                     type_arguments,
                     evaluation_order: order,
                     has_receiver: true,
@@ -7266,6 +7291,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::Clone),
             arguments: vec![Argument::Written(borrow)],
             parameters: vec![(Some(THIS.to_string()), borrow_ty)],
+            escaping: vec![false],
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
@@ -7303,6 +7329,7 @@ impl TypeChecker {
         let call = Call {
             callee: Callee::Builtin(builtin),
             evaluation_order: (0..written.len()).collect(),
+            escaping: vec![false; parameters.len()],
             arguments: written,
             parameters,
             type_arguments: Vec::new(),
@@ -7349,6 +7376,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::ToString),
             arguments: vec![Argument::Written(copy)],
             parameters: vec![(Some(THIS.to_string()), copy_ty)],
+            escaping: vec![false],
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
