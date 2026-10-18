@@ -1,0 +1,7 @@
+// expect: ok
+struct Box<T>(var v: T)
+struct Pair<A, B>(val a: A, val b: B)
+enum Option<T> : Copy { Some(T), None }
+fun <T> id(x: T): T = x
+public compose fun <T : Copy, U : Clone,> show(a: T, b: U): Unit {}
+mut fun <T> Box<T>.put(v: T) {}

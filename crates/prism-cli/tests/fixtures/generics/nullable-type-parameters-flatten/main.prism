@@ -1,0 +1,3 @@
+// expect: ok
+fun <T> orNull(x: T, keep: Bool): T? = if (keep) x else null
+fun f(s: String?): String? = orNull(s, true)

@@ -1,0 +1,5 @@
+// expect: E4022
+fun <T> apply(f: (T) -> Unit) {}
+fun k(s: (&Int) -> Unit) {
+    apply(s)
+}

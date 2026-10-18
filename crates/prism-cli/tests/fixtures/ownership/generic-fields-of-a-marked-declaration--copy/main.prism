@@ -1,2 +1,2 @@
-// expect: E4016
+// expect: ok
 struct Box<T> : Copy { val v: T }

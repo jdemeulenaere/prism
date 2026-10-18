@@ -461,39 +461,6 @@ impl Type {
             other => Type::Nullable(Box::new(other)),
         }
     }
-
-    /// Rewrites every opaque type name inside `self` with `bind`, keeping names it returns
-    /// `None` for. Used to bind names lowered from annotations or ABI types to the struct or enum
-    /// they denote.
-    pub fn bind_names(self, bind: &dyn Fn(&str) -> Option<Type>) -> Type {
-        match self {
-            Type::Opaque(name) => bind(&name).unwrap_or(Type::Opaque(name)),
-            Type::Reference { mutable, inner } => Type::Reference {
-                mutable,
-                inner: Box::new(inner.bind_names(bind)),
-            },
-            Type::Nullable(inner) => Type::Nullable(Box::new(inner.bind_names(bind))),
-            Type::Heap(inner) => Type::Heap(Box::new(inner.bind_names(bind))),
-            Type::Struct { id, arguments } => Type::Struct {
-                id,
-                arguments: arguments.into_iter().map(|a| a.bind_names(bind)).collect(),
-            },
-            Type::Enum { id, arguments } => Type::Enum {
-                id,
-                arguments: arguments.into_iter().map(|a| a.bind_names(bind)).collect(),
-            },
-            Type::Fn {
-                is_compose,
-                params,
-                ret,
-            } => Type::Fn {
-                is_compose,
-                params: params.into_iter().map(|p| p.bind_names(bind)).collect(),
-                ret: Box::new(ret.bind_names(bind)),
-            },
-            other => other,
-        }
-    }
 }
 
 impl Type {

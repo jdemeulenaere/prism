@@ -1,0 +1,4 @@
+// expect: E4006
+struct Box<T>(val v: T)
+fun Box<Int>.inc(): Int = v + 1
+fun f(b: Box<String>): Int = b.inc()

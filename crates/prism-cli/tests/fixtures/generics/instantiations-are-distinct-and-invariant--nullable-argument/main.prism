@@ -1,0 +1,3 @@
+// expect: E4005
+struct Box<T>(val v: T)
+fun g(b: Box<Int>): Box<Int?> = b

@@ -1,0 +1,6 @@
+// expect: E4022
+fun <T> id(x: T): T = x
+fun f(a: Int): Int {
+    val r = id<&Int>(&a)
+    return 1
+}

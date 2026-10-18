@@ -116,6 +116,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
+            call.type_arguments.clone(),
             destination,
             call.is_compose,
             *ty != Type::Nothing,
@@ -131,6 +132,7 @@ impl Builder<'_> {
         callee: Callee,
         arguments: Vec<Operand>,
         parameters: Vec<Type>,
+        type_arguments: Vec<Type>,
         destination: Place,
         is_compose: bool,
         returns: bool,
@@ -147,6 +149,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
+            type_arguments,
             destination,
             target,
             is_compose,
@@ -157,7 +160,9 @@ impl Builder<'_> {
 
     /// The borrow of the receiver `pending` of `call`, in a temporary.
     fn borrow_receiver(&mut self, call: &Call, pending: PendingReceiver) -> Operand {
-        let receiver_ty = call.parameters[0].1.clone();
+        let receiver_ty = call
+            .parameter_type(0)
+            .expect("a receiver is the first parameter");
         let local = self.new_temporary(receiver_ty, pending.span);
         let rvalue = Rvalue::Borrow {
             mutable: pending.mutable,
@@ -224,11 +229,15 @@ impl Builder<'_> {
         let TreeCallee::Function(function) = &call.callee else {
             panic!("internal error: an omitted argument of a function value");
         };
-        let (name, parameter_ty) = call.parameters[index].clone();
+        // The generator is as generic as its function: it is called with the call's type
+        // arguments, its parameters are declared, and the caller's temporaries are substituted.
+        let (name, declared_ty) = call.parameters[index].clone();
+        let parameter_ty = declared_ty.substitute(&call.type_arguments);
         let mut arguments = Vec::new();
         let mut parameters = Vec::new();
         for (earlier, operand) in operands.iter().enumerate().take(index) {
-            let earlier_ty = call.parameters[earlier].1.clone();
+            let declared_earlier = call.parameters[earlier].1.clone();
+            let earlier_ty = declared_earlier.substitute(&call.type_arguments);
             let place = match operand {
                 Some(Operand::Move(place, _)) => place.clone(),
                 _ if self.current.is_none() => return Operand::Constant(Constant::Unit),
@@ -245,7 +254,7 @@ impl Builder<'_> {
             };
             self.assign(Place::local(borrow), rvalue, span);
             arguments.push(Operand::Move(Place::local(borrow), span));
-            parameters.push(shared(earlier_ty));
+            parameters.push(shared(declared_earlier));
         }
         if let Some(slot_ty) = slot_type(&parameter_ty) {
             let slot = self.new_temporary(slot_ty.clone(), span);
@@ -263,7 +272,11 @@ impl Builder<'_> {
             };
             self.assign(Place::local(borrow), rvalue, span);
             arguments.push(Operand::Move(Place::local(borrow), span));
-            parameters.push(slot_reference);
+            let declared_slot = slot_type(&declared_ty).expect("a reference parameter");
+            parameters.push(Type::Reference {
+                mutable: true,
+                inner: Box::new(declared_slot),
+            });
         }
         let result = self.new_temporary(parameter_ty, span);
         let callee = Callee::Default {
@@ -275,6 +288,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
+            call.type_arguments.clone(),
             Place::local(result),
             false,
             true,

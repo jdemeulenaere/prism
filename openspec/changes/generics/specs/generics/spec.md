@@ -10,7 +10,7 @@ The generics specification defines type parameters on functions, extensions, str
 Functions, extension functions, structs and enums MUST accept type parameters. A function's type parameters MUST be in scope in its receiver, parameters, default values, return type and body. A struct's or enum's MUST be in scope in its fields or payloads. A type parameter MUST shadow a struct or enum of the same name. A duplicate type parameter, or one named like a built-in type other than `Range`, MUST be rejected with `E4010`.
 
 #### Scenario: Generic function, struct and enum
-- **WHEN** `fun <T> id(x: T): T = x`, `struct Box<T>(val v: T)` and `enum Option<T> { Some(T), None }` are declared, and `fun f(): Int = id(1)`, `fun g(b: Box<String>): String = b.v` and `fun h(): Option<Int> = Option.Some(2)` are checked
+- **WHEN** `fun <T> id(x: T): T = x`, `struct Box<T>(val v: T)` and `enum Option<T> { Some(T), None }` are declared, and `fun f(): Int = id(1)`, `fun g(b: Box<Int>): Int = b.v` and `fun h(): Option<Int> = Option.Some(2)` are checked
 - **THEN** the file typechecks successfully
 
 #### Scenario: A type parameter shadows a struct

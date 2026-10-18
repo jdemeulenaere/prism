@@ -1,0 +1,11 @@
+// expect: ok
+struct Box<T>(var v: T)
+fun <T> Box<T>.get(): &T = &v
+mut fun <T> Box<T>.put(x: T) { v = x }
+fun Box<Int>.inc(): Int = v + 1
+fun f(b: Box<Int>): Int {
+    var c = b
+    c.put(2)
+    val n: Int = c.get()
+    return c.inc() + n
+}

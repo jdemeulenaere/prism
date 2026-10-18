@@ -1,0 +1,3 @@
+// expect: E4016
+struct Box<T> : Copy { val v: T }
+struct Bad<T> : Copy { val b: Box<String> }

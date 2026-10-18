@@ -51,7 +51,7 @@ pub(crate) fn check_escapes(
         };
         if let Rvalue::Aggregate(kind, operands) = rvalue.as_ref() {
             let position = match kind {
-                AggregateKind::Struct(_) => "stored in a field here",
+                AggregateKind::Struct { .. } => "stored in a field here",
                 AggregateKind::Variant { .. } => "stored in a variant here",
             };
             for operand in operands {

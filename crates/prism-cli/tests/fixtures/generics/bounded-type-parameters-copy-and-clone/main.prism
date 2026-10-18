@@ -1,0 +1,4 @@
+// expect: ok
+struct Pair<A, B>(val a: A, val b: B)
+fun <T : Copy> dup(x: T): Pair<T, T> = Pair(x, x)
+fun <T : Clone> c(x: &T): T = x.clone()

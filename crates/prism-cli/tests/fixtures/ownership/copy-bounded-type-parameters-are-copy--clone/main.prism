@@ -1,0 +1,2 @@
+// expect: E4017
+fun <T : Clone> take(x: &T): T = x

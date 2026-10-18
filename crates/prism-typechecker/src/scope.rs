@@ -4,6 +4,7 @@ use crate::error::TypeError;
 use crate::types::{NominalId, Type};
 use prism_ast::{Span, Visibility};
 use prism_typed_tree::LocalId;
+use prism_typed_tree::TypeParameter;
 use std::collections::HashMap;
 
 /// Declared mutability of a binding (`val` vs `var`).
@@ -27,9 +28,11 @@ pub enum SymbolKind {
         /// The defining module, for a top-level `val` or a payload-free variant.
         module: Option<String>,
     },
-    /// Function declaration.
+    /// Function declaration, or a payload variant's constructor. The function type mentions the
+    /// declaration's own `type_parameters`, if it is generic.
     Function {
         fn_type: Type,
+        type_parameters: Vec<TypeParameter>,
         param_names: Vec<String>,
         has_default: Vec<bool>,
         visibility: Visibility,
@@ -108,6 +111,7 @@ impl Symbol {
             name: name.into(),
             kind: SymbolKind::Function {
                 fn_type,
+                type_parameters: Vec::new(),
                 param_names: Vec::new(),
                 has_default: Vec::new(),
                 visibility,
@@ -131,6 +135,7 @@ impl Symbol {
             name: name.into(),
             kind: SymbolKind::Function {
                 fn_type,
+                type_parameters: Vec::new(),
                 param_names,
                 has_default,
                 visibility,
@@ -181,6 +186,27 @@ impl Symbol {
             *local = Some(id);
         }
         self
+    }
+
+    /// The symbol of a generic function or variant constructor with `parameters`.
+    pub fn with_type_parameters(mut self, parameters: Vec<TypeParameter>) -> Self {
+        if let SymbolKind::Function {
+            type_parameters, ..
+        } = &mut self.kind
+        {
+            *type_parameters = parameters;
+        }
+        self
+    }
+
+    /// The type parameters of a generic function or variant constructor, empty otherwise.
+    pub fn type_parameters(&self) -> &[TypeParameter] {
+        match &self.kind {
+            SymbolKind::Function {
+                type_parameters, ..
+            } => type_parameters,
+            _ => &[],
+        }
     }
 
     /// The symbol, declared by module `defining_module`. Only top-level values and functions

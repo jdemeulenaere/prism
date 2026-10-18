@@ -221,10 +221,16 @@ impl Printer<'_> {
             Rvalue::Discriminant(place) => format!("discriminant {}", self.place(place)),
             Rvalue::Aggregate(kind, operands) => {
                 let name = match kind {
-                    AggregateKind::Struct(id) => format!("struct {}::{}", id.module, id.name),
-                    AggregateKind::Variant { enum_id, index } => {
-                        format!("variant {}", self.variant(enum_id, *index))
-                    }
+                    AggregateKind::Struct { .. } => format!("struct {}", kind.ty().qualified()),
+                    AggregateKind::Variant {
+                        enum_id,
+                        index,
+                        arguments,
+                    } => format!(
+                        "variant {}{}",
+                        self.variant(enum_id, *index),
+                        render_type_arguments(arguments)
+                    ),
                 };
                 format!("{}({})", name, self.operands(operands))
             }
@@ -311,6 +317,16 @@ impl Printer<'_> {
             TerminatorKind::Unreachable => "unreachable".to_string(),
         }
     }
+}
+
+/// Renders type arguments as written after a name (`<Int, String>`), qualified by module, or
+/// nothing when there are none.
+fn render_type_arguments(arguments: &[Type]) -> String {
+    if arguments.is_empty() {
+        return String::new();
+    }
+    let rendered: Vec<String> = arguments.iter().map(Type::qualified).collect();
+    format!("<{}>", rendered.join(", "))
 }
 
 fn position(span: Span) -> String {

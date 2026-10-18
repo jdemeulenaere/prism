@@ -1,0 +1,6 @@
+// expect: ok
+enum Option<T> { Some(T), None }
+fun <T> none(): Option<T> = Option.None
+fun k() {
+    val o: Option<Int> = none()
+}

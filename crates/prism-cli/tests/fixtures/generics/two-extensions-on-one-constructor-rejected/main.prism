@@ -1,0 +1,4 @@
+// expect: E4010
+struct Box<T>(val v: T)
+fun Box<Int>.size(): Int = 1
+fun <T> Box<T>.size(): Int = 2

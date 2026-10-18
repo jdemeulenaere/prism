@@ -1,0 +1,2 @@
+// expect: E4010
+fun <T, T> f(x: T): T = x

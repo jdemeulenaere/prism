@@ -1,0 +1,6 @@
+// expect: ok
+enum Option<T> { Some(T), None }
+fun f(o: Option<Int>): Int = when (o) {
+    Option.None -> 0
+    else -> 1
+}

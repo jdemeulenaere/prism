@@ -1,0 +1,6 @@
+// expect: ok
+fun <T> first(a: &T, b: &T): &T = a
+fun f(x: String, y: String): Int {
+    val r = first(&x, &y)
+    return 1
+}

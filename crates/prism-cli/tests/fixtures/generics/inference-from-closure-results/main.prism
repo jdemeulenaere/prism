@@ -1,0 +1,11 @@
+// expect: ok
+fun <T> remember(calc: () -> T): T = calc()
+fun <T, R> map(x: T, f: (T) -> R): R = f(x)
+fun f(): Int {
+    val n = remember { 0 }
+    return n
+}
+fun g(): Int {
+    val n = map("a") { s -> 1 }
+    return n
+}

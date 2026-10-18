@@ -1,0 +1,4 @@
+// expect: ok
+struct T { val n: Int }
+fun <T> id(x: T): T = x
+fun f(): String = id("a")

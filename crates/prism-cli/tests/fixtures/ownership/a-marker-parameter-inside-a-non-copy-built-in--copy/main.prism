@@ -1,0 +1,2 @@
+// expect: E4016
+struct W<T> : Copy { val h: Heap<T> }

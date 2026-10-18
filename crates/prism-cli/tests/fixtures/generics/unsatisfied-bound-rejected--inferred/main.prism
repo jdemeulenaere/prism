@@ -1,0 +1,3 @@
+// expect: E4021
+fun <T : Copy> dup(x: T): T = x
+fun f(s: String): String = dup(s)

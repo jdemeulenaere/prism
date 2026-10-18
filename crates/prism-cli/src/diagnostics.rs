@@ -233,6 +233,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         | TypeError::UnknownField {
             help: Some(help), ..
+        }
+        | TypeError::CannotInferType {
+            help: Some(help), ..
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }
@@ -314,6 +317,32 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 ));
             }
         },
+        TypeError::WrongTypeArgumentCount { expected: 0, .. } => {
+            out.push_str(
+                "   = help: remove the type arguments; only generic declarations take them\n",
+            );
+        }
+        TypeError::WrongTypeArgumentCount { expected, .. } => {
+            out.push_str(&format!(
+                "   = help: write exactly {} type argument{}, one per type parameter, in order\n",
+                expected,
+                if *expected == 1 { "" } else { "s" }
+            ));
+        }
+        TypeError::UnsatisfiedBound {
+            parameter, bound, ..
+        } => {
+            out.push_str(&format!(
+                "   = help: add the bound to the caller's type parameter, or pass a '{}' value ('{}' is declared '{} : {}')\n",
+                bound.as_str(),
+                parameter,
+                parameter,
+                bound.as_str()
+            ));
+        }
+        TypeError::BorrowInTypeArgument { .. } => {
+            out.push_str("   = help: type parameters stand for owned values; take '&T' in the signature instead, as in 'fun <T> first(a: &T): &T'\n");
+        }
         TypeError::NotAReference { .. } => {
             out.push_str("   = help: '*r = v' writes through a reference 'r'; assign a variable or field directly with 'x = v'\n");
         }
@@ -443,6 +472,45 @@ mod tests {
             .iter()
             .map(|err| format_type_error(Path::new("main.prism"), Some(src), err))
             .collect()
+    }
+
+    #[test]
+    fn test_generic_errors_render_their_helps() {
+        let out = render_type_errors(
+            "fun <T> id(x: T): T = x\nfun <T : Copy> dup(x: T): T = x\nfun f(a: Int, s: String) {\n    val r = id<&Int>(&a)\n    val d = dup(s)\n    val n = id<Int, Int>(1)\n}\nfun <T> none(): T? = null\nfun g() {\n    val o = none()\n}\n",
+        );
+        assert!(
+            out.contains("error[E4022]: type argument '&Int' of 'id'"),
+            "{out}"
+        );
+        assert!(out.contains("take '&T' in the signature instead"), "{out}");
+        assert!(
+            out.contains("error[E4021]: type argument 'String' of 'dup' does not satisfy the bound 'T : Copy'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("add the bound to the caller's type parameter"),
+            "{out}"
+        );
+        assert!(
+            out.contains("error[E4020]: 'id' takes 1 type argument, but 2 were given"),
+            "{out}"
+        );
+        assert!(
+            out.contains("error[E4013]: cannot infer the type argument 'T' of 'none'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("help: write the type arguments, as in 'name<...>(...)'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn test_clone_of_an_unbounded_type_parameter_suggests_a_bound() {
+        let out = render_type_errors("fun <T> c(x: &T): T = x.clone()\n");
+        assert!(out.contains("error[E4018]"), "{out}");
+        assert!(out.contains("help: add the bound '<T : Clone>'"), "{out}");
     }
 
     #[test]

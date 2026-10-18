@@ -1,0 +1,3 @@
+// expect: E4017
+struct Pair<A, B> : Copy { val a: A, val b: B }
+fun h(p: &Pair<String, Int>): Pair<String, Int> = p

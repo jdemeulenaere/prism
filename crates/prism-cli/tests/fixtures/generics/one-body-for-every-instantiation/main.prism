@@ -1,0 +1,7 @@
+// expect: ok
+fun <T> keep(x: T): T {
+    val y = x
+    return y
+}
+fun f(): Int = keep(1)
+fun g(s: String): String = keep(s)

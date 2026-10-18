@@ -1,0 +1,4 @@
+// expect: E4018
+struct Pair<A, B> : Copy { val a: A, val b: B }
+struct Raw { val n: Int }
+fun k(p: &Pair<Raw, Int>): Pair<Raw, Int> = p.clone()

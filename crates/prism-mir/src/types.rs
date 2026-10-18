@@ -45,10 +45,11 @@ pub fn projection_type(base: &Type, projection: Projection, types: &TypeTable) -
         (Projection::Deref, Type::Reference { inner, .. } | Type::Heap(inner)) => {
             Some(inner.as_ref().clone())
         }
-        (Projection::Field(index), Type::Struct { id, .. }) => types
+        // A field has its declared type with the struct's type arguments substituted.
+        (Projection::Field(index), Type::Struct { id, arguments }) => types
             .struct_fields(id)
             .and_then(|fields| fields.get(index))
-            .map(|(_, _, ty)| ty.clone()),
+            .map(|(_, _, ty)| ty.substitute(arguments)),
         (Projection::Payload, Type::Nullable(inner)) => Some(inner.as_ref().clone()),
         (Projection::Index(_), Type::String) => Some(Type::Char),
         _ => None,

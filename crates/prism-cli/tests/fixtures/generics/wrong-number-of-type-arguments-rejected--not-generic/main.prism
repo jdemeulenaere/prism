@@ -1,0 +1,3 @@
+// expect: E4020
+fun one(): Int = 1
+fun g(): Int = one<Int>()

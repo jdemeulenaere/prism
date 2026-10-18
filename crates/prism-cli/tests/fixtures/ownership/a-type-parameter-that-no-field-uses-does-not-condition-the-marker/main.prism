@@ -1,0 +1,3 @@
+// expect: ok
+struct Handle<T> : Copy { val id: Int }
+fun f(h: &Handle<String>): Handle<String> = h

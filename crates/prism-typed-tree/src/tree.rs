@@ -18,7 +18,7 @@
 //!   no node or binding of the error type.
 
 use crate::arena::{Arena, BodyId, ExpressionId, LocalId, StatementId};
-use crate::types::{NominalId, Type, TypeTable};
+use crate::types::{NominalId, Type, TypeParameter, TypeTable};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
 use std::fmt;
 
@@ -53,6 +53,9 @@ pub struct FunctionItem {
     pub path: DeclarationPath,
     pub visibility: Visibility,
     pub is_compose: bool,
+    /// The type parameters of a generic function, in order, with their bounds; the types of
+    /// its signature and body mention them.
+    pub type_parameters: Vec<TypeParameter>,
     /// The receiver of an extension: its mode and its type (`User` for `fun User.greet()`).
     pub receiver: Option<(ReceiverMode, Type)>,
     /// The declared parameters, without the receiver.
@@ -68,7 +71,11 @@ pub struct FunctionItem {
 pub struct StructItem {
     pub id: NominalId,
     pub visibility: Visibility,
+    /// The type parameters of a generic struct, which its field types mention.
+    pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
+    /// The indices of the type parameters that condition the marker (D6 of `generics`).
+    pub marker_parameters: Vec<u32>,
     /// The fields as `(name, is_var, type)`, in declaration order: a field is named by its index.
     pub fields: Vec<(String, bool, Type)>,
     pub span: Span,
@@ -79,7 +86,11 @@ pub struct StructItem {
 pub struct EnumItem {
     pub id: NominalId,
     pub visibility: Visibility,
+    /// The type parameters of a generic enum, which its payload types mention.
+    pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
+    /// The indices of the type parameters that condition the marker (D6 of `generics`).
+    pub marker_parameters: Vec<u32>,
     /// The variants as `(name, payload types)`, in declaration order: a variant is named by its
     /// index.
     pub variants: Vec<(String, Vec<Type>)>,
@@ -374,9 +385,14 @@ pub struct Call {
     /// One argument per parameter, in parameter order, the receiver first when `has_receiver`.
     pub arguments: Vec<Argument>,
     /// The parameters as the callee declares them, in the same order: the name (`None` for a
-    /// function-typed value) and the type each argument has. An extension's receiver is
-    /// `this`, of the type it is passed as (`&T`, `&mut T` or `T`).
+    /// function-typed value) and the declared type, which mentions a generic callee's type
+    /// parameters. An extension's receiver is `this`, of the type it is passed as (`&T`, `&mut T`
+    /// or `T`). The type of argument `i` is [`Call::parameter_type`].
     pub parameters: Vec<(Option<String>, Type)>,
+    /// The type arguments of a generic callee, written or inferred, in the order of its type
+    /// parameters; empty for any other callee. Inside a generic body they may mention the
+    /// body's own type parameters (D9 of `generics`).
+    pub type_arguments: Vec<Type>,
     /// The parameter indices of the written arguments, in source order, the receiver first.
     /// Defaults are evaluated after them.
     pub evaluation_order: Vec<usize>,
@@ -384,6 +400,16 @@ pub struct Call {
     pub has_receiver: bool,
     /// Whether the callee is a `compose fun` or composable function value.
     pub is_compose: bool,
+}
+
+impl Call {
+    /// The type of argument `index`: its declared parameter type with the call's type
+    /// arguments substituted.
+    pub fn parameter_type(&self, index: usize) -> Option<Type> {
+        self.parameters
+            .get(index)
+            .map(|(_, ty)| ty.substitute(&self.type_arguments))
+    }
 }
 
 /// What a call calls.
@@ -467,7 +493,8 @@ pub enum ConstructKind {
 pub struct ConstructField {
     /// The field's name, `None` for a variant payload.
     pub name: Option<String>,
-    /// The field's declared type.
+    /// The field's declared type, which mentions a generic struct's or enum's type parameters;
+    /// the value has it with the construction's type arguments substituted.
     pub ty: Type,
     pub value: ExpressionId,
 }

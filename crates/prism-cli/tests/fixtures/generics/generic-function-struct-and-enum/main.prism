@@ -1,0 +1,7 @@
+// expect: ok
+fun <T> id(x: T): T = x
+struct Box<T>(val v: T)
+enum Option<T> { Some(T), None }
+fun f(): Int = id(1)
+fun g(b: Box<Int>): Int = b.v
+fun h(): Option<Int> = Option.Some(2)

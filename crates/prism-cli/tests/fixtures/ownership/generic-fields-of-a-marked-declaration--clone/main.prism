@@ -1,0 +1,2 @@
+// expect: ok
+struct Cell<T> : Clone { val v: T, val next: Heap<T>? }

@@ -1,0 +1,3 @@
+// expect: E4004
+fun <T> pick(a: T, b: T): T = a
+fun f(): Int = pick(1, "a")

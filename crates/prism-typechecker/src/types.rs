@@ -3,8 +3,8 @@
 //! The semantic [`Type`] itself lives in `prism-typed-tree`, which the typed tree shares with
 //! later stages; the rules stay with the type checker.
 
-use prism_abi::{AbiType, NominalKind, PrimKind};
-pub use prism_typed_tree::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
+use prism_abi::{AbiType, AbiTypeParameter, NominalKind, PrimKind};
+pub use prism_typed_tree::types::{NominalId, Type, TypeDef, TypeParameter, BUILTIN_MODULE};
 
 /// The assignability rules over semantic types: subtyping, and the join of two branches.
 pub trait TypeRelations {
@@ -36,6 +36,34 @@ impl TypeRelations for Type {
 
         if self == expected {
             return true;
+        }
+
+        // Generic types are invariant in their arguments (D11 of `generics`); an argument that
+        // is an earlier error matches any.
+        if let (
+            Type::Struct {
+                id: self_id,
+                arguments: self_arguments,
+            },
+            Type::Struct { id, arguments },
+        )
+        | (
+            Type::Enum {
+                id: self_id,
+                arguments: self_arguments,
+            },
+            Type::Enum { id, arguments },
+        ) = (self, expected)
+        {
+            if self_id == id
+                && self_arguments.len() == arguments.len()
+                && self_arguments
+                    .iter()
+                    .zip(arguments)
+                    .all(|(found, expected)| same_modulo_errors(found, expected))
+            {
+                return true;
+            }
         }
 
         // T <= T?
@@ -150,45 +178,11 @@ impl TypeRelations for Type {
     }
 }
 
-/// Converts an AST type to a semantic `Type`. Nominal names stay [`Type::Opaque`] until the
-/// checker binds them in scope.
-pub fn type_from_ast(ast_ty: &prism_ast::types::Type) -> Type {
-    match &ast_ty.kind {
-        prism_ast::types::TypeKind::Named { name, type_args } => match name.as_str() {
-            "Int" => Type::Int,
-            "Float" | "Double" => Type::Float,
-            "Bool" => Type::Bool,
-            "Char" => Type::Char,
-            "String" => Type::String,
-            "Unit" => Type::Unit,
-            "Nothing" => Type::Nothing,
-            "Heap" if type_args.len() == 1 => Type::Heap(Box::new(type_from_ast(&type_args[0]))),
-            // Nominal type or generic type parameter, bound by the checker's scope.
-            _ => Type::Opaque(name.clone()),
-        },
-        prism_ast::types::TypeKind::Nullable(inner) => {
-            Type::Nullable(Box::new(type_from_ast(inner)))
-        }
-        prism_ast::types::TypeKind::Reference { mutable, inner } => Type::Reference {
-            mutable: *mutable,
-            inner: Box::new(type_from_ast(inner)),
-        },
-        prism_ast::types::TypeKind::Unit => Type::Unit,
-        prism_ast::types::TypeKind::Function {
-            is_compose,
-            params,
-            return_type,
-        } => Type::Fn {
-            is_compose: *is_compose,
-            params: params.iter().map(type_from_ast).collect(),
-            ret: Box::new(type_from_ast(return_type)),
-        },
-    }
-}
-
-/// Converts a type recorded in an imported file's ABI. Phase 1 has already bound each
-/// nominal name to its defining module; an unbound name stays opaque.
-pub fn type_from_abi(ty: &AbiType) -> Type {
+/// Converts a type recorded in an imported file's ABI, in a signature or definition whose
+/// declaration has the type `parameters`. Phase 1 has already bound each nominal name to its
+/// defining module; an unbound name stays opaque, and a type parameter is the declaration's.
+pub fn type_from_abi(ty: &AbiType, parameters: &[TypeParameter]) -> Type {
+    let convert = |inner: &AbiType| type_from_abi(inner, parameters);
     match ty {
         AbiType::Prim(prim) => match prim {
             PrimKind::Int => Type::Int,
@@ -200,39 +194,125 @@ pub fn type_from_abi(ty: &AbiType) -> Type {
         },
         AbiType::Unit => Type::Unit,
         AbiType::Nominal {
-            kind, module, name, ..
+            kind,
+            module,
+            name,
+            args,
+            ..
         } => {
             let id = NominalId::new(module.clone(), name.clone());
+            let arguments = args.iter().map(convert).collect();
             match kind {
-                NominalKind::Struct => Type::plain_struct(id),
-                NominalKind::Enum => Type::plain_enum(id),
+                NominalKind::Struct => Type::Struct { id, arguments },
+                NominalKind::Enum => Type::Enum { id, arguments },
             }
         }
         AbiType::Range => Type::plain_struct(NominalId::builtin_range()),
-        AbiType::Unbound { name, .. } | AbiType::Parameter { name, .. } => {
-            Type::Opaque(name.clone())
-        }
-        AbiType::Nullable(inner) => Type::Nullable(Box::new(type_from_abi(inner))),
+        AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
+        AbiType::Parameter { index, name } => parameters
+            .get(*index as usize)
+            .map_or_else(|| Type::Opaque(name.clone()), TypeParameter::as_type),
+        AbiType::Nullable(inner) => Type::Nullable(Box::new(convert(inner))),
         AbiType::Ref { mutable, inner } => Type::Reference {
             mutable: *mutable,
-            inner: Box::new(type_from_abi(inner)),
+            inner: Box::new(convert(inner)),
         },
-        AbiType::Heap(inner) => Type::Heap(Box::new(type_from_abi(inner))),
+        AbiType::Heap(inner) => Type::Heap(Box::new(convert(inner))),
         AbiType::Fn {
             compose,
             params,
             ret,
         } => Type::Fn {
             is_compose: *compose,
-            params: params.iter().map(type_from_abi).collect(),
-            ret: Box::new(type_from_abi(ret)),
+            params: params.iter().map(convert).collect(),
+            ret: Box::new(convert(ret)),
         },
     }
+}
+
+/// The type parameters an ABI records for a declaration, as semantic type parameters.
+pub fn type_parameters_from_abi(parameters: &[AbiTypeParameter]) -> Vec<TypeParameter> {
+    parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| TypeParameter {
+            index: index as u32,
+            name: parameter.name.clone(),
+            bound: parameter.bound,
+        })
+        .collect()
 }
 
 /// Whether either type is the error type, which is compatible with everything.
 fn is_error_pair(a: &Type, b: &Type) -> bool {
     a == &Type::Error || b == &Type::Error
+}
+
+/// Whether `a` and `b` are the same type, where an error anywhere inside one matches the other.
+fn same_modulo_errors(a: &Type, b: &Type) -> bool {
+    if a == b || is_error_pair(a, b) {
+        return true;
+    }
+    match (a, b) {
+        (Type::Nullable(a), Type::Nullable(b)) | (Type::Heap(a), Type::Heap(b)) => {
+            same_modulo_errors(a, b)
+        }
+        (
+            Type::Reference {
+                mutable: a_mutable,
+                inner: a,
+            },
+            Type::Reference {
+                mutable: b_mutable,
+                inner: b,
+            },
+        ) => a_mutable == b_mutable && same_modulo_errors(a, b),
+        (
+            Type::Struct {
+                id: a_id,
+                arguments: a,
+            },
+            Type::Struct {
+                id: b_id,
+                arguments: b,
+            },
+        )
+        | (
+            Type::Enum {
+                id: a_id,
+                arguments: a,
+            },
+            Type::Enum {
+                id: b_id,
+                arguments: b,
+            },
+        ) => {
+            a_id == b_id
+                && a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| same_modulo_errors(a, b))
+        }
+        (
+            Type::Fn {
+                is_compose: a_compose,
+                params: a_params,
+                ret: a_ret,
+            },
+            Type::Fn {
+                is_compose: b_compose,
+                params: b_params,
+                ret: b_ret,
+            },
+        ) => {
+            a_compose == b_compose
+                && a_params.len() == b_params.len()
+                && a_params
+                    .iter()
+                    .zip(b_params)
+                    .all(|(a, b)| same_modulo_errors(a, b))
+                && same_modulo_errors(a_ret, b_ret)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

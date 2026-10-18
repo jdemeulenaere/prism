@@ -1,0 +1,2 @@
+// expect: E4006
+fun <T> size(x: &T): Int = x.length

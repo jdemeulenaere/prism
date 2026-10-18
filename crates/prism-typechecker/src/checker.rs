@@ -6,9 +6,11 @@
 
 use crate::builder::{BodyBuilder, FileBuilder};
 use crate::error::TypeError;
+use crate::inference::Unknowns;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
 use crate::types::{
-    type_from_abi, type_from_ast, NominalId, Type, TypeDef, TypeRelations, BUILTIN_MODULE,
+    type_from_abi, type_parameters_from_abi, NominalId, Type, TypeDef, TypeParameter,
+    TypeRelations, BUILTIN_MODULE,
 };
 use prism_abi::{AbiType, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
@@ -26,6 +28,10 @@ use prism_typed_tree::{
     UnaryOperator, ValueItem,
 };
 use std::collections::{HashMap, HashSet};
+
+/// The help of a type argument that cannot be inferred (`E4013`, D8 of `generics`).
+const TYPE_ARGUMENTS_HELP: &str =
+    "write the type arguments, as in 'name<...>(...)', or annotate the expected type";
 
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
@@ -142,17 +148,96 @@ struct NormalizedArguments {
 /// The nodes of the arguments checked before a call was found not to match its callee.
 struct CheckedArguments(Vec<ExpressionId>);
 
+/// The declared signature of a generic callee (a function, extension, struct constructor or
+/// payload variant), whose types mention its `type_parameters`.
+struct GenericSignature {
+    /// How diagnostics name the callee ("function 'id'").
+    owner: String,
+    type_parameters: Vec<TypeParameter>,
+    /// The declared parameter types.
+    params: Vec<Type>,
+    /// The declared return type.
+    ret: Type,
+    /// For an extension: its declared receiver type and the type it is called on.
+    receiver: Option<(Type, Type)>,
+}
+
+/// The state of the arguments of a generic call while its type arguments are inferred (D8 of
+/// `generics`).
+struct GenericArguments<'a> {
+    owner: String,
+    type_parameters: Vec<TypeParameter>,
+    params: Vec<Type>,
+    unknowns: Unknowns,
+    /// Whether the type arguments were written, so nothing is inferred.
+    explicit: bool,
+    /// Arguments inferred before the unknowns their parameter types mention were solved, to fit
+    /// once they are.
+    synthesized: Vec<SynthesizedArgument<'a>>,
+    /// Closure arguments whose parameter types mention unsolved unknowns, checked last.
+    deferred: Vec<(usize, &'a Expr)>,
+}
+
+/// A call `target.member<type_arguments>(args)` whose target is a value, checked against
+/// `expected` when the call is checked against a type.
+struct MethodCall<'a> {
+    callee: &'a Expr,
+    target: &'a Expr,
+    member: &'a str,
+    is_safe_nav: bool,
+    type_arguments: &'a [prism_ast::types::Type],
+    args: &'a [CallArg],
+    expected: Option<&'a Type>,
+}
+
+/// An argument inferred before its parameter type was known (D8 of `generics`, step 4).
+struct SynthesizedArgument<'a> {
+    index: usize,
+    expr: &'a Expr,
+    found: ExpressionId,
+    site: Site,
+    /// Whether the argument is a place whose move check waits for the fit.
+    deferred_move: bool,
+}
+
+/// Checks the written argument `value` of parameter `index` of a call, returning its node, or
+/// `None` when the argument is deferred (a closure whose parameter types are not inferred yet).
+type ArgumentChecker<'a, 'b> =
+    dyn FnMut(&mut TypeChecker, usize, &'a Expr) -> Option<ExpressionId> + 'b;
+
 /// An extension function known to the file (the `extension-functions` spec): declared in it, or
 /// exported by a direct import. Extensions live in their own tables, keyed by receiver type and
 /// name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist.
 #[derive(Debug, Clone)]
 struct Extension {
     mode: ReceiverMode,
+    /// The declared receiver type, which may mention the extension's type parameters
+    /// (`Box<T>` in `fun <T> Box<T>.get()`).
+    receiver: Type,
     /// The defining module.
     module: String,
     /// The function's signature, parameter names, defaults and visibility. Its name is the
     /// method's name.
     symbol: Symbol,
+}
+
+/// What extensions are keyed by: the type constructor of their receiver, without type arguments
+/// (D10 of `generics`), so `fun Box<Int>.sum()` and `fun <T> Box<T>.sum()` share a key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ReceiverKey {
+    /// A struct or enum, by identity.
+    Nominal(NominalId),
+    /// Any other receiver type, as it is.
+    Other(Type),
+}
+
+impl ReceiverKey {
+    fn of(ty: &Type) -> Self {
+        match ty.nominal_id() {
+            Some(id) => ReceiverKey::Nominal(id.clone()),
+            None => ReceiverKey::Other(ty.clone()),
+        }
+    }
 }
 
 /// The result of looking an extension up by receiver type and name.
@@ -226,8 +311,8 @@ struct ReceiverSite<'a> {
 enum InferenceKey {
     /// A top-level function or `val`, by name.
     Declaration(String),
-    /// An extension function, by receiver type and name.
-    Extension { receiver: Type, name: String },
+    /// An extension function, by receiver type constructor and name.
+    Extension { receiver: ReceiverKey, name: String },
 }
 
 /// Inference state of an unannotated private top-level declaration, whose type comes from its
@@ -302,10 +387,10 @@ pub struct TypeChecker {
     /// Declarations already reported as depending on themselves (`E4013`).
     recursive_inference: HashSet<InferenceKey>,
     /// The file's own extension functions, by receiver type and name.
-    own_extensions: HashMap<(Type, String), Extension>,
+    own_extensions: HashMap<(ReceiverKey, String), Extension>,
     /// Extension functions exported by direct imports, by receiver type and name, with one
     /// candidate per exporting module.
-    imported_extensions: HashMap<(Type, String), Vec<(String, Extension)>>,
+    imported_extensions: HashMap<(ReceiverKey, String), Vec<(String, Extension)>>,
     /// Module paths of the file's direct imports, whose ABIs this checker has ingested.
     direct_imports: HashSet<String>,
     /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
@@ -317,6 +402,16 @@ pub struct TypeChecker {
     default_inputs: Option<(Vec<prism_typed_tree::LocalId>, usize)>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
+    /// The type parameters in scope: those of the generic declaration whose signature, fields or
+    /// body is being registered or checked (D12 of `generics`).
+    type_parameter_scope: Vec<TypeParameter>,
+    /// The type a call is checked against, set just before the call is inferred and taken by
+    /// [`Self::infer_call_expr`], which uses it to infer type arguments (D8 of `generics`).
+    call_expectation: Option<Type>,
+    /// Set while the callee of a call is inferred, where a generic function or variant
+    /// constructor may be named; anywhere else it is a value whose type arguments nothing
+    /// infers (`E4013`). Taken by the first name typed.
+    generic_callee: bool,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
     pub in_compose_stack: Vec<bool>,
     /// Expected return type of the currently enclosing function.
@@ -357,6 +452,9 @@ impl TypeChecker {
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
             default_inputs: None,
+            type_parameter_scope: Vec::new(),
+            call_expectation: None,
+            generic_callee: false,
             errors: Vec::new(),
             in_compose_stack: vec![false],
             current_expected_return: None,
@@ -614,10 +712,11 @@ impl TypeChecker {
     /// offending member. Markers are shallow, so this needs no recursion or cycle guard.
     fn check_marker_declarations(&mut self, source_file: &SourceFile) {
         for decl in &source_file.declarations {
-            let (marker, type_name, members) = match decl {
+            let (marker, type_name, type_parameters, members) = match decl {
                 Declaration::Struct(s) => (
                     s.marker,
                     &s.name,
+                    &s.type_parameters,
                     s.fields
                         .iter()
                         .map(|f| (format!("field '{}'", f.name), &f.ty, f.span))
@@ -626,6 +725,7 @@ impl TypeChecker {
                 Declaration::Enum(e) => (
                     e.marker,
                     &e.name,
+                    &e.type_parameters,
                     e.variants
                         .iter()
                         .flat_map(|v| {
@@ -642,8 +742,21 @@ impl TypeChecker {
                 _ => continue,
             };
             let Some(marker) = marker else { continue };
-            for (member, ast_ty, span) in members {
-                let member_type = self.lower_type(ast_ty);
+            // Each marker parameter counts as satisfying the marker (D6 of `generics`): it is
+            // lowered as a type parameter bounded by it.
+            let member_types: Vec<&prism_ast::types::Type> =
+                members.iter().map(|(_, ty, _)| *ty).collect();
+            let marker_parameters = prism_abi::marker_parameters(type_parameters, &member_types);
+            let mut parameters = type_parameters_of(type_parameters);
+            for parameter in &mut parameters {
+                if marker_parameters.contains(&parameter.index) {
+                    parameter.bound = Some(marker);
+                }
+            }
+            let member_types: Vec<Type> = self.with_type_parameters(parameters, |c| {
+                member_types.iter().map(|ty| c.lower_type(ty)).collect()
+            });
+            for ((member, _, span), member_type) in members.into_iter().zip(member_types) {
                 let accepted = match marker {
                     TypeMarker::Copy => self.is_copy(&member_type),
                     TypeMarker::Clone => self.is_clone(&member_type),
@@ -690,10 +803,118 @@ impl TypeChecker {
         }
     }
 
-    /// Lowers an annotation to a semantic type, binding each nominal name to the struct or enum
-    /// it denotes where the annotation appears. Names with no declaration stay opaque.
+    /// Lowers an annotation to a semantic type, binding each name where the annotation appears:
+    /// first to a type parameter in scope, then to a declared or imported struct or enum, with
+    /// its type arguments (D12 of `generics`). Names with no declaration stay opaque. A type
+    /// written with the wrong number of type arguments is the error type; that and the other
+    /// annotation errors are reported once, by [`Self::check_annotation_names`].
     pub fn lower_type(&self, ast_ty: &prism_ast::types::Type) -> Type {
-        type_from_ast(ast_ty).bind_names(&|name| self.bind_type_name(name))
+        use prism_ast::types::TypeKind;
+        match &ast_ty.kind {
+            TypeKind::Named { name, type_args } => {
+                if let Some(parameter) = self.scoped_type_parameter(name) {
+                    return if type_args.is_empty() {
+                        parameter.as_type()
+                    } else {
+                        Type::Error
+                    };
+                }
+                match name.as_str() {
+                    "Int" => return Type::Int,
+                    "Float" | "Double" => return Type::Float,
+                    "Bool" => return Type::Bool,
+                    "Char" => return Type::Char,
+                    "String" => return Type::String,
+                    "Unit" => return Type::Unit,
+                    "Nothing" => return Type::Nothing,
+                    "Heap" => {
+                        return match type_args.as_slice() {
+                            [inner] => Type::Heap(Box::new(self.lower_type(inner))),
+                            _ => Type::Error,
+                        }
+                    }
+                    _ => {}
+                }
+                let arguments: Vec<Type> = type_args.iter().map(|a| self.lower_type(a)).collect();
+                match self.bind_type_name(name) {
+                    Some(Type::Struct { id, .. }) => {
+                        if self.types.parameters(&id).len() != arguments.len() {
+                            return Type::Error;
+                        }
+                        Type::Struct { id, arguments }
+                    }
+                    Some(Type::Enum { id, .. }) => {
+                        if self.types.parameters(&id).len() != arguments.len() {
+                            return Type::Error;
+                        }
+                        Type::Enum { id, arguments }
+                    }
+                    Some(other) => other,
+                    None => Type::Opaque(name.clone()),
+                }
+            }
+            TypeKind::Nullable(inner) => Type::Nullable(Box::new(self.lower_type(inner))),
+            TypeKind::Reference { mutable, inner } => Type::Reference {
+                mutable: *mutable,
+                inner: Box::new(self.lower_type(inner)),
+            },
+            TypeKind::Unit => Type::Unit,
+            TypeKind::Function {
+                is_compose,
+                params,
+                return_type,
+            } => Type::Fn {
+                is_compose: *is_compose,
+                params: params.iter().map(|p| self.lower_type(p)).collect(),
+                ret: Box::new(self.lower_type(return_type)),
+            },
+        }
+    }
+
+    /// The type parameter named `name` in scope, if any.
+    fn scoped_type_parameter(&self, name: &str) -> Option<&TypeParameter> {
+        self.type_parameter_scope.iter().find(|p| p.name == name)
+    }
+
+    /// Runs `f` with `parameters` as the type parameters in scope, restoring the outer scope
+    /// afterwards. Generic declarations do not nest, so the scope is replaced, not extended.
+    fn with_type_parameters<T>(
+        &mut self,
+        parameters: Vec<TypeParameter>,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let outer = std::mem::replace(&mut self.type_parameter_scope, parameters);
+        let result = f(self);
+        self.type_parameter_scope = outer;
+        result
+    }
+
+    /// Reports a duplicate type parameter of one declaration, and one named like a built-in
+    /// type the lowering fixes, with `E4010` (D12 of `generics`).
+    fn check_type_parameter_names(&mut self, parameters: &[prism_ast::TypeParameter]) {
+        const BUILT_IN: &[&str] = &[
+            "Int", "Float", "Double", "Bool", "Char", "String", "Unit", "Nothing", "Heap",
+        ];
+        let mut seen = HashSet::new();
+        for parameter in parameters {
+            if BUILT_IN.contains(&parameter.name.as_str()) {
+                self.errors.push(TypeError::InvalidTypeParameterName {
+                    message: format!(
+                        "type parameter '{}' would hide the built-in type '{}'; choose another name",
+                        parameter.name, parameter.name
+                    ),
+                    span: parameter.span,
+                });
+            } else if !seen.insert(parameter.name.as_str()) {
+                self.errors.push(TypeError::InvalidTypeParameterName {
+                    message: format!(
+                        "type parameter '{}' is declared twice in one list",
+                        parameter.name
+                    ),
+                    span: parameter.span,
+                });
+            }
+        }
     }
 
     /// Resolves an identifier, reporting `E4001` when it is unknown and `E4007` when it names a
@@ -816,31 +1037,62 @@ impl TypeChecker {
         true
     }
 
-    /// Reports `E4012` for every nominal type name in an annotation that several imports export,
-    /// and `E4007` for every one that has `package`
-    /// visibility in another package.
+    /// Reports the errors of an annotation, which [`Self::lower_type`] lowers silently: `E4012`
+    /// for every nominal type name that several imports export, `E4007` for every one that has
+    /// `package` visibility in another package, `E4014` for one only an import's signature
+    /// names, `E4020` for a generic type, `Heap` or type parameter written with the wrong number
+    /// of type arguments, and `E4022` for a type argument holding a borrow (D7 of `generics`).
     fn check_annotation_names(&mut self, ast_ty: &prism_ast::types::Type) {
         use prism_ast::types::TypeKind;
         match &ast_ty.kind {
             TypeKind::Named { name, type_args } => {
-                if let Some(sym) = self.env.lookup_type(name).cloned() {
-                    self.check_visibility(&sym, ast_ty.span);
-                } else if let ImportLookup::Ambiguous(modules) =
-                    self.env.lookup_import(name, is_type_symbol)
-                {
-                    self.errors.push(TypeError::AmbiguousImport {
-                        name: name.clone(),
-                        modules,
-                        span: ast_ty.span,
-                    });
-                } else if let Some(id) = self.unimported_type_named(name) {
-                    // The name is a type this file only knows through an import's signature:
-                    // naming it requires importing its module, like using its members.
-                    self.errors.push(TypeError::MemberOfUnimportedType {
-                        type_name: id.name,
-                        module: id.module,
-                        span: ast_ty.span,
-                    });
+                let expected_arguments = if self.scoped_type_parameter(name).is_some() {
+                    Some((format!("type parameter '{}'", name), 0))
+                } else if name == "Heap" {
+                    Some(("'Heap'".to_string(), 1))
+                } else if is_primitive_name(name) {
+                    None
+                } else {
+                    if let Some(sym) = self.env.lookup_type(name).cloned() {
+                        self.check_visibility(&sym, ast_ty.span);
+                    } else if let ImportLookup::Ambiguous(modules) =
+                        self.env.lookup_import(name, is_type_symbol)
+                    {
+                        self.errors.push(TypeError::AmbiguousImport {
+                            name: name.clone(),
+                            modules,
+                            span: ast_ty.span,
+                        });
+                    } else if let Some(id) = self.unimported_type_named(name) {
+                        // The name is a type this file only knows through an import's
+                        // signature: naming it requires importing its module, like using its
+                        // members.
+                        self.errors.push(TypeError::MemberOfUnimportedType {
+                            type_name: id.name,
+                            module: id.module,
+                            span: ast_ty.span,
+                        });
+                    }
+                    match self.bind_type_name(name) {
+                        Some(Type::Struct { id, .. }) | Some(Type::Enum { id, .. }) => {
+                            Some((format!("type '{}'", name), self.types.parameters(&id).len()))
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some((owner, expected)) = expected_arguments {
+                    if expected != type_args.len() {
+                        self.errors.push(TypeError::WrongTypeArgumentCount {
+                            owner,
+                            expected,
+                            found: type_args.len(),
+                            span: ast_ty.span,
+                        });
+                    } else {
+                        for arg in type_args {
+                            self.check_borrow_free_annotation(arg, name);
+                        }
+                    }
                 }
                 for arg in type_args {
                     self.check_annotation_names(arg);
@@ -860,6 +1112,19 @@ impl TypeChecker {
                 self.check_annotation_names(return_type);
             }
             TypeKind::Unit => {}
+        }
+    }
+
+    /// Reports `E4022` when the written type argument `arg` of `owner` holds a borrow outside a
+    /// function type.
+    fn check_borrow_free_annotation(&mut self, arg: &prism_ast::types::Type, owner: &str) {
+        let lowered = self.lower_type(arg);
+        if lowered.reference_outside_functions().is_some() {
+            self.errors.push(TypeError::BorrowInTypeArgument {
+                argument: lowered,
+                owner: format!("'{}'", owner),
+                span: arg.span,
+            });
         }
     }
 
@@ -892,6 +1157,7 @@ impl TypeChecker {
         if !self.check_visibility(&sym, target.span) {
             return Some((self.error_node(Vec::new(), span), None));
         }
+        let generic_callee = std::mem::take(&mut self.generic_callee);
         let ty = sym.ty();
         if let SymbolKind::Struct { .. } = sym.kind {
             self.errors.push(TypeError::UnknownField {
@@ -903,7 +1169,114 @@ impl TypeChecker {
             return Some((self.error_node(Vec::new(), span), None));
         }
         let (member_ty, is_var) = self.member_type(&ty, member, false, span);
+        // A variant of a generic enum needs its type arguments: a call infers them for a
+        // payload variant, and an expected type for a payload-free one (D8 of `generics`).
+        if member_ty.mentions_parameter() {
+            let qualified = format!("{}.{}", sym.name, member);
+            if !matches!(member_ty, Type::Fn { .. }) {
+                return Some((self.uninferred_unit_variant(&qualified, span), is_var));
+            }
+            if !generic_callee {
+                self.errors.push(TypeError::CannotInferType {
+                    help: Some("call it, or wrap the call in a closure".to_string()),
+                    message: format!(
+                        "cannot infer the type arguments of the generic '{}' used as a value",
+                        qualified
+                    ),
+                    span,
+                });
+                return Some((self.error_node(Vec::new(), span), is_var));
+            }
+        }
         Some((self.variant_node(&ty, member, member_ty, span), is_var))
+    }
+
+    /// Reports `E4013` for the payload-free variant `name` of a generic enum, used where no
+    /// expected type gives its type arguments (`val o = Option.None`).
+    fn uninferred_unit_variant(&mut self, name: &str, span: Span) -> ExpressionId {
+        self.errors.push(TypeError::CannotInferType {
+            help: Some(format!(
+                "annotate the expected type, as in 'val x: {}<...> = {}'",
+                name.split('.').next().unwrap_or(name),
+                name
+            )),
+            message: format!("cannot infer the type arguments of '{}'", name),
+            span,
+        });
+        self.error_node(Vec::new(), span)
+    }
+
+    /// The enum and name of the payload-free variant of a generic enum that `expr` names
+    /// (`Option.None`, or a bare `None`), whose type arguments come from the expected type.
+    fn generic_unit_variant(&self, expr: &Expr) -> Option<(NominalId, String)> {
+        let (id, member) = match &expr.kind {
+            ExprKind::MemberAccess {
+                target,
+                member,
+                is_safe_nav: false,
+            } => match self.type_name_symbol(target)?.kind {
+                SymbolKind::Enum { id, .. } => (id, member.clone()),
+                _ => return None,
+            },
+            ExprKind::Ident(name)
+                if self.variant_owners.contains_key(name) && !self.env.resolves_to_local(name) =>
+            {
+                match &self.env.lookup(name)?.kind {
+                    SymbolKind::Variable {
+                        ty: Type::Enum { id, .. },
+                        local: None,
+                        ..
+                    } => (id.clone(), name.clone()),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        if self.types.parameters(&id).is_empty() {
+            return None;
+        }
+        let payload_free = self
+            .types
+            .enum_variants(&id)?
+            .iter()
+            .any(|(name, payloads)| name == &member && payloads.is_empty());
+        payload_free.then_some((id, member))
+    }
+
+    /// Checks the payload-free variant `member` of the generic enum `id` against `expected`,
+    /// which gives its type arguments, or reports `E4013`.
+    fn check_generic_unit_variant(
+        &mut self,
+        expr: &Expr,
+        id: &NominalId,
+        member: &str,
+        expected: &Type,
+    ) -> ExpressionId {
+        let parameters = self.types.parameters(id).to_vec();
+        let pattern = Type::Enum {
+            id: id.clone(),
+            arguments: parameter_types(&parameters),
+        };
+        let mut unknowns = Unknowns::new(parameters.len());
+        unknowns.match_exact(&pattern, expected);
+        let visible = match &expr.kind {
+            ExprKind::MemberAccess { target, .. } => match self.type_name_symbol(target) {
+                Some(sym) => self.check_visibility(&sym, target.span),
+                None => true,
+            },
+            ExprKind::Ident(name) => self.resolve_ident(name, expr.span).is_some(),
+            _ => true,
+        };
+        if !visible {
+            return self.error_node(Vec::new(), expr.span);
+        }
+        if !(0..parameters.len()).all(|index| unknowns.is_exact(index)) {
+            let name = format!("{}.{}", id.name, member);
+            return self.uninferred_unit_variant(&name, expr.span);
+        }
+        let ty = pattern.substitute(&unknowns.partial());
+        let node = self.variant_node(&ty, member, ty.clone(), expr.span);
+        self.fit(expr, node, expected, Site::Value, false)
     }
 
     /// The node of variant `member` of the enum `enum_ty`, whose type `member_ty` is the enum for
@@ -1028,20 +1401,22 @@ impl TypeChecker {
                     is_compose,
                     receiver,
                     name,
+                    type_parameters,
                     params,
                     return_type,
                     ..
                 } => {
+                    let type_parameters = type_parameters_from_abi(type_parameters);
                     let param_types = params
                         .iter()
-                        .map(|(_, ty_str, _)| type_from_abi(ty_str))
+                        .map(|(_, ty, _)| type_from_abi(ty, &type_parameters))
                         .collect();
                     let param_names = params.iter().map(|(n, _, _)| n.clone()).collect();
                     let has_default = params.iter().map(|(_, _, d)| d.is_some()).collect();
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
                         params: param_types,
-                        ret: Box::new(type_from_abi(return_type)),
+                        ret: Box::new(type_from_abi(return_type, &type_parameters)),
                     };
                     let symbol = Symbol::function_with_defaults(
                         name.clone(),
@@ -1052,15 +1427,18 @@ impl TypeChecker {
                         abi.package.clone(),
                         Span::dummy(),
                     )
-                    .with_module(abi.module.clone());
+                    .with_module(abi.module.clone())
+                    .with_type_parameters(type_parameters.clone());
                     match receiver {
                         // An extension is reached through its receiver, never by its bare name.
                         Some(receiver) => {
-                            let key = (type_from_abi(&receiver.ty), name.clone());
+                            let receiver_ty = type_from_abi(&receiver.ty, &type_parameters);
+                            let key = (ReceiverKey::of(&receiver_ty), name.clone());
                             let candidates = self.imported_extensions.entry(key).or_default();
                             if !candidates.iter().any(|(m, _)| m == &abi.module) {
                                 let extension = Extension {
                                     mode: receiver.mode,
+                                    receiver: receiver_ty,
                                     module: abi.module.clone(),
                                     symbol,
                                 };
@@ -1070,40 +1448,47 @@ impl TypeChecker {
                         None => self.env.define_import(&abi.module, symbol),
                     }
                 }
-                ExportedSymbol::Struct { name, fields, .. } => {
+                ExportedSymbol::Struct {
+                    name,
+                    type_parameters,
+                    fields,
+                    ..
+                } => {
+                    let parameters = type_parameters_from_abi(type_parameters);
                     let fields = fields
                         .iter()
                         .map(|(f_name, is_var, f_ty)| {
-                            (f_name.clone(), *is_var, type_from_abi(f_ty))
+                            (f_name.clone(), *is_var, type_from_abi(f_ty, &parameters))
                         })
                         .collect();
                     let id = NominalId::new(abi.module.clone(), name.clone());
-                    self.types.insert_definition(
-                        id,
-                        TypeDef::Struct {
-                            parameters: Vec::new(),
-                            fields,
-                        },
-                    );
+                    self.types
+                        .insert_definition(id, TypeDef::Struct { parameters, fields });
                 }
                 ExportedSymbol::Enum {
                     visibility,
                     name,
+                    type_parameters,
                     variants,
                     ..
                 } => {
+                    let parameters = type_parameters_from_abi(type_parameters);
                     let variant_types: Vec<(String, Vec<Type>)> = variants
                         .iter()
                         .map(|(v_name, f_types)| {
-                            (v_name.clone(), f_types.iter().map(type_from_abi).collect())
+                            let payloads = f_types.iter().map(|ty| type_from_abi(ty, &parameters));
+                            (v_name.clone(), payloads.collect())
                         })
                         .collect();
                     let id = NominalId::new(abi.module.clone(), name.clone());
-                    let enum_ty = Type::plain_enum(id.clone());
+                    let enum_ty = Type::Enum {
+                        id: id.clone(),
+                        arguments: parameter_types(&parameters),
+                    };
                     self.types.insert_definition(
                         id,
                         TypeDef::Enum {
-                            parameters: Vec::new(),
+                            parameters: parameters.clone(),
                             variants: variant_types.clone(),
                         },
                     );
@@ -1130,6 +1515,7 @@ impl TypeChecker {
                                 abi.package.clone(),
                                 Span::dummy(),
                             )
+                            .with_type_parameters(parameters.clone())
                         }
                         .with_module(abi.module.clone());
                         self.define_variant(name, v_sym).ok();
@@ -1142,7 +1528,7 @@ impl TypeChecker {
                 } => {
                     let symbol = Symbol::top_level_variable(
                         name.clone(),
-                        type_from_abi(ty),
+                        type_from_abi(ty, &[]),
                         Mutability::Val,
                         *visibility,
                         abi.package.clone(),
@@ -1176,8 +1562,23 @@ impl TypeChecker {
                             });
                         }
                     }
+                    self.check_type_parameter_names(&s.type_parameters);
                     let id = NominalId::new(self.module_path.clone(), s.name.clone());
-                    self.types.insert_marker(id.clone(), s.marker, Vec::new());
+                    let members: Vec<&prism_ast::types::Type> =
+                        s.fields.iter().map(|f| &f.ty).collect();
+                    let marker_parameters =
+                        prism_abi::marker_parameters(&s.type_parameters, &members);
+                    self.types
+                        .insert_marker(id.clone(), s.marker, marker_parameters);
+                    // The parameters are known before any annotation is lowered; the fields
+                    // follow below.
+                    self.types.insert_definition(
+                        id.clone(),
+                        TypeDef::Struct {
+                            parameters: type_parameters_of(&s.type_parameters),
+                            fields: Vec::new(),
+                        },
+                    );
                     Symbol::struct_decl(id, s.visibility, self.current_package.clone(), s.span)
                 }
                 Declaration::Enum(e) => {
@@ -1193,8 +1594,21 @@ impl TypeChecker {
                             });
                         }
                     }
+                    self.check_type_parameter_names(&e.type_parameters);
                     let id = NominalId::new(self.module_path.clone(), e.name.clone());
-                    self.types.insert_marker(id.clone(), e.marker, Vec::new());
+                    let members: Vec<&prism_ast::types::Type> =
+                        e.variants.iter().flat_map(|v| &v.fields).collect();
+                    let marker_parameters =
+                        prism_abi::marker_parameters(&e.type_parameters, &members);
+                    self.types
+                        .insert_marker(id.clone(), e.marker, marker_parameters);
+                    self.types.insert_definition(
+                        id.clone(),
+                        TypeDef::Enum {
+                            parameters: type_parameters_of(&e.type_parameters),
+                            variants: Vec::new(),
+                        },
+                    );
                     Symbol::enum_decl(id, e.visibility, self.current_package.clone(), e.span)
                 }
                 _ => continue,
@@ -1205,43 +1619,47 @@ impl TypeChecker {
         for decl in &source_file.declarations {
             match decl {
                 Declaration::Struct(s) => {
-                    for f in &s.fields {
-                        self.check_annotation_names(&f.ty);
-                    }
-                    let fields = s
-                        .fields
-                        .iter()
-                        .map(|f| (f.name.clone(), f.is_var, self.lower_type(&f.ty)))
-                        .collect();
+                    let parameters = type_parameters_of(&s.type_parameters);
+                    let fields = self.with_type_parameters(parameters.clone(), |c| {
+                        for f in &s.fields {
+                            c.check_annotation_names(&f.ty);
+                        }
+                        s.fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.is_var, c.lower_type(&f.ty)))
+                            .collect()
+                    });
                     let id = NominalId::new(self.module_path.clone(), s.name.clone());
-                    self.types.insert_definition(
-                        id,
-                        TypeDef::Struct {
-                            parameters: Vec::new(),
-                            fields,
-                        },
-                    );
+                    self.types
+                        .replace_definition(id, TypeDef::Struct { parameters, fields });
                 }
                 Declaration::Enum(e) => {
-                    for payload in e.variants.iter().flat_map(|v| &v.fields) {
-                        self.check_annotation_names(payload);
-                    }
-                    let variants: Vec<(String, Vec<Type>)> = e
-                        .variants
-                        .iter()
-                        .map(|v| {
-                            (
-                                v.name.clone(),
-                                v.fields.iter().map(|f| self.lower_type(f)).collect(),
-                            )
-                        })
-                        .collect();
+                    let parameters = type_parameters_of(&e.type_parameters);
+                    let variants: Vec<(String, Vec<Type>)> =
+                        self.with_type_parameters(parameters.clone(), |c| {
+                            for payload in e.variants.iter().flat_map(|v| &v.fields) {
+                                c.check_annotation_names(payload);
+                            }
+                            e.variants
+                                .iter()
+                                .map(|v| {
+                                    (
+                                        v.name.clone(),
+                                        v.fields.iter().map(|f| c.lower_type(f)).collect(),
+                                    )
+                                })
+                                .collect()
+                        });
                     let id = NominalId::new(self.module_path.clone(), e.name.clone());
-                    let enum_ty = Type::plain_enum(id.clone());
-                    self.types.insert_definition(
+                    // Inside the declaration, the enum is applied to its own parameters.
+                    let enum_ty = Type::Enum {
+                        id: id.clone(),
+                        arguments: parameter_types(&parameters),
+                    };
+                    self.types.replace_definition(
                         id,
                         TypeDef::Enum {
-                            parameters: Vec::new(),
+                            parameters: parameters.clone(),
                             variants: variants.clone(),
                         },
                     );
@@ -1272,6 +1690,7 @@ impl TypeChecker {
                                 e.span,
                             )
                             .with_module(self.module_path.clone())
+                            .with_type_parameters(parameters.clone())
                         };
                         if let Err(err) = self.define_variant(&e.name, v_sym) {
                             self.errors.push(err);
@@ -1338,6 +1757,15 @@ impl TypeChecker {
     /// The symbol of function `f`: its signature, parameter names, defaults and visibility. An
     /// unannotated private expression body gets the error type as a provisional return type.
     fn function_symbol(&mut self, f: &FunctionDecl) -> Symbol {
+        self.check_type_parameter_names(&f.type_parameters);
+        let type_parameters = type_parameters_of(&f.type_parameters);
+        let symbol =
+            self.with_type_parameters(type_parameters.clone(), |c| c.function_signature_symbol(f));
+        symbol.with_type_parameters(type_parameters)
+    }
+
+    /// [`Self::function_symbol`] with the function's type parameters in scope.
+    fn function_signature_symbol(&mut self, f: &FunctionDecl) -> Symbol {
         for annot in f.params.iter().map(|p| &p.ty).chain(&f.return_type) {
             self.check_annotation_names(annot);
         }
@@ -1385,13 +1813,15 @@ impl TypeChecker {
     /// could never be called, because members take precedence.
     fn register_extension_decl(&mut self, f: &FunctionDecl) {
         let receiver = f.receiver.as_ref().expect("an extension has a receiver");
-        self.check_annotation_names(&receiver.ty);
-        let receiver_ty = self.lower_type(&receiver.ty);
+        let receiver_ty = self.with_type_parameters(type_parameters_of(&f.type_parameters), |c| {
+            c.check_annotation_names(&receiver.ty);
+            c.lower_type(&receiver.ty)
+        });
         let symbol = self.function_symbol(f);
         if receiver_ty == Type::Error {
             return;
         }
-        let key = (receiver_ty.clone(), f.name.clone());
+        let key = (ReceiverKey::of(&receiver_ty), f.name.clone());
         let field_clash = match &receiver_ty {
             Type::Struct { id, .. } => self
                 .struct_fields(id)
@@ -1399,8 +1829,14 @@ impl TypeChecker {
             _ => false,
         };
         if self.own_extensions.contains_key(&key) {
+            // Extensions are keyed by the receiver's type constructor (D10 of `generics`), so
+            // `Box<Int>.size` and `Box<T>.size` are one name.
+            let constructor = match &key.0 {
+                ReceiverKey::Nominal(id) => id.name.clone(),
+                ReceiverKey::Other(ty) => ty.to_string(),
+            };
             self.errors.push(TypeError::DuplicateSymbol {
-                name: format!("{}.{}", receiver_ty, f.name),
+                name: format!("{}.{}", constructor, f.name),
                 span: f.span,
             });
             return;
@@ -1424,6 +1860,7 @@ impl TypeChecker {
         }
         let extension = Extension {
             mode: receiver.mode,
+            receiver: receiver_ty,
             module: self.module_path.clone(),
             symbol,
         };
@@ -1448,7 +1885,10 @@ impl TypeChecker {
                 {
                     let key = match &f.receiver {
                         Some(receiver) => InferenceKey::Extension {
-                            receiver: self.lower_type(&receiver.ty),
+                            receiver: ReceiverKey::of(&self.with_type_parameters(
+                                type_parameters_of(&f.type_parameters),
+                                |c| c.lower_type(&receiver.ty),
+                            )),
                             name: f.name.clone(),
                         },
                         None => InferenceKey::Declaration(f.name.clone()),
@@ -1497,6 +1937,8 @@ impl TypeChecker {
                     let id = NominalId::new(self.module_path.clone(), s.name.clone());
                     let fields = self.struct_fields(&id).unwrap_or_default();
                     items.push(Item::Struct(StructItem {
+                        type_parameters: self.types.parameters(&id).to_vec(),
+                        marker_parameters: self.types.marker_parameters(&id).to_vec(),
                         id,
                         visibility: s.visibility,
                         marker: s.marker,
@@ -1508,6 +1950,8 @@ impl TypeChecker {
                     let id = NominalId::new(self.module_path.clone(), e.name.clone());
                     let variants = self.enum_variants(&id).unwrap_or_default();
                     items.push(Item::Enum(EnumItem {
+                        type_parameters: self.types.parameters(&id).to_vec(),
+                        marker_parameters: self.types.marker_parameters(&id).to_vec(),
                         id,
                         visibility: e.visibility,
                         marker: e.marker,
@@ -1645,9 +2089,13 @@ impl TypeChecker {
             Some(Inference::InProgress) if self.recursive_inference.insert(key.clone()) => {
                 let name = match key {
                     InferenceKey::Declaration(name) => name.clone(),
-                    InferenceKey::Extension { receiver, name } => format!("{}.{}", receiver, name),
+                    InferenceKey::Extension { receiver, name } => match receiver {
+                        ReceiverKey::Nominal(id) => format!("{}.{}", id.name, name),
+                        ReceiverKey::Other(ty) => format!("{}.{}", ty, name),
+                    },
                 };
                 self.errors.push(TypeError::CannotInferType {
+                    help: None,
                     message: format!(
                         "cannot infer the type of '{}' because it depends on itself; add an explicit type",
                         name
@@ -1693,8 +2141,16 @@ impl TypeChecker {
         }
     }
 
-    /// Typechecks an individual function declaration body.
+    /// Typechecks an individual function declaration body, with its type parameters in scope:
+    /// a generic body is checked once, against its type parameters and their bounds alone (D5
+    /// of `generics`).
     pub fn check_function_body(&mut self, f: &FunctionDecl) {
+        self.with_type_parameters(type_parameters_of(&f.type_parameters), |c| {
+            c.check_function_body_in_scope(f)
+        });
+    }
+
+    fn check_function_body_in_scope(&mut self, f: &FunctionDecl) {
         let receiver_ty = f.receiver.as_ref().map(|r| self.lower_type(&r.ty));
         let path = match &receiver_ty {
             Some(receiver_ty) => {
@@ -1819,7 +2275,7 @@ impl TypeChecker {
                         };
                         match &receiver_ty {
                             Some(receiver_ty) => {
-                                let key = (receiver_ty.clone(), f.name.clone());
+                                let key = (ReceiverKey::of(receiver_ty), f.name.clone());
                                 if let Some(extension) = self.own_extensions.get_mut(&key) {
                                     if let SymbolKind::Function { fn_type, .. } =
                                         &mut extension.symbol.kind
@@ -1848,11 +2304,13 @@ impl TypeChecker {
             .as_ref()
             .zip(receiver_ty)
             .map(|(receiver, ty)| (receiver.mode, ty));
+        let type_parameters = self.type_parameter_scope.clone();
         self.finish_body(previous, f.span, |body| {
             Item::Function(FunctionItem {
                 path,
                 visibility: f.visibility,
                 is_compose: f.is_compose,
+                type_parameters,
                 receiver,
                 parameters,
                 return_type,
@@ -2037,49 +2495,14 @@ impl TypeChecker {
                 ret: exp_ret,
             } = expected
             {
-                if params.len() != exp_params.len() {
-                    self.errors.push(TypeError::CallSignatureMismatch {
-                        message: format!(
-                            "closure expected {} parameters, but has {}",
-                            exp_params.len(),
-                            params.len()
-                        ),
-                        span: expr.span,
-                    });
-                    return self.error_node(Vec::new(), expr.span);
-                }
-
-                let prev = self.enter_closure(*is_compose, Some((**exp_ret).clone()));
-                let mut parameters = Vec::new();
-                for (parameter, param_ty) in params.iter().zip(exp_params.iter()) {
-                    let sym = self.bind_local(
-                        &parameter.name,
-                        param_ty.clone(),
-                        Mutability::Val,
-                        LocalKind::ClosureParameter,
-                        parameter.span,
-                    );
-                    parameters.push(Self::local_of(&sym).expect("a bound local"));
-                    self.define_local(sym);
-                }
-
-                // The body's value is what the closure returns.
-                let body_id = self.with_origin(Origin::Return, |c| {
-                    c.with_consuming(true, |c| c.check_block(body, Some(exp_ret)))
-                });
-                let captures = self.exit_closure(prev);
-                let ty = Type::Fn {
-                    is_compose: *is_compose,
-                    params: exp_params.clone(),
-                    ret: Box::new(self.ty(body_id)),
-                };
-                let kind = ExpressionKind::Closure {
-                    parameters,
-                    body: body_id,
-                    is_compose: *is_compose,
-                    captures,
-                };
-                return self.add(kind, ty, expr.span);
+                return self.check_closure(
+                    params,
+                    body,
+                    *is_compose,
+                    exp_params,
+                    Some(exp_ret),
+                    expr.span,
+                );
             }
         }
 
@@ -2130,6 +2553,25 @@ impl TypeChecker {
             );
         }
 
+        // A payload-free variant of a generic enum takes its type arguments from the expected
+        // type (D8 of `generics`).
+        if let Some((id, member)) = self.generic_unit_variant(expr) {
+            return self.check_generic_unit_variant(expr, &id, &member, expected);
+        }
+
+        // A call is inferred knowing its expected type, from which a generic callee infers
+        // type arguments (D8 of `generics`), then fitted like any other value.
+        if let ExprKind::Call { .. } = &expr.kind {
+            let consuming = self.parent_consuming;
+            let inferred = self.with_origin(Origin::Value, |c| {
+                c.call_expectation = Some(expected.clone());
+                let id = c.with_consuming(consuming, |c| c.infer_expr(expr));
+                c.call_expectation = None;
+                id
+            });
+            return self.fit(expr, inferred, expected, Site::Value, false);
+        }
+
         // Default: infer, then fit the value to the expected type (copying out of a borrow if
         // needed). Expectations nested inside the inferred expression have their own origin. A
         // leaf's move check waits for the fit, which decides whether anything moves.
@@ -2139,6 +2581,63 @@ impl TypeChecker {
             c.with_consuming(consuming && !deferred_move, |c| c.infer_expr(expr))
         });
         self.fit(expr, inferred, expected, Site::Value, deferred_move)
+    }
+
+    /// Checks the closure `{ params -> body }` against a function type with parameter types
+    /// `exp_params` and, when known, return type `exp_ret`; without one the body's type is the
+    /// closure's return type.
+    fn check_closure(
+        &mut self,
+        params: &[prism_ast::ClosureParameter],
+        body: &Block,
+        is_compose: bool,
+        exp_params: &[Type],
+        exp_ret: Option<&Type>,
+        span: Span,
+    ) -> ExpressionId {
+        if params.len() != exp_params.len() {
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!(
+                    "closure expected {} parameters, but has {}",
+                    exp_params.len(),
+                    params.len()
+                ),
+                span,
+            });
+            return self.error_node(Vec::new(), span);
+        }
+
+        let prev = self.enter_closure(is_compose, exp_ret.cloned());
+        let mut parameters = Vec::new();
+        for (parameter, param_ty) in params.iter().zip(exp_params.iter()) {
+            let sym = self.bind_local(
+                &parameter.name,
+                param_ty.clone(),
+                Mutability::Val,
+                LocalKind::ClosureParameter,
+                parameter.span,
+            );
+            parameters.push(Self::local_of(&sym).expect("a bound local"));
+            self.define_local(sym);
+        }
+
+        // The body's value is what the closure returns.
+        let body_id = self.with_origin(Origin::Return, |c| {
+            c.with_consuming(true, |c| c.check_block(body, exp_ret))
+        });
+        let captures = self.exit_closure(prev);
+        let ty = Type::Fn {
+            is_compose,
+            params: exp_params.to_vec(),
+            ret: Box::new(self.ty(body_id)),
+        };
+        let kind = ExpressionKind::Closure {
+            parameters,
+            body: body_id,
+            is_compose,
+            captures,
+        };
+        self.add(kind, ty, span)
     }
 
     /// Enters the body of a closure: a scope, a compose context, a fresh set of open loops (a
@@ -2184,6 +2683,23 @@ impl TypeChecker {
     /// The node of a name that resolved to `sym` (D4 of `typed-tree`): a binding of the body, a
     /// top-level value or function by its path, or a variant of an enum.
     fn symbol_node(&mut self, sym: &Symbol, name: &str, span: Span) -> ExpressionId {
+        let generic_callee = std::mem::take(&mut self.generic_callee);
+        if !generic_callee && !sym.type_parameters().is_empty() {
+            // A generic function or variant constructor named outside a call: nothing gives its
+            // type arguments (D8 of `generics`).
+            self.errors.push(TypeError::CannotInferType {
+                help: Some(format!(
+                    "call it, or wrap the call in a closure, as in '{{ x -> {}(x) }}'",
+                    name
+                )),
+                message: format!(
+                    "cannot infer the type arguments of the generic '{}' used as a value",
+                    name
+                ),
+                span,
+            });
+            return self.error_node(Vec::new(), span);
+        }
         match &sym.kind {
             SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
                 self.errors.push(TypeError::TypeNameAsValue {
@@ -2202,6 +2718,9 @@ impl TypeChecker {
             }
             SymbolKind::Variable { ty, module, .. } => {
                 if self.variant_owners.contains_key(name) {
+                    if ty.mentions_parameter() {
+                        return self.uninferred_unit_variant(name, span);
+                    }
                     return self.variant_node(ty, name, ty.clone(), span);
                 }
                 let module = module.clone().unwrap_or_else(|| self.module_path.clone());
@@ -2328,7 +2847,14 @@ impl TypeChecker {
                 self.infer_when_expr(target.as_deref(), branches, WhenUse::Infer, expr.span)
             }
 
-            ExprKind::Call { callee, args, .. } => self.infer_call_expr(callee, args, expr.span),
+            ExprKind::Call {
+                callee,
+                type_arguments,
+                args,
+            } => {
+                let expected = self.call_expectation.take();
+                self.infer_call_expr(callee, type_arguments, args, expr.span, expected)
+            }
 
             ExprKind::MemberAccess {
                 target,
@@ -2435,6 +2961,7 @@ impl TypeChecker {
                     parameters.push(Self::local_of(&sym).expect("a bound local"));
                     match self.env.define(sym) {
                         Ok(()) => self.errors.push(TypeError::CannotInferType {
+                            help: None,
                             message: format!(
                                 "cannot infer the type of closure parameter '{}'; pass the closure where a function type is expected",
                                 name
@@ -2497,11 +3024,12 @@ impl TypeChecker {
                     Type::String
                 } else {
                     // Strict typing: no implicit widening (e.g. Int + Float rejected)
+                    let help = type_parameter_operator_help(&left_ty, &right_ty);
                     self.errors.push(TypeError::TypeMismatch {
                         expected: left_ty,
                         found: right_ty,
                         span,
-                        help: None,
+                        help,
                     });
                     Type::Error
                 };
@@ -2515,6 +3043,22 @@ impl TypeChecker {
 
                 if left_ty == Type::Error || right_ty == Type::Error {
                     return binary(self, left_id, right_id, Type::Bool);
+                }
+
+                // A type parameter has no equality until traits exist (D5 of `generics`); only
+                // a comparison with `null` reads a `T?`.
+                let null = Type::Nothing.nullable();
+                let compares_parameters = left_ty.mentions_parameter_outside_functions()
+                    || right_ty.mentions_parameter_outside_functions();
+                if compares_parameters && left_ty != null && right_ty != null {
+                    let help = type_parameter_operator_help(&left_ty, &right_ty);
+                    self.errors.push(TypeError::TypeMismatch {
+                        expected: left_ty,
+                        found: right_ty,
+                        span,
+                        help,
+                    });
+                    return binary(self, left_id, right_id, Type::Error);
                 }
 
                 if right_ty.is_assignable_to(&left_ty) {
@@ -2548,11 +3092,12 @@ impl TypeChecker {
                 let ty = if comparable {
                     Type::Bool
                 } else {
+                    let help = type_parameter_operator_help(&left_ty, &right_ty);
                     self.errors.push(TypeError::TypeMismatch {
                         expected: left_ty,
                         found: right_ty,
                         span,
-                        help: None,
+                        help,
                     });
                     Type::Error
                 };
@@ -3479,10 +4024,19 @@ impl TypeChecker {
             .then(|| v_name.clone())
     }
 
-    fn infer_call_expr(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> ExpressionId {
+    /// Infers the call `callee<type_arguments>(args)`, checked against `expected` when the call
+    /// is checked against a type, which generic callees use to infer their type arguments.
+    fn infer_call_expr(
+        &mut self,
+        callee: &Expr,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        span: Span,
+        expected: Option<Type>,
+    ) -> ExpressionId {
         // In an extension body, `name(...)` may call a field or another extension of `this`.
         if let Some(member) = self.implicit_this_callee(callee) {
-            return self.infer_call_expr(&member, args, span);
+            return self.infer_call_expr(&member, type_arguments, args, span, expected);
         }
         // `recv.name(...)`: a field, the built-in `clone()` or an extension function.
         if let ExprKind::MemberAccess {
@@ -3502,10 +4056,19 @@ impl TypeChecker {
                     },
                     callee.span,
                 );
-                return self.infer_call_expr(&callee, args, span);
+                return self.infer_call_expr(&callee, type_arguments, args, span, expected);
             }
             if self.type_name_symbol(target).is_none() {
-                return self.infer_method_call(callee, target, member, *is_safe_nav, args, span);
+                let call = MethodCall {
+                    callee,
+                    target,
+                    member,
+                    is_safe_nav: *is_safe_nav,
+                    type_arguments,
+                    args,
+                    expected: expected.as_ref(),
+                };
+                return self.infer_method_call(call, span);
             }
         }
         // A struct name is its constructor; an enum name is only a namespace for its variants.
@@ -3526,7 +4089,16 @@ impl TypeChecker {
                 }
             },
             None => {
+                // The callee may name a generic function or variant (D8 of `generics`).
+                if let ExprKind::Ident(name) = &callee.kind {
+                    self.ensure_inferred(name, callee.span);
+                }
+                self.generic_callee = matches!(
+                    callee.kind,
+                    ExprKind::Ident(_) | ExprKind::MemberAccess { .. }
+                );
                 let id = self.infer_expr(callee);
+                self.generic_callee = false;
                 (Some(id), self.ty(id))
             }
         };
@@ -3535,20 +4107,60 @@ impl TypeChecker {
             callee_node,
             callee_ty,
             type_name.is_some(),
+            type_arguments,
             args,
+            expected.as_ref(),
             span,
         )
     }
 
+    /// The parameter names, defaults and type parameters of the callee of a call: a declared
+    /// function or payload variant named by `callee` (whose node is `callee_node`), or nothing
+    /// for a function-typed value.
+    fn callee_declaration(
+        &self,
+        callee: &Expr,
+        callee_node: Option<ExpressionId>,
+    ) -> (Vec<String>, Vec<bool>, Vec<TypeParameter>) {
+        if let ExprKind::Ident(name) = &callee.kind {
+            if let Some(SymbolKind::Function {
+                param_names,
+                has_default,
+                type_parameters,
+                ..
+            }) = self.env.lookup(name).map(|sym| &sym.kind)
+            {
+                return (
+                    param_names.clone(),
+                    has_default.clone(),
+                    type_parameters.clone(),
+                );
+            }
+        }
+        if let Some(ExpressionKind::VariantConstructor { enum_id, .. }) =
+            callee_node.map(|node| self.builder.kind(node))
+        {
+            return (
+                Vec::new(),
+                Vec::new(),
+                self.types.parameters(enum_id).to_vec(),
+            );
+        }
+        (Vec::new(), Vec::new(), Vec::new())
+    }
+
     /// Checks a call of `callee`, of type `callee_ty`, with `args`: a function or function-typed
     /// value whose node is `callee_node`, or a struct constructor when `is_constructor`.
+    #[allow(clippy::too_many_arguments)]
     fn call_with_type(
         &mut self,
         callee: &Expr,
         callee_node: Option<ExpressionId>,
         callee_ty: Type,
         is_constructor: bool,
+        type_arguments: &[prism_ast::types::Type],
         args: &[CallArg],
+        expected: Option<&Type>,
         span: Span,
     ) -> ExpressionId {
         match callee_ty {
@@ -3570,53 +4182,86 @@ impl TypeChecker {
                     });
                 }
 
-                let (param_names, has_default) = if let ExprKind::Ident(callee_name) = &callee.kind
-                {
-                    if let Some(sym) = self.env.lookup(callee_name) {
-                        if let SymbolKind::Function {
-                            param_names,
-                            has_default,
-                            ..
-                        } = &sym.kind
-                        {
-                            (param_names.clone(), has_default.clone())
-                        } else {
-                            (Vec::new(), Vec::new())
-                        }
-                    } else {
-                        (Vec::new(), Vec::new())
-                    }
-                } else {
-                    (Vec::new(), Vec::new())
-                };
-
-                let checked =
-                    self.check_call_arguments(&params, &param_names, &has_default, args, span);
+                let (param_names, has_default, type_parameters) =
+                    self.callee_declaration(callee, callee_node);
                 let callee_node = callee_node.expect("a function type comes from a node");
+                if type_parameters.is_empty() {
+                    self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
+                    let checked =
+                        self.check_call_arguments(&params, &param_names, &has_default, args, span);
+                    return match checked {
+                        Err(CheckedArguments(children)) => {
+                            let mut all = vec![callee_node];
+                            all.extend(children);
+                            self.error_node(all, span)
+                        }
+                        Ok(NormalizedArguments {
+                            arguments,
+                            evaluation_order,
+                        }) => {
+                            let parameters = parameter_list(&param_names, &params);
+                            self.build_call(
+                                callee_node,
+                                arguments,
+                                parameters,
+                                Vec::new(),
+                                evaluation_order,
+                                is_compose,
+                                *ret,
+                                span,
+                            )
+                        }
+                    };
+                }
+                let signature = GenericSignature {
+                    owner: format!("'{}'", callee),
+                    type_parameters,
+                    params,
+                    ret: *ret,
+                    receiver: None,
+                };
+                let checked = self.check_generic_call_arguments(
+                    &signature,
+                    type_arguments,
+                    expected,
+                    &param_names,
+                    &has_default,
+                    args,
+                    span,
+                );
                 match checked {
                     Err(CheckedArguments(children)) => {
                         let mut all = vec![callee_node];
                         all.extend(children);
                         self.error_node(all, span)
                     }
-                    Ok(NormalizedArguments {
-                        arguments,
-                        evaluation_order,
-                    }) => {
-                        let parameters = parameter_list(&param_names, &params);
+                    Ok((
+                        NormalizedArguments {
+                            arguments,
+                            evaluation_order,
+                        },
+                        solution,
+                    )) => {
+                        // The call records the declared parameter types and the type
+                        // arguments (D9 of `generics`).
+                        let parameters = parameter_list(&param_names, &signature.params);
+                        let ret = signature.ret.substitute(&solution);
                         self.build_call(
                             callee_node,
                             arguments,
                             parameters,
+                            solution,
                             evaluation_order,
                             is_compose,
-                            *ret,
+                            ret,
                             span,
                         )
                     }
                 }
             }
-            Type::Struct { id, .. } if is_constructor => self.construct_struct(id, args, span),
+            Type::Struct { id, .. } if is_constructor => {
+                self.construct_struct(id, type_arguments, args, expected, span)
+            }
             Type::Error => self.error_node(callee_node.into_iter().collect(), span),
             other => {
                 self.errors.push(TypeError::CallSignatureMismatch {
@@ -3626,6 +4271,277 @@ impl TypeChecker {
                 self.error_node(callee_node.into_iter().collect(), span)
             }
         }
+    }
+
+    /// Checks the arguments of a call of the generic `signature`, inferring its type arguments
+    /// (D8 of `generics`). Returns the normalized arguments and the type arguments.
+    #[allow(clippy::too_many_arguments)]
+    fn check_generic_call_arguments(
+        &mut self,
+        signature: &GenericSignature,
+        type_arguments: &[prism_ast::types::Type],
+        expected: Option<&Type>,
+        param_names: &[String],
+        has_default: &[bool],
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<(NormalizedArguments, Vec<Type>), CheckedArguments> {
+        let mut state = self.start_generic_arguments(signature, type_arguments, expected);
+        let mut normalized = self.check_call_arguments_with(
+            signature.params.len(),
+            param_names,
+            has_default,
+            args,
+            span,
+            &mut |checker, index, value| checker.generic_argument(&mut state, index, value),
+        )?;
+        let (solution, fitted) = self.finish_generic_arguments(state, span);
+        for (index, node) in fitted {
+            normalized.arguments[index] = Argument::Written(node);
+        }
+        Ok((normalized, solution))
+    }
+
+    /// Reports `E4020` for type arguments written for `owner`, which is not generic.
+    fn reject_type_arguments(&mut self, owner: &str, type_arguments: &[prism_ast::types::Type]) {
+        if let (Some(first), Some(last)) = (type_arguments.first(), type_arguments.last()) {
+            self.errors.push(TypeError::WrongTypeArgumentCount {
+                owner: owner.to_string(),
+                expected: 0,
+                found: type_arguments.len(),
+                span: first.span.merge(last.span),
+            });
+        }
+    }
+
+    /// Starts inferring the type arguments of a call of `signature` (D8 of `generics`, steps 1
+    /// to 3): the written type arguments, when their number is right, fix every unknown;
+    /// otherwise the receiver and the expected type give exact solutions.
+    fn start_generic_arguments<'a>(
+        &mut self,
+        signature: &GenericSignature,
+        type_arguments: &[prism_ast::types::Type],
+        expected: Option<&Type>,
+    ) -> GenericArguments<'a> {
+        let count = signature.type_parameters.len();
+        let mut unknowns = Unknowns::new(count);
+        let mut explicit = false;
+        if let (Some(first), Some(last)) = (type_arguments.first(), type_arguments.last()) {
+            for argument in type_arguments {
+                self.check_annotation_names(argument);
+            }
+            if type_arguments.len() != count {
+                self.errors.push(TypeError::WrongTypeArgumentCount {
+                    owner: signature.owner.clone(),
+                    expected: count,
+                    found: type_arguments.len(),
+                    span: first.span.merge(last.span),
+                });
+            } else {
+                explicit = true;
+                for (index, argument) in type_arguments.iter().enumerate() {
+                    let ty = self.lower_type(argument);
+                    if ty.reference_outside_functions().is_some() {
+                        self.errors.push(TypeError::BorrowInTypeArgument {
+                            argument: ty.clone(),
+                            owner: signature.owner.clone(),
+                            span: argument.span,
+                        });
+                    }
+                    unknowns.fix(index, ty);
+                }
+            }
+        }
+        if !explicit {
+            if let Some((declared, reached)) = &signature.receiver {
+                unknowns.match_exact(declared, reached);
+            }
+            if let Some(expected) = expected {
+                unknowns.match_exact(&signature.ret, expected);
+            }
+        }
+        GenericArguments {
+            owner: signature.owner.clone(),
+            type_parameters: signature.type_parameters.clone(),
+            params: signature.params.clone(),
+            unknowns,
+            explicit,
+            synthesized: Vec::new(),
+            deferred: Vec::new(),
+        }
+    }
+
+    /// Checks the written argument `expr` of parameter `index` of a generic call (D8 of
+    /// `generics`, step 4). When the parameter's declared type mentions an unknown with no exact
+    /// solution, the argument is inferred and its type gives lower bounds; its fit waits for the
+    /// solution. A closure passed for a function type mentioning such an unknown is deferred.
+    /// Any other argument is checked against its parameter type now.
+    fn generic_argument<'a>(
+        &mut self,
+        state: &mut GenericArguments<'a>,
+        index: usize,
+        expr: &'a Expr,
+    ) -> Option<ExpressionId> {
+        let declared = state.params[index].clone();
+        if !state.unknowns.mentions_inexact(&declared) {
+            let ty = declared.substitute(&state.unknowns.partial());
+            return Some(self.check_argument(expr, &ty, Origin::Argument));
+        }
+        if matches!(expr.kind, ExprKind::Closure { .. }) && closure_signature(&declared).is_some() {
+            state.deferred.push((index, expr));
+            return None;
+        }
+        let (found, site, deferred_move) = if is_reference_parameter(&declared) {
+            let is_place = self.is_place(expr);
+            let found = self.with_origin(Origin::Value, |c| {
+                c.with_consuming(!is_place, |c| c.infer_expr(expr))
+            });
+            (found, Site::Argument { is_place }, false)
+        } else {
+            let deferred_move = is_move_leaf(expr);
+            let found = self.with_origin(Origin::Value, |c| {
+                c.with_consuming(!deferred_move, |c| c.infer_expr(expr))
+            });
+            (found, Site::Value, deferred_move)
+        };
+        let found_ty = self.ty(found);
+        state.unknowns.match_lower(&declared, &found_ty, expr.span);
+        state.synthesized.push(SynthesizedArgument {
+            index,
+            expr,
+            found,
+            site,
+            deferred_move,
+        });
+        Some(found)
+    }
+
+    /// Finishes the arguments of a generic call (D8 of `generics`, steps 5 to 8): checks the
+    /// deferred closures, solves the unknowns, reports those left unsolved (`E4013`), borrows
+    /// in the solution (`E4022`) and unsatisfied bounds (`E4021`), and fits each synthesized
+    /// argument to its parameter type. Returns the type arguments and the final node of every
+    /// argument that was deferred or synthesized, by parameter index.
+    fn finish_generic_arguments(
+        &mut self,
+        mut state: GenericArguments,
+        span: Span,
+    ) -> (Vec<Type>, Vec<(usize, ExpressionId)>) {
+        let mut fitted = Vec::new();
+        let deferred = std::mem::take(&mut state.deferred);
+        for (index, expr) in deferred {
+            let declared = state.params[index].clone();
+            let node = self.check_deferred_closure(&mut state, &declared, expr);
+            state.synthesized.push(SynthesizedArgument {
+                index,
+                expr,
+                found: node,
+                site: Site::Value,
+                deferred_move: false,
+            });
+        }
+        let (solution, unsolved, _) = state.unknowns.solve();
+        if let Some(unsolved) = unsolved {
+            let parameter = &state.type_parameters[unsolved.index];
+            self.errors.push(TypeError::CannotInferType {
+                help: Some(TYPE_ARGUMENTS_HELP.to_string()),
+                message: format!(
+                    "cannot infer the type argument '{}' of {}",
+                    parameter.name, state.owner
+                ),
+                span,
+            });
+        }
+        if !state.explicit {
+            for argument in &solution {
+                if argument.reference_outside_functions().is_some() {
+                    self.errors.push(TypeError::BorrowInTypeArgument {
+                        argument: argument.clone(),
+                        owner: state.owner.clone(),
+                        span,
+                    });
+                }
+            }
+        }
+        for (parameter, argument) in state.type_parameters.iter().zip(&solution) {
+            let satisfied = match parameter.bound {
+                None => true,
+                Some(TypeMarker::Copy) => self.is_copy(argument),
+                Some(TypeMarker::Clone) => self.is_clone(argument),
+            };
+            if let (false, Some(bound)) = (satisfied, parameter.bound) {
+                self.errors.push(TypeError::UnsatisfiedBound {
+                    argument: argument.clone(),
+                    parameter: parameter.name.clone(),
+                    bound,
+                    owner: state.owner.clone(),
+                    span,
+                });
+            }
+        }
+        for argument in std::mem::take(&mut state.synthesized) {
+            let expected = state.params[argument.index].substitute(&solution);
+            let node = self.with_origin(Origin::Argument, |c| {
+                c.fit(
+                    argument.expr,
+                    argument.found,
+                    &expected,
+                    argument.site,
+                    argument.deferred_move,
+                )
+            });
+            fitted.push((argument.index, node));
+        }
+        (solution, fitted)
+    }
+
+    /// Checks the closure `expr`, passed for a parameter of declared type `declared`, after the
+    /// other arguments (D8 of `generics`, step 6): its parameters take their solved types, and a
+    /// return type mentioning an unknown without an exact solution is inferred from the body,
+    /// giving it a lower bound.
+    fn check_deferred_closure(
+        &mut self,
+        state: &mut GenericArguments,
+        declared: &Type,
+        expr: &Expr,
+    ) -> ExpressionId {
+        let (is_compose, params, ret) =
+            closure_signature(declared).expect("deferred closures have a function type");
+        let ExprKind::Closure {
+            params: written,
+            body,
+        } = &expr.kind
+        else {
+            unreachable!("only closure literals are deferred")
+        };
+        if let Some(unsolved) = params.iter().find(|p| state.unknowns.mentions_unsolved(p)) {
+            self.errors.push(TypeError::CannotInferType {
+                help: Some(TYPE_ARGUMENTS_HELP.to_string()),
+                message: format!(
+                    "cannot infer the type '{}' of a parameter of this closure, passed to {}",
+                    unsolved, state.owner
+                ),
+                span: expr.span,
+            });
+            return self.error_node(Vec::new(), expr.span);
+        }
+        let partial = state.unknowns.partial();
+        let params: Vec<Type> = params.iter().map(|p| p.substitute(&partial)).collect();
+        let infer_return = state.unknowns.mentions_inexact(&ret);
+        let expected_return = (!infer_return).then(|| ret.substitute(&partial));
+        let node = self.check_closure(
+            written,
+            body,
+            is_compose,
+            &params,
+            expected_return.as_ref(),
+            expr.span,
+        );
+        if infer_return {
+            if let Type::Fn { ret: found, .. } = self.ty(node) {
+                state.unknowns.match_lower(&ret, &found, expr.span);
+            }
+        }
+        node
     }
 
     /// The node of a call whose normalized arguments are `arguments` (D8 of `typed-tree`). A
@@ -3638,6 +4554,7 @@ impl TypeChecker {
         callee_node: ExpressionId,
         arguments: Vec<Argument>,
         parameters: Vec<(Option<String>, Type)>,
+        type_arguments: Vec<Type>,
         evaluation_order: Vec<usize>,
         is_compose: bool,
         ret: Type,
@@ -3649,6 +4566,7 @@ impl TypeChecker {
                     callee: Callee::Function(path),
                     arguments,
                     parameters,
+                    type_arguments,
                     evaluation_order,
                     has_receiver: false,
                     is_compose,
@@ -3691,6 +4609,7 @@ impl TypeChecker {
                     callee: Callee::Value(callee_node),
                     arguments,
                     parameters,
+                    type_arguments,
                     evaluation_order,
                     has_receiver: false,
                     is_compose,
@@ -3701,10 +4620,100 @@ impl TypeChecker {
     }
 
     /// Checks the construction of struct `id` with `args`, positional or named, building it with
-    /// its fields in declaration order (D8 of `typed-tree`).
-    fn construct_struct(&mut self, id: NominalId, args: &[CallArg], span: Span) -> ExpressionId {
-        let name = id.name.clone();
+    /// its fields in declaration order (D8 of `typed-tree`). A generic struct's type arguments
+    /// are the written ones, or inferred like a call's from the expected type and the arguments
+    /// (D8 of `generics`).
+    fn construct_struct(
+        &mut self,
+        id: NominalId,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> ExpressionId {
         let fields = self.struct_fields(&id).unwrap_or_default();
+        let type_parameters = self.types.parameters(&id).to_vec();
+        let field_types: Vec<Type> = fields.iter().map(|(_, _, ty)| ty.clone()).collect();
+        if type_parameters.is_empty() {
+            self.reject_type_arguments(&format!("struct '{}'", id.name), type_arguments);
+            let mapped =
+                self.construct_struct_with(&id, &fields, args, span, &mut |c, index, value| {
+                    Some(c.check_expr_at(value, &field_types[index], Origin::Argument))
+                });
+            return self.build_construction(id, Vec::new(), &fields, mapped, span);
+        }
+        let signature = GenericSignature {
+            owner: format!("struct '{}'", id.name),
+            type_parameters: type_parameters.clone(),
+            params: field_types,
+            ret: Type::Struct {
+                id: id.clone(),
+                arguments: parameter_types(&type_parameters),
+            },
+            receiver: None,
+        };
+        let mut state = self.start_generic_arguments(&signature, type_arguments, expected);
+        let mapped =
+            self.construct_struct_with(&id, &fields, args, span, &mut |c, index, value| {
+                c.generic_argument(&mut state, index, value)
+            });
+        let mapped = match mapped {
+            Ok((mut values, order)) => {
+                let (solution, fitted) = self.finish_generic_arguments(state, span);
+                for (index, node) in fitted {
+                    values[index] = Some(node);
+                }
+                (Ok((values, order)), solution)
+            }
+            Err(children) => (Err(children), Vec::new()),
+        };
+        self.build_construction(id, mapped.1, &fields, mapped.0, span)
+    }
+
+    /// The node of a construction of struct `id` with `type_arguments` whose fields were checked
+    /// into `mapped`, or an error node keeping the checked fields.
+    fn build_construction(
+        &mut self,
+        id: NominalId,
+        type_arguments: Vec<Type>,
+        fields: &[(String, bool, Type)],
+        mapped: Result<(Vec<Option<ExpressionId>>, Vec<usize>), CheckedArguments>,
+        span: Span,
+    ) -> ExpressionId {
+        let (values, evaluation_order) = match mapped {
+            Ok(mapped) => mapped,
+            Err(CheckedArguments(checked)) => return self.error_node(checked, span),
+        };
+        let fields = fields
+            .iter()
+            .zip(values)
+            .map(|((name, _, ty), value)| ConstructField {
+                name: Some(name.clone()),
+                ty: ty.clone(),
+                value: value.expect("every field is given"),
+            })
+            .collect();
+        let kind = ExpressionKind::Construct {
+            kind: ConstructKind::Struct(id.clone()),
+            fields,
+            evaluation_order,
+        };
+        let ty = Type::Struct {
+            id,
+            arguments: type_arguments,
+        };
+        self.add(kind, ty, span)
+    }
+
+    fn construct_struct_with<'a>(
+        &mut self,
+        id: &NominalId,
+        fields: &[(String, bool, Type)],
+        args: &'a [CallArg],
+        span: Span,
+        check: &mut ArgumentChecker<'a, '_>,
+    ) -> Result<(Vec<Option<ExpressionId>>, Vec<usize>), CheckedArguments> {
+        let name = id.name.clone();
         let mut values: Vec<Option<ExpressionId>> = vec![None; fields.len()];
         let mut evaluation_order = Vec::new();
         let mut checked = Vec::new();
@@ -3721,13 +4730,13 @@ impl TypeChecker {
                     ),
                     span,
                 });
-                return self.error_node(Vec::new(), span);
+                return Err(CheckedArguments(Vec::new()));
             }
-            for (index, (arg, (_, _, f_ty))) in args.iter().zip(fields.iter()).enumerate() {
-                let value = self.check_expr_at(&arg.value, f_ty, Origin::Argument);
-                values[index] = Some(value);
+            for (index, arg) in args.iter().enumerate() {
+                let value = check(self, index, &arg.value);
+                values[index] = value;
                 evaluation_order.push(index);
-                checked.push(value);
+                checked.extend(value);
             }
         } else {
             let mut field_assigned = vec![false; fields.len()];
@@ -3759,11 +4768,10 @@ impl TypeChecker {
                             failed = true;
                         }
                         field_assigned[idx] = true;
-                        let value =
-                            self.check_expr_at(&arg.value, &fields[idx].2, Origin::Argument);
-                        values[idx] = Some(value);
+                        let value = check(self, idx, &arg.value);
+                        values[idx] = value;
                         evaluation_order.push(idx);
-                        checked.push(value);
+                        checked.extend(value);
                     } else {
                         self.errors.push(TypeError::UnknownField {
                             target_type: Type::plain_struct(id.clone()),
@@ -3785,11 +4793,10 @@ impl TypeChecker {
                         failed = true;
                     }
                     field_assigned[pos_idx] = true;
-                    let value =
-                        self.check_expr_at(&arg.value, &fields[pos_idx].2, Origin::Argument);
-                    values[pos_idx] = Some(value);
+                    let value = check(self, pos_idx, &arg.value);
+                    values[pos_idx] = value;
                     evaluation_order.push(pos_idx);
-                    checked.push(value);
+                    checked.extend(value);
                     pos_idx += 1;
                 } else {
                     self.errors.push(TypeError::CallSignatureMismatch {
@@ -3819,23 +4826,9 @@ impl TypeChecker {
         }
 
         if failed {
-            return self.error_node(checked, span);
+            return Err(CheckedArguments(checked));
         }
-        let fields = fields
-            .into_iter()
-            .zip(values)
-            .map(|((name, _, ty), value)| ConstructField {
-                name: Some(name),
-                ty,
-                value: value.expect("every field is given"),
-            })
-            .collect();
-        let kind = ExpressionKind::Construct {
-            kind: ConstructKind::Struct(id.clone()),
-            fields,
-            evaluation_order,
-        };
-        self.add(kind, Type::plain_struct(id), span)
+        Ok((values, evaluation_order))
     }
 
     /// Checks a call `target.member(args)` (or `target?.member(args)`) whose target is a value,
@@ -3847,16 +4840,16 @@ impl TypeChecker {
     /// The receiver is classified like an argument before its type is known: a place, or a `?.`
     /// chain of fields over one, is read in place, and anything else is evaluated into a consumed
     /// temporary.
-    #[allow(clippy::too_many_arguments)]
-    fn infer_method_call(
-        &mut self,
-        callee: &Expr,
-        target: &Expr,
-        member: &str,
-        is_safe_nav: bool,
-        args: &[CallArg],
-        span: Span,
-    ) -> ExpressionId {
+    fn infer_method_call(&mut self, call: MethodCall, span: Span) -> ExpressionId {
+        let MethodCall {
+            callee,
+            target,
+            member,
+            is_safe_nav,
+            type_arguments,
+            args,
+            expected,
+        } = call;
         let is_place = self.is_place(target) || self.is_optional_place(target);
         let (receiver, writable) = self.with_origin(Origin::Value, |c| {
             if is_place {
@@ -3874,7 +4867,16 @@ impl TypeChecker {
         if self.has_field(&receiver_ty, member) {
             let (field, _) = self.build_member_access(receiver, member, is_safe_nav, callee.span);
             let field_ty = self.ty(field);
-            return self.call_with_type(callee, Some(field), field_ty, false, args, span);
+            return self.call_with_type(
+                callee,
+                Some(field),
+                field_ty,
+                false,
+                type_arguments,
+                args,
+                expected,
+                span,
+            );
         }
 
         // 2. The built-in `clone()` of a `Clone` type.
@@ -3942,7 +4944,7 @@ impl TypeChecker {
             ExtensionLookup::Found { extension, own } => {
                 let extension = if own {
                     let key = InferenceKey::Extension {
-                        receiver: reached.clone(),
+                        receiver: ReceiverKey::of(&reached),
                         name: member.to_string(),
                     };
                     self.ensure_key_inferred(&key, callee.span);
@@ -3957,6 +4959,21 @@ impl TypeChecker {
                 if !self.check_visibility(&extension.symbol, callee.span) {
                     return self.give_up_call(receiver, args, span);
                 }
+                // The receiver must match the declared one, at the layer whose type constructor
+                // has the extension (D10 of `generics`).
+                if !self.receiver_matches(&extension, &reached) {
+                    let call = self.give_up_call(receiver, args, span);
+                    self.errors.push(TypeError::UnknownField {
+                        target_type: reached.clone(),
+                        field_name: member.to_string(),
+                        span: callee.span,
+                        help: Some(format!(
+                            "the extension '{}' is declared on '{}', not on '{}'",
+                            member, extension.receiver, reached
+                        )),
+                    });
+                    return call;
+                }
                 let receiver_site = ReceiverSite {
                     expr: target,
                     ty: &receiver_ty,
@@ -3969,12 +4986,18 @@ impl TypeChecker {
                 let (joined, receiver_argument) =
                     self.apply_receiver_adjustment(receiver, adjustment, &reached);
                 let call = self.call_extension(
-                    callee,
+                    MethodCall {
+                        callee,
+                        target,
+                        member,
+                        is_safe_nav,
+                        type_arguments,
+                        args,
+                        expected,
+                    },
                     &extension,
                     &reached,
-                    member,
                     receiver_argument,
-                    args,
                     span,
                 );
                 if through_nullable {
@@ -4005,7 +5028,16 @@ impl TypeChecker {
                     }
                 }
                 let member_ty = self.ty(member_node);
-                self.call_with_type(callee, Some(member_node), member_ty, false, args, span)
+                self.call_with_type(
+                    callee,
+                    Some(member_node),
+                    member_ty,
+                    false,
+                    type_arguments,
+                    args,
+                    expected,
+                    span,
+                )
             }
         }
     }
@@ -4057,19 +5089,40 @@ impl TypeChecker {
         self.add(ExpressionKind::Copy { place }, ty, span)
     }
 
+    /// Whether `reached`, the type an extension call reaches, matches the extension's declared
+    /// receiver: equals it, for a concrete receiver, or instantiates it, for a generic one.
+    fn receiver_matches(&self, extension: &Extension, reached: &Type) -> bool {
+        let type_parameters = extension.symbol.type_parameters();
+        let declared = if type_parameters.is_empty() {
+            extension.receiver.clone()
+        } else {
+            let mut unknowns = Unknowns::new(type_parameters.len());
+            unknowns.match_exact(&extension.receiver, reached);
+            extension.receiver.substitute(&unknowns.partial())
+        };
+        reached.is_assignable_to(&declared) && declared.is_assignable_to(reached)
+    }
+
     /// Checks the arguments of a call of `extension` against its parameters, and its compose
-    /// context (`E4008`), building the call with `receiver_argument` as its first argument.
-    #[allow(clippy::too_many_arguments)]
+    /// context (`E4008`), building the call with `receiver_argument` as its first argument. A
+    /// generic extension's type arguments are inferred from the receiver first (D8 of
+    /// `generics`).
     fn call_extension(
         &mut self,
-        callee: &Expr,
+        call: MethodCall,
         extension: &Extension,
         reached: &Type,
-        member: &str,
         receiver_argument: ExpressionId,
-        args: &[CallArg],
         span: Span,
     ) -> ExpressionId {
+        let MethodCall {
+            callee,
+            member,
+            type_arguments,
+            args,
+            expected,
+            ..
+        } = call;
         let SymbolKind::Function {
             fn_type:
                 Type::Fn {
@@ -4079,6 +5132,7 @@ impl TypeChecker {
                 },
             param_names,
             has_default,
+            type_parameters,
             ..
         } = &extension.symbol.kind
         else {
@@ -4097,27 +5151,60 @@ impl TypeChecker {
             has_default.clone(),
             (**ret).clone(),
         );
+        // The declared type of `this`, which the call records like every declared parameter type.
+        let declared_receiver = extension.receiver.clone();
         let this_ty = match extension.mode {
             ReceiverMode::Shared => Type::Reference {
                 mutable: false,
-                inner: Box::new(reached.clone()),
+                inner: Box::new(declared_receiver),
             },
             ReceiverMode::Mutable => Type::Reference {
                 mutable: true,
-                inner: Box::new(reached.clone()),
+                inner: Box::new(declared_receiver),
             },
-            ReceiverMode::Consuming => reached.clone(),
+            ReceiverMode::Consuming => declared_receiver,
         };
-        match self.check_call_arguments(&params, &param_names, &has_default, args, span) {
+        let checked = if type_parameters.is_empty() {
+            self.reject_type_arguments(&format!("extension '{}'", member), type_arguments);
+            self.check_call_arguments(&params, &param_names, &has_default, args, span)
+                .map(|normalized| (normalized, params, ret, Vec::new()))
+        } else {
+            let signature = GenericSignature {
+                owner: format!("extension '{}.{}'", extension.receiver, member),
+                type_parameters: type_parameters.clone(),
+                params,
+                ret,
+                receiver: Some((extension.receiver.clone(), reached.clone())),
+            };
+            self.check_generic_call_arguments(
+                &signature,
+                type_arguments,
+                expected,
+                &param_names,
+                &has_default,
+                args,
+                span,
+            )
+            .map(|(normalized, solution)| {
+                let ret = signature.ret.substitute(&solution);
+                (normalized, signature.params, ret, solution)
+            })
+        };
+        match checked {
             Err(CheckedArguments(children)) => {
                 let mut all = vec![receiver_argument];
                 all.extend(children);
                 self.error_node(all, span)
             }
-            Ok(NormalizedArguments {
-                arguments,
-                evaluation_order,
-            }) => {
+            Ok((
+                NormalizedArguments {
+                    arguments,
+                    evaluation_order,
+                },
+                params,
+                ret,
+                type_arguments,
+            )) => {
                 // The receiver is the first argument, evaluated first (D8 of `typed-tree`).
                 let mut all_arguments = vec![Argument::Written(receiver_argument)];
                 all_arguments.extend(arguments);
@@ -4125,12 +5212,16 @@ impl TypeChecker {
                 order.extend(evaluation_order.iter().map(|index| index + 1));
                 let mut parameters = vec![(Some(THIS.to_string()), this_ty)];
                 parameters.extend(parameter_list(&param_names, &params));
-                let path =
-                    DeclarationPath::extension(extension.module.clone(), reached.clone(), member);
+                let path = DeclarationPath::extension(
+                    extension.module.clone(),
+                    extension.receiver.clone(),
+                    member,
+                );
                 let call = Call {
                     callee: Callee::Function(path),
                     arguments: all_arguments,
                     parameters,
+                    type_arguments,
                     evaluation_order: order,
                     has_receiver: true,
                     is_compose,
@@ -4143,7 +5234,7 @@ impl TypeChecker {
     /// The extension named `name` on receiver type `receiver` visible in this file: its own one,
     /// which shadows imported ones, else the single import exporting one.
     fn find_extension(&self, receiver: &Type, name: &str) -> ExtensionLookup {
-        let key = (receiver.clone(), name.to_string());
+        let key = (ReceiverKey::of(receiver), name.to_string());
         if let Some(extension) = self.own_extensions.get(&key) {
             return ExtensionLookup::Found {
                 extension: Box::new(extension.clone()),
@@ -4357,7 +5448,30 @@ impl TypeChecker {
         args: &[CallArg],
         span: Span,
     ) -> Result<NormalizedArguments, CheckedArguments> {
-        let n_params = params.len();
+        self.check_call_arguments_with(
+            params.len(),
+            param_names,
+            has_default,
+            args,
+            span,
+            &mut |checker, index, value| {
+                Some(checker.check_argument(value, &params[index], Origin::Argument))
+            },
+        )
+    }
+
+    /// [`Self::check_call_arguments`] for a callee with `n_params` parameters, where `check`
+    /// checks the argument for parameter `index`, in source order. `check` may defer an
+    /// argument by returning `None`, leaving its slot `Argument::Default` for the caller to fill.
+    fn check_call_arguments_with<'a>(
+        &mut self,
+        n_params: usize,
+        param_names: &[String],
+        has_default: &[bool],
+        args: &'a [CallArg],
+        span: Span,
+        check: &mut ArgumentChecker<'a, '_>,
+    ) -> Result<NormalizedArguments, CheckedArguments> {
         let min_args = if has_default.len() == n_params {
             has_default.iter().filter(|&&d| !d).count()
         } else {
@@ -4390,9 +5504,10 @@ impl TypeChecker {
                 return Err(CheckedArguments(Vec::new()));
             }
 
-            for (index, (arg, param_ty)) in args.iter().zip(params.iter()).enumerate() {
-                let value = self.check_argument(&arg.value, param_ty, Origin::Argument);
-                arguments[index] = Argument::Written(value);
+            for (index, arg) in args.iter().enumerate() {
+                if let Some(value) = check(self, index, &arg.value) {
+                    arguments[index] = Argument::Written(value);
+                }
                 evaluation_order.push(index);
             }
             return Ok(NormalizedArguments {
@@ -4428,10 +5543,11 @@ impl TypeChecker {
                         failed = true;
                     }
                     param_assigned[pos] = true;
-                    let value = self.check_argument(&arg.value, &params[pos], Origin::Argument);
-                    arguments[pos] = Argument::Written(value);
+                    if let Some(value) = check(self, pos, &arg.value) {
+                        arguments[pos] = Argument::Written(value);
+                        checked.push(value);
+                    }
                     evaluation_order.push(pos);
-                    checked.push(value);
                 } else {
                     self.errors.push(TypeError::CallSignatureMismatch {
                         message: format!("unknown parameter '{}'", arg_name),
@@ -4454,11 +5570,11 @@ impl TypeChecker {
                     failed = true;
                 }
                 param_assigned[positional_idx] = true;
-                let value =
-                    self.check_argument(&arg.value, &params[positional_idx], Origin::Argument);
-                arguments[positional_idx] = Argument::Written(value);
+                if let Some(value) = check(self, positional_idx, &arg.value) {
+                    arguments[positional_idx] = Argument::Written(value);
+                    checked.push(value);
+                }
                 evaluation_order.push(positional_idx);
-                checked.push(value);
                 positional_idx += 1;
             } else {
                 self.errors.push(TypeError::CallSignatureMismatch {
@@ -4844,6 +5960,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::Clone),
             arguments: vec![Argument::Written(borrow)],
             parameters: vec![(Some(THIS.to_string()), borrow_ty)],
+            type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
             is_compose: false,
@@ -4928,8 +6045,11 @@ impl TypeChecker {
         };
         let base = self.peel_indirection_nodes(base);
         let body = match &reached {
-            Type::Struct { id, .. } => {
-                let fields = self.struct_fields(id).unwrap_or_default();
+            Type::Struct { id, arguments } => {
+                let fields = self
+                    .types
+                    .instantiated_fields(id, arguments)
+                    .unwrap_or_default();
                 let index = fields
                     .iter()
                     .position(|(name, _, _)| name == member)
@@ -5076,13 +6196,13 @@ impl TypeChecker {
         if self.reject_unimported_members(&peeled_ty, span) {
             return (Type::Error, None);
         }
-        let def = match &peeled_ty {
-            Type::Struct { id, .. } | Type::Enum { id, .. } => self.types.definition(id).cloned(),
-            _ => None,
-        };
-
-        match (&peeled_ty, def) {
-            (Type::Struct { .. }, Some(TypeDef::Struct { fields, .. })) => {
+        match &peeled_ty {
+            Type::Struct { id, arguments } if self.types.struct_fields(id).is_some() => {
+                // Fields have their declared types with the type arguments substituted.
+                let fields = self
+                    .types
+                    .instantiated_fields(id, arguments)
+                    .unwrap_or_default();
                 if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
                     (wrap(f_ty.clone()), Some(*is_var))
                 } else {
@@ -5095,9 +6215,23 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            (Type::Enum { id, .. }, Some(TypeDef::Enum { variants, .. })) => {
+            Type::Enum { id, arguments } if self.types.enum_variants(id).is_some() => {
+                // Through the enum's name (`Option.Some`), the enum is applied to its own
+                // parameters, which the use solves (D8 of `generics`).
+                let arguments = if arguments.is_empty() {
+                    parameter_types(self.types.parameters(id))
+                } else {
+                    arguments.clone()
+                };
+                let variants = self
+                    .types
+                    .instantiated_variants(id, &arguments)
+                    .unwrap_or_default();
                 if let Some((_, payloads)) = variants.iter().find(|(v_name, _)| v_name == member) {
-                    let enum_ty = Type::plain_enum(id.clone());
+                    let enum_ty = Type::Enum {
+                        id: id.clone(),
+                        arguments,
+                    };
                     if payloads.is_empty() {
                         (wrap(enum_ty), None)
                     } else {
@@ -5118,12 +6252,18 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            (other, _) => {
+            other => {
+                let help = matches!(other, Type::Parameter(_)).then(|| {
+                    format!(
+                        "'{}' is a type parameter, which has no members until traits exist",
+                        other
+                    )
+                });
                 self.errors.push(TypeError::UnknownField {
                     target_type: other.clone(),
                     field_name: member.to_string(),
                     span,
-                    help: None,
+                    help,
                 });
                 (Type::Error, None)
             }
@@ -5346,6 +6486,54 @@ fn this_member(member: &str, span: Span) -> Expr {
         },
         span,
     )
+}
+
+/// The function type a closure argument is checked against, for a parameter of declared type
+/// `declared`: a function type, possibly nullable. Returns its compose flag, parameter types and
+/// return type.
+fn closure_signature(declared: &Type) -> Option<(bool, Vec<Type>, Type)> {
+    match declared {
+        Type::Fn {
+            is_compose,
+            params,
+            ret,
+        } => Some((*is_compose, params.clone(), (**ret).clone())),
+        Type::Nullable(inner) => closure_signature(inner),
+        _ => None,
+    }
+}
+
+/// The help of an operator applied to a value of a type parameter (D5 of `generics`).
+fn type_parameter_operator_help(left: &Type, right: &Type) -> Option<String> {
+    (left.mentions_parameter_outside_functions() || right.mentions_parameter_outside_functions())
+        .then(|| "type parameters have no '==' or operators until traits exist".to_string())
+}
+
+/// Whether `name` is a built-in type name the lowering fixes, which takes no type arguments.
+fn is_primitive_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Int" | "Float" | "Double" | "Bool" | "Char" | "String" | "Unit" | "Nothing"
+    )
+}
+
+/// The semantic type parameters of a declaration's written ones, by position.
+fn type_parameters_of(parameters: &[prism_ast::TypeParameter]) -> Vec<TypeParameter> {
+    parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| TypeParameter {
+            index: index as u32,
+            name: parameter.name.clone(),
+            bound: parameter.bound,
+        })
+        .collect()
+}
+
+/// The type parameters of a declaration as types, the arguments of its own generic type
+/// (`Box<T>` inside `struct Box<T>`).
+fn parameter_types(parameters: &[TypeParameter]) -> Vec<Type> {
+    parameters.iter().map(TypeParameter::as_type).collect()
 }
 
 /// Whether `expr` is a leaf whose move [`TypeChecker::check_move_source`] checks: a name, a field
@@ -6805,5 +7993,72 @@ mod tests {
         assert!(messages[0].contains("field 'name'") && messages[0].contains("'String'"));
         assert!(messages[1].contains("field 'tags'"));
         assert!(messages[2].contains("payload 1 of variant 'Text'"));
+    }
+
+    #[test]
+    fn generic_declarations_record_their_type_parameters_and_marker_parameters() {
+        let file = prism_parser::parse_source(
+            "struct Pair<A, B> : Copy { val a: A, val b: Int }\nenum Option<T> { Some(T), None }\nfun <T : Clone> keep(x: T): T = x\nfun f(p: Pair<Int, String>): Int = p.b\n",
+        )
+        .expect("source must parse");
+        let mut checker = TypeChecker::new(None, "main");
+        let typed = checker.check_module(&file);
+        assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+        let pair = NominalId::new("main", "Pair");
+        let names: Vec<&str> = checker
+            .types
+            .parameters(&pair)
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["A", "B"]);
+        // Only `A` occurs in a field, so only `A` conditions the marker.
+        assert_eq!(checker.types.marker_parameters(&pair), &[0]);
+        let fields = checker.types.struct_fields(&pair).unwrap();
+        assert!(matches!(&fields[0].2, Type::Parameter(p) if p.name == "A" && p.index == 0));
+        let option = NominalId::new("main", "Option");
+        assert_eq!(checker.types.parameters(&option).len(), 1);
+        let keep = checker.env.lookup("keep").expect("keep is declared");
+        let bounds: Vec<Option<TypeMarker>> =
+            keep.type_parameters().iter().map(|p| p.bound).collect();
+        assert_eq!(bounds, vec![Some(TypeMarker::Clone)]);
+        let item = typed.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.path.name == "keep" => Some(f),
+            _ => None,
+        });
+        assert_eq!(item.expect("keep is an item").type_parameters.len(), 1);
+    }
+
+    #[test]
+    fn annotations_of_generic_types_keep_their_arguments_and_bind_parameters_first() {
+        let file = prism_parser::parse_source(
+            "struct T { val n: Int }\nstruct Box<T>(val v: T)\nfun <T> f(b: Box<T>, t: T) {}\n",
+        )
+        .expect("source must parse");
+        let mut checker = TypeChecker::new(None, "main");
+        checker.check_module(&file);
+        assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+        let Some(Type::Fn { params, .. }) = checker.env.lookup("f").map(|s| s.ty()) else {
+            panic!("f is a function");
+        };
+        let parameter = Type::Parameter(TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: None,
+        });
+        assert_eq!(
+            params,
+            vec![
+                Type::Struct {
+                    id: NominalId::new("main", "Box"),
+                    arguments: vec![parameter.clone()],
+                },
+                parameter,
+            ]
+        );
+        assert_eq!(
+            error_codes(&check_source("struct Box<T>(val v: T)\nfun f(b: Box) {}\nfun g(b: Box<&Int>) {}\nfun <T> h(x: T<Int>) {}\n")),
+            vec!["E4020", "E4022", "E4020"]
+        );
     }
 }

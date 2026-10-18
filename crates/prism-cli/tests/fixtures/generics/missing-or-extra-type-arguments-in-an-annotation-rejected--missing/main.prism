@@ -1,0 +1,3 @@
+// expect: E4020
+struct Box<T>(val v: T)
+fun f(b: Box) {}

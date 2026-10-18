@@ -1,0 +1,12 @@
+// expect: ok
+fun <T> pick(a: T, b: T): T = a
+fun <T> id(x: T): T = x
+struct Box<T>(val v: T)
+fun f(): Int? {
+    val n = pick(1, null)
+    return n
+}
+fun g(): Box<Int?> {
+    val b: Box<Int?> = Box(null)
+    return b
+}

@@ -1,2 +1,0 @@
-// expect: E4016
-struct Box<T> : Clone { val v: T }

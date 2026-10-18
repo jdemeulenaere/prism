@@ -1,0 +1,6 @@
+// expect: E4013
+enum Option<T> { Some(T), None }
+fun <T> none(): Option<T> = Option.None
+fun f() {
+    val o = none()
+}

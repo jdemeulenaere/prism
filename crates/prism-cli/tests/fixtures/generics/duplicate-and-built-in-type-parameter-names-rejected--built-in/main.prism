@@ -1,0 +1,2 @@
+// expect: E4010
+fun <Int> g(x: Int): Int = x

@@ -241,8 +241,14 @@ pub enum TerminatorKind {
     Call {
         callee: Callee,
         arguments: Vec<Operand>,
-        /// The type of each parameter, as the callee declares it.
+        /// The type of each parameter, as the callee declares it: it mentions a generic callee's
+        /// type parameters. The operand of parameter `i` has the type `parameters[i]` with
+        /// `type_arguments` substituted ([`TerminatorKind::parameter_type`]).
         parameters: Vec<Type>,
+        /// The type arguments of a generic callee, in the order of its type parameters; empty
+        /// for any other callee. Inside a generic body they may mention the body's own type
+        /// parameters (D9 of `generics`).
+        type_arguments: Vec<Type>,
         destination: Place,
         target: Option<BlockId>,
         is_compose: bool,
@@ -258,6 +264,21 @@ pub enum TerminatorKind {
 }
 
 impl TerminatorKind {
+    /// For a call, the type of the operand of parameter `index`: its declared type with the
+    /// call's type arguments substituted.
+    pub fn parameter_type(&self, index: usize) -> Option<Type> {
+        match self {
+            TerminatorKind::Call {
+                parameters,
+                type_arguments,
+                ..
+            } => parameters
+                .get(index)
+                .map(|ty| ty.substitute(type_arguments)),
+            _ => None,
+        }
+    }
+
     /// The blocks this terminator may jump to, in order.
     pub fn successors(&self) -> Vec<BlockId> {
         match self {
@@ -388,11 +409,44 @@ pub enum Rvalue {
     },
 }
 
-/// What an aggregate builds.
+/// What an aggregate builds, with the type arguments of a generic struct or enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AggregateKind {
-    Struct(NominalId),
-    Variant { enum_id: NominalId, index: usize },
+    Struct {
+        id: NominalId,
+        arguments: Vec<Type>,
+    },
+    Variant {
+        enum_id: NominalId,
+        index: usize,
+        arguments: Vec<Type>,
+    },
+}
+
+impl AggregateKind {
+    /// The aggregate of the non-generic struct `id`.
+    pub fn plain_struct(id: NominalId) -> Self {
+        AggregateKind::Struct {
+            id,
+            arguments: Vec::new(),
+        }
+    }
+
+    /// The type of the value the aggregate builds.
+    pub fn ty(&self) -> Type {
+        match self {
+            AggregateKind::Struct { id, arguments } => Type::Struct {
+                id: id.clone(),
+                arguments: arguments.clone(),
+            },
+            AggregateKind::Variant {
+                enum_id, arguments, ..
+            } => Type::Enum {
+                id: enum_id.clone(),
+                arguments: arguments.clone(),
+            },
+        }
+    }
 }
 
 /// What a call calls (D10).

@@ -329,6 +329,7 @@ impl Validator<'_> {
                 callee,
                 arguments,
                 parameters,
+                type_arguments,
                 destination,
                 target,
                 ..
@@ -355,9 +356,11 @@ impl Validator<'_> {
                     );
                     self.report(message);
                 }
+                // An operand has its parameter's declared type with the call's type arguments.
                 for (index, (argument, parameter)) in arguments.iter().zip(parameters).enumerate() {
                     let ty = self.operand_type(argument, &at);
-                    self.expect(ty, parameter, &format!("{} operand {}", at, index));
+                    let parameter = parameter.substitute(type_arguments);
+                    self.expect(ty, &parameter, &format!("{} operand {}", at, index));
                 }
                 if let Some(ty) = self.place_type(destination, &at) {
                     if let Callee::Value(place, _) = callee {
@@ -514,21 +517,23 @@ impl Validator<'_> {
                 self.expect(Some(Type::Int), ty, &what);
             }
             Rvalue::Aggregate(kind, operands) => {
-                let (found, fields) = match kind {
-                    AggregateKind::Struct(id) => (
-                        Type::plain_struct(id.clone()),
-                        self.types
-                            .struct_fields(id)
-                            .map(|f| f.iter().map(|(_, _, ty)| ty.clone()).collect::<Vec<_>>()),
-                    ),
-                    AggregateKind::Variant { enum_id, index } => (
-                        Type::plain_enum(enum_id.clone()),
-                        self.types
-                            .enum_variants(enum_id)
-                            .and_then(|variants| variants.get(*index))
-                            .map(|(_, payloads)| payloads.clone()),
-                    ),
+                // Fields have their declared types with the type arguments substituted.
+                let fields = match kind {
+                    AggregateKind::Struct { id, arguments } => self
+                        .types
+                        .instantiated_fields(id, arguments)
+                        .map(|f| f.into_iter().map(|(_, _, ty)| ty).collect::<Vec<_>>()),
+                    AggregateKind::Variant {
+                        enum_id,
+                        index,
+                        arguments,
+                    } => self
+                        .types
+                        .instantiated_variants(enum_id, arguments)
+                        .and_then(|variants| variants.into_iter().nth(*index))
+                        .map(|(_, payloads)| payloads),
                 };
+                let found = kind.ty();
                 self.expect(Some(found), ty, &what);
                 match fields {
                     Some(fields) if fields.len() == operands.len() => {
@@ -882,6 +887,7 @@ mod tests {
             callee: Callee::Function(prism_typed_tree::DeclarationPath::new("main", "g")),
             arguments: vec![Operand::Constant(Constant::Int(1))],
             parameters: vec![Type::String],
+            type_arguments: Vec::new(),
             destination: Place::local(LocalId(2)),
             target: None,
             is_compose: false,

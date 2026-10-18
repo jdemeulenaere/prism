@@ -1,0 +1,4 @@
+// expect: ok
+struct Box<T>(val v: T)
+fun <T> Box<T>.get(): &T = &v
+fun Box<Int>.sum(): Int = v

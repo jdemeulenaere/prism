@@ -7,7 +7,7 @@ use crate::tree::{
     ExpressionKind, FunctionItem, Item, Pattern, StatementKind, StructItem, TypedFile,
     UnaryOperator,
 };
-use crate::types::{NominalId, Type};
+use crate::types::{NominalId, Type, TypeParameter};
 use prism_ast::ReceiverMode;
 use std::collections::{HashMap, HashSet};
 
@@ -40,9 +40,47 @@ impl TypedFile {
             }
         }
         for item in &self.items {
-            let (body_id, owner) = match item {
-                Item::Function(f) => (f.body, f.path.to_string()),
-                Item::Value(v) => (v.body, v.path.to_string()),
+            // A struct's or enum's member types mention its own type parameters only.
+            let members: Vec<(&[TypeParameter], &Type, String)> = match item {
+                Item::Struct(s) => s
+                    .fields
+                    .iter()
+                    .map(|(name, _, ty)| {
+                        (
+                            &s.type_parameters[..],
+                            ty,
+                            format!("{}.{}", s.id.name, name),
+                        )
+                    })
+                    .collect(),
+                Item::Enum(e) => e
+                    .variants
+                    .iter()
+                    .flat_map(|(name, payloads)| {
+                        payloads.iter().map(move |ty| {
+                            (
+                                &e.type_parameters[..],
+                                ty,
+                                format!("{}.{}", e.id.name, name),
+                            )
+                        })
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for (parameters, ty, member) in members {
+                for parameter in foreign_parameters(ty, parameters) {
+                    violations.push(format!(
+                        "{}: mentions type parameter {}, which its declaration does not declare",
+                        member, parameter
+                    ));
+                }
+            }
+        }
+        for item in &self.items {
+            let (body_id, owner, type_parameters) = match item {
+                Item::Function(f) => (f.body, f.path.to_string(), &f.type_parameters[..]),
+                Item::Value(v) => (v.body, v.path.to_string(), &[][..]),
                 Item::Struct(_) | Item::Enum(_) => continue,
             };
             let Some(body) = self.bodies.get(body_id) else {
@@ -60,6 +98,7 @@ impl TypedFile {
                 returns: Vec::new(),
                 functions: &functions,
                 structs: &structs,
+                type_parameters,
                 violations: Vec::new(),
             };
             validator.body_roots(item);
@@ -85,6 +124,8 @@ struct Validator<'a> {
     /// and field accesses must repeat.
     functions: &'a HashMap<&'a DeclarationPath, &'a FunctionItem>,
     structs: &'a HashMap<&'a NominalId, &'a StructItem>,
+    /// The type parameters of the item whose body this is, the only ones its types may mention.
+    type_parameters: &'a [TypeParameter],
     violations: Vec<String>,
 }
 
@@ -99,6 +140,8 @@ impl Validator<'_> {
                 let message = format!("binding '{}' has the error type", local.name);
                 self.report(message);
             }
+            let what = format!("binding '{}'", local.name);
+            self.check_type_parameters_of(&local.ty, &what);
         }
         for parameter in self.body.parameters.clone() {
             self.check_local(parameter);
@@ -163,6 +206,18 @@ impl Validator<'_> {
 
     fn type_of(&self, id: ExpressionId) -> Option<&Type> {
         self.body.expressions.get(id).map(|e| &e.ty)
+    }
+
+    /// Reports every type parameter `ty` mentions that is not one of the item's own, with the
+    /// same index, name and bound (D9 of `generics`).
+    fn check_type_parameters_of(&mut self, ty: &Type, what: &str) {
+        for parameter in foreign_parameters(ty, self.type_parameters) {
+            let message = format!(
+                "{} mentions type parameter {}, which {} does not declare",
+                what, parameter, self.owner
+            );
+            self.report(message);
+        }
     }
 
     /// Reports a child whose type differs from its slot's, in a tree without type errors.
@@ -280,6 +335,7 @@ impl Validator<'_> {
         if self.error_free && contains_error(&ty) {
             self.report(format!("expression {} has the error type", id.0));
         }
+        self.check_type_parameters_of(&ty, &format!("expression {}", id.0));
         match &expression.kind {
             ExpressionKind::Literal(_)
             | ExpressionKind::TopLevelValue(_)
@@ -289,11 +345,16 @@ impl Validator<'_> {
             ExpressionKind::Field { base, index, name } => {
                 self.expression(*base);
                 self.expect_place(*base, "field base");
-                if let Some(Type::Struct { id: struct_id, .. }) = self.type_of(*base).cloned() {
+                if let Some(Type::Struct {
+                    id: struct_id,
+                    arguments,
+                }) = self.type_of(*base).cloned()
+                {
                     if let Some(item) = self.structs.get(&struct_id) {
                         match item.fields.get(*index) {
                             Some((field_name, _, field_ty)) if field_name == name => {
-                                let field_ty = field_ty.clone();
+                                // The declared type, with the struct's type arguments.
+                                let field_ty = field_ty.substitute(&arguments);
                                 self.expect_type_of_node(id, &field_ty, "field");
                             }
                             _ => {
@@ -449,14 +510,28 @@ impl Validator<'_> {
                                 format!("call {} of {} does not repeat its signature", id.0, path);
                             self.report(message);
                         }
-                        self.expect_type_of_node(id, &function.return_type, "call");
+                        if function.type_parameters.len() != call.type_arguments.len() {
+                            let message = format!(
+                                "call {} of {} has {} type arguments for {} type parameters",
+                                id.0,
+                                path,
+                                call.type_arguments.len(),
+                                function.type_parameters.len()
+                            );
+                            self.report(message);
+                        }
+                        let return_type = function.return_type.substitute(&call.type_arguments);
+                        self.expect_type_of_node(id, &return_type, "call");
                     }
+                }
+                for argument in &call.type_arguments {
+                    self.check_type_parameters_of(argument, &format!("call {}", id.0));
                 }
                 for (index, argument) in call.arguments.iter().enumerate() {
                     if let Argument::Written(value) = argument {
                         self.expression(*value);
-                        if let Some((_, parameter_ty)) = call.parameters.get(index) {
-                            let parameter_ty = parameter_ty.clone();
+                        // The slot has the declared type with the call's type arguments.
+                        if let Some(parameter_ty) = call.parameter_type(index) {
                             self.expect_type(*value, &parameter_ty, "argument");
                         }
                     }
@@ -488,9 +563,16 @@ impl Validator<'_> {
                 {
                     self.report(format!("construction {} has a bad evaluation order", id.0));
                 }
+                // A field's value has its declared type with the construction's type arguments.
+                let arguments = match &ty {
+                    Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
+                        arguments.clone()
+                    }
+                    _ => Vec::new(),
+                };
                 for field in fields.clone() {
                     self.expression(field.value);
-                    self.expect_type(field.value, &field.ty, "field value");
+                    self.expect_type(field.value, &field.ty.substitute(&arguments), "field value");
                 }
             }
             ExpressionKind::Range { start, end, .. } => {
@@ -586,9 +668,12 @@ impl Validator<'_> {
                     for pattern in &branch.patterns {
                         match pattern {
                             Pattern::Variant { enum_id, .. } => {
-                                if self.error_free
-                                    && subject_ty != Some(Type::plain_enum(enum_id.clone()))
-                                {
+                                let matches_enum = subject_ty
+                                    .as_ref()
+                                    .and_then(Type::nominal_id)
+                                    .is_some_and(|id| id == enum_id)
+                                    && matches!(subject_ty, Some(Type::Enum { .. }));
+                                if self.error_free && !matches_enum {
                                     let message = format!(
                                         "when {} matches a variant of {}",
                                         id.0, enum_id.name
@@ -821,6 +906,38 @@ impl Validator<'_> {
                 self.report(message);
             }
         }
+    }
+}
+
+/// The type parameters `ty` mentions that are not among `declared`, as they are declared.
+pub(crate) fn foreign_parameters(ty: &Type, declared: &[TypeParameter]) -> Vec<TypeParameter> {
+    let mut foreign = Vec::new();
+    collect_foreign_parameters(ty, declared, &mut foreign);
+    foreign
+}
+
+fn collect_foreign_parameters(ty: &Type, declared: &[TypeParameter], out: &mut Vec<TypeParameter>) {
+    match ty {
+        Type::Parameter(parameter) => {
+            if declared.get(parameter.index as usize) != Some(parameter) {
+                out.push(parameter.clone());
+            }
+        }
+        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
+            collect_foreign_parameters(inner, declared, out)
+        }
+        Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
+            for argument in arguments {
+                collect_foreign_parameters(argument, declared, out);
+            }
+        }
+        Type::Fn { params, ret, .. } => {
+            for param in params {
+                collect_foreign_parameters(param, declared, out);
+            }
+            collect_foreign_parameters(ret, declared, out);
+        }
+        _ => {}
     }
 }
 
@@ -1179,6 +1296,7 @@ mod tests {
                 callee: Callee::Value(closure),
                 arguments: vec![],
                 parameters: vec![],
+                type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
                 is_compose: false,
@@ -1279,6 +1397,7 @@ mod tests {
                 callee: Callee::Function(DeclarationPath::new("main", "g")),
                 arguments: vec![],
                 parameters: vec![(Some("a".to_string()), Type::Int)],
+                type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
                 is_compose: false,

@@ -10,6 +10,7 @@
 mod builder;
 pub mod checker;
 pub mod error;
+pub mod inference;
 pub mod scope;
 pub mod types;
 
@@ -18,5 +19,6 @@ pub use error::TypeError;
 pub use prism_typed_tree::TypedFile;
 pub use scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 pub use types::{
-    type_from_abi, type_from_ast, NominalId, Type, TypeDef, TypeRelations, BUILTIN_MODULE,
+    type_from_abi, type_parameters_from_abi, NominalId, Type, TypeDef, TypeParameter,
+    TypeRelations, BUILTIN_MODULE,
 };

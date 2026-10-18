@@ -1,0 +1,2 @@
+// expect: E4020
+fun h(b: Heap<Int, Int>) {}

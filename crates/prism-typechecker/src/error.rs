@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::{Span, TypeMarker};
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4019`).
+/// Semantic and type checking error categories (`E4001` - `E4022`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -87,6 +87,10 @@ pub enum TypeError {
     /// `clone()` of a `Clone` type).
     UncallableExtension { message: String, span: Span },
 
+    /// E4010: A type parameter declared twice in one list, or named like a built-in type the
+    /// lowering fixes (D12 of `generics`).
+    InvalidTypeParameterName { message: String, span: Span },
+
     /// E4011: A `public` or `package` function omits its explicit return type annotation.
     MissingReturnType { function_name: String, span: Span },
 
@@ -98,8 +102,13 @@ pub enum TypeError {
     },
 
     /// E4013: A type cannot be inferred and must be written: a closure parameter with no expected
-    /// function type, or a declaration whose inferred type depends on itself.
-    CannotInferType { message: String, span: Span },
+    /// function type, a declaration whose inferred type depends on itself, or a type argument
+    /// of a generic call (D8 of `generics`). `help` replaces the generic fix when set.
+    CannotInferType {
+        message: String,
+        span: Span,
+        help: Option<String>,
+    },
 
     /// E4014: A member of a struct or enum (a field, a variant, its constructor) is used, but the
     /// module defining the type is not a direct import of the file.
@@ -141,6 +150,34 @@ pub enum TypeError {
 
     /// E4019: `*` writes through a value that is not a reference (`*x = 1` for `x: Int`).
     NotAReference { ty: Type, span: Span },
+
+    /// E4020: A generic type or call is given the wrong number of type arguments: a generic type
+    /// written without them or with too many, type arguments for a callee or a type parameter
+    /// that takes none. `owner` describes what takes them ("type 'Box'", "function 'id'").
+    WrongTypeArgumentCount {
+        owner: String,
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
+
+    /// E4021: A type argument does not satisfy the bound of its type parameter (`String` for
+    /// `T : Copy`). `owner` describes the generic declaration ("function 'dup'").
+    UnsatisfiedBound {
+        argument: Type,
+        parameter: String,
+        bound: TypeMarker,
+        owner: String,
+        span: Span,
+    },
+
+    /// E4022: A type argument, written or inferred, contains a reference outside a function type
+    /// (D7 of `generics`). `owner` describes the generic declaration or type.
+    BorrowInTypeArgument {
+        argument: Type,
+        owner: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -161,6 +198,7 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
             TypeError::UncallableExtension { .. } => "E4010",
+            TypeError::InvalidTypeParameterName { .. } => "E4010",
             TypeError::MissingReturnType { .. } => "E4011",
             TypeError::AmbiguousImport { .. } => "E4012",
             TypeError::CannotInferType { .. } => "E4013",
@@ -170,6 +208,9 @@ impl TypeError {
             TypeError::CannotMoveOut { .. } => "E4017",
             TypeError::NotCloneable { .. } => "E4018",
             TypeError::NotAReference { .. } => "E4019",
+            TypeError::WrongTypeArgumentCount { .. } => "E4020",
+            TypeError::UnsatisfiedBound { .. } => "E4021",
+            TypeError::BorrowInTypeArgument { .. } => "E4022",
         }
     }
 
@@ -190,6 +231,7 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
             TypeError::UncallableExtension { span, .. } => *span,
+            TypeError::InvalidTypeParameterName { span, .. } => *span,
             TypeError::MissingReturnType { span, .. } => *span,
             TypeError::AmbiguousImport { span, .. } => *span,
             TypeError::CannotInferType { span, .. } => *span,
@@ -199,6 +241,9 @@ impl TypeError {
             TypeError::NotCloneable { span, .. } => *span,
             TypeError::CannotMoveOut { span, .. } => *span,
             TypeError::NotAReference { span, .. } => *span,
+            TypeError::WrongTypeArgumentCount { span, .. } => *span,
+            TypeError::UnsatisfiedBound { span, .. } => *span,
+            TypeError::BorrowInTypeArgument { span, .. } => *span,
         }
     }
 
@@ -269,6 +314,7 @@ impl TypeError {
             }
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
+            TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
             TypeError::DuplicateSymbol { name, .. } => {
                 format!("duplicate symbol declaration '{}' in the same scope", name)
             }
@@ -330,6 +376,40 @@ impl TypeError {
             TypeError::NotAReference { ty, .. } => format!(
                 "cannot write through a value of type '{}': '*' needs a reference",
                 ty
+            ),
+            TypeError::WrongTypeArgumentCount {
+                owner,
+                expected,
+                found,
+                ..
+            } => format!(
+                "{} takes {} type argument{}, but {} {} given",
+                owner,
+                expected,
+                if *expected == 1 { "" } else { "s" },
+                found,
+                if *found == 1 { "was" } else { "were" }
+            ),
+            TypeError::UnsatisfiedBound {
+                argument,
+                parameter,
+                bound,
+                owner,
+                ..
+            } => format!(
+                "type argument '{}' of {} does not satisfy the bound '{} : {}': '{}' is not '{}'",
+                argument,
+                owner,
+                parameter,
+                bound.as_str(),
+                argument,
+                bound.as_str()
+            ),
+            TypeError::BorrowInTypeArgument {
+                argument, owner, ..
+            } => format!(
+                "type argument '{}' of {} contains a borrow, but type arguments must be borrow-free",
+                argument, owner
             ),
         }
     }

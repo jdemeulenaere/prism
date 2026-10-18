@@ -1,0 +1,2 @@
+// expect: E4002
+fun <T> same(a: &T, b: &T): Bool = a == b

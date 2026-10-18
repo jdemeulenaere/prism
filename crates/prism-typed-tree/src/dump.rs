@@ -30,10 +30,11 @@ impl TypedFile {
                 Item::Struct(s) => {
                     writeln!(
                         out,
-                        "{}struct {}{} {}",
+                        "{}struct {}{}{} {}",
                         visibility_prefix(s.visibility),
                         nominal(&s.id),
-                        marker_suffix(s.marker),
+                        TypeParameter::render_list(&s.type_parameters),
+                        generic_marker_suffix(s.marker, &s.type_parameters, &s.marker_parameters),
                         position(s.span)
                     )
                     .unwrap();
@@ -42,10 +43,11 @@ impl TypedFile {
                 Item::Enum(e) => {
                     writeln!(
                         out,
-                        "{}enum {}{} {}",
+                        "{}enum {}{}{} {}",
                         visibility_prefix(e.visibility),
                         nominal(&e.id),
-                        marker_suffix(e.marker),
+                        TypeParameter::render_list(&e.type_parameters),
+                        generic_marker_suffix(e.marker, &e.type_parameters, &e.marker_parameters),
                         position(e.span)
                     )
                     .unwrap();
@@ -63,11 +65,17 @@ impl TypedFile {
                     for (name, ty) in &f.parameters {
                         parameters.push(format!("{}: {}", name, ty));
                     }
+                    let type_parameters = TypeParameter::render_list(&f.type_parameters);
                     writeln!(
                         out,
-                        "{}{}fun {}({}): {} {}",
+                        "{}{}fun {}{}({}): {} {}",
                         visibility_prefix(f.visibility),
                         if f.is_compose { "compose " } else { "" },
+                        if type_parameters.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{} ", type_parameters)
+                        },
                         f.path,
                         parameters.join(", "),
                         f.return_type,
@@ -260,7 +268,9 @@ impl Printer<'_> {
             ),
             ExpressionKind::Call(call) => {
                 let callee = match &call.callee {
-                    Callee::Function(path) => path.to_string(),
+                    Callee::Function(path) => {
+                        format!("{}{}", path, render_type_arguments(&call.type_arguments))
+                    }
                     Callee::Builtin(builtin) => match builtin {
                         crate::tree::BuiltinFunction::Clone => "builtin clone".to_string(),
                     },
@@ -592,6 +602,34 @@ fn marker_suffix(marker: Option<TypeMarker>) -> String {
     marker.map_or(String::new(), |m| format!(" : {}", m.as_str()))
 }
 
+/// The marker of a generic struct or enum, with the type parameters that condition it
+/// (` : Copy if T`).
+fn generic_marker_suffix(
+    marker: Option<TypeMarker>,
+    type_parameters: &[TypeParameter],
+    marker_parameters: &[u32],
+) -> String {
+    let mut suffix = marker_suffix(marker);
+    if marker.is_some() && !marker_parameters.is_empty() {
+        let names: Vec<&str> = marker_parameters
+            .iter()
+            .filter_map(|index| type_parameters.get(*index as usize))
+            .map(|p| p.name.as_str())
+            .collect();
+        write!(suffix, " if {}", names.join(", ")).unwrap();
+    }
+    suffix
+}
+
+/// A call's type arguments as written after the callee (`<Int>`), or nothing.
+fn render_type_arguments(arguments: &[Type]) -> String {
+    if arguments.is_empty() {
+        return String::new();
+    }
+    let rendered: Vec<String> = arguments.iter().map(ToString::to_string).collect();
+    format!("<{}>", rendered.join(", "))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::arena::Arena;
@@ -645,6 +683,7 @@ pub(crate) mod tests {
                 path,
                 visibility: Visibility::Private,
                 is_compose: false,
+                type_parameters: Vec::new(),
                 receiver: None,
                 parameters: vec![("a".to_string(), Type::Int)],
                 return_type: Type::Int,

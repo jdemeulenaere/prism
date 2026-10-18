@@ -1,0 +1,5 @@
+// expect: E4013
+fun <T> keep(x: T): T = x
+fun h() {
+    val k = keep
+}

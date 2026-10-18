@@ -1,0 +1,3 @@
+// expect: E5001
+struct Pair<A, B>(val a: A, val b: B)
+fun <T> dup(x: T): Pair<T, T> = Pair(x, x)

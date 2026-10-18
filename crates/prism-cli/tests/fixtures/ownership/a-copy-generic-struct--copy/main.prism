@@ -1,0 +1,5 @@
+// expect: ok
+struct Pair<A, B> : Copy { val a: A, val b: B }
+struct User : Clone { val name: String }
+fun f(p: &Pair<Int, Int>): Pair<Int, Int> = p
+fun g(p: &Pair<User, Int>): Pair<User, Int> = p.clone()

@@ -1,0 +1,2 @@
+// expect: E4018
+fun <T> c(x: &T): T = x.clone()

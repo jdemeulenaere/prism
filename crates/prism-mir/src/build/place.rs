@@ -106,11 +106,22 @@ impl Builder<'_> {
                 for (index, operand) in order.into_iter().zip(self.ordered_operands(&values)) {
                     operands[index] = Some(operand);
                 }
+                // The construction's type gives a generic type's arguments.
+                let arguments = match &ty {
+                    Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
+                        arguments.clone()
+                    }
+                    _ => Vec::new(),
+                };
                 let kind = match kind {
-                    ConstructKind::Struct(id) => AggregateKind::Struct(id.clone()),
+                    ConstructKind::Struct(id) => AggregateKind::Struct {
+                        id: id.clone(),
+                        arguments,
+                    },
                     ConstructKind::Variant { enum_id, index, .. } => AggregateKind::Variant {
                         enum_id: enum_id.clone(),
                         index: *index,
+                        arguments,
                     },
                 };
                 let operands = operands.into_iter().flatten().collect();
@@ -127,7 +138,7 @@ impl Builder<'_> {
                 let end_inclusive = Operand::Constant(Constant::Bool(*end_inclusive));
                 let destination = self.destination_or_temporary(destination, &ty, span);
                 let rvalue = Rvalue::Aggregate(
-                    AggregateKind::Struct(NominalId::builtin_range()),
+                    AggregateKind::plain_struct(NominalId::builtin_range()),
                     vec![start, end, end_inclusive],
                 );
                 self.assign(destination, rvalue, span);
