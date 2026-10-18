@@ -60,8 +60,10 @@ impl MaybeInitialized<'_> {
 }
 
 impl Analysis for MaybeInitialized<'_> {
-    fn domain_size(&self) -> usize {
-        self.data.paths.len()
+    type Domain = BitSet;
+
+    fn bottom(&self) -> BitSet {
+        BitSet::new(self.data.paths.len())
     }
 
     fn initialize_boundary(&self, state: &mut BitSet) {
@@ -137,8 +139,10 @@ impl ReachingUninitializations<'_> {
 }
 
 impl Analysis for ReachingUninitializations<'_> {
-    fn domain_size(&self) -> usize {
-        self.data.event_count()
+    type Domain = BitSet;
+
+    fn bottom(&self) -> BitSet {
+        BitSet::new(self.data.event_count())
     }
 
     fn initialize_boundary(&self, _: &mut BitSet) {}

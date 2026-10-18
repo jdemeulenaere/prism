@@ -78,8 +78,10 @@ impl<'a> Liveness<'a> {
 }
 
 impl Analysis for Liveness<'_> {
-    fn domain_size(&self) -> usize {
-        self.borrows.carriers.len()
+    type Domain = BitSet;
+
+    fn bottom(&self) -> BitSet {
+        BitSet::new(self.borrows.carriers.len())
     }
 
     fn direction(&self) -> Direction {

@@ -553,8 +553,10 @@ impl DropStates<'_> {
 }
 
 impl Analysis for DropStates<'_> {
-    fn domain_size(&self) -> usize {
-        self.body.locals.len() * 6
+    type Domain = BitSet;
+
+    fn bottom(&self) -> BitSet {
+        BitSet::new(self.body.locals.len() * 6)
     }
 
     fn initialize_boundary(&self, state: &mut BitSet) {

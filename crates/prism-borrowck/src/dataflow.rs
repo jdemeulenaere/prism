@@ -1,11 +1,16 @@
-//! A bit-set dataflow framework over a body's control-flow graph (D4 of `borrowck-moves`).
+//! A dataflow framework over a body's control-flow graph (D4 of `borrowck-moves`).
 //!
-//! An [`Analysis`] names a domain of bits (move paths, move events, ...), a direction, the
-//! state at the boundary of the body, and the effect of each statement and terminator. [`solve`]
-//! iterates the blocks (in reverse postorder forward, postorder backward) joining states by union
-//! until no block's state changes, and a [`ResultsCursor`] replays a block's effects to give the
-//! state at any location. `borrowck-exclusivity` adds its liveness (backward) and borrow
-//! analyses on the same framework.
+//! An [`Analysis`] names its states (a [`Domain`], such as bits over move paths or move
+//! events), a direction, the state at the boundary of the body, and the effect of each
+//! statement and terminator. [`solve`] iterates the blocks (in reverse postorder forward,
+//! postorder backward) joining states until no block's state changes, and a [`ResultsCursor`]
+//! replays a block's effects to give the state at any location. `borrowck-exclusivity` adds its
+//! liveness (backward) and borrow analyses on the same framework.
+//!
+//! Its cost is linear in the body's locations times the size of a state, per iteration: a
+//! forward analysis stores a state only for the blocks that are not chained to their
+//! predecessor ([`Results`]), and a backward cursor visited in program order keeps the states
+//! of its current block instead of replaying the block for each location.
 
 use crate::location::{postorder, predecessors, reverse_postorder, Location};
 use prism_mir::{BlockId, Body, Statement, Terminator};
@@ -101,10 +106,26 @@ pub enum Direction {
     Backward,
 }
 
-/// A dataflow analysis over the bits `0..domain_size` of one body, joined by union.
+/// The states of an analysis, joined where control flow merges.
+pub trait Domain: Clone + PartialEq {
+    /// Adds everything `other` holds, returning whether this state changed.
+    fn join(&mut self, other: &Self) -> bool;
+}
+
+impl Domain for BitSet {
+    fn join(&mut self, other: &Self) -> bool {
+        self.union(other)
+    }
+}
+
+/// A dataflow analysis over the states [`Analysis::Domain`] of one body, such as the bits
+/// `0..n` of a [`BitSet`], joined by union.
 pub trait Analysis {
-    /// The number of bits of the domain.
-    fn domain_size(&self) -> usize;
+    /// The analysis's states.
+    type Domain: Domain;
+
+    /// The state that holds nothing, where the analysis starts at every block but the boundary.
+    fn bottom(&self) -> Self::Domain;
 
     fn direction(&self) -> Direction {
         Direction::Forward
@@ -112,30 +133,75 @@ pub trait Analysis {
 
     /// Sets the state at the boundary: the entry of `bb0` forward, the exit of each block without
     /// successors backward.
-    fn initialize_boundary(&self, state: &mut BitSet);
+    fn initialize_boundary(&self, state: &mut Self::Domain);
 
     /// Applies the effect of `statement`, at `location`.
-    fn apply_statement(&self, state: &mut BitSet, statement: &Statement, location: Location);
+    fn apply_statement(&self, state: &mut Self::Domain, statement: &Statement, location: Location);
 
     /// Applies the effect of `terminator`, at `location`. Forward, it holds on every outgoing
     /// edge.
-    fn apply_terminator(&self, state: &mut BitSet, terminator: &Terminator, location: Location);
+    fn apply_terminator(
+        &self,
+        state: &mut Self::Domain,
+        terminator: &Terminator,
+        location: Location,
+    );
 
     /// Applies the effect of the edge `from -> to` to the state leaving `from`, forward only,
     /// for an analysis that tells the successors of a switch apart. None by default.
-    fn apply_edge(&self, _state: &mut BitSet, _from: BlockId, _to: BlockId) {}
+    fn apply_edge(&self, _state: &mut Self::Domain, _from: BlockId, _to: BlockId) {}
 }
 
 /// The fixpoint of an analysis: the state where the analysis enters each block (its start
 /// forward, its end backward).
-pub struct Results<A> {
+///
+/// Forward, a block whose only predecessor has it as only successor is *chained* to that
+/// predecessor: its state is the predecessor's exit state, which the solver and the cursor
+/// carry from one to the other instead of storing it, so that a long straight-line body (whose
+/// calls each end a block) stores one state, not one per block.
+pub struct Results<A: Analysis> {
     pub analysis: A,
-    block_states: Vec<BitSet>,
+    /// The state where the analysis enters each block that is not chained; `None` for a
+    /// chained block.
+    block_states: Vec<Option<A::Domain>>,
+    /// The predecessor each chained block is chained to.
+    chained_from: Vec<Option<BlockId>>,
 }
 
 /// Solves `analysis` over every edge of `body`.
 pub fn solve<A: Analysis>(body: &Body, analysis: A) -> Results<A> {
     solve_with(body, analysis, |_, _| true)
+}
+
+/// The predecessor each reachable block of `body` other than `bb0` is chained to, when the
+/// edge between them is its only way in, its predecessor's only way out, and kept: the order
+/// visits a chained block right after its predecessor.
+fn chains(
+    body: &Body,
+    order: &[BlockId],
+    predecessors: &[Vec<BlockId>],
+    keep_edge: &impl Fn(BlockId, BlockId) -> bool,
+) -> Vec<Option<BlockId>> {
+    let mut chained_from = vec![None; body.blocks.len()];
+    for &block in order {
+        if block.index() == 0 {
+            continue;
+        }
+        if let [predecessor] = predecessors[block.index()][..] {
+            let single_exit = body.blocks[predecessor].terminator.kind.successors().len() == 1;
+            if predecessor != block && single_exit && keep_edge(predecessor, block) {
+                chained_from[block.index()] = Some(predecessor);
+            }
+        }
+    }
+    chained_from
+}
+
+/// The stored state of `block`, which is not chained.
+fn stored<D>(states: &mut [Option<D>], block: BlockId) -> &mut D {
+    states[block.index()]
+        .as_mut()
+        .expect("the state of a block that is not chained")
 }
 
 /// Solves `analysis` over the edges `from -> to` of `body` for which `keep_edge` holds, such as
@@ -145,49 +211,75 @@ pub fn solve_with<A: Analysis>(
     analysis: A,
     keep_edge: impl Fn(BlockId, BlockId) -> bool,
 ) -> Results<A> {
-    let size = analysis.domain_size();
     let count = body.blocks.len();
-    let mut block_states = vec![BitSet::new(size); count];
     let direction = analysis.direction();
     let order = match direction {
         Direction::Forward => reverse_postorder(body),
         Direction::Backward => postorder(body),
     };
+    let predecessors = predecessors(body);
+    let chained_from = match direction {
+        Direction::Forward => chains(body, &order, &predecessors, &keep_edge),
+        Direction::Backward => vec![None; count],
+    };
+    let mut block_states: Vec<Option<A::Domain>> = chained_from
+        .iter()
+        .map(|chained| chained.is_none().then(|| analysis.bottom()))
+        .collect();
     match direction {
         Direction::Forward => {
             if count > 0 {
-                analysis.initialize_boundary(&mut block_states[0]);
+                analysis.initialize_boundary(stored(&mut block_states, BlockId(0)));
             }
         }
         Direction::Backward => {
             for (block, data) in body.blocks.iter() {
                 if data.terminator.kind.successors().is_empty() {
-                    analysis.initialize_boundary(&mut block_states[block.index()]);
+                    analysis.initialize_boundary(stored(&mut block_states, block));
                 }
             }
         }
     }
-    let predecessors = predecessors(body);
     let mut changed = true;
     while changed {
         changed = false;
+        // The exit state of the block just visited, when the next block is chained to it.
+        let mut carried: Option<A::Domain> = None;
         for &block in &order {
-            let mut state = block_states[block.index()].clone();
+            let mut state = match chained_from[block.index()] {
+                Some(predecessor) => {
+                    let mut state = carried
+                        .take()
+                        .expect("a chained block is visited right after its predecessor");
+                    analysis.apply_edge(&mut state, predecessor, block);
+                    state
+                }
+                None => block_states[block.index()]
+                    .clone()
+                    .expect("the state of a block that is not chained"),
+            };
             apply_block(body, &analysis, block, &mut state);
             match direction {
                 Direction::Forward => {
-                    for successor in body.blocks[block].terminator.kind.successors() {
+                    let successors = body.blocks[block].terminator.kind.successors();
+                    if let [successor] = successors[..] {
+                        if chained_from[successor.index()] == Some(block) {
+                            carried = Some(state);
+                            continue;
+                        }
+                    }
+                    for successor in successors {
                         if keep_edge(block, successor) {
                             let mut edge_state = state.clone();
                             analysis.apply_edge(&mut edge_state, block, successor);
-                            changed |= block_states[successor.index()].union(&edge_state);
+                            changed |= stored(&mut block_states, successor).join(&edge_state);
                         }
                     }
                 }
                 Direction::Backward => {
                     for &predecessor in &predecessors[block.index()] {
                         if keep_edge(predecessor, block) {
-                            changed |= block_states[predecessor.index()].union(&state);
+                            changed |= stored(&mut block_states, predecessor).join(&state);
                         }
                     }
                 }
@@ -197,11 +289,12 @@ pub fn solve_with<A: Analysis>(
     Results {
         analysis,
         block_states,
+        chained_from,
     }
 }
 
 /// Applies the effects of `block` to `state`, in the analysis's direction.
-fn apply_block<A: Analysis>(body: &Body, analysis: &A, block: BlockId, state: &mut BitSet) {
+fn apply_block<A: Analysis>(body: &Body, analysis: &A, block: BlockId, state: &mut A::Domain) {
     let data = &body.blocks[block];
     let terminator = Location::terminator(body, block);
     match analysis.direction() {
@@ -235,9 +328,24 @@ fn apply_block<A: Analysis>(body: &Body, analysis: &A, block: BlockId, state: &m
 }
 
 impl<A: Analysis> Results<A> {
-    /// The state where the analysis enters `block`: its start forward, its end backward.
-    pub fn block_state(&self, block: BlockId) -> &BitSet {
-        &self.block_states[block.index()]
+    /// The state where the analysis enters `block`: its start forward, its end backward. The
+    /// state of a chained block is replayed from the block its chain starts at.
+    pub fn block_state(&self, block: BlockId, body: &Body) -> A::Domain {
+        // The chain back to the first block whose state is stored: `block`, its predecessor, ...
+        let mut chain = vec![block];
+        while let Some(predecessor) = self.chained_from[chain[chain.len() - 1].index()] {
+            chain.push(predecessor);
+        }
+        let head = chain[chain.len() - 1];
+        let mut state = self.block_states[head.index()]
+            .clone()
+            .expect("the state of a block that is not chained");
+        for pair in chain.windows(2).rev() {
+            let (to, from) = (pair[0], pair[1]);
+            apply_block(body, &self.analysis, from, &mut state);
+            self.analysis.apply_edge(&mut state, from, to);
+        }
+        state
     }
 
     /// A cursor over these results in `body`.
@@ -246,65 +354,100 @@ impl<A: Analysis> Results<A> {
             results: self,
             body,
             position: None,
-            state: BitSet::new(self.analysis.domain_size()),
+            state: self.analysis.bottom(),
+            snapshots: None,
         }
     }
 }
 
 /// Gives the state at any location of a body by replaying its block's effects from the block's
-/// state, reusing the replay when locations of one block are visited in the analysis's
-/// direction.
-pub struct ResultsCursor<'a, A> {
+/// state. Forward, it reuses the replay when locations of one block are visited in order, and
+/// carries it into the next block when that block is chained to the current one. Backward, it
+/// keeps the state at every location of the block it last entered, so that a block's locations
+/// can be visited in any order, such as in program order with a forward cursor, each in
+/// constant time.
+pub struct ResultsCursor<'a, A: Analysis> {
     results: &'a Results<A>,
     body: &'a Body,
-    /// The location whose effect `state` was last brought to, exclusive: the next effect to
-    /// apply is at `position` forward, before it backward.
+    /// Forward: the location whose effect `state` was last brought to, exclusive: the next
+    /// effect to apply is at `position`.
     position: Option<Location>,
-    state: BitSet,
+    state: A::Domain,
+    /// Backward: the block last entered, and the state after each of its locations.
+    snapshots: Option<(BlockId, Vec<A::Domain>)>,
 }
 
 impl<A: Analysis> ResultsCursor<'_, A> {
     /// The state before the effect of `location` in the analysis's direction: before it in
     /// program order forward, after it backward.
-    pub fn seek(&mut self, location: Location) -> &BitSet {
-        let analysis = &self.results.analysis;
-        let data = &self.body.blocks[location.block];
-        let forward = analysis.direction() == Direction::Forward;
+    pub fn seek(&mut self, location: Location) -> &A::Domain {
+        match self.results.analysis.direction() {
+            Direction::Forward => self.seek_forward(location),
+            Direction::Backward => self.seek_backward(location),
+        }
+    }
+
+    fn seek_forward(&mut self, location: Location) -> &A::Domain {
+        let results = self.results;
         let reusable = self.position.is_some_and(|position| {
-            position.block == location.block
-                && if forward {
-                    position.statement <= location.statement
-                } else {
-                    position.statement > location.statement
-                }
+            position.block == location.block && position.statement <= location.statement
         });
         if !reusable {
-            self.state = self.results.block_state(location.block).clone();
-            let start = if forward {
-                0
-            } else {
-                // Nothing applied yet: the next effect is the terminator's.
-                data.statements.len() + 1
-            };
-            self.position = Some(Location {
-                block: location.block,
-                statement: start,
-            });
+            let chained_from = results.chained_from[location.block.index()];
+            match (self.position, chained_from) {
+                // Carried on from the end of the predecessor the block is chained to.
+                (Some(position), Some(predecessor)) if position.block == predecessor => {
+                    let terminator = Location::terminator(self.body, predecessor);
+                    let mut position = position;
+                    while position.statement <= terminator.statement {
+                        self.apply(position);
+                        position.statement += 1;
+                    }
+                    results
+                        .analysis
+                        .apply_edge(&mut self.state, predecessor, location.block);
+                }
+                _ => self.state = results.block_state(location.block, self.body),
+            }
+            self.position = Some(Location::start(location.block));
         }
         let mut position = self.position.expect("the cursor has a position");
-        if forward {
-            while position.statement < location.statement {
-                self.apply(position);
-                position.statement += 1;
-            }
-        } else {
-            while position.statement > location.statement + 1 {
-                position.statement -= 1;
-                self.apply(position);
-            }
+        while position.statement < location.statement {
+            self.apply(position);
+            position.statement += 1;
         }
         self.position = Some(position);
         &self.state
+    }
+
+    fn seek_backward(&mut self, location: Location) -> &A::Domain {
+        let entered = matches!(&self.snapshots, Some((block, _)) if *block == location.block);
+        if !entered {
+            let analysis = &self.results.analysis;
+            let data = &self.body.blocks[location.block];
+            let mut state = self.results.block_state(location.block, self.body);
+            // The state after each location, from the terminator's back to the first
+            // statement's.
+            let mut states = Vec::with_capacity(data.statements.len() + 1);
+            for statement in (0..=data.statements.len()).rev() {
+                states.push(state.clone());
+                if statement == 0 {
+                    break;
+                }
+                let after = Location {
+                    block: location.block,
+                    statement,
+                };
+                match data.statements.get(statement) {
+                    Some(next) => analysis.apply_statement(&mut state, next, after),
+                    None => analysis.apply_terminator(&mut state, &data.terminator, after),
+                }
+            }
+            states.reverse();
+            self.snapshots = Some((location.block, states));
+        }
+        let (_, states) = self.snapshots.as_ref().expect("the block was entered");
+        &states[location.statement]
     }
 
     fn apply(&mut self, location: Location) {
@@ -348,8 +491,10 @@ mod tests {
     }
 
     impl Analysis for BlocksRun {
-        fn domain_size(&self) -> usize {
-            self.size
+        type Domain = BitSet;
+
+        fn bottom(&self) -> BitSet {
+            BitSet::new(self.size)
         }
 
         fn direction(&self) -> Direction {
@@ -384,10 +529,19 @@ mod tests {
                 direction: Direction::Forward,
             },
         );
-        assert_eq!(blocks(results.block_state(BlockId(0))), Vec::<usize>::new());
+        assert_eq!(
+            blocks(&results.block_state(BlockId(0), &body)),
+            Vec::<usize>::new()
+        );
         // The loop head is reached from the entry and, around the loop, from the body.
-        assert_eq!(blocks(results.block_state(BlockId(1))), vec![0, 1, 2]);
-        assert_eq!(blocks(results.block_state(BlockId(3))), vec![0, 1, 2]);
+        assert_eq!(
+            blocks(&results.block_state(BlockId(1), &body)),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            blocks(&results.block_state(BlockId(3), &body)),
+            vec![0, 1, 2]
+        );
         let mut cursor = results.cursor(&body);
         let after_head = Location::terminator(&body, BlockId(1));
         assert_eq!(blocks(cursor.seek(after_head)), vec![0, 1, 2]);
@@ -401,7 +555,65 @@ mod tests {
             },
             |from, to| !dominators.is_back_edge(from, to),
         );
-        assert_eq!(blocks(acyclic.block_state(BlockId(1))), vec![0]);
+        assert_eq!(blocks(&acyclic.block_state(BlockId(1), &body)), vec![0]);
+    }
+
+    /// `bb0 -> bb1 -> bb2 -> {bb3, bb4} -> bb5`: `bb1` and `bb2` are chained.
+    fn chain_then_branch() -> Body {
+        body_with_edges(&[&[1], &[2], &[3, 4], &[5], &[5], &[]])
+    }
+
+    #[test]
+    fn a_chained_block_s_state_is_carried_from_its_predecessor() {
+        let body = chain_then_branch();
+        let results = solve(
+            &body,
+            BlocksRun {
+                size: 6,
+                direction: Direction::Forward,
+            },
+        );
+        assert_eq!(results.chained_from[1], Some(BlockId(0)));
+        assert_eq!(results.chained_from[2], Some(BlockId(1)));
+        // A block after a branch, and a merge, store their states.
+        assert_eq!(results.chained_from[3], None);
+        assert_eq!(results.chained_from[5], None);
+        assert_eq!(blocks(&results.block_state(BlockId(2), &body)), vec![0, 1]);
+        assert_eq!(
+            blocks(&results.block_state(BlockId(5), &body)),
+            vec![0, 1, 2, 3, 4]
+        );
+        // In order, the cursor carries the state across the chain; out of order, it replays it.
+        let mut cursor = results.cursor(&body);
+        for (block, expected) in [(0, vec![]), (1, vec![0]), (2, vec![0, 1]), (1, vec![0])] {
+            assert_eq!(
+                blocks(cursor.seek(Location::start(BlockId(block)))),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn a_backward_cursor_is_visited_in_program_order() {
+        let body = chain_then_branch();
+        let results = solve(
+            &body,
+            BlocksRun {
+                size: 6,
+                direction: Direction::Backward,
+            },
+        );
+        let mut cursor = results.cursor(&body);
+        // After each block's terminator in program order, then back to an earlier block.
+        for (block, expected) in [
+            (0, vec![1, 2, 3, 4, 5]),
+            (1, vec![2, 3, 4, 5]),
+            (2, vec![3, 4, 5]),
+            (1, vec![2, 3, 4, 5]),
+        ] {
+            let terminator = Location::terminator(&body, BlockId(block));
+            assert_eq!(blocks(cursor.seek(terminator)), expected);
+        }
     }
 
     #[test]
@@ -415,9 +627,18 @@ mod tests {
             },
         );
         // At the end of each block: the blocks that may run after it.
-        assert_eq!(blocks(results.block_state(BlockId(3))), Vec::<usize>::new());
-        assert_eq!(blocks(results.block_state(BlockId(2))), vec![1, 2, 3]);
-        assert_eq!(blocks(results.block_state(BlockId(0))), vec![1, 2, 3]);
+        assert_eq!(
+            blocks(&results.block_state(BlockId(3), &body)),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            blocks(&results.block_state(BlockId(2), &body)),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            blocks(&results.block_state(BlockId(0), &body)),
+            vec![1, 2, 3]
+        );
         let mut cursor = results.cursor(&body);
         // After the terminator of bb3 nothing runs; after the loop head's, the loop may run again.
         assert_eq!(

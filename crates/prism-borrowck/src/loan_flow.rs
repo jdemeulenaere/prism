@@ -402,8 +402,10 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
 }
 
 impl Analysis for LoanFlow<'_> {
-    fn domain_size(&self) -> usize {
-        self.borrows.carriers.len() * self.borrows.item_count()
+    type Domain = BitSet;
+
+    fn bottom(&self) -> BitSet {
+        BitSet::new(self.borrows.carriers.len() * self.borrows.item_count())
     }
 
     fn initialize_boundary(&self, state: &mut BitSet) {

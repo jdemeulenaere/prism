@@ -410,17 +410,17 @@ fn live_after_event(
         .collect()
 }
 
-struct Checker<'a> {
+struct Checker<'a, 'f> {
     file: &'a MirFile,
     body: &'a Body,
     captures: &'a CaptureModes,
     borrows: &'a BorrowSet,
-    flow: &'a Results<LoanFlow<'a>>,
+    flow: &'a Results<LoanFlow<'f>>,
     returned: Vec<LocalId>,
     dominators: Dominators,
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// Whether an access of `kind` to `place` conflicts with `loan`.
     fn conflicts(&self, place: &Place, kind: AccessKind, loan: LoanId) -> bool {
         let loan = &self.borrows.loans[loan];
