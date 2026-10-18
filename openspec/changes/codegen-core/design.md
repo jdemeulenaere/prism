@@ -170,6 +170,13 @@ A fixture whose header has `// run: <status>` beside its `// expect:` line (usua
 
 `code-generation` (the backend's contract: what it compiles and rejects, units, symbols, the table, representation, `dump-clif`) and `execution` (what a running program does) separate what later backend changes extend (`codegen-aggregates` adds layouts to the first) from language runtime semantics that every tier must share (Tier 2 adds nothing to the second). Loop evaluation goes to `loops`, beside its static rules. The new stage gets `E6xxx`: `E6001` `UnsupportedByBackend`, `E6002` `MissingMain`, `E6003` `InvalidMain`, one per fix (wait for the backend or avoid the construct; add a `main`; fix its signature). Rejected: one `execution` spec for both (mixes a backend's temporary limits with permanent semantics), and type-checker codes for the entry point (D13).
 
+### D26. Decisions made during implementation (autonomous)
+
+- **The function table is owned by the linked program, not a global.** D4's "process-wide" table is a `FunctionTable` that the `Linker` creates and the `Program` keeps, shared with the JIT's symbol lookup through an `Arc`. `prism run` links one program, so the table is process-wide in effect, and `hot-reload` will keep the same table across loads; a test process can link several programs that define the same symbols (`main::main`) without one repointing the other's slots. Rejected: a `static` table (tests in one process would share slots, and running them in parallel would race).
+- **Data is never addressed PC-relatively.** Every reference to a data object (slots, the file name, panic details, top-level value storage) is a non-colocated symbol, so an absolute address (or a GOT load on x86-64) rather than an `adrp` that `cranelift-jit` resolves only within ±2 GiB of the code, which its memory provider does not promise. Rejected: `cranelift-module`'s default, which marks a module's own data colocated.
+- **References are named by their referent in `E6001`** (D9's table): `fun f(s: &String)` reports strings.
+- **The unlinked stub reports no location.** `prism_rt_unlinked_function` is called with whatever arguments the call site passes, so it cannot know where it was called from; it reports an internal error without an `at` line. In a checked program it is never reached.
+
 ## Risks / Trade-offs
 
 - [Cranelift's API changes between versions] → the exact pin (D2); upgrades are deliberate commits that re-run the fixtures.

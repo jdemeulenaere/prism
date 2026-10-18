@@ -735,6 +735,50 @@ fn fixture_symbols_are_distinct() {
     assert!(files > 200, "only {} files named", files);
 }
 
+/// code-generation: "Unsupported Constructs Are Rejected Before Code Generation". The backend
+/// compiles every body of every passing case that its support check accepts, without an internal
+/// error or a crash: what the check accepts, the lowering handles. Each entry is compiled alone,
+/// its imports' slots left unlinked.
+#[test]
+fn supported_fixtures_compile() {
+    let mut compiled = 0;
+    let mut failures = Vec::new();
+    for case in load_cases() {
+        if !case.expected.is_empty() {
+            continue;
+        }
+        let entry = entry_of(&case);
+        if !entry.is_file() {
+            continue;
+        }
+        let Ok(dump) = prism_cli::dump_elaborated_mir(&entry) else {
+            continue;
+        };
+        if prism_codegen::check_file(&dump.mir).is_err() {
+            continue;
+        }
+        compiled += 1;
+        let mir = dump.mir;
+        match std::panic::catch_unwind(move || prism_codegen::Program::compile(&[mir]).map(|_| ()))
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => failures.push(format!("{}: {}", case.name, error)),
+            Err(panic) => failures.push(format!(
+                "{}: code generation panicked: {}",
+                case.name,
+                panic_message(&panic)
+            )),
+        }
+    }
+    assert!(compiled > 100, "only {} files compiled", compiled);
+    assert!(
+        failures.is_empty(),
+        "{} files failed to compile:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = panic.downcast_ref::<String>() {
         message.clone()
