@@ -234,8 +234,13 @@ fn a_closure_parameter_that_ends_while_borrowed_is_labelled_at_its_name() {
     let actual = rendered(
         "fun run2(f: (Int) -> Int): Int = f(1)\nfun print(n: &Int) {}\nfun g() { var a = 1; var r: &Int = &a; run2 { x -> r = &x; 1 }; print(r) }\n",
     );
-    assert_eq!(actual, "\
+    assert_eq!(
+        actual,
+        "\
 E5006 'x' does not live long enough @3:56 borrowed value does not live long enough
   related @3:45 borrow later used here
-  related @3:47 'x' is dropped when the closure returns, while still borrowed", "\n{}", actual);
+  related @3:47 'x' is dropped when the closure returns, while still borrowed",
+        "\n{}",
+        actual
+    );
 }
