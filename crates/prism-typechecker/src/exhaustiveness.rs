@@ -7,7 +7,8 @@
 //! type are an enum's variants, a struct's one constructor, `true` and `false` for `Bool`, and
 //! `null` and "present" (with the payload as its one field) for a nullable. The literals of an
 //! open type (`Int`, `Double`, `Char`, `String`) are constructors of a set that is never complete.
-//! Patterns are finite and do not look through `Heap<T>`, so the algorithm terminates.
+//! A `Heap<T>` column is its contents' column, since a box has one constructor (D9 of
+//! `heap-boxes`); patterns are finite, so the algorithm still terminates.
 
 use prism_ast::Literal;
 use prism_typed_tree::{ExpressionId, Pattern, Type, TypeTable};
@@ -148,6 +149,8 @@ fn reduce(
                 });
             Reduced::Constructor(Constructor::Struct, reduce_fields(fields, parts))
         }
+        // A box has one constructor, so its column is its contents' (D9 of `heap-boxes`).
+        Pattern::Deref(inner) => reduce(types, inner, peel_boxes(ty), literal),
         Pattern::NonNull(inner) => {
             let payload = match ty {
                 Type::Nullable(payload) => payload.as_ref().clone(),
@@ -178,6 +181,14 @@ fn reduce(
     }
 }
 
+/// `ty` without its `Heap<T>` layers: a box is matched, and printed, as its contents.
+fn peel_boxes(mut ty: &Type) -> &Type {
+    while let Type::Heap(inner) = ty {
+        ty = inner;
+    }
+    ty
+}
+
 /// The usefulness algorithm over a matrix of reduced rows.
 struct Matrix<'a> {
     types: &'a TypeTable,
@@ -187,7 +198,7 @@ impl Matrix<'_> {
     /// Every constructor of `ty` with its field types, or `None` for an open type (or one whose
     /// definition is unknown), whose constructor set is never complete.
     fn constructors(&self, ty: &Type) -> Option<Vec<(Constructor, Vec<Type>)>> {
-        match ty {
+        match peel_boxes(ty) {
             Type::Enum { id, arguments } => {
                 let variants = self.types.instantiated_variants(id, arguments)?;
                 Some(
@@ -365,7 +376,7 @@ impl Matrix<'_> {
                 } else {
                     format!("({})", rendered.join(", "))
                 };
-                match (constructor, ty) {
+                match (constructor, peel_boxes(ty)) {
                     (Constructor::Variant(index), Type::Enum { id, .. }) => {
                         let name = self
                             .types
@@ -465,6 +476,34 @@ mod tests {
     }
 
     const NESTED: &str = "enum Inner { A, B }\nenum Outer { Wrap(Inner), Empty }\n";
+
+    #[test]
+    fn boxes_are_matched_as_their_contents() {
+        let types = "enum Bit { Zero, One }\nenum Pair { Of(Heap<Bit>, Heap<Bit>) }\n";
+        assert_eq!(
+            missing(&format!(
+                "{}fun f(p: &Pair): Int = when (p) {{ Pair.Of(Bit.Zero, _) -> 0; Pair.Of(Bit.One, Bit.Zero) -> 1; Pair.Of(Bit.One, Bit.One) -> 2 }}\n",
+                types
+            )),
+            None
+        );
+        assert_eq!(
+            missing(&format!(
+                "{}fun f(p: &Pair): Int = when (p) {{ Pair.Of(Bit.Zero, _) -> 0; Pair.Of(_, Bit.Zero) -> 1 }}\n",
+                types
+            )),
+            Some("Pair.Of(Bit.One, Bit.One)".to_string())
+        );
+        // A boxed subject, and a box nobody looks into, are covered by a wildcard.
+        assert_eq!(
+            missing("enum E { A, B(Heap<E>) }\nfun f(h: Heap<E>): Int = when (h) { E.A -> 0; E.B(_) -> 1 }\n"),
+            None
+        );
+        assert_eq!(
+            missing("enum E { A, B(Heap<E>) }\nfun f(h: Heap<E>): Int = when (h) { E.A -> 0; E.B(E.A) -> 1 }\n"),
+            Some("E.B(E.B(_))".to_string())
+        );
+    }
 
     #[test]
     fn nested_enums() {

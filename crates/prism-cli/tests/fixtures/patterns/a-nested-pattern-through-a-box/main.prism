@@ -1,0 +1,7 @@
+// expect: ok
+enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }
+
+fun isZeroSum(e: &Expr): Bool = when (e) {
+    Expr.Add(Expr.Lit(0), Expr.Lit(0)) -> true
+    else -> false
+}

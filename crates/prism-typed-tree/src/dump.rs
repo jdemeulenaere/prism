@@ -527,6 +527,10 @@ impl Printer<'_> {
                 self.line(depth, "", "pattern non-null");
                 self.pattern(inner, depth + 1);
             }
+            Pattern::Deref(inner) => {
+                self.line(depth, "", "pattern deref");
+                self.pattern(inner, depth + 1);
+            }
             Pattern::Wildcard => self.line(depth, "", "pattern wildcard"),
             Pattern::Binding { local, mode } => {
                 let ty = self

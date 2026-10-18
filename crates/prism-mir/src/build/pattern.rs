@@ -5,7 +5,9 @@
 //! places. Once a pattern matched, its copying and borrowing bindings are made; then its guard, if
 //! any, runs, reading each moving binding's part in place; then a value the pattern takes apart is
 //! moved whole into its parts by [`StatementKind::Destructure`], each part going to its binding or
-//! to a temporary of the branch, which is dropped where the branch ends.
+//! to a temporary of the branch, which is dropped where the branch ends. A pattern of a box's
+//! contents tests and binds them through a [`Projection::Deref`] place; taking them apart moves
+//! the box into a call of the built-in `unbox`, whose result is taken apart (D10 of `heap-boxes`).
 //!
 //! The locals of a branch (its bindings and the temporaries of every alternative's take-apart) are
 //! declared once, in the branch's scope, and marked live at the start of each path that matched a
@@ -13,13 +15,22 @@
 
 use super::Builder;
 use crate::mir::{
-    BlockId, BorrowOrigin, Constant, LocalDeclaration, LocalId, LocalKind, Operand, Place,
+    BlockId, BorrowOrigin, Callee, Constant, LocalDeclaration, LocalId, LocalKind, Operand, Place,
     Projection, Rvalue, StatementKind,
 };
 use prism_ast::Span;
 use prism_typed_tree::{
-    BinaryOperator, BindingMode, ExpressionId, LocalId as TreeLocalId, Pattern, Type,
+    BinaryOperator, BindingMode, BuiltinFunction, ExpressionId, LocalId as TreeLocalId, Pattern,
+    Type,
 };
+
+/// The contents' type of the box type `ty` a [`Pattern::Deref`] matches.
+fn box_contents(ty: &Type) -> Type {
+    match ty {
+        Type::Heap(contents) => contents.as_ref().clone(),
+        other => panic!("internal error: a box pattern of a {}", other),
+    }
+}
 
 /// The MIR locals of one branch: its bindings, then per pattern the temporaries its take-apart
 /// needs, in the order [`Builder::take_apart`] uses them.
@@ -165,9 +176,18 @@ impl Builder<'_> {
             out.push(payload.clone());
             return self.take_apart_types(inner, &payload, out);
         }
+        // The contents of a box taken apart are unboxed into a temporary (D9 of `heap-boxes`).
+        if let Pattern::Deref(inner) = pattern {
+            let contents = box_contents(ty);
+            out.push(contents.clone());
+            return self.take_apart_types(inner, &contents, out);
+        }
         let Some((variant, fields)) = Self::constructor_parts(pattern) else {
             return;
         };
+        // Every part's temporary first, then the nested take-aparts, in the order
+        // `take_apart` uses them.
+        let mut nested = Vec::new();
         for (field, sub) in fields.iter().enumerate() {
             let part = self.part_type(ty, variant, field);
             if self.is_copy(&part)
@@ -182,6 +202,9 @@ impl Builder<'_> {
                 continue;
             }
             out.push(part.clone());
+            nested.push((sub, part));
+        }
+        for (sub, part) in nested {
             self.take_apart_types(sub, &part, out);
         }
     }
@@ -258,6 +281,11 @@ impl Builder<'_> {
                 };
                 let part = place.project(Projection::Payload);
                 self.test_pattern(&part, &payload, inner, failures, subject_span, span);
+            }
+            Pattern::Deref(inner) => {
+                let contents = box_contents(ty);
+                let place = place.project(Projection::Deref);
+                self.test_pattern(&place, &contents, inner, failures, subject_span, span);
             }
             Pattern::Value(value) => {
                 let value = *value;
@@ -366,6 +394,11 @@ impl Builder<'_> {
                     span,
                 );
             }
+            Pattern::Deref(inner) => {
+                let contents = box_contents(ty);
+                let place = place.project(Projection::Deref);
+                self.bind_copies_and_borrows(&place, &contents, inner, span);
+            }
             _ => {
                 if let Some((variant, fields)) = Self::constructor_parts(pattern) {
                     for (field, sub) in fields.iter().enumerate() {
@@ -401,6 +434,9 @@ impl Builder<'_> {
             } => out.push((*local, place.clone())),
             Pattern::NonNull(inner) => {
                 self.moving_binding_places(&place.project(Projection::Payload), inner, out)
+            }
+            Pattern::Deref(inner) => {
+                self.moving_binding_places(&place.project(Projection::Deref), inner, out)
             }
             _ => {
                 if let Some((variant, fields)) = Self::constructor_parts(pattern) {
@@ -452,6 +488,23 @@ impl Builder<'_> {
             let rvalue = Rvalue::Use(Operand::Move(place.project(Projection::Payload), span));
             self.assign(Place::local(temporary), rvalue, span);
             return self.take_apart(Place::local(temporary), &payload, inner, temporaries, span);
+        }
+        if let Pattern::Deref(inner) = pattern {
+            // The box moves into `unbox`, which frees it and gives its contents to take apart
+            // (D9 of `heap-boxes`).
+            let contents = box_contents(ty);
+            let temporary = *temporaries.next().expect("a planned temporary");
+            self.emit_call(
+                Callee::Builtin(BuiltinFunction::Unbox),
+                vec![Operand::Move(place, span)],
+                vec![ty.clone()],
+                Vec::new(),
+                Place::local(temporary),
+                false,
+                true,
+                span,
+            );
+            return self.take_apart(Place::local(temporary), &contents, inner, temporaries, span);
         }
         let Some((variant, fields)) = Self::constructor_parts(pattern) else {
             return;

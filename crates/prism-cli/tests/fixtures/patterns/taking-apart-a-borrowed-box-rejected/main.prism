@@ -1,0 +1,9 @@
+// expect: E4017
+enum Doc { Text(String), Wrapped(Heap<Doc>) }
+
+struct Holder { val h: Heap<Doc> }
+
+fun f(o: Holder): String = when (o.h) {
+    Doc.Text(val s) -> s
+    else -> ""
+}

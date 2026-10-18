@@ -1,0 +1,8 @@
+// expect: ok
+enum Counter { Count(Int) }
+
+fun bump(h: &mut Heap<Counter>) {
+    when (h) {
+        Counter.Count(val n) -> *n += 1
+    }
+}

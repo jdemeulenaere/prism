@@ -1,0 +1,13 @@
+// expect: ok
+enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }
+
+fun f(h: Heap<Expr>): Int = when (h) {
+    Expr.Lit(val n) -> n
+    Expr.Add(_, _) -> 0
+}
+
+fun g(h: &Heap<Int>): Int = when (h) {
+    0 -> 1
+    in 1..9 -> 2
+    else -> 3
+}

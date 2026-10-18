@@ -1,0 +1,10 @@
+// expect: ok
+enum Bit { Zero, One }
+
+enum Pair { Of(Heap<Bit>, Heap<Bit>) }
+
+fun f(p: &Pair): Int = when (p) {
+    Pair.Of(Bit.Zero, _) -> 0
+    Pair.Of(Bit.One, Bit.Zero) -> 1
+    Pair.Of(Bit.One, Bit.One) -> 2
+}

@@ -1,0 +1,7 @@
+// expect: ok
+enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }
+
+fun eval(e: &Expr): Int = when (e) {
+    Expr.Lit(val n) -> n
+    Expr.Add(val l, val r) -> eval(l) + eval(r)
+}

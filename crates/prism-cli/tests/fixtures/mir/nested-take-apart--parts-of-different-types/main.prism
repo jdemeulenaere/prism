@@ -1,0 +1,11 @@
+// expect: ok
+enum Inner { A(String), B(Int) }
+
+struct Pair(val a: Inner, val b: Inner)
+
+struct Two(val a: Pair, val b: Pair)
+
+fun g(p: Two): String = when (p) {
+    Two(Pair(Inner.A(val s), _), Pair(_, Inner.A(val t))) -> s
+    else -> ""
+}

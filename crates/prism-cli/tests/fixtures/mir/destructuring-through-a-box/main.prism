@@ -1,0 +1,7 @@
+// expect: ok
+enum Doc { Text(String), Wrapped(Heap<Doc>) }
+
+fun f(d: Doc): String = when (d) {
+    Doc.Wrapped(Doc.Text(val s)) -> s
+    else -> ""
+}

@@ -6,7 +6,9 @@
 //! fall back to the value their syntax spells. Bindings take the mode the subject's type gives
 //! them (D5): by value for an owned subject, by shared borrow (copying `Copy` parts) through a
 //! `&`, by mutable borrow through a `&mut`. A branch's bindings are collected per pattern, so
-//! that alternatives can be compared and share one binding per name (D10).
+//! that alternatives can be compared and share one binding per name (D10). Constructor, value
+//! and range patterns look through boxes, matching their contents in the same mode, while
+//! wildcards and bindings take the box itself (D9 of `heap-boxes`).
 
 use super::{binding_name, TypeChecker, THIS};
 use crate::error::TypeError;
@@ -109,6 +111,15 @@ impl TypeChecker {
             PatternKind::Wildcard => Pattern::Wildcard,
             PatternKind::Binding { is_var, name } => {
                 self.bind_pattern_name(name, *is_var, part, mode, pattern.span, bindings)
+            }
+            // Any other pattern matches the contents of a box, keeping the subject's mode (D9 of
+            // `heap-boxes`); a wildcard or a binding takes the box itself.
+            _ if matches!(part, Type::Heap(_)) => {
+                let Type::Heap(contents) = part else {
+                    unreachable!("matched above")
+                };
+                let inner = self.check_pattern(pattern, contents, mode, bindings);
+                Pattern::Deref(Box::new(inner))
             }
             PatternKind::InRange {
                 start,
@@ -371,11 +382,16 @@ impl TypeChecker {
             self.sub_patterns_of_error(arguments, mode, bindings);
             return Pattern::Wildcard;
         }
-        // A constructor pattern of `T` matches a non-null `T?`.
+        // A constructor pattern of `T` matches a non-null `T?`, and the contents of a non-null
+        // `Heap<T>?`.
         let (target, nullable) = match part {
             Type::Nullable(inner) => (inner.as_ref().clone(), true),
             other => (other.clone(), false),
         };
+        if nullable && matches!(target, Type::Heap(_)) {
+            let inner = self.check_pattern(pattern, &target, mode, bindings);
+            return Pattern::NonNull(Box::new(inner));
+        }
         let part_enum = match &target {
             Type::Enum { id, .. } => Some(id.clone()),
             _ => None,

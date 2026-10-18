@@ -930,6 +930,14 @@ impl Validator<'_> {
                     .map(|fields| fields.into_iter().map(|(_, _, ty)| ty).collect());
                 self.sub_patterns(fields, field_types, when, &id.name);
             }
+            Pattern::Deref(inner) => match part {
+                Type::Heap(contents) => self.pattern(inner, contents, when),
+                _ if self.error_free => self.report(format!(
+                    "when {} matches the contents of a box against a {}",
+                    when.0, part
+                )),
+                _ => {}
+            },
             Pattern::NonNull(inner) => match part {
                 Type::Nullable(payload) => self.pattern(inner, payload, when),
                 _ if self.error_free => self.report(format!(

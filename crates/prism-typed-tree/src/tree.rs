@@ -675,6 +675,9 @@ pub enum Pattern {
     /// A nullable that is not `null`, whose payload matches the inner pattern: a constructor
     /// pattern of `T` matching a `T?`.
     NonNull(Box<Pattern>),
+    /// A box whose contents match the inner pattern: a constructor, value or range pattern of
+    /// `T` matching a `Heap<T>` (D9 of `heap-boxes`). Taking the contents apart unboxes the box.
+    Deref(Box<Pattern>),
     /// `_`, or a part no pattern names.
     Wildcard,
     /// A binding of the matched part, by `mode`.
@@ -702,7 +705,7 @@ impl Pattern {
                     field.expressions(out);
                 }
             }
-            Pattern::NonNull(inner) => inner.expressions(out),
+            Pattern::NonNull(inner) | Pattern::Deref(inner) => inner.expressions(out),
             Pattern::Value(value) | Pattern::Condition(value) => out.push(*value),
             Pattern::Range { start, end, .. } => out.extend([*start, *end]),
             Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Else => {}
@@ -723,7 +726,7 @@ impl Pattern {
                     field.collect_bindings(out);
                 }
             }
-            Pattern::NonNull(inner) => inner.collect_bindings(out),
+            Pattern::NonNull(inner) | Pattern::Deref(inner) => inner.collect_bindings(out),
             Pattern::Binding { local, mode } => out.push((*local, *mode)),
             _ => {}
         }
