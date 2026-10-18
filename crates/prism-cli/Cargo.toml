@@ -28,3 +28,9 @@ prism-runtime = { path = "../prism-runtime" }
 [dev-dependencies]
 prism-mir = { path = "../prism-mir" }
 prism-borrowck = { path = "../prism-borrowck" }
+# The compile-time benchmark (tests/compile_timing.rs) times Cranelift's compilation apart from
+# the backend's lowering, at the backend's pinned version.
+cranelift-codegen = "=0.136.2"
+cranelift-jit = "=0.136.2"
+cranelift-module = "=0.136.2"
+cranelift-native = "=0.136.2"

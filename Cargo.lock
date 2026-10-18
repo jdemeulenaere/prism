@@ -386,6 +386,10 @@ dependencies = [
 name = "prism-cli"
 version = "0.1.0"
 dependencies = [
+ "cranelift-codegen",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
  "prism-abi",
  "prism-ast",
  "prism-borrowck",
