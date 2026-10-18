@@ -485,6 +485,8 @@ impl Builder<'_> {
             subject_span,
         );
         let mut targets: Vec<(u64, BlockId)> = Vec::new();
+        // The variants `targets` already switches on.
+        let mut switched: std::collections::HashSet<usize> = std::collections::HashSet::new();
         // Per taken branch: its body block, and the block of each pattern that binds.
         type TakenBranch<'b> = (BlockId, &'b WhenBranch, Vec<(usize, BlockId)>);
         let mut bodies: Vec<TakenBranch> = Vec::new();
@@ -500,9 +502,7 @@ impl Builder<'_> {
             let mut pattern_blocks = Vec::new();
             for (index, pattern) in branch.patterns.iter().enumerate() {
                 let fresh = match pattern {
-                    Pattern::Variant { index, .. } => {
-                        !targets.iter().any(|(v, _)| *v == *index as u64)
-                    }
+                    Pattern::Variant { index, .. } => !switched.contains(index),
                     Pattern::Else => true,
                     _ => unreachable!("a variant switch has only variants and else"),
                 };
@@ -518,7 +518,10 @@ impl Builder<'_> {
                     body_block
                 };
                 match pattern {
-                    Pattern::Variant { index, .. } => targets.push((*index as u64, target)),
+                    Pattern::Variant { index, .. } => {
+                        switched.insert(*index);
+                        targets.push((*index as u64, target));
+                    }
                     _ => otherwise = Some(target),
                 }
             }

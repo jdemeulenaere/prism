@@ -297,9 +297,7 @@ impl TypeChecker {
             },
             _ => return None,
         };
-        self.enum_variants(id)?
-            .iter()
-            .position(|(variant, _)| variant == name)
+        self.variant_index(id, name)
     }
 
     /// The name of variant `index` of enum `id`.
@@ -313,9 +311,8 @@ impl TypeChecker {
     /// The payload types of variant `index` of enum `id` instantiated with `arguments`.
     fn variant_payloads(&self, id: &NominalId, arguments: &[Type], index: usize) -> Vec<Type> {
         self.types
-            .instantiated_variants(id, arguments)
-            .and_then(|variants| variants.into_iter().nth(index))
-            .map_or_else(Vec::new, |(_, payloads)| payloads)
+            .instantiated_variant(id, arguments, index)
+            .unwrap_or_default()
     }
 
     /// What the name of a constructor pattern resolves to, against a part whose enum (if any) is
@@ -336,9 +333,7 @@ impl TypeChecker {
                     return Constructor::Other;
                 };
                 let id = id.clone();
-                let index = self
-                    .enum_variants(&id)
-                    .and_then(|variants| variants.iter().position(|(name, _)| name == member));
+                let index = self.variant_index(&id, member);
                 match index {
                     Some(index) => {
                         self.check_visibility(&sym, target.span);
@@ -353,9 +348,7 @@ impl TypeChecker {
                     return Constructor::Other;
                 }
                 if let Some(id) = part_enum {
-                    let index = self
-                        .enum_variants(id)
-                        .and_then(|variants| variants.iter().position(|(v, _)| v == name));
+                    let index = self.variant_index(id, name);
                     if let Some(index) = index {
                         return Constructor::Variant {
                             id: id.clone(),
@@ -381,9 +374,7 @@ impl TypeChecker {
                         _ => None,
                     };
                     if let Some(id) = owner {
-                        let index = self
-                            .enum_variants(&id)
-                            .and_then(|variants| variants.iter().position(|(v, _)| v == name));
+                        let index = self.variant_index(&id, name);
                         if let Some(index) = index {
                             return Constructor::Variant { id, index };
                         }

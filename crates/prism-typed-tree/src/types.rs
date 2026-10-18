@@ -4,7 +4,7 @@
 //! the type checker; this module holds only the representation and its rendering.
 
 use prism_ast::TypeMarker;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 /// Module path of the compiler's built-in nominal types (such as `Range`).
@@ -112,6 +112,22 @@ pub struct NominalMarker {
 pub struct TypeTable {
     definitions: BTreeMap<NominalId, TypeDef>,
     markers: BTreeMap<NominalId, NominalMarker>,
+    /// The position of each field of a struct, or variant of an enum, by name (the first of a
+    /// repeated name), so that a member is found in constant time however many there are.
+    member_indices: BTreeMap<NominalId, HashMap<String, usize>>,
+}
+
+/// The position of each member of `definition` by name, the first of a repeated name.
+fn member_indices(definition: &TypeDef) -> HashMap<String, usize> {
+    let names: Vec<&String> = match definition {
+        TypeDef::Struct { fields, .. } => fields.iter().map(|(name, _, _)| name).collect(),
+        TypeDef::Enum { variants, .. } => variants.iter().map(|(name, _)| name).collect(),
+    };
+    let mut indices = HashMap::with_capacity(names.len());
+    for (index, name) in names.into_iter().enumerate() {
+        indices.entry(name.clone()).or_insert(index);
+    }
+    indices
 }
 
 impl TypeTable {
@@ -141,11 +157,17 @@ impl TypeTable {
 
     /// Records the definition of `id`, unless one is already recorded.
     pub fn insert_definition(&mut self, id: NominalId, definition: TypeDef) {
-        self.definitions.entry(id).or_insert(definition);
+        if !self.definitions.contains_key(&id) {
+            self.member_indices
+                .insert(id.clone(), member_indices(&definition));
+            self.definitions.insert(id, definition);
+        }
     }
 
     /// Replaces the definition of `id`.
     pub fn replace_definition(&mut self, id: NominalId, definition: TypeDef) {
+        self.member_indices
+            .insert(id.clone(), member_indices(&definition));
         self.definitions.insert(id, definition);
     }
 
@@ -209,6 +231,18 @@ impl TypeTable {
         }
     }
 
+    /// The position of the field `name` of struct `id`, if its definition is known and has one.
+    pub fn field_index(&self, id: &NominalId, name: &str) -> Option<usize> {
+        self.struct_fields(id)?;
+        self.member_indices.get(id)?.get(name).copied()
+    }
+
+    /// The position of the variant `name` of enum `id`, if its definition is known and has one.
+    pub fn variant_index(&self, id: &NominalId, name: &str) -> Option<usize> {
+        self.enum_variants(id)?;
+        self.member_indices.get(id)?.get(name).copied()
+    }
+
     /// The type parameters of `id`, empty when it is not generic or unknown.
     pub fn parameters(&self, id: &NominalId) -> &[TypeParameter] {
         self.definitions.get(id).map_or(&[], TypeDef::parameters)
@@ -245,6 +279,31 @@ impl TypeTable {
                 })
                 .collect()
         })
+    }
+
+    /// The payload types of variant `index` of enum `id` with `arguments` substituted for its
+    /// type parameters, if its definition is known and has that variant. Only that variant is
+    /// instantiated, so a lookup costs its payloads, not the enum's variants.
+    pub fn instantiated_variant(
+        &self,
+        id: &NominalId,
+        arguments: &[Type],
+        index: usize,
+    ) -> Option<Vec<Type>> {
+        let (_, payloads) = self.enum_variants(id)?.get(index)?;
+        Some(payloads.iter().map(|ty| ty.substitute(arguments)).collect())
+    }
+
+    /// The type of field `index` of struct `id` with `arguments` substituted for its type
+    /// parameters, if its definition is known and has that field.
+    pub fn instantiated_field(
+        &self,
+        id: &NominalId,
+        arguments: &[Type],
+        index: usize,
+    ) -> Option<Type> {
+        let (_, _, ty) = self.struct_fields(id)?.get(index)?;
+        Some(ty.substitute(arguments))
     }
 
     /// Whether every marker parameter of `id` has an argument satisfying `satisfies`. A missing

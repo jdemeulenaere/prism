@@ -133,9 +133,8 @@ fn reduce(
             ..
         } => {
             let parts = types
-                .instantiated_variants(enum_id, arguments)
-                .and_then(|variants| variants.into_iter().nth(*index))
-                .map_or_else(Vec::new, |(_, payloads)| payloads);
+                .instantiated_variant(enum_id, arguments, *index)
+                .unwrap_or_default();
             Reduced::Constructor(Constructor::Variant(*index), reduce_fields(fields, parts))
         }
         Pattern::Struct {
@@ -181,6 +180,22 @@ fn reduce(
         },
         Pattern::Range { .. } | Pattern::Condition(_) => Reduced::Opaque,
     }
+}
+
+/// The union of the increasing lists `a` and `b`, which share no element, in increasing order.
+fn merged(a: &[usize], b: &[usize]) -> Vec<usize> {
+    let mut merged = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if j == b.len() || (i < a.len() && a[i] < b[j]) {
+            merged.push(a[i]);
+            i += 1;
+        } else {
+            merged.push(b[j]);
+            j += 1;
+        }
+    }
+    merged
 }
 
 /// `ty` without its `Heap<T>` and reference layers: a box is matched, and printed, as its
@@ -231,10 +246,16 @@ impl Matrix<'_> {
         }
     }
 
-    /// The field types of `constructor` of `ty`.
+    /// The field types of `constructor` of `ty`. A variant's are looked up alone, so the cost
+    /// does not grow with the enum's other variants.
     fn fields_of(&self, constructor: &Constructor, ty: &Type) -> Vec<Type> {
-        match constructor {
-            Constructor::Literal(_) => Vec::new(),
+        match (constructor, peel_indirections(ty)) {
+            (Constructor::Literal(_), _) => Vec::new(),
+            (Constructor::Variant(index), Type::Enum { id, arguments }) => self
+                .types
+                .instantiated_variant(id, arguments, *index)
+                .unwrap_or_default(),
+            (_, Type::Enum { .. }) => Vec::new(),
             _ => self
                 .constructors(ty)
                 .and_then(|all| {
@@ -246,6 +267,17 @@ impl Matrix<'_> {
         }
     }
 
+    /// The position of `constructor` in the list [`Self::constructors`] gives for its type, when
+    /// that list can contain it.
+    fn position(constructor: &Constructor) -> Option<usize> {
+        match constructor {
+            Constructor::Variant(index) => Some(*index),
+            Constructor::Struct | Constructor::Bool(true) | Constructor::Null => Some(0),
+            Constructor::Bool(false) | Constructor::Present => Some(1),
+            Constructor::Literal(_) => None,
+        }
+    }
+
     /// The rows of `matrix` that match `constructor`, with its fields in place of their first
     /// column. An opaque first column matches nothing for certain.
     fn specialize(
@@ -254,22 +286,30 @@ impl Matrix<'_> {
         constructor: &Constructor,
         arity: usize,
     ) -> Vec<Vec<Reduced>> {
-        matrix
-            .iter()
-            .filter_map(|row| {
-                let mut fields = match &row[0] {
-                    Reduced::Wildcard => vec![Reduced::Wildcard; arity],
-                    Reduced::Constructor(c, fields) if c == constructor => {
-                        let mut fields = fields.clone();
-                        fields.resize(arity, Reduced::Wildcard);
-                        fields
-                    }
-                    _ => return None,
-                };
-                fields.extend(row[1..].iter().cloned());
-                Some(fields)
-            })
-            .collect()
+        self.specialize_rows(matrix.iter(), constructor, arity)
+    }
+
+    /// [`Self::specialize`] over `rows` only, in order: the rows that can match.
+    fn specialize_rows<'r>(
+        &self,
+        rows: impl Iterator<Item = &'r Vec<Reduced>>,
+        constructor: &Constructor,
+        arity: usize,
+    ) -> Vec<Vec<Reduced>> {
+        rows.filter_map(|row| {
+            let mut fields = match &row[0] {
+                Reduced::Wildcard => vec![Reduced::Wildcard; arity],
+                Reduced::Constructor(c, fields) if c == constructor => {
+                    let mut fields = fields.clone();
+                    fields.resize(arity, Reduced::Wildcard);
+                    fields
+                }
+                _ => return None,
+            };
+            fields.extend(row[1..].iter().cloned());
+            Some(fields)
+        })
+        .collect()
     }
 
     /// The rows of `matrix` whose first column is a wildcard, without it.
@@ -308,27 +348,43 @@ impl Matrix<'_> {
                 Some(Self::rebuild(constructor.clone(), arity, witness))
             }
             Reduced::Wildcard => {
-                let heads: Vec<&Constructor> = matrix
-                    .iter()
-                    .filter_map(|row| match &row[0] {
-                        Reduced::Constructor(c, _) => Some(c),
-                        _ => None,
-                    })
-                    .collect();
                 // An enum without variants has no constructor, yet is never covered: a `when`
                 // over it needs `else` (D11).
                 let all = self.constructors(ty).filter(|all| !all.is_empty());
-                let complete = all
-                    .as_ref()
-                    .is_some_and(|all| all.iter().all(|(c, _)| heads.contains(&c)));
+                // The rows headed by each constructor of `all`, and the rows headed by a
+                // wildcard, in order: each specialization below reads only its own rows and
+                // the wildcards, so the cost does not grow with constructors times rows.
+                let mut headed: Vec<Vec<usize>> =
+                    vec![Vec::new(); all.as_ref().map_or(0, Vec::len)];
+                let mut wildcards = Vec::new();
+                for (index, row) in matrix.iter().enumerate() {
+                    match &row[0] {
+                        Reduced::Constructor(c, _) => {
+                            let position = Self::position(c).filter(|position| {
+                                all.as_ref()
+                                    .and_then(|all| all.get(*position))
+                                    .is_some_and(|(listed, _)| listed == c)
+                            });
+                            if let Some(position) = position {
+                                headed[position].push(index);
+                            }
+                        }
+                        Reduced::Wildcard => wildcards.push(index),
+                        Reduced::Opaque => {}
+                    }
+                }
+                let complete = all.is_some() && headed.iter().all(|rows| !rows.is_empty());
                 if let (true, Some(all)) = (complete, &all) {
-                    for (constructor, field_types) in all {
+                    for (position, (constructor, field_types)) in all.iter().enumerate() {
                         let arity = field_types.len();
                         let mut next = vec![Reduced::Wildcard; arity];
                         next.extend(rest.iter().cloned());
                         let mut column_types = field_types.clone();
                         column_types.extend(types[1..].iter().cloned());
-                        let specialized = self.specialize(matrix, constructor, arity);
+                        let rows = merged(&headed[position], &wildcards)
+                            .into_iter()
+                            .map(|index| &matrix[index]);
+                        let specialized = self.specialize_rows(rows, constructor, arity);
                         if let Some(witness) = self.useful(&specialized, &next, &column_types) {
                             return Some(Self::rebuild(constructor.clone(), arity, witness));
                         }
@@ -340,8 +396,9 @@ impl Matrix<'_> {
                 // A constructor no row names is missing; an open type's is any other value.
                 let missing = all.and_then(|all| {
                     all.into_iter()
-                        .find(|(c, _)| !heads.contains(&c))
-                        .map(|(c, fields)| {
+                        .zip(&headed)
+                        .find(|(_, rows)| rows.is_empty())
+                        .map(|((c, fields), _)| {
                             Witness::Constructor(c, vec![Witness::Wildcard; fields.len()])
                         })
                 });

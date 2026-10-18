@@ -833,6 +833,20 @@ impl TypeChecker {
         self.types.enum_variants(id).map(<[_]>::to_vec)
     }
 
+    /// Whether the definition of struct or enum `id` is known and its members are visible.
+    fn members_visible(&self, id: &NominalId) -> bool {
+        !self.is_layout_only(id) && self.types.definition(id).is_some()
+    }
+
+    /// The position of the variant `name` of enum `id`, if its definition is known, its members
+    /// are visible and it has one.
+    fn variant_index(&self, id: &NominalId, name: &str) -> Option<usize> {
+        if self.is_layout_only(id) {
+            return None;
+        }
+        self.types.variant_index(id, name)
+    }
+
     /// Whether the type checker knows the definition of `id` for layout only: the type is
     /// neither the file's own, built in, nor exported by an import, so it reached the file's
     /// type table through an import's reachable type definitions (D4 of `codegen-aggregates`).
@@ -1302,10 +1316,8 @@ impl TypeChecker {
         if self.types.parameters(&id).is_empty() {
             return None;
         }
-        let payload_free = self
-            .enum_variants(&id)?
-            .iter()
-            .any(|(name, payloads)| name == &member && payloads.is_empty());
+        let index = self.variant_index(&id, &member)?;
+        let payload_free = self.types.enum_variants(&id)?[index].1.is_empty();
         payload_free.then_some((id, member))
     }
 
@@ -1358,9 +1370,7 @@ impl TypeChecker {
         let Type::Enum { id: enum_id, .. } = peel_indirection(enum_ty).clone() else {
             return self.error_node(Vec::new(), span);
         };
-        let index = self
-            .enum_variants(&enum_id)
-            .and_then(|variants| variants.iter().position(|(name, _)| name == member));
+        let index = self.variant_index(&enum_id, member);
         let Some(index) = index else {
             return self.error_node(Vec::new(), span);
         };
@@ -7160,9 +7170,7 @@ impl TypeChecker {
             ty = inner;
         }
         match ty {
-            Type::Enum { id, .. } => self
-                .enum_variants(id)
-                .is_some_and(|variants| variants.iter().any(|(v, _)| v == name)),
+            Type::Enum { id, .. } => self.variant_index(id, name).is_some(),
             _ => false,
         }
     }
@@ -7228,14 +7236,14 @@ impl TypeChecker {
             return (Type::Error, None);
         }
         match &peeled_ty {
-            Type::Struct { id, arguments } if self.struct_fields(id).is_some() => {
+            Type::Struct { id, arguments } if self.members_visible(id) => {
                 // Fields have their declared types with the type arguments substituted.
-                let fields = self
-                    .types
-                    .instantiated_fields(id, arguments)
-                    .unwrap_or_default();
-                if let Some((_, is_var, f_ty)) = fields.iter().find(|(n, _, _)| n == member) {
-                    (wrap(f_ty.clone()), Some(*is_var))
+                let field = self.types.field_index(id, member).and_then(|index| {
+                    let is_var = self.types.struct_fields(id)?[index].1;
+                    Some((is_var, self.types.instantiated_field(id, arguments, index)?))
+                });
+                if let Some((is_var, f_ty)) = field {
+                    (wrap(f_ty), Some(is_var))
                 } else {
                     self.errors.push(TypeError::UnknownField {
                         target_type: peeled_ty.clone(),
@@ -7246,7 +7254,7 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            Type::Enum { id, arguments } if self.enum_variants(id).is_some() => {
+            Type::Enum { id, arguments } if self.members_visible(id) => {
                 // Through the enum's name (`Option.Some`), the enum is applied to its own
                 // parameters, which the use solves (D8 of `generics`).
                 let arguments = if arguments.is_empty() {
@@ -7254,11 +7262,11 @@ impl TypeChecker {
                 } else {
                     arguments.clone()
                 };
-                let variants = self
+                let variant = self
                     .types
-                    .instantiated_variants(id, &arguments)
-                    .unwrap_or_default();
-                if let Some((_, payloads)) = variants.iter().find(|(v_name, _)| v_name == member) {
+                    .variant_index(id, member)
+                    .and_then(|index| self.types.instantiated_variant(id, &arguments, index));
+                if let Some(payloads) = &variant {
                     let enum_ty = Type::Enum {
                         id: id.clone(),
                         arguments,
