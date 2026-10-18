@@ -761,6 +761,27 @@ fn nested_lists(n: usize) -> String {
     format!("fun main() {{\n    val xs = {value}\n    println(xs == xs.clone())\n}}\n")
 }
 
+/// `n` functions whose parameters are structs and enums nested eight deep, each reaching every
+/// definition below it twice: their slot contracts hash the fingerprints of those types, which
+/// are memoized per unit (D5 and D6 of `hot-reload`), so the `lower` stage stays linear in `n`.
+fn contract_fingerprints(n: usize) -> String {
+    let mut source =
+        String::from("enum E0 { A, B(Int) }\nstruct S0 : Copy { val x: Int, val y: Double }\n");
+    for depth in 1..8 {
+        let below = depth - 1;
+        writeln!(
+            source,
+            "struct S{depth} {{ val a: S{below}, val b: S{below}, val e: E{below} }}\n\
+             enum E{depth} {{ A(S{below}), B(E{below}, Int), C }}"
+        )
+        .unwrap();
+    }
+    for i in 0..n {
+        writeln!(source, "fun f{i}(a: &S7, b: &E7, c: Int): Int = c + {i}").unwrap();
+    }
+    source
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -858,6 +879,7 @@ fn shapes() -> Vec<Shape> {
         shape("list-loops", true, SIZES, list_loops),
         shape("list-element-types", true, SIZES, list_element_types),
         shape("nested-lists", true, DEPTHS, nested_lists),
+        shape("contract-fingerprints", true, SIZES, contract_fingerprints),
     ]
 }
 
