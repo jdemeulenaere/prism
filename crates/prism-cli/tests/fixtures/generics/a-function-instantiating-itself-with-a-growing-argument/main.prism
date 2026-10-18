@@ -1,0 +1,3 @@
+// expect: E4027
+struct Box<T>(val v: T)
+fun <T> nest(x: T, n: Int): Int = if (n == 0) 0 else nest(Box(x), n - 1)

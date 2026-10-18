@@ -2157,7 +2157,11 @@ impl TypeChecker {
                 _ => {}
             }
         }
-        self.finish_file(source_file)
+        let file = self.finish_file(source_file);
+        let recursion =
+            crate::recursion::check_polymorphic_recursion(source_file, &file, &self.errors);
+        self.errors.extend(recursion);
+        file
     }
 
     /// The typed tree of the file: its items in source order, structs and enums from the type

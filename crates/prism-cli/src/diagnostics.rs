@@ -444,6 +444,21 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 type_name
             ));
         }
+        TypeError::PolymorphicRecursion { cycle, is_type, .. } => {
+            if *is_type {
+                out.push_str(&format!(
+                    "   = note: the cycle {} would need infinitely many types for its layout and glue\n",
+                    cycle
+                ));
+                out.push_str("   = help: pass the same type parameters on, unnested, wherever the type reaches itself\n");
+            } else {
+                out.push_str(&format!(
+                    "   = note: the cycle {} would need infinitely many instances\n",
+                    cycle
+                ));
+                out.push_str("   = help: pass the same type arguments on every recursive call, or wrap the value in a non-generic type\n");
+            }
+        }
         TypeError::NotAReference { .. } => {
             out.push_str("   = help: '*r = v' writes through a reference 'r', and '*h = v' into the contents of a box 'h'; assign a variable or field directly with 'x = v'\n");
         }

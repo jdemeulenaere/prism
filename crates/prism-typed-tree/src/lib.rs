@@ -7,6 +7,7 @@
 
 pub mod arena;
 pub mod dump;
+pub mod instantiation;
 pub mod tree;
 pub mod types;
 pub mod validate;

@@ -12,6 +12,7 @@ pub mod checker;
 pub mod error;
 pub mod exhaustiveness;
 pub mod inference;
+mod recursion;
 pub mod scope;
 pub mod types;
 

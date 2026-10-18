@@ -1,0 +1,4 @@
+// expect: E4027
+struct Box<T>(val v: T)
+fun <T> ping(x: T, n: Int): Int = if (n == 0) 0 else pong(Box(x), n - 1)
+fun <T> pong(x: T, n: Int): Int = ping(x, n)

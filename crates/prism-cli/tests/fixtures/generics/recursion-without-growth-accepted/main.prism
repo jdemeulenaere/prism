@@ -1,0 +1,3 @@
+// expect: ok
+fun <T> count(x: &T, n: Int): Int = if (n == 0) 0 else count(x, n - 1)
+fun <T> deep(x: T?, n: Int): Int = if (n == 0) 0 else deep<T?>(x, n - 1)

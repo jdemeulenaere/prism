@@ -266,6 +266,18 @@ pub enum TypeError {
         help: Vec<String>,
         span: Span,
     },
+
+    /// E4027: A generic function reaches a call of itself, or a generic struct or enum reaches
+    /// itself through its fields or payloads, with a type argument that nests its own type
+    /// parameter in another type, so it would need infinitely many instances (D8 and D9 of
+    /// `monomorphization`). `message` names the growing argument, `cycle` the generics on the
+    /// cycle (`'ping' -> 'pong' -> 'ping'`), and `is_type` whether they are types.
+    PolymorphicRecursion {
+        message: String,
+        cycle: String,
+        is_type: bool,
+        span: Span,
+    },
 }
 
 /// Why a string template part has no text form (D8 of `string-templates`).
@@ -326,6 +338,7 @@ impl TypeError {
             TypeError::InvalidPattern { .. } => "E4024",
             TypeError::InconsistentAlternativeBindings { .. } => "E4025",
             TypeError::NoTextForm { .. } => "E4026",
+            TypeError::PolymorphicRecursion { .. } => "E4027",
         }
     }
 
@@ -370,6 +383,7 @@ impl TypeError {
             TypeError::InvalidPattern { span, .. } => *span,
             TypeError::InconsistentAlternativeBindings { span, .. } => *span,
             TypeError::NoTextForm { span, .. } => *span,
+            TypeError::PolymorphicRecursion { span, .. } => *span,
         }
     }
 
@@ -606,6 +620,9 @@ impl TypeError {
                 "'{}' has an infinite size: it contains itself by value",
                 type_name
             ),
+            TypeError::PolymorphicRecursion { message, .. } => {
+                format!("polymorphic recursion: {}", message)
+            }
         }
     }
 }
