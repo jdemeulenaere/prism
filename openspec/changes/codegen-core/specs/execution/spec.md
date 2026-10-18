@@ -51,11 +51,15 @@ The entry file MUST declare a top-level function `main` that has no type paramet
 - **THEN** stdout holds `1truex`, a newline, `-5`, a newline, and a newline
 
 ### Requirement: Double Text Form
-A `Double` MUST be written as the shortest decimal that reads back as the same value, with at least one digit after the point, in scientific notation (`1.0E7`, `1.0E-4`) when its magnitude is at least 10^7 or below 10^-3, and as `NaN`, `Infinity`, `-Infinity` and `-0.0` for those values, as Kotlin writes it.
+A `Double` MUST be written as Kotlin writes it (Java's `Double.toString`): as the shortest decimal that reads back as the same value, or, when that decimal has a single significant digit, as the closest decimal of one or two significant digits that reads back as the same value; with at least one digit after the point; in scientific notation (`1.0E7`, `1.0E-4`) when its magnitude is at least 10^7 or below 10^-3; and as `NaN`, `Infinity`, `-Infinity` and `-0.0` for those values.
 
 #### Scenario: Printing doubles
 - **WHEN** a program prints `1.0`, `0.1 + 0.2`, `10000000.0`, `0.0001`, `1.0 / 0.0`, `0.0 / 0.0` and `-0.0`, each with `println`
 - **THEN** stdout holds the lines `1.0`, `0.30000000000000004`, `1.0E7`, `1.0E-4`, `Infinity`, `NaN` and `-0.0`
+
+#### Scenario: Printing the smallest double
+- **WHEN** a program prints `4.9E-324`, the smallest positive `Double`, and `1.0E-323`, its double, each with `println`
+- **THEN** stdout holds the lines `4.9E-324` and `9.9E-324`, the closest two-digit decimals, rather than the shortest `5.0E-324` and `1.0E-323`
 
 ### Requirement: Output Is Buffered and Flushed
 Output MUST appear in the order the program writes it. It MUST be written to stdout at the latest when the program ends, before a runtime error is reported, and at each newline when stdout is a terminal.

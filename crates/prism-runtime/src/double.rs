@@ -5,7 +5,9 @@
 //! value, with at least one digit after the point, in plain notation when its magnitude is in
 //! `[10^-3, 10^7)` and in scientific notation (`1.0E7`, `1.0E-4`) otherwise, and `NaN`,
 //! `Infinity`, `-Infinity` and `-0.0` for those values. The shortest digits come from Rust's
-//! `{:e}` formatting; only the layout is ours.
+//! `{:e}` formatting. Where they are a single digit, Java's `Double.toString` writes the closest
+//! decimal of one or two digits instead (`4.9E-324` rather than `5.0E-324`), which only differs
+//! for subnormals, whose precision is below two digits; `{:.1e}` gives that decimal.
 
 /// The text form of `value`.
 pub fn format_double(value: f64) -> String {
@@ -24,12 +26,14 @@ pub fn format_double(value: f64) -> String {
         .to_string();
     }
     // `{:e}` writes the shortest round-trip digits as `d[.ddd]e<exponent>`.
-    let scientific = format!("{:e}", value.abs());
-    let (mantissa, exponent) = scientific
-        .split_once('e')
-        .expect("`{:e}` always writes an exponent");
-    let exponent: i32 = exponent.parse().expect("`{:e}` writes a decimal exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let (mut digits, mut exponent) = decimal_digits(&format!("{:e}", value.abs()));
+    if digits.len() == 1 {
+        // The closest decimal of two digits, when it reads back as the same value.
+        let closest = format!("{:.1e}", value.abs());
+        if closest.parse::<f64>() == Ok(value.abs()) {
+            (digits, exponent) = decimal_digits(&closest);
+        }
+    }
     let mut text = String::new();
     if value < 0.0 {
         text.push('-');
@@ -45,6 +49,20 @@ pub fn format_double(value: f64) -> String {
         text.push_str(&exponent.to_string());
     }
     text
+}
+
+/// The significant digits of `scientific`, written as `{:e}` writes it (`d[.ddd]e<exponent>`),
+/// without trailing zeros, and its exponent.
+fn decimal_digits(scientific: &str) -> (String, i32) {
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("`{:e}` always writes an exponent");
+    let exponent: i32 = exponent.parse().expect("`{:e}` writes a decimal exponent");
+    let mut digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+    }
+    (digits, exponent)
 }
 
 /// Writes the value `0.<digits> * 10^(exponent + 1)` in plain notation, with at least one digit
@@ -113,9 +131,15 @@ mod tests {
             (0.0, "0.0"),
             (f64::MAX, "1.7976931348623157E308"),
             (f64::MIN_POSITIVE, "2.2250738585072014E-308"),
-            // Java writes the closest two-digit decimal, `4.9E-324`, where the shortest has one
+            // Java writes the closest decimal of one or two digits where the shortest has one
             // digit; that only differs for subnormals, whose precision is below two digits.
-            (5e-324, "5.0E-324"),
+            (5e-324, "4.9E-324"),
+            (1e-323, "9.9E-324"),
+            (1.5e-323, "1.5E-323"),
+            (2e-323, "2.0E-323"),
+            (1e22, "1.0E22"),
+            (1e23, "1.0E23"),
+            (0.3, "0.3"),
         ];
         for (value, text) in cases {
             assert_eq!(format_double(value), text, "{value:?}");
