@@ -32,10 +32,11 @@
 use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::captures::CaptureModes;
 use crate::check::{clone_help, sort_labels};
-use crate::dataflow::{BitSet, Results};
+use crate::dataflow::Results;
 use crate::dominators::Dominators;
 use crate::error::{AccessKind, BorrowError, BorrowErrorKind, Label};
 use crate::liveness::{returned_locals, Liveness};
+use crate::loan_flow::Holdings;
 use crate::loan_flow::LoanFlow;
 use crate::location::{locations, Location};
 use crate::places;
@@ -44,6 +45,7 @@ use prism_mir::{
     Body, BodyOwner, BorrowOrigin, Callee, LocalId, LocalKind, MirFile, Operand, Place, Rvalue,
     StatementKind, TerminatorKind,
 };
+use prism_typed_tree::ArenaId;
 use std::collections::{HashSet, VecDeque};
 
 /// One effect of a location, in evaluation order.
@@ -317,27 +319,30 @@ pub(crate) fn check_conflicts(
     let mut reported_drops: HashSet<LoanId> = HashSet::new();
     let mut errors = Vec::new();
     for location in locations(body) {
-        let live_after = live_cursor.seek(location).clone();
-        let state = flow_cursor.seek(location).clone();
+        let live_after = live_cursor.seek(location);
+        let state = flow_cursor.seek(location);
         let events = location_events(file, body, location, &checker.returned);
         for (index, event) in events.iter().enumerate() {
             let Event::Access { place, kind, span } = event else {
                 continue;
             };
-            let in_scope = live_after_event(&events[index + 1..], borrows, |local| {
-                liveness.analysis.is_live(&live_after, local)
-            });
-            let mut loans: Vec<LoanId> = in_scope
+            // The earliest loan of an overlapping place, which must be rooted at the same
+            // local, that conflicts with the access and that a local in scope holds.
+            let in_scope = |local: LocalId| {
+                in_scope_after_event(&events[index + 1..], local)
+                    .unwrap_or_else(|| liveness.analysis.is_live(live_after, local))
+            };
+            let Some(loan) = borrows
+                .loans_of(place.local)
                 .iter()
-                .flat_map(|local| flow.analysis.holds(&state, *local))
-                .filter_map(|item| match item {
-                    Item::Loan(loan) => Some(loan),
-                    Item::Input(_) => None,
-                })
+                .copied()
                 .filter(|loan| checker.conflicts(place, *kind, *loan))
-                .collect();
-            loans.sort();
-            let Some(&loan) = loans.first() else {
+                .find(|loan| {
+                    state
+                        .holders(loan.index())
+                        .any(|carrier| in_scope(borrows.carriers[carrier]))
+                })
+            else {
                 continue;
             };
             // A value that ends while an escaping closure borrows it is reported as the escape.
@@ -370,44 +375,20 @@ pub(crate) fn check_conflicts(
         .collect()
 }
 
-/// The loan-carrying locals live just after an event, given the events that follow it in its
-/// location and the locals live after the location: liveness applied backward through those
+/// Whether the loan-carrying `local` is live just after an event, given the events that follow
+/// it in its location, when one of them decides it: liveness applied backward through those
 /// events, so that a local the location wholly reassigns does not keep its old loans in scope.
-fn live_after_event(
-    later: &[Event],
-    borrows: &BorrowSet,
-    live_after_location: impl Fn(LocalId) -> bool,
-) -> Vec<LocalId> {
-    let mut live: Vec<bool> = borrows
-        .carriers
-        .iter()
-        .map(|local| live_after_location(*local))
-        .collect();
-    for event in later.iter().rev() {
-        match event {
-            Event::Use { local, .. } => {
-                if let Some(bit) = borrows.carrier(*local) {
-                    live[bit] = true;
-                }
-            }
-            Event::Access {
-                place,
-                kind: AccessKind::Write | AccessKind::StorageDead,
-                ..
-            } if place.projections.is_empty() => {
-                if let Some(bit) = borrows.carrier(place.local) {
-                    live[bit] = false;
-                }
-            }
-            Event::Access { .. } => {}
-        }
-    }
-    borrows
-        .carriers
-        .iter()
-        .zip(live)
-        .filter_map(|(local, live)| live.then_some(*local))
-        .collect()
+/// `None` when no later event uses or defines it: it is then live as after the location.
+fn in_scope_after_event(later: &[Event], local: LocalId) -> Option<bool> {
+    later.iter().find_map(|event| match event {
+        Event::Use { local: used, .. } if *used == local => Some(true),
+        Event::Access {
+            place,
+            kind: AccessKind::Write | AccessKind::StorageDead,
+            ..
+        } if place.projections.is_empty() && place.local == local => Some(false),
+        _ => None,
+    })
 }
 
 struct Checker<'a, 'f> {
@@ -669,7 +650,7 @@ impl Checker<'_, '_> {
     }
 
     /// Whether `local` may hold `loan` in `state`.
-    fn holds(&self, state: &BitSet, local: LocalId, loan: LoanId) -> bool {
+    fn holds(&self, state: &Holdings, local: LocalId, loan: LoanId) -> bool {
         self.flow
             .analysis
             .holds_item(state, local, Item::Loan(loan))
@@ -702,7 +683,7 @@ impl Checker<'_, '_> {
     /// `event`, when it is a use of a local that holds `loan` in `state`.
     fn use_of(
         &self,
-        state: &BitSet,
+        state: &Holdings,
         event: &Event,
         loan: LoanId,
         later_iteration: bool,

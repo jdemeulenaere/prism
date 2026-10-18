@@ -1,9 +1,10 @@
 //! Loan flow (D4 and D9 of `borrowck-exclusivity`): a forward analysis of which loans, and
 //! function inputs, each loan-carrying local may hold at each point.
 //!
-//! Its bits are pairs of a loan-carrying local and an item ([`Item`]). A borrow puts its loan
-//! in its destination, with every loan the borrowed place's root local holds (a reborrow, a
-//! field through a reference and a borrow of a reference keep the source's loans); a copy, a
+//! Its states are sets of pairs of a loan-carrying local and an item ([`Item`]), kept sparse
+//! ([`Holdings`]). A borrow puts its loan in its destination, with every loan the borrowed
+//! place's root local holds (a reborrow, a field through a reference and a borrow of a
+//! reference keep the source's loans); a copy, a
 //! move, a wrap or a subtyping conversion passes on the loans of its operand's root local; a
 //! closure value holds its captures' loans and the loans of the captured locals, and a variable
 //! it captures mutably, and what that variable points at, receive the loans of its other
@@ -26,7 +27,7 @@
 //! reference holds, not the borrow of the reference.
 
 use crate::borrows::{BorrowSet, Item, LoanKind};
-use crate::dataflow::{Analysis, BitSet};
+use crate::dataflow::{Analysis, Domain};
 use crate::elision::{self, Rule, Signature};
 use crate::location::Location;
 use crate::places;
@@ -36,38 +37,150 @@ use prism_mir::{
 };
 use prism_typed_tree::{ArenaId, Type};
 
+/// The state of the loan flow: the items each loan-carrying local may hold, as pairs of a
+/// carrier (its position among [`BorrowSet::carriers`]) and an item, sorted.
+///
+/// A state's size is the number of pairs it holds, not the number of carriers times the number
+/// of items: most locals hold nothing or one loan, so a body with many borrows has small states.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Holdings {
+    pairs: Vec<(u32, u32)>,
+}
+
+impl Holdings {
+    /// The positions in `pairs` of the pairs of `carrier`.
+    fn range(&self, carrier: usize) -> std::ops::Range<usize> {
+        let carrier = carrier as u32;
+        let start = self
+            .pairs
+            .partition_point(|(held_by, _)| *held_by < carrier);
+        let end = start + self.pairs[start..].partition_point(|(held_by, _)| *held_by == carrier);
+        start..end
+    }
+
+    /// The items `carrier` holds, in increasing order.
+    pub fn items(&self, carrier: usize) -> impl Iterator<Item = usize> + '_ {
+        self.pairs[self.range(carrier)]
+            .iter()
+            .map(|(_, item)| *item as usize)
+    }
+
+    /// Whether `carrier` holds `item`.
+    pub fn contains(&self, carrier: usize, item: usize) -> bool {
+        self.pairs
+            .binary_search(&(carrier as u32, item as u32))
+            .is_ok()
+    }
+
+    /// The carriers that hold `item`, in increasing order.
+    pub fn holders(&self, item: usize) -> impl Iterator<Item = usize> + '_ {
+        let item = item as u32;
+        self.pairs
+            .iter()
+            .filter(move |(_, held)| *held == item)
+            .map(|(carrier, _)| *carrier as usize)
+    }
+
+    /// Adds `items` to what `carrier` holds.
+    fn insert(&mut self, carrier: usize, items: impl IntoIterator<Item = usize>) {
+        let range = self.range(carrier);
+        let mut held: Vec<(u32, u32)> = self.pairs[range.clone()].to_vec();
+        let before = held.len();
+        held.extend(items.into_iter().map(|item| (carrier as u32, item as u32)));
+        if held.len() == before {
+            return;
+        }
+        held.sort_unstable();
+        held.dedup();
+        self.pairs.splice(range, held);
+    }
+
+    /// Removes everything `carrier` holds.
+    fn clear(&mut self, carrier: usize) {
+        let range = self.range(carrier);
+        if !range.is_empty() {
+            self.pairs.drain(range);
+        }
+    }
+
+    /// Removes `items`, sorted, from every carrier.
+    fn remove_items(&mut self, items: &[usize]) {
+        self.pairs
+            .retain(|(_, item)| items.binary_search(&(*item as usize)).is_err());
+    }
+}
+
+impl Domain for Holdings {
+    fn join(&mut self, other: &Self) -> bool {
+        if other.pairs.is_empty() {
+            return false;
+        }
+        let mut joined = Vec::with_capacity(self.pairs.len() + other.pairs.len());
+        let (mut left, mut right) = (self.pairs.iter().peekable(), other.pairs.iter().peekable());
+        loop {
+            let next = match (left.peek(), right.peek()) {
+                (Some(a), Some(b)) if a < b => left.next(),
+                (Some(a), Some(b)) if b < a => right.next(),
+                (Some(_), Some(_)) => {
+                    right.next();
+                    left.next()
+                }
+                (Some(_), None) => left.next(),
+                (None, Some(_)) => right.next(),
+                (None, None) => break,
+            };
+            joined.extend(next.copied());
+        }
+        let changed = joined.len() != self.pairs.len();
+        self.pairs = joined;
+        changed
+    }
+}
+
 /// Which items each loan-carrying local may hold.
 pub struct LoanFlow<'a> {
     pub file: &'a MirFile,
     pub body: &'a Body,
     pub borrows: &'a BorrowSet,
+    /// The items of the loans of places through a dereference of each local, which no longer
+    /// name what they borrowed once the local is re-pointed, sorted.
+    through_dereference: Vec<Vec<usize>>,
 }
 
 impl<'a> LoanFlow<'a> {
     pub fn new(file: &'a MirFile, body: &'a Body, borrows: &'a BorrowSet) -> Self {
+        let through_dereference = body
+            .locals
+            .iter()
+            .map(|(local, _)| {
+                borrows
+                    .loans_of(local)
+                    .iter()
+                    .filter(|loan| {
+                        borrows.loans[**loan].place.projections.first() == Some(&Projection::Deref)
+                    })
+                    .map(|loan| loan.index())
+                    .collect()
+            })
+            .collect();
         Self {
             file,
             body,
             borrows,
+            through_dereference,
         }
     }
 
-    fn bit(&self, carrier: usize, item: usize) -> usize {
-        carrier * self.borrows.item_count() + item
-    }
-
     /// The indices of the items `local` may hold in `state`.
-    fn held(&self, state: &BitSet, local: LocalId) -> Vec<usize> {
-        let Some(carrier) = self.borrows.carrier(local) else {
-            return Vec::new();
-        };
-        (0..self.borrows.item_count())
-            .filter(|item| state.contains(self.bit(carrier, *item)))
-            .collect()
+    fn held(&self, state: &Holdings, local: LocalId) -> Vec<usize> {
+        match self.borrows.carrier(local) {
+            Some(carrier) => state.items(carrier).collect(),
+            None => Vec::new(),
+        }
     }
 
     /// The items `local` may hold in `state`.
-    pub fn holds(&self, state: &BitSet, local: LocalId) -> Vec<Item> {
+    pub fn holds(&self, state: &Holdings, local: LocalId) -> Vec<Item> {
         self.held(state, local)
             .into_iter()
             .map(|item| self.borrows.item(item))
@@ -75,33 +188,31 @@ impl<'a> LoanFlow<'a> {
     }
 
     /// Whether `local` may hold `item` in `state`.
-    pub fn holds_item(&self, state: &BitSet, local: LocalId, item: Item) -> bool {
+    pub fn holds_item(&self, state: &Holdings, local: LocalId, item: Item) -> bool {
         self.borrows
             .carrier(local)
-            .is_some_and(|carrier| state.contains(self.bit(carrier, self.borrows.item_index(item))))
+            .is_some_and(|carrier| state.contains(carrier, self.borrows.item_index(item)))
     }
 
     /// Adds `items` to what `local` holds, except loans of places rooted at `local`.
-    fn give(&self, state: &mut BitSet, local: LocalId, items: &[usize]) {
+    fn give(&self, state: &mut Holdings, local: LocalId, items: &[usize]) {
         let Some(carrier) = self.borrows.carrier(local) else {
             return;
         };
-        for &item in items {
-            if let Item::Loan(loan) = self.borrows.item(item) {
-                if self.borrows.loans[loan].place.local == local {
-                    continue;
-                }
-            }
-            state.insert(self.bit(carrier, item));
-        }
+        let given = items
+            .iter()
+            .copied()
+            .filter(|item| match self.borrows.item(*item) {
+                Item::Loan(loan) => self.borrows.loans[loan].place.local != local,
+                Item::Input(_) => true,
+            });
+        state.insert(carrier, given);
     }
 
     /// Empties `local`.
-    fn clear(&self, state: &mut BitSet, local: LocalId) {
+    fn clear(&self, state: &mut Holdings, local: LocalId) {
         if let Some(carrier) = self.borrows.carrier(local) {
-            for item in 0..self.borrows.item_count() {
-                state.remove(self.bit(carrier, item));
-            }
+            state.clear(carrier);
         }
     }
 
@@ -131,16 +242,10 @@ impl<'a> LoanFlow<'a> {
 
     /// Removes from every local the loans of places through a dereference of `local`, which no
     /// longer name what they borrowed once `local` is re-pointed.
-    fn kill_through_dereference(&self, state: &mut BitSet, local: LocalId) {
-        for (loan, data) in self.borrows.loans.iter() {
-            if data.place.local == local
-                && data.place.projections.first() == Some(&Projection::Deref)
-            {
-                let item = loan.index();
-                for carrier in 0..self.borrows.carriers.len() {
-                    state.remove(self.bit(carrier, item));
-                }
-            }
+    fn kill_through_dereference(&self, state: &mut Holdings, local: LocalId) {
+        let items = &self.through_dereference[local.index()];
+        if !items.is_empty() {
+            state.remove_items(items);
         }
     }
 
@@ -149,7 +254,7 @@ impl<'a> LoanFlow<'a> {
     /// variable points at, the items of its other captures.
     fn closure_writes(
         &self,
-        state: &BitSet,
+        state: &Holdings,
         location: Location,
         closure: prism_mir::BodyId,
         captures: &[Place],
@@ -191,7 +296,7 @@ impl<'a> LoanFlow<'a> {
     }
 
     /// The items the value of `operand` carries: those of its place's root local.
-    fn operand_items(&self, state: &BitSet, operand: &Operand) -> Vec<usize> {
+    fn operand_items(&self, state: &Holdings, operand: &Operand) -> Vec<usize> {
         match operand.place() {
             Some(place) => self.held(state, place.local),
             None => Vec::new(),
@@ -199,7 +304,12 @@ impl<'a> LoanFlow<'a> {
     }
 
     /// The items the value of `rvalue`, assigned at `location`, carries.
-    pub fn rvalue_items(&self, state: &BitSet, rvalue: &Rvalue, location: Location) -> Vec<usize> {
+    pub fn rvalue_items(
+        &self,
+        state: &Holdings,
+        rvalue: &Rvalue,
+        location: Location,
+    ) -> Vec<usize> {
         let mut items = match rvalue {
             Rvalue::Use(operand) | Rvalue::WrapNullable(operand) | Rvalue::Subtype(operand) => {
                 self.operand_items(state, operand)
@@ -240,7 +350,7 @@ impl<'a> LoanFlow<'a> {
     }
 
     /// Writes a value carrying `items` to `destination`.
-    fn write(&self, state: &mut BitSet, destination: &Place, items: &[usize]) {
+    fn write(&self, state: &mut Holdings, destination: &Place, items: &[usize]) {
         let items = &self.fitting(items.to_vec(), &destination.ty(self.body, &self.file.types));
         let root = destination.local;
         if destination.projections.is_empty() {
@@ -273,7 +383,7 @@ impl<'a> LoanFlow<'a> {
     /// shared borrows of the argument temporaries, only what they borrow (D10).
     pub fn call_items(
         &self,
-        state: &BitSet,
+        state: &Holdings,
         callee: &Callee,
         arguments: &[Operand],
         parameters: &[Type],
@@ -332,7 +442,7 @@ impl<'a> LoanFlow<'a> {
     /// reach what it points at.
     fn call_writes(
         &self,
-        state: &BitSet,
+        state: &Holdings,
         callee: &Callee,
         arguments: &[Operand],
         parameters: &[Type],
@@ -402,20 +512,20 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
 }
 
 impl Analysis for LoanFlow<'_> {
-    type Domain = BitSet;
+    type Domain = Holdings;
 
-    fn bottom(&self) -> BitSet {
-        BitSet::new(self.borrows.carriers.len() * self.borrows.item_count())
+    fn bottom(&self) -> Holdings {
+        Holdings::default()
     }
 
-    fn initialize_boundary(&self, state: &mut BitSet) {
+    fn initialize_boundary(&self, state: &mut Holdings) {
         for input in &self.borrows.inputs {
             let item = self.borrows.item_index(Item::Input(*input));
             self.give(state, *input, &[item]);
         }
     }
 
-    fn apply_statement(&self, state: &mut BitSet, statement: &Statement, location: Location) {
+    fn apply_statement(&self, state: &mut Holdings, statement: &Statement, location: Location) {
         match &statement.kind {
             StatementKind::Assign(destination, rvalue) => {
                 let items = self.rvalue_items(state, rvalue, location);
@@ -450,7 +560,7 @@ impl Analysis for LoanFlow<'_> {
         }
     }
 
-    fn apply_terminator(&self, state: &mut BitSet, terminator: &Terminator, _: Location) {
+    fn apply_terminator(&self, state: &mut Holdings, terminator: &Terminator, _: Location) {
         if let TerminatorKind::Call {
             callee,
             arguments,
@@ -483,6 +593,24 @@ mod tests {
     use crate::dataflow::solve;
     use crate::location::locations;
     use crate::test_bodies::{body, elaborate};
+
+    #[test]
+    fn holdings_are_sorted_pairs() {
+        let mut state = Holdings::default();
+        state.insert(2, [5, 1, 5]);
+        state.insert(0, [3]);
+        assert_eq!(state.items(2).collect::<Vec<_>>(), vec![1, 5]);
+        assert!(state.contains(0, 3) && !state.contains(1, 3));
+        let mut other = Holdings::default();
+        other.insert(1, [5]);
+        other.insert(2, [1]);
+        assert!(state.join(&other));
+        assert!(!state.join(&other));
+        assert_eq!(state.holders(5).collect::<Vec<_>>(), vec![1, 2]);
+        state.remove_items(&[5]);
+        state.clear(0);
+        assert_eq!(state.pairs, vec![(2, 1)]);
+    }
 
     /// What the local named `name` of `f` in `source` may hold just before the first location
     /// whose span starts at the first occurrence of `at` in the line of `f`, each item named by

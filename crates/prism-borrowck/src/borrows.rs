@@ -73,8 +73,12 @@ pub struct BorrowSet {
     pub carriers: Vec<LocalId>,
     /// The position of each local in `carriers`.
     carrier_index: Vec<Option<usize>>,
+    /// The position of each local in `inputs`.
+    input_index: Vec<Option<usize>>,
     /// The loans each statement makes.
     by_location: HashMap<Location, Vec<LoanId>>,
+    /// The loans of places rooted at each local, in order.
+    by_root: Vec<Vec<LoanId>>,
 }
 
 impl BorrowSet {
@@ -84,6 +88,7 @@ impl BorrowSet {
         let mut carriers = Vec::new();
         let mut carrier_index = vec![None; body.locals.len()];
         let mut inputs = Vec::new();
+        let mut input_index = vec![None; body.locals.len()];
         for (local, declaration) in body.locals.iter() {
             if places::carries_loans(&declaration.ty) {
                 carrier_index[local.index()] = Some(carriers.len());
@@ -92,6 +97,7 @@ impl BorrowSet {
             if matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
                 && places::carries_loans(&declaration.ty)
             {
+                input_index[local.index()] = Some(inputs.len());
                 inputs.push(local);
             }
         }
@@ -148,12 +154,18 @@ impl BorrowSet {
                 }
             }
         }
+        let mut by_root = vec![Vec::new(); body.locals.len()];
+        for (id, loan) in loans.iter() {
+            by_root[loan.place.local.index()].push(id);
+        }
         Self {
             loans,
             inputs,
             carriers,
             carrier_index,
+            input_index,
             by_location,
+            by_root,
         }
     }
 
@@ -172,12 +184,7 @@ impl BorrowSet {
         match item {
             Item::Loan(loan) => loan.index(),
             Item::Input(local) => {
-                self.loans.len()
-                    + self
-                        .inputs
-                        .iter()
-                        .position(|input| *input == local)
-                        .expect("an input of the body")
+                self.loans.len() + self.input_index[local.index()].expect("an input of the body")
             }
         }
     }
@@ -189,6 +196,11 @@ impl BorrowSet {
         } else {
             Item::Input(self.inputs[index - self.loans.len()])
         }
+    }
+
+    /// The loans of places rooted at `local`, in order.
+    pub fn loans_of(&self, local: LocalId) -> &[LoanId] {
+        &self.by_root[local.index()]
     }
 
     /// The loans the statement at `location` makes, in order.
