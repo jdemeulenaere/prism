@@ -251,7 +251,7 @@ Where a value of type `T` is expected and an expression of type `&T` or `&mut T`
 - **THEN** the type checker emits `E4017` at each of the four sites that take a borrow, naming the borrow `r`, `m`, `r` and `get(r)`, with help suggesting `.clone()`
 
 ### Requirement: Consuming Receivers Follow the Move Rules
-The receiver of a `consuming fun` call MUST be checked as a consuming position. A whole local, parameter or temporary MUST be moved into the call. A field, a top-level `val`, an index or a safe navigation of a field MUST be rejected with `E4017`, as for any move. Through a reference or `Heap<T>`, a `Copy` receiver MUST be copied out and any other MUST be rejected with `E4017`.
+The receiver of a `consuming fun` call MUST be checked as a consuming position. A whole local, parameter or temporary MUST be moved into the call, and when it is reached through `Heap<T>` layers only, each box MUST be unboxed: its contents moved out and the box freed. A field, a top-level `val`, an index or a safe navigation of a field MUST be rejected with `E4017`, as for any move. Through a reference, a `Copy` receiver MUST be copied out and any other MUST be rejected with `E4017`.
 
 #### Scenario: Consuming method moves the receiver
 - **WHEN** `struct User { val name: String }`, `struct Account { val owner: User }`, `consuming fun User.toAccount(): Account = Account(this)` and `fun make(): User` are declared and a body of `fun f(u: User)` runs `val a = u.toAccount()` and `val b = make().toAccount()`
@@ -262,8 +262,12 @@ The receiver of a `consuming fun` call MUST be checked as a consuming position. 
 - **THEN** the type checker emits `E4017` for the field `user` of `o`, with help suggesting `o.user.clone()`
 
 #### Scenario: Consuming through a borrow
-- **WHEN** `consuming fun User.toAccount(): Account`, `struct Point : Copy { val x: Int }` and `consuming fun Point.moved(): Point` are declared, and `fun f(r: &User): Account = r.toAccount()`, `fun g(h: Heap<User>): Account = h.toAccount()` and `fun k(p: &Point): Point = p.moved()` are checked
-- **THEN** the type checker emits `E4017` for `f`, naming the borrow `r`, and for `g`, and accepts `k`, copying the `Point` out
+- **WHEN** `consuming fun User.toAccount(): Account`, `struct Point : Copy { val x: Int }` and `consuming fun Point.moved(): Point` are declared, and `fun f(r: &User): Account = r.toAccount()`, `fun g(h: &Heap<User>): Account = h.toAccount()` and `fun k(p: &Point): Point = p.moved()` are checked
+- **THEN** the type checker emits `E4017` for `f`, naming the borrow `r`, and for `g`, naming the borrow `h`, and accepts `k`, copying the `Point` out
+
+#### Scenario: Consuming through a box
+- **WHEN** `consuming fun User.toAccount(): Account`, `struct Team { val lead: Heap<User> }` are declared, and `fun f(h: Heap<User>): Account = h.toAccount()`, `fun g(hh: Heap<Heap<User>>): Account = hh.toAccount()` and `fun k(t: Team): Account = t.lead.toAccount()` are checked
+- **THEN** the type checker accepts `f` and `g`, each unboxing its receiver, and emits `E4017` for `k`, because `t.lead` is a field
 
 #### Scenario: Consuming a top-level val receiver rejected
 - **WHEN** a file declares `val GUEST = User("guest")` and `consuming fun User.toAccount(): Account`, and `fun f(): Account = GUEST.toAccount()`
@@ -422,6 +426,32 @@ A value that a branch or destructuring declaration took apart MUST be moved on t
 - **WHEN** `struct User { val name: String, val id: Int }` and `fun show(u: &User) {}` are declared and `fun f(u: User) { val (name) = u; show(u) }` is checked
 - **THEN** the borrow checker emits `E5001` at `u` in `show(u)`, labelling the entry `name` as where the value moved
 
+### Requirement: Unboxing Moves the Contents Out
+A `Heap<T>`, after its references are peeled, MUST have a built-in member function `unbox()` of type `T`, taking no arguments (`E4004` otherwise), whose receiver is consuming: it MUST move the contents out of the box and free the box. Its receiver MUST follow the move rules of consuming receivers. `h?.unbox()` on an owned `Heap<T>?` MUST have type `T?`.
+
+#### Scenario: Unboxing a whole value
+- **WHEN** `struct User { val name: String }` is declared and `fun f(h: Heap<User>): User = h.unbox()`, `fun g(): Int = Heap(1).unbox()` and `fun k(hh: Heap<Heap<Int>>): Heap<Int> = hh.unbox()` are checked
+- **THEN** all three typecheck; a later use of `h` in `f` would be a use after move, which the borrow checker reports
+
+#### Scenario: Unboxing a field or through a borrow rejected
+- **WHEN** `struct Node : Clone { val value: Int, val next: Heap<Node>? }` and `struct Holder { val h: Heap<Int> }` are declared, and `fun f(o: Holder): Int = o.h.unbox()` and `fun g(r: &Heap<Node>): Node = r.unbox()` are checked
+- **THEN** the type checker emits `E4017` for the field `h` of `o`, and for `g`, naming the borrow `r`, with help suggesting `r.clone().unbox()`
+
+#### Scenario: Unboxing an optional box
+- **WHEN** `struct Node { val value: Int, val next: Heap<Node>? }` is declared and `fun f(n: Heap<Node>?): Node? = n?.unbox()` is checked
+- **THEN** the file typechecks successfully
+
+#### Scenario: unbox takes no arguments
+- **WHEN** `fun f(h: Heap<Int>): Int = h.unbox(1)` is checked
+- **THEN** the type checker emits `E4004`, saying that `unbox()` takes no arguments
+
+### Requirement: Moving Out of a Box Is Rejected
+Where a value of type `T` is expected and an expression of type `Heap<T>`, behind any boxes and references, is given for a non-`Copy` `T`, the type checker MUST reject it with `CannotMoveOut` (`E4017`), naming the source "the contents of `Heap` `h`", with help suggesting `h.unbox()`. A `Copy` value is copied out instead (see the `references` spec).
+
+#### Scenario: Taking a box's contents where a value is expected
+- **WHEN** `struct User { val name: String }` and `fun take(u: User) {}` are declared, and `fun f(h: Heap<User>) { take(h) }`, `fun g(h: Heap<User>): User = h` and `fun k(h: Heap<User>) { val u: User = h }` are checked
+- **THEN** the type checker emits `E4017` at each, naming the contents of `Heap` `h`, with help suggesting `h.unbox()`
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -443,7 +473,7 @@ Decisions from `reference-access`:
 
 Decisions from `extension-methods`:
 
-- **A `consuming fun` receiver is one more consuming position** (user, from `value-semantics`). It is checked exactly like a by-value argument, so `E4017`'s help stays the same for every consuming site: borrow, clone, or take the whole value. Through a reference, a `Copy` receiver is copied out and any other is a move out of the borrow. Moving out of a `Heap<T>` waits for the `Heap<T>` change. Because moves take whole values, a `consuming fun` can pass `this` on but not take its fields apart, until destructuring or partial moves exist.
+- **A `consuming fun` receiver is one more consuming position** (user, from `value-semantics`). It is checked exactly like a by-value argument, so `E4017`'s help stays the same for every consuming site: borrow, clone, or take the whole value. Through a reference, a `Copy` receiver is copied out and any other is a move out of the borrow; through boxes alone it is unboxed (`heap-boxes`, below). Because moves take whole values, a `consuming fun` passes `this` on or takes it apart with `val (...) = this` (`payload-patterns`).
 - **An extension named `clone` is called only on a type that is not `Clone`.** On a `Clone` type the built-in always wins, so such an extension is rejected (see `extension-functions`).
 
 Decisions from `borrowck-moves`:
@@ -472,3 +502,9 @@ Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined w
 - **Taking a value apart moves it whole** (D6). A branch or destructuring declaration that binds a non-`Copy` part by value moves its whole subject on that path, so the borrow checker sees one whole-value move plus one initialization per part, and nothing is ever partly moved or partly dropped. The source must be one a move already accepts (a whole owned local, a by-value parameter, a consuming `this`, a temporary); a field, a borrow's referent, a top-level `val`, a capture or a branch, block or `?:` expression is `E4017`, with help suggesting the borrow to match on (for a safe navigation, the borrow of what `?.` reads). A branch expression is rejected rather than consumed because the subject is checked before its patterns decide whether it moves.
 - **Partial moves stay out of the language** (D7), closing the "possible relaxation" left by `value-semantics`. Every use it had is covered by taking the value apart: `val (name, email) = user` instead of moving `user.name` then reading `user.email`, `val (name) = this` in a `consuming fun`, a `when` that moves a payload. Partial moves would make drop elaboration track fields (field-level drop flags, partial drops of the remainder) and make every later use ask which fields are left. `E4017`'s help for a field of a whole owned local suggests the destructuring. Revisit only if real programs show patterns destructuring cannot express.
 - **A use after taking apart is labelled at the binding** (D16, D24). `E5001` points at the binding that moved a part, and when the moved value was destructured its help suggests matching on its borrow (`when (&m)` or `val (...) = &m`).
+
+Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Moving out is explicit: the consuming built-in `h.unbox()`** (D6). It moves the contents out and frees the box without dropping them, following the move rules of every consuming receiver (a field or a top-level `val` is `E4017`, a box behind a reference is a move out of the borrow, with help suggesting `.clone().unbox()`), works through `?.` (`n?.unbox()` is a `T?`) and peels one box. A non-`Copy` content where a `T` is expected (`val u: User = h`) is `E4017`, "the contents of `Heap` `h`", with help suggesting `h.unbox()`, mirroring a move out of a borrow; a `Copy` content is copied out. Rejected: Rust's move out of `*b` (no read `*`); implicit unboxing at by-value positions (a type mismatch would silently free a box, and `val x: T = h` would read unlike `val x = h`); a free function; the names `take()`, `get()` and `into()`.
+- **A `consuming fun` receiver reached through boxes is unboxed** (D7), once per box layer, as Rust's method calls move out of a `Box`: receivers look through boxes in every other mode with nothing written, and the source is consumed either way. The receiver must be movable as a whole; any reference layer keeps it a move out of a borrow (`E4017`). `h.unbox().f()` stays possible. Rejected: keeping `E4017` (it made `consuming` the one mode that does not look through boxes); unboxing through references.
+- **Branch and `?:` operands are consumed** (from the review). An `if`, `when`, block or `?:` used as an operand, a `when` subject or a member access target is a temporary, so a place in its branches is moved, as the rule above already said; the checker had read them in place, which MIR could not lower (a crash on `"a" + (k.t ?: "-")`).

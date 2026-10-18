@@ -286,6 +286,47 @@ A destructuring declaration MUST bind its entries as a pattern does over its val
 - **WHEN** with that `Account`, `fun f(a: Account): Int { val (id) = a; val (name) = a; return id }` is checked
 - **THEN** the file typechecks, since copying `id` leaves `a` whole
 
+### Requirement: Patterns Look Through Boxes
+A constructor, value or range pattern checked against a subject or part of type `Heap<T>`, behind any boxes and references, MUST be checked against `T` and match the box's contents. A wildcard or a binding at such a position MUST take the box itself, with the binding mode of its subject.
+
+#### Scenario: Evaluating an expression tree recursively
+- **WHEN** `enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }` is declared and `fun eval(e: &Expr): Int = when (e) { Expr.Lit(val n) -> n; Expr.Add(val l, val r) -> eval(l) + eval(r) }` is checked
+- **THEN** the file typechecks, `n` has type `Int`, `l` and `r` have type `&Heap<Expr>`, each lending its contents to `eval`, and the `when` is exhaustive
+
+#### Scenario: A nested pattern through a box
+- **WHEN** with that `Expr`, `fun isZeroSum(e: &Expr): Bool = when (e) { Expr.Add(Expr.Lit(0), Expr.Lit(0)) -> true; else -> false }` is checked
+- **THEN** the file typechecks, each `Expr.Lit(0)` matching the contents of a box
+
+#### Scenario: A boxed subject
+- **WHEN** with that `Expr`, `fun f(h: Heap<Expr>): Int = when (h) { Expr.Lit(val n) -> n; Expr.Add(_, _) -> 0 }` and `fun g(h: &Heap<Int>): Int = when (h) { 0 -> 1; in 1..9 -> 2; else -> 3 }` are checked
+- **THEN** both typecheck, the patterns of `f` matching the contents of `h` without moving it, since no binding moves anything
+
+#### Scenario: Mutable bindings through a box
+- **WHEN** `enum Counter { Count(Int) }` is declared and `fun bump(h: &mut Heap<Counter>) { when (h) { Counter.Count(val n) -> *n += 1 } }` is checked
+- **THEN** the file typechecks, `n` having type `&mut Int`
+
+### Requirement: Taking Apart Through a Box Unboxes It
+When a value is taken apart and a by-value non-`Copy` binding lies inside the contents of a box part, or of a boxed subject, the box MUST be unboxed: its contents taken apart and the box freed. The move rules of taking apart MUST apply to the outermost subject unchanged.
+
+#### Scenario: Moving a payload out through a box
+- **WHEN** `enum Doc { Text(String), Wrapped(Heap<Doc>) }` is declared and `fun inner(d: Doc): String = when (d) { Doc.Wrapped(Doc.Text(val s)) -> s; else -> "" }` and `fun top(h: Heap<Doc>): String = when (h) { Doc.Text(val s) -> s; else -> "" }` are checked
+- **THEN** both typecheck, `s` having type `String`, and `d` and `h` are moved by the branches that bind `s`
+
+#### Scenario: Taking apart a borrowed box rejected
+- **WHEN** with that `Doc`, `struct Holder { val h: Heap<Doc> }` is declared and `fun f(o: Holder): String = when (o.h) { Doc.Text(val s) -> s; else -> "" }` is checked
+- **THEN** the type checker emits `E4017`, because the field `h` of `o` cannot be taken apart, with help suggesting `when (&o.h)`
+
+### Requirement: Exhaustiveness Looks Through Boxes
+For exhaustiveness and for the uncovered value named by `E4009`, a `Heap<T>` subject or part MUST be covered exactly by the patterns that cover `T`, and an uncovered value inside a box MUST be named without any box syntax.
+
+#### Scenario: A box covered by its contents' patterns
+- **WHEN** `enum Bit { Zero, One }` and `enum Pair { Of(Heap<Bit>, Heap<Bit>) }` are declared and `fun f(p: &Pair): Int = when (p) { Pair.Of(Bit.Zero, _) -> 0; Pair.Of(Bit.One, Bit.Zero) -> 1; Pair.Of(Bit.One, Bit.One) -> 2 }` is checked
+- **THEN** the `when` is exhaustive without `else`
+
+#### Scenario: An uncovered value inside a box
+- **WHEN** with that `Bit` and `Pair`, `fun f(p: &Pair): Int = when (p) { Pair.Of(Bit.Zero, _) -> 0; Pair.Of(_, Bit.Zero) -> 1 }` is checked
+- **THEN** the type checker emits `E4009`, stating that `Pair.Of(Bit.One, Bit.One)` is not covered
+
 ## Design Rationale
 Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -296,9 +337,14 @@ Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined w
 - **Binding modes follow the subject's type** (D5). An owned subject binds by value (copying `Copy` parts, moving the rest), `&E` copies `Copy` parts and borrows the rest, and `&mut E` borrows every part mutably, so `when (this)` borrows in a `fun`, borrows mutably in a `mut fun` and takes the receiver apart in a `consuming fun`. This is Rust's default binding modes plus Prism's copy-out of `Copy` values, minus partial moves. To borrow from an owned local, match on `&m`. Rejected: Swift's rule for noncopyable values (a place subject is borrowed and only `consume x` consumes), which would add the language's only explicit move operator; inferring the mode from later uses of the subject.
 - **Guards are Kotlin 2.1's `pattern if condition ->`** (D9). The guard applies to every alternative of its branch and sees its bindings read-only: moving a binding there is `E4017` and mutating through one `E4003`, because a false guard continues with the next pattern, which must find the subject whole. Copying and borrowing bindings are made before the guard and moving ones after it, the guard reading a moving binding's part in place. A guard may not change a subject its pattern takes apart either: MIR holds a shared borrow of the subject across such a guard (found at review, when `if clear(&mut v)` let the branch take apart a value that no longer held its variant), so the borrow checker reports it. Rejected: Rust's mutable access through bindings in guards, which needs fake borrows of the whole subject.
 - **Alternatives bind the same names, types, modes and mutability** (D10), as Rust's and Swift's or-patterns, so `Circle(val d), Square(val d) -> d` needs no duplicated body; any difference is `E4025`.
-- **Exhaustiveness and usefulness by Maranget's algorithm** (D11), as `rustc_pattern_analysis` and Swift's space engine. Its constructors are an enum's variants, a struct's single constructor, `true`/`false`, and `null`/present for `T?`; a literal of an open type (`Int`, `Double`, `Char`, `String`) never completes its type, and a guarded branch, a range or a non-literal value covers nothing. The witness of a missing value is printed as a pattern in `E4009` (`Shape.Rect(_, _)`, `Outer.Wrap(Inner.B)`, `null`, `_`). An enum without variants still needs `else` in value position. Patterns do not look through `Heap<T>`.
+- **Exhaustiveness and usefulness by Maranget's algorithm** (D11), as `rustc_pattern_analysis` and Swift's space engine. Its constructors are an enum's variants, a struct's single constructor, `true`/`false`, and `null`/present for `T?`; a literal of an open type (`Int`, `Double`, `Char`, `String`) never completes its type, and a guarded branch, a range or a non-literal value covers nothing. The witness of a missing value is printed as a pattern in `E4009` (`Shape.Rect(_, _)`, `Outer.Wrap(Inner.B)`, `null`, `_`). An enum without variants still needs `else` in value position. Boxes are looked through (`heap-boxes`, below).
 - **Unreachable branches are not reported** (D12) until a warnings channel exists: an error would reject today's valid `when (b) { true -> 1; false -> 2; else -> 3 }`. Usefulness is computed and unit-tested.
 - **Destructuring declarations name fields** (D13). `val (name, email) = user` binds by field name, `field as local` renames, order is free and fields may be left out. Kotlin's positional `componentN` destructuring was rejected because reordering two fields of one type silently swaps the bindings; a positional-looking entry that is not a field is `E4006` with a `first as a` help. Only structs (or references to them) are destructured; `as` is a keyword only inside the list.
 - **Variant names match through a nullable subject** (D22). Over `c: Color?`, `Red` matches a non-null `Red`, so `null`, `Red` and `Green` cover `Color?`, as constructor patterns of `T` do.
 - **A pattern error does not also report `E4009`** (D23): a pattern that failed to check covers nothing reliably, so the witness would be noise.
 - **A binding at the top binds the whole subject**, `T?` included: a binding of a nullable's non-null value waits for smart casts and `if`-patterns.
+
+Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Patterns look through boxes; bindings take the box** (D9). A constructor, value or range pattern at a `Heap<T>` part or subject matches the contents, the auto-deref of field access applied to patterns, so `Expr.Add(Expr.Lit(0), val r)` needs no `box` pattern syntax (Rust's, still unstable). A binding or wildcard takes the part as declared, with the subject's mode (`l: &Heap<Expr>` under `&`), so a binding never hides an unboxing, and `eval(l)` lends `l`'s contents. Taking apart through a box unboxes it, freeing the box, so no partial move ever crosses a box. Exhaustiveness treats a box as its one constructor and prints witnesses without box syntax. Rejected: an explicit deref pattern; bindings that take the contents (their type would differ from the payload's, and a consuming subject would free the box silently); no deref patterns (simplifiers would need nested `when`s).
+- **A nullable borrow matches its referent** (from the review). Over a `(&T)?` or `(&mut T)?` subject, which is how a `Heap<T>?` is passed borrowed, patterns of `T` match the referent with the borrow's mode, the same `Deref` pattern node as a box; before, only `?.` could read such a value.

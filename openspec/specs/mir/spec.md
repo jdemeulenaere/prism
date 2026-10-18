@@ -211,7 +211,7 @@ Code after an expression of type `Nothing` MUST NOT be lowered, and every block 
 - **THEN** the body of `f` has no call of `g`
 
 ### Requirement: Calls Name Their Callee
-A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `length`, `get` (a string's character), `toString`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable.
+A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `length`, `get` (a string's character), `toString`, `Heap` (constructing a box), `unbox`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable.
 
 #### Scenario: Imported function named by its module
 - **WHEN** `models/user.prism` declares `public fun greet(n: Int): Int = n`, and a file importing `/models/user` declares `fun hello(): Int = greet(1)`
@@ -222,7 +222,7 @@ A call MUST name its callee (a declaration path for an own or imported function 
 - **THEN** the body of `Screen` is composable, its call of `Label` is marked composable, and its call of `log` is not
 
 ### Requirement: Receivers Lead the Operands of Calls
-The first operand of a call of an extension or of `clone`, `length`, `get` or `toString`, and the first argument of an extension's body, MUST be the receiver, whose type the path or the built-in names; no other call has one.
+The first operand of a call of an extension or of `clone`, `length`, `get`, `toString` or `unbox`, and the first argument of an extension's body, MUST be the receiver, whose type the path or the built-in names; no other call has one.
 
 #### Scenario: An extension call names its receiver
 - **WHEN** `lib/team.prism` declares `public struct Team { var lead: String }` and `public fun Team.captain(o: &String): &String = &lead`, and a file importing `/lib/team` declares `fun f(t: Team, s: String): Int { val c = t.captain(&s); return 1 }`
@@ -235,6 +235,10 @@ The first operand of a call of an extension or of `clone`, `length`, `get` or `t
 #### Scenario: String members are built-in calls
 - **WHEN** `fun f(s: String, i: Int): Char = s[i]` and `fun g(s: &String): String = s.length.toString()` are lowered
 - **THEN** the MIR of `f` calls `builtin get` with a shared receiver borrow of `s` and a copy of `i`, and no place of `f` has an index projection; the MIR of `g` calls `builtin length` with a receiver borrow of the referent of `s`, then `builtin toString` with a copy of its result
+
+#### Scenario: Box built-ins are calls
+- **WHEN** `fun f(n: Int): Int { val h = Heap(n); return h.unbox() }` is lowered
+- **THEN** the MIR of `f` calls `builtin Heap<Int>` with the value of `n`, which is not a receiver, into `h`, then `builtin unbox` with a move of `h` as its receiver
 
 ### Requirement: Call Arguments Are Evaluated in Order
 A call MUST evaluate its receiver first: a receiver that the call moves or copies (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, and a receiver that the call borrows has its place evaluated then and is borrowed after the written arguments. The written arguments MUST be evaluated in source order, then the omitted arguments in parameter order, and then the call made.
@@ -422,6 +426,24 @@ A destructuring declaration MUST evaluate its value once, as a place when it is 
 - **WHEN** `struct User { val name: String, val email: String, val id: Int }` is declared and `fun f(u: User): Int { val (id, name) = u; return id }` is lowered
 - **THEN** `id` is copied from field `id` of `u`, then `u` is destructured into `name` and a temporary for `email`, both dropped where the body's block ends, and `u` is not dropped
 
+### Requirement: A Box's Contents Are Its Dereference
+The contents of a `Heap<T>` place MUST be the place's dereference. Reading, borrowing and writing the contents MUST use that place, and writing it MUST drop the old contents first, as any assignment does. No operand MUST move out of it: contents MUST leave a box only through a call of the built-in `unbox`, which moves the whole box.
+
+#### Scenario: Writing a box's contents drops the old contents
+- **WHEN** `fun f(h: Heap<String>) { var m = h; *m = "b" }` is lowered
+- **THEN** the dereference of `m` is dropped and then assigned the string `"b"`, and `m` is dropped where its scope ends
+
+#### Scenario: Unboxing moves the whole box
+- **WHEN** `fun f(h: Heap<String>): String = h.unbox()` is lowered
+- **THEN** the MIR of `f` calls `builtin unbox` with a move of `h`, and the elaborated MIR drops `h` nowhere
+
+### Requirement: Taking Apart Through a Box Unboxes It
+Where a pattern takes its subject apart through a box, MIR MUST move the box part into a temporary as for any nested part, call the built-in `unbox` on it into a second temporary, and destructure that temporary.
+
+#### Scenario: Destructuring through a box
+- **WHEN** `enum Doc { Text(String), Wrapped(Heap<Doc>) }` is declared and `fun f(d: Doc): String = when (d) { Doc.Wrapped(Doc.Text(val s)) -> s; else -> "" }` is lowered
+- **THEN** in the first branch, `d` is destructured into a temporary holding its `Heap<Doc>`, which is moved into a call of `builtin unbox` whose result is destructured into `s`
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -487,3 +509,7 @@ Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined w
 - **One projection into a variant's payload** (D15). `(_1 as Text).0` is a place typed by a Prism type at every step; Rust's `Downcast` followed by `Field` would leave an untyped intermediate place.
 - **`Destructure` moves a whole local into its parts** (D15). One statement moves the source and initializes one local per non-`Copy` part (a binding, or a temporary of the branch for a part no binding takes, dropped where the branch ends, D8), which is exactly what the borrow checker must see: a whole-value move and several initializations. The validator requires every non-`Copy` part to be listed once, so nothing leaks. A nullable payload or a nested part is first moved into a temporary. Rejected: one move per part out of `(_1 as V).i`, which would need partial moves (see `ownership`).
 - **Ordered tests, bindings, then the guard, then the take-apart** (D9, D15). Each pattern of a branch gets its own test path, binding block and guard copy, all jumping to one body. A `when` without guards whose top-level patterns are variants with only wildcard and binding sub-patterns still switches once on the discriminant. A guarded pattern that takes its subject apart holds a shared borrow of the subject (origin `guard`) from before the guard to the `Destructure`, so a guard that changes the subject is a borrow conflict (found at review). Decision trees are an optimization for later.
+
+Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Two built-in calls, no new place or rvalue** (D10). `Heap(v)` and `h.unbox()` are `Call` terminators of `builtin Heap<T>` and `builtin unbox`, so allocation failure happens at a terminator like any call; a box's contents are the existing `Deref` place, written by an ordinary assignment that drops the old value. Moves out of a dereference stay invalid, so contents leave a box only through `unbox`; a pattern taking apart through a box moves the box part into a temporary and unboxes it into a second one. Rejected: an `Rvalue::Box` (Rust's old `box` expression) and a move out of `(*_1)` allowed for boxes only (Rust's special case), which would put allocation or partial moves of boxes into every analysis.

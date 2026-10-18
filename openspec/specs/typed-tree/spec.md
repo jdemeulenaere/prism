@@ -149,7 +149,7 @@ An extension call MUST be a call whose first argument is the receiver, passed as
 - **THEN** the body's value is a chain whose body is the call of `greet`, with a receiver borrow of the payload of `u` and the call of `next` as arguments
 
 ### Requirement: Built-In Clone and Output Are Identified
-The built-in `clone()` MUST be a call of the built-in clone function with a shared receiver borrow, never a call of a declaration. A call of `print` or `println` (see `type-system`) MUST be a call of the built-in print or print-line function, its argument copied out of a reference when `Copy` and borrowed when a `String`.
+The built-in `clone()` MUST be a call of the built-in clone function with a shared receiver borrow, never a call of a declaration. A call of `print` or `println` (see `type-system`) MUST be a call of the built-in print or print-line function, its argument copied out of references and boxes when `Copy` and borrowed when a `String`.
 
 #### Scenario: Built-in clone
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: &User): String = u.name.clone()` is checked
@@ -160,11 +160,15 @@ The built-in `clone()` MUST be a call of the built-in clone function with a shar
 - **THEN** the body calls the built-in print-line function with a copy-out of the binding `r`, then the built-in print function with a shared argument borrow of the binding `s`
 
 ### Requirement: Built-In String and Scalar Members Are Identified
-A string's `length` MUST be a call of the built-in length function, and a string's character `s[i]` a call of the built-in string-character function, each with a shared receiver borrow of the string, the latter also with the index. A scalar's `toString()` MUST be a call of the built-in to-string function with the receiver copied out of any reference.
+A string's `length` MUST be a call of the built-in length function, and a string's character `s[i]` a call of the built-in string-character function, each with a shared receiver borrow of the string, the latter also with the index. A scalar's `toString()` MUST be a call of the built-in to-string function with the receiver copied out of any reference or box.
 
 #### Scenario: Built-in string members
 - **WHEN** `fun f(s: &String, n: Int): Char = s[n + s.length]` and `fun g(n: &Int): String = n.toString()` are checked
 - **THEN** the body of `f` is a call of the built-in string-character function whose receiver is a shared receiver borrow of the dereferenced binding `s` and whose index adds `n` to a call of the built-in length function with a shared receiver borrow of the same place, and the body of `g` is a call of the built-in to-string function with a copy-out of the binding `n`
+
+#### Scenario: Built-in members through a box
+- **WHEN** `fun f(h: Heap<Int>): String = h.toString()` and `fun g(s: Heap<String>) { println(s.length) }` are checked
+- **THEN** the body of `f` is a call of the built-in to-string function with a copy of the dereferenced binding `h`, and the body of `g` calls the built-in length function with a shared receiver borrow of the dereferenced binding `s`
 
 ### Requirement: Ranges Are Range Nodes
 A range `a..b` or `a..<b` MUST be a range node of the built-in `Range` type that records whether its end is included.
@@ -294,6 +298,24 @@ A destructuring declaration MUST be a statement of its block holding its value, 
 - **WHEN** `struct User { val name: String, val id: Int }` is declared and `fun f(u: User): Int { val (id as n, name) = u; return n }` is checked
 - **THEN** the block of `f` starts with a destructuring statement reading `u` in place, whose struct pattern of `User` binds `name` by move and `n` by copy, in field order
 
+### Requirement: Boxes Are Read Through Dereferences
+Every implicit read through a `Heap<T>` MUST be explicit in the typed tree as a dereference of the box: a copy-out is a copy of a dereference, a box lending its contents to a reference parameter is a borrow of a dereference with origin argument, and a borrowed box converted to borrowed contents is a borrow of a dereference with origin conversion. No coercion node MUST convert one `Heap` type to another.
+
+#### Scenario: Lending a box's contents
+- **WHEN** `fun eval(e: &Int): Int = e` is declared and `fun f(h: Heap<Int>, r: &Heap<Int>): Int = eval(h) + eval(r)` is checked
+- **THEN** the first argument is a shared argument borrow of the dereferenced binding `h`, and the second a shared argument borrow of the dereference of the dereferenced binding `r`
+
+#### Scenario: Copying a box's contents out
+- **WHEN** `fun f(h: Heap<Int>): Int = h` is checked
+- **THEN** the body's value is a copy of the dereferenced binding `h`
+
+### Requirement: Built-In Box Operations Are Identified
+`Heap(value)` MUST be a call of the built-in heap-allocate function, with the contents' type as its type argument and the value consumed, and `h.unbox()` a call of the built-in unbox function with the box moved as its receiver. A `consuming fun` receiver reached through boxes MUST be wrapped in one unbox call per box.
+
+#### Scenario: Built-in box operations
+- **WHEN** `struct User { val name: String }` and `consuming fun User.close(): Int = 1` are declared, and `fun f(u: User): User = Heap(u).unbox()` and `fun g(h: Heap<User>): Int = h.close()` are checked
+- **THEN** the body of `f` is a call of the built-in unbox function whose receiver is a call of the built-in heap-allocate function with type argument `User` and a move of the binding `u`, and the body of `g` calls `close` with a call of the built-in unbox function on a move of the binding `h` as its receiver
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -302,7 +324,7 @@ Decisions from `typed-tree` (the shape agreed with the user in the borrow-checke
 - **Per-body arenas with typed ids.** A body (function or top-level `val`) holds its locals, expressions and statements, addressed by `LocalId`, `ExpressionId` and `StatementId` allocated in checking order, so a tree is deterministic and any node can be named by borrowck diagnostics, MIR source maps, the LSP and the compose transform. A parameter's default is an expression of its function's body that may read `this` and the earlier parameters, so MIR can lower each default as its own small function (Swift's default argument generators). A closure's parameters and locals live in its enclosing body's arenas. Rejected: a boxed tree (no node identity, rebuilt to insert a wrapper) and one arena per file.
 - **Bindings are local ids; declarations are module-qualified paths** (module, receiver type for an extension, name), the ABI's own identity for an exported symbol, unique because Prism has no overloading. Fields and variants are indices in declaration order, as the ABI records them. Global numeric definition ids were rejected because they break single-file compilation units; symbolic paths also let `hot-reload` key its tables and `generics` serialize an exported generic body's tree.
 - **Places, moves, copies and borrows are explicit, built from four primitives.** Places are bindings, top-level values, fields, dereferences, indices, payloads of nullables and temporaries (storage until the end of the enclosing statement). A consumed place is a `Move`, or a `Copy` when its type is `Copy`, exactly where the checker runs its move check, so MIR never re-derives which positions consume; other uses read in place. Every looked-through `&`, `&mut` or `Heap<T>` layer is a `Deref`, so a field read through `&&User` is `Field(Deref(Deref(Local)))`, matching MIR's place projections. Each checker classification becomes a composition: a reborrow is a borrow of a dereference, a copy-out a copy of a dereference, and the nullable conversions are chains. A borrow records its origin (written, argument, receiver, conversion): a receiver borrow is taken after the other arguments, which two-phase borrows need, and the origin lets borrowck diagnostics say why a borrow exists. A shared borrow (or other `Copy` place) passed on to a reference parameter is an explicit `Copy`. Rejected: one node kind per classification, which MIR would expand into the same projections anyway.
-- **A node's type is its slot's type.** Wherever a value fits by assignability with another type, a `Coerce` node wraps it: `WrapNullable` (a representation change MIR must emit), `Diverge` (`Nothing`) or `Subtype` (every other step: `&mut T` as `&T`, `T?` as `U?`, `Heap` and function-type variance). This includes the branches of an inferred `if` or `when` and the operands of `?:`, and for `==`/`!=` the operand assignable to the other's type is coerced to it. So MIR lowering never consults subtyping. A `Subtype` step that changes representation (`(Int?) -> Unit` given for `(Int) -> Unit`, `Heap<Int>` for `Heap<Int?>`) needs an adapter in the backend; the tree marks every such place.
+- **A node's type is its slot's type.** Wherever a value fits by assignability with another type, a `Coerce` node wraps it: `WrapNullable` (a representation change MIR must emit), `Diverge` (`Nothing`) or `Subtype` (every other step: `&mut T` as `&T`, `T?` as `U?` and function-type variance; boxes are invariant since `heap-boxes`). This includes the branches of an inferred `if` or `when` and the operands of `?:`, and for `==`/`!=` the operand assignable to the other's type is coerced to it. So MIR lowering never consults subtyping. A `Subtype` step that changes representation (`(Int?) -> Unit` given for `(Int) -> Unit`, `Heap<Int>` for `Heap<Int?>`) needs an adapter in the backend; the tree marks every such place.
 - **Safe navigation is a chain with payload projections**, as in Swift's optional evaluation. `NonNullPayload` leaves the innermost chain with `null`, and the payload of a place is a place, which is what lets `t?.lead?.greet()` borrow `lead` where it lives: a `?.` on a written chain joins it. A safe call's arguments are inside its chain, so they are evaluated only when the receiver is not `null`. Rejected: desugaring to a `when` over a synthetic local (which moves or copies the payload) and a `safe` flag on nodes (which leaves MIR to find where a chain ends).
 - **Calls are normalized where names are matched.** A callee is a declaration path, a built-in function (`clone`) or a function-typed value read in place. Arguments are in parameter order with `Default` slots, the receiver first; the source order of the written arguments is recorded (named arguments are evaluated as written, as in Kotlin; defaults after them); a call records its parameters' names and types, so slot types are known without the callee's signature, which for an import lives only in the ABI; and `is_compose` lets the compose transform find every composable call. A call of a declared function or payload variant takes over its callee's reference node, so no node is left unreachable. Constructions are not calls: `Construct` nodes in field order, like Rust's aggregates, since a constructor runs no code.
 - **Control flow stays structured.** `docs/architecture.md` assigns branching to MIR lowering, so `if`, `when`, `&&`, `||`, `?:`, `?.` and loops stay structured. A block's tail is always its value: a block whose value is discarded (a `Unit` body or loop body, the `then` branch of an `if` without `else`, a branch of a `when` statement) holds its last expression as a statement. A `when` records whether it is exhaustive, so MIR can mark the fall-through unreachable. Jumps name their loop's statement, found from a stack of open loops reset in closures; loop labels will only change the lookup.
@@ -332,3 +354,7 @@ Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, 
 Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Patterns are recursive, and the subject stays read in place** (D14). A variant or struct pattern holds one sub-pattern per payload or field (named and omitted struct fields normalized into place), a constructor pattern of `T` against a `T?` is wrapped in `NonNull`, and each binding is a `PatternBinding` local whose type follows its mode (`Copy` and `Move` the part's type, the borrows `&T`/`&mut T`). Alternatives share one local per name. A `Move` binding is what tells MIR to take the subject apart.
+
+Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Boxes are dereferences and calls** (D10). Reading through a box is a `Deref` node, so copy-out is a copy of a dereference, lending a borrow of a dereference with origin argument and the box view one with origin conversion; construction and unboxing are calls of the built-ins `HeapAllocate` (dump `Heap`) and `Unbox` (dump `unbox`), and a consuming receiver through boxes is wrapped in one `unbox` call per layer. A pattern of a box's contents is `Pattern::Deref`, beside `NonNull`, since a pattern has no place of its own to put a `Deref` step on; it also matches the referent of a `(&T)?` (from the review).

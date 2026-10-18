@@ -32,7 +32,7 @@ Every compiled function of a declaration MUST have a symbol derived from its dec
 - **THEN** `prism dump-clif lib/math.prism` prints the functions `lib/math::Int.double`, `lib/math::scale`, `lib/math::scale#default(b)`, `lib/math::BASE#init` and `lib/math::BASE#get`
 
 ### Requirement: Glue Has No Function Table Slot
-Drop and clone glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)` or `<module>#clone(<type>)` after that unit's module and the type it handles.
+Drop, clone and equality glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)`, `<module>#clone(<type>)` or `<module>#equals(<type>)` after that unit's module and the type it handles.
 
 #### Scenario: Glue of one type in two files
 - **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User): Unit {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
@@ -144,41 +144,15 @@ Each top-level `val` MUST have storage in its file's code unit and an accessor t
 - **WHEN** `lib/config.prism` declares `public val LIMIT: Int = 10`, and `app/main.prism` imports `/lib/config` and declares `fun main() { println(LIMIT + 1) }`
 - **THEN** `prism run app/main.prism` prints `11`
 
-### Requirement: Unsupported Constructs Are Rejected Before Code Generation
-Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
-
-#### Scenario: Unsupported constructs in several forms
-- **WHEN** a program's `main` runs `val h: Heap<Int>? = null`, or `val f = { 1 }`, or `println(id(1))` for `fun <T> id(x: T): T = x`, or the program declares `compose fun Label() {}` or `fun first(h: Heap<Int>): Int = 1`
-- **THEN** `prism run` reports `E6001` naming `'Heap' values` at `null`, closures at `{ 1 }`, calls of generic functions at `id(1)`, composable functions at `Label`, and `'Heap' values` at the declaration of `first`, and runs nothing
-
-#### Scenario: One error per body
-- **WHEN** `fun f(): Int { val a: Heap<Int>? = null; val b: Heap<Int>? = null; return 1 }` and `fun g(): Int { val c: Heap<Int>? = null; return 2 }` are declared with a `main` that calls neither
-- **THEN** `prism run` reports exactly two `E6001`, one at the first `null` in `f` and one at the `null` in `g`
-
-### Requirement: Aggregates Holding Heap or Function Values Are Rejected
-A struct, enum or nullable holding a `Heap<T>` or a function value MUST be rejected with `E6001`, naming what it holds, until `heap-boxes` and `closures` support them.
-
-#### Scenario: A struct holding a heap value
-- **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming `'Heap' values`, and exits with status 1
-
-#### Scenario: A struct is rejected
-- **WHEN** `struct P { val next: Heap<Int>? }` and `fun main() { val p = P(null); println(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `P(null)`, naming `'Heap' values`, with a note naming the `heap-boxes` change, prints nothing to stdout and exits with status 1
-
-#### Scenario: An enum holding a heap value is rejected
-- **WHEN** `enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun main() { val e = Expr.Literal(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `Expr.Literal(1)`, naming `'Heap' values`, prints nothing to stdout and exits with status 1
-
 ### Requirement: Cranelift IR Dump
-`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's drop and clone glue in order of their names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
+`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's drop, clone and equality glue in order of their names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
 
 #### Scenario: Dumping a file's IR
 - **WHEN** `prism dump-clif main.prism` runs twice on a file that `prism run` accepts
 - **THEN** it prints the same text both times and exits with status 0
 
 #### Scenario: Dumping a file the backend rejects
-- **WHEN** `prism dump-clif main.prism` runs on a file holding `fun f(h: Heap<Int>): Int = 1`
+- **WHEN** `prism dump-clif main.prism` runs on a file holding `fun f(g: () -> Int): Int = 1`
 - **THEN** it reports `E6001`, prints no IR, and exits with a failure status
 
 ### Requirement: Layout Dump
@@ -254,7 +228,7 @@ The built-in `clone()` of a value whose type owns storage MUST run the clone glu
 - **THEN** it prints `7` twice, reports no live allocation and exits with status 0
 
 ### Requirement: Glue Is Local to Its Code Unit
-Each code unit MUST generate the drop and clone glue of the types its bodies drop or clone, including types of other modules, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
+Each code unit MUST generate the drop, clone and equality glue of the types its bodies drop, clone or compare through boxes, including types of other modules and the types those reach through boxes, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
 
 #### Scenario: Drop glue in the IR dump
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User { val name: String }` and `fun f(u: User) {}`
@@ -263,6 +237,83 @@ Each code unit MUST generate the drop and clone glue of the types its bodies dro
 #### Scenario: Clone glue in the IR dump
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User : Clone { val name: String, val id: Int }` and `fun f(u: &User): User = u.clone()`
 - **THEN** after the file's functions it prints the clone glue of `main::User`, headed `function main#clone(main::User)`, which `f` calls
+
+#### Scenario: Glue of an imported recursive type
+- **WHEN** `lib/tree.prism` declares `public enum Tree { Leaf, Node(Heap<Tree>, Int, Heap<Tree>) }` and `public fun leaf(): Tree = Tree.Leaf`, and `app/main.prism` imports `/lib/tree` and declares `fun main() { val t = Tree.Node(Heap(leaf()), 1, Heap(leaf())); println(t == t) }`
+- **THEN** `prism run --check-allocations app/main.prism` prints `true` and exits with status 0, and `prism dump-clif app/main.prism` prints `app/main#drop(lib/tree::Tree)`, `app/main#drop(Heap<lib/tree::Tree>)` and `app/main#equals(lib/tree::Tree)`
+
+### Requirement: A Box Is a Pointer to an Exactly Sized Allocation
+A `Heap<T>` value MUST be a non-null pointer to its contents, held in an allocation of exactly the size and alignment of `T` made through the runtime. Constructing a box MUST evaluate its argument before allocating. A box of a zero-sized `T` MUST allocate nothing and hold a non-null address aligned for `T`. A `Heap<T>?` MUST stay one pointer, `null` being 0.
+
+#### Scenario: Constructing a box allocates its contents' size
+- **WHEN** `struct Point : Copy { val x: Int, val y: Int }` and `fun f(p: Point): Heap<Point> = Heap(p)` are declared and `prism dump-clif main.prism` runs
+- **THEN** the body of `f` calls the runtime's allocation function with size 16 and alignment 8 and writes `p` into the allocation
+
+#### Scenario: A box of a zero-sized value allocates nothing
+- **WHEN** `struct Marker : Copy {}` is declared and `fun main() { val h = Heap(Marker()); val g = h.clone(); println(1) }` runs
+- **THEN** it prints `1`, and the program makes no allocation
+
+### Requirement: Box Glue Drops the Contents Before Freeing
+Dropping a `Heap<T>` MUST run the drop glue of `T` on its contents when `T` owns storage, and then free the allocation, which MUST be freed exactly once. Unboxing MUST move the contents out and free the allocation without dropping them. Each box type that a unit drops MUST have its own drop glue, named after the box type.
+
+#### Scenario: Box glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun f(e: Expr) {}`
+- **THEN** after the file's functions it prints `function main#drop(main::Expr)` and `function main#drop(Heap<main::Expr>)`, each calling the other, and the latter freeing the allocation after the call
+
+#### Scenario: A struct holding a heap value
+- **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(size(Node(Heap(1)))) }` are declared
+- **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0
+
+### Requirement: Cloning a Box Allocates a New Box
+The clone glue of `Heap<T>` MUST allocate a new box and clone the contents into it, by the clone glue of `T` when `T` owns storage and by a bitwise copy otherwise, so that the clone shares no memory with the original.
+
+#### Scenario: Box clone glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `fun f(h: &Heap<Int>): Heap<Int> = h.clone()`
+- **THEN** it prints `function main#clone(Heap<Int>)`, which `f` calls, and which calls the runtime's allocation function
+
+### Requirement: Boxes of Aggregates Are Compared by Equality Glue
+Comparing the contents of two boxes whose contents are a struct, an enum or a nullable of one MUST call the equality glue of the contents' type, a function of its code unit named `<module>#equals(<type>)` that compares two values structurally as `==` does, without comparing addresses. Contents of other types MUST be compared inline.
+
+#### Scenario: Equality glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun same(a: &Expr, b: &Expr): Bool = a == b`
+- **THEN** it prints `function main#equals(main::Expr)`, which calls itself for the boxed payloads of `Add`, and `same` compares the variants inline and calls the glue for `Add`'s payloads
+
+### Requirement: Glue Checks the Stack
+Every drop, clone and equality glue function MUST check the stack on entry, as compiled bodies do, so that recursion through glue that exceeds the program's stack raises the runtime error "stack overflow".
+
+#### Scenario: Dropping a very deep list
+- **WHEN** `struct Node { val next: Heap<Node>? }` is declared and `fun main() { var list: Heap<Node>? = null; var i = 0; while (i < 1000000) { list = Heap(Node(list)); i += 1 }; println(i) }` runs
+- **THEN** stdout holds `1000000` and a newline, stderr holds exactly `panic: stack overflow` and a newline, and the exit status is 101
+
+### Requirement: Constructs the Backend Lacks Are Rejected Before Code Generation
+Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
+
+#### Scenario: A struct is rejected
+- **WHEN** `struct P { val run: () -> Int }`, `fun one(): Int = 1` and `fun main() { val p = P(one); println(1) }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` in `main`, naming function values and closures, with a note naming the `closures` change, prints nothing to stdout and exits with status 1
+
+#### Scenario: A recursive enum runs
+- **WHEN** `enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun main() { val e = Expr.Add(Heap(Expr.Literal(1)), Heap(Expr.Literal(2))); println(1) }` are declared
+- **THEN** `prism run --check-allocations main.prism` prints `1`, writes nothing to stderr and exits with status 0
+
+#### Scenario: Unsupported constructs in several forms
+- **WHEN** a program's `main` runs `val f = { 1 }`, or `println(id(1))` for `fun <T> id(x: T): T = x`, or the program declares `compose fun Label() {}` or `fun first(g: () -> Int): Int = 1`
+- **THEN** `prism run` reports `E6001` naming closures at `{ 1 }`, calls of generic functions at `id(1)`, composable functions at `Label`, and function values at the declaration of `first`, and runs nothing
+
+#### Scenario: One error per body
+- **WHEN** `fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }` and `fun g(): Int { val c = { 3 }; return 2 }` are declared with a `main` that calls neither
+- **THEN** `prism run` reports exactly two `E6001`, one at the first closure in `f` and one at the closure in `g`
+
+### Requirement: Aggregates Holding Function Values Are Rejected
+A struct, enum or nullable holding a function value MUST be rejected with `E6001`, naming what it holds, until `closures` supports them.
+
+#### Scenario: A struct holding a function value
+- **WHEN** `struct Task { val run: () -> Int }`, `fun size(t: &Task): Int = 1` and `fun main() { println(1) }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming function values and closures, and exits with status 1
+
+#### Scenario: An enum holding a function value is rejected
+- **WHEN** `enum Job { Run(() -> Int), Idle }` and `fun main() { val j = Job.Idle }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `Job.Idle`, naming function values and closures, prints nothing to stdout and exits with status 1
 
 ## Design Rationale
 
@@ -287,11 +338,11 @@ Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined
 - **Structs inline, fields by decreasing alignment** (D5): equal alignments keep declaration order, so `struct S { val a: Bool, val n: Int, val b: Bool }` takes 16 bytes instead of C's 24, and the order is stable and documented so dumps and tests can pin it. Programs never see it: construction, evaluation and equality follow declaration order. Rejected: C order (padding with no FFI to justify it; a later C-layout attribute can opt in), Rust's unspecified order.
 - **Enums are the smallest tag, then the payloads** (D6): a `u8`, `u16` or `u32` index at offset 0, each variant's payload laid out like a struct starting right after the tag (a `Bool` payload sits at 1), every variant sharing the storage. An enum without variants is uninhabited. Rejected: an `Int`-wide tag, a common payload offset, niche filling, a trailing tag.
 - **Nullables are a tag byte, or the null pointer** (D7): `T?` is a `u8` tag (0 for `null`, matching MIR's `Discriminant`) then `T` at its alignment; `(&T)?`, `(&mut T)?` and `Heap<T>?` are one pointer, null being 0, so every optional borrow MIR produces costs one pointer. Rejected: one representation for all nullables, general niche filling now (a later change can add it with no observable effect).
-- **Sizes** (D8): `Int`, `Double` and pointers 8, `Char` 4, `Bool` 1; `Unit` and fieldless structs 0 bytes (storage is at least one byte so every value has an address); `Heap<T>` is a pointer now so recursive enums have a layout, though its values stay `E6001`; `String` and function types have no layout until `runtime-strings-and-drops` and `closures` choose theirs (`String` now has its fixed 32-byte layout; see below).
+- **Sizes** (D8): `Int`, `Double` and pointers 8, `Char` 4, `Bool` 1; `Unit` and fieldless structs 0 bytes (storage is at least one byte so every value has an address); `Heap<T>` is a pointer, so recursive enums have a layout (its values came with `heap-boxes`); `String` and function types have no layout until `runtime-strings-and-drops` and `closures` choose theirs (`String` now has its fixed 32-byte layout; see below).
 - **Aggregates live in memory, scalars in variables** (D9). A struct, enum or tag-byte nullable local is a stack slot of its layout; an aggregate argument is used in place, and the return place is the caller's memory. Rejected: scalar replacement of unborrowed aggregates, an optimization with no observable effect that needs a second representation and cannot split overlapping payloads; Tier 2 gets it from LLVM.
 - **Passed by address, returned through a caller address** (D10). An aggregate parameter is one pointer and an aggregate result a pointer parameter placed first, so a machine signature never depends on a layout and a function-table slot keeps its signature when a type gains a field. The caller passes a moved operand's own place (dead after the move), copies a `Copy` operand into a fresh slot (so a write through another argument cannot change it), and passes its destination as the result address only when the destination is a whole, unborrowed local no argument is rooted at, else a fresh slot copied afterwards. A layout change still recompiles every function touching the type, which the interface hashes find (see `compilation-and-abi`); what happens to live values is `hot-reload`'s. Rejected: `StructReturn` (its C registers are not needed between Prism functions), multi-value returns and per-field arguments (signatures would follow layouts), small aggregates in registers (a follow-up), callee-allocated results.
 - **Places, copies and moves** (D11, D12). A place's address follows its projections (`Deref` loads, `Field` and a tag-byte `Payload` add offsets, a pointer-like `Payload` adds nothing); `Subtype` is lowered only where both sides share a representation. A copy and a move are the same bytes copied (`emit_small_memory_copy`, in its overlapping form when source and destination share a root or go through a dereference), and an `Aggregate` whose memory operands may overlap the destination copies them to temporaries first. Nothing is zeroed or flagged after a move.
-- **Equality is expanded inline** (D13): fields in declaration order, enum tags then the current variant's payloads, nullables by presence then payload, references by referent, each scalar as its type compares, so padding and inactive payload bytes are never read and `NaN` and `-0.0` behave. Rejected: `memcmp` (reads padding, wrong for floats), per-type equality functions now (`runtime-strings-and-drops` kept equality inline and left them to `heap-boxes`; see below). Expansion is bounded by the type's size, since a type reaching itself needs `Heap<T>`, whose values are rejected.
+- **Equality is expanded inline** (D13): fields in declaration order, enum tags then the current variant's payloads, nullables by presence then payload, references by referent, each scalar as its type compares, so padding and inactive payload bytes are never read and `NaN` and `-0.0` behave. Rejected: `memcmp` (reads padding, wrong for floats), per-type equality functions now (`runtime-strings-and-drops` kept equality inline and left them to `heap-boxes`; see below). Expansion is bounded by the type's size, since it stops at `Heap<T>` layers, where equality glue takes over (`heap-boxes`, below).
 - **Drops of values that own nothing compile to nothing** (D14, D15): a `Drop` of a supported type is a jump, drop flags stay ordinary `Bool` locals, and `clone()` of such a value is a bitwise copy, so non-`Copy` aggregates of scalars run with their moves checked as they will be later. Rejected: rejecting every non-`Copy` aggregate until drop glue exists. (Types that own storage run drop and clone glue since `runtime-strings-and-drops`; see below.)
 - **Top-level values build in place** (D17): `#storage` is sized by the layout and the accessor passes its address as `#init`'s result address.
 - **`prism dump-layout`** (D18) prints the file's own structs and enums in declaration order, then every other struct, enum and nullable its compiled bodies hold (through fields, payloads and referents, not `Heap<T>`) by rendered name, with sizes, alignments, offsets and tags; a type without a layout is listed with what it waits for. `layout.snap` fixtures pin the layout rules, which `prism dump-clif` (no snapshots) could not. Rejected: layouts inside `dump-clif`, a `--layouts` flag on `dump-mir`.
@@ -304,6 +355,13 @@ Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, 
 - **The allocator is the runtime over Rust's global allocator, with sized frees** (D8). `prism_rt_allocate(size, alignment)` and `prism_rt_free(pointer, size, alignment)` over `std::alloc`, every allocation of a program going through them, so a size-class allocator can replace the global one without changing callers and the allocation check can verify each free. A failed allocation or an impossible size is "out of memory". A zero-sized allocation is a dangling aligned pointer, never allocated or tracked (D22), which `heap-boxes` uses for boxes of zero-sized values. The allocation map has its own lock, so reporting an invalid free, which flushes the output, never runs with the map locked (D22). Rejected: an arena freed at exit (a long-running UI would grow without bound), the C library's `malloc` from generated code, Prism's own allocator now, counting allocations in normal runs.
 - **Drop glue is generated per code unit, per type** (D9). A type that owns no storage has none (its `Drop` is a jump); a `String` is dropped by `prism_rt_string_drop`; a struct drops its owning fields in declaration order (Rust's order), an enum switches on its tag and drops the current variant's owning payloads, a nullable tests its tag, each part through its own glue, as `<unit module>#drop(<type>)` functions with local linkage, memoized in the unit's `GlueTable` (`crates/prism-codegen/src/glue.rs`), lowered after its bodies, and called directly through non-colocated references. Drop flags need nothing new: they are MIR `Bool` locals tested before the `Drop`. A unit's code then depends only on its own MIR, instances of generic types get glue where they are used, and hot reload stays sound (a unit is recompiled when a type it handles changes layout, and old frames keep calling old glue). Glue symbols qualify every struct and enum by its module, also in type arguments. Glue does not check the stack, since nothing recursive can be dropped yet; `heap-boxes` must add the check or drop long chains iteratively. Rejected: glue inlined at each drop (code grows with the type, and recursive types cannot be expanded), glue in the defining file's unit through the function table (an indirect call per drop, and no file defines `Pair<String, Int>`'s), a runtime interpreter of layout descriptions, anonymous functions (`prism dump-clif` could not name them). Duplicate glue across units costs a few instructions per type; Tier 2 can merge it.
 - **Clone glue follows drop glue** (D10). `<unit module>#clone(<type>)` takes the destination's and the source's addresses, copies the whole value bitwise (every part that owns nothing, the tag and the padding) and then replaces each owning part of the current variant or payload, in declaration order, by a clone made by its own glue; a `String` is cloned by `prism_rt_string_clone` (a copy when it owns no buffer, a new exactly sized one otherwise). Glue exists only for `Clone` types, runs no user code, and shares no owned memory with the source.
-- **Equality stays inline; strings compare in the runtime** (D11). Without `Heap<T>` no type reaches itself, so inline expansion still terminates; a `String` part calls `prism_rt_string_equals`. `heap-boxes` must turn equality of types that reach themselves through boxes into `#equals` glue functions of the same kind.
+- **Equality stays inline; strings compare in the runtime** (D11). Without `Heap<T>` no type reaches itself, so inline expansion still terminates; a `String` part calls `prism_rt_string_equals`. `heap-boxes` turned the comparison of boxed aggregates into `#equals` glue functions of the same kind (below).
 - **Strings in the calling convention** (D16). `String` is `Representation::Memory`, so every rule for aggregates applies: a stack slot per local, parameters by the address of caller-owned memory (a literal operand is first built in a slot), results through the caller's result address, a move a 32-byte copy that leaves the source untouched. A top-level `String`'s `#storage` is 32 bytes and its accessor registers it with the runtime once initialized (see `execution`).
-- **What the backend still rejects** (D18). Strings and every type holding them are supported; `classify` names, in field order, `'Heap' values` (`heap-boxes`), function values and closures (`closures`), calls of generic functions (`monomorphization`), composable functions (`compose-transform`) and values of unknown type, and the fixtures that pinned strings as unsupported now pin `Heap<T>`.
+- **What the backend still rejects** (D18). Strings and every type holding them are supported; `classify` names, in field order, function values and closures (`closures`), calls of generic functions (`monomorphization`), composable functions (`compose-transform`) and values of unknown type, and the fixtures that pinned strings as unsupported pinned `Heap<T>` until `heap-boxes` moved them to function values.
+
+Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **A box is a pointer to an exactly sized allocation** (D3): non-null, `T`-aligned, `size_of(T)` bytes from the runtime allocator, freed with the same size and alignment. The argument is evaluated before allocating, so `Heap(make())` runs `make` before the allocation can fail ("out of memory", no location). A zero-sized `T` allocates nothing: the box is the address equal to `T`'s alignment, as Rust's `NonNull::dangling`. `Heap<T>?` stays one pointer, null being 0. Rejected: a header word (nothing reads it, and a count would be hidden reference counting, which the zero-cost memory safety invariant forbids); one byte for zero-sized contents; placement construction (it reorders "out of memory" before the argument's effects; a later optimization).
+- **Box glue drops the contents, then the allocation** (D12): `#drop(Heap<T>)` runs `T`'s drop glue then frees, `#clone(Heap<T>)` allocates then clones or copies the contents into the new box, and `unbox` and construction are lowered inline. Aggregates call the box's glue for box parts, a `Heap<T>?` tests its pointer for 0, and a recursive type's glue is recursive.
+- **Boxed aggregates compare by equality glue** (D13). `==` stays structural and never compares addresses; inline expansion stops at box layers, where the contents of a struct, enum or nullable of one are compared by `<module>#equals(<type>)`, local to the unit like drop and clone glue (the expansion moved to `equality.rs`, shared by bodies and glue). Scalars, strings and nullable scalars in a box compare inline. There is no pointer-equality shortcut, since a boxed `NaN` is unequal to itself. Rejected: equality glue for every aggregate; glue only for types that reach themselves; a pointer shortcut for types without `Double`.
+- **Glue checks the stack** (D14). Every drop, clone and equality glue function checks the stack on entry like a compiled body, so a structure deeper than the 8 MiB stack is the runtime error "stack overflow", written without a location since glue has no declaration, instead of a crash. A linked list of a few hundred thousand nodes overflows on drop, as Rust's `Box` lists do; iterative drop of box chains is a follow-up that changes no program's meaning. Rejected: iterative drop now; no stack check (a segmentation fault); passing a location to every glue call.

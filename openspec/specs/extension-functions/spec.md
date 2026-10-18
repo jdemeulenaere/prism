@@ -68,7 +68,7 @@ A call `value.name(...)` MUST resolve to an extension named `name` whose receive
 - **THEN** the type checker emits `E4006` naming `fly` and `User`
 
 ### Requirement: Members Take Precedence Over Extensions
-A call `value.name(...)` MUST invoke a field named `name` of the receiver's struct when it has one, the built-in `clone()` when `name` is `clone` and the receiver's type is `Clone`, and the built-in `toString()` when `name` is `toString` and the receiver's type is `Int`, `Double`, `Bool` or `Char`, whatever extensions are visible; the built-in `length` of a `String` counts as a field. An extension MUST be considered only when no such member exists.
+A call `value.name(...)` MUST invoke, whatever extensions are visible, a field `name` of the receiver's struct, else the built-in `clone()` on a `Clone` receiver, `unbox()` on a receiver that is a `Heap<T>` after its references, or `toString()` on an `Int`, `Double`, `Bool` or `Char`; a `String`'s built-in `length` counts as a field. An extension MUST be considered only when no such member exists.
 
 #### Scenario: A field wins over an extension
 - **WHEN** a file declares `struct Button { val onClick: () -> String }` and `fun Button.onClick(): Int = 1`, and `fun f(b: Button) { val s: String = b.onClick() }`
@@ -77,6 +77,10 @@ A call `value.name(...)` MUST invoke a field named `name` of the receiver's stru
 #### Scenario: A built-in toString wins over an extension
 - **WHEN** a file declares `fun Int.toString(): String = "x"` and `fun f(n: Int): String = n.toString()`
 - **THEN** the type checker emits `E4010` for the extension and nothing for `f`, whose call is the built-in `toString()`
+
+#### Scenario: The built-in unbox wins over an extension on the contents
+- **WHEN** a file declares `struct Gift { val n: Int }`, `fun Gift.unbox(): Int = n`, `fun f(h: Heap<Gift>): Gift = h.unbox()` and `fun g(h: Heap<Gift>): Int { val r: &Gift = &h; return r.unbox() }`
+- **THEN** the file typechecks: the call in `f` is the built-in `unbox()` of the box, and the call in `g` is the extension, on the borrowed contents
 
 ### Requirement: The Receiver in Extension Bodies
 Inside an extension body, `this` MUST be the receiver, a `val` binding of type `&T` in a `fun`, `&mut T` in a `mut fun` and `T` in a `consuming fun`, in scope in the body and in parameter defaults. A bare name that is not a local or parameter MUST resolve to `this.name` when the receiver's struct has that field, and, when called, to `this.name(...)` when an extension on the receiver type matches, before top-level declarations and imports. `this` elsewhere MUST be `E4001`.

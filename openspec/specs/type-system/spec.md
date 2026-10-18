@@ -327,7 +327,7 @@ A type in an imported signature MUST denote the same type the exporting file dec
 - **THEN** the closure is checked against `(Int) -> Int?` and the call typechecks successfully
 
 ### Requirement: Operators Read Through References
-Operator operands (arithmetic, comparison, equality, logical, unary and range bounds), and `if` and subjectless-`when` conditions, MUST be typed after peeling every `&` and `&mut` layer, so a borrowed value can be read by operators. Positions that expect a value of type `T` (arguments, initializers, returns, assignment values) accept a `&T` only by copying a `Copy` value out of it, as the `references` spec defines.
+Operator operands (arithmetic, comparison, equality, logical, unary and range bounds), and `if` and subjectless-`when` conditions, MUST be typed after peeling every `&`, `&mut` and `Heap<T>` layer, so a borrowed or boxed value can be read by operators. Positions that expect a value of type `T` (arguments, initializers, returns, assignment values) accept a `&T` or a `Heap<T>` only by copying a `Copy` value out of it, as the `references` spec defines.
 
 #### Scenario: Arithmetic on a borrowed integer
 - **WHEN** `fun f(a: &Int): Int = a + 1` is checked
@@ -344,6 +344,10 @@ Operator operands (arithmetic, comparison, equality, logical, unary and range bo
 #### Scenario: Borrow passed where a value is expected
 - **WHEN** `fun g(s: String): Int` is declared and `fun f(a: &String): Int = g(a)` is checked
 - **THEN** the type checker rejects the argument with `E4017`, as a move out of the borrow `a`
+
+#### Scenario: Operators on boxed values
+- **WHEN** `fun f(h: Heap<Int>, r: &Heap<Int>, c: Heap<Bool>): Int = if (c && h == r) h + r * 2 else -h` is checked
+- **THEN** the function typechecks successfully
 
 ### Requirement: Return and Argument Mismatch Codes
 A value whose type is incompatible with the return type of its enclosing function or closure MUST be reported as `E4005`. A value incompatible with a parameter type (positional, named or trailing-lambda argument, struct constructor field, or enum payload) MUST be reported as `E4004`. Both codes MUST also apply inside an `if`/`when` branch or block's final expression producing that value.
@@ -528,7 +532,7 @@ A call whose callee is the bare name `print` or `println` MUST call the output b
 - **THEN** the type checker emits `E4001` for `println`
 
 ### Requirement: Output Built-In Arguments
-`print` MUST take exactly one argument and `println` zero or one, given positionally, of type `Int`, `Double`, `Bool`, `Char` or `String`, or a reference to one. A `Copy` argument MUST be passed by value, copied out of a reference, and a `String` MUST be borrowed implicitly, as an argument of a `&String` parameter is, without being moved. Any other count, a named argument or another type MUST be rejected with `E4004`. A call MUST have type `Unit`.
+`print` MUST take exactly one argument and `println` zero or one, given positionally, of type `Int`, `Double`, `Bool`, `Char` or `String`, or a reference or `Heap<T>` of one, at any depth. A `Copy` argument MUST be passed by value, copied out of references and boxes, and a `String` MUST be borrowed implicitly, as an argument of a `&String` parameter is, without being moved. Any other count, a named argument or another type MUST be rejected with `E4004`. A call MUST have type `Unit`.
 
 #### Scenario: Printing scalars and strings
 - **WHEN** `fun f(r: &Int, s: String) { print(1); println(2.5); println(true); println('c'); println(r); println(s); println(s); println() }` is checked
@@ -541,6 +545,10 @@ A call whose callee is the bare name `print` or `println` MUST call the output b
 #### Scenario: Wrong argument count or form
 - **WHEN** `fun f() { print(); println(1, 2); println(value = 1) }` is checked
 - **THEN** the type checker emits `E4004` for each of the three calls
+
+#### Scenario: Printing boxed values
+- **WHEN** `fun f(h: Heap<Int>, s: Heap<String>) { println(h); println(s); println(s) }` is checked
+- **THEN** the file typechecks, and neither `h` nor `s` is moved
 
 ### Requirement: String Length
 A `String` MUST have a built-in member `length` of type `Int`, read without parentheses through any `&`, `&mut` and `Heap<T>` layers, and `s?.length` on a `String?` MUST have type `Int?`. `length` is not a function: `s.length()` MUST be rejected as calling an `Int` (`E4004`), as a call of a field of type `Int` is.
@@ -569,7 +577,7 @@ A `String` MUST have a built-in member `length` of type `Int`, read without pare
 - **THEN** the type checker emits `E4002`, expecting `Int`
 
 ### Requirement: Scalars Have a Built-In toString
-An `Int`, `Double`, `Bool` or `Char`, read through any `&` and `&mut` layers, MUST have a built-in member function `toString()` taking no arguments and returning `String`, and `x?.toString()` on a nullable of one of these MUST have type `String?`. Arguments MUST be rejected with `E4004`. On any other type, `toString` MUST be an ordinary name, resolved to a field or an extension like any other member (`E4006` when none exists).
+An `Int`, `Double`, `Bool` or `Char`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have a built-in member function `toString()` taking no arguments and returning `String`, and `x?.toString()` on a nullable of one of these MUST have type `String?`. Arguments MUST be rejected with `E4004`. On any other type, `toString` MUST be an ordinary name, resolved to a field or an extension like any other member (`E4006` when none exists).
 
 #### Scenario: Converting scalars to strings
 - **WHEN** `fun f(n: Int, d: &Double, b: Bool, c: Char, m: Int?): String = n.toString() + d.toString() + b.toString() + c.toString() + (m?.toString() ?: "")` is checked
@@ -582,6 +590,55 @@ An `Int`, `Double`, `Bool` or `Char`, read through any `&` and `&mut` layers, MU
 #### Scenario: toString of a struct is an extension
 - **WHEN** `struct Point : Copy { val x: Int, val y: Int }`, `enum Color { Red }`, `fun Point.toString(): String = x.toString() + "," + y.toString()`, `fun f(p: Point): String = p.toString()` and `fun g(c: Color): String = c.toString()` are checked
 - **THEN** the type checker accepts `f` and the extension, and emits `E4006` for `toString` on `Color`
+
+#### Scenario: toString through a box
+- **WHEN** `fun f(h: Heap<Int>, r: &Heap<Char>): String = h.toString() + r.toString()` is checked
+- **THEN** the file typechecks successfully
+
+### Requirement: Heap Construction
+A call `Heap(value)` MUST construct a `Heap<T>` holding `value`, where `T` is the call's explicit type argument (`Heap<Int?>(1)`), else the contents' type of the expected `Heap<T>`, else the type of `value`. The argument MUST be checked against `T` in a consuming position. Exactly one positional argument MUST be given, or the call is `E4004`.
+
+#### Scenario: Boxing a value
+- **WHEN** `enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }` is declared and `fun f(): Expr = Expr.Add(Heap(Expr.Lit(1)), Heap(Expr.Lit(2)))` and `fun g(): Heap<Int> { val h = Heap(1); return h }` are checked
+- **THEN** both typecheck, and `h` has type `Heap<Int>`
+
+#### Scenario: The expected type gives the contents' type
+- **WHEN** `fun f(): Heap<Int?> = Heap(1)` and `fun g(): Heap<Int?> = Heap<Int?>(null)` are checked
+- **THEN** both typecheck, the `1` being converted to `Int?` before it is boxed
+
+#### Scenario: The boxed value is consumed
+- **WHEN** `struct User { val name: String }` is declared and `fun f(u: User): Heap<String> = Heap(u.name)` and `fun g(u: User): Heap<User> = Heap(u)` are checked
+- **THEN** the type checker emits `E4017` for `u.name` and accepts `g`
+
+#### Scenario: Wrong arguments of Heap rejected
+- **WHEN** `fun f() { val a = Heap(); val b = Heap(1, 2); val c = Heap(value = 1); val d = Heap<Int>("x") }` is checked
+- **THEN** the type checker emits `E4004` for each call, the last for `"x"`, an argument that does not fit `Int`
+
+#### Scenario: Borrows in the type argument rejected
+- **WHEN** `fun f(a: Int) { val h = Heap<&Int>(&a) }` is checked
+- **THEN** the type checker emits `E4022`
+
+### Requirement: The Name Heap Is Built In
+`Heap` in call position MUST name the built-in constructor whatever is in scope. A top-level function, struct, enum or `val` named `Heap` MUST be rejected with `E4010`, and `Heap` named without a call MUST be rejected with `E4001`.
+
+#### Scenario: A declaration named Heap rejected
+- **WHEN** a file declares `struct Heap(val x: Int)` or `fun Heap(x: Int): Int = x`
+- **THEN** the type checker emits `E4010`, saying that the declaration would hide the built-in `Heap`
+
+#### Scenario: Heap is not a value
+- **WHEN** `fun f() { val make = Heap }` is checked
+- **THEN** the type checker emits `E4001` for `Heap`
+
+### Requirement: Heap Types Are Invariant
+`Heap<U>` MUST be assignable to `Heap<T>` only when `U` and `T` are the same type, because a box cannot change the representation of its contents. A mismatch MUST be reported like any other, with help saying that the contents can be converted when the box is built.
+
+#### Scenario: A box is not a box of a nullable
+- **WHEN** `fun g(h: Heap<Int?>) {}` is declared and `fun f(h: Heap<Int>) { g(h) }` and `fun k(h: Heap<Int>): Heap<Int?> = h` are checked
+- **THEN** the type checker emits `E4004` for `f` and `E4005` for `k`, each with help suggesting that the box be built as a `Heap<Int?>`
+
+#### Scenario: Branches of different boxes have no join
+- **WHEN** `fun f(c: Bool) { val h = if (c) Heap(1) else Heap(null) }` and `fun g(c: Bool): Heap<Int?> = if (c) Heap(1) else Heap(null)` are checked
+- **THEN** the type checker emits `E4002` for `f`, and accepts `g`, whose branches are each built as a `Heap<Int?>`
 
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
@@ -624,7 +681,7 @@ Decisions from `statements-and-loops`:
 
 Decisions from `reference-access`:
 
-- **References are invariant in their referent** (user). `&U` is assignable to `&T` only for the same type, except that `&mut` may weaken to `&` at the outer layer and behind shared borrows; `&mut U` to `&mut T` needs equal types. A reference cannot change the representation of what it points at (`&Int` is not a `&(Int?)`), so covariance would have hidden a converted copy behind a borrow. `Heap<T>` keeps covariance until the `Heap<T>` change decides it.
+- **References are invariant in their referent** (user). `&U` is assignable to `&T` only for the same type, except that `&mut` may weaken to `&` at the outer layer and behind shared borrows; `&mut U` to `&mut T` needs equal types. A reference cannot change the representation of what it points at (`&Int` is not a `&(Int?)`), so covariance would have hidden a converted copy behind a borrow. `Heap<T>` is invariant for the same reason (`heap-boxes`, below).
 - **Value positions copy `Copy` values out of borrows.** The "Operators read through references; value positions do not" rule above now ends at copy-out: where a `T` is expected, a `&T` of a `Copy` type is accepted, and a non-`Copy` one is `E4017` (see `references`).
 
 Decisions from the `Bool` plain fixes (2026-10-18, logged in `docs/decisions-for-review.md`):
@@ -652,3 +709,9 @@ Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, 
 - **Built-in `length` and `toString()`** (D6). `s.length` is a built-in member read without parentheses, through `&`, `&mut`, `Heap<T>` and `?.`, counting as a field of `String` for member precedence (`s.length()` is `E4004`); `x.toString()` is a built-in member function of `Int`, `Double`, `Bool` and `Char`, through references and `?.`, giving the text `print(x)` writes, and wins over extensions. On every other type `toString` is an ordinary name, so `fun Point.toString(): String` is how a struct will display in templates. Rejected: `String.toString()` (a clone under another name), a generated `toString()` for every type (no text form committed for aggregates), a library `fun Int.toString()` (no prelude), `length()` or `size`.
 - **The receiver of `s[i]` and `s.length` is borrowed after the other arguments** (D22). Both are calls of built-ins with a receiver borrow, so the index of `s[i]` is evaluated before `s` is borrowed, as for every receiver; the order is observable only through an index that reassigns the string (`s[{ s = "cd"; 0 }]` reads the new `s`, where Kotlin reads the old one). Rejected: a special evaluation order for the built-in members alone.
 - **`s.length = n` is `E4003`** (D22): `length` counts as an immutable field, so assigning it reports "cannot assign to immutable 'val' struct field 'length'". Rejected: `E4006`, a string-specific message.
+
+Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **`Heap(value)` is a built-in constructor** (D2). It reads as the type's constructor, as Kotlin and Swift users expect, and is a call of the built-in `HeapAllocate`. The contents' type comes from an explicit type argument (`Heap<Int?>(1)`), else the expected type, else the argument, which is checked in a consuming position, so `1` is wrapped into `Int?` before it is boxed. `Heap` resolves like a type name in call position, so no local hides it, and a top-level declaration named `Heap` could never be named: `E4010`. Rejected: a free function `box(v)`, Rust's `Box::new` (no associated functions), a `heap`/`new` keyword, and letting user declarations shadow it like `print`.
+- **Boxes are invariant** (D8), like references and generic types: `Heap<Int>` and `Heap<Int?>` hold contents of different layouts, so covariance would need a re-allocating adapter behind an assignment. The contents are converted where the box is built instead, and the mismatch help says so. After this the typed tree's only representation-changing `Subtype` step is function-type variance. Rejected: covariance with a re-boxing adapter; covariance for representation-preserving steps only (there are none left in a box, whose contents are borrow-free).
+- **Operators, conditions, output and `toString()` read through boxes** (D4), as through references, so `h + 1` and `if (flag)` need nothing written.

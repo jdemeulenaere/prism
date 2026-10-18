@@ -192,6 +192,15 @@ The packet was proposed before `runtime-strings-and-drops` and `payload-patterns
 
 Pending packets: `monomorphization` and `closures` MODIFY "Constructs the Backend Lacks Are Rejected Before Code Generation", whose name stays. `closures` removed "Aggregates Holding Heap or Function Values Are Rejected"; its REMOVED header now names "Aggregates Holding Function Values Are Rejected" (edited in that packet). `monomorphization` still MODIFIES "Symbols Derive from Declaration Paths" with the long pre-8e5cc47 text, including the glue sentence, and its "Glue Is Local to Its Code Unit" and "Cranelift IR Dump" blocks carry the long `dump-clif` wording; when it is applied it must move its glue-naming sentence to "Glue Has No Function Table Slot" and re-base those blocks. `closures`' "Cranelift IR Dump" needs the same re-basing. `escaping-closures` REMOVES "Capturing Closures Do Not Escape", which this change MODIFIES to cover boxes; its replacement must keep boxing a capturing closure covered. `string-templates` and `collections` touch none of these requirements.
 
+### Findings at review (2026-10-18)
+
+The review ran recursive enums, lists and trees (built in loops, evaluated, cloned, compared, written through `*h = v`, unboxed, taken apart through boxes, dropped at 10k and 100k nodes) under `--check-allocations` and found no leak, double free or wrong output; 300k nodes end with "stack overflow" (status 101), as D14 intends. It fixed two bugs as plain fixes, each with a scenario in the main specs:
+
+- **Branch and `?:` operands read in place crashed MIR.** `"a" + (k.t ?: "-")`, `(k.t ?: "-").length`, `when (k.t ?: "-")` and `s += (if (c) u.name else "x")` were inferred in a reading position, so a non-`Copy` place in a branch was neither moved nor copied and MIR panicked. Such an operand is a temporary whose branches are consuming, as `ownership`'s "Consuming Positions" says ("Branch and elvis operands are consumed"). Not specific to boxes.
+- **A `(&T)?` subject rejected every pattern of `T`** (`E4002`), so D4's `fun depth(t: (&Tree)?)` could read the tree only through `?.`. Patterns of `T` now match the referent with the borrow's mode, the same `Pattern::Deref` as a box ("A nullable borrow subject").
+
+The safe-navigation lending gap of "Scenario fixes at implementation" is not a bug: the `references` rationale "A borrow points at one place or one temporary" makes a `?.` chain a consumed temporary on purpose and names lending it a possible relaxation, now a `ROADMAP.md` follow-up. Destructuring declarations through a box (`val (a, b) = h`, `E4024`) are a follow-up too.
+
 ## Risks / Trade-offs
 
 - [Deep structures overflow the stack on drop, clone or comparison] → a "stack overflow" runtime error, not a crash (D14), and iterative drop is a recorded follow-up. Milestone 2's apps hold their lists in `List<T>` (`collections`), not in linked boxes.
