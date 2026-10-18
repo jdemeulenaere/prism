@@ -205,7 +205,7 @@ A `when` in value position MUST be exhaustive: every value of its subject's type
 - **THEN** the file typechecks
 
 ### Requirement: Nullable Subjects Match Patterns of Their Payload
-For a subject of type `T?`, `null` MUST match `null`, and a constructor pattern, a variant name or a literal of `T` MUST match a non-null subject whose payload matches it, so `null` together with patterns covering `T` covers `T?`. A binding at the top binds the whole `T?`.
+For a subject of type `T?`, `null` MUST match `null`, and a constructor pattern, a variant name or a literal of `T` MUST match a non-null subject whose payload matches it, so `null` together with patterns covering `T` covers `T?`. For a subject of type `(&T)?` or `(&mut T)?`, they MUST match the payload's referent, binding with the mode of that borrow ("Binding Modes Follow the Subject's Type"). A binding at the top binds the whole `T?`.
 
 #### Scenario: Nullable enum subject
 - **WHEN** `enum Shape { Circle(Double), Square(Double) }` is declared and `fun f(s: Shape?): Double = when (s) { null -> 0.0; Shape.Circle(val r) -> r; Shape.Square(val d) -> d }` is checked
@@ -214,6 +214,10 @@ For a subject of type `T?`, `null` MUST match `null`, and a constructor pattern,
 #### Scenario: Variant names over a nullable enum
 - **WHEN** `enum Color { Red, Green }` is declared and `fun f(c: Color?): Int = when (c) { null -> 0; Red -> 1; Color.Green -> 2 }` is checked
 - **THEN** the file typechecks and is exhaustive
+
+#### Scenario: A nullable borrow subject
+- **WHEN** `struct Tree { var value: Int, var left: Heap<Tree>? }` and `enum Color { Red, Blue(Int) }` are declared and `fun depth(t: (&Tree)?): Int = when (t) { null -> 0; Tree(_, val l) -> 1 + depth(l) }`, `fun bump(t: (&mut Tree)?) { when (t) { null -> {}; Tree(val v, val l) -> { *v += 1; bump(l) } } }` and `fun code(c: (&Color)?): Int = when (c) { null -> 0; Red -> 1; Color.Blue(val n) -> n }` are run
+- **THEN** each typechecks and is exhaustive, `l` having type `&Heap<Tree>?` in `depth` and `&mut Heap<Tree>?` in `bump`, and the program runs, reading and writing the trees through the borrows
 
 #### Scenario: Nullable payload
 - **WHEN** `enum Slot { Of(Int?) }` is declared and `fun f(s: Slot): Int = when (s) { Slot.Of(null) -> 0; Slot.Of(1) -> 1; Slot.Of(val n) -> 2 }` is checked

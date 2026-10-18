@@ -677,6 +677,8 @@ pub enum Pattern {
     NonNull(Box<Pattern>),
     /// A box whose contents match the inner pattern: a constructor, value or range pattern of
     /// `T` matching a `Heap<T>` (D9 of `heap-boxes`). Taking the contents apart unboxes the box.
+    /// Also the referent of the borrow a `(&T)?` holds, matched by a constructor or value
+    /// pattern of `T`, which binds by the borrow's mode and never takes anything apart.
     Deref(Box<Pattern>),
     /// `_`, or a part no pattern names.
     Wildcard,

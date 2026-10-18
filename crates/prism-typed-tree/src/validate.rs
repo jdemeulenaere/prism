@@ -931,7 +931,10 @@ impl Validator<'_> {
                 self.sub_patterns(fields, field_types, when, &id.name);
             }
             Pattern::Deref(inner) => match part {
-                Type::Heap(contents) => self.pattern(inner, contents, when),
+                Type::Heap(contents)
+                | Type::Reference {
+                    inner: contents, ..
+                } => self.pattern(inner, contents, when),
                 _ if self.error_free => self.report(format!(
                     "when {} matches the contents of a box against a {}",
                     when.0, part

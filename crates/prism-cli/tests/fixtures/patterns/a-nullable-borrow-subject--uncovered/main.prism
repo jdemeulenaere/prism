@@ -1,0 +1,7 @@
+// expect: E4009
+enum Color { Red, Blue(Int) }
+
+fun code(c: (&Color)?): Int = when (c) {
+    Red -> 1
+    Color.Blue(val n) -> n
+}

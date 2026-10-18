@@ -16,7 +16,7 @@ use crate::scope::{Mutability, Symbol, SymbolKind};
 use crate::types::{NominalId, Type};
 use prism_ast::expr::{Expr, ExprKind, PatternArgument, PatternKind};
 use prism_ast::statement::DestructureEntry;
-use prism_ast::Span;
+use prism_ast::{Literal, Span};
 use prism_typed_tree::{
     BindingMode, LocalId, LocalKind, Pattern, StatementId, StatementKind as TreeStatementKind,
 };
@@ -40,6 +40,15 @@ impl SubjectMode {
             (SubjectMode::Owned, false) => BindingMode::Move,
             (SubjectMode::Shared, false) => BindingMode::SharedBorrow,
             (SubjectMode::Mutable, _) => BindingMode::MutableBorrow,
+        }
+    }
+
+    /// The mode of the referent of a borrow (`mutable` or shared) held in this mode: a shared
+    /// layer anywhere makes it shared (D5).
+    fn through_reference(self, mutable: bool) -> SubjectMode {
+        match (self, mutable) {
+            (SubjectMode::Owned | SubjectMode::Mutable, true) => SubjectMode::Mutable,
+            _ => SubjectMode::Shared,
         }
     }
 }
@@ -121,6 +130,15 @@ impl TypeChecker {
                 let inner = self.check_pattern(pattern, contents, mode, bindings);
                 Pattern::Deref(Box::new(inner))
             }
+            // The borrow a `(&T)?` holds is matched as its referent, borrowed (D5).
+            _ if matches!(part, Type::Reference { .. }) => {
+                let Type::Reference { mutable, inner } = part else {
+                    unreachable!("matched above")
+                };
+                let mode = mode.through_reference(*mutable);
+                let inner = self.check_pattern(pattern, inner, mode, bindings);
+                Pattern::Deref(Box::new(inner))
+            }
             PatternKind::InRange {
                 start,
                 end,
@@ -199,6 +217,15 @@ impl TypeChecker {
     /// which matches the variant whatever its payloads. An unresolved bare name is `E4001` with
     /// help suggesting a binding (D1).
     fn value_pattern(&mut self, value: &Expr, part: &Type) -> Pattern {
+        // A value other than `null` matches the referent of a non-null `(&T)?`.
+        if let Type::Nullable(payload) = part {
+            if let Type::Reference { inner, .. } = payload.as_ref() {
+                if !matches!(value.kind, ExprKind::Literal(Literal::Null)) {
+                    let inner = self.value_pattern(value, inner);
+                    return Pattern::NonNull(Box::new(Pattern::Deref(Box::new(inner))));
+                }
+            }
+        }
         let (enum_part, nullable) = match part {
             Type::Enum { .. } => (Some(part.clone()), false),
             Type::Nullable(inner) if matches!(inner.as_ref(), Type::Enum { .. }) => {
@@ -382,13 +409,13 @@ impl TypeChecker {
             self.sub_patterns_of_error(arguments, mode, bindings);
             return Pattern::Wildcard;
         }
-        // A constructor pattern of `T` matches a non-null `T?`, and the contents of a non-null
-        // `Heap<T>?`.
+        // A constructor pattern of `T` matches a non-null `T?`, the contents of a non-null
+        // `Heap<T>?` and the referent of a non-null `(&T)?`.
         let (target, nullable) = match part {
             Type::Nullable(inner) => (inner.as_ref().clone(), true),
             other => (other.clone(), false),
         };
-        if nullable && matches!(target, Type::Heap(_)) {
+        if nullable && matches!(target, Type::Heap(_) | Type::Reference { .. }) {
             let inner = self.check_pattern(pattern, &target, mode, bindings);
             return Pattern::NonNull(Box::new(inner));
         }

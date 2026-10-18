@@ -24,10 +24,14 @@ use prism_typed_tree::{
     Type,
 };
 
-/// The contents' type of the box type `ty` a [`Pattern::Deref`] matches.
+/// The contents' type of the box type `ty` a [`Pattern::Deref`] matches, or the referent of the
+/// borrow a `(&T)?` holds, which is tested and bound in place but never taken apart.
 fn box_contents(ty: &Type) -> Type {
     match ty {
-        Type::Heap(contents) => contents.as_ref().clone(),
+        Type::Heap(contents)
+        | Type::Reference {
+            inner: contents, ..
+        } => contents.as_ref().clone(),
         other => panic!("internal error: a box pattern of a {}", other),
     }
 }

@@ -8,7 +8,8 @@
 //! `null` and "present" (with the payload as its one field) for a nullable. The literals of an
 //! open type (`Int`, `Double`, `Char`, `String`) are constructors of a set that is never complete.
 //! A `Heap<T>` column is its contents' column, since a box has one constructor (D9 of
-//! `heap-boxes`); patterns are finite, so the algorithm still terminates.
+//! `heap-boxes`), and the borrow a `(&T)?` holds is its referent's column likewise; patterns
+//! are finite, so the algorithm still terminates.
 
 use prism_ast::Literal;
 use prism_typed_tree::{ExpressionId, Pattern, Type, TypeTable};
@@ -149,8 +150,9 @@ fn reduce(
                 });
             Reduced::Constructor(Constructor::Struct, reduce_fields(fields, parts))
         }
-        // A box has one constructor, so its column is its contents' (D9 of `heap-boxes`).
-        Pattern::Deref(inner) => reduce(types, inner, peel_boxes(ty), literal),
+        // A box has one constructor, so its column is its contents' (D9 of `heap-boxes`); a
+        // borrow's is its referent's.
+        Pattern::Deref(inner) => reduce(types, inner, peel_indirections(ty), literal),
         Pattern::NonNull(inner) => {
             let payload = match ty {
                 Type::Nullable(payload) => payload.as_ref().clone(),
@@ -181,9 +183,10 @@ fn reduce(
     }
 }
 
-/// `ty` without its `Heap<T>` layers: a box is matched, and printed, as its contents.
-fn peel_boxes(mut ty: &Type) -> &Type {
-    while let Type::Heap(inner) = ty {
+/// `ty` without its `Heap<T>` and reference layers: a box is matched, and printed, as its
+/// contents, and a borrow as its referent.
+fn peel_indirections(mut ty: &Type) -> &Type {
+    while let Type::Heap(inner) | Type::Reference { inner, .. } = ty {
         ty = inner;
     }
     ty
@@ -198,7 +201,7 @@ impl Matrix<'_> {
     /// Every constructor of `ty` with its field types, or `None` for an open type (or one whose
     /// definition is unknown), whose constructor set is never complete.
     fn constructors(&self, ty: &Type) -> Option<Vec<(Constructor, Vec<Type>)>> {
-        match peel_boxes(ty) {
+        match peel_indirections(ty) {
             Type::Enum { id, arguments } => {
                 let variants = self.types.instantiated_variants(id, arguments)?;
                 Some(
@@ -376,7 +379,7 @@ impl Matrix<'_> {
                 } else {
                     format!("({})", rendered.join(", "))
                 };
-                match (constructor, peel_boxes(ty)) {
+                match (constructor, peel_indirections(ty)) {
                     (Constructor::Variant(index), Type::Enum { id, .. }) => {
                         let name = self
                             .types

@@ -1,0 +1,52 @@
+// expect: ok
+// run: 0
+struct Tree { var value: Int, var left: Heap<Tree>? }
+enum Color { Red, Blue(Int) }
+
+fun depth(t: (&Tree)?): Int = when (t) {
+    null -> 0
+    Tree(_, val l) -> 1 + depth(l)
+}
+
+fun sum(t: (&Tree)?): Int = when (t) {
+    null -> 0
+    Tree(val v, val l) -> v + sum(l)
+}
+
+fun bump(t: (&mut Tree)?) {
+    when (t) {
+        null -> {}
+        Tree(val v, val l) -> {
+            *v += 1
+            bump(l)
+        }
+    }
+}
+
+fun code(c: (&Color)?): Int = when (c) {
+    null -> 0
+    Red -> 1
+    Color.Blue(val n) -> n
+}
+
+fun word(s: (&String)?): Int = when (s) {
+    null -> 0
+    "a", "b" -> 1
+    else -> 2
+}
+
+fun main() {
+    var t = Tree(1, Heap(Tree(2, Heap(Tree(3, null)))))
+    println(depth(&t))
+    println(depth(t.left))
+    bump(&mut t)
+    println(sum(&t))
+    val blue: Color? = Color.Blue(7)
+    val none: Color? = null
+    println(code(&blue))
+    println(code(&none))
+    println(code(Color.Red))
+    val b: String? = "b" + ""
+    println(word(&b))
+    println(word("c" + ""))
+}
