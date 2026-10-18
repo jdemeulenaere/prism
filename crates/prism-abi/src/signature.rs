@@ -189,7 +189,7 @@ impl FileAbi {
 
                     // For generic functions, compute monomorphization hash of the body (`compilation-and-abi` spec)
                     // Hashing MUST be span-free to prevent comments/whitespace from altering ABI (hermetic builds invariant)
-                    let generic_body_hash = if !f.type_params.is_empty() {
+                    let generic_body_hash = if !f.type_parameters.is_empty() {
                         let mut h = DeterministicHasher::new();
                         if let Some(body) = &f.body {
                             hash_body_span_free(body, &mut h);
@@ -209,7 +209,7 @@ impl FileAbi {
                         is_compose: f.is_compose,
                         receiver,
                         name: f.name.clone(),
-                        type_params: f.type_params.clone(),
+                        type_params: f.type_parameters.iter().map(|p| p.name.clone()).collect(),
                         params,
                         return_type,
                         generic_body_hash,
@@ -226,7 +226,7 @@ impl FileAbi {
                     symbols.push(ExportedSymbol::Struct {
                         visibility: vis,
                         name: s.name.clone(),
-                        type_params: s.type_params.clone(),
+                        type_params: s.type_parameters.iter().map(|p| p.name.clone()).collect(),
                         marker: s.marker,
                         fields,
                     });
@@ -242,7 +242,7 @@ impl FileAbi {
                     symbols.push(ExportedSymbol::Enum {
                         visibility: vis,
                         name: e.name.clone(),
-                        type_params: e.type_params.clone(),
+                        type_params: e.type_parameters.iter().map(|p| p.name.clone()).collect(),
                         marker: e.marker,
                         variants,
                     });
@@ -543,9 +543,17 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
             hasher.write_str(op.as_str());
             hash_expr_span_free(expr, hasher);
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call {
+            callee,
+            type_arguments,
+            args,
+        } => {
             hasher.write_u8(14);
             hash_expr_span_free(callee, hasher);
+            hasher.write_u64(type_arguments.len() as u64);
+            for argument in type_arguments {
+                hasher.write_str(&argument.to_string());
+            }
             hasher.write_u64(args.len() as u64);
             for arg in args {
                 if let Some(name) = &arg.name {

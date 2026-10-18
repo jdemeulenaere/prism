@@ -1,0 +1,3 @@
+// expect: E2001
+struct User(val name: String)
+fun User.f<T>(x: T) {}

@@ -1,0 +1,3 @@
+// expect: ok
+fun g(x: Bool, y: Bool): Int = 1
+fun f(a: Int, b: Int, c: Int, d: Int): Int = g((a < b), c > (d))

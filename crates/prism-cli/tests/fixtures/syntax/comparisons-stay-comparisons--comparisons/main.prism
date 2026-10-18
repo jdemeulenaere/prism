@@ -1,0 +1,7 @@
+// expect: ok
+fun f(): Int = 1
+fun g(a: Int, b: Int, i: Int, n: Int): Bool {
+    if (i<n) f()
+    val m = a < b + 1
+    return a < b && m
+}

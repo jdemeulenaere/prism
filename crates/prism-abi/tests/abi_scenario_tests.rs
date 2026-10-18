@@ -341,8 +341,8 @@ fn reordering_private_declarations_among_exports_leaves_the_hash() {
 
 #[test]
 fn changing_a_generic_function_body_changes_the_monomorphization_and_abi_hashes() {
-    let before = extract("public fun id<T>(x: T): T {\n    return x\n}\n");
-    let after = extract("public fun id<T>(x: T): T {\n    val y = x\n    return y\n}\n");
+    let before = extract("public fun <T> id(x: T): T {\n    return x\n}\n");
+    let after = extract("public fun <T> id(x: T): T {\n    val y = x\n    return y\n}\n");
 
     let hash_of = |abi: &FileAbi| match &abi.symbols[0] {
         ExportedSymbol::Function {
@@ -371,8 +371,8 @@ fn a_non_generic_function_records_no_monomorphization_hash() {
 #[test]
 fn generic_body_hash_ignores_comments_blank_lines_and_indentation() {
     assert_hash_equal(
-        "public fun id<T>(x: T): T {\n    return x\n}\n",
-        "\n\n// leading comment\npublic fun id<T>(x: T): T {\n\n        /* inner */\n        return    x\n\n}\n",
+        "public fun <T> id(x: T): T {\n    return x\n}\n",
+        "\n\n// leading comment\npublic fun <T> id(x: T): T {\n\n        /* inner */\n        return    x\n\n}\n",
         "comments, blank lines and whitespace in a generic body",
     );
 }

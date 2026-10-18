@@ -2,6 +2,7 @@
 
 use crate::span::Span;
 use crate::statement::Block;
+use crate::types::Type;
 use std::fmt;
 
 /// Literal values in Prism source code.
@@ -168,6 +169,9 @@ pub enum ExprKind {
     },
     Call {
         callee: Box<Expr>,
+        /// The explicit type arguments written after the callee (`id<Int>(1)`), empty when none
+        /// are written.
+        type_arguments: Vec<Type>,
         args: Vec<CallArg>,
     },
     MemberAccess {
@@ -240,8 +244,18 @@ impl fmt::Display for Expr {
                 write!(f, "({} {} {})", left, op.as_str(), right)
             }
             ExprKind::Unary { op, expr } => write!(f, "({}{})", op.as_str(), expr),
-            ExprKind::Call { callee, args } => {
-                write!(f, "{}(", callee)?;
+            ExprKind::Call {
+                callee,
+                type_arguments,
+                args,
+            } => {
+                write!(f, "{}", callee)?;
+                if !type_arguments.is_empty() {
+                    let written: Vec<String> =
+                        type_arguments.iter().map(|ty| ty.to_string()).collect();
+                    write!(f, "<{}>", written.join(", "))?;
+                }
+                write!(f, "(")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

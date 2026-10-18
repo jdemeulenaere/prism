@@ -1,0 +1,2 @@
+// expect: E2001
+fun f(a: Int, b: Int, c: Int): Bool = a < b < c

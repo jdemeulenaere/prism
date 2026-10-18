@@ -116,6 +116,16 @@ pub struct Receiver {
     pub span: Span,
 }
 
+/// A type parameter of a function, struct or enum (`T` or `T : Copy` in `fun <T : Copy> f()`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeParameter {
+    pub name: String,
+    /// The marker bounding the parameter (`: Copy` or `: Clone`); only function type parameters
+    /// may have one.
+    pub bound: Option<TypeMarker>,
+    pub span: Span,
+}
+
 /// Function declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
@@ -126,7 +136,7 @@ pub struct FunctionDecl {
     /// for a plain function.
     pub receiver: Option<Receiver>,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_parameters: Vec<TypeParameter>,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     pub body: Option<FunctionBody>,
@@ -166,7 +176,7 @@ impl TypeMarker {
 pub struct StructDecl {
     pub visibility: Visibility,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
     pub fields: Vec<StructField>,
     pub span: Span,
@@ -185,7 +195,7 @@ pub struct EnumVariant {
 pub struct EnumDecl {
     pub visibility: Visibility,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
     pub variants: Vec<EnumVariant>,
     pub span: Span,

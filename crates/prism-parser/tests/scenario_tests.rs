@@ -621,7 +621,12 @@ fn marker_after_type_parameters_and_a_shorthand_parameter_list() {
     let Declaration::Struct(tagged) = &file.declarations[0] else {
         panic!("expected a struct");
     };
-    assert_eq!(tagged.type_params, vec!["T"]);
+    let names: Vec<&str> = tagged
+        .type_parameters
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["T"]);
     assert_eq!(tagged.marker, Some(TypeMarker::Copy));
     let Declaration::Struct(name) = &file.declarations[1] else {
         panic!("expected a struct");
@@ -857,7 +862,11 @@ fn extension_declarations() {
 #[test]
 fn unsupported_receivers_rejected() {
     for (src, expected) in [
-        ("fun Heap<User>.size(): Int = 0", "type arguments"),
+        (
+            "fun Heap<User>.size(): Int = 0",
+            "calls look through 'Heap'",
+        ),
+        ("fun <T> T.also(): T = this", "bare type parameter"),
         ("fun User?.greet(): String = \"x\"", "call it with '?.'"),
         ("fun &User.greet(): String = \"x\"", "receiver mode"),
         ("fun &mut User.rename() { }", "receiver mode"),
@@ -980,4 +989,204 @@ fn consuming_as_an_identifier() {
         ExprKind::Call { callee, .. }
             if matches!(&callee.kind, ExprKind::MemberAccess { member, .. } if member == "consuming")
     ));
+}
+
+// --- Type Parameter Lists
+
+/// The names and bounds of `parameters`, in order.
+fn type_parameter_shapes(parameters: &[TypeParameter]) -> Vec<(&str, Option<TypeMarker>)> {
+    parameters
+        .iter()
+        .map(|p| (p.name.as_str(), p.bound))
+        .collect()
+}
+
+#[test]
+fn type_parameter_lists() {
+    let file = parse(
+        "fun <T> id(x: T): T = x\npublic compose fun <T : Copy, U : Clone,> show(a: T, b: U) {}\nmut fun <T> Box<T>.put(v: T) {}\nstruct Pair<A, B>(val a: A, val b: B)\nenum Option<T> : Copy { Some(T), None }\n",
+    );
+    let shapes: Vec<Vec<(&str, Option<TypeMarker>)>> = file
+        .declarations
+        .iter()
+        .map(|d| match d {
+            Declaration::Function(f) => type_parameter_shapes(&f.type_parameters),
+            Declaration::Struct(s) => type_parameter_shapes(&s.type_parameters),
+            Declaration::Enum(e) => type_parameter_shapes(&e.type_parameters),
+            Declaration::Var(_) => panic!("no top-level val in the source"),
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        vec![
+            vec![("T", None)],
+            vec![
+                ("T", Some(TypeMarker::Copy)),
+                ("U", Some(TypeMarker::Clone))
+            ],
+            vec![("T", None)],
+            vec![("A", None), ("B", None)],
+            vec![("T", None)],
+        ]
+    );
+    let Declaration::Function(put) = &file.declarations[2] else {
+        panic!("expected a function");
+    };
+    assert_eq!(put.name, "put");
+    assert_eq!(
+        receiver_of(put),
+        ("Box<T>".to_string(), ReceiverMode::Mutable)
+    );
+}
+
+#[test]
+fn type_parameters_after_the_function_name_rejected() {
+    for src in ["fun id<T>(x: T): T = x", "fun User.f<T>(x: T) {}"] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains("fun <T> id(...)"), "{}: {}", src, err);
+    }
+}
+
+#[test]
+fn malformed_type_parameter_lists_rejected() {
+    for (src, expected) in [
+        ("fun <> f() {}", "at least one type parameter"),
+        ("fun <T : Eq> f(x: T) {}", "Only 'Copy' or 'Clone'"),
+        ("fun <T : Copy, Clone> f(x: T) {}", "exactly one bound"),
+        ("struct Box<T : Copy>(val v: T)", "cannot be bounded yet"),
+    ] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains(expected), "{}: {}", src, err);
+    }
+}
+
+#[test]
+fn receivers_with_type_arguments() {
+    let fns = functions("fun <T> Box<T>.get(): &T = &v\nfun Box<Int>.sum(): Int = v\n");
+    let receivers: Vec<String> = fns.iter().map(|f| receiver_of(f).0).collect();
+    assert_eq!(receivers, vec!["Box<T>", "Box<Int>"]);
+    assert_eq!(fns[0].name, "get");
+    assert_eq!(fns[1].name, "sum");
+}
+
+// --- Explicit Type Arguments at Call Sites
+
+/// The callee and written type arguments of call `e`.
+#[track_caller]
+fn call_shape(e: &Expr) -> (String, Vec<String>) {
+    match &e.kind {
+        ExprKind::Call {
+            callee,
+            type_arguments,
+            ..
+        } => (
+            callee.to_string(),
+            type_arguments.iter().map(|t| t.to_string()).collect(),
+        ),
+        other => panic!("expected a call, got {:?}", other),
+    }
+}
+
+#[test]
+fn type_arguments_on_calls() {
+    let stmts = block_stmts(
+        "fun f() {\n    id<Int>(1)\n    Box<String?>(null)\n    remember<Int> { 0 }\n    s.map<Box<Int>> { n -> Box(n) }\n    u?.pick<Int>(1)\n}\n",
+    );
+    let shapes: Vec<(String, Vec<String>)> = stmts.iter().map(|s| call_shape(expr_of(s))).collect();
+    assert_eq!(
+        shapes,
+        vec![
+            ("id".to_string(), vec!["Int".to_string()]),
+            ("Box".to_string(), vec!["String?".to_string()]),
+            ("remember".to_string(), vec!["Int".to_string()]),
+            ("s.map".to_string(), vec!["Box<Int>".to_string()]),
+            ("u?.pick".to_string(), vec!["Int".to_string()]),
+        ]
+    );
+}
+
+#[test]
+fn type_arguments_inside_an_operand() {
+    // The list binds like the call, tighter than the operators around it.
+    let e = expr_body("fun f(): Int = a + id<Int>(1) * 2");
+    assert_eq!(e.to_string(), "(a + (id<Int>(1) * 2))");
+}
+
+#[test]
+fn comparisons_stay_comparisons() {
+    assert_eq!(expr_body("fun f(): Bool = a < b").to_string(), "(a < b)");
+    let stmts = block_stmts("fun f() {\n    if (i<n) f()\n    val m = a < b + 1\n}\n");
+    let ExprKind::If { cond, .. } = &expr_of(&stmts[0]).kind else {
+        panic!("expected an if");
+    };
+    assert_eq!(cond.to_string(), "(i < n)");
+    let StatementKind::Local { initializer, .. } = &stmts[1].kind else {
+        panic!("expected a local");
+    };
+    assert_eq!(initializer.to_string(), "(a < (b + 1))");
+    let src = "fun f() { val k = a < b >= c }";
+    let err = parse_source(src).expect_err(src);
+    assert_eq!(err.code, "E2001");
+    assert!(err.message.contains("cannot be chained"), "{}", err);
+}
+
+#[test]
+fn comma_separated_comparisons_read_as_type_arguments() {
+    let ExprKind::Call { args, .. } = expr_body("fun f(): Int = g(a < b, c > (d))").kind else {
+        panic!("expected a call");
+    };
+    assert_eq!(args.len(), 1);
+    assert_eq!(
+        call_shape(&args[0].value),
+        ("a".to_string(), vec!["b".to_string(), "c".to_string()])
+    );
+    let ExprKind::Call { args, .. } = expr_body("fun f(): Int = g((a < b), c > (d))").kind else {
+        panic!("expected a call");
+    };
+    let written: Vec<String> = args.iter().map(|a| a.value.to_string()).collect();
+    assert_eq!(written, vec!["(a < b)", "(c > d)"]);
+}
+
+#[test]
+fn a_failed_speculation_leaves_the_token_stream_unchanged() {
+    // `a < b >= c` tries `<b>` as a type-argument list closed by the `>` of `>=`; the rewind
+    // keeps `>=` as one token, so the chained comparison is reported at `>=`.
+    let src = "fun f() { val k = a < b >= c }";
+    let err = parse_source(src).expect_err(src);
+    assert_eq!(err.span.start, src.find(">=").unwrap());
+    assert_eq!(err.span.end, src.find(">=").unwrap() + 2);
+    // A split `&&` is restored too: `x < &&y` is a comparison with a double borrow.
+    assert_eq!(
+        expr_body("fun f(): Bool = x < &&y").to_string(),
+        "(x < (&(&y)))"
+    );
+}
+
+#[test]
+fn type_arguments_then_a_line_break_are_not_a_call() {
+    // `(x)` on its own line is not the call's argument list, so `f<Int>` is not a call.
+    let src = "fun f() {\n    f<Int>\n    (x)\n}\n";
+    let err = parse_source(src).expect_err(src);
+    assert_eq!(err.code, "E2001");
+}
+
+#[test]
+fn non_associative_comparison() {
+    for src in ["fun f(): Bool = a < b < c", "fun f(): Bool = a < b > c"] {
+        let err = parse_source(src).expect_err(src);
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(err.message.contains("'&&'"), "{}: {}", src, err);
+        let second = src.rfind(['<', '>']).unwrap();
+        assert_eq!(err.span.start, second, "{}", src);
+    }
+    assert_eq!(
+        expr_body("fun f(): Bool = (a < b) == c").to_string(),
+        "((a < b) == c)"
+    );
+    assert_eq!(
+        expr_body("fun f(): Bool = a < b == c > d").to_string(),
+        "((a < b) == (c > d))"
+    );
 }

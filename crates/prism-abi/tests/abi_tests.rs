@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn test_generic_body_whitespace_and_comment_independence() {
         let src1 = r#"
-            public fun id<T>(x: T): T {
+            public fun <T> id(x: T): T {
                 return x
             }
         "#;
@@ -159,7 +159,7 @@ mod tests {
         let src2 = r#"
             // Added leading comments and blank lines
 
-            public fun id<T>(x: T): T {
+            public fun <T> id(x: T): T {
                 // Inner comment
                 return x
             }

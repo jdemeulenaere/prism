@@ -1,0 +1,2 @@
+// expect: E2001
+struct Box<T : Copy>(val v: T)

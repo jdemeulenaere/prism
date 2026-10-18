@@ -43,6 +43,12 @@ pub struct Parser {
     /// Whether a line break ends an expression, innermost delimiter last:
     /// `false` inside `( )` and `[ ]`, `true` inside `{ }` and at the top level.
     newline_modes: Vec<bool>,
+    /// Whether the parser is trying a call's type-argument list that it may rewind
+    /// ([`Self::try_parse_call_type_arguments`]): a joined `>=` then never closes a list.
+    speculating: bool,
+    /// The tokens [`Self::split_token`] changed while speculating, with their original
+    /// contents, so a rewind restores the stream exactly.
+    split_log: Vec<(usize, Token)>,
 }
 
 impl Parser {
@@ -61,6 +67,8 @@ impl Parser {
             depth: 0,
             peak: 0,
             newline_modes: vec![true],
+            speculating: false,
+            split_log: Vec::new(),
         }
     }
 
@@ -130,6 +138,10 @@ impl Parser {
     /// `first` token and leaves the rest as a `rest` token, for operators the
     /// lexer joined where the grammar needs them apart (`Heap<Int>= x`, `&&x`).
     fn split_token(&mut self, first: TokenKind, rest: TokenKind) -> Token {
+        if self.speculating {
+            self.split_log
+                .push((self.cursor, self.tokens[self.cursor].clone()));
+        }
         let tok = &mut self.tokens[self.cursor];
         let span = tok.span;
         let head = Token::with_newline(
@@ -150,7 +162,9 @@ impl Parser {
     }
 
     fn expect_closing_angle(&mut self) -> Result<Token, ParseError> {
-        if self.peek_kind() == &TokenKind::GtEq {
+        // A call's type-argument list closed by the `>` of `>=` is a comparison instead
+        // (`a < b >= c`), so speculation never splits it.
+        if self.peek_kind() == &TokenKind::GtEq && !self.speculating {
             Ok(self.split_token(TokenKind::Gt, TokenKind::Eq))
         } else {
             self.expect(TokenKind::Gt)
@@ -451,22 +465,47 @@ impl Parser {
         start_span: Span,
     ) -> Result<FunctionDecl, ParseError> {
         self.expect(TokenKind::Fun)?;
+        // Generic type parameters go between `fun` and the name or receiver: `fun <T> id()`.
+        let type_parameters = if self.peek_kind() == &TokenKind::Lt {
+            self.parse_type_parameter_list(true)?
+        } else {
+            Vec::new()
+        };
         self.reject_unsupported_receiver_start()?;
         let (first_name, first_span) = self.expect_ident()?;
 
-        // Generic type parameters: <T, U>
-        let mut type_params = self.parse_optional_type_params()?;
+        // A receiver's type arguments (`fun <T> Box<T>.get()`), or type parameters written
+        // after the name in the old placement (`fun id<T>()`).
+        let mut receiver_arguments = Vec::new();
+        let mut receiver_end = first_span;
+        if self.peek_kind() == &TokenKind::Lt {
+            let lt_span = self.peek().span;
+            match self.try_parse_receiver_type_arguments() {
+                Some((arguments, end)) => {
+                    receiver_arguments = arguments;
+                    receiver_end = end;
+                }
+                None => return Err(Self::type_parameters_after_name(lt_span)),
+            }
+        }
 
         // Extension receiver: `fun User.greet()`.
         let mut receiver = None;
         let name = if self.peek_kind() == &TokenKind::Dot {
-            if !type_params.is_empty() {
+            let receiver_span = first_span.merge(receiver_end);
+            if first_name == "Heap" && !receiver_arguments.is_empty() {
+                return Err(ParseError::new(
+                    "An extension receiver cannot be a 'Heap<...>': calls look through 'Heap', so declare the extension on its contents, as in 'fun User.size()'",
+                    receiver_span,
+                ));
+            }
+            if type_parameters.iter().any(|p| p.name == first_name) {
                 return Err(ParseError::new(
                     format!(
-                        "A receiver type with type arguments ('{}<...>') is not supported yet; an extension receiver is a single type name, as in 'fun User.greet()'",
+                        "A bare type parameter cannot be a receiver: '{}' is a type parameter of this function; declare the extension on a named type, as in 'fun <T> Box<T>.get()'",
                         first_name
                     ),
-                    first_span,
+                    receiver_span,
                 ));
             }
             self.bump(); // '.'
@@ -477,11 +516,18 @@ impl Parser {
                     first_span.merge(name_span),
                 ));
             }
-            type_params = self.parse_optional_type_params()?;
+            if self.peek_kind() == &TokenKind::Lt {
+                return Err(Self::type_parameters_after_name(self.peek().span));
+            }
+            let ty = if receiver_arguments.is_empty() {
+                Type::named(first_name, receiver_span)
+            } else {
+                Type::generic(first_name, receiver_arguments, receiver_span)
+            };
             receiver = Some(Receiver {
-                ty: Type::named(first_name, first_span),
+                ty,
                 mode: mode.map_or(ReceiverMode::Shared, |(mode, _)| mode),
-                span: mode.map_or(first_span, |(_, span)| span.merge(first_span)),
+                span: mode.map_or(receiver_span, |(_, span)| span.merge(receiver_span)),
             });
             name
         } else if matches!(
@@ -496,6 +542,9 @@ impl Parser {
                 first_span.merge(self.peek().span),
             ));
         } else {
+            if !receiver_arguments.is_empty() {
+                return Err(Self::type_parameters_after_name(first_span));
+            }
             if let Some((mode, span)) = mode {
                 return Err(ParseError::new(
                     format!(
@@ -542,7 +591,7 @@ impl Parser {
             is_compose,
             receiver,
             name,
-            type_params,
+            type_parameters,
             params,
             return_type,
             body,
@@ -563,6 +612,30 @@ impl Parser {
             _ => return Ok(()),
         };
         Err(ParseError::new(message, self.peek().span))
+    }
+
+    /// The error for type parameters written after a function's name (`fun id<T>()`).
+    fn type_parameters_after_name(span: Span) -> ParseError {
+        ParseError::new(
+            "Type parameters go before the name, as in 'fun <T> id(...)', or before the receiver, as in 'fun <T> Box<T>.get()'",
+            span,
+        )
+    }
+
+    /// Reads the type arguments of a receiver (`Box<T>` in `fun <T> Box<T>.get()`) when they
+    /// parse as types and a `.` follows them; otherwise rewinds and returns `None`. Returns the
+    /// arguments and the span of the closing `>`.
+    fn try_parse_receiver_type_arguments(&mut self) -> Option<(Vec<Type>, Span)> {
+        let (arguments, end) = self.speculate(|parser| {
+            let arguments = parser.parse_type_argument_list()?;
+            let end = parser.tokens[parser.cursor - 1].span;
+            if parser.peek_kind() == &TokenKind::Dot {
+                Ok((arguments, end))
+            } else {
+                Err(ParseError::new("not a receiver", end))
+            }
+        })?;
+        Some((arguments, end))
     }
 
     /// Function parameters up to (not including) the closing `)`.
@@ -601,7 +674,7 @@ impl Parser {
     ) -> Result<StructDecl, ParseError> {
         self.expect(TokenKind::Struct)?;
         let (name, _) = self.expect_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let type_parameters = self.parse_optional_type_parameters()?;
 
         let mut fields = Vec::new();
         let marker;
@@ -693,7 +766,7 @@ impl Parser {
         Ok(StructDecl {
             visibility,
             name,
-            type_params,
+            type_parameters,
             marker,
             fields,
             span: start_span.merge(end_span),
@@ -707,7 +780,7 @@ impl Parser {
     ) -> Result<EnumDecl, ParseError> {
         self.expect(TokenKind::Enum)?;
         let (name, _) = self.expect_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let type_parameters = self.parse_optional_type_parameters()?;
         let marker = self.parse_optional_marker()?.map(|(parsed, _)| parsed);
 
         self.expect(TokenKind::LBrace)?;
@@ -751,7 +824,7 @@ impl Parser {
         Ok(EnumDecl {
             visibility,
             name,
-            type_params,
+            type_parameters,
             marker,
             variants,
             span: start_span.merge(end_span),
@@ -968,22 +1041,129 @@ impl Parser {
         Ok(Some((marker, tok.span)))
     }
 
-    fn parse_optional_type_params(&mut self) -> Result<Vec<String>, ParseError> {
-        let mut params = Vec::new();
+    /// The type parameters of a struct or enum, after its name, if any.
+    fn parse_optional_type_parameters(&mut self) -> Result<Vec<TypeParameter>, ParseError> {
         if self.peek_kind() == &TokenKind::Lt {
-            self.bump();
-            while !self.at_closing_angle() && !self.is_eof() {
-                let (p, _) = self.expect_ident()?;
-                params.push(p);
-                if self.peek_kind() == &TokenKind::Comma {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            self.expect_closing_angle()?;
+            self.parse_type_parameter_list(false)
+        } else {
+            Ok(Vec::new())
         }
-        Ok(params)
+    }
+
+    /// A type parameter list `<T, U : Copy,>` from its `<`: one or more names, each with an
+    /// optional bound `: Copy` or `: Clone` when `allow_bounds` (function type parameters), and
+    /// an optional trailing comma.
+    fn parse_type_parameter_list(
+        &mut self,
+        allow_bounds: bool,
+    ) -> Result<Vec<TypeParameter>, ParseError> {
+        const ONE_BOUND: &str = "Only 'Copy' or 'Clone' can bound a type parameter until traits exist, and a type parameter has exactly one bound, as in '<T : Copy>' ('Copy' already implies 'Clone')";
+        let lt_span = self.expect(TokenKind::Lt)?.span;
+        let mut parameters = Vec::new();
+        while !self.at_closing_angle() && !self.is_eof() {
+            let (name, span) = self.expect_ident()?;
+            if name == "Copy" || name == "Clone" {
+                return Err(ParseError::new(ONE_BOUND, span));
+            }
+            let mut bound = None;
+            let mut end = span;
+            if self.peek_kind() == &TokenKind::Colon {
+                let colon = self.bump().span;
+                if !allow_bounds {
+                    return Err(ParseError::new(
+                        "Type parameters of a struct or enum cannot be bounded yet; only a function's type parameters take a bound, as in 'fun <T : Copy> f()'",
+                        colon,
+                    ));
+                }
+                let tok = self.peek().clone();
+                bound = Some(match &tok.kind {
+                    TokenKind::Ident(marker) if marker == "Copy" => TypeMarker::Copy,
+                    TokenKind::Ident(marker) if marker == "Clone" => TypeMarker::Clone,
+                    _ => return Err(ParseError::new(ONE_BOUND, tok.span)),
+                });
+                end = self.bump().span;
+            }
+            parameters.push(TypeParameter {
+                name,
+                bound,
+                span: span.merge(end),
+            });
+            if self.peek_kind() == &TokenKind::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        if parameters.is_empty() {
+            return Err(ParseError::new(
+                "A type parameter list needs at least one type parameter, as in '<T>'",
+                lt_span.merge(self.peek().span),
+            ));
+        }
+        self.expect_closing_angle()?;
+        Ok(parameters)
+    }
+
+    /// A type-argument list `<Int, Box<String>>` from its `<`: one or more types separated by
+    /// commas.
+    fn parse_type_argument_list(&mut self) -> Result<Vec<Type>, ParseError> {
+        self.expect(TokenKind::Lt)?;
+        let mut arguments = vec![self.parse_type()?];
+        while self.peek_kind() == &TokenKind::Comma {
+            self.bump();
+            arguments.push(self.parse_type()?);
+        }
+        self.expect_closing_angle()?;
+        Ok(arguments)
+    }
+
+    /// Runs `attempt` and keeps what it consumed when it succeeds. On any error it rewinds the
+    /// cursor and every token it split, reports nothing and returns `None`.
+    fn speculate<T>(
+        &mut self,
+        attempt: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Option<T> {
+        let cursor = self.cursor;
+        let peak = self.peak;
+        let outer_speculating = std::mem::replace(&mut self.speculating, true);
+        let log_start = self.split_log.len();
+        let result = attempt(self);
+        self.speculating = outer_speculating;
+        match result {
+            Ok(value) => {
+                if !self.speculating {
+                    self.split_log.clear();
+                }
+                Some(value)
+            }
+            Err(_) => {
+                while self.split_log.len() > log_start {
+                    let (index, token) = self.split_log.pop().expect("a logged split");
+                    self.tokens[index] = token;
+                }
+                self.cursor = cursor;
+                self.peak = peak;
+                None
+            }
+        }
+    }
+
+    /// After an identifier or member name, tries `<` as the call's type-argument list
+    /// (`id<Int>(1)`, `remember<Int> { 0 }`): it is one when the tokens up to the matching `>`
+    /// parse as types, the list closes with `>` (not the `>` of `>=`), and the next token is a
+    /// `(` or `{` on the same line. Otherwise the stream is unchanged and the `<` is a
+    /// comparison.
+    fn try_parse_call_type_arguments(&mut self) -> Option<Vec<Type>> {
+        self.speculate(|parser| {
+            let arguments = parser.parse_type_argument_list()?;
+            let opens_call = matches!(parser.peek_kind(), TokenKind::LParen | TokenKind::LBrace)
+                && !parser.at_line_break();
+            if opens_call {
+                Ok(arguments)
+            } else {
+                Err(ParseError::new("not a call", parser.peek().span))
+            }
+        })
     }
 
     // --- Expression Pratt Parser ---
@@ -1001,10 +1181,30 @@ impl Parser {
         // node, so track the tree's height rather than the recursion depth.
         let mut height = self.peak - self.depth;
 
-        while !self.is_eof() && precedence < self.current_precedence() {
+        while !self.is_eof() {
             let op_span = self.peek().span;
+            // Explicit type arguments of a call bind like the call itself, tighter than `<`.
+            let type_arguments = if self.peek_kind() == &TokenKind::Lt
+                && !self.at_line_break()
+                && matches!(
+                    left.kind,
+                    ExprKind::Ident(_) | ExprKind::MemberAccess { .. }
+                ) {
+                self.try_parse_call_type_arguments()
+            } else {
+                None
+            };
+            if type_arguments.is_none() && precedence >= self.current_precedence() {
+                break;
+            }
             self.peak = self.depth;
-            left = self.parse_infix(left)?;
+            left = match type_arguments {
+                Some(type_arguments) if self.peek_kind() == &TokenKind::LParen => {
+                    self.parse_call(left, type_arguments)?
+                }
+                Some(type_arguments) => self.parse_trailing_lambda_call(left, type_arguments)?,
+                None => self.parse_infix(left)?,
+            };
             height = (height + 1).max(self.peak - self.depth);
             if self.depth + height > MAX_NESTING_DEPTH {
                 return Err(ParseError::nesting_too_deep(MAX_NESTING_DEPTH, op_span));
@@ -1292,9 +1492,9 @@ impl Parser {
             // Member access: .ident, safe navigation: ?.ident
             TokenKind::Dot | TokenKind::QuestionDot => self.parse_member_access(left),
             // Function Call: (args...)
-            TokenKind::LParen => self.parse_call(left),
+            TokenKind::LParen => self.parse_call(left, Vec::new()),
             // Trailing lambda call without parentheses: callee { body }
-            TokenKind::LBrace => self.parse_trailing_lambda_call(left),
+            TokenKind::LBrace => self.parse_trailing_lambda_call(left, Vec::new()),
             // Indexing: target[index]
             TokenKind::LBracket => self.parse_index(left),
             // Assignments are statements, parsed by `parse_statement_or_expression`.
@@ -1321,7 +1521,7 @@ impl Parser {
         ))
     }
 
-    fn parse_call(&mut self, left: Expr) -> Result<Expr, ParseError> {
+    fn parse_call(&mut self, left: Expr, type_arguments: Vec<Type>) -> Result<Expr, ParseError> {
         self.expect(TokenKind::LParen)?;
         let mut args = self.with_newlines(false, Self::parse_call_args)?;
         let end = self.expect(TokenKind::RParen)?.span;
@@ -1341,6 +1541,7 @@ impl Parser {
         Ok(Expr::new(
             ExprKind::Call {
                 callee: Box::new(left),
+                type_arguments,
                 args,
             },
             span,
@@ -1378,12 +1579,17 @@ impl Parser {
         Ok(args)
     }
 
-    fn parse_trailing_lambda_call(&mut self, left: Expr) -> Result<Expr, ParseError> {
+    fn parse_trailing_lambda_call(
+        &mut self,
+        left: Expr,
+        type_arguments: Vec<Type>,
+    ) -> Result<Expr, ParseError> {
         let lambda = self.parse_closure()?;
         let span = left.span.merge(lambda.span);
         Ok(Expr::new(
             ExprKind::Call {
                 callee: Box::new(left),
+                type_arguments,
                 args: vec![CallArg {
                     name: None,
                     span: lambda.span,
@@ -1421,6 +1627,14 @@ impl Parser {
         let prec = self.current_precedence();
         self.bump();
         let right = self.parse_expr(prec)?;
+        // Comparisons are non-associative: `a < b < c` never means anything, since `Bool` is
+        // not ordered.
+        if prec == Precedence::Comparison && self.current_precedence() == Precedence::Comparison {
+            return Err(ParseError::new(
+                "Comparisons cannot be chained; join them with '&&', as in 'a < b && b < c'",
+                self.peek().span,
+            ));
+        }
         let span = left.span.merge(right.span);
         Ok(Expr::new(
             ExprKind::Binary {

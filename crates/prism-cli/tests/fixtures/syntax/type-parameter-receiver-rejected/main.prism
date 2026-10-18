@@ -1,0 +1,2 @@
+// expect: E2001
+fun <T> T.also(): T = this

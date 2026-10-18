@@ -2299,7 +2299,7 @@ impl TypeChecker {
                 self.infer_when_expr(target.as_deref(), branches, WhenUse::Infer, expr.span)
             }
 
-            ExprKind::Call { callee, args } => self.infer_call_expr(callee, args, expr.span),
+            ExprKind::Call { callee, args, .. } => self.infer_call_expr(callee, args, expr.span),
 
             ExprKind::MemberAccess {
                 target,
@@ -5507,6 +5507,7 @@ mod tests {
         // Calling MyView in non-compose context
         let call = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("MyView".to_string()))),
+            type_arguments: Vec::new(),
             args: Vec::new(),
         });
         infer(&mut checker, &call);
@@ -5576,6 +5577,7 @@ mod tests {
         // Wrong arity
         let call_wrong_arity = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("add".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![CallArg {
                 name: None,
                 value: expr(ExprKind::Literal(Literal::Int(1))),
@@ -5589,6 +5591,7 @@ mod tests {
         // Wrong argument type
         let call_wrong_type = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("add".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: None,
@@ -5682,6 +5685,7 @@ mod tests {
         // Valid positional instantiation
         let call_pos = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: None,
@@ -5701,6 +5705,7 @@ mod tests {
         // Valid named field instantiation
         let call_named = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: Some("x".to_string()),
@@ -5754,6 +5759,7 @@ mod tests {
             ty: None,
             initializer: expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Ident("User".to_string()))),
+                type_arguments: Vec::new(),
                 args: vec![
                     CallArg {
                         name: None,
@@ -5808,6 +5814,7 @@ mod tests {
             ty: None,
             initializer: expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Ident("User".to_string()))),
+                type_arguments: Vec::new(),
                 args: vec![
                     CallArg {
                         name: None,
@@ -5861,6 +5868,7 @@ mod tests {
 
         // Qualified variant constructor call: Option.Some(42) -> Option
         let some_call = expr(ExprKind::Call {
+            type_arguments: Vec::new(),
             callee: Box::new(expr(ExprKind::MemberAccess {
                 target: Box::new(expr(ExprKind::Ident("Option".to_string()))),
                 member: "Some".to_string(),
@@ -5877,6 +5885,7 @@ mod tests {
 
         // Option.Some("bad") -> E4004 (argument type mismatch)
         let some_bad = expr(ExprKind::Call {
+            type_arguments: Vec::new(),
             callee: Box::new(expr(ExprKind::MemberAccess {
                 target: Box::new(expr(ExprKind::Ident("Option".to_string()))),
                 member: "Some".to_string(),
@@ -6051,6 +6060,7 @@ mod tests {
         // Calling public 'add' -> OK
         let call_pub = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("add".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: None,
@@ -6070,6 +6080,7 @@ mod tests {
         // Calling package-visible 'internal_calc' from external package -> E4007
         let call_pkg = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("internal_calc".to_string()))),
+            type_arguments: Vec::new(),
             args: Vec::new(),
         });
         infer(&mut ext_checker, &call_pkg);
@@ -6104,6 +6115,7 @@ mod tests {
         // 1. Omit default parameters: greet("hello") -> OK
         let call_one = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("greet".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![CallArg {
                 name: None,
                 value: expr(ExprKind::Literal(Literal::String("hello".to_string()))),
@@ -6116,6 +6128,7 @@ mod tests {
         // 2. Named arguments: greet(msg = "hi", prefix = ">>") -> OK
         let call_named = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("greet".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: Some("msg".to_string()),
@@ -6135,6 +6148,7 @@ mod tests {
         // 3. Duplicate named argument -> E4004
         let call_dup = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("greet".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: Some("msg".to_string()),
@@ -6155,6 +6169,7 @@ mod tests {
         // 4. Missing required parameter -> E4004
         let call_missing = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("greet".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![CallArg {
                 name: Some("count".to_string()),
                 value: expr(ExprKind::Literal(Literal::Int(2))),
@@ -6180,6 +6195,7 @@ mod tests {
         // Valid named: Point(x = 1, y = 2) -> OK
         let call_ok = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: Some("x".to_string()),
@@ -6199,6 +6215,7 @@ mod tests {
         // Duplicate field: Point(x = 1, x = 2) -> E4004
         let call_dup = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![
                 CallArg {
                     name: Some("x".to_string()),
@@ -6219,6 +6236,7 @@ mod tests {
         // Missing field: Point(x = 1) -> E4004
         let call_missing = expr(ExprKind::Call {
             callee: Box::new(expr(ExprKind::Ident("Point".to_string()))),
+            type_arguments: Vec::new(),
             args: vec![CallArg {
                 name: Some("x".to_string()),
                 value: expr(ExprKind::Literal(Literal::Int(1))),
@@ -6369,6 +6387,7 @@ mod tests {
                 statements: Vec::new(),
                 tail: Some(Box::new(expr(ExprKind::Call {
                     callee: Box::new(expr(ExprKind::Ident("MyView".to_string()))),
+                    type_arguments: Vec::new(),
                     args: Vec::new(),
                 }))),
                 span: Span::dummy(),
@@ -6391,7 +6410,7 @@ mod tests {
                 Declaration::Struct(prism_ast::StructDecl {
                     visibility: Visibility::Public,
                     name: "DupPoint".to_string(),
-                    type_params: Vec::new(),
+                    type_parameters: Vec::new(),
                     marker: None,
                     fields: vec![
                         prism_ast::StructField {
@@ -6412,7 +6431,7 @@ mod tests {
                 Declaration::Enum(prism_ast::EnumDecl {
                     visibility: Visibility::Public,
                     name: "DupEnum".to_string(),
-                    type_params: Vec::new(),
+                    type_parameters: Vec::new(),
                     marker: None,
                     variants: vec![
                         prism_ast::EnumVariant {

@@ -242,7 +242,7 @@ mod tests {
                     assert_eq!(items(b).len(), 4);
 
                     // 1. Column(padding = 16) { Text("Hello") }
-                    if let ExprKind::Call { callee, args } = &expr_of(&items(b)[0]).kind {
+                    if let ExprKind::Call { callee, args, .. } = &expr_of(&items(b)[0]).kind {
                         assert_eq!(callee.to_string(), "Column");
                         assert_eq!(args.len(), 2);
                         assert_eq!(args[0].name.as_deref(), Some("padding"));
@@ -257,7 +257,7 @@ mod tests {
 
                     // 2. val state = remember { mutableStateOf(0) }
                     if let StatementKind::Local { initializer, .. } = &items(b)[1].kind {
-                        if let ExprKind::Call { callee, args } = &initializer.kind {
+                        if let ExprKind::Call { callee, args, .. } = &initializer.kind {
                             assert_eq!(callee.to_string(), "remember");
                             assert_eq!(args.len(), 1);
                         } else {
@@ -268,7 +268,7 @@ mod tests {
                     }
 
                     // 4. items.forEach { item -> val s = item * item; println(s) }
-                    if let ExprKind::Call { callee, args } = &expr_of(&items(b)[3]).kind {
+                    if let ExprKind::Call { callee, args, .. } = &expr_of(&items(b)[3]).kind {
                         if let ExprKind::MemberAccess { member, .. } = &callee.kind {
                             assert_eq!(member, "forEach");
                         } else {
@@ -468,7 +468,7 @@ mod tests {
             if let Some(FunctionBody::Block(b)) = &f.body {
                 assert_eq!(items(b).len(), 2);
                 // First stmt is cleanup()
-                if let ExprKind::Call { callee, args } = &expr_of(&items(b)[0]).kind {
+                if let ExprKind::Call { callee, args, .. } = &expr_of(&items(b)[0]).kind {
                     assert_eq!(callee.to_string(), "cleanup");
                     assert_eq!(args.len(), 0);
                 } else {
@@ -527,7 +527,7 @@ mod tests {
             assert_eq!(f.params[1].name, "compose");
             if let Some(FunctionBody::Block(b)) = &f.body {
                 if let ExprKind::Return(Some(val)) = &expr_of(&items(b)[0]).kind {
-                    if let ExprKind::Call { callee, args } = &val.kind {
+                    if let ExprKind::Call { callee, args, .. } = &val.kind {
                         if let ExprKind::MemberAccess { member, .. } = &callee.kind {
                             assert_eq!(member, "compose");
                         } else {
