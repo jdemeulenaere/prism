@@ -24,6 +24,7 @@ pub mod dominators;
 mod elaborate;
 mod error;
 pub mod liveness;
+pub mod loan_flow;
 pub mod location;
 pub mod move_paths;
 pub mod places;
@@ -44,6 +45,16 @@ use prism_typed_tree::Arena;
 /// returns the file with its drops elaborated ([`MirPhase::Elaborated`]) when no body has an
 /// error, or the errors sorted by primary location, then code.
 pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
+    let (elaborated, _) = check_moves_and_elaborate(file)?;
+    Ok(elaborated)
+}
+
+/// The move check of every body of `file`, as lowered; when no body has an error, the file
+/// with its drops elaborated and its closure bodies' capture modes recorded, with the capture
+/// modes and the uses that decided them.
+pub(crate) fn check_moves_and_elaborate(
+    file: &MirFile,
+) -> Result<(MirFile, captures::CaptureModes), Vec<BorrowError>> {
     assert_eq!(
         file.phase,
         MirPhase::Built,
@@ -71,10 +82,10 @@ pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
         bodies: elaborated,
     };
     let captures = captures::infer_capture_modes(&elaborated);
-    for (id, modes) in captures.modes {
-        elaborated.bodies[id].capture_modes = modes;
+    for (id, modes) in &captures.modes {
+        elaborated.bodies[*id].capture_modes = modes.clone();
     }
-    Ok(elaborated)
+    Ok((elaborated, captures))
 }
 
 /// Checks the drops of an elaborated file (D15 of `borrowck-moves`): every drop of a whole local

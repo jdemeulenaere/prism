@@ -76,3 +76,11 @@ pub(crate) fn body<'a>(file: &'a prism_mir::MirFile, name: &str) -> &'a Body {
         .unwrap_or_else(|| panic!("no body main::{} in\n{}", name, file.dump()));
     body
 }
+
+/// The elaborated MIR of `source`, a file `main` that must typecheck and pass the move check,
+/// with its capture modes, before any exclusivity check.
+pub(crate) fn elaborate(source: &str) -> prism_mir::MirFile {
+    crate::check_moves_and_elaborate(&lower(source))
+        .unwrap_or_else(|errors| panic!("move errors: {:?}", errors))
+        .0
+}

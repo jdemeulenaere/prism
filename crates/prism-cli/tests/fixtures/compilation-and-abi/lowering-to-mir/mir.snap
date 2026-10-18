@@ -54,7 +54,7 @@ fun main::f(_1: User?, _2: Color, _3: Bool): Int @4:1
     switch move _8 [0 -> bb11, otherwise -> bb10] @6:9
   bb10:
     storage_dead _8 @6:9
-    _4 = copy _4 + const 1 @6:34
+    _4 = copy _4 + const 1 @6:26
     goto -> bb12 @6:5
   bb11:
     storage_dead _8 @6:9
@@ -97,7 +97,7 @@ fun main::f(_1: User?, _2: Color, _3: Bool): Int @4:1
   bb19:
     unreachable @8:25
   bb20:
-    _4 = copy _4 + move _14 @8:17
+    _4 = copy _4 + move _14 @8:9
     storage_dead _15 @8:9
     storage_dead _14 @8:9
     storage_dead _13 @9:5

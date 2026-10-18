@@ -687,13 +687,16 @@ impl Builder<'_> {
     /// one, then the write (D6). A value that moves a place the source names is moved into a
     /// temporary before the drop, so that the drop cannot destroy it (`s = s`). The write is at
     /// the target's span, so a write to a field of a moved value points at the field. A whole
-    /// local that needs no drop is written directly.
+    /// local that needs no drop is written directly; when the value is a straight-line operand
+    /// or operator, that write is at the target's span too, so a write while borrowed points at
+    /// the variable (D6 of `borrowck-exclusivity`).
     fn lower_assign(&mut self, target: ExpressionId, value: ExpressionId, span: Span) {
         let target_expression = self.expression(target);
         let (target_ty, target_span) = (target_expression.ty.clone(), target_expression.span);
         if !self.needs_drop(&target_ty) && self.is_binding(target) {
             let place = self.place(target);
             self.expression_into(Some(&place), value);
+            self.relocate_last_write(&place, target_span);
             return;
         }
         let mut operand = self.operand(value);
@@ -705,6 +708,29 @@ impl Builder<'_> {
             self.emit_drop(place.clone(), span);
         }
         self.assign(place, Rvalue::Use(operand), target_span);
+    }
+
+    /// Gives the current block's last statement the span `span` when it writes `place` an
+    /// operand or an operator's result, whose operands carry their own spans.
+    fn relocate_last_write(&mut self, place: &Place, span: Span) {
+        let Some(block) = self.current else {
+            return;
+        };
+        if let Some(statement) = self.blocks[block.0 as usize].statements.last_mut() {
+            if let StatementKind::Assign(written, rvalue) = &statement.kind {
+                let operand_only = matches!(
+                    rvalue.as_ref(),
+                    Rvalue::Use(_)
+                        | Rvalue::Binary(..)
+                        | Rvalue::Unary(..)
+                        | Rvalue::WrapNullable(_)
+                        | Rvalue::Subtype(_)
+                );
+                if written == place && operand_only {
+                    statement.span = span;
+                }
+            }
+        }
     }
 
     /// Whether the place `id` is a binding, whose lowering evaluates nothing.

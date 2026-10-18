@@ -108,11 +108,11 @@ mod tests {
     use super::*;
     use crate::dataflow::solve;
     use crate::location::locations;
-    use crate::test_bodies::{body, lower};
+    use crate::test_bodies::{body, elaborate};
     use prism_mir::{BodyOwner, MirFile, StatementKind};
 
     fn elaborated(source: &str) -> MirFile {
-        crate::check_file(&lower(source)).expect("the source passes the borrow checker")
+        elaborate(source)
     }
 
     fn local_named(body: &Body, name: &str) -> LocalId {

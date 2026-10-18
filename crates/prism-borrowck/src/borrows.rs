@@ -187,7 +187,7 @@ impl BorrowSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_bodies::{body, lower};
+    use crate::test_bodies::{body, elaborate};
 
     const DECLARATIONS: &str = "\
 struct User { var name: String }
@@ -202,8 +202,7 @@ fun run(f: () -> Int): Int = f()
 
     /// The loans of `f` in `source`, as `(kind, mutable)`, and the borrow set.
     fn loans(source: &str) -> (Vec<(LoanKind, bool)>, BorrowSet) {
-        let file = crate::check_file(&lower(&format!("{}{}", DECLARATIONS, source)))
-            .expect("the source passes the borrow checker");
+        let file = elaborate(&format!("{}{}", DECLARATIONS, source));
         let set = BorrowSet::gather(&file, body(&file, "f"));
         let loans = set
             .loans
