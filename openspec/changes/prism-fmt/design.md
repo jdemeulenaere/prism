@@ -49,7 +49,8 @@ Comments are attached while printing, in source order, by a cursor over the comm
 - **Dangling**: comments left before a list's closing `}` or `)` go on their own lines before it.
 - **In comma lists** (parameters, arguments), the comments after an item on its line, and those left inside it, follow the item's comma, where the next run finds them in the same place; this keeps `a /* x */, b` stable as `a, /* x */ b`.
 - **Before tokens**: a comment between an operand and its binary operator, or between an assignment target and its `=`, stays before the operator; a comment after an operator on its line stays there (`1 + // plus`); a comment before a `.` of a call chain breaks the chain there, so it stays before that member.
-- **Fallback**: a comment elsewhere (inside a type, between modifiers) is printed before the next node that starts after it: a block comment inline, followed by a space, and a line comment followed by a forced line break. Comments left inside an item when it ends are flushed at its end.
+- **Fallback**: a comment elsewhere (inside a type, between modifiers) is printed before the next node that starts after it: a block comment inline, followed by a space, and a line comment after one space and followed by a forced line break, the code after it continuing one level deeper than the line the comment ends. Comments left inside an item when it ends are flushed at its end.
+- **Before a block's `{`**: when one of them ends its line, the comments before a `{` move inside the block, before its first item, so the `{` stays on its header's line.
 
 A line comment is a document primitive that ends the output line: anything printed after it starts a new line, and its groups are broken. That keeps the comment's meaning (the rest of the line is a comment) without a deferred "line suffix", whose reordering against a later block comment on the same line would break the order guarantee.
 

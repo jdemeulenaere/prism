@@ -105,14 +105,19 @@ impl<'a> Printer<'a> {
         start >= end || !self.source[start..end.min(self.source.len())].contains('\n')
     }
 
-    fn newlines_between(&self, start: usize, end: usize) -> usize {
+    /// Whether a line holding only whitespace lies between `start` and `end`. A line holding a
+    /// token, such as a `{` that a moved comment preceded, is not blank.
+    fn has_blank_line_between(&self, start: usize, end: usize) -> bool {
         if start >= end {
-            return 0;
+            return false;
         }
-        self.source[start..end.min(self.source.len())]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count()
+        let lines: Vec<&str> = self.source[start..end.min(self.source.len())]
+            .split('\n')
+            .collect();
+        lines.len() > 2
+            && lines[1..lines.len() - 1]
+                .iter()
+                .any(|line| line.trim().is_empty())
     }
 
     // --- Comments ---
@@ -172,6 +177,14 @@ impl<'a> Printer<'a> {
         let rest = &self.source[comment.span.end..];
         let line = rest.split('\n').next().unwrap_or_default().trim_start();
         line.is_empty() || line.starts_with("//") || line.starts_with("/*")
+    }
+
+    /// Whether one of the comments starting before `offset` ends its line.
+    pub(crate) fn comments_end_a_line_before(&self, offset: usize) -> bool {
+        self.comments[self.next_comment..]
+            .iter()
+            .take_while(|comment| comment.span.start < offset)
+            .any(|comment| self.ends_line(comment))
     }
 
     /// The comments starting before `offset`, each where it stands relative to the code: an
@@ -431,7 +444,7 @@ impl VerticalList {
             return;
         }
         self.parts.push(hard_line());
-        if self.force_blank || printer.newlines_between(self.previous_end, next_start) >= 2 {
+        if self.force_blank || printer.has_blank_line_between(self.previous_end, next_start) {
             self.parts.push(hard_line());
         }
         self.force_blank = false;

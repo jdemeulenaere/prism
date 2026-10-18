@@ -179,6 +179,14 @@ The formatter MUST keep every line and block comment. A comment on its own line 
 - **WHEN** formatting `fun f() {\n// first\nval a = 1   // one\n    /* two */ val b = 2\n  // last\n}`
 - **THEN** the result is `fun f() {\n    // first\n    val a = 1 // one\n    /* two */ val b = 2\n    // last\n}\n`
 
+#### Scenario: Comment before an opening brace
+- **WHEN** formatting `fun f(): Int // result\n{\n    return 1\n}` and, inside a function, `if (a) {\n    b()\n} // otherwise\nelse {\n    c()\n}`
+- **THEN** each `{` stays on its header's line after one space, and the comment moves to its own line at the start of the block: `fun f(): Int {\n    // result\n    return 1\n}` and `} else {\n        // otherwise\n        c()\n    }`
+
+#### Scenario: Line comment inside an expression or type
+- **WHEN** formatting `val w: // width\nInt = 3` and `x[// first\n1] = 2` inside a function
+- **THEN** each comment stays at the end of its line after one space (`val w: // width`, `x[ // first`), and the code after it continues on the next line, indented one level deeper than the line the comment ends
+
 #### Scenario: Comments inside lists and expressions
 - **WHEN** formatting a call whose arguments are on separate lines, each followed by a line comment, and an expression with a block comment between an operator and its operand
 - **THEN** each line comment stays at the end of its argument's line, which keeps the argument list broken one per line, and the block comment stays between the operator and the operand

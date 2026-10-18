@@ -213,10 +213,24 @@ pub fn render(document: &Document) -> String {
             } => {
                 if *newline_before && !output.line_is_blank() {
                     output.newline();
+                } else if text.starts_with("//")
+                    && !output.pending_newline
+                    && !output.line_is_blank()
+                    && !output.text.ends_with(' ')
+                {
+                    // A line comment after code is separated from it by one space.
+                    output.write(" ", command.indent);
                 }
+                let after_code = !output.pending_newline && !output.line_is_blank();
+                let line_indent = output.line_indent();
                 output.write(text, command.indent);
                 if *newline_after {
                     output.pending_newline = true;
+                    if after_code {
+                        // What the comment pushes to the next line continues the line the
+                        // comment ends, so it is indented one level deeper than that line.
+                        output.continuation_indent = line_indent + 1;
+                    }
                 }
             }
         }
@@ -309,14 +323,18 @@ struct Output {
     column: usize,
     /// Set by a comment that ends its line: the next text starts on a new line.
     pending_newline: bool,
+    /// The least indentation of the line that a pending newline starts, when the comment that
+    /// set it followed code.
+    continuation_indent: usize,
 }
 
 impl Output {
-    fn write(&mut self, value: &str, indent: usize) {
+    fn write(&mut self, value: &str, mut indent: usize) {
         if value.is_empty() {
             return;
         }
         if self.pending_newline {
+            indent = indent.max(self.continuation_indent);
             self.newline();
         }
         if self.column == 0 && self.text.ends_with('\n') || self.text.is_empty() {
@@ -337,6 +355,14 @@ impl Output {
         self.text.push('\n');
         self.column = 0;
         self.pending_newline = false;
+        self.continuation_indent = 0;
+    }
+
+    /// The indentation level of the current line.
+    fn line_indent(&self) -> usize {
+        let line_start = self.text.rfind('\n').map_or(0, |index| index + 1);
+        let line = &self.text[line_start..];
+        (line.len() - line.trim_start_matches(' ').len()) / INDENT_WIDTH
     }
 
     /// Whether nothing but indentation has been written on the current line.

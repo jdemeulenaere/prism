@@ -1,0 +1,22 @@
+fun f(): Int {
+    // result
+    return 1
+}
+
+fun g() {
+    if (a) {
+        b()
+    } else {
+        // otherwise
+        c()
+    }
+    while (running) {
+        // forever
+        step()
+    }
+}
+
+struct S {
+    // fields
+    val a: Int
+}

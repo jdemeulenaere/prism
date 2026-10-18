@@ -20,10 +20,17 @@ impl<'a> Printer<'a> {
 
     /// A braced block, always broken over lines, or `{}`.
     pub(crate) fn block(&mut self, block: &Block) -> Document {
-        let leading = self.comments_before(block.span.start);
         if !self.is_braced(block) {
+            let leading = self.comments_before(block.span.start);
             return concat(vec![leading, self.unbraced_body(block)]);
         }
+        // Comments before the `{` stay before it only when they are all inline; one that ends
+        // its line would put the `{` on a line of its own, so they all move inside the block.
+        let leading = if self.comments_end_a_line_before(block.span.start) {
+            Document::Empty
+        } else {
+            self.comments_before(block.span.start)
+        };
         let items = self.block_items(block, block.close_brace.start);
         concat(vec![leading, self.braced(items)])
     }

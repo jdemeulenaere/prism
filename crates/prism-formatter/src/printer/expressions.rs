@@ -61,6 +61,12 @@ impl<'a> Printer<'a> {
     /// An expression, after the comments that precede it, in the parentheses it was written in
     /// (D5).
     pub(crate) fn expression(&mut self, expression: &Expr) -> Document {
+        if let ExprKind::Block(block) = &expression.kind {
+            if self.is_braced(block) && !self.is_parenthesized(expression) {
+                // A block places the comments before its `{` itself.
+                return self.block(block);
+            }
+        }
         let leading = self.comments_before(expression.span.start);
         let printed = self.expression_kind(expression);
         if self.is_parenthesized(expression) {

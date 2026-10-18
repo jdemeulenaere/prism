@@ -1,0 +1,19 @@
+fun f(
+    b: List< // elements
+        Int>,
+) {
+    val w: // width
+        Int = 3
+    x[ // first
+        1] = 2
+    foo(
+        named = // value
+            1,
+    )
+    val y =
+        - // negated
+            1
+}
+
+fun h(a: Int): // result
+    Int = a
