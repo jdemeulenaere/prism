@@ -884,7 +884,13 @@ impl TypeChecker {
             return self.check_take_apart_source(&field, what);
         }
         if let Some((source, borrowed)) = self.move_source(expr) {
-            let help = if borrowed {
+            let help = if let Some(root) = Self::safe_navigation_root(expr) {
+                // `&u?.name` would move out of the field: the borrow to match is the nullable's.
+                format!(
+                    "{} the borrow of what '?.' reads instead, '&{}', with a 'null' branch and a pattern of its fields",
+                    what, root
+                )
+            } else if borrowed {
                 format!("{} a borrow of it instead", what)
             } else {
                 format!("{} its borrow instead: '&{}'", what, expr)
@@ -894,6 +900,19 @@ impl TypeChecker {
                 help,
                 span: expr.span,
             });
+        }
+    }
+
+    /// The receiver of the first safe navigation of the member chain `expr` (`u` in
+    /// `u?.inner.name`), if it has one.
+    fn safe_navigation_root(expr: &Expr) -> Option<&Expr> {
+        match &expr.kind {
+            ExprKind::MemberAccess {
+                target,
+                is_safe_nav,
+                ..
+            } => Self::safe_navigation_root(target).or(is_safe_nav.then_some(target.as_ref())),
+            _ => None,
         }
     }
 
@@ -1259,6 +1278,19 @@ mod tests {
             "enum Pair { Of(String, Int) }\nstruct Inbox { val last: Pair }\nfun f(i: Inbox): Int = when (i.last) { Pair.Of(_, val n) -> n }\n",
             &[],
         );
+    }
+
+    #[test]
+    fn taking_apart_through_a_safe_navigation_suggests_the_nullables_borrow() {
+        let src = "struct User { val name: String, val id: Int }\nstruct Box { val u: User? }\nfun f(b: Box?): Int = when (b?.u) { null -> 0; User(name = val s) -> 1 }\n";
+        let file = prism_parser::parse_source(src).expect("source must parse");
+        let mut checker = TypeChecker::new(None, "main");
+        checker.check_module(&file);
+        let codes: Vec<&'static str> = checker.errors.iter().map(|e| e.code()).collect();
+        assert_eq!(codes, ["E4017"]);
+        let help = format!("{:?}", checker.errors[0]);
+        assert!(help.contains("'&b'"), "{}", help);
+        assert!(!help.contains("&b?.u"), "{}", help);
     }
 
     const USER: &str = "struct User { val name: String, val email: String, val age: Int }\n";

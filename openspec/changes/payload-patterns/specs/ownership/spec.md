@@ -58,6 +58,10 @@ A pattern or destructuring declaration that binds a non-`Copy` part by value MUS
 - **WHEN** with that `Msg`, `fun f(c: Bool, a: Msg, b: Msg): String = when (if (c) a else b) { Msg.Text(val s) -> s; Msg.Empty -> "" }` is checked
 - **THEN** the type checker emits `E4017`, with help suggesting binding the value to a `val` first
 
+#### Scenario: Taking apart through a safe navigation rejected
+- **WHEN** `struct User { val name: String, val id: Int }` and `struct Box { val u: User? }` are declared and `fun f(b: Box?): Int = when (b?.u) { null -> 0; User(name = val s) -> 1 }` is checked
+- **THEN** the type checker emits `E4017` for field `u` of `b`, with help suggesting a match on `&b` with a `null` branch, since `&b?.u` would move the field
+
 #### Scenario: Owned locals and temporaries are taken apart
 - **WHEN** with that `Msg`, `fun make(): Msg` is declared and `fun f(m: Msg): String = when (m) { Msg.Text(val s) -> s; Msg.Empty -> "" }` and `fun g(): String = when (make()) { Msg.Text(val s) -> s; Msg.Empty -> "" }` are checked
 - **THEN** both typecheck successfully

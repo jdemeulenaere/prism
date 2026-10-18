@@ -1,0 +1,4 @@
+// expect: E4017
+struct User { val name: String, val id: Int }
+struct Box { val u: User? }
+fun f(b: Box?): Int = when (b?.u) { null -> 0; User(name = val s) -> 1 }
