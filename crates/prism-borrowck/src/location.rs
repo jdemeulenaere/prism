@@ -43,16 +43,17 @@ pub fn postorder(body: &Body) -> Vec<BlockId> {
     if count == 0 {
         return order;
     }
-    // Each frame is a block and the index of its next successor to visit.
-    let mut stack = vec![(BlockId(0), 0usize)];
+    // Each frame is a block, its successors, listed once (a switch has many), and the index of
+    // the next one to visit.
+    let successors = |block: BlockId| body.blocks[block].terminator.kind.successors();
+    let mut stack = vec![(BlockId(0), successors(BlockId(0)), 0usize)];
     visited[0] = true;
-    while let Some((block, next)) = stack.last_mut() {
-        let successors = body.blocks[*block].terminator.kind.successors();
-        if let Some(&successor) = successors.get(*next) {
+    while let Some((block, targets, next)) = stack.last_mut() {
+        if let Some(&successor) = targets.get(*next) {
             *next += 1;
             if !visited[successor.index()] {
                 visited[successor.index()] = true;
-                stack.push((successor, 0));
+                stack.push((successor, successors(successor), 0));
             }
         } else {
             order.push(*block);

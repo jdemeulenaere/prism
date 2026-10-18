@@ -183,12 +183,18 @@ fn chains(
     keep_edge: &impl Fn(BlockId, BlockId) -> bool,
 ) -> Vec<Option<BlockId>> {
     let mut chained_from = vec![None; body.blocks.len()];
+    // Each block's number of successors, counted once: a switch has many.
+    let exits: Vec<usize> = body
+        .blocks
+        .iter()
+        .map(|(_, data)| data.terminator.kind.successors().len())
+        .collect();
     for &block in order {
         if block.index() == 0 {
             continue;
         }
         if let [predecessor] = predecessors[block.index()][..] {
-            let single_exit = body.blocks[predecessor].terminator.kind.successors().len() == 1;
+            let single_exit = exits[predecessor.index()] == 1;
             if predecessor != block && single_exit && keep_edge(predecessor, block) {
                 chained_from[block.index()] = Some(predecessor);
             }
