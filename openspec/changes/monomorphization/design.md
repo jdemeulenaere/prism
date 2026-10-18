@@ -1,0 +1,176 @@
+# Design: monomorphization
+
+## Context
+
+See `proposal.md` for motivation. This is item 20 of "Then: the road to Milestone 2" in `ROADMAP.md`, planned autonomously on 2026-10-17, and the "Re-monomorphization on Generic Body Change" requirement and "Open decision: where generic instances live" of `docs/architecture.md` §1. `generics` recorded a direction for it (its D15: ship elaborated polymorphic MIR, keep instances out of the importer's artifact, key them by the generic's MIR hash), and `abi-cache` left a question for it (what an instance key must cover beyond the generic's identity, signature, Monomorphization Hash and type arguments). The user was not available, so every decision a reviewer might take differently is marked **(autonomous)** and logged in `docs/decisions-for-review.md`.
+
+**Baseline.** This change was proposed while `runtime-strings-and-drops` was being archived and `payload-patterns`, `heap-boxes` and `string-templates` were proposed but not implemented. All four land before it. Its deltas are written against the requirements as those changes leave them. "Symbols Derive from Declaration Paths", "Glue Is Local to Its Code Unit" and "Cranelift IR Dump" of `code-generation` are taken as `heap-boxes` modifies them, and "Constructs the Backend Lacks Are Rejected Before Code Generation" as `heap-boxes` adds it, so `openspec validate --strict` reports, as information, that this last header is not in the main spec yet. When implementation starts, each MODIFIED block must be compared with the archived text again, as `runtime-strings-and-drops` did.
+
+What exists today:
+
+- **Polymorphic MIR** (`generics`). Every generic function, extension, default generator and closure inside one is lowered once (`Body::type_parameters` holds the owner's parameters). A call records `type_arguments`, which inside a generic body may mention the caller's own parameters, and `parameters`, the callee's *declared* types (`TerminatorKind::parameter_type` substitutes them). Aggregates record their type arguments. A drop of a non-`Copy` type parameter stays in and is elaborated by the borrow checker (`needs_drop(Parameter) = !is_copy`). `Type::substitute` normalizes through `Type::nullable`, so `T?` with `T = Int?` is `Int?`. A generic body is borrow-checked once, and type arguments are borrow-free (`generics` D7), so no instance needs rechecking.
+- **The backend** (`crates/prism-codegen`). `is_compiled` skips every body with type parameters, and `first_unsupported` returns `Construct::GenericCalls` for any call with type arguments, so a program calling a generic is `E6001`. There is one code unit per file (`CodeUnit::lower`), with data named after `file.module` (`<module>#file`, `<module>#text<n>`) and glue named `<module>#drop(<type>)` (`glue.rs`, `glue_symbol`). Calls load the callee's slot `<symbol>#slot` (`UnitContext::slot`) from the program-wide, symbol-keyed `FunctionTable` (`link.rs`), so any file can call any function by symbol, private ones included. `Linker::add_file` defines a unit's functions into the load's one `JITModule`. Layouts come from the unit's `MirFile::types`, which holds every type the file's bodies can hold (`codegen-aggregates` D2).
+- **Drivers** (`crates/prism-cli`). `run.rs::compile_program` elaborates every file of the program in topological order, keeps their `MirFile`s, runs `check_file` on each and links them. `prism dump-clif` and `prism dump-mir` compile the entry alone.
+- **Instance records** (`abi-cache`, `crates/prism-cli/src/workspace.rs`). `instance_requests` scans a checked file's MIR for calls of its direct imports' generics with concrete type arguments. `instance_outcomes` keys each one by the generic's signature, its Phase 1 Monomorphization Hash (a span-free hash of the body's AST, `generic_body_hash` in `crates/prism-abi/src/signature.rs`) and a hash of the qualified type arguments, and reports it in `--explain-cache`.
+- **`?:` lowering** (`build/control_flow.rs`, `lower_elvis`). A left side that is not nullable, a type parameter `T` included, is lowered alone, and the fallback is not lowered.
+- **Recursion checks.** `E4023` (`check_finite_sizes`, `checker.rs`) rejects types that contain themselves by value, with type arguments substituted and an expansion bound for generic types that grow their own arguments. Nothing rejects a generic function that instantiates itself with a growing argument (`fun <T> f(x: T) { f(Box(x)) }`), which the checker accepts today.
+
+## Goals / Non-Goals
+
+**Goals:**
+- Every generic function, extension and default value of the language runs in Tier 1, in the same file and across files, including calls inside generic bodies and generics of modules the caller does not import, with every allocation freed exactly once (`--check-allocations` in every fixture).
+- A file's code never depends on a generic body: a generic body edit changes only that generic's instances. That is the shape `hot-reload` and `instance-cache` need.
+- An instance depends only on what its defining file ships for that generic (its record) and on the definitions of its type arguments, so it is the same whichever file asks for it, and `instance-cache` can key and store it.
+- No error ever comes from an instantiation of a single file's generics: polymorphic recursion is a declaration error.
+
+**Non-Goals:**
+- Caching records or instance code across runs, changing `prism check`'s instance records, or moving the Monomorphization Hash. That is `instance-cache` (D1, D13).
+- Closures inside generic bodies, which stay `E6001` until `closures` (D12). Generic functions as values (`E4013`).
+- Sharing one instance between type arguments of the same layout, or polymorphic (dictionary-passing) code for rarely used instances.
+- Optimizing instances (inlining, removing dead drop flags). Tier 2 gets that from LLVM.
+
+## Decisions
+
+### D1. Two changes: instantiation now, caching next (autonomous)
+
+The roadmap item covers both running generics and avoiding work across runs ("re-monomorphization only where a generic body changed"). The second half needs things that do not exist yet: records serialized into the build cache (the first cached MIR), a Monomorphization Hash computed after Phase 2, and instance keys that `prism check` can compute for files it reuses. It also changes `--explain-cache` and three requirements of `compilation-and-abi` and `build-cache`. Together that would be the largest change of the road. So this change makes generics run, with the boundary (generic records, D2) and the placement (instance units, D3) that the cache will key. A new item 21, `instance-cache`, follows it, before `closures`. `hot-reload` needs to know which instances a body edit invalidates, so `instance-cache` must land before it. Until then, `prism check`'s instance records keep `abi-cache`'s keys and their known gaps (D13), and `prism run`, which does not use the cache, is correct regardless. Rejected: one change, which would be too large to review; caching first, since its keys would be untestable without instances that run.
+
+### D2. What an exporter ships: a generic record per generic function (autonomous)
+
+For every generic function and extension of a file that passes Phase 2, private ones included, the compiler builds a **generic record** (`prism_mir::GenericRecord`, new `crates/prism-mir/src/record.rs`). It holds:
+
+- the elaborated polymorphic MIR of the function's body, of its default value generators and of the closures lowered inside them, which is self-describing because calls record their callees' paths, declared parameter types and type arguments (`generics` D9);
+- the definitions of every struct and enum those bodies mention, through locals, places, aggregates, constants and call types, closed over their fields and payloads (`TypeTable::restricted_to`, new in `prism-typed-tree`). That is a subset of the file's type table, which already holds every type the file's bodies can hold, private ones and those of modules the importer does not import included.
+
+A record holds no other body. A non-generic function the generic body calls (`helper(n)`), private or not, of its own file or another, is called by symbol through its slot of the function table, and its code is in its own file's unit: the instance depends on its signature, which the call records, not on its body. A generic the body calls is another instance, built from its own record. A private generic therefore has a record, so the instances of a public generic can reach it, and it is an "instantiable" symbol that no importer can name. Visibility stays a type-checking rule. Linking is by symbol, and Tier 2 must export these symbols from object files instead of giving them local linkage (recorded in `ROADMAP.md` for Tier 2).
+
+Why MIR: the typed tree or the source would make the importer type-check or lower the body again, against the generic's own imports' ABIs, which the importer may not have. The elaborated MIR is checked once, where it is declared, and `generics` D7 guarantees that substitution needs no recheck. Why per generic rather than per file: the record is what `instance-cache` hashes, so an edit to one generic, or to a type only another generic uses, must not touch it.
+
+In this change the records are built in memory from the `MirFile`s `prism run` already holds. `instance-cache` serializes them into the defining file's check entry.
+
+Rejected: Swift's `@inlinable` rule, under which an exported generic body may reference only exported declarations, which would force libraries to export their helpers and widen their APIs for an implementation detail; shipping the source or typed tree (re-checking in importers, and the generic's imports' ABIs would be needed); shipping the whole file's MIR (an instance would depend on unrelated bodies, and its key would change with every edit of the file).
+
+### D3. Where instances live: one code unit per instance, with its own slot (autonomous)
+
+Each instance, meaning one generic body (a function, an extension or a default generator) with one list of concrete type arguments, is compiled once per program into an **instance unit** of its own. That unit is a `MirFile` holding the single instance body, the generic's module, `MirPhase::Elaborated`, and the union of the record's type definitions and those of the type arguments. It is defined into the load's `JITModule` beside the file units, and its function gets a slot named by its symbol (D4). Every call of the instance, from a file's unit or from another instance unit, loads that slot and calls it indirectly, like every call in Tier 1. Instances of a file's own generics are instance units too, so the rule has no exception.
+
+Consequences:
+
+- A file's unit never contains generic code, so its code depends only on the file and its direct imports' ABIs (the `compilation-and-abi` requirement for Phase 3, made explicit by this change's delta). A generic body edit leaves every caller's code byte for byte the same (the scenario "A generic body change leaves its callers' code unchanged").
+- `hot-reload` can regenerate the instances of a changed generic and repoint their slots. Their symbols do not change with the body, and frames of old code reach the new code at their next call, as `codegen-core` D4 designed for file units.
+- An instance calling a generic of a module the caller does not import (`lib/box::first<Int>` calling `lib/util::twin<Int>`) is just another unit. Nothing about it lives in the caller.
+
+Rejected:
+- **Instances in the instantiating file's unit, with local linkage, like glue.** The importer's code would depend on the generic's body, against the Phase 3 requirement and the per-file artifacts that the deterministic hermetic builds invariant needs. Every importer would be recompiled on a generic body edit, an importer would hold code of modules it does not import, and each importer would duplicate the code. Glue is local because it depends only on layouts, which already re-check the units that use them. A body has no such property.
+- **Instances in the defining file's unit**, which would make that file's code depend on the type arguments its importers use, so it would change whenever an importer changes.
+- **One instance unit per program**, which a single generic body edit would regenerate whole.
+- **Deduplicating instances of equal layout** (`keep<Int>` and `keep<Double>` share machine code in some compilers). It saves code but couples instances whose drops and glue differ. It could be a later optimization.
+
+### D4. Instance symbols: the generic's symbol and its qualified type arguments (autonomous)
+
+An instance's symbol is its generic's symbol (`codegen-core` D5) followed by its type arguments in angle brackets, separated by `, `, each written as glue names types (`glue.rs`, `qualified_name`): structs and enums qualified by module, with built-ins, nullables, references, boxes and function types as written. So the symbols are `lib/box::keep<Int>`, `lib/box::keep<lib/user::User>`, `lib/box::lib/box.Box.get<Int>` (an extension's arguments are its own type parameters' arguments, in declaration order) and `main::pair<Int?, Heap<main::Node>>`. An instance of a default generator is `<instance symbol>#default(<parameter>)` (`lib/box::pad<Int>#default(y)`), and `closures` will name an instance's closures `<instance symbol>#closure<i>`. An instance unit's name, which prefixes its data objects and glue, is its instance's symbol: `lib/box::keep<lib/user::User>#drop(lib/user::User)`, `lib/box::keep<String>#text0`. Type arguments are normalized types (`Type::nullable`), so `keep<Int?>` named twice is one instance. `--explain-cache` keeps showing instances as `abi-cache` D12 does (`lib/box::keep<Int>`), until `instance-cache` revisits it.
+
+Rejected: a hash of the type arguments in the symbol, as Rust's mangling does, which makes dumps and stub errors unreadable (Tier 2 will escape symbols for object files anyway, `codegen-core` D5); numbering instances per program (unstable as a program grows, so `hot-reload` could not match old and new).
+
+### D5. Instances are collected over the whole program at link time (autonomous)
+
+`collect_instances` (new `crates/prism-codegen/src/instances.rs`) takes the program's elaborated `MirFile`s, builds the record of every generic (D2), and runs a worklist:
+
+1. **Roots.** Every call in a compiled body of every file (non-generic and not a closure) whose callee is a `Callee::Function` or a `Callee::Default` with non-empty type arguments. Those arguments are concrete there. Calls of built-ins with type arguments (`Heap<T>(...)` from `heap-boxes`, `clone`) are not instances: the backend lowers them directly once their types are concrete.
+2. **Requests.** A request is a body (the generic function or one of its default generators), its type arguments, and the definitions of the types those arguments mention, taken from the requester's type table (`TypeTable::restricted_to`). An instance's identity is its symbol (D4), and a symbol already instantiated is skipped.
+3. **Instantiation.** The record's body is substituted (D6) into an instance unit (D3), and every call with type arguments in it, now concrete, becomes a request whose type definitions come from the instance unit's table.
+4. **Output.** The instance units, sorted by symbol, so linking and dumps are deterministic.
+
+Termination follows from D8: once no growing cycle exists, every type argument an instance can reach is bounded in depth, which is the argument Go's compiler relies on. Two tables never disagree about a type, since a `NominalId` is (module, name), unique in a program, and every definition of a program's run comes from the same ABIs. The union is checked with a debug assertion. An instance's MIR is a function of its record, its arguments and their definitions alone, so the requester that asks first cannot change it.
+
+Placement: substitution is a MIR-to-MIR function validated by the MIR validator, so it lives in `prism-mir` (D6). Collection is the first step of Phase 3 over a whole program and reports a backend-stage error (`E6004`, D8), so it lives in `prism-codegen`. `Program::compile` and `run.rs::compile_program` call it after the per-file checks. Rejected: a new `prism-monomorphize` crate, since two modules do not justify one yet; collecting in the CLI driver, which would duplicate it for `Program::compile` and the dumps.
+
+### D6. Substitution over elaborated MIR
+
+`prism_mir::instantiate(body, type_arguments, types) -> Body` (new `crates/prism-mir/src/instantiate.rs`) copies the body and:
+
+- substitutes the type arguments into every local's type, every call's `type_arguments`, every aggregate's arguments and every `Constant::Null` type. A call's `parameters` and an extension path's receiver type are the **callee's** declared types and mention the callee's own parameters, so they are left as they are: `TerminatorKind::parameter_type` substitutes the now-concrete call arguments into them;
+- clears `type_parameters` and records the arguments in a new field `Body::type_arguments` (empty for every other body), which the symbol (D4) and the dump header (`fun lib/box::keep<Int>(_1: Int): Int`) read;
+- replaces each `Drop { place, target }` whose place's substituted type no longer `needs_drop` (a `Copy` argument) by `Goto(target)`, so the instance stays well-formed. A drop of a type that still needs a drop but owns no storage is a jump in the backend already (`codegen-aggregates` D14), and any other runs the instance unit's glue. Drop flags and their tests stay. They are correct, only redundant, and Tier 2 removes them;
+- **flattens** where a type parameter's argument is nullable (D4 of `generics`). Wherever the body's polymorphic type is `T?` and `T`'s argument is `U?`, the substituted type is `U?` itself. So `WrapNullable(op)` whose operand's polymorphic type is such a `T` becomes `Use(op)`, and a `Payload` projection whose base's polymorphic type is such a `T?` is removed, the place then being the base itself, whose type `U?` is what `T` was. A `Discriminant` of such a `T?` place needs no rewrite: it reads the tag of `U?`. Polymorphic place types are computed by `projection_type` over the polymorphic locals and the record's table. No other construct can flatten: a nullable is only ever formed by `?` around a type, and only a type parameter can become nullable by substitution.
+
+A `clone()` of a `T : Clone` value, a `Copy` operand of a `T : Copy` place and a `==` on a substituted `T?` with `null` all need nothing: once their types are concrete the backend lowers them as for any type, with clone glue, a bitwise copy and a tag test. Every instance is validated with `MirFile::validate` in debug builds and tests, like freshly lowered MIR. It is never borrow-checked: `generics` D7 makes the polymorphic check exact for every instantiation.
+
+### D7. `?:` on a type parameter tests for null, as in Kotlin (autonomous, BREAKING)
+
+`ROADMAP.md` asked what `a ?: c` means for `a: T` when `T` is instantiated nullable. The checker treats `T` as not nullable, so today it lowers to `a` and the fallback never runs. Kotlin tests for `null`. With flattening (D6), the two readings disagree with each other inside Prism itself: `val w: T? = a; w ?: c` already takes the fallback for `orElse<Int?>(null, 3)`, because wrapping a `T = Int?` is the identity. Code that differs only by an intermediate `T?` binding should not differ in meaning, and Kotlin users expect the test. So a `?:` whose left operand's type is a type parameter lowers through a `T?` temporary. The left side is wrapped (`WrapNullable`), its tag is read and its payload moved or copied out where present, exactly as for a `T?` left side (`lower_elvis` in `build/control_flow.rs`, when the operand's type is `Type::Parameter`). An instance with a non-nullable argument sets the tag and always takes the left side. One with a nullable argument flattens the wrap away and tests the value's own tag. The typing is unchanged (`T`).
+
+The other operators need no rule. `x == null` on a bare `T` is already `E4002`, as on any non-nullable type, and the only member of a `T`, `clone()`, gives the same result through `?.` whether or not it tests (a clone of `null` is `null`). So `?:` is the one place where a bare `T` was assumed non-null.
+
+Rejected: keeping "never the fallback", which is inconsistent with flattening and surprising to Kotlin users; rejecting `?:` on a bare `T` (`E4002`), which forbids a common idiom of Kotlin code; making unbounded `T` non-nullable (forbidding `keep<Int?>`), which would break `State<String?>`.
+
+### D8. Polymorphic recursion is a growing cycle, rejected statically (autonomous)
+
+`fun <T> f(x: T, n: Int) { if (n > 0) f(Box(x), n - 1) }` needs `f<Int>`, `f<Box<Int>>`, `f<Box<Box<Int>>>` and so on, so it has no monomorphic implementation. The check is Go's "instantiation cycle" check. The **instantiation graph** has a node per (generic, type parameter index). A call inside generic `f` of generic `g` with type arguments `A1..An` adds, for each type parameter `i` of `f` occurring in `Aj`, an edge (`f`, `i`) to (`g`, `j`). The edge **grows** unless `Aj` is `T_i` itself or `T_i?`; `T_i?` does not grow, because flattening keeps `T??` at `T?`. Calls inside a generic's default values and closures count as calls of the generic. A strongly connected component holding a growing edge is a polymorphic recursion. The search is `growing_cycle(edges)`, new `crates/prism-typed-tree/src/instantiation.rs`, shared by the two stages below. It uses Tarjan's components and then, within the component of a growing edge, a path back to the edge's source, which is the reported cycle.
+
+- **Within a file: `E4027` `PolymorphicRecursion`**, from the type checker (new `crates/prism-typechecker/src/recursion.rs`), over the typed tree's calls of the file's own generic functions and extensions. It runs whether or not anything instantiates the generic, which keeps the `generics` rule that no error comes from an instantiation. It is reported at the growing call, naming the cycle's generics and the growing argument ("`nest` instantiates itself with `Box<T>` for `T`").
+- **Across files: `E6004` `PolymorphicRecursionAcrossFiles`**, from `collect_instances`, before the worklist runs, over every record's calls. A cycle through generics of several files needs those files to import each other, and no single file's check sees the others' bodies (the single-file compilation units invariant). It is reported at the growing call, naming every generic on the cycle. `prism check` does not see it in this change. `instance-cache`, which keeps every file's record, can check each import cycle in `prism check` and then decide whether `E6004` stays.
+
+Rejected: a depth or count limit during instantiation (Rust's `recursion_limit`), which reports late, from instantiations, at an arbitrary depth, and accepts the generic until someone calls it; supporting polymorphic recursion by passing type descriptions at run time or boxing (Swift, OCaml), which is not monomorphic and not zero-cost; rejecting every recursion between generics, which forbids ordinary recursive generic code (`count`, list traversals).
+
+### D9. Non-regular generic types are rejected by the same check (autonomous)
+
+`struct Nest<T>(val v: T, val next: Heap<Nest<Box<T>>>?)` has a finite layout (the box is a pointer), so `E4023` accepts it, but its drop glue, clone glue and equality glue would need `Nest<Box<T>>`, `Nest<Box<Box<T>>>` and so on without end. Type definitions add edges to the same graph. Each application `G<A1..An>` of a generic struct or enum anywhere in a field or payload type of generic `S` adds edges from `S`'s parameters to `G`'s, through `Heap<T>`, nullables and other generic types, but not through function types, whose values hold none of these types inline and whose glue does not depend on them. A growing cycle is `E4027` at the field or payload, checked for the file's own declarations against the full type table. The table holds the definitions of every reachable type of other modules (`codegen-aggregates` D2), so cycles through imported types are seen too. A type that `E4023` reports is skipped, so one mistake gives one error. Regular recursion (`enum List<T> { Cons(T, Heap<List<T>>), Nil }`, `struct Tree<T>(val kids: Heap<List<Tree<T>>>?)`) has no growing cycle. Rejected: leaving it to instance collection, which would loop or need a limit in glue generation.
+
+### D10. The backend checks every instance, and reports at the generic's source
+
+`check_file` runs on every instance unit after substitution, because some constructs become unsupported only through a type argument (`keep<() -> Int>` holds a function value). An error is located in the generic's file, which is the instance unit's module, mapped back to its path by `run.rs`. It is reported once per (file, location, construct), however many instances share it. A program with any `E6001` does not run, as before. `Construct::GenericCalls` and the call check for type arguments are removed from `supported.rs`. A `Type::Parameter` reaching a compiled body becomes an internal error, since instances have none. "Calls of generic functions" leaves the `E6001` row of the diagnostics catalog.
+
+### D11. `--instances` on `dump-mir` and `dump-clif` (autonomous)
+
+`prism dump-mir --instances <file>` prints the elaborated MIR of every instance the program from that entry needs, in symbol order. `prism dump-clif --instances <file>` prints their Cranelift IR and glue. Both compile the whole program, as `prism run` does, because an instance needs other files' records, while the plain dumps keep compiling the entry alone. The fixture runner accepts an `instances-mir.snap` beside a case (the expected `dump-mir --instances` output), which pins substitution and flattening the way `mir.snap` pins lowering. Every `mir` case of "Instances Are Substituted Bodies" and "Nullable Arguments Flatten Instances" must hold one. Rejected: printing instances under the plain dumps, which would make them compile other files; a separate `dump-instances` command, one more command for what is a view of the same program.
+
+### D12. Closures inside generic bodies wait for `closures`
+
+A closure body inside a generic is part of its record (D2) but is not compiled, as no closure is today. An instance whose body builds a closure is `E6001`, at the closure in the generic's source (D10), and its closure bodies are not copied into the instance unit. `closures` will instantiate a generic's closures with their parent's type arguments, named `<instance symbol>#closure<i>`, in the parent instance's unit. Until then a generic that takes or holds a function value (`remember`, `map`) cannot run either, since function values are `E6001` in every body.
+
+### D13. Direction for `instance-cache`: the Monomorphization Hash moves onto the record (autonomous, recorded)
+
+`abi-cache` asked what an instance key must cover beyond the generic's identity, signature, Monomorphization Hash and type arguments. The answer, which `instance-cache` implements:
+
+- **The Monomorphization Hash becomes a hash of the generic record**, computed after Phase 2: its bodies' elaborated MIR and its restricted type definitions. It covers the private types the body uses (a field added to a private struct that the generic holds changes the instance's layout but not the body's AST) and the signatures of every callee, the file's imports included (a callee's parameter becoming `&T` changes the instance's calls, but not the body's AST). It does not cover the bodies of non-generic helpers, which instances call by symbol (D2), nor other generics' records, which are other instances. It covers source positions too, because an instance reports runtime errors at them. Moving a generic down the file regenerates its instances, never any caller. Positions relative to the declaration, as rustc's incremental compilation uses, can come later if that ever shows up in profiles.
+- **The Phase 1 body hash leaves the ABI.** The AST hash in `generic_body_hash` is then redundant and misleading, since it misses both cases above. Without it the ABI holds signatures only, so a file's ABI hash and interface hash become one hash. That matches the deterministic hermetic builds invariant's wording ("direct import ABI hashes"), and the requirements "Monomorphization Hash for Generics" and "Interface Hash" of `compilation-and-abi` change with it.
+- **An instance key adds its type arguments' definitions**: a structural hash of the definitions, with markers, of every struct and enum the type arguments reach, so `keep<Thing>` is regenerated when `Thing` gains a field.
+- **Records go in the defining file's check entry**, so a reused file still provides them, and `prism check` collects instances transitively over the program, reporting them once per program in `--explain-cache`, with `E6004` cycles found per import cycle.
+
+These are recorded here because D2's record is shaped by them (per generic, restricted types). Rejected: keeping the Phase 1 AST hash as the instance key (wrong in both cases above), and hashing the whole defining file (every edit of the file would regenerate all its instances).
+
+### D14. Runtime errors and data of an instance
+
+An instance unit's file name (`UnitContext::file_name`) is the generic's file (`<module>.prism`), so a runtime error inside an instance reports the generic's file and position, whoever called it (the `execution` scenario "Division by zero in an imported generic"). Its string literals are data of its own unit, named after the unit (D4). Top-level `val`s it reads are reached through their accessors' slots, defined by their own files' units. Literal data must outlive every string pointing at it, which is already `hot-reload`'s concern for every unit (`runtime-strings-and-drops` D3).
+
+### D15. Diagnostics: two new codes
+
+- `E4027` `PolymorphicRecursion` (the next free type-checker code after `payload-patterns`' `E4024`/`E4025` and `string-templates`' `E4026`): a growing instantiation cycle within a file, of generic functions (D8) or generic types (D9). Fix: pass the value boxed or erased by a non-generic wrapper, or make the recursion regular.
+- `E6004` `PolymorphicRecursionAcrossFiles`: the same mistake spread over files of an import cycle, found when compiling (D8). It is a different stage, so it takes a code in that stage's range.
+- `E6001` no longer lists calls of generic functions.
+
+The catalog is not a requirement, so `openspec/specs/diagnostics/spec.md` is edited directly.
+
+### D16. No new capability (autonomous)
+
+The language rules (instances run the checked body, `?:` on `T`, polymorphic recursion) extend `generics`. Instance MIR extends `mir`. Instance units, symbols and dumps extend `code-generation`. What an instance may depend on extends `compilation-and-abi`, and the runtime meaning extends `execution`. Rejected: a `monomorphization` capability, whose rules would be split from the generic rules, MIR forms and backend contract they belong with.
+
+## Risks / Trade-offs
+
+- [One indirect call per instance call, even for tiny generics such as `Box<T>.get()`] → the same cost every Tier 1 call already pays, so that `hot-reload` works. Tier 2 inlines.
+- [Code size grows with the number of distinct type arguments] → inherent to monomorphization. Sharing equal-layout instances is a later option (D3).
+- [`E6004` is found only by `prism run`, not `prism check`, until `instance-cache`] → it needs mutually importing files with mutually recursive generics that grow a type, which is rare. The per-file `E4027` covers the common case.
+- [Records are rebuilt on every `prism run`] → `prism run` elaborates every file anyway. Caching is `instance-cache`.
+- [`prism check`'s instance records keep `abi-cache`'s keys meanwhile] → they still report direct requests correctly when a generic body changes, but miss transitive instances and changes of type arguments' layouts. `prism run` does not use them.
+- [D7 changes the meaning of accepted programs (`a ?: c` on a `T` instantiated nullable)] → no such program could run before this change, since every generic call was `E6001`.
+- [Modifying requirements of unarchived changes] → they land first (Baseline above).
+
+## Migration Plan
+
+No external users. `?:` on a bare `T` now tests for null (D7), and only polymorphic MIR snapshots holding such a `?:` change. Generic calls stop being `E6001`, so the `E6001` fixtures pinning them (`code-generation/unsupported-constructs-in-several-forms--generic-call` and any other naming "calls of generic functions") are removed or become run fixtures. Programs with polymorphic recursion, accepted until now, become `E4027`. The repository has none outside new fixtures. Rollback is a revert.
+
+## Open Questions
+
+- Whether `E6004` should survive `instance-cache`, once `prism check` can see whole import cycles (D8). The fix is the same as `E4027`'s.
+- The exact text of the `E4027` and `E6004` messages (how the cycle is printed) can be tuned during implementation.
