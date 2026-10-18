@@ -276,11 +276,6 @@ impl BodyChecker<'_> {
                 | Constant::Unit
                 | Constant::TopLevelValue(_) => None,
                 Constant::Null(ty) => self.classify(ty),
-                // A variant constructor reaches the backend only as a value; its calls are
-                // aggregates.
-                Constant::Function(_) | Constant::VariantConstructor { .. } => {
-                    Some(Construct::FunctionValues)
-                }
             },
         }
     }

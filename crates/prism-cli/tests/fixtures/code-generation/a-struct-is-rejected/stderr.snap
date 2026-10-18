@@ -1,5 +1,5 @@
 error[E6001]: the Tier 1 backend does not support function values and closures yet
-  --> main.prism:5:22
+  --> main.prism:5:24
     5 | fun main() { val p = P(one); println(1) }
-      |                      ^
+      |                        ^
    = note: support for function values and closures is planned in the 'closures' change

@@ -1,0 +1,7 @@
+// expect: ok
+fun read(r: &Int): Int = r
+
+fun main() {
+    val f: (&Int) -> Int = read
+    val g: (&mut Int) -> Int = f
+}

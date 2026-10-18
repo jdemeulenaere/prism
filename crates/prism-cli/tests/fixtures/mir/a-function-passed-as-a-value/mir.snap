@@ -1,0 +1,42 @@
+module main
+fun main::double(_1: Int): Int @2:1
+  local _0: Int (return)
+  local _1 n: Int (argument)
+  bb0:
+    _0 = copy _1 * const 2 @2:27
+    return @2:1
+fun main::apply(_1: (Int) -> Int): Int @4:1
+  local _0: Int (return)
+  local _1 f: (Int) -> Int (argument)
+  bb0:
+    _0 = call _1(const 1) -> bb1 @4:35
+  bb1:
+    drop _1 -> bb2 @4:1
+  bb2:
+    return @4:1
+fun main::main(): Unit @6:1
+  local _0: Unit (return)
+  local _1: Int (temporary)
+  local _2: (Int) -> Int (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _1 @7:13
+    storage_live _2 @7:19
+    _2 = closure main::main#closure0 [] @7:19
+    _1 = call main::apply(move _2) -> bb1 @7:13
+  bb1:
+    storage_live _3 @7:5
+    _3 = call builtin println(move _1) -> bb2 @7:5
+  bb2:
+    storage_dead _3 @7:5
+    storage_dead _2 @7:5
+    storage_dead _1 @7:5
+    _0 = const () @6:12
+    return @6:1
+closure main::main#closure0(_1: Int): Int @7:19
+  local _0: Int (return)
+  local _1: Int (argument)
+  bb0:
+    _0 = call main::double(copy _1) -> bb1 @7:19
+  bb1:
+    return @7:19

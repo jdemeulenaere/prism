@@ -1,0 +1,10 @@
+// expect: E4004
+fun each(f: (Int) -> Unit) {
+    f(1)
+}
+
+fun all(g: ((Int?) -> Unit) -> Unit) {}
+
+fun main() {
+    all(each)
+}

@@ -13,6 +13,10 @@ A function value MUST convert to another function type only when its parameters 
 - **WHEN** a body runs `val k = { 2 }; val m: () -> Int? = k`
 - **THEN** the type checker emits `E4002` at `k` in the second declaration
 
+#### Scenario: Branches joining function values of different representations
+- **WHEN** `fun show(n: Int?) {}` and `fun count(n: Int) {}` are declared, and a body runs `val g: (Int?) -> Unit = show; val h = if (c) g else count` for a `Bool` `c`
+- **THEN** the type checker emits `E4002` at `g`, since the branches join to `(Int) -> Unit`
+
 #### Scenario: Named functions and closure literals still convert
 - **WHEN** `fun show(n: Int?) {}`, `fun each(f: (Int) -> Unit) { f(1) }` and `fun pick(f: () -> Int?): Int? = f()` are declared, and a body runs `each(show)`, `val h: (Int) -> Unit = show` and `pick { 1 }`
 - **THEN** the file passes `prism check`

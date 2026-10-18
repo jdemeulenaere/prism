@@ -1,0 +1,5 @@
+// expect: E4002
+fun main() {
+    val k = { 2 }
+    val m: () -> Int? = k
+}

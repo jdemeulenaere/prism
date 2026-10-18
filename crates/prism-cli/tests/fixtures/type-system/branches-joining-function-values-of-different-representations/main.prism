@@ -1,0 +1,10 @@
+// expect: E4002
+fun show(n: Int?) {}
+
+fun count(n: Int) {}
+
+fun main() {
+    val g: (Int?) -> Unit = show
+    val c = true
+    val h = if (c) g else count
+}

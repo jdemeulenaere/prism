@@ -610,6 +610,96 @@ impl Type {
             other => Type::Nullable(Box::new(other)),
         }
     }
+
+    /// Whether a value of `self` can be used as a value of `to` without changing its
+    /// representation (D8 of `closures`): the types are equal, or differ only by `&mut T`
+    /// weakening to `&T` (behind shared borrows too, inside a nullable, and in the parameters
+    /// and result of a function type, contravariantly in the parameters). Compose flags must
+    /// match. An error on either side converts, so earlier errors are not reported again.
+    ///
+    /// The type checker allows a function value other than a named function or variant
+    /// constructor to convert only by this relation, and the backend lowers such a `Subtype`
+    /// coercion as a plain copy.
+    pub fn converts_in_place(&self, to: &Type) -> bool {
+        if self == to || *self == Type::Error || *to == Type::Error {
+            return true;
+        }
+        match (self, to) {
+            // Behind a shared borrow nothing is written, so the referent may weaken too.
+            (
+                Type::Reference { inner, .. },
+                Type::Reference {
+                    mutable: false,
+                    inner: target,
+                },
+            ) => inner.converts_in_place(target),
+            (
+                Type::Reference {
+                    mutable: true,
+                    inner,
+                },
+                Type::Reference {
+                    mutable: true,
+                    inner: target,
+                },
+            ) => inner.converts_in_place(target) && target.converts_in_place(inner),
+            (Type::Nullable(inner), Type::Nullable(target)) => inner.converts_in_place(target),
+            (Type::Heap(inner), Type::Heap(target)) => {
+                inner.converts_in_place(target) && target.converts_in_place(inner)
+            }
+            (
+                Type::Struct { id, arguments },
+                Type::Struct {
+                    id: target,
+                    arguments: target_arguments,
+                },
+            )
+            | (
+                Type::Enum { id, arguments },
+                Type::Enum {
+                    id: target,
+                    arguments: target_arguments,
+                },
+            ) => {
+                id == target
+                    && arguments.len() == target_arguments.len()
+                    && arguments
+                        .iter()
+                        .zip(target_arguments)
+                        .all(|(a, b)| a.converts_in_place(b) && b.converts_in_place(a))
+            }
+            (
+                Type::Fn {
+                    is_compose,
+                    params,
+                    ret,
+                },
+                Type::Fn {
+                    is_compose: target_compose,
+                    params: target_params,
+                    ret: target_ret,
+                },
+            ) => {
+                is_compose == target_compose
+                    && params.len() == target_params.len()
+                    && target_params
+                        .iter()
+                        .zip(params)
+                        .all(|(target, param)| target.converts_in_place(param))
+                    && ret.converts_in_place(target_ret)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the type is a function type or a nullable of one.
+    pub fn is_function_value(&self) -> bool {
+        match self {
+            Type::Fn { .. } => true,
+            Type::Nullable(inner) => matches!(**inner, Type::Fn { .. }),
+            _ => false,
+        }
+    }
 }
 
 impl Type {
@@ -754,6 +844,68 @@ mod tests {
             mutable,
             inner: Box::new(inner),
         }
+    }
+
+    fn function(params: Vec<Type>, ret: Type) -> Type {
+        Type::Fn {
+            is_compose: false,
+            params,
+            ret: Box::new(ret),
+        }
+    }
+
+    #[test]
+    fn conversions_in_place() {
+        let shared = reference(false, Type::Int);
+        let mutable = reference(true, Type::Int);
+        // Equal types and errors.
+        assert!(Type::Int.converts_in_place(&Type::Int));
+        assert!(Type::Error.converts_in_place(&Type::String));
+        assert!(Type::String.converts_in_place(&Type::Error));
+        // `&mut T` to `&T`, inside a nullable and behind shared borrows, never the reverse.
+        assert!(mutable.converts_in_place(&shared));
+        assert!(!shared.converts_in_place(&mutable));
+        assert!(mutable
+            .clone()
+            .nullable()
+            .converts_in_place(&shared.clone().nullable()));
+        assert!(
+            reference(false, mutable.clone()).converts_in_place(&reference(false, shared.clone()))
+        );
+        assert!(
+            !reference(true, mutable.clone()).converts_in_place(&reference(true, shared.clone()))
+        );
+        // Steps that change a representation.
+        assert!(!Type::Int.converts_in_place(&Type::Int.nullable()));
+        assert!(!Type::Nothing.converts_in_place(&Type::Int));
+        assert!(!Type::Heap(Box::new(Type::Int))
+            .converts_in_place(&Type::Heap(Box::new(Type::Int.nullable()))));
+        // Function types: contravariant parameters, covariant results, equal compose flags.
+        let show = function(vec![Type::Int.nullable()], Type::Unit);
+        let each = function(vec![Type::Int], Type::Unit);
+        assert!(!show.converts_in_place(&each));
+        assert!(
+            !function(vec![], Type::Int).converts_in_place(&function(vec![], Type::Int.nullable()))
+        );
+        assert!(function(vec![shared.clone()], Type::Int)
+            .converts_in_place(&function(vec![mutable.clone()], Type::Int)));
+        assert!(!function(vec![mutable.clone()], Type::Int)
+            .converts_in_place(&function(vec![shared.clone()], Type::Int)));
+        assert!(
+            function(vec![], mutable.clone()).converts_in_place(&function(vec![], shared.clone()))
+        );
+        assert!(show
+            .clone()
+            .nullable()
+            .converts_in_place(&show.clone().nullable()));
+        let composable = Type::Fn {
+            is_compose: true,
+            params: vec![],
+            ret: Box::new(Type::Unit),
+        };
+        assert!(!composable.converts_in_place(&function(vec![], Type::Unit)));
+        assert!(show.is_function_value() && show.clone().nullable().is_function_value());
+        assert!(!Type::Int.is_function_value());
     }
 
     #[test]

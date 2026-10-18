@@ -250,10 +250,6 @@ impl Printer<'_> {
             Constant::String(v) => format!("{:?}", v),
             Constant::Unit => "()".to_string(),
             Constant::Null(_) => "null".to_string(),
-            Constant::Function(path) => format!("fn {}", path),
-            Constant::VariantConstructor { enum_id, index } => {
-                format!("fn {}", self.variant(enum_id, *index))
-            }
             Constant::TopLevelValue(path) => format!("&{}", path),
         }
     }

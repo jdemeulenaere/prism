@@ -597,12 +597,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     let pointer = self.pointer();
                     Lowered::Scalar(self.builder.ins().iconst(pointer, 0))
                 }
-                other => {
-                    return Err(BackendError::new(format!(
-                        "unsupported constant {:?}",
-                        other
-                    )))
-                }
             },
         })
     }

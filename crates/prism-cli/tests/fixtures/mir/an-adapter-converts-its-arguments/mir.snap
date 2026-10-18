@@ -1,0 +1,45 @@
+module main
+fun main::show(_1: Int?): Unit @2:1
+  local _0: Unit (return)
+  local _1 n: Int? (argument)
+  bb0:
+    _0 = const () @2:19
+    return @2:1
+fun main::each(_1: (Int) -> Unit): Unit @4:1
+  local _0: Unit (return)
+  local _1 f: (Int) -> Unit (argument)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _2 @5:5
+    _2 = call _1(const 1) -> bb1 @5:5
+  bb1:
+    storage_dead _2 @5:5
+    _0 = const () @4:28
+    drop _1 -> bb2 @4:1
+  bb2:
+    return @4:1
+fun main::main(): Unit @8:1
+  local _0: Unit (return)
+  local _1: (Int) -> Unit (temporary)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _1 @9:10
+    _1 = closure main::main#closure0 [] @9:10
+    storage_live _2 @9:5
+    _2 = call main::each(move _1) -> bb1 @9:5
+  bb1:
+    storage_dead _2 @9:5
+    storage_dead _1 @9:5
+    _0 = const () @8:12
+    return @8:1
+closure main::main#closure0(_1: Int): Unit @9:10
+  local _0: Unit (return)
+  local _1: Int (argument)
+  local _2: Int? (temporary)
+  bb0:
+    storage_live _2 @9:10
+    _2 = wrap copy _1 @9:10
+    _0 = call main::show(move _2) -> bb1 @9:10
+  bb1:
+    storage_dead _2 @9:10
+    return @9:10

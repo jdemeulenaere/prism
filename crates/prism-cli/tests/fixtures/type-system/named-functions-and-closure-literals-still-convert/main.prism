@@ -1,0 +1,14 @@
+// expect: ok
+fun show(n: Int?) {}
+
+fun each(f: (Int) -> Unit) {
+    f(1)
+}
+
+fun pick(f: () -> Int?): Int? = f()
+
+fun main() {
+    each(show)
+    val h: (Int) -> Unit = show
+    pick { 1 }
+}

@@ -1,0 +1,10 @@
+// expect: ok
+fun show(n: Int?) {}
+
+fun each(f: (Int) -> Unit) {
+    f(1)
+}
+
+fun main() {
+    each(show)
+}

@@ -49,10 +49,7 @@ impl Builder<'_> {
                 }
             }
             ExpressionKind::FunctionReference(_) | ExpressionKind::VariantConstructor { .. } => {
-                if let Some(destination) = destination {
-                    let operand = self.operand(id);
-                    self.assign(destination.clone(), Rvalue::Use(operand), span);
-                }
+                self.lower_adapter(destination, id, &ty, span)
             }
             kind if kind.is_place() => {
                 let place = self.place(id);
@@ -278,7 +275,7 @@ impl Builder<'_> {
     }
 
     /// The operand of the expression `id` where its value is consumed or read: a constant for a
-    /// literal or a function, the move or copy of a consumed place, the copy of a `Copy` place
+    /// literal, the move or copy of a consumed place, the copy of a `Copy` place
     /// read in place, or the move out of a temporary holding any other value (D5).
     pub(super) fn operand(&mut self, id: ExpressionId) -> Operand {
         let expression = self.expression(id);
@@ -286,15 +283,6 @@ impl Builder<'_> {
         let ty = expression.ty.clone();
         match &expression.kind {
             ExpressionKind::Literal(literal) => Operand::Constant(Self::constant(literal, &ty)),
-            ExpressionKind::FunctionReference(path) => {
-                Operand::Constant(Constant::Function(path.clone()))
-            }
-            ExpressionKind::VariantConstructor { enum_id, index, .. } => {
-                Operand::Constant(Constant::VariantConstructor {
-                    enum_id: enum_id.clone(),
-                    index: *index,
-                })
-            }
             ExpressionKind::Move { place } => Operand::Move(self.place(*place), span),
             ExpressionKind::Copy { place } => Operand::Copy(self.place(*place), span),
             ExpressionKind::Coerce {
@@ -583,7 +571,15 @@ impl Builder<'_> {
             }
             CoercionKind::Subtype => {
                 let value_kind = &self.expression(value).kind;
-                if self.is_null_literal(value) {
+                if matches!(
+                    value_kind,
+                    ExpressionKind::FunctionReference(_)
+                        | ExpressionKind::VariantConstructor { .. }
+                ) {
+                    // The adapter converts the function's parameters and result (D7 of
+                    // `closures`).
+                    self.lower_adapter(destination, value, ty, span);
+                } else if self.is_null_literal(value) {
                     if let Some(destination) = destination {
                         let constant = Constant::Null(ty.clone());
                         self.assign(

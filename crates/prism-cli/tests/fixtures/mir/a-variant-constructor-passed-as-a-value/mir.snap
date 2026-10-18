@@ -1,0 +1,32 @@
+module main
+fun main::build(_1: (Int) -> Shape): Shape @7:1
+  local _0: Shape (return)
+  local _1 f: (Int) -> Shape (argument)
+  bb0:
+    _0 = call _1(const 3) -> bb1 @7:39
+  bb1:
+    drop _1 -> bb2 @7:1
+  bb2:
+    return @7:1
+fun main::main(): Unit @9:1
+  local _0: Unit (return)
+  local _1 s: Shape (user)
+  local _2: (Int) -> Shape (temporary)
+  bb0:
+    storage_live _1 @10:5
+    storage_live _2 @10:19
+    _2 = closure main::main#closure0 [] @10:19
+    _1 = call main::build(move _2) -> bb1 @10:13
+  bb1:
+    storage_dead _2 @10:5
+    _0 = const () @9:12
+    drop _1 -> bb2 @11:1
+  bb2:
+    storage_dead _1 @11:1
+    return @9:1
+closure main::main#closure0(_1: Int): Shape @10:19
+  local _0: Shape (return)
+  local _1: Int (argument)
+  bb0:
+    _0 = variant main::Shape.Circle(copy _1) @10:19
+    return @10:19

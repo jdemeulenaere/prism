@@ -1,0 +1,11 @@
+// expect: ok
+enum Shape {
+    Circle(Int),
+    Dot,
+}
+
+fun build(f: (Int) -> Shape): Shape = f(3)
+
+fun main() {
+    val s = build(Shape.Circle)
+}

@@ -722,6 +722,17 @@ impl TypeChecker {
                 self.add(kind, expected.clone(), span)
             }
             _ => {
+                // A join of branches that would change a function value's representation (D8
+                // of `closures`); `fit` reports the other sites with their own codes.
+                if !self.converts_function_value(id, &found, expected) {
+                    self.errors.push(TypeError::TypeMismatch {
+                        expected: expected.clone(),
+                        found,
+                        span,
+                        help: None,
+                    });
+                    return self.wrap_error(id);
+                }
                 let kind = ExpressionKind::Coerce {
                     value: id,
                     kind: CoercionKind::Subtype,
@@ -729,6 +740,46 @@ impl TypeChecker {
                 self.add(kind, expected.clone(), span)
             }
         }
+    }
+
+    /// Whether the node `id`, of the function type (or nullable of one) `found`, may be used as
+    /// an `expected` (D8 of `closures`). Any value converts in place. A named function or
+    /// variant constructor, which MIR lowers as an adapter closure, converts its own parameters
+    /// and result through any step, except those of function type, which the adapter would
+    /// have to convert as values. Values of other types are not this rule's.
+    fn converts_function_value(&self, id: ExpressionId, found: &Type, expected: &Type) -> bool {
+        if !found.is_function_value() || found.converts_in_place(expected) {
+            return true;
+        }
+        if !matches!(
+            self.builder.kind(id),
+            ExpressionKind::FunctionReference(_) | ExpressionKind::VariantConstructor { .. }
+        ) {
+            return false;
+        }
+        let expected = match (found, expected) {
+            (Type::Fn { .. }, Type::Nullable(inner)) => inner.as_ref(),
+            _ => expected,
+        };
+        let (
+            Type::Fn { params, ret, .. },
+            Type::Fn {
+                params: expected_params,
+                ret: expected_ret,
+                ..
+            },
+        ) = (found, expected)
+        else {
+            return true;
+        };
+        let adapts = |from: &Type, to: &Type| {
+            !(from.is_function_value() || to.is_function_value()) || from.converts_in_place(to)
+        };
+        expected_params
+            .iter()
+            .zip(params)
+            .all(|(from, to)| adapts(from, to))
+            && adapts(ret, expected_ret)
     }
 
     /// The definition of the nominal type `id`, if this file knows it.
@@ -6724,7 +6775,22 @@ impl TypeChecker {
         deferred_move: bool,
     ) -> ExpressionId {
         let found = self.ty(found_id);
-        match self.coerce(&found, expected, site) {
+        let coercion = self.coerce(&found, expected, site);
+        // A function value keeps its representation when converted (D8 of `closures`).
+        if !matches!(coercion, Coercion::NoFit)
+            && !self.converts_function_value(found_id, &found, expected)
+        {
+            // A named function's own conversions are its adapter's, so a closure calling it
+            // would not help.
+            let help = (!matches!(
+                self.builder.kind(found_id),
+                ExpressionKind::FunctionReference(_) | ExpressionKind::VariantConstructor { .. }
+            ))
+            .then(|| closure_call_help(expr, expected));
+            self.report_mismatch_with_help(expected, found, expr.span, help);
+            return self.wrap_error(found_id);
+        }
+        match coercion {
             Coercion::Fits(Adjustment::None) => {
                 let id = if deferred_move {
                     self.check_move_source(expr, &found);
@@ -7795,6 +7861,33 @@ fn box_write_help(reference: &Expr, behind_reference: bool) -> String {
 
 /// The help of a box given for a box of other contents (D8 of `heap-boxes`): boxes are
 /// invariant, so the contents must be converted when the box is built.
+/// The help for a function value that would change representation when converted (D8 of
+/// `closures`): a closure literal calling it, with one parameter per parameter of `expected`.
+fn closure_call_help(expr: &Expr, expected: &Type) -> String {
+    let arity = match expected {
+        Type::Fn { params, .. } => params.len(),
+        Type::Nullable(inner) => match inner.as_ref() {
+            Type::Fn { params, .. } => params.len(),
+            _ => 0,
+        },
+        _ => 0,
+    };
+    const NAMES: [&str; 6] = ["x", "y", "z", "a", "b", "c"];
+    let names: Vec<String> = (0..arity)
+        .map(|i| match NAMES.get(i) {
+            Some(name) => name.to_string(),
+            None => format!("p{}", i + 1),
+        })
+        .collect();
+    let call = format!("{}({})", expr, names.join(", "));
+    let closure = if names.is_empty() {
+        format!("{{ {} }}", call)
+    } else {
+        format!("{{ {} -> {} }}", names.join(", "), call)
+    };
+    format!("wrap it in a closure that calls it: '{}'", closure)
+}
+
 fn invariant_box_help(found: &Type, expected: &Type) -> Option<String> {
     let expected = match expected {
         Type::Nullable(inner) => inner.as_ref(),

@@ -1185,3 +1185,29 @@ fn a_private_field_type_is_recorded_by_prism_abi() {
     assert!(!stdout.contains("Helper"), "{}", stdout);
     fs::remove_dir_all(&temp).ok();
 }
+
+/// type-system: "Converting a function value through a nullable parameter" (D8 of `closures`):
+/// the mismatch suggests a closure that calls the value, and a named function gets no help.
+#[test]
+fn test_cli_binary_function_value_conversion_help() {
+    let output = run_on_source(
+        "function_value_conversion_help",
+        &["check"],
+        "fun show(n: Int?) {}\n\
+         fun each(f: (Int) -> Unit) { f(1) }\n\
+         fun all(g: ((Int?) -> Unit) -> Unit) {}\n\
+         fun main() { val g: (Int?) -> Unit = show; each(g); all(each) }\n",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("error[E4004]").count(), 2, "{stderr}");
+    assert!(
+        stderr.contains("help: wrap it in a closure that calls it: '{ x -> g(x) }'"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("closure that calls it").count(),
+        1,
+        "{stderr}"
+    );
+}

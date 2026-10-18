@@ -119,9 +119,7 @@ impl Constant {
             Constant::String(_) => Some(Type::String),
             Constant::Unit => Some(Type::Unit),
             Constant::Null(ty) => Some(ty.clone()),
-            Constant::Function(_)
-            | Constant::VariantConstructor { .. }
-            | Constant::TopLevelValue(_) => None,
+            Constant::TopLevelValue(_) => None,
         }
     }
 }

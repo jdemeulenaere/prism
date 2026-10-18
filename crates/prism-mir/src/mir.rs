@@ -391,13 +391,6 @@ pub enum Constant {
     Unit,
     /// `null`, of the nullable type it is used at.
     Null(Type),
-    /// A top-level function, as a value.
-    Function(DeclarationPath),
-    /// A variant with a payload, as its constructor function.
-    VariantConstructor {
-        enum_id: NominalId,
-        index: usize,
-    },
     /// A shared borrow `&T` of a top-level `val` (D5).
     TopLevelValue(DeclarationPath),
 }

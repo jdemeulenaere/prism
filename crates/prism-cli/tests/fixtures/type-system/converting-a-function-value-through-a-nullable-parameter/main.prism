@@ -1,0 +1,11 @@
+// expect: E4004
+fun show(n: Int?) {}
+
+fun each(f: (Int) -> Unit) {
+    f(1)
+}
+
+fun main() {
+    val g: (Int?) -> Unit = show
+    each(g)
+}
