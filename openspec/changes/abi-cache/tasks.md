@@ -20,7 +20,7 @@ The cache scenarios are integration tests in `crates/prism-cli/tests/cache_tests
 
 ## 4. Integration
 
-- [ ] 4.1 Log the decisions in `docs/decisions-for-review.md` (done at proposal time; update if a decision changed while implementing). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), run twice with `--explain-cache` to see the second run reuse every file, and `openspec validate --all --strict`. Verify all pass.
+- [x] 4.1 Log the decisions in `docs/decisions-for-review.md` (done at proposal time; update if a decision changed while implementing). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), run twice with `--explain-cache` to see the second run reuse every file, and `openspec validate --all --strict`. Verify all pass.
 
 ## Workflow follow-up
 
