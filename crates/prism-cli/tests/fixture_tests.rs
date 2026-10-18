@@ -51,6 +51,14 @@
 //! Checking" (`ELABORATED_SCENARIOS`) must hold one. `PRISM_BLESS=1` writes every kind of
 //! snapshot.
 //!
+//! A case may also hold `instances-mir.snap`: the expected output of `prism dump-mir
+//! --instances` on its entry (`prism_cli::dump_instance_mir`), the elaborated MIR of every
+//! instance of a generic the program from that entry needs, which needs a program without type
+//! or borrow errors. Every `mir` case of the scenarios of "Instances Are Substituted Bodies",
+//! "Nullable Arguments Flatten Instances" and "Instance MIR Dump" (`INSTANCE_SCENARIOS`) must hold
+//! one, which pins substitution and flattening as `mir.snap` pins lowering (D11 of
+//! `monomorphization`).
+//!
 //! ## Layout snapshots
 //!
 //! A case may also hold `layout.snap`: the expected output of `prism dump-layout` on its entry
@@ -344,6 +352,16 @@ const ELABORATED_SCENARIOS: &[&str] = &[
     "elaborated-drops-of-a-generic-body",
 ];
 
+/// The scenarios of the `mir` spec whose cases must hold an `instances-mir.snap`: those of
+/// "Instances Are Substituted Bodies", "Nullable Arguments Flatten Instances" and "Instance MIR
+/// Dump" (D11 of `monomorphization`).
+const INSTANCE_SCENARIOS: &[&str] = &[
+    "instances-of-a-generic-function",
+    "a-call-inside-an-instance-names-its-instance",
+    "wrapping-and-unwrapping-a-nullable-argument",
+    "dumping-the-instances-of-a-program",
+];
+
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of
 /// the requirements on struct, enum, nullable and generic instance layouts, and "A type without
 /// a layout yet".
@@ -393,6 +411,16 @@ const SNAPSHOTS: &[Snapshot] = &[
                 .map(|dump| dump.text)
                 .map_err(|err| err.render())
         },
+    },
+    Snapshot {
+        file: "instances-mir.snap",
+        required_for: |spec, dir| {
+            spec == "mir"
+                && INSTANCE_SCENARIOS
+                    .iter()
+                    .any(|scenario| dir.split("--").next() == Some(scenario))
+        },
+        dump: |entry| prism_cli::dump_instance_mir(entry).map_err(|err| err.render()),
     },
     Snapshot {
         file: "layout.snap",

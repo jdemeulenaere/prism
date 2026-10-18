@@ -1,0 +1,12 @@
+fun lib/box::keep<Bool>(_1: Bool): Bool @2:1
+  local _0: Bool (return)
+  local _1 x: Bool (argument)
+  bb0:
+    _0 = move _1 @2:32
+    return @2:1
+fun lib/box::keep<Int>(_1: Int): Int @2:1
+  local _0: Int (return)
+  local _1 x: Int (argument)
+  bb0:
+    _0 = move _1 @2:32
+    return @2:1

@@ -1,0 +1,42 @@
+module main
+fun <T> main::id(_1: T): T @2:1
+  local _0: T (return)
+  local _1 x: T (argument)
+  bb0:
+    _0 = move _1 @2:23
+    drop _1 -> bb1 @2:1
+  bb1:
+    return @2:1
+fun <T> main::twice(_1: T): T @3:1
+  local _0: T (return)
+  local _1 x: T (argument)
+  local _2: T (temporary)
+  local _3: T (temporary)
+  bb0:
+    storage_live _2 @3:29
+    storage_live _3 @3:32
+    _3 = move _1 @3:32
+    _2 = call main::id<T>(move _3) -> bb1 @3:29
+  bb1:
+    _0 = call main::id<T>(move _2) -> bb2 @3:26
+  bb2:
+    storage_dead _3 @3:26
+    storage_dead _2 @3:26
+    drop _1 -> bb3 @3:1
+  bb3:
+    return @3:1
+fun main::main(): Unit @4:1
+  local _0: Unit (return)
+  local _1: Int (temporary)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _1 @4:22
+    _1 = call main::twice<Int>(const 1) -> bb1 @4:22
+  bb1:
+    storage_live _2 @4:14
+    _2 = call builtin println(move _1) -> bb2 @4:14
+  bb2:
+    storage_dead _2 @4:14
+    storage_dead _1 @4:14
+    _0 = const () @4:12
+    return @4:1

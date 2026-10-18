@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+enum List<T> { Cons(T, Heap<List<T>>), Nil }
+fun <T> List<T>.size(): Int = when (this) {
+    List.Cons(_, val rest) -> 1 + rest.size()
+    List.Nil -> 0
+}
+fun <T> push(list: List<T>, x: T): List<T> = List.Cons(x, Heap(list))
+fun main() {
+    val empty: List<String> = List.Nil
+    val names = push(push(empty, "a"), "b")
+    val none: List<Int> = List.Nil
+    val numbers = push(none, 1)
+    println(names.size())
+    println(numbers.size())
+}

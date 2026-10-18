@@ -1,0 +1,7 @@
+package lib
+fun helper(n: Int): Int = n + 1
+fun <T> inner(x: T): T = x
+public fun <T> outer(x: T, n: Int): Int {
+    val y = inner(x)
+    return helper(n)
+}

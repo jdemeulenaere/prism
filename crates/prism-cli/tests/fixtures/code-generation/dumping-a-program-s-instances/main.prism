@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun <T> keep(x: T): T = x
+fun main() {
+    println(keep(1))
+    println(keep("a"))
+}

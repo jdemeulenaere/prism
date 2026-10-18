@@ -1,0 +1,3 @@
+package lib
+public struct Pair<A, B>(val a: A, val b: B)
+public fun <T : Copy> twin(x: T): Pair<T, T> = Pair(x, x)

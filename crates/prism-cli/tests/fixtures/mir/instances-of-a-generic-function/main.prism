@@ -1,0 +1,6 @@
+// expect: ok
+fun <T> discard(x: T) {}
+fun main() {
+    discard(1)
+    discard("a")
+}

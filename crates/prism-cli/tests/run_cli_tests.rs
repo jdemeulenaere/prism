@@ -812,3 +812,283 @@ fn a_template_calls_the_runtime_once() {
         assert!(!label.contains(other), "{}", label);
     }
 }
+
+// Instances of generics (the `monomorphization` change).
+
+/// Whether `ir` loads the address in the slot `slot` and calls what it loaded indirectly.
+fn calls_through_slot(ir: &str, slot: &str) -> bool {
+    let Some(global) = ir
+        .lines()
+        .find(|line| line.contains(&format!("symbol %\"{}\"", slot)))
+        .and_then(|line| line.trim().split(' ').next())
+    else {
+        return false;
+    };
+    let Some(address) = ir
+        .lines()
+        .find(|line| line.contains(&format!("symbol_value.i64 {}", global)))
+        .and_then(|line| line.trim().split(' ').next())
+    else {
+        return false;
+    };
+    let Some(loaded) = ir
+        .lines()
+        .find(|line| line.contains("load.i64") && line.ends_with(&format!(" {}", address)))
+        .and_then(|line| line.trim().split(' ').next())
+    else {
+        return false;
+    };
+    ir.lines()
+        .any(|line| line.contains("call_indirect") && line.contains(&format!(", {}(", loaded)))
+}
+
+/// A workspace with `lib/box.prism` holding `box_source` and `app/main.prism` importing it.
+fn box_workspace(test_name: &str, box_source: &str, main: &str) -> PathBuf {
+    let directory = temporary_directory(test_name);
+    write(
+        &directory.join("lib/box.prism"),
+        &format!("package lib\n{}", box_source),
+    );
+    write(
+        &directory.join("app/main.prism"),
+        &format!("package app\nimport /lib/box\n{}", main),
+    );
+    directory
+}
+
+/// code-generation: "Calls of an instance go through its slot".
+#[test]
+fn calls_of_an_instance_go_through_its_slot() {
+    let directory = box_workspace(
+        "instance_slot",
+        "public fun <T> keep(x: T): T = x\n",
+        "fun main() { println(keep(1)) }\n",
+    );
+    let dump = prism(&["dump-clif", "app/main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let main = function_ir(&dump, "app/main::main");
+    assert!(
+        calls_through_slot(main, "lib/box::keep<Int>#slot"),
+        "{}",
+        main
+    );
+    // The file's own dump holds no instance.
+    assert_eq!(function_headers(&dump), ["app/main::main"]);
+    let run = prism(&["run", "app/main.prism"], &directory);
+    assert_eq!(run.status.code(), Some(0), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "1\n");
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "One instance for every caller".
+#[test]
+fn one_instance_for_every_caller() {
+    let directory = box_workspace(
+        "one_instance",
+        "public fun <T> keep(x: T): T = x\n",
+        "import /app/other\nfun main() { println(keep(1)); println(other()) }\n",
+    );
+    write(
+        &directory.join("app/other.prism"),
+        "package app\nimport /lib/box\npublic fun other(): Int = keep(2)\n",
+    );
+    let dump = prism(&["dump-clif", "--instances", "app/main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    assert_eq!(function_headers(&stdout(&dump)), ["lib/box::keep<Int>"]);
+    let run = prism(&["run", "app/main.prism"], &directory);
+    assert_eq!(stdout(&run), "1\n2\n", "{}", stderr(&run));
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Dumping a program's instances".
+#[test]
+fn dumping_a_program_s_instances() {
+    let directory = single_file(
+        "instance_dump",
+        "fun <T> keep(x: T): T = x\nfun main() { println(keep(1)); println(keep(\"a\")) }\n",
+    );
+    let first = prism(&["dump-clif", "--instances", "main.prism"], &directory);
+    let second = prism(&["dump-clif", "--instances", "main.prism"], &directory);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    assert_eq!(stdout(&first), stdout(&second));
+    assert_eq!(
+        function_headers(&stdout(&first)),
+        ["main::keep<Int>", "main::keep<String>"]
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// mir: "Instance MIR Dump" and code-generation: "Instance Code Units Are Dumped on Request",
+/// for a program with errors.
+#[test]
+fn instance_dumps_of_a_program_with_errors() {
+    let directory = box_workspace(
+        "instance_dump_errors",
+        "public fun <T> keep(x: T): T = nope\n",
+        "fun main() { println(keep(1)) }\n",
+    );
+    for flag in [["dump-mir", "--instances"], ["dump-clif", "--instances"]] {
+        let output = prism(&[flag[0], flag[1], "app/main.prism"], &directory);
+        assert_eq!(output.status.code(), Some(1), "{}", flag[0]);
+        assert_eq!(stdout(&output), "", "{}", flag[0]);
+        assert!(stderr(&output).contains("E4001"), "{}", stderr(&output));
+    }
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// mir: "Dumping the instances of a program", on the binary.
+#[test]
+fn dumping_the_instances_of_a_program() {
+    let directory = box_workspace(
+        "instance_mir",
+        "public fun <T> keep(x: T): T = x\n",
+        "fun main() { println(keep(1)); println(keep(true)) }\n",
+    );
+    let first = prism(&["dump-mir", "--instances", "app/main.prism"], &directory);
+    let second = prism(&["dump-mir", "--instances", "app/main.prism"], &directory);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let text = stdout(&first);
+    assert_eq!(text, stdout(&second));
+    let headers: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("fun "))
+        .collect();
+    assert_eq!(
+        headers,
+        [
+            "fun lib/box::keep<Bool>(_1: Bool): Bool @2:1",
+            "fun lib/box::keep<Int>(_1: Int): Int @2:1"
+        ]
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Symbols of instances".
+#[test]
+fn symbols_of_instances() {
+    let directory = box_workspace(
+        "instance_symbols",
+        "public struct Box<T>(val v: T)\n\
+         public fun <T> keep(x: T): T = x\n\
+         public fun <T> Box<T>.get(): &T = &v\n\
+         public fun <T : Copy> pad(x: T, y: T = x): T = y\n",
+        "import /lib/user\n\
+         fun main() { val u = keep(User(\"a\")); println(Box(1).get()); println(pad(2)) }\n",
+    );
+    write(
+        &directory.join("lib/user.prism"),
+        "package lib\npublic struct User { val name: String }\n",
+    );
+    let dump = prism(&["dump-clif", "--instances", "app/main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let headers = function_headers(&dump);
+    for symbol in [
+        "lib/box::keep<lib/user::User>",
+        "lib/box::lib/box.Box.get<Int>",
+        "lib/box::pad<Int>",
+        "lib/box::pad<Int>#default(y)",
+    ] {
+        assert!(headers.contains(&symbol), "no {} in {:?}", symbol, headers);
+    }
+    let run = prism(
+        &["run", "--check-allocations", "app/main.prism"],
+        &directory,
+    );
+    assert_eq!(stdout(&run), "1\n2\n", "{}", stderr(&run));
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Glue of an instance".
+#[test]
+fn glue_of_an_instance() {
+    let directory = single_file(
+        "instance_glue",
+        "struct User : Clone { val name: String }\n\
+         fun <T> discard(x: T) {}\n\
+         fun <T : Clone> copy(x: &T): T = x.clone()\n\
+         fun main() { discard(User(\"a\")); val u = copy(&User(\"b\")); println(1) }\n",
+    );
+    let dump = prism(&["dump-clif", "--instances", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let headers = function_headers(&dump);
+    let position = |symbol: &str| {
+        headers
+            .iter()
+            .position(|header| *header == symbol)
+            .unwrap_or_else(|| panic!("no {} in {:?}", symbol, headers))
+    };
+    assert!(
+        position("main::discard<main::User>")
+            < position("main::discard<main::User>#drop(main::User)")
+    );
+    assert!(
+        position("main::copy<main::User>") < position("main::copy<main::User>#clone(main::User)")
+    );
+    assert!(calls_directly(
+        function_ir(&dump, "main::discard<main::User>"),
+        "main::discard<main::User>#drop(main::User)"
+    ));
+    let run = prism(&["run", "--check-allocations", "main.prism"], &directory);
+    assert_eq!(run.status.code(), Some(0), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "1\n");
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// compilation-and-abi: "A generic body change leaves its callers' code unchanged".
+#[test]
+fn a_generic_body_change_leaves_its_callers_code_unchanged() {
+    let directory = box_workspace(
+        "generic_body_change",
+        "public fun <T> pick(a: T, b: T): T = a\n",
+        "fun main() { println(pick(1, 2)) }\n",
+    );
+    let before = prism(&["dump-clif", "app/main.prism"], &directory);
+    let run_before = prism(&["run", "app/main.prism"], &directory);
+    write(
+        &directory.join("lib/box.prism"),
+        "package lib\npublic fun <T> pick(a: T, b: T): T = b\n",
+    );
+    let after = prism(&["dump-clif", "app/main.prism"], &directory);
+    let run_after = prism(&["run", "app/main.prism"], &directory);
+    assert_eq!(before.status.code(), Some(0), "{}", stderr(&before));
+    assert_eq!(stdout(&before), stdout(&after));
+    assert_eq!(stdout(&run_before), "1\n", "{}", stderr(&run_before));
+    assert_eq!(stdout(&run_after), "2\n", "{}", stderr(&run_after));
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// compilation-and-abi: "A generic body calls private helpers": the instance calls the helper
+/// and the other instance through their slots.
+#[test]
+fn a_generic_body_calls_private_helpers() {
+    let directory = box_workspace(
+        "private_helpers",
+        "fun helper(n: Int): Int = n + 1\n\
+         fun <T> inner(x: T): T = x\n\
+         public fun <T> outer(x: T, n: Int): Int { val y = inner(x); return helper(n) }\n",
+        "fun main() { println(outer(\"a\", 1)) }\n",
+    );
+    let dump = prism(&["dump-clif", "--instances", "app/main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let outer = function_ir(&dump, "lib/box::outer<String>");
+    assert!(
+        calls_through_slot(outer, "lib/box::helper#slot"),
+        "{}",
+        outer
+    );
+    assert!(
+        calls_through_slot(outer, "lib/box::inner<String>#slot"),
+        "{}",
+        outer
+    );
+    let run = prism(
+        &["run", "--check-allocations", "app/main.prism"],
+        &directory,
+    );
+    assert_eq!(stdout(&run), "2\n", "{}", stderr(&run));
+    fs::remove_dir_all(&directory).ok();
+}

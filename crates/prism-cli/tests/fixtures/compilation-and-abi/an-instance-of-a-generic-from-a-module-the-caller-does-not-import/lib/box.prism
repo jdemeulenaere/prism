@@ -1,0 +1,3 @@
+package lib
+import /lib/util
+public fun <T : Copy> first(x: T): T = twin(x).a

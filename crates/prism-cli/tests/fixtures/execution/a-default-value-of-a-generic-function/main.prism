@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun <T : Copy> pad(x: T, y: T = x): T = y
+fun main() {
+    println(pad(1))
+    println(pad(true, false))
+    println(pad('c'))
+}

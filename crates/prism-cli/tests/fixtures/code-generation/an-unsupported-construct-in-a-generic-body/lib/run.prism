@@ -1,0 +1,5 @@
+package lib
+public fun <T> later(x: T): Int {
+    val f = { 1 }
+    return 1
+}

@@ -1,0 +1,11 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+import /lib/box
+import /lib/user
+fun main() {
+    val u = keep(User("a"))
+    println(Box(1).get())
+    println(pad(2))
+}

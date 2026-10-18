@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+struct Pair<A, B>(val a: A, val b: B)
+struct Box<T>(val v: T)
+fun <A, B> swap(p: Pair<A, B>): Pair<B, A> {
+    val (a, b) = p
+    return Pair(b, a)
+}
+fun <T> boxed(x: T): Box<T> = Box(x)
+fun <T> Box<T>.get(): &T = &v
+fun <A, B> nest(a: A, b: B): Box<Pair<Box<A>, B>> = boxed(Pair(boxed(a), b))
+fun main() {
+    val p = swap(Pair("x" + "y", 1))
+    println(p.a)
+    println(p.b)
+    val deep = nest(nest("in" + "ner", 2), Pair("out", true))
+    println(deep.get().a.get().get().a.get())
+    println(deep.v.b.a)
+    val twice = swap(swap(Pair(Box("a"), Box(Pair(1, "b")))))
+    println(twice.b.v.b)
+}

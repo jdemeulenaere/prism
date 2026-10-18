@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+struct User : Clone { val name: String, val age: Int }
+struct Tagged<T>(val tag: String, val value: T)
+fun <T> tagged(tag: &String, value: T): Tagged<T> = Tagged("<$tag>", value)
+fun <T> label(t: &Tagged<T>, n: Int): String = "${t.tag} #$n of ${t.tag.length}"
+fun <T : Clone> keepBoth(t: &Tagged<T>): Tagged<T> = Tagged(t.tag + "!", t.value.clone())
+fun main() {
+    val name = "ada"
+    val t = tagged(&name, User("ada " + "lovelace", 36))
+    println(label(&t, 1))
+    val copy = keepBoth(&t)
+    println("${copy.tag}: ${copy.value.name} is ${copy.value.age}")
+    val n = tagged(&"n", 2.5)
+    println(label(&n, 2))
+    println("${n.value} and ${tagged(&"c", 'x').value}")
+}

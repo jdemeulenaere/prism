@@ -1,0 +1,22 @@
+fun main::id<Int>(_1: Int): Int @2:1
+  local _0: Int (return)
+  local _1 x: Int (argument)
+  bb0:
+    _0 = move _1 @2:23
+    return @2:1
+fun main::twice<Int>(_1: Int): Int @3:1
+  local _0: Int (return)
+  local _1 x: Int (argument)
+  local _2: Int (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _2 @3:29
+    storage_live _3 @3:32
+    _3 = move _1 @3:32
+    _2 = call main::id<Int>(move _3) -> bb1 @3:29
+  bb1:
+    _0 = call main::id<Int>(move _2) -> bb2 @3:26
+  bb2:
+    storage_dead _3 @3:26
+    storage_dead _2 @3:26
+    return @3:1

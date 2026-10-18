@@ -1,0 +1,2 @@
+package lib
+public fun <T> keep(x: T): T = x

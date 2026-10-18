@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+struct User : Clone { val name: String }
+struct Box<T>(val v: T)
+fun <T> unwrap(b: Box<T>): T {
+    val (v) = b
+    return v
+}
+fun main() {
+    val u = unwrap(Box(User("ada")))
+    println(u.name)
+    val c = unwrap(Box(Box(u.clone())))
+    println(c.v.name)
+}

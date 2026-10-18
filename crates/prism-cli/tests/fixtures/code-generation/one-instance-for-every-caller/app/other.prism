@@ -1,0 +1,3 @@
+package app
+import /lib/box
+public fun other(): Int = keep(2)

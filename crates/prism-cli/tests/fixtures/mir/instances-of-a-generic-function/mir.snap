@@ -1,0 +1,24 @@
+module main
+fun <T> main::discard(_1: T): Unit @2:1
+  local _0: Unit (return)
+  local _1 x: T (argument)
+  bb0:
+    _0 = const () @2:23
+    drop _1 -> bb1 @2:1
+  bb1:
+    return @2:1
+fun main::main(): Unit @3:1
+  local _0: Unit (return)
+  local _1: Unit (temporary)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _1 @4:5
+    _1 = call main::discard<Int>(const 1) -> bb1 @4:5
+  bb1:
+    storage_dead _1 @4:5
+    storage_live _2 @5:5
+    _2 = call main::discard<String>(const "a") -> bb2 @5:5
+  bb2:
+    storage_dead _2 @5:5
+    _0 = const () @3:12
+    return @3:1

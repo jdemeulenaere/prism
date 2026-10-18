@@ -1,0 +1,6 @@
+// expect: ok
+// entry: app/main.prism
+// run: 101
+package app
+import /lib/math
+fun main() { println(ratio("x", 1, 0)) }

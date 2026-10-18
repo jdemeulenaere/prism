@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Pair<A, B>(val a: A, val b: B)
+fun <T> pick(a: T, b: T, first: Bool): T = if (first) a else b
+fun <T> discard(x: T) {}
+fun <T : Clone> both(x: &T): Pair<T, T> = Pair(x.clone(), x.clone())
+fun main() {
+    println(pick("a", "b", false))
+    discard("c" + "d")
+    val p = both(&("e" + "f"))
+    println(p.a + p.b)
+}

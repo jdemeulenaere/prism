@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun <T> wrap(a: T): T? = a
+fun <T> isNull(a: T?): Bool = a == null
+fun main() {
+    println(isNull(wrap<Int?>(null)))
+    println(isNull(wrap<Int?>(1)))
+    println(isNull<Int>(null))
+    println(wrap<String?>("s") ?: "none")
+}

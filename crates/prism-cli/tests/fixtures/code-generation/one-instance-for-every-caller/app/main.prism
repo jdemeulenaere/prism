@@ -1,0 +1,10 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+import /lib/box
+import /app/other
+fun main() {
+    println(keep(1))
+    println(other())
+}
