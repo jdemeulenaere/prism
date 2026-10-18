@@ -92,7 +92,7 @@ A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback o
 - **WHEN** `compose fun Leaf() { }`, `compose fun E(stop: Bool) { if (stop) { Leaf(); return }; Leaf() }`, `fun screen(stop: Bool): compose () -> Unit = { E(stop) }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); println("done") }` run
 - **THEN** stdout is `done`, and the exit status is 0
 
-### Requirement: Remembering a Value
+### Requirement: Remembering a Value in a Composable
 `remember(calculation)` MUST be a composable that runs `calculation` the first time its position in its group is composed, keeps the result in a slot, and returns a copy of the kept value on every later pass without running `calculation`. Its type parameter MUST be bounded by `Copy`, and `calculation` MUST NOT be a composable context.
 
 #### Scenario: Remembered value survives recomposition
