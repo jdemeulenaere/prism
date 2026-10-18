@@ -71,7 +71,7 @@ Formatting the output of the formatter MUST return it unchanged.
 - **THEN** the result is identical to its input
 
 ### Requirement: Indentation and Line Width
-The formatter MUST indent with four spaces per level, never with tabs, and MUST keep lines within 100 characters wherever a break that keeps the parse exists; a line that cannot be broken (a long string literal or name) MAY exceed it. Every part of the layout that fits on the current line MUST stay on it.
+The formatter MUST indent with four spaces per level, never with tabs, and MUST keep lines within 100 characters (Unicode scalar values, so a wide character counts as one) wherever the layout rules of this spec provide a break; a line they cannot break MAY exceed it, such as a long string literal or name, or a chain of field accesses, which breaks only before a call ("Breaking Chains and Operators"). Every part of the layout that fits on the current line MUST stay on it.
 
 #### Scenario: Short call stays on one line
 - **WHEN** formatting `foo(\n  a,\n  b,\n)` as a statement
