@@ -243,6 +243,21 @@ A call of a generic function or extension MUST record its type arguments, writte
 - **WHEN** `fun <T> id(x: T): T = x` and `fun <U> twice(x: U): U = id(id(x))` are declared
 - **THEN** both calls of `main::id` in `twice` record the type argument `U`, the type parameter of `twice`
 
+### Requirement: Compound Assignments Are Statements Over Places
+A compound assignment MUST be a statement recording its arithmetic operator, its target and its value. The target MUST be a place that appears once, read in place and then written; the value MUST be an operator operand of the target's type, read in place when it is a place and never consumed.
+
+#### Scenario: Compound assignment of a local
+- **WHEN** a body of `fun f(k: &Int)` runs `var n = 1; n += k`
+- **THEN** the second statement is a compound assignment `+` whose target is the binding `n` and whose value is the dereference of the binding `k`, read in place
+
+#### Scenario: Compound assignment through a reference
+- **WHEN** `struct Counter { var count: Int }` is declared and `fun f(c: &mut Counter) { c.count *= 2 }` is checked
+- **THEN** the statement is a compound assignment `*` whose target is field 0 of the dereference of the binding `c`, and whose value is the literal `2`
+
+#### Scenario: String compound assignment reads its value in place
+- **WHEN** `fun f(t: String) { var s = "a"; s += t }` is checked
+- **THEN** the compound assignment `+` has the binding `s` as its target and the binding `t` itself as its value, neither moved nor copied
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -265,3 +280,7 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 
 - **One polymorphic tree per declaration; calls record declared types and type arguments.** Generic items record their type parameters, and a call or construction records its type arguments with the callee's declared parameter (or field) types, the slot type being their substitution (`Call::parameter_type`). Recording the declared types keeps calls self-describing, lets monomorphization substitute only the caller's type arguments, and lets the borrow checker see which slots are generic. Rejected: recording only substituted types (the generic slots disappear) or both lists (a consistency rule).
 - **Dumps print generics as declared:** `fun <T : Copy> main::wrap`, `call main::id<Int>`, `Box<Int>`, and a generic type's marker parameters after its marker (`struct main::Box<T> : Copy if T`), for the file's own types and imported ones alike.
+
+Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Compound assignment is its own statement over a place.** `CompoundAssign { operator, target, value }` keeps the target once, read in place and written, and the operator visible to a backend that wants to append in place. Rejected: desugaring to `Assign { target, value: Binary(op, target', v) }`, which the single-parent rule forbids sharing and a copy would evaluate twice, and a "same place as the target" node every consumer would have to understand anyway.

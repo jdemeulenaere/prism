@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Compound Assignments Read Then Write Their Target
-A compound assignment MUST evaluate its target's place once, then read the place's current value (a copy for a `Copy` type, a shared operator borrow otherwise), then evaluate the value, then apply the operator. A `Copy` result MUST be written to the place directly; any other result MUST be computed into a temporary, after which the old value is dropped and the temporary moved in. When the value may re-point a reference the place is reached through (it assigns or mutably borrows the binding or field holding it), the place MUST first be pinned by a mutable borrow of the referent of its last dereference, and read and written through that borrow. Both the read and the write MUST be at the target's span.
+A compound assignment MUST evaluate its target's place once, then read the place's current value (a copy for a `Copy` type, a shared operator borrow otherwise), then evaluate the value, then apply the operator. A `Copy` result MUST be written to the place directly; any other result MUST be computed into a temporary, after which the old value is dropped and the temporary moved in. Both the read and the write MUST be at the target's span.
 
 #### Scenario: Compound assignment of an integer local
 - **WHEN** `fun f(): Int { var n = 1; n += 2; return n }` is lowered
@@ -17,10 +17,13 @@ A compound assignment MUST evaluate its target's place once, then read the place
 - **WHEN** `fun pick(a: &mut Int, b: &mut Int): &mut Int = a` is declared and `fun f() { var a = 1; var b = 2; *pick(&mut a, &mut b) += 1 }` is lowered
 - **THEN** `pick` is called once, and the dereference of its result is both read and written
 
-#### Scenario: The target's reference is read before the value re-points it
-- **WHEN** `fun f(): Int { var a = 1; var b = 10; var r = &mut a; *r += if (b > 0) { r = &mut b; 1 } else 0; return a }` is lowered
-- **THEN** a mutable borrow of the referent of `r` is taken before the value is evaluated, and the sum is written through that borrow rather than through `r`, so it is `a` that is incremented
-
 #### Scenario: String compound assignment drops the old value
 - **WHEN** `fun f(t: String): String { var s = "a"; s += t; return s }` is lowered
 - **THEN** a temporary is assigned the sum of a shared operator borrow of `s` and a shared operator borrow of `t`, then `s` is dropped and assigned a move of the temporary, and `t` is not moved
+
+### Requirement: Compound Assignment Targets Are Pinned Before a Re-pointing Value
+When the value of a compound assignment may re-point a reference that its target is reached through, because it assigns or mutably borrows the binding or field holding that reference, the target's place MUST first be pinned by a mutable borrow of the referent of its last dereference, and then read and written through that borrow.
+
+#### Scenario: The target's reference is read before the value re-points it
+- **WHEN** `fun f(): Int { var a = 1; var b = 10; var r = &mut a; *r += if (b > 0) { r = &mut b; 1 } else 0; return a }` is lowered
+- **THEN** a mutable borrow of the referent of `r` is taken before the value is evaluated, and the sum is written through that borrow rather than through `r`, so it is `a` that is incremented

@@ -345,6 +345,32 @@ A generic declaration's body, and its default values and closures, MUST be lower
 - **WHEN** `fun <T> pass(x: T): T = x` and `fun <T> pick(a: T, b: T, c: Bool): T = if (c) a else b` are lowered and elaborated
 - **THEN** `pass` drops nothing, since `x` is moved into the return place, and `pick` drops the argument it did not return, under a drop flag or on each branch
 
+### Requirement: Compound Assignments Read Then Write Their Target
+A compound assignment MUST evaluate its target's place once, then read the place's current value (a copy for a `Copy` type, a shared operator borrow otherwise), then evaluate the value, then apply the operator. A `Copy` result MUST be written to the place directly; any other result MUST be computed into a temporary, after which the old value is dropped and the temporary moved in. Both the read and the write MUST be at the target's span.
+
+#### Scenario: Compound assignment of an integer local
+- **WHEN** `fun f(): Int { var n = 1; n += 2; return n }` is lowered
+- **THEN** `n` is assigned the sum of a copy of `n` and the constant `2`, with no temporary, at the span of `n`
+
+#### Scenario: The target is read before the value is evaluated
+- **WHEN** `fun inc(r: &mut Int): Int { *r += 1; return r }` is declared and `fun f(): Int { var n = 1; n += inc(&mut n); return n }` is lowered
+- **THEN** `n` is copied into a temporary before `inc` is called, and `n` is then assigned the sum of that temporary and the call's result
+
+#### Scenario: The target's place is evaluated once
+- **WHEN** `fun pick(a: &mut Int, b: &mut Int): &mut Int = a` is declared and `fun f() { var a = 1; var b = 2; *pick(&mut a, &mut b) += 1 }` is lowered
+- **THEN** `pick` is called once, and the dereference of its result is both read and written
+
+#### Scenario: String compound assignment drops the old value
+- **WHEN** `fun f(t: String): String { var s = "a"; s += t; return s }` is lowered
+- **THEN** a temporary is assigned the sum of a shared operator borrow of `s` and a shared operator borrow of `t`, then `s` is dropped and assigned a move of the temporary, and `t` is not moved
+
+### Requirement: Compound Assignment Targets Are Pinned Before a Re-pointing Value
+When the value of a compound assignment may re-point a reference that its target is reached through, because it assigns or mutably borrows the binding or field holding that reference, the target's place MUST first be pinned by a mutable borrow of the referent of its last dereference, and then read and written through that borrow.
+
+#### Scenario: The target's reference is read before the value re-points it
+- **WHEN** `fun f(): Int { var a = 1; var b = 10; var r = &mut a; *r += if (b > 0) { r = &mut b; 1 } else 0; return a }` is lowered
+- **THEN** a mutable borrow of the referent of `r` is taken before the value is evaluated, and the sum is written through that borrow rather than through `r`, so it is `a` that is incremented
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -390,3 +416,8 @@ Decisions from `borrowck-elision`:
 Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Generic bodies are lowered once, and drops of type parameters stay in.** A body records its owner's type parameters, its default generators and closures included, and a value of a non-`Copy` type parameter "maybe needs drop": it is elaborated as usual and monomorphization resolves it to the instance's drop glue or removes it. A `T : Copy` value is never dropped. Calls, default generator calls and aggregates (`struct m::Box<T>(...)`, `variant m::Opt.Some<T>(...)`) record their type arguments, so a body stays self-describing and the validator checks operands against substituted types. Rejected: reading aggregate arguments from the assigned place's type, which hides them from anything reading the rvalue alone.
+
+Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Compound assignment lowers to existing statements.** The place is evaluated once, then read: a `Copy` value is copied (stabilized into a temporary when the value may write it, as `ordered_operands` does), anything else borrowed with the `Operator` origin; then `place = op(old, value)` at the target's span (`_1 = copy _1 + const 2`), or for a type with drop a temporary, a drop of the place and a move. rustc also lowers primitive compound assignment this way. Rejected: a MIR compound-assignment statement every borrow-checker analysis and the backend would have to learn.
+- **A target reached through a reference the value re-points is pinned first** (from the review). A place such as `(*_3)` re-reads `_3` at each use, so `*r += if (c) { r = &mut b; 1 } else 0` would read through the old `r` and write through the new one. When the value assigns or mutably borrows a place holding a pointer the target is reached through (a syntactic walk, closures included), the target is pinned with `_t = &mut (*_3)` and read and written as `(*_t)`; re-pointing kills the loans through `r`, so the pin stays valid. Pinning only then keeps `*r += inc(r)` accepted. Rejected: pinning whenever the value may write; evaluating dereferenced targets after the value.

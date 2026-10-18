@@ -412,7 +412,7 @@ A block or closure body MUST parse into a sequence of statements followed by an 
 - **THEN** the body has no statements and the tail `1`
 
 ### Requirement: Assignment Is a Statement
-An assignment MUST be a statement, never an expression. It MAY appear as a statement in a block or closure body, or as the unbraced body of an `if`/`else` branch, a `when` branch, or a `while` or `for` loop, where it forms a block with no tail. Anywhere else the parser MUST report `E2001`.
+An assignment, with `=` or a compound operator such as `+=`, MUST be a statement, never an expression. It MAY appear as a statement in a block or closure body, or as the unbraced body of an `if`/`else` branch, a `when` branch, or a `while` or `for` loop, where it forms a block with no tail. Anywhere else the parser MUST report `E2001`.
 
 #### Scenario: Assignments as unbraced branch bodies
 - **WHEN** parsing `if (c) x = 1 else x = 2` and `when (n) { 0 -> x = 3, else -> x = 4 }` inside a function body
@@ -421,6 +421,48 @@ An assignment MUST be a statement, never an expression. It MAY appear as a state
 #### Scenario: Parenthesized assignment as a value rejected
 - **WHEN** parsing `fun f() { var x = 0; val y = (x = 1) }` or `fun f() { var x = 0; g((x = 1)) }`
 - **THEN** the parser reports `E2001`, while `g(x = 1)` still parses as a named argument
+
+### Requirement: Compound Assignment
+A statement MAY be a compound assignment `target op= value`, where `op=` is one of `+=`, `-=`, `*=`, `/=` and `%=`, each a single token. Its target MUST be one that `=` accepts: a variable, a `.` field access, an index expression or a write through `*`. Any other target, a chained assignment, and a compound operator in expression position MUST be rejected with `E2001`. A newline before the operator MUST end the previous expression.
+
+#### Scenario: Compound assignment statements
+- **WHEN** parsing the statements `x += 1`, `x -= 1`, `x *= 2`, `x /= 2`, `x %= 2`, `u.count += 1`, `xs[i] += 1`, `*r += 1` and `count += 1` inside a function body
+- **THEN** each parses as a compound assignment of its operator, with the written target and the value as its right-hand side
+
+#### Scenario: Compound value binds looser than every operator
+- **WHEN** parsing `x += a ?: b * c` and `*r.n += 1`
+- **THEN** the value of the first is the whole expression `a ?: (b * c)`, and the target of the second is `*` applied to `r.n`
+
+#### Scenario: Compound assignment in an unbraced body
+- **WHEN** parsing `if (c) x += 1 else x -= 1`, the `when` branch `0 -> x += 1` and `while (c) x *= 2`
+- **THEN** each body is a block holding the compound assignment, with no tail
+
+#### Scenario: Invalid compound assignment target rejected
+- **WHEN** parsing `a + b += 1`, `1 += 2`, `g() += 1` or `a?.b += 1`
+- **THEN** the parser reports `E2001` at the target, as it does for `=`
+
+#### Scenario: Compound assignment as a value rejected
+- **WHEN** parsing `fun f() { var x = 0; val y = (x += 1) }`, `fun f() { var x = 0; g(x += 1) }`, `fun f() { var x = 0; val y = x += 1 }` or `fun f() { var a = 0; var b = 0; a += b += 1 }`
+- **THEN** the parser reports `E2001` at the `+=` inside the parentheses, in the argument, after `val y = x`, and at the second `+=`, saying that an assignment is a statement or that chained assignments are not allowed
+
+#### Scenario: A newline before a compound operator ends the expression
+- **WHEN** parsing `fun f() {\nvar x = 0\nx\n+= 1\n}`
+- **THEN** the parser reports `E2001` at `+=`, because the statement `x` ends at the newline and no expression starts with `+=`
+
+#### Scenario: Compound operators are single tokens
+- **WHEN** tokenizing `a+=b`, `a-=b`, `a*=b`, `a/=b` and `a%=b`, and `a = -b`, `a->b`, `a == b` and `a /* c */ = b`
+- **THEN** each of the first five yields an identifier, one compound operator token and an identifier, and the others keep their existing tokens
+
+### Requirement: No Increment or Decrement Operators
+The lexer MUST read `++` and `--` as single tokens, and the parser MUST reject either anywhere with `E2001`, with help suggesting the compound assignment `x += 1` or `x -= 1`. A double negation or the subtraction of a negation MUST be written with a space or parentheses.
+
+#### Scenario: Increment and decrement rejected
+- **WHEN** parsing the statements `x++`, `x--`, `++x` and `--x` inside a function body
+- **THEN** the parser reports `E2001` at the `++` or `--`, with help suggesting `x += 1` or `x -= 1`
+
+#### Scenario: Double minus needs a space
+- **WHEN** parsing `fun f(a: Int, b: Int): Int = a--b`, `fun g(a: Int, b: Int): Int = a - -b` and `fun h(x: Int): Int = -(-x)`
+- **THEN** the parser reports `E2001` at `--` in `f`, and accepts `g` and `h`
 
 ### Requirement: Half-Open Range Operator
 The lexer MUST read `..<` as one token, and the parser MUST give it the precedence of `..`. `a..<b` denotes the range from `a` up to but excluding `b`. A newline before `..<` ends the expression, as for `..`.
@@ -634,3 +676,9 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 - **Type parameters go between `fun` and the name or receiver** (`fun <T> id`, `fun <T> Box<T>.get()`), as in Kotlin, because a generic receiver mentions them and must not read `T` before declaring it. Structs and enums keep `struct Box<T>`. The old `fun id<T>` placement is `E2001` with a hint. `Copy` and `Clone` cannot name a type parameter, so `<T : Copy, Clone>` is a rejected second bound rather than a parameter named `Clone`. Rejected: Rust/Swift's `fun id<T>` plus a second placement for extensions.
 - **Call type arguments use Kotlin's syntax with a deterministic rule.** After an identifier or member name, `<` is tried as a type-argument list, kept when the tokens up to the matching `>` parse as types, the list closes with `>` (never the `>` of `>=`), and a `(` or `{` follows on the same line; otherwise the parser rewinds and `<` is a comparison. Comparisons are non-associative, as in Kotlin's grammar (`a < b < c` never typechecked), which leaves `g(a < b, c > (d))` as the only double reading; it is a generic call, as in Kotlin and C#, the way `else` binds to the nearest `if`. Rejected: Rust's turbofish (foreign to `mutableStateOf<String?>(null)`, and it takes `::` from method references), whitespace-sensitive `<`, and name-directed parsing, which would make the parser depend on the type checker.
 - **A receiver may carry type arguments, but not be a bare type parameter or `Heap<...>`.** `fun <T> T.also()` would make every extension lookup generic, and a `Heap` receiver competes with looking through `Heap` layers.
+
+Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Compound assignment is a statement with the targets of `=`.** `+=`, `-=`, `*=`, `/=` and `%=` are single tokens, accepted wherever `=` is, with the same target check, same-line rule and chained-assignment error; in expression position they reach the "an assignment is a statement" error, because a compound assignment is an assignment. The AST has its own `CompoundAssign` statement rather than an optional operator on `Assign`, so every consumer (type checker, ABI body hash, formatter) must decide what it means instead of silently treating it as `=`.
+- **`++` and `--` are reserved tokens that are always rejected.** The lexer reads them as Kotlin's does and the parser reports `E2001` with help suggesting `x += 1`, in prefix and postfix position. Kotlin's `++` expressions were rejected because their value (old or new, by position) makes an assignment an expression, against "Assignment Is a Statement"; a statement-only `x++` because it still invites `val y = x++` (Swift removed both, SE-0004); leaving the lexer alone because `a--b` would keep meaning `a - (-b)`, a reading Kotlin does not have. **Breaking:** `a--b` and `--x` need a space or parentheses. Reserving the tokens keeps adding the operators later non-breaking.
+- **Bitwise operators are deferred.** Their spelling has real ambiguity costs (`&` is the borrow operator and `&&x` is two borrows, `|` is a lexer error, `>>` closes nested type arguments) and depends on sized integer types; Kotlin uses named infix functions (`and`, `shl`). A `bitwise-operators` change decides both and extends the compound token set (ROADMAP).

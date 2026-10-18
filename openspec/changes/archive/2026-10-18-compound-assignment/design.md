@@ -64,7 +64,7 @@ Rejected: desugaring in the type checker to `Assign { target, value: Binary(op, 
 - **`Copy` type** (`Int`, `Float`): the left operand is `copy place`, stabilized into a temporary when the value may write (`may_write`), as `ordered_operands` does. The right operand is the value's operand. Then `place = op(left, right)`, written at the target's span: `_1 = copy _1 + const 2`.
 - **Other types** (`String`): a shared `Operator` borrow of the place, then the value's borrow (`comparison_operand`), then `tmp = op(borrow, borrow)`, a drop of the place, and `place = move tmp` at the target's span.
 
-- **A value that may re-point the target's reference** (`*r += if (c) { r = &mut b; 1 } else 0`, found in review): a MIR place such as `(*_3)` re-reads the pointer `_3` at each use, so reading before the value and writing after it would read `a` and write `b`. When the value assigns or mutably borrows a place holding a pointer the target is reached through (`may_repoint`, a syntactic walk of the value, closures included), the place is first pinned: `_t = &mut (*_3)`, then `(*_t)` is read and written. Re-pointing `r` kills the loans through it, so the pinned borrow stays valid; a value that both re-points `r` and uses it before (a closure capturing `r`) is rejected as a second mutable borrow, as in Rust. Pinning only in that case keeps `*r += inc(r)` accepted.
+- **A value that may re-point the target's reference**: the place is pinned first (D11).
 
 The whole statement runs in its own temporary scope, like `Assign`. The borrow checker then sees a read of the place followed by a write, with no new rule: a live borrow makes the write `E5004` (D6), a closure's write to a capture makes it mutable, and a moved `String` target is `E5001` at its borrow.
 
@@ -97,6 +97,12 @@ The `lexer-parser` item grouped bitwise operators with compound assignment, but 
 ### D10. Spec placement (autonomous)
 
 No new capability: the grammar goes to `syntax`, the typing to `type-system` (next to the operator rules), the tree shape to `typed-tree`, the lowering to `mir` and the borrow-checker view to `references`, where conflicts and captures live. A `compound-assignment` capability was rejected because it would split each of these subjects across two specs.
+
+### D11. Review: a target reached through a reference the value re-points is pinned (autonomous)
+
+A MIR place such as `(*_3)` re-reads its pointer `_3` at each use, so with D5 alone `*r += if (c) { r = &mut b; 1 } else 0` read `a` through the old `r` and wrote `b` through the new one, against D2's "the place is evaluated once". When the value may re-point a reference the target is reached through, which `may_repoint` decides syntactically (the value, closures in it included, assigns or mutably borrows a place that is a prefix of the pointer of one of the target's dereferences: `r` for `*r` or `r.n`, `c` or `c.r` for `c.r.n`), the lowering pins the place: `_t = &mut (*_3)`, then `(*_t)` is read and written. Re-pointing `r` kills the loans through it, so the pinned borrow stays valid. A value that uses `r` before re-pointing it (a closure capturing `r`, `inc(r)` in a branch that also re-points) is then rejected as a second mutable borrow, as Rust rejects the equivalent explicit code.
+
+Rejected: pinning every target with a dereference whenever the value may write, which would reject `*r += inc(r)` (a second mutable borrow of `*r`) for no gain; evaluating the place after the value for dereferenced targets, which would give compound assignment two evaluation orders; rejecting a re-pointing value outright, which needs a new diagnostic for code whose meaning D2 already fixes.
 
 ## Risks / Trade-offs
 

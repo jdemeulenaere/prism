@@ -526,6 +526,21 @@ An `E5008` diagnostic MUST point at where the borrow is returned, name the local
 - **WHEN** `struct Team { var lead: String }` is declared and `prism check` runs on `fun Team.other(o: &String): &String = o`
 - **THEN** it reports `error[E5009]: method 'other' cannot return a borrow derived from parameter 'o'` at `o` in the body labelled "returned here", with a related location at the parameter `o` labelled "'o' is a parameter here", and a note that a method's returned borrow is tied to its receiver only (elision rule 2)
 
+### Requirement: Compound Assignments Read and Write Their Target
+The borrow checker MUST treat a compound assignment as a read of its target followed by a write of it. A live borrow of an overlapping place, shared or mutable, MUST be reported once, as `E5004` at the target. A closure whose body compound-assigns a captured variable or one of its fields MUST capture it mutably. A target that may have been moved MUST be rejected with `E5001`.
+
+#### Scenario: Compound assignment while borrowed
+- **WHEN** `fun print(n: &Int) {}` is declared and a body runs `var x = 1; val r = &x; x += 1; print(r)`, or `var y = 1; val m = &mut y; y += 1; print(m)`, or `var z = 1; val k = &z; print(k); z += 1`
+- **THEN** the borrow checker emits `E5004` at `x` in `x += 1`, a single `E5004` at `y` in `y += 1`, not also an `E5003` for its read, and accepts the last, whose borrow ends at `print(k)`
+
+#### Scenario: A closure compound-assigning a capture borrows it mutably
+- **WHEN** `fun run(f: () -> Int): Int = f()` and `fun print(n: &Int) {}` are declared and a body runs `var count = 0; val f = { count += 1; count }; print(count); run(f)`, or `var total = 0; run { total += 1; total }; print(total)`
+- **THEN** the borrow checker emits `E5003` at `count` in `print(count)`, and accepts the second, whose closure's borrow ends when `run` returns
+
+#### Scenario: Compound assignment to a moved string
+- **WHEN** `fun take(s: String) {}` is declared and `fun f() { var s = "a"; take(s); s += "b" }` is checked
+- **THEN** the borrow checker emits `E5001` at `s` in `s += "b"`, with a related location at the `s` passed to `take`
+
 ## Design Rationale
 Decisions from `reference-access` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change, 2026-10-17):
 
@@ -577,3 +592,7 @@ Decisions from `borrowck-elision` (the four rules agreed with the user in the bo
 Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **A capturing closure or function input cannot be passed to a generic slot** (`E5007`, "passed to a generic parameter here"). A parameter whose declared type has a type parameter outside a function type may be stored, returned or kept by the generic body, which is checked without knowing the instantiation. A closure passed for `calc: () -> T` is a function-typed parameter, so `remember { count }` stays allowed. This is the second half of the borrow-free rule of `generics`; owning, move-capturing closures (`closures`) will pass.
+
+Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **One conflict per compound assignment.** Under a live mutable borrow, `x += 1` reads and writes `x` at the same span; the existing rule that, of the accesses at one span conflicting with one loan, only the last is reported gives the write's `E5004` alone, whatever the borrow's kind. `x = x + 1` keeps reporting both, since the user wrote the read and the write separately. Rejected: putting the read at the operator's span so both are reported; reporting the read's `E5003`, which would not apply to a shared borrow.
