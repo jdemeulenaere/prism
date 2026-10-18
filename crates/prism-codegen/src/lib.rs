@@ -2,6 +2,7 @@
 //! code in memory with Cranelift and links the files of a program through a function table (the
 //! `code-generation` spec; D1 of `codegen-core`).
 
+pub mod artifact;
 pub mod dump;
 pub mod entry;
 mod equality;
@@ -24,6 +25,7 @@ mod lowering_tests;
 #[cfg(test)]
 mod test_support;
 
+pub use artifact::UnitArtifact;
 pub use dump::{dump_file, dump_instances, DumpError, InstanceDumpError};
 pub use entry::find_main;
 pub use error::{BackendError, CodegenError, CodegenErrorKind};
