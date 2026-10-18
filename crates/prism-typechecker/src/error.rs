@@ -32,7 +32,8 @@ pub enum TypeError {
 
     /// E4002: An operator that does not apply to its operands' types: the operator of a
     /// compound assignment (`s -= "a"`), with the target's type on the left (D7 of
-    /// `compound-assignment`), or an ordering (`false < true`). `operator` is written as in the
+    /// `compound-assignment`), an ordering (`false < true`), or any operator but a `null` test
+    /// applied to a value of a type parameter (`a == b` for `a: T`, D5 of `generics`). `operator` is written as in the
     /// source (`-=`, `<`).
     OperatorMismatch {
         operator: String,

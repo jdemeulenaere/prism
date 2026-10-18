@@ -42,6 +42,10 @@ In a generic body, a value of an unbounded type parameter `T` MUST be neither `C
 - **WHEN** `fun <T> c(x: &T): T = x.clone()` or `fun <T> same(a: &T, b: &T): Bool = a == b` is checked
 - **THEN** the type checker emits `E4018` for `c`, with help suggesting the bound `<T : Clone>`, and `E4002` for `same`
 
+#### Scenario: Comparing type-parameter values names the operator
+- **WHEN** `fun <T> same(a: &T, b: &T): Bool = a == b` and `fun <T> differ(a: &T, b: &T): Bool = a != b` are checked
+- **THEN** the type checker emits `E4002` for each, saying that operator `==` (or `!=`) cannot be applied to `T` and `T`, with help saying that type parameters have no equality until traits exist
+
 #### Scenario: Moving out of a borrowed type parameter rejected
 - **WHEN** `fun <T> get(x: &T): T = x` is checked
 - **THEN** the type checker emits `E4017`, because only a `Copy` value is copied out of a borrow

@@ -1,0 +1,10 @@
+error[E4002]: operator '==' cannot be applied to 'T' and 'T'
+  --> main.prism:3:36
+    3 | fun <T> same(a: &T, b: &T): Bool = a == b
+      |                                    ^
+   = help: type parameters have no equality, neither '==' nor '!=', with or without a bound, until traits exist
+error[E4002]: operator '!=' cannot be applied to 'T' and 'T'
+  --> main.prism:5:38
+    5 | fun <T> differ(a: &T, b: &T): Bool = a != b
+      |                                      ^
+   = help: type parameters have no equality, neither '==' nor '!=', with or without a bound, until traits exist

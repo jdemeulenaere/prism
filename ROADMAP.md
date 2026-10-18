@@ -288,7 +288,7 @@ Follow-ups of `monomorphization`:
 - [ ] Optimizing instances: drop flags and tests that substitution made redundant stay, and nothing is inlined; Tier 2 gets both from LLVM (D6, non-goal of the change).
 - [ ] `E6001` errors of instances are reported in symbol order (`later2<String>` before `later<Bool>`), not in source order; sort them by position within a file (found while reviewing the change).
 - [ ] Fix: a `?.` chain on a call result followed by `?.clone()` (`u()?.name?.clone()` for `fun u(): User?`) is `E4017`, with a help suggesting the same code; on a local (`c?.name?.clone()`) it is accepted (found while reviewing `monomorphization`; not specific to generics).
-- [ ] `a == b` on values of a type parameter reports "type mismatch: expected 'T', found 'T'" (`E4002`) before its help; name the missing equality in the message itself (found while reviewing `monomorphization`).
+- [x] `a == b` on values of a type parameter reports "type mismatch: expected 'T', found 'T'" (`E4002`) before its help; name the missing equality in the message itself (found while reviewing `monomorphization`). Done as a plain fix: `OperatorMismatch` names the operator and both types, with help saying type parameters have no equality, orderings or arithmetic until traits exist.
 
 Follow-ups of `closures`:
 - [ ] The borrow check of a body building many closures grows faster than linearly: 4096 closures in one body grow x6 per x4 in `borrow` (`many-closures` in `compile_timing.rs`), as `live-borrows` does (x5.3), since every capture's loan is live across the others in the loan flow; capture-mode inference itself is linear since the change (`first_mutable_uses`). Shares the fix of the dense dataflow states above (measured while applying `closures`).

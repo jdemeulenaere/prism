@@ -3495,14 +3495,23 @@ impl TypeChecker {
                     Type::Error
                 } else if let Some(ty) = arithmetic_result(op, &left_ty, &right_ty) {
                     ty
+                } else if let Some(help) = type_parameter_operator_help(op, &left_ty, &right_ty) {
+                    // The operator, not an operand, does not apply (D5 of `generics`).
+                    self.errors.push(TypeError::OperatorMismatch {
+                        operator: operator_text(op).to_string(),
+                        left: left_ty,
+                        right: right_ty,
+                        span,
+                        help: Some(help),
+                    });
+                    Type::Error
                 } else {
                     // Strict typing: no implicit widening (e.g. Int + Float rejected)
-                    let help = type_parameter_operator_help(&left_ty, &right_ty);
                     self.errors.push(TypeError::TypeMismatch {
                         expected: left_ty,
                         found: right_ty,
                         span,
-                        help,
+                        help: None,
                     });
                     Type::Error
                 };
@@ -3524,10 +3533,11 @@ impl TypeChecker {
                 let compares_parameters = left_ty.mentions_parameter_outside_functions()
                     || right_ty.mentions_parameter_outside_functions();
                 if compares_parameters && left_ty != null && right_ty != null {
-                    let help = type_parameter_operator_help(&left_ty, &right_ty);
-                    self.errors.push(TypeError::TypeMismatch {
-                        expected: left_ty,
-                        found: right_ty,
+                    let help = type_parameter_operator_help(op, &left_ty, &right_ty);
+                    self.errors.push(TypeError::OperatorMismatch {
+                        operator: operator_text(op).to_string(),
+                        left: left_ty,
+                        right: right_ty,
                         span,
                         help,
                     });
@@ -3567,7 +3577,7 @@ impl TypeChecker {
                 } else {
                     // Two `Bool`s or two `String`s must not read "expected 'Bool', found
                     // 'Bool'": the operator, not an operand, does not apply.
-                    let help = type_parameter_operator_help(&left_ty, &right_ty).or_else(|| {
+                    let help = type_parameter_operator_help(op, &left_ty, &right_ty).or_else(|| {
                         Some(format!(
                             "'{}' needs two operands that are both 'Int', both 'Float' or both 'Char'",
                             operator_text(op)
@@ -4057,7 +4067,7 @@ impl TypeChecker {
                     }
                 }
                 if checked && arithmetic_result(operator, &target_ty, &value_ty).is_none() {
-                    let help = type_parameter_operator_help(&target_ty, &value_ty)
+                    let help = type_parameter_operator_help(operator, &target_ty, &value_ty)
                         .or_else(|| Some(compound_operand_help(operator, &compound)));
                     self.errors.push(TypeError::OperatorMismatch {
                         operator: compound,
@@ -7742,7 +7752,16 @@ fn operator_text(op: BinaryOp) -> &'static str {
         BinaryOp::LtEq => "<=",
         BinaryOp::Gt => ">",
         BinaryOp::GtEq => ">=",
-        _ => unreachable!("only the ordering operators are reported by their text"),
+        BinaryOp::Eq => "==",
+        BinaryOp::NotEq => "!=",
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Mod => "%",
+        _ => unreachable!(
+            "only arithmetic, equality and ordering operators are reported by their text"
+        ),
     }
 }
 
@@ -8158,10 +8177,23 @@ fn closure_signature(declared: &Type) -> Option<(bool, Vec<Type>, Type)> {
     }
 }
 
-/// The help of an operator applied to a value of a type parameter (D5 of `generics`).
-fn type_parameter_operator_help(left: &Type, right: &Type) -> Option<String> {
-    (left.mentions_parameter_outside_functions() || right.mentions_parameter_outside_functions())
-        .then(|| "type parameters have no '==' or operators until traits exist".to_string())
+/// The help of the operator `op` applied to a value of a type parameter (D5 of `generics`):
+/// no bound gives a type parameter equality, orderings or arithmetic until traits exist.
+fn type_parameter_operator_help(op: BinaryOp, left: &Type, right: &Type) -> Option<String> {
+    if !(left.mentions_parameter_outside_functions()
+        || right.mentions_parameter_outside_functions())
+    {
+        return None;
+    }
+    let what = match op {
+        BinaryOp::Eq | BinaryOp::NotEq => "equality, neither '==' nor '!='",
+        BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => "orderings",
+        _ => "arithmetic operators",
+    };
+    Some(format!(
+        "type parameters have no {}, with or without a bound, until traits exist",
+        what
+    ))
 }
 
 /// Whether `name` is a built-in type name the lowering fixes, which takes no type arguments.
