@@ -154,6 +154,8 @@ impl Builder<'_> {
 
     /// `n ?: f`: the consumed nullable in a temporary, a switch on its tag, its payload moved or
     /// copied out where it is present, the fallback in its own scope where it is `null` (D8).
+    /// A left side that cannot be null, which the type checker accepts, is the value: it is
+    /// lowered alone and the fallback, which can never run, is not lowered.
     pub(super) fn lower_elvis(
         &mut self,
         destination: Option<&Place>,
@@ -162,6 +164,10 @@ impl Builder<'_> {
         ty: &Type,
         span: Span,
     ) {
+        if !self.is_nullable(nullable) {
+            self.expression_into(destination, nullable);
+            return;
+        }
         let destination = self.destination_or_temporary(destination, ty, span);
         let nullable_ty = self.expression(nullable).ty.clone();
         let temporary = self.new_temporary(nullable_ty.clone(), span);

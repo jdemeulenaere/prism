@@ -1,0 +1,2 @@
+// expect: ok
+fun h(s: String): String = s ?: "anon"

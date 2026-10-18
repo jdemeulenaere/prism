@@ -1,0 +1,12 @@
+module main
+fun main::g(): Int @2:1
+  local _0: Int (return)
+  bb0:
+    _0 = const 2 @2:16
+    return @2:1
+fun main::f(_1: Int): Int @3:1
+  local _0: Int (return)
+  local _1 a: Int (argument)
+  bb0:
+    _0 = copy _1 @3:22
+    return @3:1

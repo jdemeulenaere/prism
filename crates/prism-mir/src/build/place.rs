@@ -776,6 +776,10 @@ impl Builder<'_> {
                 ExpressionKind::When { branches, .. } if expression.ty != Type::Unit => {
                     pending.extend(branches.iter().rev().map(|branch| branch.body));
                 }
+                // A left side that cannot be null is the value; the fallback never runs.
+                ExpressionKind::Elvis { nullable, .. } if !self.is_nullable(*nullable) => {
+                    pending.push(*nullable)
+                }
                 ExpressionKind::Elvis { fallback, .. } => pending.push(*fallback),
                 ExpressionKind::Block {
                     tail: Some(tail), ..
@@ -847,6 +851,11 @@ impl Builder<'_> {
                 }
             }
         }
+    }
+
+    /// Whether `id` has a nullable type.
+    pub(super) fn is_nullable(&self, id: ExpressionId) -> bool {
+        matches!(self.expression(id).ty, Type::Nullable(_))
     }
 
     /// Whether the place `id` is a binding, whose lowering evaluates nothing.
