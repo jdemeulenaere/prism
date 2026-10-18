@@ -2607,13 +2607,26 @@ impl TypeChecker {
         result
     }
 
+    /// Infers a value that is read where it is rather than consumed: an operand, a `when`
+    /// subject or the target of a member access. A place or a field access, `?.` included, is
+    /// read in place (a field's own target is read the same way); anything else is a temporary,
+    /// so its branches, block tail and `?:` operands are consuming (the `ownership` spec,
+    /// "Consuming Positions"), as for a borrowed argument that is not a place.
+    fn infer_read(&mut self, expr: &Expr) -> ExpressionId {
+        let read_in_place = self.is_place(expr)
+            || self.implicit_this_field(expr).is_some()
+            || matches!(&expr.kind, ExprKind::MemberAccess { target, .. }
+                if self.type_name_symbol(target).is_none());
+        self.with_consuming(!read_in_place, |c| c.infer_expr(expr))
+    }
+
     /// Infers an operator operand or a condition. Operators read through references (D1 of
     /// `typechecker-soundness`) and boxes (D4 of `heap-boxes`), so every `&`, `&mut` and
     /// `Heap<T>` layer is peeled: with `a: &Int` or `a: Heap<Int>`, `a + 1` is an `Int`. Each
     /// peeled layer is an explicit dereference, and the operand is read in place (D5 of
     /// `typed-tree`).
     fn infer_operand(&mut self, expr: &Expr) -> ExpressionId {
-        let id = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
+        let id = self.with_origin(Origin::Value, |c| c.infer_read(expr));
         self.peel_indirection_nodes(id)
     }
 
@@ -4293,7 +4306,7 @@ impl TypeChecker {
         // and the layers peeled decide the binding modes (D5 of `payload-patterns`).
         let mut layers = Vec::new();
         let mut subject = target.map(|t| {
-            let mut id = self.infer_expr(t);
+            let mut id = self.infer_read(t);
             while let Type::Reference { mutable, .. } = self.builder.type_of(id) {
                 layers.push(*mutable);
                 id = self.deref(id);
@@ -6998,7 +7011,7 @@ impl TypeChecker {
         if let Some((node, _)) = self.type_name_member(target, member, span) {
             return node;
         }
-        let target_id = self.infer_expr(target);
+        let target_id = self.infer_read(target);
         let target_ty = self.ty(target_id);
         if !self.has_member(&target_ty, member) && self.extension_named(&target_ty, member) {
             // An extension is not a value: only a call reaches it.

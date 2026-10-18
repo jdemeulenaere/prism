@@ -1,0 +1,10 @@
+// expect: E4017
+struct User {
+    val name: String
+    val nick: String?
+}
+
+fun f(c: Bool, u: User) {
+    println((if (c) u.name else "x") == "a")
+    println("a" + (u.nick ?: "x"))
+}

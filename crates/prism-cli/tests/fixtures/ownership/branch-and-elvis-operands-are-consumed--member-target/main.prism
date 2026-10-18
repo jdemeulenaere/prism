@@ -1,0 +1,9 @@
+// expect: E4017
+struct User {
+    val name: String
+    val nick: String?
+}
+
+fun f(c: Bool, u: User) {
+    println((u.nick ?: "x").length)
+}

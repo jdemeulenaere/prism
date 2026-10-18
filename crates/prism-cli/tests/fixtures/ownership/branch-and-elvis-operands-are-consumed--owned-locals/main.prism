@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+fun nick(known: Bool): String? = if (known) "n" + "ick" else null
+
+fun main() {
+    val name = "na" + "me"
+    val unknown = nick(false)
+    val known = nick(true)
+    println((if (name.length > 3) name else "x") == "name")
+    println("a" + (unknown ?: "x"))
+    println((known ?: "x").length)
+    val other = nick(true)
+    println(when (other ?: "x") { "nick" -> 1; else -> 2 })
+}

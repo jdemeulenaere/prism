@@ -155,6 +155,10 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 - **WHEN** `struct User { val name: String, val nick: String? }` is declared and a body of `fun f(c: Bool, u: User, v: User)` runs `val r = &(if (c) u.name else v.name)` and `val s = &(u.nick ?: "x")`
 - **THEN** the type checker emits `E4017` for `u.name`, `v.name` and `u.nick`, because each borrow's operand is a temporary made by moving them
 
+#### Scenario: Branch and elvis operands are consumed
+- **WHEN** `struct User { val name: String, val nick: String? }` is declared and a body of `fun f(c: Bool, u: User)` uses `(if (c) u.name else "x") == "a"` or `"a" + (u.nick ?: "x")` as an operand, `(u.nick ?: "x").length`, `when (u.nick ?: "x") { ... }` or `s += (if (c) u.name else "x")`
+- **THEN** the type checker emits `E4017` for `u.name` and `u.nick`, because each operand is a temporary made by moving them, while the same expressions over owned locals run
+
 #### Scenario: Borrowing a safe navigation
 - **WHEN** `struct User { val name: String, val id: Int }` is declared and a body of `fun f(u: User?)` runs `val r = &u?.name` and `val i = &u?.id`
 - **THEN** the type checker emits `E4017` for `u?.name`, with help suggesting `u?.name?.clone()`, and accepts `&u?.id`, whose temporary is a copy
