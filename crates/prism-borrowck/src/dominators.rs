@@ -15,6 +15,10 @@ pub struct Dominators {
     immediate: Vec<Option<BlockId>>,
     /// The position of each block in reverse postorder.
     order: Vec<usize>,
+    /// The interval of each reachable block in a depth-first walk of the dominator tree: when
+    /// it is entered and left. A block dominates another exactly when its interval contains the
+    /// other's, which answers [`Self::dominates`] in constant time however deep the tree is.
+    intervals: Vec<(usize, usize)>,
 }
 
 impl Dominators {
@@ -28,7 +32,11 @@ impl Dominators {
         let predecessors = predecessors(body);
         let mut immediate: Vec<Option<BlockId>> = vec![None; count];
         if count == 0 {
-            return Self { immediate, order };
+            return Self {
+                immediate,
+                order,
+                intervals: Vec::new(),
+            };
         }
         immediate[0] = Some(BlockId(0));
         let mut changed = true;
@@ -51,7 +59,12 @@ impl Dominators {
                 }
             }
         }
-        Self { immediate, order }
+        let intervals = tree_intervals(&immediate);
+        Self {
+            immediate,
+            order,
+            intervals,
+        }
     }
 
     /// The immediate dominator of `block`, `None` for `bb0` and unreachable blocks.
@@ -64,19 +77,11 @@ impl Dominators {
 
     /// Whether `a` dominates `b`: every path from `bb0` to `b` passes through `a`.
     pub fn dominates(&self, a: BlockId, b: BlockId) -> bool {
-        if self.immediate[b.index()].is_none() {
+        if self.immediate[a.index()].is_none() || self.immediate[b.index()].is_none() {
             return false;
         }
-        let mut current = b;
-        loop {
-            if current == a {
-                return true;
-            }
-            match self.immediate_dominator(current) {
-                Some(next) => current = next,
-                None => return false,
-            }
-        }
+        let (a, b) = (self.intervals[a.index()], self.intervals[b.index()]);
+        a.0 <= b.0 && b.1 <= a.1
     }
 
     /// Whether the edge `from -> to` is a back edge: one to a block that dominates its source.
@@ -88,6 +93,38 @@ impl Dominators {
     pub fn reverse_postorder_index(&self, block: BlockId) -> usize {
         self.order[block.index()]
     }
+}
+
+/// The interval of each block reachable from `bb0` in an iterative depth-first walk of the
+/// dominator tree given by `immediate`: the times the walk enters and leaves it.
+fn tree_intervals(immediate: &[Option<BlockId>]) -> Vec<(usize, usize)> {
+    let count = immediate.len();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (block, dominator) in immediate.iter().enumerate() {
+        if let Some(dominator) = dominator {
+            if dominator.index() != block {
+                children[dominator.index()].push(block);
+            }
+        }
+    }
+    let mut intervals = vec![(0, 0); count];
+    let mut time = 0;
+    // Each frame is a block and the index of its next child to visit.
+    let mut stack = vec![(0usize, 0usize)];
+    intervals[0].0 = time;
+    while let Some((block, next)) = stack.last_mut() {
+        if let Some(&child) = children[*block].get(*next) {
+            *next += 1;
+            time += 1;
+            intervals[child].0 = time;
+            stack.push((child, 0));
+        } else {
+            time += 1;
+            intervals[*block].1 = time;
+            stack.pop();
+        }
+    }
+    intervals
 }
 
 /// The nearest common dominator of `a` and `b`, walking up from the later of the two in reverse
