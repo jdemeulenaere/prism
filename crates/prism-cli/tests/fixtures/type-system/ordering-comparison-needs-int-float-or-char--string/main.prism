@@ -1,0 +1,2 @@
+// expect: E4002
+fun f(a: String, b: String): Bool = a >= b

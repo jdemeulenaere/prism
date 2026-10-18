@@ -39,6 +39,10 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **WHEN** an arithmetic operation mixes numeric types (e.g. `val x: Float = 1 + 2.0`)
 - **THEN** the type checker rejects the operation with a type mismatch error (`E4002`)
 
+#### Scenario: Ordering comparison needs Int, Float or Char
+- **WHEN** `<`, `<=`, `>` or `>=` compares two `Int`s, two `Float`s or two `Char`s, it has type `Bool`; when it compares two `Bool`s (`false < true`), two `String`s, values of different types (`1 < 2.0`), or any other type
+- **THEN** the type checker rejects it with `E4002` through `OperatorMismatch`, whose message names the operator and both operand types (`operator '<' cannot be applied to 'Bool' and 'Bool'`) and whose help names the accepted types, rather than a mismatch between two identical types
+
 #### Scenario: Reassignment to immutable val rejected
 - **WHEN** code attempts to reassign to a variable declared with `val`
 - **THEN** the type checker emits an immutability violation error (`E4003`)
@@ -550,6 +554,10 @@ Decisions from `reference-access`:
 
 - **References are invariant in their referent** (user). `&U` is assignable to `&T` only for the same type, except that `&mut` may weaken to `&` at the outer layer and behind shared borrows; `&mut U` to `&mut T` needs equal types. A reference cannot change the representation of what it points at (`&Int` is not a `&(Int?)`), so covariance would have hidden a converted copy behind a borrow. `Heap<T>` keeps covariance until the `Heap<T>` change decides it.
 - **Value positions copy `Copy` values out of borrows.** The "Operators read through references; value positions do not" rule above now ends at copy-out: where a `T` is expected, a `&T` of a `Copy` type is accepted, and a non-`Copy` one is `E4017` (see `references`).
+
+Decisions from the plain fix to ordering comparisons (2026-10-18, logged in `docs/decisions-for-review.md`):
+
+- **Only `Int`, `Float` and `Char` are ordered.** `false < true` is `E4002`, which Kotlin allows; `Bool` has no natural ordering that a program should rely on, and `String` is unordered until comparison becomes a trait (a type parameter's ordering is `E4002` for the same reason). Allowing it later is compatible. An unordered or mixed comparison is reported through `OperatorMismatch`, as compound assignment's operators are, not as a type mismatch between two identical types; the other binary operators still report `TypeMismatch` (ROADMAP).
 
 Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 

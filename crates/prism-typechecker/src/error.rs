@@ -26,9 +26,10 @@ pub enum TypeError {
         help: Option<String>,
     },
 
-    /// E4002: An operator that does not apply to its operands' types: today the operator of a
+    /// E4002: An operator that does not apply to its operands' types: the operator of a
     /// compound assignment (`s -= "a"`), with the target's type on the left (D7 of
-    /// `compound-assignment`). `operator` is written as in the source (`-=`).
+    /// `compound-assignment`), or an ordering (`false < true`). `operator` is written as in the
+    /// source (`-=`, `<`).
     OperatorMismatch {
         operator: String,
         left: Type,

@@ -1,0 +1,4 @@
+// expect: ok
+fun ints(a: Int, b: Int): Bool = a < b
+fun floats(a: Float, b: Float): Bool = a <= b
+fun chars(a: Char, b: Char): Bool = a > b || a >= b

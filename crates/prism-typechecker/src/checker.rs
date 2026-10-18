@@ -3104,10 +3104,18 @@ impl TypeChecker {
                 let ty = if comparable {
                     Type::Bool
                 } else {
-                    let help = type_parameter_operator_help(&left_ty, &right_ty);
-                    self.errors.push(TypeError::TypeMismatch {
-                        expected: left_ty,
-                        found: right_ty,
+                    // Two `Bool`s or two `String`s must not read "expected 'Bool', found
+                    // 'Bool'": the operator, not an operand, does not apply.
+                    let help = type_parameter_operator_help(&left_ty, &right_ty).or_else(|| {
+                        Some(format!(
+                            "'{}' needs two operands that are both 'Int', both 'Float' or both 'Char'",
+                            operator_text(op)
+                        ))
+                    });
+                    self.errors.push(TypeError::OperatorMismatch {
+                        operator: operator_text(op).to_string(),
+                        left: left_ty,
+                        right: right_ty,
                         span,
                         help,
                     });
@@ -6633,6 +6641,17 @@ fn compound_operand_help(op: BinaryOp, compound: &str) -> String {
             "'{}' needs a target and a value that are both 'Int' or both 'Float'",
             compound
         )
+    }
+}
+
+/// An ordering operator as written in the source.
+fn operator_text(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Lt => "<",
+        BinaryOp::LtEq => "<=",
+        BinaryOp::Gt => ">",
+        BinaryOp::GtEq => ">=",
+        _ => unreachable!("only the ordering operators are reported by their text"),
     }
 }
 
