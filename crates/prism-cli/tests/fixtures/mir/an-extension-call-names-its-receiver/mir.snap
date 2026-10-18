@@ -1,0 +1,25 @@
+module app/main
+fun app/main::f(_1: Team, _2: String): Int @5:1
+  local _0: Int (return)
+  local _1 t: Team (argument)
+  local _2 s: String (argument)
+  local _3 c: &String (user)
+  local _4: &String (temporary)
+  local _5: &Team (temporary)
+  bb0:
+    storage_live _3 @6:5
+    storage_live _4 @6:23
+    _4 = &_2 (written) @6:23
+    storage_live _5 @6:13
+    _5 = &_1 (receiver) @6:13
+    _3 = call lib/team::Team.captain(move _5, move _4) -> bb1 @6:13
+  bb1:
+    storage_dead _5 @6:5
+    storage_dead _4 @6:5
+    _0 = const 1 @7:12
+    storage_dead _3 @7:5
+    drop _2 -> bb2 @5:1
+  bb2:
+    drop _1 -> bb3 @5:1
+  bb3:
+    return @5:1

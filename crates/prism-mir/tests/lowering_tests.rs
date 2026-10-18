@@ -171,3 +171,46 @@ fun k(x: Int) { var i = 0; while (i < x) { i = i + 1; if (i == 2) continue; if (
         actual
     );
 }
+
+/// The MIR of `source` as data, a file `main` that must typecheck.
+fn lowered(source: &str) -> prism_mir::MirFile {
+    let file = prism_parser::parse_source(source).expect("the source parses");
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+    let tree = checker.check_module(&file);
+    assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+    prism_mir::lower_file(&tree)
+}
+
+#[test]
+fn receivers_are_known_from_the_callee_and_the_owner() {
+    use prism_mir::TerminatorKind;
+    let file = lowered(
+        "\
+struct Team { var lead: String }
+fun Team.captain(o: &String): &String = &lead
+fun first(a: &String): &String = a
+fun f(t: Team, s: String, g: (&String) -> Int): Int {
+    val c = t.captain(&s)
+    val d = first(&s)
+    val e = t.lead.clone()
+    val h = { 1 }
+    return g(&s)
+}
+",
+    );
+    let mut owners = Vec::new();
+    let mut calls = Vec::new();
+    for (_, body) in file.bodies.iter() {
+        owners.push((format!("{:?}", body.owner), body.owner.has_receiver()));
+        for (_, block) in body.blocks.iter() {
+            if let TerminatorKind::Call { callee, .. } = &block.terminator.kind {
+                calls.push(callee.has_receiver());
+            }
+        }
+    }
+    let receivers: Vec<bool> = owners.iter().map(|(_, receiver)| *receiver).collect();
+    // `Team.captain`, `first`, `f` and its closure.
+    assert_eq!(receivers, vec![true, false, false, false], "{:?}", owners);
+    // `t.captain(&s)`, `first(&s)`, `clone()`, `g(&s)`.
+    assert_eq!(calls, vec![true, false, true, false]);
+}

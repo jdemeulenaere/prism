@@ -86,6 +86,14 @@ pub enum BodyOwner {
     Closure { parent: BodyId, index: usize },
 }
 
+impl BodyOwner {
+    /// Whether the body's first argument is a receiver: exactly for the body of an extension,
+    /// whose declaration path names its receiver type (D3 of `borrowck-elision`).
+    pub fn has_receiver(&self) -> bool {
+        matches!(self, BodyOwner::Function(path) if path.receiver.is_some())
+    }
+}
+
 /// The control-flow graph of one body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
@@ -403,6 +411,20 @@ pub enum Callee {
         parameter: usize,
         name: String,
     },
+}
+
+impl Callee {
+    /// Whether the call's first operand is a receiver: exactly for a call of an extension,
+    /// whose declaration path names its receiver type, and of the built-in `clone`, which
+    /// takes a shared receiver borrow (D3 of `borrowck-elision`). A function value is never an
+    /// extension, since an extension cannot be named as a value.
+    pub fn has_receiver(&self) -> bool {
+        match self {
+            Callee::Function(path) => path.receiver.is_some(),
+            Callee::Builtin(_) => true,
+            Callee::Value(..) | Callee::Default { .. } => false,
+        }
+    }
 }
 
 /// Why a borrow exists.

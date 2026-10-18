@@ -8,7 +8,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 2. MIR: the receiver of a call (D3)
 
-- [ ] 2.1 In `crates/prism-mir/src/mir.rs`, add `Callee::has_receiver(&self) -> bool` (`Function(path)` with `path.receiver.is_some()`, and `Builtin`) and `BodyOwner::has_receiver(&self) -> bool` (`Function(path)` with `path.receiver.is_some()`), documented as "the first operand (argument) is the receiver" (D3). Verify with unit tests in `mir.rs` or `dump.rs` on a file lowered from source with an extension call, a function call and a closure call, and with the fixture `mir/an-extension-call-names-its-receiver` (two files, `// entry: app/main.prism`, `mir.snap` showing the call of `lib/team::Team.captain` with the receiver borrow first; check the scenario's THEN against the dump).
+- [x] 2.1 In `crates/prism-mir/src/mir.rs`, add `Callee::has_receiver(&self) -> bool` (`Function(path)` with `path.receiver.is_some()`, and `Builtin`) and `BodyOwner::has_receiver(&self) -> bool` (`Function(path)` with `path.receiver.is_some()`), documented as "the first operand (argument) is the receiver" (D3). Verify with unit tests in `mir.rs` or `dump.rs` on a file lowered from source with an extension call, a function call and a closure call, and with the fixture `mir/an-extension-call-names-its-receiver` (two files, `// entry: app/main.prism`, `mir.snap` showing the call of `lib/team::Team.captain` with the receiver borrow first; check the scenario's THEN against the dump).
 
 ## 3. The elision rules and the caller's side (D2, D4, D10)
 

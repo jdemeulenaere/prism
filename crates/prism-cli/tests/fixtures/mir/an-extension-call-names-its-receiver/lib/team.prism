@@ -1,0 +1,3 @@
+package lib
+public struct Team { var lead: String }
+public fun Team.captain(o: &String): &String = &lead

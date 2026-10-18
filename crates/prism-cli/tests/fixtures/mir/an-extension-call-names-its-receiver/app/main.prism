@@ -1,0 +1,8 @@
+// expect: ok
+// entry: app/main.prism
+package app
+import /lib/team
+fun f(t: Team, s: String): Int {
+    val c = t.captain(&s)
+    return 1
+}
