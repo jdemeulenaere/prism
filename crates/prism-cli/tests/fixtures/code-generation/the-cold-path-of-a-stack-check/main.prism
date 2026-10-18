@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+fun helper(): Int = 1
+fun main() { println(helper()) }

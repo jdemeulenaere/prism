@@ -201,31 +201,54 @@ pub struct PlannedInstanceKey {
     pub code_key: ContentHash,
 }
 
+/// A unit of a [`BuildPlan`]: a file's, by its module path, or an instance's, by its symbol.
+/// Either is also the unit's name in the linker.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum UnitId {
+    File(String),
+    Instance(String),
+}
+
+impl UnitId {
+    /// The unit's name: the module of a file's unit, the symbol of an instance's.
+    pub fn name(&self) -> &str {
+        match self {
+            UnitId::File(module) | UnitId::Instance(module) => module,
+        }
+    }
+}
+
 impl BuildPlan {
-    /// The file units and instance units of this plan whose code key is not in `previous`:
-    /// those whose code must be generated, or loaded from the cache, after the edit that turned
-    /// `previous` into this plan. Linear in the two plans' sizes.
-    pub fn changed_since(
-        &self,
-        previous: &BuildPlan,
-    ) -> (Vec<&PlannedUnit>, Vec<&PlannedInstanceKey>) {
+    /// The units of this plan whose code key is not in `running`: those whose code must be
+    /// generated, or loaded from the cache, after the edit that turned `running` into this plan
+    /// (D9 of `hot-reload`). File units come first, in check order, which is topological; then
+    /// instance units, in symbol order. Linear in the two plans' sizes.
+    pub fn changed_since(&self, running: &BuildPlan) -> Vec<UnitId> {
         let units: std::collections::HashSet<&ContentHash> =
-            previous.units.iter().map(|unit| &unit.code_key).collect();
-        let instances: std::collections::HashSet<&ContentHash> = previous
+            running.units.iter().map(|unit| &unit.code_key).collect();
+        let instances: std::collections::HashSet<&ContentHash> = running
             .instances
             .iter()
             .map(|instance| &instance.code_key)
             .collect();
-        (
-            self.units
-                .iter()
-                .filter(|unit| !units.contains(&unit.code_key))
-                .collect(),
-            self.instances
-                .iter()
-                .filter(|instance| !instances.contains(&instance.code_key))
-                .collect(),
-        )
+        self.units
+            .iter()
+            .filter(|unit| !units.contains(&unit.code_key))
+            .map(|unit| UnitId::File(unit.module.clone()))
+            .chain(
+                self.instances
+                    .iter()
+                    .filter(|instance| !instances.contains(&instance.code_key))
+                    .map(|instance| UnitId::Instance(instance.symbol.clone())),
+            )
+            .collect()
+    }
+
+    /// The planned instance whose symbol is `symbol`.
+    pub fn instance(&self, symbol: &str) -> Option<&PlannedInstanceKey> {
+        self.instances
+            .iter()
+            .find(|instance| instance.symbol == symbol)
     }
 }
 

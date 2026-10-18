@@ -3,6 +3,7 @@
 //! `code-generation` spec; D1 of `codegen-core`).
 
 pub mod artifact;
+pub mod contract;
 pub mod dump;
 pub mod entry;
 mod equality;
@@ -14,6 +15,7 @@ pub mod layout;
 pub mod link;
 mod lower;
 pub mod program;
+pub mod reload;
 pub mod representation;
 pub mod supported;
 pub mod symbols;
@@ -22,6 +24,8 @@ mod variables;
 
 #[cfg(test)]
 mod lowering_tests;
+#[cfg(test)]
+mod reload_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -34,7 +38,8 @@ pub use instances::{
     InstanceUnit, PlannedInstance,
 };
 pub use layout::{dump_layouts, Layout, LayoutTable};
-pub use link::{FunctionTable, Linker};
-pub use program::Program;
+pub use link::{FunctionTable, Linker, SlotChange, ValueKeys, ValueTable};
+pub use program::{Program, RunningProgram, PROGRAM_STACK_SIZE};
+pub use reload::{LiveProgram, PreparedReload, ReloadWrites, SlotKind};
 pub use supported::check_file;
 pub use unit::CodeUnit;

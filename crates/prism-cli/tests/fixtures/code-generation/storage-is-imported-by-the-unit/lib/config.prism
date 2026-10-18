@@ -1,0 +1,2 @@
+package lib
+public val LIMIT: Int = 10

@@ -1470,7 +1470,10 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
     }
 
     /// Raises "stack overflow" at the body's declaration when the stack pointer is below the
-    /// runtime's stack limit (D27), before the body runs.
+    /// runtime's stack limit (D27), before the body runs. The fast path is one load, one
+    /// comparison and one branch. Its cold path asks the runtime first, which applies a pending
+    /// reload when the limit held the reload interrupt and then lets the body run (D3 of
+    /// `hot-reload`).
     fn check_stack(&mut self) -> Result<(), BackendError> {
         let pointer = self.pointer();
         let limit = self.context.stack_limit()?;
@@ -1480,11 +1483,27 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .ins()
             .load(pointer, MemFlagsData::trusted(), limit_address, 0);
         let stack_pointer = self.builder.ins().get_stack_pointer(pointer);
-        let overflow = self
+        let below = self
             .builder
             .ins()
             .icmp(IntCC::UnsignedLessThan, stack_pointer, limit);
-        self.check(overflow, PanicKind::StackOverflow, "", self.body.span)
+        let cold = self.builder.create_block();
+        let resume = self.builder.create_block();
+        self.builder.set_cold_block(cold);
+        self.builder.ins().brif(below, cold, &[], resume, &[]);
+        self.builder.switch_to_block(cold);
+        let failed = self.runtime_function("prism_rt_stack_check_failed")?;
+        let call = self.builder.ins().call(failed, &[stack_pointer]);
+        let overflow = self.builder.inst_results(call)[0];
+        let overflowed = self.builder.create_block();
+        self.builder.set_cold_block(overflowed);
+        self.builder
+            .ins()
+            .brif(overflow, overflowed, &[], resume, &[]);
+        self.builder.switch_to_block(overflowed);
+        self.panic(PanicKind::StackOverflow, "", self.body.span)?;
+        self.builder.switch_to_block(resume);
+        Ok(())
     }
 
     // Calls.

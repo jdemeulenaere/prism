@@ -916,6 +916,25 @@ fn hash_pattern_span_free(pattern: &Pattern, hasher: &mut DeterministicHasher) {
     }
 }
 
+/// The initializer hash of the top-level value `declaration` (D8 of `hot-reload`): a hash of its
+/// name, its declared type and its initializer expression that ignores positions, so moving or
+/// reformatting the declaration keeps it, and editing the type or the initializer changes it.
+/// One of the three parts of the key of the value's storage across reloads.
+pub fn initializer_hash(declaration: &TopLevelVarDecl) -> ContentHash {
+    let mut hasher = DeterministicHasher::new();
+    hasher.write_str("initializer");
+    hasher.write_str(&declaration.name);
+    match &declaration.ty {
+        Some(ty) => {
+            hasher.write_u8(1);
+            hasher.write_str(&ty.to_string());
+        }
+        None => hasher.write_u8(0),
+    }
+    hash_expr_span_free(&declaration.initializer, &mut hasher);
+    hasher.finish()
+}
+
 /// Recursively hashes expression syntax structure, ignoring all `Span` metadata.
 fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
     match &expr.kind {

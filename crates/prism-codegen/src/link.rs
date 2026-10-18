@@ -1,25 +1,38 @@
-//! The function table and the linker (D3 and D4 of `codegen-core`).
+//! The function table, the value table and the linker (D3 and D4 of `codegen-core`, D5 and D8
+//! of `hot-reload`).
 //!
 //! The function table holds one pointer-sized slot per symbol of a function, default value
 //! generator or top-level value accessor, allocated in chunks that never move, so a slot keeps
 //! its address for as long as the table lives. A slot nothing defines holds the address of
 //! `prism_rt_unlinked_function`. Code refers to a slot only by the symbol `<symbol>#slot`, which
-//! the JIT resolves through the table when a load is finalized; after finalizing, the linker
-//! writes the address of each function the load defines into its slot.
+//! the JIT resolves when a load is finalized to the slot the table maps the symbol to; after
+//! finalizing, the linker writes the address of each function the load defines into its slot.
 //!
-//! One table serves a whole program for the life of the process (`prism run` links one
-//! program), and `hot-reload` will repoint its slots. It is owned by the [`Linker`] and then the
-//! [`crate::Program`] rather than being a global, so a test process can link several programs.
+//! Each slot records the contract of the code it holds (`crate::contract`). A later load of a
+//! watch session that defines a symbol again with the same contract repoints its slot; one with a
+//! different contract gets a new slot for the symbol, which the code of that load and of every
+//! later one calls, while code finalized before keeps calling the old slot and its old code
+//! (D5 of `hot-reload`).
+//!
+//! The value table holds the storage and initialization state of every top-level value, keyed by
+//! the value's symbol and its value key (D8 of `hot-reload`): a unit imports `<value>#storage`
+//! and `<value>#state`, and the linker resolves them to the storage the table holds for that key,
+//! or to new zeroed storage when the key changed.
+//!
+//! One table serves a whole program, and a watch session keeps it across loads. It is owned by
+//! the [`Linker`] and then the [`crate::Program`] rather than being a global, so a test process
+//! can link several programs.
 
 use crate::artifact::{
     CompiledFunction, DataContents, DataObject, Declaration, Relocation, RelocationTarget,
-    UnitArtifact,
+    UnitArtifact, ValueRecord,
 };
 use crate::error::BackendError;
 use crate::instances::InstanceUnit;
 use crate::isa::{is_large, isa, large_function_isa};
 use crate::program::Program;
-use crate::symbols::slot_owner;
+use crate::reload::{LiveProgram, PreparedReload, ReloadWrites, SlotKind};
+use crate::symbols::{slot_owner, slot_symbol};
 use crate::unit::CodeUnit;
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::control::ControlPlane;
@@ -31,18 +44,19 @@ use cranelift_module::{
     default_libcall_names, DataDescription, DataId, FuncId, FuncOrDataId, Init, Linkage, Module,
     ModuleDeclarations, ModuleReloc, ModuleRelocTarget, ModuleResult,
 };
+use prism_abi::{ContentHash, DeterministicHasher};
 use prism_mir::MirFile;
 use prism_runtime::{
     prism_rt_unlinked_function, RUNTIME_FUNCTIONS, STACK_LIMIT, STACK_LIMIT_SYMBOL,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The number of slots in one chunk of the table.
 const CHUNK_SIZE: usize = 256;
 
-/// The process-wide table of function slots.
+/// A program's table of function slots.
 pub struct FunctionTable {
     inner: Mutex<TableInner>,
 }
@@ -52,13 +66,48 @@ struct TableInner {
     chunks: Vec<Box<[AtomicUsize]>>,
     /// The slots used in the last chunk.
     used: usize,
-    /// The slot of each symbol.
-    slots: HashMap<String, *const AtomicUsize>,
+    /// The slot each symbol is mapped to, with the contract of the code it holds once a load
+    /// filled it.
+    slots: HashMap<String, SlotEntry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SlotEntry {
+    slot: *const AtomicUsize,
+    contract: Option<ContentHash>,
 }
 
 // SAFETY: the raw pointers point into the table's own chunks, which are only freed with the
 // table, and every access to a slot is atomic.
 unsafe impl Send for TableInner {}
+
+/// What defining a symbol does to its slot ([`FunctionTable::slot_for`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotChange {
+    /// The symbol had no code yet: an added declaration, or the first load.
+    New,
+    /// The code has the contract of the slot's code: the slot is repointed.
+    Repointed,
+    /// The code has another contract: the symbol gets a new slot, and the old slot keeps its
+    /// code for the code finalized before.
+    Split,
+}
+
+impl TableInner {
+    fn allocate(&mut self) -> *const AtomicUsize {
+        if self.used == CHUNK_SIZE {
+            let unlinked = prism_rt_unlinked_function as *const u8 as usize;
+            let chunk: Box<[AtomicUsize]> = (0..CHUNK_SIZE)
+                .map(|_| AtomicUsize::new(unlinked))
+                .collect();
+            self.chunks.push(chunk);
+            self.used = 0;
+        }
+        let index = self.used;
+        self.used += 1;
+        &self.chunks.last().expect("a chunk exists")[index]
+    }
+}
 
 impl FunctionTable {
     pub fn new() -> Arc<Self> {
@@ -77,31 +126,72 @@ impl FunctionTable {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The slot of `symbol`, allocated on first use and holding the unlinked stub until a
-    /// function is linked into it.
+    /// The slot `symbol` is mapped to, allocated on first use and holding the unlinked stub
+    /// until a function is linked into it.
     pub fn slot(&self, symbol: &str) -> *const AtomicUsize {
         let mut inner = self.lock();
-        if let Some(slot) = inner.slots.get(symbol) {
-            return *slot;
+        if let Some(entry) = inner.slots.get(symbol) {
+            return entry.slot;
         }
-        if inner.used == CHUNK_SIZE {
-            let unlinked = prism_rt_unlinked_function as *const u8 as usize;
-            let chunk: Box<[AtomicUsize]> = (0..CHUNK_SIZE)
-                .map(|_| AtomicUsize::new(unlinked))
-                .collect();
-            inner.chunks.push(chunk);
-            inner.used = 0;
-        }
-        let index = inner.used;
-        inner.used += 1;
-        let slot: *const AtomicUsize = &inner.chunks.last().expect("a chunk exists")[index];
-        inner.slots.insert(symbol.to_string(), slot);
+        let slot = inner.allocate();
+        inner.slots.insert(
+            symbol.to_string(),
+            SlotEntry {
+                slot,
+                contract: None,
+            },
+        );
         slot
+    }
+
+    /// The slot code of `contract` for `symbol` goes in, and how it changes the symbol's slot:
+    /// its current slot when the symbol has no code yet or the contracts are equal, otherwise a
+    /// fresh slot. The mapping is not changed: [`FunctionTable::commit`] does that once the load
+    /// is applied, so that a load that is never applied leaves the table as it was.
+    pub fn slot_for(
+        &self,
+        symbol: &str,
+        contract: Option<ContentHash>,
+    ) -> (*const AtomicUsize, SlotChange) {
+        let mut inner = self.lock();
+        match inner.slots.get(symbol).copied() {
+            Some(SlotEntry {
+                slot,
+                contract: None,
+            }) => (slot, SlotChange::New),
+            Some(entry) if contract.is_none() || entry.contract == contract => {
+                (entry.slot, SlotChange::Repointed)
+            }
+            Some(_) => (inner.allocate(), SlotChange::Split),
+            None => {
+                let slot = inner.allocate();
+                inner.slots.insert(
+                    symbol.to_string(),
+                    SlotEntry {
+                        slot,
+                        contract: None,
+                    },
+                );
+                (slot, SlotChange::New)
+            }
+        }
+    }
+
+    /// Maps `symbol` to `slot`, whose code has `contract`, for every later load.
+    pub fn commit(&self, symbol: &str, slot: *const AtomicUsize, contract: Option<ContentHash>) {
+        self.lock()
+            .slots
+            .insert(symbol.to_string(), SlotEntry { slot, contract });
+    }
+
+    /// The contract of the code `symbol`'s slot holds, once a load filled it.
+    pub fn contract(&self, symbol: &str) -> Option<ContentHash> {
+        self.lock().slots.get(symbol)?.contract
     }
 
     /// The address `symbol`'s slot holds, if it has a slot.
     pub fn get(&self, symbol: &str) -> Option<*const u8> {
-        let slot = *self.lock().slots.get(symbol)?;
+        let slot = self.lock().slots.get(symbol)?.slot;
         // SAFETY: the slot lives as long as the table.
         Some(unsafe { (*slot).load(Ordering::Acquire) } as *const u8)
     }
@@ -114,26 +204,169 @@ impl FunctionTable {
     }
 }
 
+/// The initializer hash of each top-level value a load defines, by its symbol (D8 of
+/// `hot-reload`): what a watch session supplies so that an edited initializer gives its value
+/// new storage. A value without one is keyed by its symbol and type alone.
+pub type ValueKeys = HashMap<String, ContentHash>;
+
+/// The key of the storage of the top-level value `symbol` whose type has `type_fingerprint` and
+/// whose declared type and initializer hash to `initializer` (D8 of `hot-reload`).
+pub fn value_key(
+    symbol: &str,
+    type_fingerprint: &ContentHash,
+    initializer: Option<&ContentHash>,
+) -> ContentHash {
+    let mut hasher = DeterministicHasher::new();
+    hasher.write_str("value");
+    hasher.write_str(symbol);
+    hasher.write_hash(type_fingerprint);
+    match initializer {
+        Some(hash) => {
+            hasher.write_u8(1);
+            hasher.write_hash(hash);
+        }
+        None => hasher.write_u8(0),
+    }
+    hasher.finish()
+}
+
+/// The storage of one top-level value: its key, and the addresses of its storage and of its
+/// state byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoredValue {
+    pub key: ContentHash,
+    pub storage: usize,
+    pub state: usize,
+}
+
+/// A program's top-level value storage (D8 of `hot-reload`). Storage is zeroed when allocated,
+/// never moves, and is freed only with the table, so code and borrows that still refer to
+/// storage a reload replaced stay valid.
+pub struct ValueTable {
+    inner: Mutex<ValuesInner>,
+}
+
+#[derive(Default)]
+struct ValuesInner {
+    /// The storage each symbol currently resolves to.
+    current: HashMap<String, StoredValue>,
+    /// Every block allocated, with its layout.
+    blocks: Vec<(usize, std::alloc::Layout)>,
+}
+
+impl ValueTable {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(ValuesInner::default()),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ValuesInner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The storage of `value` under `key`: the symbol's current storage when its key is `key`,
+    /// otherwise new zeroed storage, which [`ValueTable::commit`] makes current.
+    pub fn storage_for(&self, value: &ValueRecord, key: ContentHash) -> StoredValue {
+        let mut inner = self.lock();
+        if let Some(stored) = inner.current.get(&value.symbol) {
+            if stored.key == key {
+                return *stored;
+            }
+        }
+        let align = value.align.max(1) as usize;
+        let size = (value.size.max(1) as usize).next_multiple_of(align);
+        let layout = std::alloc::Layout::from_size_align(size + 1, align)
+            .expect("a value's storage has a valid layout");
+        // SAFETY: the layout has a non-zero size.
+        let block = unsafe { std::alloc::alloc_zeroed(layout) };
+        if block.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        inner.blocks.push((block as usize, layout));
+        StoredValue {
+            key,
+            storage: block as usize,
+            state: block as usize + size,
+        }
+    }
+
+    /// Makes `stored` the storage of `symbol` for every later load.
+    pub fn commit(&self, symbol: &str, stored: StoredValue) {
+        self.lock().current.insert(symbol.to_string(), stored);
+    }
+
+    /// The storage `symbol` currently resolves to.
+    pub fn get(&self, symbol: &str) -> Option<StoredValue> {
+        self.lock().current.get(symbol).copied()
+    }
+}
+
+impl Drop for ValueTable {
+    fn drop(&mut self) {
+        let inner = self
+            .inner
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (block, layout) in inner.blocks.drain(..) {
+            // SAFETY: each block was allocated with its layout and is freed once, with the
+            // program, when no code of it runs any more.
+            unsafe { std::alloc::dealloc(block as *mut u8, layout) };
+        }
+    }
+}
+
+/// A function a load defines into a slot.
+struct DefinedFunction {
+    symbol: String,
+    id: FuncId,
+    slot: *const AtomicUsize,
+    contract: Option<ContentHash>,
+    change: SlotChange,
+}
+
 /// Builds one load of a program: the code units of its files, defined into one JIT module and
 /// finalized together (D3). Every unit is defined from its relocatable artifact
 /// ([`UnitArtifact`], D8 of `instance-cache`), whether it was just compiled or read from the
-/// build cache.
+/// build cache. The first load of a program is linked ([`Linker::link`]); each later load of a
+/// watch session is prepared over the program's tables ([`Linker::with_table`],
+/// [`Linker::prepare`]) and applied by the program thread.
 pub struct Linker {
     table: Arc<FunctionTable>,
+    values: Arc<ValueTable>,
     module: JITModule,
     /// The ISA of large functions ([`crate::isa::is_large`]).
     large: OwnedTargetIsa,
-    /// The functions the load defines, by symbol.
-    defined: Vec<(String, FuncId)>,
+    /// The address this load resolves a symbol to ahead of the table: the new slot of each
+    /// split symbol, and the storage and state of each value the load defines.
+    resolved: Arc<Mutex<HashMap<String, usize>>>,
+    /// The functions the load defines into slots.
+    defined: Vec<DefinedFunction>,
+    /// The storage each value of the load resolves to.
+    stored: Vec<(String, StoredValue)>,
+    /// The initializer hash of each value, which keys its storage.
+    value_keys: ValueKeys,
+    /// The units of the load, by name, with the symbols whose slots each refers to.
+    units: Vec<(String, BTreeSet<String>)>,
     /// The number of functions compiled by Cranelift in this load, cached ones excluded.
     compiled_functions: usize,
 }
 
 impl Linker {
-    /// A linker with a new function table, whose JIT resolves the runtime functions by name
-    /// and every `<symbol>#slot` to the table's slot of `symbol`.
+    /// A linker with a new function table and value table, whose JIT resolves the runtime
+    /// functions by name and every `<symbol>#slot` to the table's slot of `symbol`.
     pub fn new() -> Result<Self, BackendError> {
-        let table = FunctionTable::new();
+        Self::with_table(FunctionTable::new(), ValueTable::new())
+    }
+
+    /// A linker of a later load of the program whose tables are `table` and `values`: its new
+    /// module resolves slots and storage through them, as [`Linker::new`]'s does.
+    pub fn with_table(
+        table: Arc<FunctionTable>,
+        values: Arc<ValueTable>,
+    ) -> Result<Self, BackendError> {
         let mut builder = JITBuilder::with_isa(isa()?, default_libcall_names());
         builder.symbols(
             RUNTIME_FUNCTIONS
@@ -144,17 +377,37 @@ impl Linker {
                     std::ptr::addr_of!(STACK_LIMIT).cast::<u8>(),
                 ))),
         );
+        let resolved: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
+        let lookup_resolved = Arc::clone(&resolved);
         let lookup_table = Arc::clone(&table);
         builder.symbol_lookup_fn(Box::new(move |name| {
+            let resolved = lookup_resolved
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(name)
+                .copied();
+            if let Some(address) = resolved {
+                return Some(address as *const u8);
+            }
             slot_owner(name).map(|symbol| lookup_table.slot(symbol).cast::<u8>())
         }));
         Ok(Self {
             table,
+            values,
             module: JITModule::new(builder),
             large: large_function_isa()?,
+            resolved,
             defined: Vec::new(),
+            stored: Vec::new(),
+            value_keys: ValueKeys::new(),
+            units: Vec::new(),
             compiled_functions: 0,
         })
+    }
+
+    /// Keys the storage of the values defined from now on by their initializers' hashes.
+    pub fn set_value_keys(&mut self, keys: ValueKeys) {
+        self.value_keys = keys;
     }
 
     /// The number of functions Cranelift compiled for this load: zero when every unit came
@@ -167,7 +420,7 @@ impl Linker {
     /// functions and defines them.
     pub fn add_file(&mut self, file: &MirFile) -> Result<(), BackendError> {
         let artifact = self.compile_unit(file, &file.module)?;
-        self.define_checked(&artifact)
+        self.define_checked(&file.module, &artifact)
     }
 
     /// Lowers the instance unit `instance`, which passed [`crate::check_instances`], under its
@@ -175,7 +428,7 @@ impl Linker {
     /// `monomorphization`), and defines them.
     pub fn add_instance(&mut self, instance: &InstanceUnit) -> Result<(), BackendError> {
         let artifact = self.compile_instance(instance)?;
-        self.define_checked(&artifact)
+        self.define_checked(&instance.symbol, &artifact)
     }
 
     /// The artifact of the instance unit `instance`, compiled but not defined.
@@ -188,7 +441,7 @@ impl Linker {
 
     /// Defines `artifact`, round-tripping it through its encoding first in debug builds, so
     /// that every test exercises the codec (D8 of `instance-cache`).
-    fn define_checked(&mut self, artifact: &UnitArtifact) -> Result<(), BackendError> {
+    fn define_checked(&mut self, unit: &str, artifact: &UnitArtifact) -> Result<(), BackendError> {
         #[cfg(debug_assertions)]
         if let Some(bytes) = artifact.encode() {
             let decoded = UnitArtifact::decode(&bytes).expect("an encoded artifact decodes");
@@ -196,9 +449,9 @@ impl Linker {
                 &decoded, artifact,
                 "an artifact round-trips through its encoding"
             );
-            return self.define_artifact(&decoded);
+            return self.define_artifact(unit, &decoded);
         }
-        self.define_artifact(artifact)
+        self.define_artifact(unit, artifact)
     }
 
     /// Lowers `file` into its code unit under the unit name `unit_name` and compiles each of
@@ -231,20 +484,32 @@ impl Linker {
                     BackendError::new(format!("compiling {}: {:?}", function.symbol, error))
                 })?;
             self.compiled_functions += 1;
-            artifact.function(function.id, has_slot, compiled, &context.func)?;
+            artifact.function(
+                function.id,
+                has_slot,
+                function.contract,
+                compiled,
+                &context.func,
+            )?;
             self.module.clear_context(&mut context);
         }
         for (id, description) in &data {
             artifact.data(*id, description)?;
         }
-        Ok(artifact.finish())
+        Ok(artifact.finish(unit.values))
     }
 
-    /// Defines every function and data object of `artifact` in the load: declares each of its
-    /// symbols with its linkage and signature, maps its relocations back to the module's ids,
-    /// and defines the code and data from their bytes. A function with a slot is linked into it
-    /// by [`Linker::link`].
-    pub fn define_artifact(&mut self, artifact: &UnitArtifact) -> Result<(), BackendError> {
+    /// Defines every function and data object of `artifact`, the unit `unit`, in the load:
+    /// declares each of its symbols with its linkage and signature, maps its relocations back to
+    /// the module's ids, and defines the code and data from their bytes. Each function with a
+    /// slot is given the slot its contract selects ([`FunctionTable::slot_for`]), and each value
+    /// the storage its key selects; they are filled and made current by [`Linker::link`], or by
+    /// applying [`Linker::prepare`]'s reload.
+    pub fn define_artifact(
+        &mut self,
+        unit: &str,
+        artifact: &UnitArtifact,
+    ) -> Result<(), BackendError> {
         let mut ids: HashMap<&str, FuncOrDataId> = HashMap::new();
         for declaration in &artifact.declarations {
             let id = match declaration {
@@ -276,6 +541,7 @@ impl Linker {
                 name
             ))),
         };
+        let mut references: BTreeSet<String> = BTreeSet::new();
         for function in &artifact.functions {
             let id = function_id(&function.name)?;
             let relocations = function
@@ -287,6 +553,9 @@ impl Linker {
                             ModuleRelocTarget::user(0, function_id(name)?.as_u32())
                         }
                         RelocationTarget::Data(name) => {
+                            if let Some(symbol) = slot_owner(name) {
+                                references.insert(symbol.to_string());
+                            }
                             ModuleRelocTarget::user(1, data_id(name)?.as_u32())
                         }
                         RelocationTarget::LibCall(name) => {
@@ -313,7 +582,17 @@ impl Linker {
                 })?;
             // Glue is called directly within its unit and has no slot.
             if function.has_slot {
-                self.defined.push((function.name.clone(), id));
+                let (slot, change) = self.table.slot_for(&function.name, function.contract);
+                if change == SlotChange::Split {
+                    self.resolve(slot_symbol(&function.name), slot as usize);
+                }
+                self.defined.push(DefinedFunction {
+                    symbol: function.name.clone(),
+                    id,
+                    slot,
+                    contract: function.contract,
+                    change,
+                });
             }
         }
         for object in &artifact.data {
@@ -336,6 +615,9 @@ impl Linker {
                         description.write_function_addr(relocation.offset, target);
                     }
                     RelocationTarget::Data(name) => {
+                        if let Some(symbol) = slot_owner(name) {
+                            references.insert(symbol.to_string());
+                        }
                         let target = description.import_global_value(ModuleRelocTarget::user(
                             1,
                             data_id(name)?.as_u32(),
@@ -352,18 +634,77 @@ impl Linker {
             }
             self.module.define_data(id, &description)?;
         }
+        for value in &artifact.values {
+            let key = value_key(
+                &value.symbol,
+                &value.type_fingerprint,
+                self.value_keys.get(&value.symbol),
+            );
+            let stored = self.values.storage_for(value, key);
+            self.resolve(format!("{}#storage", value.symbol), stored.storage);
+            self.resolve(format!("{}#state", value.symbol), stored.state);
+            self.stored.push((value.symbol.clone(), stored));
+        }
+        self.units.push((unit.to_string(), references));
         Ok(())
     }
 
-    /// Finalizes the load, resolving every slot and runtime symbol, and writes the address of
-    /// each defined function into its slot.
-    pub fn link(mut self) -> Result<Program, BackendError> {
+    /// Resolves `name` to `address` in this load, ahead of the table.
+    fn resolve(&self, name: String, address: usize) {
+        self.resolved
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(name, address);
+    }
+
+    /// Finalizes the load, resolving every slot, value and runtime symbol, and gives the writes
+    /// that make it current.
+    fn finalize(&mut self) -> Result<ReloadWrites, BackendError> {
         self.module.finalize_definitions()?;
-        for (symbol, id) in &self.defined {
-            let address = self.module.get_finalized_function(*id);
-            self.table.set(symbol, address);
+        let mut writes = ReloadWrites::new(Arc::clone(&self.table), Arc::clone(&self.values));
+        for function in &self.defined {
+            let address = self.module.get_finalized_function(function.id);
+            writes.slot(
+                function.symbol.clone(),
+                function.slot,
+                address,
+                function.contract,
+            );
         }
-        Ok(Program::new(self.table, self.module))
+        for (symbol, stored) in &self.stored {
+            writes.value(symbol.clone(), *stored);
+        }
+        Ok(writes)
+    }
+
+    /// Finalizes the first load of a program and makes it current: writes the address of each
+    /// defined function into its slot and maps every symbol and value of the load.
+    pub fn link(mut self) -> Result<Program, BackendError> {
+        let writes = self.finalize()?;
+        writes.apply();
+        let units = std::mem::take(&mut self.units);
+        let live = LiveProgram::new(self.table, self.values, self.module, units);
+        Ok(Program::new(live))
+    }
+
+    /// Finalizes a later load over the program's tables without writing any slot: the reload
+    /// it gives is applied on the program thread ([`PreparedReload`]).
+    pub fn prepare(mut self) -> Result<PreparedReload, BackendError> {
+        let writes = self.finalize()?;
+        let splits = self
+            .defined
+            .iter()
+            .filter(|function| function.change == SlotChange::Split)
+            .map(|function| {
+                let kind = if function.symbol.contains("#closure") {
+                    SlotKind::Closure
+                } else {
+                    SlotKind::Function
+                };
+                (function.symbol.clone(), kind)
+            })
+            .collect();
+        Ok(PreparedReload::new(writes, splits, self.module, self.units))
     }
 }
 
@@ -529,6 +870,7 @@ impl<'m> ArtifactBuilder<'m> {
         &mut self,
         id: FuncId,
         has_slot: bool,
+        contract: Option<ContentHash>,
         compiled: CompiledCode,
         function: &ir::Function,
     ) -> Result<(), BackendError> {
@@ -549,6 +891,7 @@ impl<'m> ArtifactBuilder<'m> {
         self.functions.push(CompiledFunction {
             name,
             has_slot,
+            contract,
             alignment: compiled.alignment,
             code: compiled.code,
             relocations,
@@ -592,11 +935,12 @@ impl<'m> ArtifactBuilder<'m> {
         Ok(())
     }
 
-    fn finish(self) -> UnitArtifact {
+    fn finish(self, values: Vec<ValueRecord>) -> UnitArtifact {
         UnitArtifact {
             declarations: self.declarations,
             functions: self.functions,
             data: self.data,
+            values,
         }
     }
 }

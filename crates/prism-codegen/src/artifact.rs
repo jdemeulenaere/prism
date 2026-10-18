@@ -14,6 +14,7 @@ use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::ir::{self, AbiParam, ArgumentExtension, ArgumentPurpose, LibCall};
 use cranelift_codegen::isa::CallConv;
 use cranelift_module::Linkage;
+use prism_abi::ContentHash;
 use prism_mir::codec::{Codec, Decoder, Encoder};
 use std::str::FromStr;
 
@@ -26,6 +27,19 @@ pub struct UnitArtifact {
     pub functions: Vec<CompiledFunction>,
     /// The unit's data objects.
     pub data: Vec<DataObject>,
+    /// The top-level values whose storage the unit imports (D8 of `hot-reload`).
+    pub values: Vec<ValueRecord>,
+}
+
+/// A top-level value whose storage a unit imports from the program's value table: its symbol
+/// (`<module>::<name>`, without suffix), the size and alignment of its storage, and its type's
+/// fingerprint, one of the three parts of its value key (D8 of `hot-reload`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueRecord {
+    pub symbol: String,
+    pub size: u32,
+    pub align: u32,
+    pub type_fingerprint: ContentHash,
 }
 
 /// How a symbol is declared in a module.
@@ -59,6 +73,8 @@ pub struct CompiledFunction {
     pub name: String,
     /// Whether the function has a slot in the function table; glue has none.
     pub has_slot: bool,
+    /// The contract of the code, for a function with a slot (D5 of `hot-reload`).
+    pub contract: Option<ContentHash>,
     /// The code's alignment in bytes.
     pub alignment: u64,
     pub code: Vec<u8>,
@@ -135,6 +151,7 @@ fn encode_artifact(artifact: &UnitArtifact, encoder: &mut Encoder) -> Option<()>
         declarations,
         functions,
         data,
+        values,
     } = artifact;
     encoder.length(declarations.len());
     for declaration in declarations {
@@ -168,12 +185,14 @@ fn encode_artifact(artifact: &UnitArtifact, encoder: &mut Encoder) -> Option<()>
         let CompiledFunction {
             name,
             has_slot,
+            contract,
             alignment,
             code,
             relocations,
         } = function;
         encoder.string(name);
         encoder.bool(*has_slot);
+        encode_hash(contract.as_ref(), encoder);
         encoder.u64(*alignment);
         encoder.bytes(code);
         encode_relocations(relocations, encoder)?;
@@ -200,7 +219,43 @@ fn encode_artifact(artifact: &UnitArtifact, encoder: &mut Encoder) -> Option<()>
         }
         encode_relocations(relocations, encoder)?;
     }
+    encoder.length(values.len());
+    for value in values {
+        let ValueRecord {
+            symbol,
+            size,
+            align,
+            type_fingerprint,
+        } = value;
+        encoder.string(symbol);
+        encoder.u32(*size);
+        encoder.u32(*align);
+        encoder.bytes(&type_fingerprint.0);
+    }
     Some(())
+}
+
+/// An optional hash: a presence byte, then its 32 bytes.
+fn encode_hash(hash: Option<&ContentHash>, encoder: &mut Encoder) {
+    match hash {
+        Some(hash) => {
+            encoder.u8(1);
+            encoder.bytes(&hash.0);
+        }
+        None => encoder.u8(0),
+    }
+}
+
+fn decode_hash(decoder: &mut Decoder) -> Option<ContentHash> {
+    Some(ContentHash(decoder.bytes()?.try_into().ok()?))
+}
+
+fn decode_optional_hash(decoder: &mut Decoder) -> Option<Option<ContentHash>> {
+    match decoder.u8()? {
+        0 => Some(None),
+        1 => Some(Some(decode_hash(decoder)?)),
+        _ => None,
+    }
 }
 
 fn decode_artifact(decoder: &mut Decoder) -> Option<UnitArtifact> {
@@ -228,6 +283,7 @@ fn decode_artifact(decoder: &mut Decoder) -> Option<UnitArtifact> {
         functions.push(CompiledFunction {
             name: decoder.string()?,
             has_slot: decoder.bool()?,
+            contract: decode_optional_hash(decoder)?,
             alignment: decoder.u64()?,
             code: decoder.bytes()?.to_vec(),
             relocations: decode_relocations(decoder)?,
@@ -247,10 +303,21 @@ fn decode_artifact(decoder: &mut Decoder) -> Option<UnitArtifact> {
             relocations: decode_relocations(decoder)?,
         });
     }
+    let count = decoder.sequence_length()?;
+    let mut values = Vec::new();
+    for _ in 0..count {
+        values.push(ValueRecord {
+            symbol: decoder.string()?,
+            size: decoder.u32()?,
+            align: decoder.u32()?,
+            type_fingerprint: decode_hash(decoder)?,
+        });
+    }
     Some(UnitArtifact {
         declarations,
         functions,
         data,
+        values,
     })
 }
 
@@ -536,6 +603,7 @@ mod tests {
             functions: vec![CompiledFunction {
                 name: "main::main".to_string(),
                 has_slot: true,
+                contract: Some(ContentHash([7; 32])),
                 alignment: 16,
                 code: vec![1, 2, 3, 4],
                 relocations: vec![
@@ -578,6 +646,12 @@ mod tests {
                     }],
                 },
             ],
+            values: vec![ValueRecord {
+                symbol: "main::LIMIT".to_string(),
+                size: 8,
+                align: 8,
+                type_fingerprint: ContentHash([9; 32]),
+            }],
         }
     }
 

@@ -3,29 +3,52 @@
 use crate::error::BackendError;
 use crate::instances::{check_instances, collect_instances};
 use crate::link::{FunctionTable, Linker};
+use crate::reload::LiveProgram;
 use crate::symbols::function_symbol;
-use cranelift_jit::JITModule;
 use prism_mir::MirFile;
 use prism_typed_tree::DeclarationPath;
-use std::sync::Arc;
 
 /// The stack size of the thread a program runs on, the same on every platform.
 pub const PROGRAM_STACK_SIZE: usize = 8 * 1024 * 1024;
 
-/// The files of a program, compiled and linked in memory.
+/// The files of a program, compiled and linked in memory, with the loads a watch session
+/// reloads into it.
 pub struct Program {
-    table: Arc<FunctionTable>,
-    /// The loads whose code the table points into; their memory is never freed while the
-    /// program lives.
-    _modules: Vec<JITModule>,
+    live: LiveProgram,
+}
+
+/// A program whose `main` runs on its own thread ([`Program::start`]).
+pub struct RunningProgram {
+    thread: std::thread::JoinHandle<i32>,
+}
+
+impl RunningProgram {
+    /// Waits for `main` to return and gives the exit status [`prism_runtime::finish`] gave.
+    pub fn join(self) -> Result<i32, BackendError> {
+        self.thread
+            .join()
+            .map_err(|_| BackendError::new("the program's thread panicked"))
+    }
+
+    /// Whether the program's thread has ended.
+    pub fn is_finished(&self) -> bool {
+        self.thread.is_finished()
+    }
 }
 
 impl Program {
-    pub(crate) fn new(table: Arc<FunctionTable>, module: JITModule) -> Self {
-        Self {
-            table,
-            _modules: vec![module],
-        }
+    pub(crate) fn new(live: LiveProgram) -> Self {
+        Self { live }
+    }
+
+    /// The program's code and tables across reloads.
+    pub fn live(&self) -> &LiveProgram {
+        &self.live
+    }
+
+    /// The program's code and tables across reloads, to prepare and hold a reload.
+    pub fn live_mut(&mut self) -> &mut LiveProgram {
+        &mut self.live
     }
 
     /// Compiles and links `files`, each of which passed [`crate::check_file`], with the
@@ -47,12 +70,12 @@ impl Program {
 
     /// The program's function table.
     pub fn table(&self) -> &FunctionTable {
-        &self.table
+        self.live.table()
     }
 
     /// The address the slot of `symbol` holds: the linked function, or the unlinked stub.
     pub fn function_address(&self, symbol: &str) -> Option<*const u8> {
-        self.table.get(symbol)
+        self.live.table().get(symbol)
     }
 
     /// Runs the program from `main`, a function without parameters or result, on a thread of
@@ -67,6 +90,21 @@ impl Program {
         arguments: Vec<String>,
         check_allocations: bool,
     ) -> Result<i32, BackendError> {
+        self.start(main, arguments, check_allocations, |_| {})?
+            .join()
+    }
+
+    /// Starts the program from `main` as [`Program::run`] does, without waiting for it:
+    /// `on_return` is called on the program's thread with the exit status once `main` returned
+    /// and the run finished. Under watch mode a runtime error parks the thread instead
+    /// (`prism_runtime::set_watch_mode`), and `on_return` is never called.
+    pub fn start(
+        &self,
+        main: &DeclarationPath,
+        arguments: Vec<String>,
+        check_allocations: bool,
+        on_return: impl FnOnce(i32) + Send + 'static,
+    ) -> Result<RunningProgram, BackendError> {
         let symbol = function_symbol(main);
         let address = self
             .function_address(&symbol)
@@ -76,22 +114,22 @@ impl Program {
             .name("main".to_string())
             .stack_size(PROGRAM_STACK_SIZE)
             .spawn(move || {
+                prism_runtime::start(arguments, check_allocations);
                 // The stack grows down from about here: generated code raises "stack overflow"
                 // before it reaches the end (D27).
                 let top = 0u8;
                 let top = std::hint::black_box(std::ptr::addr_of!(top)) as usize;
                 prism_runtime::set_stack_limit(top, PROGRAM_STACK_SIZE);
-                prism_runtime::start(arguments, check_allocations);
                 // SAFETY: `address` is the compiled `main`, whose signature `find_main` checked:
                 // no parameters, no result, the host's C calling convention.
                 let main: extern "C" fn() = unsafe { std::mem::transmute(address) };
                 main();
                 prism_runtime::clear_stack_limit();
-                prism_runtime::finish()
+                let status = prism_runtime::finish();
+                on_return(status);
+                status
             })
             .map_err(|error| BackendError::new(format!("starting the program: {}", error)))?;
-        thread
-            .join()
-            .map_err(|_| BackendError::new("the program's thread panicked"))
+        Ok(RunningProgram { thread })
     }
 }

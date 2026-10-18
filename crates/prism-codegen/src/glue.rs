@@ -331,6 +331,7 @@ impl<M: Module> UnitContext<'_, M> {
                     symbol,
                     id,
                     function,
+                    contract: None,
                 });
             } else if let Some((body, symbol, id)) = self.glue.queued_environment_drops.pop() {
                 let signature = self.glue_signature(GlueKind::Drop);
@@ -341,6 +342,7 @@ impl<M: Module> UnitContext<'_, M> {
                     symbol,
                     id,
                     function,
+                    contract: None,
                 });
             } else {
                 break;
@@ -504,13 +506,28 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             .ins()
             .load(pointer, MemFlagsData::trusted(), limit_address, 0);
         let stack_pointer = self.builder.ins().get_stack_pointer(pointer);
-        let overflow = self
+        let below = self
             .builder
             .ins()
             .icmp(IntCC::UnsignedLessThan, stack_pointer, limit);
+        let cold = self.builder.create_block();
         let failure = self.builder.create_block();
         let success = self.builder.create_block();
+        self.builder.set_cold_block(cold);
         self.builder.set_cold_block(failure);
+        self.builder.ins().brif(below, cold, &[], success, &[]);
+        // The cold path asks the runtime first, which applies a pending reload when the limit
+        // held the reload interrupt (D3 of `hot-reload`), so glue never reports a false overflow.
+        self.builder.switch_to_block(cold);
+        let failed = self
+            .context
+            .runtime_function("prism_rt_stack_check_failed")?;
+        let failed = self
+            .context
+            .module
+            .declare_func_in_func(failed, self.builder.func);
+        let call = self.builder.ins().call(failed, &[stack_pointer]);
+        let overflow = self.builder.inst_results(call)[0];
         self.builder
             .ins()
             .brif(overflow, failure, &[], success, &[]);

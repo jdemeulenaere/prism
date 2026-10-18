@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+// entry: app/main.prism
+package app
+import /lib/config
+fun main() { println(LIMIT); println(LIMIT + 1) }

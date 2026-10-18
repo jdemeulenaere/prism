@@ -8,7 +8,15 @@
 //! values) is named after its module, so the units of a program never collide. Each closure of
 //! the unit has a descriptor, `<closure symbol>#descriptor`, whose first word is relocated to
 //! the closure's slot (D3 of `closures`).
+//!
+//! A top-level value's storage and state belong to the program, not to the unit (D8 of
+//! `hot-reload`): the unit imports `<value>#storage` and `<value>#state` as data symbols, which
+//! the linker resolves to the program's value table, and lists each value it accesses with its
+//! size, alignment and type fingerprint ([`ValueRecord`]). Each function with a slot records the
+//! contract of its code ([`crate::contract`]), which decides whether a reload repoints its slot.
 
+use crate::artifact::ValueRecord;
+use crate::contract::{accessor_contract, slot_contract, TypeFingerprints};
 use crate::error::BackendError;
 use crate::glue::{GlueKind, GlueTable};
 use crate::layout::{EnvironmentKind, LayoutTable};
@@ -18,8 +26,8 @@ use crate::representation::{
 };
 use crate::supported::is_compiled;
 use crate::symbols::{
-    accessor_symbol, descriptor_symbol, initializer_symbol, slot_symbol, state_symbol,
-    storage_symbol, symbols_of,
+    accessor_symbol, descriptor_symbol, function_symbol, initializer_symbol, slot_symbol,
+    state_symbol, storage_symbol, symbols_of,
 };
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, UserFuncName,
@@ -27,6 +35,7 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+use prism_abi::ContentHash;
 use prism_mir::{BodyId, BodyOwner, MirFile};
 use prism_runtime::{RuntimeType, RUNTIME_FUNCTIONS, STACK_LIMIT_SYMBOL};
 use prism_typed_tree::{ArenaId, DeclarationPath, Type};
@@ -37,6 +46,9 @@ pub struct LoweredFunction {
     pub symbol: String,
     pub id: FuncId,
     pub function: Function,
+    /// The contract of its code, for a function with a slot; `None` for glue (D5 of
+    /// `hot-reload`).
+    pub contract: Option<ContentHash>,
 }
 
 /// The code unit of one file, or of one instance of a generic (D3 of `monomorphization`).
@@ -52,6 +64,8 @@ pub struct CodeUnit {
     /// The drop and clone glue its functions call, in order of their symbols: local to the unit,
     /// with no slot (D9 of `runtime-strings-and-drops`).
     pub glue: Vec<LoweredFunction>,
+    /// The top-level values whose storage it imports, in body order (D8 of `hot-reload`).
+    pub values: Vec<ValueRecord>,
 }
 
 /// The values of a top-level `val`'s initialization state byte (D18).
@@ -95,6 +109,15 @@ impl CodeUnit {
                 _ => body_signature(body, context.call_conv, context.pointer),
             };
             let id = context.declare_function(&symbol, &signature)?;
+            let environment = match body.owner {
+                BodyOwner::Closure { .. } => context
+                    .layouts
+                    .environment_layout(body)
+                    .ok()
+                    .map(|layout| layout.kind),
+                _ => None,
+            };
+            let contract = slot_contract(body, environment, &mut context.fingerprints);
             let mut function =
                 Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
             BodyLowering::lower(&mut context, body, &mut function, &mut builder_context)?;
@@ -102,6 +125,7 @@ impl CodeUnit {
                 symbol,
                 id,
                 function,
+                contract: Some(contract),
             });
             if let BodyOwner::Value(path) = &body.owner {
                 let accessor = context.accessor(path, body.return_type(), &mut builder_context)?;
@@ -114,6 +138,7 @@ impl CodeUnit {
             name: name.to_string(),
             functions,
             glue,
+            values: std::mem::take(&mut context.values),
         })
     }
 }
@@ -141,6 +166,10 @@ pub(crate) struct UnitContext<'m, M: Module> {
     /// The symbol of each body of the file, by id, built once ([`symbols_of`]).
     symbols: Vec<String>,
     stack_limit: Option<DataId>,
+    /// The fingerprints of the file's types, for contracts and value records.
+    pub fingerprints: TypeFingerprints<'m>,
+    /// The top-level values the unit imports the storage of.
+    values: Vec<ValueRecord>,
 }
 
 impl<'m, M: Module> UnitContext<'m, M> {
@@ -163,6 +192,8 @@ impl<'m, M: Module> UnitContext<'m, M> {
             descriptors: HashMap::new(),
             symbols: symbols_of(file),
             stack_limit: None,
+            fingerprints: TypeFingerprints::new(&file.types),
+            values: Vec::new(),
         };
         let id = context.define_bytes(&format!("{}#file", unit_name), name.as_bytes())?;
         context.file_name = (id, name.len());
@@ -197,16 +228,12 @@ impl<'m, M: Module> UnitContext<'m, M> {
         Ok(id)
     }
 
-    /// Defines a writable, zero-initialized data object of `size` bytes aligned to `align`.
-    fn define_zeroed(&mut self, name: &str, size: u32, align: u32) -> Result<DataId, BackendError> {
-        let id = self
+    /// Imports the writable data object `name`, which the linker resolves to storage of the
+    /// program's value table.
+    fn import_storage(&mut self, name: &str) -> Result<DataId, BackendError> {
+        Ok(self
             .module
-            .declare_data(name, Linkage::Local, true, false)?;
-        let mut description = DataDescription::new();
-        description.define_zeroinit(size as usize);
-        description.set_align(u64::from(align));
-        self.module.define_data(id, &description)?;
-        Ok(id)
+            .declare_data(name, Linkage::Import, true, false)?)
     }
 
     /// The file name's data object and length.
@@ -341,9 +368,16 @@ impl<'m, M: Module> UnitContext<'m, M> {
         let layout = self.layouts.layout(ty).map_err(|construct| {
             BackendError::new(format!("no layout for {}: {}", ty, construct.description()))
         })?;
-        let storage =
-            self.define_zeroed(&storage_symbol(path), layout.storage_size(), layout.align)?;
-        let state = self.define_zeroed(&state_symbol(path), 1, 1)?;
+        let storage = self.import_storage(&storage_symbol(path))?;
+        let state = self.import_storage(&state_symbol(path))?;
+        let type_fingerprint = self.fingerprints.fingerprint(ty);
+        self.values.push(ValueRecord {
+            symbol: function_symbol(path),
+            size: layout.storage_size(),
+            align: layout.align,
+            type_fingerprint,
+        });
+        let contract = accessor_contract(ty, &mut self.fingerprints);
         let initializer = self.slot(&initializer_symbol(path))?;
         let symbol = accessor_symbol(path);
         let mut accessor_signature = ir::Signature::new(self.call_conv);
@@ -435,6 +469,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             symbol,
             id,
             function,
+            contract: Some(contract),
         })
     }
 }

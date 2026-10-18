@@ -448,3 +448,42 @@ mod tests {
         marker_parameters: Vec::new(),
     };
 }
+
+/// The initializer hash of the first top-level value of `source` (D8 of `hot-reload`).
+fn initializer_of(source: &str) -> prism_abi::ContentHash {
+    let file = prism_parser::parse_source(source).expect("the source parses");
+    let declaration = file
+        .declarations
+        .iter()
+        .find_map(|declaration| match declaration {
+            prism_ast::Declaration::Var(value) => Some(value),
+            _ => None,
+        })
+        .expect("a top-level value");
+    prism_abi::initializer_hash(declaration)
+}
+
+#[test]
+fn an_initializer_hash_ignores_positions_and_covers_the_initializer() {
+    let base = initializer_of("val V: Int = noisy() + 1\nfun noisy(): Int = 1\n");
+    assert_eq!(
+        base,
+        initializer_of("fun noisy(): Int = 1\n\n\nval   V : Int =\n    noisy()   +   1\n")
+    );
+    assert_ne!(
+        base,
+        initializer_of("val V: Int = noisy() + 2\nfun noisy(): Int = 1\n")
+    );
+    assert_ne!(
+        base,
+        initializer_of("val V: Int = noisy()\nfun noisy(): Int = 1\n")
+    );
+    assert_ne!(
+        base,
+        initializer_of("val V = noisy() + 1\nfun noisy(): Int = 1\n")
+    );
+    assert_ne!(
+        base,
+        initializer_of("val W: Int = noisy() + 1\nfun noisy(): Int = 1\n")
+    );
+}

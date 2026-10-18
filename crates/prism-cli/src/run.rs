@@ -312,7 +312,7 @@ pub fn compile_program_with(
     check_instances(&missed).map_err(|errors| instance_errors(&graph, errors))?;
 
     let mut linker = Linker::new().map_err(WorkspaceError::Backend)?;
-    let mut artifacts: Vec<UnitArtifact> = Vec::new();
+    let mut artifacts: Vec<(String, UnitArtifact)> = Vec::new();
     for file in &mut files {
         let artifact = match file.artifact.take() {
             Some(artifact) => artifact,
@@ -334,14 +334,14 @@ pub fn compile_program_with(
                 artifact
             }
         };
-        artifacts.push(artifact);
+        artifacts.push((file.module.clone(), artifact));
     }
     let mut missed = missed.into_iter();
     for instance in &mut instances {
         match instance.artifact.take() {
             Some(artifact) => {
                 instance.reused = true;
-                artifacts.push(artifact);
+                artifacts.push((instance.planned.symbol.clone(), artifact));
             }
             None => {
                 let unit = missed.next().expect("every missed instance was built");
@@ -349,16 +349,16 @@ pub fn compile_program_with(
                     .compile_instance(&unit)
                     .map_err(WorkspaceError::Backend)?;
                 write_code(cache, EntryKind::Instance, instance.key.as_ref(), &artifact);
-                artifacts.push(artifact);
+                artifacts.push((instance.planned.symbol.clone(), artifact));
             }
         }
     }
     let code_generation = start.elapsed();
 
     let start = Instant::now();
-    for artifact in &artifacts {
+    for (unit, artifact) in &artifacts {
         linker
-            .define_artifact(artifact)
+            .define_artifact(unit, artifact)
             .map_err(WorkspaceError::Backend)?;
     }
     let compiled_functions = linker.compiled_functions();
@@ -683,6 +683,7 @@ fn entry_in_graph(graph: &DependencyGraph, entry: &Path) -> Result<PathBuf, Work
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::UnitId;
 
     fn workspace(name: &str, files: &[(&str, &str)]) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -706,6 +707,65 @@ mod tests {
             )),
             ..RunOptions::default()
         }
+    }
+
+    /// D9 of `hot-reload`: a body edit changes the edited file's unit alone, and a field added
+    /// to a type argument changes that type's file and the instances over it.
+    #[test]
+    fn a_body_edit_or_a_type_argument_edit_changes_only_its_units() {
+        const SHAPES: &str = "package lib\npublic struct P : Copy { val x: Int }\n\
+                              public fun origin(): P = P(1)\n";
+        const MATH: &str = "package lib\npublic fun twice(n: Int): Int = n * 2\n";
+        let root = workspace(
+            "plan_edits",
+            &[
+                ("lib/box.prism", BOX),
+                ("lib/shapes.prism", SHAPES),
+                ("lib/math.prism", MATH),
+                (
+                    "app/main.prism",
+                    "package app\nimport /lib/box\nimport /lib/shapes\nimport /lib/math\n\
+                     fun main() { println(keep(origin()).x); println(keep(2)); println(twice(3)) }\n",
+                ),
+            ],
+        );
+        let entry = root.join("app/main.prism");
+        let options = options(&root);
+        let before = compile_program_with(&entry, &options)
+            .unwrap()
+            .plan
+            .unwrap();
+        fs::write(root.join("lib/math.prism"), MATH.replace("n * 2", "n * 3")).unwrap();
+        let body = compile_program_with(&entry, &options)
+            .unwrap()
+            .plan
+            .unwrap();
+        assert_eq!(
+            body.changed_since(&before),
+            [UnitId::File("lib/math".to_string())]
+        );
+        fs::write(
+            root.join("lib/shapes.prism"),
+            SHAPES
+                .replace("val x: Int }", "val x: Int, val y: Int }")
+                .replace("P(1)", "P(1, 2)"),
+        )
+        .unwrap();
+        let field = compile_program_with(&entry, &options)
+            .unwrap()
+            .plan
+            .unwrap();
+        let changed = field.changed_since(&body);
+        // `app/main` imports the edited type, whose definition is in its import's ABI hash.
+        assert_eq!(
+            changed,
+            [
+                UnitId::File("lib/shapes".to_string()),
+                UnitId::File("app/main".to_string()),
+                UnitId::Instance("lib/box::keep<lib/shapes::P>".to_string()),
+            ]
+        );
+        fs::remove_dir_all(&root).ok();
     }
 
     const BOX: &str =
@@ -735,8 +795,7 @@ mod tests {
         let before = before.plan.unwrap();
         assert_eq!(before.units.len(), 2);
         assert_eq!(before.instances.len(), 2);
-        let (units, instances) = before.changed_since(&before);
-        assert!(units.is_empty() && instances.is_empty());
+        assert!(before.changed_since(&before).is_empty());
 
         fs::write(
             root.join("lib/box.prism"),
@@ -745,14 +804,13 @@ mod tests {
         .unwrap();
         let after = compile_program_with(&entry, &options).unwrap();
         let plan = after.plan.unwrap();
-        let (units, instances) = plan.changed_since(&before);
-        let units: Vec<&str> = units.iter().map(|unit| unit.module.as_str()).collect();
-        let instances: Vec<&str> = instances
-            .iter()
-            .map(|instance| instance.display.as_str())
-            .collect();
-        assert_eq!(units, ["lib/box"]);
-        assert_eq!(instances, ["lib/box::keep<Int>"]);
+        assert_eq!(
+            plan.changed_since(&before),
+            [
+                UnitId::File("lib/box".to_string()),
+                UnitId::Instance("lib/box::keep<Int>".to_string())
+            ]
+        );
         fs::remove_dir_all(&root).ok();
     }
 }

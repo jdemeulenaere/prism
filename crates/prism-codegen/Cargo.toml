@@ -10,6 +10,9 @@ prism-ast = { path = "../prism-ast" }
 prism-typed-tree = { path = "../prism-typed-tree" }
 prism-mir = { path = "../prism-mir" }
 prism-runtime = { path = "../prism-runtime" }
+# Type fingerprints and slot contracts hash with the ABI's deterministic hasher (D6 of
+# `hot-reload`).
+prism-abi = { path = "../prism-abi" }
 # Pinned exactly, so that generated code, `prism dump-clif` and the timing baseline only change
 # with a deliberate upgrade (D2 of `codegen-core`).
 cranelift-codegen = "=0.136.2"
@@ -19,7 +22,6 @@ cranelift-jit = "=0.136.2"
 cranelift-native = "=0.136.2"
 
 [dev-dependencies]
-prism-abi = { path = "../prism-abi" }
 prism-parser = { path = "../prism-parser" }
 prism-typechecker = { path = "../prism-typechecker" }
 prism-borrowck = { path = "../prism-borrowck" }

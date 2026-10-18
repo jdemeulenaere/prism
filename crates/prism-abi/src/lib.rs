@@ -18,6 +18,6 @@ pub use abi_type::{
 pub use error::AbiError;
 pub use hasher::{ContentHash, DeterministicHasher};
 pub use signature::{
-    declared_types, marker_parameters, type_definitions, AbiParameter, AbiReceiver,
-    AbiTypeDefinition, AbiTypeMembers, ExportedSymbol, FileAbi,
+    declared_types, initializer_hash, marker_parameters, type_definitions, AbiParameter,
+    AbiReceiver, AbiTypeDefinition, AbiTypeMembers, ExportedSymbol, FileAbi,
 };

@@ -35,7 +35,7 @@ A reload MUST compile exactly the code units whose code key in the program's bui
 - **THEN** stdout holds `1` and `2`, and stderr begins with `reload: applied lib/pick.prism (1 instance)`
 
 ### Requirement: Reloads Are Applied on the Program's Thread at Its Next Call
-A reload MUST be compiled while the program keeps running. It MUST be applied on the program's own thread at the next safe point: entry to a function that calls another, entry to glue, or a runtime call at which an edit script stops the program. All of a reload's slot changes MUST take effect together, between two operations of the program.
+A reload MUST be compiled while the program keeps running. It MUST be applied on the program's own thread at the next safe point: entry to a compiled body, entry to glue, or a runtime call at which an edit script stops the program. All of a reload's slot changes MUST take effect together, between two operations of the program.
 
 #### Scenario: A running loop reaches new code at its next call
 - **WHEN** `fun step(i: Int): Int = i` and `fun main() { var i = 0; while (i < 4) { println(step(i)); i += 1 } }` run under the script `after line 2: edit main.prism main.prism.v2`, where `main.prism.v2` declares `fun step(i: Int): Int = i * 10` and the same `main`
