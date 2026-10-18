@@ -22,7 +22,8 @@ use prism_mir::{
     TerminatorKind,
 };
 use prism_typed_tree::{Type, TypeTable};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// How deep [`classify`] looks into nested structs and enums. Infinitely sized types are
 /// rejected by the type checker (`E4023`), and a box's contents are looked into once per type,
@@ -127,7 +128,11 @@ pub fn first_unsupported(body: &Body, types: &TypeTable) -> Option<(Construct, S
     if body.is_compose {
         return Some((Construct::ComposableFunctions, body.span));
     }
-    let checker = BodyChecker { body, types };
+    let checker = BodyChecker {
+        body,
+        types,
+        classified: RefCell::new(HashMap::new()),
+    };
     for (_, block) in body.blocks.iter() {
         for statement in &block.statements {
             if let Some(construct) = checker.statement(&statement.kind) {
@@ -220,9 +225,24 @@ pub fn is_lowered_subtype(from: &Type, to: &Type) -> bool {
 struct BodyChecker<'a> {
     body: &'a Body,
     types: &'a TypeTable,
+    /// The classification of each type already classified: a body names the same types again
+    /// and again, and classifying an enum walks all of its variants.
+    classified: RefCell<HashMap<Type, Option<Construct>>>,
 }
 
 impl BodyChecker<'_> {
+    /// [`classify`] of `ty`, computed once per type.
+    fn classify(&self, ty: &Type) -> Option<Construct> {
+        if let Some(construct) = self.classified.borrow().get(ty) {
+            return construct.clone();
+        }
+        let construct = classify(ty, self.types);
+        self.classified
+            .borrow_mut()
+            .insert(ty.clone(), construct.clone());
+        construct
+    }
+
     fn local_type(&self, place: &Place) -> &Type {
         &self.body.locals[place.local].ty
     }
@@ -234,7 +254,7 @@ impl BodyChecker<'_> {
     /// A place is supported when its local is. Its projections are: the MIR has no index
     /// projection (D5 of `runtime-strings-and-drops`).
     fn place(&self, place: &Place) -> Option<Construct> {
-        classify(self.local_type(place), self.types)
+        self.classify(self.local_type(place))
     }
 
     fn operand(&self, operand: &Operand) -> Option<Construct> {
@@ -248,7 +268,7 @@ impl BodyChecker<'_> {
                 | Constant::String(_)
                 | Constant::Unit
                 | Constant::TopLevelValue(_) => None,
-                Constant::Null(ty) => classify(ty, self.types),
+                Constant::Null(ty) => self.classify(ty),
                 // A variant constructor reaches the backend only as a value; its calls are
                 // aggregates.
                 Constant::Function(_) | Constant::VariantConstructor { .. } => {
@@ -282,7 +302,8 @@ impl BodyChecker<'_> {
             }
             Rvalue::Binary(_, left, right) => self.operand(left).or_else(|| self.operand(right)),
             Rvalue::Borrow { place, .. } | Rvalue::Discriminant(place) => self.place(place),
-            Rvalue::Aggregate(kind, operands) => classify(&kind.ty(), self.types)
+            Rvalue::Aggregate(kind, operands) => self
+                .classify(&kind.ty())
                 .or_else(|| operands.iter().find_map(|operand| self.operand(operand))),
             Rvalue::Subtype(operand) => self.operand(operand).or_else(|| {
                 let from = operand.try_ty(self.body, self.types)?;
@@ -329,12 +350,12 @@ impl BodyChecker<'_> {
                     .or_else(|| {
                         parameters
                             .iter()
-                            .find_map(|ty| classify(&ty.substitute(type_arguments), self.types))
+                            .find_map(|ty| self.classify(&ty.substitute(type_arguments)))
                     })
                     .or_else(|| self.place(destination))
                     .or_else(|| {
                         self.place_type(destination)
-                            .and_then(|ty| classify(&ty, self.types))
+                            .and_then(|ty| self.classify(&ty))
                     })
             }
         }
