@@ -32,6 +32,13 @@ Arguments after `--` MUST be passed to the program and never interpreted by `pri
 - **WHEN** `prism run --no-cache --explain-cache main.prism` runs on `fun main() { println(1) }`
 - **THEN** stderr holds `Cache: off` and `  checked main.prism`, stdout holds `1`, and it exits with status 0
 
+### Requirement: Watch Options
+`--watch`, before the file, MUST run the program in a watch session that reloads it when its files change (`hot-reload`), passing the same arguments to every run of `main`. `--edits <script>` MUST drive that session's reloads from a script, and without `--watch` is a usage error with status 1. Under `--watch`, `--timings` MUST also print the stages of each reload, `--no-cache` keeps the whole session out of the cache, and `--explain-cache` explains its first load.
+
+#### Scenario: Edits without watching
+- **WHEN** `prism run --edits edits main.prism` runs
+- **THEN** it prints the usage of `prism run` to stderr, runs nothing and exits with status 1
+
 ### Requirement: Program Entry Point
 The entry file MUST declare a top-level function `main` that has no type parameters, receiver or parameters, returns `Unit` (written or omitted) and is not `compose`. Without one, `prism run` MUST report `E6002` (`MissingMain`); a `main` breaking these rules, or a top-level `val` named `main`, MUST be reported as `E6003` (`InvalidMain`). A `main` of any other file is an ordinary function.
 
@@ -108,6 +115,13 @@ A runtime error MUST flush the program's output, write `panic: <message>` and th
 #### Scenario: Runtime error location
 - **WHEN** `app/main.prism` declares `fun zero(): Int = 0` on line 2 and `fun main() { val a = 1; println(a / zero()) }` on line 3, with `a / zero()` starting at column 33
 - **THEN** stderr is exactly `panic: division by zero` and `  at app/main.prism:3:33`, each followed by a newline
+
+### Requirement: A Runtime Error Under Watch Ends Only the Run
+Under `prism run --watch`, a runtime error MUST be reported as "Runtime Errors End the Program" states, and MUST end the program's run instead of the process: no further code of the run and no drop runs, and the watch session continues (`hot-reload`).
+
+#### Scenario: A runtime error under watch
+- **WHEN** `prism run --watch --edits edits app/main.prism` runs the program of "Runtime error location", with an edit script whose only step is `after exit` and fixes `zero` to return `1`
+- **THEN** stderr holds `panic: division by zero` and `  at app/main.prism:3:33`, then `watch: the program stopped with a runtime error; waiting for changes`, and the program runs again
 
 ### Requirement: Stack Overflow Is a Runtime Error
 A program whose calls nest deeper than its stack allows MUST raise the runtime error "stack overflow" at the declaration of the function being entered, or with no location when the stack runs out inside drop, clone or equality glue, which ends the program as any runtime error does. A program MUST get a stack of the same size on every platform.
@@ -898,3 +912,8 @@ Decisions from `collections` (planned autonomously on 2026-10-18, refined while 
 - **Index errors happen after the operands and before any change** (D8). An element access, `insert` or `removeAt` checks its index after its operands are evaluated, so `xs[f()] = g()` runs `f` and `g` first, as Kotlin's `xs.set(f(), g())` does; runtime errors do not unwind, so no partially changed list is ever observed. `removeLast()` of an empty list has its own message, after Kotlin's `NoSuchElementException`.
 - **An element's index is evaluated before the assigned value** (D21). The MIR evaluated an assignment's value before its target, which no earlier target could observe; for an element the target's index now comes first, matching Kotlin and the left-to-right order of calls.
 - **A reported benchmark for adds** (D19). An ignored release test (`crates/prism-cli/tests/list_timing.rs`) reports the wall time of `prism run` on a million adds and their sum against 20 ms, failing only with `PRISM_ASSERT_TIMING=1`, like the startup benchmark: 4.2 ms median, 4.8 ms 90th percentile, startup included (Apple arm64, 2026-10-18). Asserting the time in `cargo test` would be flaky on shared machines.
+
+Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **A runtime error under `--watch` stops the run, not the process** (D13). The error is reported as for `prism run`; then `panic.rs::stop` clears the stack limit, tells the session and parks the program thread forever, so no further code and no drop runs, as this spec requires, and the session waits for the next change, which runs `main` in a fresh program. A parked thread holds no runtime lock and keeps 8 MiB of reserved address space. Rejected: exiting the session (one bad edit would end it); unwinding (Prism has none).
+- **Cache options under `--watch`** (D19). `--no-cache` keeps the whole session out of the build cache, with keys computed for the process alone; `--explain-cache` explains the first load only, since the `reload: applied` line already names what each reload defines.
