@@ -1,0 +1,4 @@
+// expect: E4017
+struct User { val name: String }
+
+fun g(h: Heap<User>): User = h

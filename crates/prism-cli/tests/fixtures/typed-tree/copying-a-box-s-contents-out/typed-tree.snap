@@ -1,0 +1,6 @@
+module main
+fun main::f(h: Heap<Int>): Int @2:1
+  local %0 h: Heap<Int> (parameter)
+  copy: Int @2:28
+    deref: Int @2:28
+      local %0 h: Heap<Int> @2:28

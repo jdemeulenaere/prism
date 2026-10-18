@@ -626,8 +626,9 @@ fn borrow_passed_where_a_value_is_expected() {
 }
 
 #[test]
-fn operators_do_not_read_through_heap() {
-    assert_codes("fun f(h: Heap<Int>): Int = h + 1\n", &["E4002"]);
+fn operators_read_through_heap() {
+    // D4 of `heap-boxes`: operators read through boxes as through references.
+    assert_ok("fun f(h: Heap<Int>): Int = h + 1\n");
 }
 
 // Order-independent inference of private declarations (typechecker-soundness D5).

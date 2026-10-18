@@ -1,0 +1,6 @@
+// expect: ok
+fun f(h: Heap<Int>, s: Heap<String>) {
+    println(h)
+    println(s)
+    println(s)
+}

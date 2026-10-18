@@ -1,0 +1,7 @@
+// expect: ok
+fun <T> same(x: &T): &T = x
+
+fun f(h: Heap<Int>): Int {
+    val r = same(&h)
+    return 1
+}

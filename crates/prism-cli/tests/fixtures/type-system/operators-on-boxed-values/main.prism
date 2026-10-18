@@ -1,0 +1,2 @@
+// expect: ok
+fun f(h: Heap<Int>, r: &Heap<Int>, c: Heap<Bool>): Int = if (c && h == r) h + r * 2 else -h

@@ -1,0 +1,8 @@
+// expect: E4004
+fun bump(r: &mut Int) {}
+
+fun f(h: Heap<Int>) {
+    var m = h
+    bump(m)
+    bump(&mut m)
+}

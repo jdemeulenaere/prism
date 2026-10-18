@@ -102,8 +102,8 @@ enum Origin {
 enum Adjustment {
     /// The value is used as it is: moved, or copied when it is `Copy`.
     None,
-    /// A `Copy` value read out of `layers` references, inside a `?` when `through_nullable`
-    /// (`(&Int)?` used as an `Int?`).
+    /// A `Copy` value read out of `layers` references and boxes, inside a `?` when
+    /// `through_nullable` (`(&Int)?` used as an `Int?`).
     CopyOut {
         layers: usize,
         through_nullable: bool,
@@ -119,6 +119,16 @@ enum Adjustment {
     Reborrow,
     /// A borrowed nullable `&(T?)` read as an optional borrow `(&T)?`.
     NullableView,
+    /// The contents of a box borrowed (D4 of `heap-boxes`), reached by `steps` dereferences of
+    /// references and boxes and, when `through_nullable`, the payload of one nullable: an
+    /// argument lending them to a reference parameter (`eval(h)` for `h: Heap<Expr>`), or a
+    /// borrowed box viewed as borrowed contents (`&Heap<T>` as `&T`, `&(Heap<T>?)` as `(&T)?`).
+    BoxContents {
+        steps: usize,
+        through_nullable: bool,
+        mutable: bool,
+        origin: BorrowOrigin,
+    },
 }
 
 /// Where a value is checked against an expected type, which decides the implicit borrows
@@ -137,8 +147,13 @@ enum Coercion {
     /// The value fits after the adjustment.
     Fits(Adjustment),
     /// The value fits only by moving `ty` out of a borrow, which is not `Copy` (`E4017`).
-    /// `nullable` is true when the borrow is inside a `?`.
-    MovesOutOfBorrow { ty: Type, nullable: bool },
+    /// `nullable` is true when the borrow is inside a `?`, and `through_box` when every layer
+    /// around `ty` is a `Heap<T>`, whose contents move out only through `unbox()`.
+    MovesOutOfBorrow {
+        ty: Type,
+        nullable: bool,
+        through_box: bool,
+    },
     /// The value does not fit.
     NoFit,
 }
@@ -2579,12 +2594,13 @@ impl TypeChecker {
     }
 
     /// Infers an operator operand or a condition. Operators read through references (D1 of
-    /// `typechecker-soundness`), so every `&` and `&mut` layer is peeled: with `a: &Int`,
-    /// `a + 1` is an `Int`. `Heap<T>` is not peeled. Each peeled layer is an explicit
-    /// dereference, and the operand is read in place (D5 of `typed-tree`).
+    /// `typechecker-soundness`) and boxes (D4 of `heap-boxes`), so every `&`, `&mut` and
+    /// `Heap<T>` layer is peeled: with `a: &Int` or `a: Heap<Int>`, `a + 1` is an `Int`. Each
+    /// peeled layer is an explicit dereference, and the operand is read in place (D5 of
+    /// `typed-tree`).
     fn infer_operand(&mut self, expr: &Expr) -> ExpressionId {
         let id = self.with_origin(Origin::Value, |c| c.infer_expr(expr));
-        self.peel_reference_nodes(id)
+        self.peel_indirection_nodes(id)
     }
 
     /// Checks an operator operand or a condition against `expected`, reading through references
@@ -4679,10 +4695,8 @@ impl TypeChecker {
             c.with_consuming(!is_place, |c| c.infer_expr(expr))
         });
         let found_ty = self.ty(found);
-        let mut referent = &found_ty;
-        while let Type::Reference { inner, .. } = referent {
-            referent = inner;
-        }
+        // Printed values are read through references and boxes (D4 of `heap-boxes`).
+        let referent = peel_indirection(&found_ty);
         let parameter = match referent {
             Type::Int | Type::Float | Type::Bool | Type::Char => referent.clone(),
             Type::String => Type::Reference {
@@ -5473,7 +5487,8 @@ impl TypeChecker {
         if member == "clone" && self.is_clone(&clone_target(&receiver_ty, is_safe_nav).0) {
             return self.infer_clone_call(receiver, is_safe_nav, args, span);
         }
-        if member == TO_STRING && has_builtin_to_string(&clone_target(&receiver_ty, is_safe_nav).0)
+        if member == TO_STRING
+            && has_builtin_to_string(peel_indirection(&clone_target(&receiver_ty, is_safe_nav).0))
         {
             return self.infer_to_string_call(receiver, is_safe_nav, type_arguments, args, span);
         }
@@ -5902,6 +5917,7 @@ impl TypeChecker {
                         borrow: None,
                         clone,
                         destructure: None,
+                        unbox: None,
                         span: expr.span,
                     });
                 }
@@ -6227,14 +6243,17 @@ impl TypeChecker {
                 return Coercion::Fits(adjustment);
             }
         }
+        if let Some(adjustment) = box_contents(found, expected, site) {
+            return Coercion::Fits(adjustment);
+        }
         if nullable_view(found).is_some_and(|view| view.is_assignable_to(expected)) {
             return Coercion::Fits(Adjustment::NullableView);
         }
         self.copy_out(found, expected)
     }
 
-    /// Copies a `Copy` value out of the references around `found` until it fits `expected`,
-    /// directly or inside a `?` (`(&T)?` as a `T?`).
+    /// Copies a `Copy` value out of the references and boxes around `found` until it fits
+    /// `expected`, directly or, for references, inside a `?` (`(&T)?` as a `T?`).
     fn copy_out(&self, found: &Type, expected: &Type) -> Coercion {
         let (found, expected, through_nullable) = match (found, expected) {
             (Type::Nullable(found), Type::Nullable(expected))
@@ -6246,8 +6265,16 @@ impl TypeChecker {
         };
         let mut referent = found;
         let mut layers = 0;
-        while let Type::Reference { inner, .. } = referent {
-            referent = inner;
+        let mut through_box = true;
+        loop {
+            referent = match referent {
+                Type::Reference { inner, .. } => {
+                    through_box = false;
+                    inner
+                }
+                Type::Heap(inner) if !through_nullable => inner,
+                _ => return Coercion::NoFit,
+            };
             layers += 1;
             if !referent.is_assignable_to(expected) {
                 continue;
@@ -6261,10 +6288,10 @@ impl TypeChecker {
                 Coercion::MovesOutOfBorrow {
                     ty: referent.clone(),
                     nullable: through_nullable,
+                    through_box,
                 }
             };
         }
-        Coercion::NoFit
     }
 
     /// Checks `expr`, already inferred as the node `found_id`, against `expected` at `site`,
@@ -6304,7 +6331,24 @@ impl TypeChecker {
                 self.wrap_error(found_id)
             }
             Coercion::Fits(adjustment) => self.apply_adjustment(found_id, adjustment, expected),
-            Coercion::MovesOutOfBorrow { ty, nullable } => {
+            // The contents of a box move out only through `unbox()` (D6 of `heap-boxes`).
+            Coercion::MovesOutOfBorrow {
+                ty,
+                through_box: true,
+                ..
+            } => {
+                self.errors.push(TypeError::CannotMoveOut {
+                    source: format!("the contents of 'Heap' '{}'", expr),
+                    ty,
+                    borrow: None,
+                    clone: None,
+                    destructure: None,
+                    unbox: Some(format!("{}.unbox()", expr)),
+                    span: expr.span,
+                });
+                self.wrap_error(found_id)
+            }
+            Coercion::MovesOutOfBorrow { ty, nullable, .. } => {
                 let clone = self.is_clone(&ty).then(|| match nullable {
                     true => format!("{}?.clone()", expr),
                     false => format!("{}.clone()", expr),
@@ -6315,6 +6359,7 @@ impl TypeChecker {
                     borrow: None,
                     clone,
                     destructure: None,
+                    unbox: None,
                     span: expr.span,
                 });
                 self.wrap_error(found_id)
@@ -6352,6 +6397,11 @@ impl TypeChecker {
                     found_id
                 };
                 for _ in 0..layers {
+                    // A box that is not a place is held in a temporary, which drops it at the
+                    // end of the statement.
+                    if matches!(self.ty(place), Type::Heap(_)) {
+                        place = self.as_place(place);
+                    }
                     place = self.deref(place);
                 }
                 let copy = self.copy(place);
@@ -6395,6 +6445,42 @@ impl TypeChecker {
                 self.borrow(mutable, BorrowOrigin::Argument, referent)
             }
             Adjustment::NullableView => self.nullable_view_chain(found_id),
+            Adjustment::BoxContents {
+                steps,
+                through_nullable,
+                mutable,
+                origin,
+            } => {
+                // An owned box is lent where it lives, or from a temporary that drops it at the
+                // end of the statement; a borrowed one is reborrowed at its contents.
+                let owned = !matches!(self.ty(found_id), Type::Reference { .. });
+                let mut place = if owned {
+                    self.as_place(found_id)
+                } else {
+                    found_id
+                };
+                for _ in 0..steps {
+                    place = match self.ty(place) {
+                        Type::Nullable(inner) => {
+                            let inner = inner.as_ref().clone();
+                            let kind = ExpressionKind::NonNullPayload { nullable: place };
+                            self.add(kind, inner, span)
+                        }
+                        _ => self.deref(place),
+                    };
+                }
+                let borrow = self.borrow(mutable, origin, place);
+                if through_nullable {
+                    let origin = if owned {
+                        SafeNavigationOrigin::BorrowContents
+                    } else {
+                        SafeNavigationOrigin::NullableView
+                    };
+                    self.close_chain(None, borrow, origin, span)
+                } else {
+                    borrow
+                }
+            }
         };
         self.coerce_to(adjusted, expected)
     }
@@ -6458,6 +6544,7 @@ impl TypeChecker {
             borrow: (!is_borrowed).then(|| format!("&{}", expr)),
             clone,
             destructure,
+            unbox: None,
             span: expr.span,
         });
     }
@@ -6697,7 +6784,7 @@ impl TypeChecker {
         } else {
             (None, receiver)
         };
-        let place = self.peel_reference_nodes(base);
+        let place = self.peel_indirection_nodes(base);
         let copy = self.copy(place);
         let copy_ty = self.ty(copy);
         let call = Call {
@@ -7211,6 +7298,75 @@ fn implicit_borrow(found: &Type, expected: &Type, is_place: bool) -> Option<Adju
     }
 }
 
+/// How a box's contents are borrowed to fit `expected`, a reference or optional reference, when
+/// `found` holds a `Heap<T>` (D4 of `heap-boxes`): the steps through the references, boxes and at
+/// most one nullable of `found` that reach a place of the referent's exact type, with at least
+/// one box among them. An owned box (or nullable box) lends its contents only to a shared
+/// reference parameter; a borrowed one converts anywhere, mutably only through `&mut` layers.
+fn box_contents(found: &Type, expected: &Type, site: Site) -> Option<Adjustment> {
+    let (target, nullable) = match expected {
+        Type::Reference { .. } => (expected, false),
+        Type::Nullable(inner) if matches!(**inner, Type::Reference { .. }) => {
+            (inner.as_ref(), true)
+        }
+        _ => return None,
+    };
+    let Type::Reference { mutable, .. } = target else {
+        return None;
+    };
+    let argument = matches!(site, Site::Argument { .. });
+    let owned = !matches!(found, Type::Reference { .. });
+    if owned && (*mutable || !argument) {
+        return None;
+    }
+    let (mut ty, mut steps) = (found, 0);
+    let (mut saw_box, mut entered_nullable, mut writable) = (false, false, true);
+    loop {
+        if saw_box && entered_nullable == nullable && (!*mutable || writable) {
+            let reference = Type::Reference {
+                mutable: *mutable,
+                inner: Box::new(ty.clone()),
+            };
+            if reference.is_assignable_to(target) {
+                return Some(Adjustment::BoxContents {
+                    steps,
+                    through_nullable: nullable,
+                    mutable: *mutable,
+                    origin: if argument {
+                        BorrowOrigin::Argument
+                    } else {
+                        BorrowOrigin::Conversion
+                    },
+                });
+            }
+        }
+        ty = match ty {
+            Type::Reference { mutable, inner } => {
+                writable &= *mutable;
+                inner
+            }
+            Type::Heap(inner) => {
+                saw_box = true;
+                inner
+            }
+            Type::Nullable(inner) if nullable && !entered_nullable => {
+                entered_nullable = true;
+                inner
+            }
+            _ => return None,
+        };
+        steps += 1;
+    }
+}
+
+/// `ty` without its `Heap<T>` layers.
+fn peel_boxes(mut ty: &Type) -> &Type {
+    while let Type::Heap(inner) = ty {
+        ty = inner;
+    }
+    ty
+}
+
 /// The borrow to suggest when `expr`, of type `found`, does not fit the reference `expected`
 /// but its referent would: a written `&` outside arguments (D1 of `reference-access`), and a
 /// written `&mut` everywhere, since a mutable borrow is never implicit.
@@ -7218,7 +7374,8 @@ fn borrow_help(expr: &Expr, found: &Type, expected: &Type, site: Site) -> Option
     let Type::Reference { mutable, inner } = expected else {
         return None;
     };
-    if matches!(found, Type::Reference { .. }) || !found.is_assignable_to(inner) {
+    // A box is borrowed at its contents too (D4 of `heap-boxes`).
+    if matches!(found, Type::Reference { .. }) || !peel_boxes(found).is_assignable_to(inner) {
         return None;
     }
     match (mutable, site) {

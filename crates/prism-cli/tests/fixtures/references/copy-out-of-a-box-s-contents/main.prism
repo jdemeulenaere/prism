@@ -1,0 +1,13 @@
+// expect: ok
+struct Point : Copy { val x: Int }
+
+fun f(h: Heap<Int>, r: &Heap<Point>): Int {
+    val n: Int = h
+    val p: Point = r
+    return h
+}
+
+fun g(h: Heap<Int>): Heap<Int> {
+    val k = h
+    return k
+}

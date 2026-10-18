@@ -1,0 +1,6 @@
+// expect: ok
+struct Node { val value: Int, val next: Heap<Node>? }
+
+fun contents(h: &Heap<Node>): &Node = h
+
+fun next(n: &Node): (&Node)? = &n.next

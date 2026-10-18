@@ -1,0 +1,19 @@
+module main
+fun main::eval(e: &Int): Int @2:1
+  local %0 e: &Int (parameter)
+  copy: Int @2:26
+    deref: Int @2:26
+      local %0 e: &Int @2:26
+fun main::f(h: Heap<Int>, r: &Heap<Int>): Int @4:1
+  local %0 h: Heap<Int> (parameter)
+  local %1 r: &Heap<Int> (parameter)
+  binary +: Int @4:43
+    call main::eval: Int @4:43
+      argument e: borrow (argument): &Int @4:48
+        deref: Int @4:48
+          local %0 h: Heap<Int> @4:48
+    call main::eval: Int @4:53
+      argument e: borrow (argument): &Int @4:58
+        deref: Int @4:58
+          deref: Heap<Int> @4:58
+            local %1 r: &Heap<Int> @4:58

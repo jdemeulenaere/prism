@@ -1,0 +1,8 @@
+// expect: E4017
+struct User { val name: String }
+
+fun take(u: User) {}
+
+fun f(h: Heap<User>) {
+    take(h)
+}

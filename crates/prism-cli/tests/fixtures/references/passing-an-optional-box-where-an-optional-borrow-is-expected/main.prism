@@ -1,0 +1,6 @@
+// expect: ok
+struct Tree { val value: Int, val left: Heap<Tree>? }
+
+fun depth(t: (&Tree)?): Int = 0
+
+fun f(t: &Tree): Int = depth(t.left)

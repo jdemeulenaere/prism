@@ -1,0 +1,4 @@
+// expect: ok
+fun eval(e: &Int): Int = e
+
+fun f(h: Heap<Int>, r: &Heap<Int>): Int = eval(h) + eval(r)

@@ -186,6 +186,9 @@ pub enum TypeError {
         /// For a field of a whole owned local, the destructuring declaration that takes it out
         /// (`val (name) = u`, D7 of `payload-patterns`).
         destructure: Option<String>,
+        /// For the contents of a box, the call that moves them out (`h.unbox()`, D6 of
+        /// `heap-boxes`).
+        unbox: Option<String>,
         span: Span,
     },
 
@@ -493,6 +496,15 @@ impl TypeError {
             TypeError::NotCloneable { ty, .. } => {
                 format!("'{}' is not 'Clone', so it cannot be cloned", ty)
             }
+            TypeError::CannotMoveOut {
+                source,
+                ty,
+                unbox: Some(_),
+                ..
+            } => format!(
+                "cannot move out of {}: its type '{}' is not 'Copy', so it cannot be copied out of the box",
+                source, ty
+            ),
             TypeError::CannotMoveOut {
                 source,
                 ty,

@@ -1,0 +1,12 @@
+// expect: ok
+enum Expr { Lit(Int), Neg(Heap<Expr>) }
+
+fun eval(e: &Expr): Int = 0
+
+fun f(h: Heap<Expr>, r: &Heap<Expr>, hh: Heap<Heap<Expr>>) {
+    eval(h)
+    eval(h)
+    eval(r)
+    eval(hh)
+    eval(Heap(Expr.Lit(1)))
+}

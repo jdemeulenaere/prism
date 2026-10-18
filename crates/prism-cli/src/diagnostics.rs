@@ -365,6 +365,7 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             borrow,
             clone,
             destructure,
+            unbox,
             ty,
             ..
         } => match borrow {
@@ -382,12 +383,22 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             }
             // The source is already a borrow: clone it, or keep borrowing where it is used.
             None => {
+                if let Some(unbox) = unbox {
+                    out.push_str(&format!(
+                        "   = help: move the contents out of the box: '{}'\n",
+                        unbox
+                    ));
+                }
                 if let Some(clone) = clone {
                     out.push_str(&format!("   = help: clone it: '{}'\n", clone));
                 }
                 out.push_str(&format!(
                     "   = help: {}take a '&{}' where the value is used, instead of a '{}'\n",
-                    if clone.is_some() { "or " } else { "" },
+                    if clone.is_some() || unbox.is_some() {
+                        "or "
+                    } else {
+                        ""
+                    },
                     ty,
                     ty
                 ));
