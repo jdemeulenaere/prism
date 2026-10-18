@@ -288,6 +288,8 @@ Reference medians at apply time (2026-10-18, release build, Apple silicon), from
 
 The leaf pass grows x1.00 and the first composition per group x1.06 from 1,000 to 100,000 groups. A keyed reversal of 1,000 movable groups takes 79 µs. `allocations.rs` records no allocation and no free in its last 98 passes.
 
+Startup after the change (task 9.2, `cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture`, the same machine): `prism run` of `examples/run/main.prism` reaches `main` in a median of 8.8 ms cold (p90 8.9 ms) and 6.3 ms warm (p90 8.5 ms), under the 15 ms target. Registering the compose table adds 23 symbols to the JIT's table, and the finish report is one function pointer stored per run.
+
 Compile-time cost of the whole change: none. No stage, analysis or pass is added. The backend's entry-point lookup covers one more table, and `/prism/composer` is parsed only when imported.
 
 ### D17. A new `compose` capability, and how the change is tested
@@ -295,6 +297,22 @@ Compile-time cost of the whole change: none. No stage, analysis or pass is added
 The runtime's behavior is new and is a part of compose, which `compose-transform` and `state-handles` will extend with the language side, so it is a new `compose` capability rather than part of `execution`. `execution` gains the misuse exception in "Runtime Errors End the Program" and the composition report, and `standard-library` gains `/prism/composer` in its module list. There is no new error code, since misuse is a runtime error.
 
 Behavior a `.prism` program can observe is pinned by executable fixtures under `crates/prism-cli/tests/fixtures/compose/` and `.../execution/`, all under `--check-allocations`. Behavior it cannot observe is pinned by Rust tests in `prism-compose` with recording drop entries and a recording applier: release order, slot addresses outliving removals, and typed slot records. Misuse that Prism code cannot reach (`no slot to read`) is pinned by a Rust test in a child process.
+
+### D18. Revisions made while implementing (autonomous)
+
+Implementing the design showed four places where it was wrong or underspecified. Each is now what the code does:
+
+- **Typed values live in blocks of their own (revises D6).** D6 kept values of at most 16 bytes inline in the slot. A group's slot vector moves its elements when it grows, and a forgotten slot moves onto the release list, so an inline value's address would change during the pass, against "Removals Are Deferred to the End of the Pass". Every typed value is now in a block of the record's size and alignment, allocated when the slot is created and freed at its release. A write over a slot of the same type whose values need no drop overwrites the value in place (no address is given out twice in a pass, since the cursor moves past each slot it reads), so `changed` of a plain value allocates nothing. Word slots stay inline: their values are only read by value. Run-time cost: one allocation per new typed slot, none in steady state; the size-class allocator follow-up of the archive list covers small blocks. Rejected: inline storage with addresses valid only until the next slot operation (it breaks generated code that keeps a remembered value's address), and a per-thread slab of 16-byte cells now (more code before a measurement asks for it).
+- **A context stays in order while matches only skip unvisited siblings (refines D9).** With removals deferred, a node after a removed one has the removed node as its previous sibling until the pass ends, so placing it after the last placed node would move it, although nothing visible changes. Each node context now records whether it is *in order*: every node placed so far is where it belongs, and every other node of the context belongs to an old group not visited yet, which will be removed or matched later. While it is, a reused node is not placed again. A match at an old position below the highest one matched so far in its parent, a new node of a node group (after a kind change) or a skipped child behind a placed one makes the context out of order, and from then on every node group places its node, and skipping a group places the top-level nodes of its subtree again. Run-time cost: one compare per match; the subtree walk only after a reorder. A randomized Rust test checks after every pass of keyed edits, skips and restarts that each node's children are the top-level nodes of its group's subtree.
+- **The applier numbers nodes for dumps (refines D9 and D14).** `Applier` gains `number(node) -> u64`, which the composition dump prints as `#<node>`, since handles hold generations that dumps must not show. A kind-changed node group's old node is released at the group's end, after the nodes of its removed children, so nodes are released children first.
+- **An eighth misuse detail (refines D12).** A restart function that reads or writes a slot before starting its group has no group of its own open: its frame is its scope's parent window. That is the misuse `slot outside a group`, rather than reading or writing the parent's slots.
+
+Smaller differences from the plan:
+- The pass's buffers (composer frames, scratch children, key maps, ordering buffers, release list and walk) belong to the thread rather than to each composition, since a thread runs one pass at a time (D4). Their capacity is shared by every composition of the thread, and a composition's invalidation queue is swapped with a spare buffer when a pass orders it, so neither reallocates.
+- `set_finish_report` takes `Option<fn() -> Option<String>>`, so a test can remove the report.
+- The Rust API also has `Composition::recompose_forced` (D15's forced pass, which `compose-hot-reload` D6 may drop), `Composition::with_applier`, `thread::active_scope` for `state-handles`, and `active_composer` for tests.
+- The `E6005` test of the compose table is in `lowering_tests.rs` over a library test module, and the prelude test of `/prism/composer` is in `cache_tests.rs`, beside "Unreached modules are not parsed", whose helpers it shares.
+- The scenario "Disposing a composition frees what it holds" now clones the name in its restart function (`Greeting(c, name.clone())`): a closure never gives away what it captures (`E4017`), so the proposal's source did not compile.
 
 ## Risks / Trade-offs
 

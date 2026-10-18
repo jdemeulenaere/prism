@@ -107,8 +107,8 @@ Prerequisites (design, "Baseline"): groups 1 to 6 need only `closures`' function
 
 ## 9. Integration
 
-- [ ] 9.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings) and `cargo test --workspace`. Run `cargo run -q -p prism-cli -- check` on every file under `examples/`, `cargo run -q -p prism-cli -- fmt --check examples/` and `cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism`, which must behave as before. No compiler stage is added, so `compile_timing.rs` gets no new shape (design D16).
-- [ ] 9.2 Re-run the startup benchmark of `crates/prism-cli/tests/run_timing.rs`, cold and warm, to check that registering the compose table and installing the finish report leave startup under its 15 ms target. Record the medians in design.md, D16.
+- [x] 9.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings) and `cargo test --workspace`. Run `cargo run -q -p prism-cli -- check` on every file under `examples/`, `cargo run -q -p prism-cli -- fmt --check examples/` and `cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism`, which must behave as before. No compiler stage is added, so `compile_timing.rs` gets no new shape (design D16).
+- [x] 9.2 Re-run the startup benchmark of `crates/prism-cli/tests/run_timing.rs`, cold and warm, to check that registering the compose table and installing the finish report leave startup under its 15 ms target. Record the medians in design.md, D16.
 
 ## Workflow follow-up
 

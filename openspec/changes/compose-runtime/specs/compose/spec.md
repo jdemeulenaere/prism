@@ -211,11 +211,18 @@ Every entry point MUST validate the handles it is given in constant time. A comp
 - **THEN** the program ends with `panic: composition misuse: stale composition handle` and status 101
 
 ### Requirement: Composition Misuse Is a Runtime Error
-Misusing the composition protocol MUST end the program with the runtime error `composition misuse: <detail>`, which writes no location (execution, "Runtime Errors End the Program"). The details for handles are `composer used outside its pass` and `stale composition handle` ("Handles Are Validated"), for passes `composition operation during a pass` ("One Pass at a Time"), and for slots `no slot to read`, when a read that must find a slot finds none.
+Misusing the composition protocol MUST end the program with the runtime error `composition misuse: <detail>`, which writes no location (execution, "Runtime Errors End the Program"). The details are `composer used outside its pass` and `stale composition handle` ("Handles Are Validated"), `composition operation during a pass` ("One Pass at a Time"), those of "Groups Are Balanced" and "Slots Belong to an Open Group", and `no slot to read`, for a read that must find a slot and finds none.
 
 #### Scenario: Reading a slot that is not there
 - **WHEN** a Rust test calls the entry point that reads a word slot where the cursor is at no slot
 - **THEN** the runtime error `composition misuse: no slot to read` ends the test's child process with status 101
+
+### Requirement: Slots Belong to an Open Group
+A slot operation MUST read or write the slots of the innermost group open in the composer, or of the root group in the root content. A restart function that reads or writes a slot before it starts a group has no group of its own open, and the operation MUST be the misuse `slot outside a group`.
+
+#### Scenario: A slot read before a restart function's group
+- **WHEN** a Rust test's restart function asks whether a word slot is at the cursor before it starts its group, and its scope is recomposed
+- **THEN** the operation fails with the misuse `slot outside a group`
 
 ### Requirement: Groups Are Balanced
 Ending a group when none is open in the current scope MUST be the misuse `end of a group that was not started`. `endGroup` closing a restart group, or `endRestartGroup` closing a group of another kind, MUST be the misuse `group ended with the wrong kind`. A content or restart function returning while a group it started is open MUST be the misuse `group left open`.

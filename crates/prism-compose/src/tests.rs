@@ -1183,3 +1183,31 @@ fn nodes_follow_their_groups_over_random_edits() {
         assert!(tree.borrow().is_empty(), "every node is released");
     }
 }
+
+/// compose: "Composition Misuse Is a Runtime Error": a restart function that reads a slot
+/// before it starts its group has no group to read in.
+#[test]
+fn a_slot_outside_a_group_is_a_misuse() {
+    let result: Rc<Cell<Option<Misuse>>> = Rc::default();
+    let scope_handle: Rc<Cell<Option<Handle>>> = Rc::default();
+    let (r, s) = (result.clone(), scope_handle.clone());
+    let c = Composition::start(
+        tree(),
+        content(move |k| {
+            k.start_group(GroupKind::Restart, 1, 0).unwrap();
+            s.set(Some(k.current_scope().unwrap()));
+            let r = r.clone();
+            k.end_restart_group(content(move |k| {
+                r.set(k.has_word(0).err());
+                k.start_group(GroupKind::Restart, 1, 0).unwrap();
+                k.end_restart_group(content(|_| {})).unwrap();
+            }))
+            .unwrap();
+        }),
+    )
+    .unwrap();
+    invalidate(scope_handle.get().unwrap());
+    Composition::recompose(c).unwrap();
+    assert_eq!(result.get(), Some(SLOT_OUTSIDE_GROUP));
+    Composition::dispose(c).unwrap();
+}
