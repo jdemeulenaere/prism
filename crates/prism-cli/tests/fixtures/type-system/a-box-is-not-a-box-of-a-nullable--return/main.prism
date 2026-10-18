@@ -1,0 +1,2 @@
+// expect: E4005
+fun k(h: Heap<Int>): Heap<Int?> = h

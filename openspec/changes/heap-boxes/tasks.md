@@ -26,7 +26,7 @@ Prerequisites (D1): `codegen-aggregates`, `runtime-strings-and-drops` and `paylo
 
 ## 5. Invariance (D8)
 
-- [ ] 5.1 In `crates/prism-typechecker/src/types.rs`, remove the `Heap<T> <= Heap<U>` rule from `is_assignable_to`, so boxes compare like generic types (`same_modulo_errors`), and update its doc comment. Add the help "'Heap' is invariant: build the box as a 'Heap<...>' of the expected contents" to `E4002`, `E4004` and `E4005` when both sides are boxes. Flip the `checker.rs` unit tests that relied on covariance, and update the `typed-tree` comment that lists `Heap` variance among the `Subtype` steps. In `crates/prism-codegen/src/supported.rs`, remove the box case from the `Subtype` steps that `is_lowered_subtype` rejects, if it has one. Verify with fixtures under `type-system/` for every scenario of "Heap Types Are Invariant", and that `cargo test -p prism-typechecker` passes.
+- [x] 5.1 In `crates/prism-typechecker/src/types.rs`, remove the `Heap<T> <= Heap<U>` rule from `is_assignable_to`, so boxes compare like generic types (`same_modulo_errors`), and update its doc comment. Add the help "'Heap' is invariant: build the box as a 'Heap<...>' of the expected contents" to `E4002`, `E4004` and `E4005` when both sides are boxes. Flip the `checker.rs` unit tests that relied on covariance, and update the `typed-tree` comment that lists `Heap` variance among the `Subtype` steps. In `crates/prism-codegen/src/supported.rs`, remove the box case from the `Subtype` steps that `is_lowered_subtype` rejects, if it has one. Verify with fixtures under `type-system/` for every scenario of "Heap Types Are Invariant", and that `cargo test -p prism-typechecker` passes.
 
 ## 6. MIR and borrow checker (D10, D11)
 

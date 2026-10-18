@@ -1,0 +1,6 @@
+// expect: E4004
+fun g(h: Heap<Int?>) {}
+
+fun f(h: Heap<Int>) {
+    g(h)
+}

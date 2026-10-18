@@ -600,8 +600,9 @@ pub enum CoercionKind {
     WrapNullable,
     /// `Nothing` to any type: the value never exists.
     Diverge,
-    /// Any other assignability step: `&mut T` to `&T`, `Nothing?` to `T?`, `T?` to `U?`,
-    /// `Heap<T>` and function-type variance.
+    /// Any other assignability step: `&mut T` to `&T`, `Nothing?` to `T?`, `T?` to `U?` and
+    /// function-type variance. Boxes are invariant (D8 of `heap-boxes`), so no step converts
+    /// one `Heap` type to another.
     Subtype,
 }
 

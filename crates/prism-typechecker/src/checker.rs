@@ -6551,7 +6551,8 @@ impl TypeChecker {
                 if found == Type::Error {
                     return found_id;
                 }
-                let help = borrow_help(expr, &found, expected, site);
+                let help = borrow_help(expr, &found, expected, site)
+                    .or_else(|| invariant_box_help(&found, expected));
                 self.report_mismatch_with_help(expected, found, expr.span, help);
                 self.wrap_error(found_id)
             }
@@ -7559,6 +7560,22 @@ fn box_write_help(reference: &Expr, behind_reference: bool) -> String {
             member
         ),
         _ => "write the contents through a 'var' binding holding the box".to_string(),
+    }
+}
+
+/// The help of a box given for a box of other contents (D8 of `heap-boxes`): boxes are
+/// invariant, so the contents must be converted when the box is built.
+fn invariant_box_help(found: &Type, expected: &Type) -> Option<String> {
+    let expected = match expected {
+        Type::Nullable(inner) => inner.as_ref(),
+        other => other,
+    };
+    match (found, expected) {
+        (Type::Heap(_), Type::Heap(contents)) => Some(format!(
+            "'Heap' is invariant: build the box as a '{}' of the expected contents, as in 'Heap<{}>(...)'",
+            expected, contents
+        )),
+        _ => None,
     }
 }
 

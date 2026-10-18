@@ -1,0 +1,4 @@
+// expect: E4002
+fun f(c: Bool) {
+    val h = if (c) Heap(1) else Heap(null)
+}

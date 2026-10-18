@@ -23,6 +23,7 @@ impl TypeRelations for Type {
     /// - `T <= T?` for all `T` (non-null value is assignable to nullable)
     /// - `&mut T <= &T` (mutable borrow can coerce to shared borrow at call sites); references are
     ///   otherwise invariant in their referent
+    /// - `Heap<T>` is invariant in its contents
     /// - Structs and Enums are nominal (matched by [`NominalId`])
     /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Float`)
     fn is_assignable_to(&self, expected: &Type) -> bool {
@@ -80,11 +81,10 @@ impl TypeRelations for Type {
             }
         }
 
-        // Heap<T> <= Heap<U> if T <= U
+        // Boxes are invariant (D8 of `heap-boxes`): `Heap<Int>` and `Heap<Int?>` hold contents
+        // of different layouts, so a box cannot be read as a box of another type.
         if let (Type::Heap(self_inner), Type::Heap(exp_inner)) = (self, expected) {
-            if self_inner.is_assignable_to(exp_inner) {
-                return true;
-            }
+            return same_modulo_errors(self_inner, exp_inner);
         }
 
         // References are invariant: a reference points at existing storage, so it cannot change
