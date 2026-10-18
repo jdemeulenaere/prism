@@ -76,6 +76,10 @@ Without explicit type arguments, a call MUST infer them from the receiver, the e
 - **WHEN** `fun <T> pick(a: T, b: T): T = a`, `fun <T> id(x: T): T = x` and `struct Box<T>(val v: T)` are declared and `fun f(): Int? { val n = pick(1, null); return n }` and `fun g(): Box<Int?> { val b: Box<Int?> = Box(null); return b }` are checked
 - **THEN** the file typechecks successfully: `pick` is instantiated with `Int?`, the join of `Int` and `null`, and `Box` with `Int?` from the expected type
 
+#### Scenario: Expected types reach a fallback and a borrowed argument
+- **WHEN** `struct Box<T>(val v: T)` and `fun take(b: &Box<Int?>) {}` are declared and `fun f(m: Box<Int?>?): Box<Int?> { val b: Box<Int?> = m ?: Box(null); return b }` and `fun g() { take(Box(null)) }` are checked
+- **THEN** the file typechecks successfully: the fallback of `?:` is checked against the type the `?:` is, and an argument passed to a borrow against the borrow's referent, so `Box` is instantiated with `Int?` in both
+
 #### Scenario: Inference from closure results
 - **WHEN** `fun <T> remember(calc: () -> T): T = calc()` and `fun <T, R> map(x: T, f: (T) -> R): R = f(x)` are declared and `fun f(): Int { val n = remember { 0 }; return n }` and `fun g(): Int { val n = map("a") { s -> 1 }; return n }` are checked
 - **THEN** the file typechecks successfully, with `remember` instantiated with `Int`, and `map` with `String` and `Int`

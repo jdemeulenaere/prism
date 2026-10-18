@@ -2345,8 +2345,10 @@ impl TypeChecker {
             return self.check_expr_at(expr, param_ty, origin);
         }
         let is_place = self.is_place(expr);
+        // A generic call passed to a borrow infers its type arguments from the referent.
+        let referent = referent_of_reference_parameter(param_ty);
         let found = self.with_origin(Origin::Value, |c| {
-            c.with_consuming(!is_place, |c| c.infer_expr(expr))
+            c.with_consuming(!is_place, |c| c.infer_expr_expecting(expr, Some(&referent)))
         });
         self.with_origin(origin, |c| {
             c.fit(expr, found, param_ty, Site::Argument { is_place }, false)
@@ -2556,8 +2558,14 @@ impl TypeChecker {
         }
 
         // A call is inferred knowing its expected type, from which a generic callee infers
-        // type arguments (D8 of `generics`), then fitted like any other value.
-        if let ExprKind::Call { .. } = &expr.kind {
+        // type arguments (D8 of `generics`), then fitted like any other value. So is `?:`,
+        // whose fallback may be such a call.
+        if let ExprKind::Call { .. }
+        | ExprKind::Binary {
+            op: BinaryOp::Elvis,
+            ..
+        } = &expr.kind
+        {
             let consuming = self.parent_consuming;
             let inferred = self.with_origin(Origin::Value, |c| {
                 c.with_consuming(consuming, |c| c.infer_expr_expecting(expr, Some(expected)))
@@ -2792,7 +2800,7 @@ impl TypeChecker {
             },
 
             ExprKind::Binary { op, left, right } => {
-                self.infer_binary_op(*op, left, right, expr.span)
+                self.infer_binary_op(*op, left, right, expr.span, expected)
             }
 
             ExprKind::Unary { op, expr: inner } => self.infer_unary_op(*op, inner, expr.span),
@@ -2989,12 +2997,16 @@ impl TypeChecker {
         }
     }
 
+    /// Infers the binary operation `left op right`. `expected`, the type the operation is checked
+    /// against, if any, is the expected type of the fallback of `?:`, which a generic call there
+    /// infers its type arguments from (D8 of `generics`).
     fn infer_binary_op(
         &mut self,
         op: BinaryOp,
         left: &Expr,
         right: &Expr,
         span: Span,
+        expected: Option<&Type>,
     ) -> ExpressionId {
         let binary = |checker: &mut Self, l: ExpressionId, r: ExpressionId, ty: Type| {
             let kind = ExpressionKind::Binary {
@@ -3133,7 +3145,8 @@ impl TypeChecker {
                     Type::Nullable(inner) => *inner,
                     other => other,
                 };
-                let right_id = self.with_consuming(consuming, |c| c.infer_expr(right));
+                let right_id =
+                    self.with_consuming(consuming, |c| c.infer_expr_expecting(right, expected));
                 let right_ty = self.ty(right_id);
                 let mut fits = true;
                 let ty = if inner == Type::Error || right_ty == Type::Error {
@@ -6433,6 +6446,15 @@ fn is_reference_parameter(ty: &Type) -> bool {
     match ty {
         Type::Nullable(inner) => matches!(**inner, Type::Reference { .. }),
         other => matches!(other, Type::Reference { .. }),
+    }
+}
+
+/// The type a reference parameter refers to: `T` for `&T` or `&mut T`, and `T?` for `(&T)?`.
+fn referent_of_reference_parameter(ty: &Type) -> Type {
+    match ty {
+        Type::Nullable(inner) => referent_of_reference_parameter(inner).nullable(),
+        Type::Reference { inner, .. } => inner.as_ref().clone(),
+        other => other.clone(),
     }
 }
 

@@ -1,0 +1,6 @@
+// expect: ok
+struct Box<T>(val v: T)
+fun take(b: &Box<Int?>) {}
+fun g() {
+    take(Box(null))
+}

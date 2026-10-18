@@ -1,0 +1,6 @@
+// expect: ok
+struct Box<T>(val v: T)
+fun f(m: Box<Int?>?): Box<Int?> {
+    val b: Box<Int?> = m ?: Box(null)
+    return b
+}
