@@ -29,7 +29,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 6. Liveness (D5)
 
-- [ ] 6.1 Add `src/liveness.rs`: `Liveness`, a backward `Analysis` over the loan-carrying locals of a body, using the effects of `uses.rs` (a use of any place rooted at the local, including writes through it), killed by whole-local assignments and call destinations and by `StorageDead`, with drops and `Return` not using anything except that `Return` uses the capture locals and the arguments of type `&mut R` where `R` carries loans. Verify with unit tests: in `val r = &x; print(r); x = 2` `r` is dead at `x = 2`; in a `while` loop using `r` at its start, `r` is live at the end of the body; a closure capture local is live at the return; a dropped closure local is dead before its drop.
+- [x] 6.1 Add `src/liveness.rs`: `Liveness`, a backward `Analysis` over the loan-carrying locals of a body, using the effects of `uses.rs` (a use of any place rooted at the local, including writes through it), killed by whole-local assignments and call destinations and by `StorageDead`, with drops and `Return` not using anything except that `Return` uses the capture locals and the arguments of type `&mut R` where `R` carries loans. Verify with unit tests: in `val r = &x; print(r); x = 2` `r` is dead at `x = 2`; in a `while` loop using `r` at its start, `r` is live at the end of the body; a closure capture local is live at the return; a dropped closure local is dead before its drop.
 
 ## 7. Loan flow (D4, D9)
 

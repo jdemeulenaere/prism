@@ -23,6 +23,7 @@ pub mod dataflow;
 pub mod dominators;
 mod elaborate;
 mod error;
+pub mod liveness;
 pub mod location;
 pub mod move_paths;
 pub mod places;
