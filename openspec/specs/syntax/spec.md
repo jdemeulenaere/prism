@@ -91,7 +91,7 @@ The grammar MUST recognize `compose` as a native modifier on function declaratio
 - **THEN** the compiler parses it as a composable UI function eligible for slot-table transformation
 
 ### Requirement: Lexical Tokenization and Escape Sequences
-The compiler MUST tokenize source text into a stream of typed tokens with accurate source spans, processing whitespace, line comments, nested block comments, and escape sequences while rejecting raw unescaped newlines in single-line strings. A single byte order mark (U+FEFF) at the very start of a source file MUST be ignored; a U+FEFF anywhere else is an unexpected character.
+The compiler MUST tokenize source text into a stream of typed tokens with accurate source spans, processing whitespace, line comments, nested block comments, and escape sequences while rejecting raw unescaped newlines in single-line strings, outside the expression parts of string templates (see "String Templates"). A single byte order mark (U+FEFF) at the very start of a source file MUST be ignored; a U+FEFF anywhere else is an unexpected character.
 
 #### Scenario: Columns count characters
 - **WHEN** non-ASCII text precedes a token on its line (`/* café */ fun`)
@@ -126,8 +126,12 @@ The compiler MUST tokenize source text into a stream of typed tokens with accura
 - **THEN** tokenizer reports an `Error` token without consuming the closing quote
 
 #### Scenario: Unknown escape sequence rejected
-- **WHEN** a string or char literal contains a backslash followed by a character other than `n`, `r`, `t`, `\`, `"`, `'`, `0` or `u` (`"\q"`, `'\é'`)
+- **WHEN** a string or char literal contains a backslash followed by a character other than `n`, `r`, `t`, `\`, `"`, `'`, `0`, `$` or `u` (`"\q"`, `'\é'`)
 - **THEN** tokenizer emits an `Error` token naming the unknown escape, without panicking on multi-byte characters
+
+#### Scenario: Dollar sign escape
+- **WHEN** a string or char literal contains `\$` (`"\$count costs \$5"`, `'\$'`)
+- **THEN** the string token holds the text `$count costs $5` with no template part, and the char token holds `$`
 
 #### Scenario: Empty char literal rejected
 - **WHEN** a char literal has no character (`''`)
@@ -642,6 +646,62 @@ After an identifier or a member name in an expression, `<` MUST start a type-arg
 - **WHEN** parsing `g(a < b, c > (d))`
 - **THEN** the call `g` has one argument, the call `a<b, c>(d)`, while `g((a < b), c > (d))` has two comparison arguments
 
+### Requirement: String Templates
+A string literal MUST be a template when it holds a `$` followed by an ASCII letter or `_`, which begins a name part, or by `{`, which begins an expression part. A name part is the longest run of identifier characters after the `$`, and MUST be an identifier or `this`; another keyword after `$` MUST be rejected (`E2001`). Any other `$` MUST be the character `$`. A literal without parts MUST remain a plain string literal.
+
+#### Scenario: Adjacent parts and this
+- **WHEN** tokenizing `"$a$b"` and `"[$this]"`
+- **THEN** the first holds the name parts `a` and `b` with no text between them, and the second the text `[`, the name part `this` and the text `]`
+
+#### Scenario: A dollar sign that starts no part
+- **WHEN** tokenizing `"$5, $ x, a$, $$y, $é"`
+- **THEN** the result is a template whose text is `$5, $ x, a$, $` followed by the name part `y` and the text `, $é`; and tokenizing `"cost: $5"` gives a single plain string token holding `cost: $5`
+
+#### Scenario: A keyword after a dollar sign rejected
+- **WHEN** a file contains `val s = "$if"` or `val t = "$null"`
+- **THEN** the lexer emits an `Error` token naming the keyword, and `prism check` reports `E2001`
+
+### Requirement: Expression Parts Match Their Braces
+An expression part MUST end at the `}` that matches its `${`: braces of the expression itself, such as those of closures, blocks and `when`, MUST be matched first, and braces inside nested string and char literals and comments MUST NOT count. An expression part MAY hold nested literals and templates, comments and newlines. The text between parts follows the rules of string literals: escapes are decoded and a raw newline is rejected.
+
+#### Scenario: Braces and strings inside an expression part
+- **WHEN** tokenizing `"${when (n) { 1 -> "}" else -> "$n {" }} done"`
+- **THEN** the template has one expression part, holding the whole `when` with its nested literal `"}"` and nested template `"$n {"`, followed by the text ` done`
+
+#### Scenario: Comment-collecting lexer inside templates
+- **WHEN** tokenizing `"x ${a /* why */ + b} // not a comment"` in comment-collecting mode
+- **THEN** the tokens are those of normal lexing, the block comment `/* why */` is collected, and the text ` // not a comment` is a text run, not a comment
+
+### Requirement: Template Tokens
+The lexer MUST emit a template as a flat run of tokens with their source spans: a template start (the opening quote), its text runs (never empty) and parts in source order, and a template end (the closing quote). A name part MUST be one token holding the name, and an expression part an opening token (`${`), the ordinary tokens of the expression and a closing token (its `}`). An unterminated template or expression part MUST yield an `Error` token without panicking.
+
+#### Scenario: Template tokens
+- **WHEN** tokenizing `"a $b ${c + d}!"`
+- **THEN** the tokens are a template start, the text `a `, the name part `b`, the text ` `, an expression start, `c`, `+`, `d`, an expression end, the text `!` and a template end, followed by the end of the file
+
+#### Scenario: Unterminated templates rejected
+- **WHEN** a template's text reaches a newline (`val s = "a $b` followed by a newline), an expression part is still open at the end of the file (`val s = "${a` followed by a newline and the end of the file), or a nested template inside an expression part is unterminated
+- **THEN** the lexer emits an `Error` token without panicking, and `prism check` reports `E2001`
+
+### Requirement: Template Expressions
+The parser MUST turn a template into a template expression holding its text runs and parts in source order. A name part MUST be the identifier (or `this`) it names, with the span of the name, so `"$x"` and `"${x}"` give the same tree. An expression part MUST hold exactly one expression, parsed with newlines insignificant as inside parentheses; an empty part or a statement MUST be rejected (`E2001`). A template is an atom that postfix operators apply to.
+
+#### Scenario: Template expression tree
+- **WHEN** parsing `val s = "Hi $name, ${a + b}!".length`
+- **THEN** the initializer reads the member `length` of a template whose parts are the text `Hi `, the identifier `name`, the text `, `, the binary expression `a + b` and the text `!`
+
+#### Scenario: Name and braced parts are the same expression
+- **WHEN** parsing `val a = "$x"` and `val b = "${x}"`
+- **THEN** both initializers are a template holding only the identifier `x`
+
+#### Scenario: Newlines inside an expression part
+- **WHEN** parsing `val s = "${a +\n    b}"`
+- **THEN** the template's part is the binary expression `a + b`
+
+#### Scenario: An empty or statement part rejected
+- **WHEN** a file contains `val s = "${}"` or `val t = "${val x = 1}"`
+- **THEN** `prism check` reports `E2001`
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -705,3 +765,10 @@ Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refine
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17 and logged in `docs/decisions-for-review.md`):
 
 - **Comments come from an opt-in lexer mode** (D2). `Lexer::tokenize_with_comments` returns the token stream of normal lexing plus every `Comment { kind, span }` (the text is the span's slice of the source); the lexer pushes to an optional list in `skip_whitespace_and_comments` only when collection is on, so compilation pays one untaken branch per comment. The formatter lexes once in this mode and hands the tokens to the parser, so its tree and comments come from the same scan. Rejected: trivia on every token (Roslyn, rust-analyzer), which grows every token for one tool and is right only for a lossless syntax tree (a follow-up, see `formatting`); re-scanning the gaps between tokens, which would duplicate the nested block-comment rules; comments as AST nodes, which every later stage would have to skip.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Kotlin's `$name` and `${expression}`, and when `$` is literal** (D2). `$` followed by an ASCII letter or `_` begins a name part, the longest run of identifier characters (`"$a.b"` inserts `a`, then `.b`); `$` followed by `{` an expression part; any other `$` is text (`"$5"`, `"$"`, `"$$x"`, `"$é"`), and `\$` writes a `$` in string and `Char` literals. A name part is an identifier (including the soft keyword `compose`) or `this`; any other keyword (`"$if"`, `"$null"`) is `E2001` naming `\$if` and `${...}`, so a `$name` part is exactly the expression `name`. Relaxing that to text later breaks nothing. Rejected: Swift's `\(expression)`, JavaScript's backquotes, and braces only (`"${x}"`), which breaks the common Kotlin form.
+- **Flat template tokens and a lexer mode stack** (D3). A template is a flat token run (start, text runs, `$name` parts, `${` and its `}` around ordinary tokens, end), as Kotlin's lexer does, so the parser stays a parser over one token vector and the formatter and future tools find tokens by offset. The lexer keeps a stack of `Template` and `TemplateExpression { open_braces }` modes; brace counting is exact because braces in literals and comments are never tokens. A literal without parts stays one `String` token, and the text before a literal's first part is scanned twice, once. A raw newline in template text and the end of the file end the open modes with one `Error` token; an unknown escape or a keyword after `$` is one `Error` token after which the template continues, so its closing quote still closes it. Lexing stays linear. Rejected: a token holding nested token vectors per part, re-lexing a substring per part (loses spans and comments), and a parser driving the lexer.
+- **An expression part holds any expression** (D4), parsed with newlines insignificant as inside parentheses, so it may span lines and hold closures, `when`, nested templates and comments, as in Kotlin. Only the text between parts rejects a raw newline. Rejected: forbidding newlines or comments inside `${}`.
+- **One tree node for every template** (D5). `ExprKind::Template` holds text and expression parts; a name part is an `Ident` (or `This`) spanning the name, so `"$x"` and `"${x}"` give the same tree and the formatter reads which was written from the tokens. A template is an atom that postfix operators apply to, never a place, and the span-free body hash covers it, so editing a template in a generic body changes the hash.

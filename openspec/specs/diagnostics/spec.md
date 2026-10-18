@@ -138,3 +138,7 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **`E6xxx` for code generation and the entry point, one code per fix** (D13 and D25): `E6001` (wait for the backend change its note names, or avoid the construct), `E6002` (add a `main`) and `E6003` (fix its signature). The entry point is checked at `prism run` rather than by the type checker, because `prism check` checks libraries, which have no `main`. Runtime errors are not diagnostics and carry no code.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **`E4026` for every part without a text form** (D8 of `string-templates`): nullable, `Unit`, function, type parameter, and structs or enums without a usable `toString()` share one code, since the rule is one ("a part needs a text form"), and the message and help name the reason and the fix. Rejected: reusing `E4004` (a part is not a call argument) or `E4006` (the user never wrote `toString`), and one code per reason.

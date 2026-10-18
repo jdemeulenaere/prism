@@ -628,6 +628,24 @@ A box MUST own its contents: a borrow of a box's contents, or of a part of them,
 - **WHEN** `struct P { var x: Int }` is declared and `fun f(h: Heap<P>): &Int = &h.x` and `fun g(h: &Heap<P>): &Int = &h.x` are checked
 - **THEN** the borrow checker emits `E5008` for `f`, a borrow of the parameter `h`, and accepts `g`, whose result borrows what `h` refers to
 
+### Requirement: Template Parts Are Borrowed Until the Template Is Built
+A template MUST read each `String` part in place, through a shared borrow that lasts until the template's result is built, and MUST NOT move it; a computed part is a temporary living until the end of the enclosing statement. A part whose evaluation needs a mutable borrow of a string that an earlier part of the same template borrows MUST be rejected as a borrow conflict (`E5003`), as for the operands of `+`.
+
+#### Scenario: Borrowed parts stay usable
+- **WHEN** `fun f(s: String, r: &mut String): String { val t = "$s and $r"; *r = t; return s }` is checked
+- **THEN** the file typechecks and borrow-checks successfully
+
+#### Scenario: A later part mutating a borrowed part rejected
+- **WHEN** `fun grow(s: &mut String): Int { *s = s + "!"; return s.length }` and `fun f() { var s = "a"; val t = "$s ${grow(&mut s)}" }` are checked
+- **THEN** the borrow checker emits `E5003` at `&mut s`, labelling the first part's borrow of `s` and its later use, where the template is built
+
+### Requirement: Scalar Template Parts Are Read at Their Position
+A scalar part MUST be read at its position in the template, so a later part writing the same place, through a mutable borrow, does not change the earlier part's text and is not a borrow conflict.
+
+#### Scenario: A later part writing an earlier scalar part
+- **WHEN** `fun bump(r: &mut Int): Int { *r = r + 1; return r }` and `fun f(): String { var n = 1; return "$n ${bump(&mut n)} $n" }` are checked
+- **THEN** the file typechecks and borrow-checks successfully, the first part reading `n` before `bump` writes it
+
 ## Design Rationale
 Decisions from `reference-access` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change, 2026-10-17):
 
@@ -699,3 +717,7 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 - **`*h = v` writes a mutable box's contents** (D5), dropping the old contents and keeping the allocation. `*` peels exactly one layer, a reference or a box, so `**r = v` writes the contents of `r: &mut Heap<T>` and `*r = Heap(v)` replaces the box. A box layer must be a mutable place (a `var`, a `var` field path, or reached through `&mut`), as field writes through a box already required: a box owns its contents, as Rust's `let mut b: Box<T>` does, so unlike a `val` holding a `&mut`, a `val` box is not written through. `h = 5` for a box is `E4002` with help suggesting `*h = 5`. Rejected: writes through a `val` box; `*r = v` without the one-layer rule, ambiguous for `r: &mut Heap<Int>`.
 - **The borrow checker treats a box's contents as owned by the box** (D11): `*h` and `h.x` are places under `h` with a non-reference `Deref`, so borrowing them conflicts with `h`, and moving, reassigning or ending `h` while they are borrowed is `E5005`, `E5004` or `E5006`; a borrow of a by-value box's contents cannot be returned (`E5008`), one of `r: &Heap<T>` is tied to `r`. Boxing a capturing closure is an escape (`E5007`, "stored in a box here"), like storing it in a struct field, because a box can be returned or stored anywhere; `closures` and `escaping-closures` revisit both together.
 - **Safe navigation is still a temporary** (from the review). `f(t.right?.left)` for a `(&Tree)?` parameter moves the field out (`E4017`) as for any `T?`: lending a `?.` chain of fields read in place is a possible relaxation of "A borrow points at one place or one temporary", recorded in `ROADMAP.md`.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Template parts are borrowed until the template is built, scalars read at their position** (D11). Parts are evaluated left to right. A `String` part is a shared `Operator` borrow, as an operand of `+` is, used where the template is built, so a later part mutating it conflicts (`E5003`), and a template never moves a part (`"$s!"` leaves `s` usable). A scalar part is copied to a temporary first when a later part may write it (`"$n ${bump(&mut n)} $n"` gives `1 2 2`, as in Kotlin). A template of many string parts keeps that many shared loans live at once, the `live-borrows` shape of the compile-time benchmark. Rejected: copying string parts in Kotlin's style (a hidden copy per part), and moving temporary parts into the runtime call to reuse their buffers, a later optimization.

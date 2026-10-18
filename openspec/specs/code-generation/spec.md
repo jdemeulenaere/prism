@@ -326,6 +326,22 @@ A struct, enum or nullable holding a function value MUST be rejected with `E6001
 - **WHEN** `enum Job { Run(() -> Int), Idle }` and `fun main() { val j = Job.Idle }` are declared
 - **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `Job.Idle`, naming function values and closures, prints nothing to stdout and exits with status 1
 
+### Requirement: A Template Is One Runtime Call
+The backend MUST lower a template rvalue to one call of a runtime function receiving the destination and a table of the parts in order: text parts as the address, byte length and character count of the code unit's literal data, string parts as the address of the borrowed string, and scalar parts as their values. A template MUST NOT call any other string or conversion function of the runtime, and MUST NOT be rejected with `E6001`.
+
+#### Scenario: A template calls the runtime once
+- **WHEN** `fun label(n: Int, d: Double, s: &String): String = "Count: $n of $s at $d"` is declared and `prism dump-clif main.prism` runs
+- **THEN** the body of `label` calls the runtime's template function once and calls no runtime concatenation or `toString()` function
+
+### Requirement: A Template Allocates Its Result Once
+The runtime MUST format a template's scalar parts itself, with the text their built-in `toString()` gives, and MUST build the result with exactly one allocation, of exactly its length in bytes, or with none when the result is empty.
+
+#### Scenario: A template allocates its result once
+- **WHEN** `fun label(n: Int, s: &String): String = "Count: $n, ${n * 2} of $s"` is compiled and called with `7` and a borrowed literal `"x"`, then its result is dropped, under the allocation check
+- **THEN** the result is `Count: 7, 14 of x`, exactly one allocation is made, and none is live afterwards
+- **WHEN** `fun empty(s: &String): String = "$s$s"` is called with a borrowed empty literal
+- **THEN** the result is empty and no allocation is made
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -385,3 +401,8 @@ Decisions from the compile-speed pass (plain fixes after `heap-boxes`, made auto
 - **A straight-line run of MIR blocks is one Cranelift block**. A MIR block that is the only successor of its only predecessor, through a `Goto`, a returning `Call` or a `Drop`, is lowered after it in the same Cranelift block, so a call no longer ends one. Cranelift's SSA construction walks back through single-predecessor blocks to find a variable's value and records it in each, so a body of 4096 borrows used after 4096 calls spent 88 ms lowering and 288 ms in Cranelift; it now takes 5 ms and 48 ms. Generated code is otherwise the same, with fewer jumps.
 - **Large functions use the single-pass register allocator**. Cranelift's default, backtracking allocator grows faster than the function: with the depth of its dominator tree (a body of thousands of sequential branches) and with the values live at once (a call of 4096 arguments took 120 ms). A function of more than `LARGE_FUNCTION_INSTRUCTIONS` (2048) Cranelift instructions, or with a call of more than `LARGE_CALL_ARGUMENTS` (256) arguments, is compiled with `regalloc_algorithm=single_pass` instead, by a second ISA outside the JIT module's own compilation, and defined from its bytes and relocations (`crates/prism-codegen/src/link.rs`), so compiling it stays linear: that call compiles in 1.2 ms, a `when` of 8192 patterns in 37 ms instead of 237 ms, 4096 live borrows in 11 ms instead of 48 ms. Its code runs about half as fast (twice as slow on recursive calls, trial division and a struct-building loop when every function took the single-pass allocator), which only such large, typically generated, functions pay; every function of the reference programs is far below the threshold. Rejected: the single-pass allocator for every function (Tier 1 code twice as slow everywhere); no threshold (seconds for one generated function in a debug build); a threshold on blocks alone (a call of thousands of arguments has four).
 - **Block-local temporaries are plain values** (amends D7 of `codegen-core`). A scalar temporary that a statement wholly assigns once and that is mentioned otherwise only after it, in the same MIR block, as the comparisons and payload reads of a `when`'s tests are, keeps its Cranelift value instead of being a variable. Cranelift's SSA construction keeps each variable's value per block in a map sized by the block's number, so a variable defined in a late block of a large body cost that body's size: a `when` of 8192 patterns spent 68 ms lowering, now 20 ms. A temporary read in a later block, written by a call or assigned twice stays a variable.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **One runtime call, one allocation** (D12). `prism_rt_string_template` takes the destination, a table of 32-byte parts (a kind word and three payload words: static text with its byte length and character count, a string's address, or a scalar's value) and the count. It measures every part (digit counting for `Int`, each `Double` formatted once into scratch memory that is not a program allocation), allocates exactly the result's length once through `prism_rt_allocate`, or nothing for an empty result, then writes the parts. Rejected: concatenation, `toString()` first, a growable buffer, and an array of pre-converted strings, which all allocate more.
+- **The part table is a stack slot** (D13). The backend fills one 8-byte-aligned stack slot per template with ordinary stores (text entries from the unit's deduplicated literal data, `Bool` and `Char` zero-extended to a word) and makes one three-argument call, so a long template never makes its function large through many call arguments; only its stores count towards the instruction threshold, linearly. A table in read-only data with only the value entries written at run time is a later optimization, needing data relocations.

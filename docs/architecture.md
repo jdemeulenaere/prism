@@ -34,7 +34,7 @@ The instances of an exported generic function MUST be generated again when what 
 
 ## 2. Two-Tier Native Execution
 
-Implemented today (`codegen-core`, `codegen-aggregates`, `runtime-strings-and-drops` and `heap-boxes`, [`code-generation`](../openspec/specs/code-generation/spec.md) and [`execution`](../openspec/specs/execution/spec.md)): the Tier 1 Cranelift JIT behind `prism run`, for programs over `Int`, `Double`, `Bool`, `Char`, `String`, structs, enums, nullables, `Heap<T>` boxes and references to them, reaching `main` well under 15 ms, with drop and clone glue freeing owned memory deterministically and `prism run --check-allocations` verifying it; every call goes through a patchable function table and nothing is inlined, which hot reload needs. Generic bodies, closures and composable functions are rejected with `E6001` until their changes land. Hot reload and Tier 2 are planned below.
+Implemented today (`codegen-core`, `codegen-aggregates`, `runtime-strings-and-drops`, `heap-boxes` and `string-templates`, [`code-generation`](../openspec/specs/code-generation/spec.md) and [`execution`](../openspec/specs/execution/spec.md)): the Tier 1 Cranelift JIT behind `prism run`, for programs over `Int`, `Double`, `Bool`, `Char`, `String` (with string templates built by one runtime call and one allocation), structs, enums, nullables, `Heap<T>` boxes and references to them, reaching `main` well under 15 ms, with drop and clone glue freeing owned memory deterministically and `prism run --check-allocations` verifying it; every call goes through a patchable function table and nothing is inlined, which hot reload needs. Generic bodies, closures and composable functions are rejected with `E6001` until their changes land. Hot reload and Tier 2 are planned below.
 
 ### Requirement: Two-Tier Native Execution Engine
 The compiler MUST support two distinct native execution backends: Tier 1 (Cranelift JIT) for development and Tier 2 (LLVM AOT) for release.
@@ -81,7 +81,7 @@ Why the requirements above were chosen; each change's `design.md` repeats the de
 
 ## 4. Runtime Semantics
 
-Implemented: the runtime semantics of every construct the type checker accepts and the Tier 1 backend runs, over scalars, strings, structs, enums, nullables, boxes and references to them, are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`, `codegen-aggregates`, `runtime-strings-and-drops`, `payload-patterns`, `heap-boxes`), and their layouts, drop glue and clone glue in [`code-generation`](../openspec/specs/code-generation/spec.md). The order of evaluation, including when receivers are evaluated and borrowed, and where each temporary is dropped are fixed by the MIR ([`mir`](../openspec/specs/mir/spec.md)), which the backend follows. Nothing remains planned here: the runtime semantics of closures and composable functions come with `closures` and the compose changes (section 5).
+Implemented: the runtime semantics of every construct the type checker accepts and the Tier 1 backend runs, over scalars, strings, structs, enums, nullables, boxes and references to them, are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`, `codegen-aggregates`, `runtime-strings-and-drops`, `payload-patterns`, `heap-boxes`, `string-templates`), and their layouts, drop glue and clone glue in [`code-generation`](../openspec/specs/code-generation/spec.md). The order of evaluation, including when receivers are evaluated and borrowed, and where each temporary is dropped are fixed by the MIR ([`mir`](../openspec/specs/mir/spec.md)), which the backend follows. Nothing remains planned here: the runtime semantics of closures and composable functions come with `closures` and the compose changes (section 5).
 
 ---
 
@@ -221,7 +221,7 @@ A write to any state during composition MUST end the program with the runtime er
 A cell MUST be owned by the `remember` slot whose calculation created it; otherwise by the composition whose event handler or root content created it; otherwise by the program. A cell MUST be freed, dropping its value, when its owner is forgotten (at the end of the pass), when its composition is dropped, or, for program-owned cells, when `main` returns, before the allocation check.
 
 #### Scenario: Forgotten state frees its value
-- **WHEN** `remember(n) { mutableStateOf("item " + n.toString()) }` recomposes with a different `n` under `--check-allocations`
+- **WHEN** `remember(n) { mutableStateOf("item $n") }` recomposes with a different `n` under `--check-allocations`
 - **THEN** the old cell and its string are freed at the end of that pass
 
 ### Requirement: UI Node Tree Owned by the Runtime

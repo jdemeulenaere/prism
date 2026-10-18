@@ -640,6 +640,65 @@ A call `Heap(value)` MUST construct a `Heap<T>` holding `value`, where `T` is th
 - **WHEN** `fun f(c: Bool) { val h = if (c) Heap(1) else Heap(null) }` and `fun g(c: Bool): Heap<Int?> = if (c) Heap(1) else Heap(null)` are checked
 - **THEN** the type checker emits `E4002` for `f`, and accepts `g`, whose branches are each built as a `Heap<Int?>`
 
+### Requirement: String Templates Have Type String
+A string template MUST have type `String`, and each of its parts MUST be checked as an expression with no expected type, in the scope where the template appears: a name part resolves as the identifier would (a local, a parameter, a top-level value, a field of the receiver through implicit `this` in an extension body, or `this`).
+
+#### Scenario: Templates are strings
+- **WHEN** `fun f(n: Int): String = "n = $n"` and `fun g(n: Int): Int = "n = $n"` are checked
+- **THEN** the type checker accepts `f` and emits `E4005` for `g`, which returns a `String` where an `Int` is declared
+
+#### Scenario: Names resolve as in code
+- **WHEN** `struct User { val name: String }`, `fun User.toString(): String = "user $name"` and `fun User.label(prefix: String): String = "$prefix: $this (${name.length})"` are checked
+- **THEN** the file typechecks successfully: `$name` reads the receiver's field, and `$this` inserts the receiver through its `toString()` extension
+
+### Requirement: Built-In Text Forms of Template Parts
+A template part MUST be read through any `&`, `&mut` and `Heap<T>` layers. A `String` part MUST be inserted as it is, and an `Int`, `Double`, `Bool` or `Char` part as the text its built-in `toString()` gives. A part of type `Nothing` MUST be accepted. A template MUST NOT consume or mutate any of its parts.
+
+#### Scenario: Parts of every built-in text type
+- **WHEN** `fun f(n: Int, d: &Double, b: Bool, c: Char, s: &String, t: String, h: Heap<Int>): String = "$n $d $b $c $s $t $h ${s.length} ${n > 0}"` is checked
+- **THEN** the file typechecks successfully
+
+#### Scenario: A part is not moved
+- **WHEN** `fun f(s: String): String { val t = "$s!"; return s + t }` is checked
+- **THEN** the file typechecks successfully, since the template does not move `s`
+
+### Requirement: Other Template Parts Call toString
+A part of any other non-nullable type MUST be inserted as the result of `toString()` on it, resolved exactly as the method call `part.toString()` would be: a field, then an extension of the file or of a direct import, with the precedence and import rules of method calls. That member MUST be callable without arguments and return `String`, and an extension MUST take a shared receiver: a `mut fun` or `consuming fun` `toString()` is never called implicitly.
+
+#### Scenario: A toString extension gives a text form
+- **WHEN** `struct Point : Copy { val x: Int, val y: Int }`, `enum Color { Red, Green }`, `fun Point.toString(): String = "($x, $y)"`, `fun Color.toString(): String = when (this) { Color.Red -> "red"; Color.Green -> "green" }` and `fun f(p: &Point, c: Color): String = "$p is $c"` are checked
+- **THEN** the file typechecks successfully
+- **WHEN** `lib/geo.prism` declares `public struct Point(val x: Int, val y: Int)` and `public fun Point.toString(): String = "($x, $y)"`, and a file importing `/lib/geo` declares `fun f(p: Point): String = "at $p"`
+- **THEN** the importing file typechecks successfully, calling the imported extension
+
+### Requirement: Parts Without a Text Form Are Rejected
+A template part MUST be rejected with `E4026` at the part (the name of a name part, the expression of an expression part) when it is nullable (any `T?`, including `String?` and `null`), `Unit`, a function value or a type parameter, or when it has no `toString()` member usable by "Other Template Parts Call toString". The diagnostic MUST name the type and the reason.
+
+#### Scenario: A nullable part rejected
+- **WHEN** `fun f(name: String?, n: Int?): String = "Hello $name, ${n}"` is checked
+- **THEN** the type checker emits `E4026` at `name` and at `n`, and accepts `fun g(name: String?): String = "Hello ${name ?: "guest"}"`
+
+#### Scenario: Unit and function parts rejected
+- **WHEN** `fun log() {}`, `fun f(): String = "${log()}"`, `fun g(h: () -> Int): String = "$h"` and `fun <T> k(t: T): String = "$t"` are checked
+- **THEN** the type checker emits `E4026` in each of `f`, `g` and `k`
+
+### Requirement: Text Form Diagnostics Name the Fix
+An `E4026` diagnostic MUST carry help naming a fix: for a nullable part, a fallback with `?:` written with the part's text (`${n ?: ...}`); for a struct or enum without `toString()`, the extension to declare (`fun User.toString(): String`) and, when a name part is followed by text that starts with `.` and an identifier, the braced member (`${u.name}`); for a `mut fun` or `consuming fun` `toString()`, the explicit call (`${c.toString()}`).
+
+#### Scenario: A struct without toString rejected
+- **WHEN** `struct User { val name: String }` and `fun f(u: User): String = "user $u.name"` are checked
+- **THEN** the type checker emits `E4026` at `u`, saying that `User` has no text form, with help suggesting `fun User.toString(): String` and `${u.name}`
+
+#### Scenario: An unusable toString rejected
+- **WHEN** `struct Point : Copy { val x: Int }`, `struct Counter { var n: Int }`, `fun Point.toString(): Int = x`, `mut fun Counter.toString(): String { n += 1; return "c" }`, `fun f(p: Point): String = "$p"` and `fun g(c: Counter): String = "$c"` are checked
+- **THEN** the type checker emits `E4026` in `f`, saying that `toString()` of `Point` returns `Int`, and `E4026` in `g`, with help suggesting `${c.toString()}`
+
+#### Scenario: Nullable help gives a fallback
+- **WHEN** `fun f(n: Int?): String = "n = $n"` is checked
+- **THEN** the type checker emits `E4026` at `n`, saying that a nullable `Int?` has no text form, with help suggesting `${n ?: ...}`
+- **WHEN** `fun f(a: Int?, b: Int): String = "${if (b > 0) a else null}"` is checked
+- **THEN** the help parenthesizes the part, suggesting `${(if (b > 0) a else null) ?: ...}`, since `?:` binds more tightly than `if`
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -715,3 +774,9 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 - **`Heap(value)` is a built-in constructor** (D2). It reads as the type's constructor, as Kotlin and Swift users expect, and is a call of the built-in `HeapAllocate`. The contents' type comes from an explicit type argument (`Heap<Int?>(1)`), else the expected type, else the argument, which is checked in a consuming position, so `1` is wrapped into `Int?` before it is boxed. `Heap` resolves like a type name in call position, so no local hides it, and a top-level declaration named `Heap` could never be named: `E4010`. Rejected: a free function `box(v)`, Rust's `Box::new` (no associated functions), a `heap`/`new` keyword, and letting user declarations shadow it like `print`.
 - **Boxes are invariant** (D8), like references and generic types: `Heap<Int>` and `Heap<Int?>` hold contents of different layouts, so covariance would need a re-allocating adapter behind an assignment. The contents are converted where the box is built instead, and the mismatch help says so. After this the typed tree's only representation-changing `Subtype` step is function-type variance. Rejected: covariance with a re-boxing adapter; covariance for representation-preserving steps only (there are none left in a box, whose contents are borrow-free).
 - **Operators, conditions, output and `toString()` read through boxes** (D4), as through references, so `h + 1` and `if (flag)` need nothing written.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **A part means what `.toString()` means, without a move or mutation** (D6). After reading through `&`, `&mut` and `Heap<T>` layers, a `String` is read in place, `Int`, `Double`, `Bool` and `Char` give the text `print` writes, `Nothing` is accepted, and any other type resolves `part.toString()` exactly as the method call would (a field of function type, then an extension of the file or an import, `E4012` and `E4007` as for an explicit call), so a template and an explicit call never run different code. The member must need no arguments and return `String`, and an extension must take a shared receiver: a `mut` or `consuming` `toString()` would mutate or move a part that looks borrowed. The check reuses the receiver half of the method-call resolution (`method_call_on`), so it costs one member lookup per non-scalar, non-`String` part, and nothing is inferred across parts. A generic `toString()` extension is a generic call (`E6001` until monomorphization). Rejected: extensions only, calling `mut`/`consuming` extensions, a generated text form, and extending `print` in the same change.
+- **Nullable parts are rejected** (D7). Kotlin prints `null`; Prism rejects every `T?` part, `null` included, since "Hello null" is a bug users see and accepting nullable parts later breaks no program, while rejecting them later would. The fallback costs one `?:`. Note that `?:` consumes a place operand (see `ownership`), so `${name ?: "guest"}` moves a non-`Copy` `name`; `${&name ?: &"guest"}` reads it in place. Rejected: Kotlin's `null`, Swift's warning (no warnings yet), printing nothing.
+- **One code, `E4026`, whose help names the fix** (D8). A part is not a call argument (`E4004`) and the user never wrote `toString` (`E4006`). The message names the type and the reason, and the helps are a fallback with `?:` written with the part, the extension to declare, the braced member when `$u.name` or `${u}.name` was written, or the explicit `${c.toString()}`. A part that binds less tightly than `?:` and `.` (an `if`, a `when`) is parenthesized in the help, so following it keeps the part whole (review fix). A template whose part has an error still has type `String`. Rejected: one code per reason.

@@ -316,6 +316,20 @@ Every implicit read through a `Heap<T>` MUST be explicit in the typed tree as a 
 - **WHEN** `struct User { val name: String }` and `consuming fun User.close(): Int = 1` are declared, and `fun f(u: User): User = Heap(u).unbox()` and `fun g(h: Heap<User>): Int = h.close()` are checked
 - **THEN** the body of `f` is a call of the built-in unbox function whose receiver is a call of the built-in heap-allocate function with type argument `User` and a move of the binding `u`, and the body of `g` calls `close` with a call of the built-in unbox function on a move of the binding `h` as its receiver
 
+### Requirement: Templates Are Nodes Over Their Parts
+A string template MUST be a template node of type `String` holding its parts in source order: each text run as its decoded text, and each other part as a value of type `String`, `Int`, `Double`, `Bool` or `Char` read in place, as an operand of an operator is. A part that is a place (a binding, a field, the referent of a reference or a box) MUST be that place, with no move or copy. `prism dump-typed-tree` MUST print the node as `template`, with its parts in order.
+
+#### Scenario: A template over places
+- **WHEN** `fun f(n: &Int, s: String): String = "n=$n, s=$s"` is checked
+- **THEN** the body's value is a template node whose parts are the text `n=`, the dereferenced binding `n`, the text `, s=` and the binding `s`, with no move, copy or borrow node around either binding
+
+### Requirement: Computed Template Parts Are Temporaries
+A computed `String` part, including the result of the `toString()` call that gives a part its text form, MUST be a temporary. A part of type `Nothing` MUST be converted to `String`.
+
+#### Scenario: A toString part is a call in a temporary
+- **WHEN** `struct Point : Copy { val x: Int }`, `fun Point.toString(): String = "p"` and `fun f(p: Point, a: String, b: String): String = "$p ${a + b}"` are checked
+- **THEN** the template's first value part is a temporary holding a call of `Point.toString` with a shared receiver borrow of the binding `p`, and its second a temporary holding the concatenation of `a` and `b`
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -358,3 +372,7 @@ Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined w
 Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **Boxes are dereferences and calls** (D10). Reading through a box is a `Deref` node, so copy-out is a copy of a dereference, lending a borrow of a dereference with origin argument and the box view one with origin conversion; construction and unboxing are calls of the built-ins `HeapAllocate` (dump `Heap`) and `Unbox` (dump `unbox`), and a consuming receiver through boxes is wrapped in one `unbox` call per layer. A pattern of a box's contents is `Pattern::Deref`, beside `NonNull`, since a pattern has no place of its own to put a `Deref` step on; it also matches the referent of a `(&T)?` (from the review).
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **A template node over parts read in place** (D9). Value parts have type `String`, `Int`, `Double`, `Bool` or `Char`; a place part is the place itself, a computed one a `Temporary`, a `toString()` part the normalized call in a `Temporary`, and a `Nothing` part a `Diverge` coercion to `String`. Rejected: a call of a variadic built-in with string-literal arguments (each text borrowed from a temporary), and `ToString` calls for scalar parts (one allocation per scalar).

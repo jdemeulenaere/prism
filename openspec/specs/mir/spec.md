@@ -444,6 +444,24 @@ Where a pattern takes its subject apart through a box, MIR MUST move the box par
 - **WHEN** `enum Doc { Text(String), Wrapped(Heap<Doc>) }` is declared and `fun f(d: Doc): String = when (d) { Doc.Wrapped(Doc.Text(val s)) -> s; else -> "" }` is lowered
 - **THEN** in the first branch, `d` is destructured into a temporary holding its `Heap<Doc>`, which is moved into a call of `builtin unbox` whose result is destructured into `s`
 
+### Requirement: Templates Build One String
+A template MUST be lowered to one template rvalue assigned to a `String` place, holding its parts in source order: each text run as a constant text, each `String` part as a shared borrow of its place with the `operator` origin (as for the operands of `+`), and each scalar part as an operand of its type. The lowering MUST NOT call `toString()` for scalar parts nor concatenate. `prism dump-mir` MUST print the rvalue as `template(...)`, with text parts as quoted strings and value parts as operands.
+
+#### Scenario: A template is one rvalue
+- **WHEN** `fun f(n: Int, s: &String): String = "$n: $s"` is lowered
+- **THEN** the MIR of `f` takes an `operator` borrow of the referent of `s` into a temporary and assigns its result a template over a copy of `n`, the text `": "` and a move of that temporary, printed as `template(copy _1, ": ", move _3)` when `_3` is the temporary, with no call
+
+### Requirement: Template Parts Are Evaluated in Order
+The parts of a template MUST be evaluated left to right: a scalar part that a later part may write MUST first be copied to a temporary, as for the operands of a call. A `toString()` call that gives a part its text form MUST be a call before the rvalue, writing a temporary that is dropped at the end of the statement.
+
+#### Scenario: A later part writing a scalar part
+- **WHEN** `fun bump(r: &mut Int): Int { *r = r + 1; return r }` and `fun f(): String { var n = 1; return "$n ${bump(&mut n)}" }` are lowered
+- **THEN** the MIR of `f` copies `n` to a temporary before the call of `bump`, and the template reads that temporary, then the result of the call
+
+#### Scenario: A toString part is called before the template
+- **WHEN** `struct Point : Copy { val x: Int }`, `fun Point.toString(): String = "p"` and `fun f(p: Point): String = "at $p"` are lowered
+- **THEN** the MIR of `f` calls `Point.toString` into a temporary, assigns the template over the text `at ` and a borrow of that temporary, and drops the temporary after the template
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -513,3 +531,7 @@ Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined w
 Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **Two built-in calls, no new place or rvalue** (D10). `Heap(v)` and `h.unbox()` are `Call` terminators of `builtin Heap<T>` and `builtin unbox`, so allocation failure happens at a terminator like any call; a box's contents are the existing `Deref` place, written by an ordinary assignment that drops the old value. Moves out of a dereference stay invalid, so contents leave a box only through `unbox`; a pattern taking apart through a box moves the box part into a temporary and unboxes it into a second one. Rejected: an `Rvalue::Box` (Rust's old `box` expression) and a move out of `(*_1)` allowed for boxes only (Rust's special case), which would put allocation or partial moves of boxes into every analysis.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **One `Rvalue::Template`** (D10), assigned to a `String` place, with constant text parts and operands that are `&String` `Operator` borrows or scalars; `toString()` parts are `Call` terminators before it, into temporaries dropped at the end of the statement. An rvalue, like string `+`, because a template fails only by running out of memory, its operands are uses at one point for the borrow checker, and the text parts are constants of the rvalue. Which scalar parts a later part may write is found in one backward pass over the parts (`later_may_write`), which `ordered_operands` uses for calls, constructions and ranges too, instead of a quadratic scan. Rejected: a `Call` of a variadic built-in, a chain of `+` (an allocation and a copy per step), and `toString()` calls for scalar parts.

@@ -224,6 +224,24 @@ The formatter MUST print patterns as written, in the spacing of calls: construct
 - **WHEN** formatting `fun f(s:Shape,u:User):Int{val(name as n,email)=u;return when(s){Shape.Rect(val w,_)if w>1->1;Point(y=0),_->2}}`
 - **THEN** the result is `fun f(s: Shape, u: User): Int {\n    val (name as n, email) = u\n    return when (s) {\n        Shape.Rect(val w, _) if w > 1 -> 1\n        Point(y = 0), _ -> 2\n    }\n}\n`
 
+### Requirement: Templates Are Printed as Written
+The formatter MUST print the text runs and name parts of a string template exactly as written, escapes and unicode sequences included, and MUST keep each part's written form (`$x` or `${x}`). Each expression part MUST be printed by the usual rules for its expression, on one line: a template MUST NOT be broken across lines, whatever its width.
+
+#### Scenario: Template text and parts kept
+- **WHEN** formatting `val s = "Count: $count, sum ${a+b}, \$5 \u{1F680} ${ name }"`
+- **THEN** the result is `val s = "Count: $count, sum ${a + b}, \$5 \u{1F680} ${name}"`
+
+#### Scenario: A long template is not broken
+- **WHEN** formatting a `val` whose initializer is a template of 120 characters with the part `${format(first, second, third)}`
+- **THEN** the template stays on one line with the part unbroken
+
+### Requirement: Templates That Cannot Be Flat Are Kept Verbatim
+A template whose expression parts hold a comment, were written over several lines, or hold an expression that the formatter always breaks (a block, a `when`, a closure with several statements) MUST be printed exactly as written, from its opening to its closing quote, with its comments printed once. Such a template written over several lines MUST stay on the line of the `=`, `return` or assignment operator before it.
+
+#### Scenario: A template part over lines kept as written
+- **WHEN** formatting `val s = "a ${when (n) {\n    1 -> "one"\n    else -> "many" // plural\n}} b"`
+- **THEN** the template is printed exactly as written, after `val s = ` on its first line, with the comment once, and formatting the result again leaves it unchanged
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -240,3 +258,8 @@ Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026
 - **The command surface** (D11). `prism fmt [--check] <path>...` walks directories in sorted order, skips dot-directories and does not follow symbolic links to directories; `-` is standard input to standard output (gofmt, Black). Changed files are listed (`gofmt -l -w`), unchanged files are never written, and `--check` lists and fails (`rustfmt --check`). There is no configuration file and no option: a formatter configuration file would be a build file, against the zero-build-file invariant, and one style is the point of a canonical formatter. The walk and the per-file loop live in `prism_formatter::files`, so `main.rs` only parses arguments and renders diagnostics.
 - **Spec placement and tests** (D12). This capability holds the command, the layout and the guarantees; the comment-collecting lexer mode is lexer behaviour and lives in `syntax`. Layout scenarios are golden files in `crates/prism-formatter/tests/golden/`, named after their scenario slugs, and command scenarios are CLI tests in `crates/prism-cli/tests/fmt_cli_tests.rs`, since the `prism check` fixture harness cannot express an expected output.
 - **No lossless syntax tree yet** (D13). A lossless concrete syntax tree (rust-analyzer's rowan, Roslyn) would make the formatter and the LSP simpler and more exact, but means replacing the parser's output type, which every stage consumes. The formatter recovers what the AST lacks from the tokens (D5) and the comments (D2 of `syntax`); a later lossless tree would replace both without changing the formatter's behaviour or its tests.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Templates are printed as written, on one line** (D14). Text runs and `$name` parts come from their tokens, escapes included, and `${x}` is never rewritten to `$x` or back (that is a lint). Each `${...}` expression is printed by the usual rules inside a `flat` document, so a template never breaks across lines, as Prettier does for JavaScript template literals; a template whose parts hold a comment, were written over several lines or always break (blocks, `when`, closures of several statements) is printed verbatim, with the comment cursor moved past its comments. The corpus variants insert and squeeze nothing between the text-level tokens of a template. Rejected: always verbatim (inconsistent spacing), and breaking inside `${}` (moves text).
+- **A multi-line template stays on the line of its `=`** (D16). Such a verbatim template forces its groups to break, so it is kept on the line of the `=`, `return` or assignment operator, as a `when` or braced `if` is; a one-line template that does not fit still moves to the next line, as a long string literal does. Moving a multi-line one would misalign its later lines, printed as written. Cost: one check of the template's source span per initializer.

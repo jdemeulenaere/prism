@@ -485,6 +485,40 @@ When a pattern takes a value apart through a box, the box MUST be freed and the 
 - **WHEN** `enum Expr { Lit(Int), Name(String), Add(Heap<Expr>, Heap<Expr>) }` and `fun simplify(e: Expr): Expr = when (e) { Expr.Add(Expr.Lit(0), val r) -> r.unbox(); Expr.Add(Expr.Name(val n), Expr.Lit(0)) -> Expr.Name(n); else -> e }` are declared and `fun main() { val a = simplify(Expr.Add(Heap(Expr.Lit(0)), Heap(Expr.Lit(7)))); val b = simplify(Expr.Add(Heap(Expr.Name(1.toString())), Heap(Expr.Lit(0)))); println(a == Expr.Lit(7)); println(b == Expr.Name("1")) }` runs with `--check-allocations`
 - **THEN** it prints `true` twice, writes nothing to stderr and exits with status 0
 
+### Requirement: Templates Give the Text of Their Parts
+A string template MUST evaluate to a new string holding, in order, its text runs and the text of each part: a `String` part's text, the text that `print` writes for a scalar part, and the result of `toString()` for a part of another type. A template MUST leave its parts unchanged.
+
+#### Scenario: Names and expressions in templates
+- **WHEN** `fun main() { val count = 3; val name = "Ada"; println("Count: $count"); println("${count * 2} items for $name's team"); println("$name$count"); println("${if (count > 1) "many ($count)" else "one"}") }` runs
+- **THEN** it prints `Count: 3`, `6 items for Ada's team`, `Ada3` and `many (3)`
+
+#### Scenario: Scalars in templates print as print does
+- **WHEN** `fun main() { val n = -42; val d = 1.0E7; println("$n|$d|${0.1 + 0.2}|${n > 0}|${'é'}|${4.9E-324}") }` runs
+- **THEN** it prints `-42|1.0E7|0.30000000000000004|false|é|4.9E-324`
+
+#### Scenario: Dollar signs that start no part
+- **WHEN** `fun main() { val count = 2; println("\$count costs $5, $ 6 or ${count}$") }` runs
+- **THEN** it prints `$count costs $5, $ 6 or 2$`
+
+#### Scenario: Nested templates and braces
+- **WHEN** `fun describe(n: Int): String = when (n) { 0 -> "none"; 1 -> "one {item}"; else -> "${n} ${if (n > 9) "many" else "few"} items" }` is declared and `fun main() { println("[${describe(0)}] [${describe(1)}] [${describe(12)}]") }` runs
+- **THEN** it prints `[none] [one {item}] [12 many items]`
+
+#### Scenario: Templates with toString extensions
+- **WHEN** `struct Point : Copy { val x: Int, val y: Int }`, `struct User { val name: String, val home: Point }`, `fun Point.toString(): String = "($x, $y)"` and `fun User.toString(): String = "$name at $home"` are declared and `fun main() { val u = User("Ada" + "!", Point(1, 2)); println("user: $u"); println(u.name) }` runs
+- **THEN** it prints `user: Ada! at (1, 2)` and then `Ada!`
+
+### Requirement: Template Parts Are Evaluated Once, Left to Right
+The parts of a template MUST be evaluated left to right, each once, and every temporary a template makes MUST be freed by the end of the enclosing statement.
+
+#### Scenario: Template parts are evaluated left to right
+- **WHEN** `fun bump(r: &mut Int): Int { *r = r + 1; return r }` is declared and `fun main() { var n = 1; println("$n ${bump(&mut n)} $n") }` runs
+- **THEN** it prints `1 2 2`
+
+#### Scenario: Templates free their temporaries and results
+- **WHEN** `fun main() { var i = 0; var all = ""; while (i < 3) { val line = "line ${i.toString() + "."} of ${"" + "3"}"; println(line); all = "$all$line;"; i += 1 }; println(all.length) }` runs with `--check-allocations`
+- **THEN** it prints `line 0. of 3`, `line 1. of 3`, `line 2. of 3` and `39`, writes nothing to stderr and exits with status 0
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -528,3 +562,7 @@ Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined w
 Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **Deep structures are a stack overflow, not a crash** (D14 in `code-generation`): dropping, cloning or comparing a structure deeper than the stack raises "stack overflow" with no location line, like "out of memory", and the program's output is kept.
+
+Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Templates give the text `print` writes and free their temporaries by the end of the statement** (D11, D12 of `string-templates`). Scalars format exactly as `print` does (`1.0E7`, `NaN`, `-0.0`), parts run left to right, each once, and only a `toString()` part allocates a temporary of its own. Every template scenario is an executable fixture under `--check-allocations`.
