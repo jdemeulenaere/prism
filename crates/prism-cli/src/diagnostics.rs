@@ -432,6 +432,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 ));
             }
         }
+        TypeError::OuterReceiverName { .. } => {
+            if let Some(help) = err.outer_receiver_help() {
+                out.push_str(&format!("   = help: {}\n", help));
+            }
+        }
         TypeError::UnboundPatternName { name, .. } => {
             out.push_str(&format!("   = help: to bind it, write 'val {}'\n", name));
         }

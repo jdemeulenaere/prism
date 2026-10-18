@@ -1,0 +1,3 @@
+// expect: E4001
+fun run(f: () -> Unit) { f() }
+fun f() { run { val t = this } }

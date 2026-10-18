@@ -1,0 +1,8 @@
+// expect: ok
+struct Scope : Copy { val depth: Int }
+fun a(f: Scope.(Int) -> Int): Int = f(Scope(1), 2)
+fun b(f: Scope.(Int) -> Int): Int {
+    val s = Scope(1)
+    return s.f(2)
+}
+fun Scope.c(f: Scope.(Int) -> Int): Int = f(2)

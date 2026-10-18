@@ -1,0 +1,4 @@
+// expect: ok
+struct Scope : Copy {}
+fun make(): Scope = Scope()
+fun a(f: Scope.() -> Int): Int = f(Scope()) + make().f()

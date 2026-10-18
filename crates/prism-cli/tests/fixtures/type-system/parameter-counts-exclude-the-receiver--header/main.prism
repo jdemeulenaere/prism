@@ -1,0 +1,6 @@
+// expect: ok
+struct Scope : Copy {}
+fun pair(f: Scope.(Int, Int) -> Int): Int = f(Scope(), 1, 2)
+fun main() {
+    pair { a, b -> a + b }
+}

@@ -392,6 +392,15 @@ enum Layer {
     Heap,
 }
 
+/// A function value with a receiver that a call passes a receiver to (D5 of
+/// `receiver-lambdas`): whether its receiver is mutable, the layers looked through to reach the
+/// receiver's type, and that type.
+struct ReceiverValue {
+    mutable: bool,
+    layers: Vec<Layer>,
+    reached: Type,
+}
+
 /// The receiver of an extension call, as [`TypeChecker::pass_receiver`] sees it.
 struct ReceiverSite<'a> {
     expr: &'a Expr,
@@ -1319,6 +1328,18 @@ impl TypeChecker {
                     .push(TypeError::UnresolvedImplicitParameter { missing, span });
                 None
             }
+            Err(TypeError::UnresolvedSymbol { .. }) if self.outer_receiver_with(name).is_some() => {
+                // Only the innermost receiver is implicit (D4 of `receiver-lambdas`): say which
+                // outer one has the name, computed on this error path only.
+                let (receiver, field) = self.outer_receiver_with(name).expect("checked above");
+                self.errors.push(TypeError::OuterReceiverName {
+                    name: name.to_string(),
+                    receiver,
+                    field,
+                    span,
+                });
+                None
+            }
             Err(TypeError::UnresolvedSymbol { .. })
                 if self.unimported_type_named(name).is_some() =>
             {
@@ -1337,6 +1358,23 @@ impl TypeChecker {
                 None
             }
         }
+    }
+
+    /// The first receiver of an enclosing extension or lambda, hidden by an inner lambda with a
+    /// receiver, that has a field (`true`) or an extension (`false`) named `name`.
+    fn outer_receiver_with(&self, name: &str) -> Option<(Type, bool)> {
+        self.env.shadowed(THIS).find_map(|symbol| {
+            let SymbolKind::Variable { ty, .. } = &symbol.kind else {
+                return None;
+            };
+            let receiver = peel_references(ty).clone();
+            if self.has_field(&receiver, name) {
+                return Some((receiver, true));
+            }
+            let extension = self.has_intrinsic_function(&receiver, name)
+                || !matches!(self.find_extension(&receiver, name), ExtensionLookup::None);
+            extension.then_some((receiver, false))
+        })
     }
 
     /// Records every struct and enum `ty` names, so `E4014` can name types that reached this
@@ -3464,10 +3502,18 @@ impl TypeChecker {
         exp_ret: ClosureReturn,
         span: Span,
     ) -> ExpressionId {
-        let implicit = !has_header && exp_params.len() == 1;
-        if !implicit && params.len() != exp_params.len() {
+        // A lambda with a receiver binds `this` before its other parameters, which alone its
+        // header declares and `it` stands for (D3 of `receiver-lambdas`).
+        let others = if receiver && !exp_params.is_empty() {
+            &exp_params[1..]
+        } else {
+            exp_params
+        };
+        let skipped = exp_params.len() - others.len();
+        let implicit = !has_header && others.len() == 1;
+        if !implicit && params.len() != others.len() {
             self.errors.push(TypeError::ClosureParameterCount {
-                expected: exp_params.to_vec(),
+                expected: others.to_vec(),
                 declared: params.len(),
                 has_header,
                 span,
@@ -3475,9 +3521,14 @@ impl TypeChecker {
             return self.error_node(Vec::new(), span);
         }
 
-        // The implicit `it` is declared at the closure's `{` (D5 of `implicit-it`).
-        let declared: Vec<(&str, Span, LocalKind)> = if implicit {
-            let brace = Span::new(span.start, span.start + 1, span.line, span.column);
+        // The implicit `it` and the receiver are declared at the closure's `{` (D5 of
+        // `implicit-it`).
+        let brace = Span::new(span.start, span.start + 1, span.line, span.column);
+        let mut declared: Vec<(&str, Span, LocalKind)> = Vec::new();
+        if skipped == 1 {
+            declared.push((THIS, brace, LocalKind::ClosureReceiver));
+        }
+        declared.extend(if implicit {
             vec![(
                 IMPLICIT_PARAMETER,
                 brace,
@@ -3488,7 +3539,7 @@ impl TypeChecker {
                 .iter()
                 .map(|p| (p.name.as_str(), p.span, LocalKind::ClosureParameter))
                 .collect()
-        };
+        });
         let missing = if implicit {
             None
         } else if has_header {
@@ -5908,10 +5959,10 @@ impl TypeChecker {
         match callee_ty {
             Type::Fn {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 ret,
-                ..
             } => {
                 // Composable context enforcement (first-class compose invariant, E4008)
                 if is_compose && !self.is_in_compose() {
@@ -5929,6 +5980,21 @@ impl TypeChecker {
                 let (param_names, has_default, type_parameters) =
                     self.callee_declaration(callee, callee_node);
                 let callee_node = callee_node.expect("a function type comes from a node");
+                // A value with a receiver called without it takes the innermost `this` (D5 of
+                // `receiver-lambdas`); a declared function never has a receiver type.
+                if receiver
+                    && param_names.is_empty()
+                    && args.len() + 1 == params.len()
+                    && args.iter().all(|arg| arg.name.is_none())
+                {
+                    return self.call_receiver_value_with_this(
+                        callee,
+                        callee_node,
+                        type_arguments,
+                        args,
+                        span,
+                    );
+                }
                 if type_parameters.is_empty() {
                     self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
                     let checked =
@@ -6764,7 +6830,34 @@ impl TypeChecker {
             return self.infer_unbox_call(call, span);
         }
 
-        // 3. An extension on the receiver's type, behind any `&`, `&mut` and `Heap<T>`.
+        // 3. A local or parameter of a function type with a receiver of the receiver's type,
+        // behind any `&`, `&mut` and `Heap<T>` (D5 of `receiver-lambdas`).
+        if !is_safe_nav {
+            if let Some(value) = self.receiver_value(member, &receiver_ty) {
+                let site = ReceiverSite {
+                    expr: target,
+                    ty: &receiver_ty,
+                    is_place,
+                    writable,
+                    layers: &value.layers,
+                    through_nullable: false,
+                };
+                let argument = self.pass_value_receiver(&site, receiver, &value, member);
+                let name = Expr::new(ExprKind::Ident(member.to_string()), callee.span);
+                let callee_node = self.infer_expr(&name);
+                return self.call_receiver_value(
+                    callee,
+                    callee_node,
+                    argument,
+                    type_arguments,
+                    args,
+                    true,
+                    span,
+                );
+            }
+        }
+
+        // 4. An extension on the receiver's type, behind any `&`, `&mut` and `Heap<T>`.
         let (payload, through_nullable) = match peel_references(&receiver_ty) {
             Type::Nullable(inner) => (inner.as_ref().clone(), true),
             other => (other.clone(), false),
@@ -6846,7 +6939,12 @@ impl TypeChecker {
                     layers: &layers,
                     through_nullable,
                 };
-                let adjustment = self.pass_receiver(&receiver_site, &extension, member);
+                let adjustment = self.pass_receiver(
+                    &receiver_site,
+                    extension.mode,
+                    extension.builtin.is_some(),
+                    member,
+                );
                 let (joined, receiver_argument) =
                     self.apply_receiver_adjustment(receiver, adjustment, &reached);
                 let call = self.call_extension(
@@ -6871,7 +6969,7 @@ impl TypeChecker {
                     call
                 }
             }
-            // 4. Nothing matched.
+            // 5. Nothing matched.
             ExtensionLookup::None if member == "clone" => {
                 self.infer_clone_call(receiver, is_safe_nav, args, span)
             }
@@ -7004,6 +7102,246 @@ impl TypeChecker {
             children.push(self.infer_expr(&arg.value));
         }
         self.error_node(children, span)
+    }
+
+    /// The local or parameter `name` that a method call `value.name(...)` on a value of type
+    /// `receiver_ty` calls (D5 of `receiver-lambdas`): the innermost binding of `name`, when it
+    /// has a function type with a receiver whose type is `receiver_ty` behind its `&`, `&mut`
+    /// and `Heap<T>` layers. An intrinsic member found on the way wins over it.
+    fn receiver_value(&self, name: &str, receiver_ty: &Type) -> Option<ReceiverValue> {
+        if !self.env.resolves_to_local(name) {
+            return None;
+        }
+        let SymbolKind::Variable { ty, .. } = &self.env.lookup(name)?.kind else {
+            return None;
+        };
+        let Type::Fn {
+            receiver: true,
+            params,
+            ..
+        } = peel_indirection(ty)
+        else {
+            return None;
+        };
+        let Some(Type::Reference { mutable, inner }) = params.first() else {
+            return None;
+        };
+        let mut layers = Vec::new();
+        let mut reached = receiver_ty.clone();
+        loop {
+            if self.member(&reached, name).is_some_and(|m| !m.property) {
+                return None;
+            }
+            if reached.is_assignable_to(inner) && inner.is_assignable_to(&reached) {
+                return Some(ReceiverValue {
+                    mutable: *mutable,
+                    layers,
+                    reached,
+                });
+            }
+            match reached {
+                Type::Reference { mutable, inner } => {
+                    layers.push(Layer::Reference { mutable });
+                    reached = *inner;
+                }
+                Type::Heap(inner) => {
+                    layers.push(Layer::Heap);
+                    reached = *inner;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The receiver argument of a call of a function value with a receiver: `receiver`, the
+    /// node of `site`, borrowed as a `fun` or `mut fun` extension's receiver is, through its
+    /// layers (`references`, "Receivers of Function Values Are Borrowed Like Extension
+    /// Receivers"), reporting a mutable receiver that is no mutable place (`E4003`).
+    fn pass_value_receiver(
+        &mut self,
+        site: &ReceiverSite,
+        receiver: ExpressionId,
+        value: &ReceiverValue,
+        name: &str,
+    ) -> ExpressionId {
+        let mode = if value.mutable {
+            ReceiverMode::Mutable
+        } else {
+            ReceiverMode::Shared
+        };
+        self.pass_receiver(site, mode, false, name);
+        let place = self.deref_until(receiver, &value.reached);
+        self.borrow(value.mutable, BorrowOrigin::Receiver, place)
+    }
+
+    /// The call of the function value `callee_node` (written `callee`), of a type with a
+    /// receiver, with `receiver_argument` as its receiver and `args` as its other arguments
+    /// (D9 of `receiver-lambdas`): a call of the value whose first argument is the receiver.
+    fn call_receiver_value(
+        &mut self,
+        callee: &Expr,
+        callee_node: ExpressionId,
+        receiver_argument: ExpressionId,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        check_compose: bool,
+        span: Span,
+    ) -> ExpressionId {
+        let callee_node = self.peel_indirection_nodes(callee_node);
+        let Type::Fn {
+            is_compose,
+            params,
+            escaping,
+            ret,
+            ..
+        } = self.ty(callee_node)
+        else {
+            return self.error_node(vec![callee_node, receiver_argument], span);
+        };
+        if check_compose && is_compose && !self.is_in_compose() {
+            self.errors.push(TypeError::InvalidComposeContext {
+                callee: callee.to_string(),
+                span,
+            });
+        }
+        self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
+        match self.check_call_arguments(&params[1..], &[], &[], args, span) {
+            Err(CheckedArguments(children)) => {
+                let mut all = vec![callee_node, receiver_argument];
+                all.extend(children);
+                self.error_node(all, span)
+            }
+            Ok(NormalizedArguments {
+                arguments,
+                evaluation_order,
+            }) => {
+                // The receiver is the first argument, evaluated first.
+                let mut all_arguments = vec![Argument::Written(receiver_argument)];
+                all_arguments.extend(arguments);
+                let mut order = vec![0];
+                order.extend(evaluation_order.iter().map(|index| index + 1));
+                let parameters = parameter_list(&[], &params);
+                self.build_call(
+                    callee_node,
+                    all_arguments,
+                    parameters,
+                    escaping,
+                    Vec::new(),
+                    order,
+                    is_compose,
+                    *ret,
+                    span,
+                )
+            }
+        }
+    }
+
+    /// A call `f(a)` of the function value `callee_node`, of a type with a receiver, written
+    /// without its receiver (D5 of `receiver-lambdas`): the innermost `this`, when its type is
+    /// the receiver's, is passed as a reborrow; otherwise the call is `E4004`, saying how to
+    /// pass one.
+    fn call_receiver_value_with_this(
+        &mut self,
+        callee: &Expr,
+        callee_node: ExpressionId,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        span: Span,
+    ) -> ExpressionId {
+        let receiver_parameter = match peel_indirection(&self.ty(callee_node)) {
+            Type::Fn { params, .. } => params.first().cloned(),
+            _ => None,
+        };
+        let Some(Type::Reference {
+            mutable,
+            inner: receiver_ty,
+        }) = receiver_parameter
+        else {
+            return self.error_node(vec![callee_node], span);
+        };
+        let this_type = match self.env.lookup(THIS).map(|sym| &sym.kind) {
+            Some(SymbolKind::Variable { ty, .. }) => Some(ty.clone()),
+            _ => None,
+        };
+        let reached = this_type.as_ref().map(|ty| peel_references(ty).clone());
+        let matches = reached.as_ref().is_some_and(|reached| {
+            reached.is_assignable_to(&receiver_ty) && receiver_ty.is_assignable_to(reached)
+        });
+        if !matches {
+            let scope = receiver_ty.to_string();
+            let mut variable = scope.clone();
+            if let Some(first) = variable.get_mut(..1) {
+                first.make_ascii_lowercase();
+            }
+            let variable = variable
+                .split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap_or("receiver")
+                .to_string();
+            let found = match &reached {
+                Some(reached) => format!("the innermost 'this' has type '{}'", reached),
+                None => "there is no 'this' here".to_string(),
+            };
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!(
+                    "'{}' takes a receiver of type '{}', and {}: pass one, as in '{}({}{})' or '{}.{}()'",
+                    callee,
+                    scope,
+                    found,
+                    callee,
+                    if mutable { "&mut " } else { "" },
+                    variable,
+                    variable,
+                    callee
+                ),
+                span,
+            });
+            let mut children = vec![callee_node];
+            for arg in args {
+                children.push(self.infer_expr(&arg.value));
+            }
+            return self.error_node(children, span);
+        }
+        let this_expr = Expr::new(ExprKind::This, callee.span);
+        let (this_node, writable) = self.with_origin(Origin::Value, |c| c.infer_place(&this_expr));
+        let this_ty = self.ty(this_node);
+        let mut layers = Vec::new();
+        let mut layer = &this_ty;
+        while let Type::Reference { mutable, inner } = layer {
+            layers.push(Layer::Reference { mutable: *mutable });
+            layer = inner;
+        }
+        let value = ReceiverValue {
+            mutable,
+            layers,
+            reached: reached.expect("matched above"),
+        };
+        let site = ReceiverSite {
+            expr: &this_expr,
+            ty: &this_ty,
+            is_place: true,
+            writable,
+            layers: &value.layers,
+            through_nullable: false,
+        };
+        let mode = if mutable {
+            ReceiverMode::Mutable
+        } else {
+            ReceiverMode::Shared
+        };
+        self.pass_receiver(&site, mode, false, &callee.to_string());
+        let place = self.deref_until(this_node, &value.reached);
+        let argument = self.borrow(mutable, BorrowOrigin::Argument, place);
+        // The composable context was checked with the callee.
+        self.call_receiver_value(
+            callee,
+            callee_node,
+            argument,
+            type_arguments,
+            args,
+            false,
+            span,
+        )
     }
 
     /// The first argument of an extension call: the receiver `receiver` passed as `adjustment`
@@ -7290,11 +7628,12 @@ impl TypeChecker {
     fn pass_receiver(
         &mut self,
         receiver: &ReceiverSite,
-        extension: &Extension,
+        mode: ReceiverMode,
+        builtin: bool,
         method: &str,
     ) -> ReceiverAdjustment {
         let expr = receiver.expr;
-        let pass = match extension.mode {
+        let pass = match mode {
             ReceiverMode::Shared => ReceiverPass::SharedBorrow,
             ReceiverMode::Mutable => {
                 // A temporary may be mutated unless it is reached through a shared borrow.
@@ -7303,7 +7642,7 @@ impl TypeChecker {
                 {
                     self.report_immutable_receiver(receiver, method);
                     // D3 of `collections`: there is no separate mutable list type.
-                    if extension.builtin.is_some() {
+                    if builtin {
                         if let Some(TypeError::ImmutabilityViolation { help, .. }) =
                             self.errors.last_mut()
                         {

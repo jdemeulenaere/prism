@@ -1,0 +1,5 @@
+// expect: E4003
+struct Builder { var size: Int }
+fun main() {
+    val g: Builder.() -> Unit = { size += 1 }
+}

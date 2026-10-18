@@ -1,0 +1,7 @@
+// expect: ok
+struct Builder { var size: Int }
+fun a(f: mut Builder.() -> Unit) {
+    var b = Builder(0)
+    f(&mut b)
+    b.f()
+}

@@ -1024,7 +1024,10 @@ fn a_receiver_function_type_round_trips() {
         ..
     } = &content
     else {
-        panic!("expected a function type with a receiver, found {:?}", content);
+        panic!(
+            "expected a function type with a receiver, found {:?}",
+            content
+        );
     };
     assert_eq!(escaping, &[false]);
     let [AbiType::Ref {
@@ -1032,7 +1035,10 @@ fn a_receiver_function_type_round_trips() {
         inner,
     }] = params.as_slice()
     else {
-        panic!("expected the receiver as a shared borrow, found {:?}", params);
+        panic!(
+            "expected the receiver as a shared borrow, found {:?}",
+            params
+        );
     };
     assert!(
         matches!(&**inner, AbiType::Nominal { module, name, .. } if module == "layout/column" && name == "ColumnScope")

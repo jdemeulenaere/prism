@@ -1,0 +1,9 @@
+// expect: ok
+struct User { val name: String }
+struct Scope : Copy {}
+fun column(f: Scope.() -> Unit) { f(Scope()) }
+fun show(s: &String) {}
+fun User.card2() {
+    val user = this
+    column { show(user.name) }
+}

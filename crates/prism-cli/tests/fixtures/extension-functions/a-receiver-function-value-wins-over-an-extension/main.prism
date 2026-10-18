@@ -1,0 +1,5 @@
+// expect: ok
+struct Scope : Copy {}
+fun Scope.render(): Bool = true
+fun f(s: Scope, render: Scope.() -> Int): Int = s.render()
+fun g(s: Scope, render: (&Scope) -> Int): Bool = s.render()

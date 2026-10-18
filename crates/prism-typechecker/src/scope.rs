@@ -404,6 +404,12 @@ impl ScopeStack {
             .filter(|(level, _)| self.is_visible(*level))
     }
 
+    /// The visible bindings of `name` that an inner binding of it shadows, innermost first: the
+    /// receivers of enclosing extensions and lambdas, for `this` (D4 of `receiver-lambdas`).
+    pub fn shadowed(&self, name: &str) -> impl Iterator<Item = &Symbol> {
+        self.visible(name).skip(1).map(|(_, symbol)| symbol)
+    }
+
     /// Defines a symbol in the current (innermost) scope level.
     ///
     /// Rejects duplicate definitions within the same scope with `E4010`.

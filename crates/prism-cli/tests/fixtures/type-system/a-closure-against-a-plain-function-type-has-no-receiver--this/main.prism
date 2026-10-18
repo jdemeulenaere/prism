@@ -1,0 +1,4 @@
+// expect: E4001
+struct Scope : Copy { val depth: Int }
+fun plain(f: (&Scope) -> Int): Int = f(Scope(1))
+fun g(): Int = plain { this.depth }

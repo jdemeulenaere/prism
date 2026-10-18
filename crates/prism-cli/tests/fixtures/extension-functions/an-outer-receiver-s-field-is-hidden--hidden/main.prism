@@ -1,0 +1,6 @@
+// expect: E4001
+struct User { val name: String }
+struct Scope : Copy {}
+fun column(f: Scope.() -> Unit) { f(Scope()) }
+fun show(s: &String) {}
+fun User.card() { column { show(name) } }

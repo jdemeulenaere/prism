@@ -1,0 +1,5 @@
+// expect: ok
+struct Scope : Copy { val depth: Int }
+fun main() {
+    val g: (Scope.() -> Int)? = { depth + 1 }
+}

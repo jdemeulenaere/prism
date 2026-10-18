@@ -1,0 +1,5 @@
+// expect: ok
+struct Builder { var size: Int }
+fun main() {
+    val f: mut Builder.() -> Unit = { size += 1 }
+}

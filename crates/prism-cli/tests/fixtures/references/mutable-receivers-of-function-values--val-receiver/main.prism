@@ -1,0 +1,6 @@
+// expect: E4003
+struct Builder { var size: Int }
+fun c(f: mut Builder.() -> Unit) {
+    val b = Builder(0)
+    b.f()
+}

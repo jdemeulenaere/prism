@@ -1,0 +1,13 @@
+// expect: ok
+struct Builder { var items: List<String> }
+mut fun Builder.add(s: String) { items.add(s) }
+fun build(f: mut Builder.() -> Unit): Int {
+    var b = Builder(listOf())
+    b.f()
+    return b.items.size
+}
+fun g(): Int = build {
+    add("a")
+    add("b")
+    items.add("c")
+}

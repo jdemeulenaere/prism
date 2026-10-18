@@ -1,0 +1,8 @@
+// expect: E4001
+struct RowScope : Copy {}
+struct BoxScope : Copy {}
+fun row(f: RowScope.() -> Unit) { f(RowScope()) }
+fun box(f: BoxScope.() -> Unit) { f(BoxScope()) }
+fun RowScope.spacer() {}
+fun BoxScope.overlay() {}
+fun g() { row { box { spacer() } } }

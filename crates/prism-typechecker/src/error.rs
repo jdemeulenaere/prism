@@ -10,11 +10,22 @@ pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
     UnresolvedSymbol { name: String, span: Span },
 
+    /// E4001: A bare name found only on an outer receiver, a field (`field`) or an extension
+    /// of `receiver`, which the innermost lambda with a receiver hides (D4 of
+    /// `receiver-lambdas`).
+    OuterReceiverName {
+        name: String,
+        receiver: Type,
+        field: bool,
+        span: Span,
+    },
+
     /// E4001: A bare name in a pattern that resolves to nothing. A bare name compares with a
     /// value; a binding needs `val` (D1 of `payload-patterns`).
     UnboundPatternName { name: String, span: Span },
 
-    /// E4001: `this` used outside an extension function, where nothing binds it.
+    /// E4001: `this` used outside an extension function and every lambda with a receiver,
+    /// where nothing binds it.
     ThisOutsideExtension { span: Span },
 
     /// E4001: `it` used where no closure binds it (D6 of `implicit-it`). `missing` says why the
@@ -453,6 +464,7 @@ impl TypeError {
     pub fn code(&self) -> &'static str {
         match self {
             TypeError::UnresolvedSymbol { .. } => "E4001",
+            TypeError::OuterReceiverName { .. } => "E4001",
             TypeError::UnboundPatternName { .. } => "E4001",
             TypeError::ThisOutsideExtension { .. } => "E4001",
             TypeError::UnresolvedImplicitParameter { .. } => "E4001",
@@ -501,6 +513,7 @@ impl TypeError {
     pub fn span(&self) -> Span {
         match self {
             TypeError::UnresolvedSymbol { span, .. } => *span,
+            TypeError::OuterReceiverName { span, .. } => *span,
             TypeError::UnboundPatternName { span, .. } => *span,
             TypeError::CannotTakeApart { span, .. } => *span,
             TypeError::MoveInGuard { span, .. } => *span,
@@ -551,6 +564,10 @@ impl TypeError {
             TypeError::UnresolvedSymbol { name, .. } => {
                 format!("unresolved symbol '{}'", name)
             }
+            TypeError::OuterReceiverName { name, .. } => format!(
+                "unresolved symbol '{}': only the innermost receiver is implicit",
+                name
+            ),
             TypeError::UnboundPatternName { name, .. } => {
                 format!(
                     "unresolved symbol '{}': a bare name in a pattern is a value compared with the matched part",
@@ -566,7 +583,7 @@ impl TypeError {
                 name
             ),
             TypeError::ThisOutsideExtension { .. } => {
-                "'this' is only available in an extension function ('fun T.name()')".to_string()
+                "'this' is only available in an extension function ('fun T.name()') or a lambda with a receiver".to_string()
             }
             TypeError::TypeMismatch {
                 expected, found, ..
@@ -850,3 +867,36 @@ impl fmt::Display for TypeError {
 }
 
 impl std::error::Error for TypeError {}
+
+impl TypeError {
+    /// The help of [`TypeError::OuterReceiverName`]: where the name was found, and how to reach
+    /// it. `None` for every other error.
+    pub fn outer_receiver_help(&self) -> Option<String> {
+        let TypeError::OuterReceiverName {
+            name,
+            receiver,
+            field,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let receiver_name = receiver.to_string();
+        let mut binding: String = receiver_name
+            .chars()
+            .take_while(|c| c.is_alphanumeric())
+            .collect();
+        if let Some(first) = binding.get_mut(..1) {
+            first.make_ascii_lowercase();
+        }
+        let (what, used) = if *field {
+            ("a field", format!("{}.{}", binding, name))
+        } else {
+            ("an extension", format!("{}.{}()", binding, name))
+        };
+        Some(format!(
+            "'{}' is {} of the outer receiver '{}', which a lambda with a receiver hides; bind it before the lambda ('val {} = this') and write '{}'",
+            name, what, receiver_name, binding, used
+        ))
+    }
+}

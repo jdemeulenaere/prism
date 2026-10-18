@@ -1,0 +1,3 @@
+// expect: E4004
+struct Scope : Copy {}
+fun a(f: Scope.() -> Int): Int = f()

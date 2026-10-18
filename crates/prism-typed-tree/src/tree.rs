@@ -218,6 +218,9 @@ pub enum LocalKind {
     /// The implicit parameter `it` of a closure without a header, declared at its `{` (D5 of
     /// `implicit-it`).
     ImplicitClosureParameter,
+    /// The `this` of a lambda with a receiver, its first parameter, declared at its `{` (D3 of
+    /// `receiver-lambdas`).
+    ClosureReceiver,
     /// A binding of a pattern (`val r` in `Shape.Circle(val r)`) or a destructuring
     /// declaration, whose type its [`BindingMode`] gives (D14 of `payload-patterns`).
     PatternBinding,

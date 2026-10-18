@@ -212,6 +212,7 @@ impl Printer<'_> {
                     "escaping implicit closure parameter"
                 }
                 LocalKind::ImplicitClosureParameter => "implicit closure parameter",
+                LocalKind::ClosureReceiver => "closure receiver",
                 LocalKind::PatternBinding if local.mutable => "pattern var",
                 LocalKind::PatternBinding => "pattern val",
             };

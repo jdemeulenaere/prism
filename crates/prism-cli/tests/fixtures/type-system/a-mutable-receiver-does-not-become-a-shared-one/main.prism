@@ -1,0 +1,7 @@
+// expect: E4004
+struct Builder { var size: Int }
+fun read(f: Builder.() -> Unit) {}
+fun main() {
+    val m: mut Builder.() -> Unit = { size += 1 }
+    read(m)
+}

@@ -1,0 +1,6 @@
+// expect: E4004
+struct Builder { var size: Int }
+fun d(f: mut Builder.() -> Unit) {
+    var b = Builder(0)
+    f(b)
+}
