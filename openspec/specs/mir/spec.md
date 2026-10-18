@@ -199,7 +199,7 @@ Code after an expression of type `Nothing` MUST NOT be lowered, and every block 
 - **THEN** the body of `f` has no call of `g`
 
 ### Requirement: Calls Name Their Callee
-A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable.
+A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable. An extension's declaration path names its receiver type, so the first operand of a call of an extension, and the first argument of an extension's body, MUST be its receiver; no other call has one.
 
 #### Scenario: Imported function named by its module
 - **WHEN** `models/user.prism` declares `public fun greet(n: Int): Int = n`, and a file importing `/models/user` declares `fun hello(): Int = greet(1)`
@@ -208,6 +208,10 @@ A call MUST name its callee (a declaration path for an own or imported function 
 #### Scenario: Composable calls are marked
 - **WHEN** `compose fun Label() {}`, `fun log() {}` and `compose fun Screen() { Label(); log() }` are declared
 - **THEN** the body of `Screen` is composable, its call of `Label` is marked composable, and its call of `log` is not
+
+#### Scenario: An extension call names its receiver
+- **WHEN** `lib/team.prism` declares `public struct Team { var lead: String }` and `public fun Team.captain(o: &String): &String = &lead`, and a file importing `/lib/team` declares `fun f(t: Team, s: String): Int { val c = t.captain(&s); return 1 }`
+- **THEN** the MIR of `f` calls `lib/team::Team.captain`, whose path names the receiver type `Team`, with the receiver borrow of `t` first and the borrow of `s` second
 
 ### Requirement: Call Arguments Are Evaluated in Order
 A call MUST evaluate its receiver first: a receiver that the call moves or copies (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, and a receiver that the call borrows has its place evaluated then and is borrowed after the written arguments. The written arguments MUST be evaluated in source order, then the omitted arguments in parameter order, and then the call made.
@@ -258,6 +262,13 @@ Where a `(&mut T)?` place is lent as a `(&T)?`, the MIR MUST read its tag and pa
 #### Scenario: Lending an optional mutable borrow twice
 - **WHEN** `struct User { var name: String }` and `fun show(n: (&User)?): Int = 1` are declared and `fun f(m: (&mut User)?) { show(m); show(m) }` is lowered
 - **THEN** before each call the tag of `m` is read, and `show` receives either `null` or a wrapped shared argument borrow of the dereference of `m`'s payload; `m` is never moved
+
+### Requirement: Optional Mutable Borrows Are Reborrowed as Mutable
+Where a `(&mut T)?` place is lent as a `(&mut T)?`, the MIR MUST read its tag and pass `null`, or a mutable borrow of the dereferenced payload wrapped as non-null, without moving the place.
+
+#### Scenario: Lending an optional mutable borrow as mutable twice
+- **WHEN** `struct User { var name: String }` and `fun edit(n: (&mut User)?) {}` are declared and `fun f(m: (&mut User)?) { edit(m); edit(m) }` is lowered
+- **THEN** before each call the tag of `m` is read, and `edit` receives either `null` or a wrapped mutable argument borrow of the dereference of `m`'s payload; `m` is never moved
 
 ### Requirement: Closures Are Separate Bodies
 Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from the places of those bindings, in capture order. How each binding is captured MUST NOT be decided by the MIR as lowered: the borrow checker infers it, and the elaborated MIR MUST record exactly one mode per capture local, shared or mutable (see `references`), and MIR as lowered none.
@@ -347,3 +358,9 @@ Decisions from `borrowck-exclusivity`:
 - **Borrowed temporaries in branch values live as long as the value.** A temporary whose written borrow is the value of a branch of `if` or `when`, a `?:` fallback or a block tail, through any nesting, belongs to the scope of the whole expression: the statement's, or the binding's block for a `val` or `var` initializer, extending `mir-lowering`'s lifetime extension through branches as Rust 1.79 does. Its storage starts before the expression, it is assigned in its branch, and it is dropped under a drop flag. Without it, `greet(&u.nick ?: &"anon")`, which `references` accepts, dropped `"anon"` while still borrowed. Rejected: rejecting the idiom; extending every branch temporary.
 - **A straight-line write of a whole local is located at the target.** An assignment to a local that needs no drop carries the target's span, like other assignments, so `x = 2` while borrowed points at `x`.
 - **A safe call borrows its receiver at its test** (review, autonomous). The receiver of a safe call is a payload reached through a tag test, so it is borrowed right after that test rather than after the arguments, which could otherwise make the tested nullable `null` before the call. Rejected: re-testing the tag after the arguments, which would evaluate the arguments of a call it then skips.
+
+Decisions from `borrowck-elision`:
+
+- **The receiver of a call comes from its callee's path.** A declaration path names an extension's receiver type, and an extension cannot be named as a value, so a call's first operand is a receiver exactly when its callee is an extension's path (or the built-in `clone`), and a body's first argument exactly when it is an extension's body; the borrow checker's rule 2 reads that. Rejected: a receiver flag on calls, which duplicates the path and needs a validator rule; the first parameter's type (a `&T` first parameter is not necessarily a receiver).
+- **A `(&mut T)?` lent as a `(&mut T)?` is reborrowed** (orchestrator). Like the `(&T)?` case, the lowering tests the tag and passes `null` or a wrapped mutable reborrow of the payload's referent, so the binding stays usable, as a `&mut` binding passed as an argument does, and passing it twice to one call is a conflict. Rejected: moving it (unusable after one call); a typed-tree coercion for one case.
+
