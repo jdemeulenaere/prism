@@ -1,6 +1,7 @@
 //! The borrow checker's diagnostics (D9 of `borrowck-moves`, D13 of `borrowck-exclusivity`): a
 //! primary location and related locations, each with a label, then notes and help lines.
 
+use crate::elision::Rule;
 use prism_ast::Span;
 
 /// One error of the borrow checker.
@@ -59,6 +60,44 @@ pub enum BorrowErrorKind {
         capture: Option<String>,
         parameter: Option<String>,
     },
+    /// `E5008`: a body returns a borrow of memory it owns, under the elision rule `rule` of its
+    /// signature (D5 and D6 of `borrowck-elision`).
+    DanglingBorrowReturn { borrowed: Borrowed, rule: Rule },
+    /// `E5009`: a body returns a borrow derived from the input `parameter` (an argument, or a
+    /// closure's capture), which its elision rule does not tie the result to, for `reason`.
+    UntiedBorrowReturn {
+        parameter: Option<String>,
+        reason: UntiedReason,
+    },
+}
+
+/// What a dangling returned borrow borrows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Borrowed {
+    /// A local `val` or `var`.
+    Local(String),
+    /// A by-value parameter, which ends when the body returns.
+    Parameter(String),
+    /// A temporary value.
+    Temporary,
+}
+
+/// Why a returned borrow's input is not one its elision rule ties the result to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UntiedReason {
+    /// A parameter of the method `method` other than its borrowed receiver (rule 2).
+    NotReceiver { method: String },
+    /// A function-typed parameter, which is not an input borrow (D9).
+    FunctionParameter,
+    /// A capture of a closure whose type has an input borrow, whose result is tied to its
+    /// reference parameters only (D8).
+    Capture,
+    /// An earlier by-value argument of the default value of parameter `default`, which the
+    /// call takes (D10).
+    DefaultByValue { default: String },
+    /// An earlier argument of the default value of parameter `default` that the call borrows
+    /// mutably beside it (D10).
+    DefaultMutable { default: String },
 }
 
 /// How a statement or terminator accesses a place, which decides the borrows it conflicts
@@ -92,6 +131,8 @@ impl BorrowError {
             BorrowErrorKind::MoveOutWhileBorrowed { .. } => "E5005",
             BorrowErrorKind::DroppedWhileBorrowed { .. } => "E5006",
             BorrowErrorKind::EscapingClosure { .. } => "E5007",
+            BorrowErrorKind::DanglingBorrowReturn { .. } => "E5008",
+            BorrowErrorKind::UntiedBorrowReturn { .. } => "E5009",
         }
     }
 
@@ -135,6 +176,42 @@ impl BorrowError {
             BorrowErrorKind::EscapingClosure { .. } => {
                 return "a closure that captures variables cannot escape".to_string()
             }
+            BorrowErrorKind::DanglingBorrowReturn { borrowed, .. } => {
+                return match borrowed {
+                    Borrowed::Local(name) => format!("cannot return a borrow of local '{}'", name),
+                    Borrowed::Parameter(name) => {
+                        format!("cannot return a borrow of parameter '{}'", name)
+                    }
+                    Borrowed::Temporary => {
+                        "cannot return a borrow of a temporary value".to_string()
+                    }
+                }
+            }
+            BorrowErrorKind::UntiedBorrowReturn { parameter, reason } => {
+                let parameter = quoted(parameter);
+                return match reason {
+                    UntiedReason::NotReceiver { method } => format!(
+                        "method '{}' cannot return a borrow derived from parameter {}",
+                        method, parameter
+                    ),
+                    UntiedReason::FunctionParameter => format!(
+                        "cannot return a borrow obtained from function-typed parameter {}",
+                        parameter
+                    ),
+                    UntiedReason::Capture => format!(
+                        "the closure cannot return a borrow derived from captured {}",
+                        parameter
+                    ),
+                    UntiedReason::DefaultByValue { default } => format!(
+                        "default value of '{}' cannot borrow parameter {}",
+                        default, parameter
+                    ),
+                    UntiedReason::DefaultMutable { default } => format!(
+                        "default value of '{}' cannot borrow from {}, which the call borrows mutably",
+                        default, parameter
+                    ),
+                };
+            }
         };
         format!(
             "use of {}{} value '{}'",
@@ -177,5 +254,99 @@ fn conflict_message(
         }
         AccessKind::SharedBorrow => format!("cannot borrow {} as shared{}", quoted(place), because),
         _ => format!("cannot use {}{}", quoted(place), because),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn error(kind: BorrowErrorKind) -> BorrowError {
+        BorrowError {
+            kind,
+            primary: Label {
+                span: Span::dummy(),
+                message: String::new(),
+            },
+            related: Vec::new(),
+            notes: Vec::new(),
+            helps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn returned_borrow_codes_and_titles() {
+        let dangling = |borrowed| {
+            error(BorrowErrorKind::DanglingBorrowReturn {
+                borrowed,
+                rule: Rule::NoInput,
+            })
+        };
+        let cases = [
+            (
+                dangling(Borrowed::Local("n".to_string())),
+                "E5008",
+                "cannot return a borrow of local 'n'",
+            ),
+            (
+                dangling(Borrowed::Parameter("s".to_string())),
+                "E5008",
+                "cannot return a borrow of parameter 's'",
+            ),
+            (
+                dangling(Borrowed::Temporary),
+                "E5008",
+                "cannot return a borrow of a temporary value",
+            ),
+        ];
+        for (error, code, message) in cases {
+            assert_eq!((error.code(), error.message().as_str()), (code, message));
+        }
+        let untied = |parameter: &str, reason| {
+            error(BorrowErrorKind::UntiedBorrowReturn {
+                parameter: Some(parameter.to_string()),
+                reason,
+            })
+        };
+        let cases = [
+            (
+                untied(
+                    "o",
+                    UntiedReason::NotReceiver {
+                        method: "other".to_string(),
+                    },
+                ),
+                "method 'other' cannot return a borrow derived from parameter 'o'",
+            ),
+            (
+                untied("h", UntiedReason::FunctionParameter),
+                "cannot return a borrow obtained from function-typed parameter 'h'",
+            ),
+            (
+                untied("n", UntiedReason::Capture),
+                "the closure cannot return a borrow derived from captured 'n'",
+            ),
+            (
+                untied(
+                    "a",
+                    UntiedReason::DefaultByValue {
+                        default: "b".to_string(),
+                    },
+                ),
+                "default value of 'b' cannot borrow parameter 'a'",
+            ),
+            (
+                untied(
+                    "this",
+                    UntiedReason::DefaultMutable {
+                        default: "n".to_string(),
+                    },
+                ),
+                "default value of 'n' cannot borrow from 'this', which the call borrows mutably",
+            ),
+        ];
+        for (error, message) in cases {
+            assert_eq!((error.code(), error.message().as_str()), ("E5009", message));
+        }
     }
 }

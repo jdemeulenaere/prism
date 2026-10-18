@@ -18,7 +18,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 4. Errors (D6)
 
-- [ ] 4.1 In `crates/prism-borrowck/src/error.rs`, add `BorrowErrorKind::DanglingBorrowReturn { borrowed: Borrowed, rule: Rule }` with `Borrowed { Local(String), Parameter(String), Temporary }`, and `UntiedBorrowReturn { parameter: Option<String>, reason: UntiedReason }` with `UntiedReason { NotReceiver { method: String }, FunctionParameter, Capture, DefaultByValue { default: String }, DefaultMutable { default: String } }`; codes `E5008` and `E5009`; the titles of D6 in `BorrowError::message`. Verify with unit tests of `code()` and `message()` for each title.
+- [x] 4.1 In `crates/prism-borrowck/src/error.rs`, add `BorrowErrorKind::DanglingBorrowReturn { borrowed: Borrowed, rule: Rule }` with `Borrowed { Local(String), Parameter(String), Temporary }`, and `UntiedBorrowReturn { parameter: Option<String>, reason: UntiedReason }` with `UntiedReason { NotReceiver { method: String }, FunctionParameter, Capture, DefaultByValue { default: String }, DefaultMutable { default: String } }`; codes `E5008` and `E5009`; the titles of D6 in `BorrowError::message`. Verify with unit tests of `code()` and `message()` for each title.
 
 ## 5. Arguments end at the return, and parameter labels (D11, D12)
 
