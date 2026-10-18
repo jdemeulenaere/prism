@@ -396,6 +396,11 @@ pub struct TypeChecker {
     /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
     /// the file does not import, which can be named in an `E4014` hint.
     seen_nominals: HashMap<String, Vec<NominalId>>,
+    /// Every struct and enum an ingested ABI exports as a symbol. A definition an ABI records
+    /// only because its exports reach the type (a private type of the import, or a type of a
+    /// module it imports) is in the type table for layout only, and its members stay hidden
+    /// (D4 of `codegen-aggregates`).
+    exported_nominals: HashSet<NominalId>,
     /// While a parameter's default value is checked: the bindings it borrows (`this` and the
     /// earlier parameters), and the number of closures open around the default. Moving one of
     /// them outside a closure of the default is a move out of a borrow (D11 of `borrowck-moves`).
@@ -448,6 +453,7 @@ impl TypeChecker {
             imported_extensions: HashMap::new(),
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
+            exported_nominals: HashSet::new(),
             default_inputs: None,
             type_parameter_scope: Vec::new(),
             generic_callee: false,
@@ -772,14 +778,30 @@ impl TypeChecker {
         }
     }
 
-    /// The fields of struct `id`, if its definition is known.
+    /// The fields of struct `id`, if its definition is known and its members are visible.
     fn struct_fields(&self, id: &NominalId) -> Option<Vec<(String, bool, Type)>> {
+        if self.is_layout_only(id) {
+            return None;
+        }
         self.types.struct_fields(id).map(<[_]>::to_vec)
     }
 
-    /// The variants of enum `id`, if its definition is known.
+    /// The variants of enum `id`, if its definition is known and its members are visible.
     fn enum_variants(&self, id: &NominalId) -> Option<Vec<(String, Vec<Type>)>> {
+        if self.is_layout_only(id) {
+            return None;
+        }
         self.types.enum_variants(id).map(<[_]>::to_vec)
+    }
+
+    /// Whether the type checker knows the definition of `id` for layout only: the type is
+    /// neither the file's own, built in, nor exported by an import, so it reached the file's
+    /// type table through an import's reachable type definitions (D4 of `codegen-aggregates`).
+    /// Its members are hidden, as if its definition were unknown.
+    fn is_layout_only(&self, id: &NominalId) -> bool {
+        id.module != self.module_path
+            && id.module != BUILTIN_MODULE
+            && !self.exported_nominals.contains(id)
     }
 
     /// Binds a type name in the current scope: a declared or imported struct or enum gives its
@@ -1240,7 +1262,6 @@ impl TypeChecker {
             return None;
         }
         let payload_free = self
-            .types
             .enum_variants(&id)?
             .iter()
             .any(|(name, payloads)| name == &member && payloads.is_empty());
@@ -1403,11 +1424,10 @@ impl TypeChecker {
                 ..
             } = sym
             {
-                self.types.insert_marker(
-                    NominalId::new(abi.module.clone(), name.clone()),
-                    *marker,
-                    marker_parameters.clone(),
-                );
+                let id = NominalId::new(abi.module.clone(), name.clone());
+                self.types
+                    .insert_marker(id.clone(), *marker, marker_parameters.clone());
+                self.exported_nominals.insert(id);
             }
             let symbol = match sym {
                 ExportedSymbol::Struct {
@@ -6624,7 +6644,7 @@ impl TypeChecker {
             return (Type::Error, None);
         }
         match &peeled_ty {
-            Type::Struct { id, arguments } if self.types.struct_fields(id).is_some() => {
+            Type::Struct { id, arguments } if self.struct_fields(id).is_some() => {
                 // Fields have their declared types with the type arguments substituted.
                 let fields = self
                     .types
@@ -6642,7 +6662,7 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            Type::Enum { id, arguments } if self.types.enum_variants(id).is_some() => {
+            Type::Enum { id, arguments } if self.enum_variants(id).is_some() => {
                 // Through the enum's name (`Option.Some`), the enum is applied to its own
                 // parameters, which the use solves (D8 of `generics`).
                 let arguments = if arguments.is_empty() {

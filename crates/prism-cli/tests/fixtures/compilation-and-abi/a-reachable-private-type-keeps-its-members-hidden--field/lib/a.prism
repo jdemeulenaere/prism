@@ -1,0 +1,6 @@
+package lib
+
+struct Secret : Copy { val k: Int }
+enum Mode : Copy { On, Off }
+public struct Outer : Copy { val s: Secret, val m: Mode }
+public fun make(): Outer = Outer(Secret(1), Mode.On)

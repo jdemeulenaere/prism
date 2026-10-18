@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Definitions of Reachable Types in the ABI
-Each file's ABI MUST record the definition (kind, type parameters, marker, and fields or variants with their bound types) of every struct and enum that a value reached through its exports can hold, transitively through fields and payloads, other than its own exported structs and enums. Private types and types of modules the file does not import MUST be included when reached; each definition MUST come from its defining file's declarations alone.
+Each file's ABI MUST record the definition (kind, type parameters, marker, and fields or variants with their bound types) of every struct and enum that a value reached through its exports can hold, transitively through fields and payloads, other than its own exported structs and enums. Private types and types of modules the file does not import MUST be included when reached; each definition MUST come from its defining file's declarations alone. A definition an importer knows only this way MUST serve layout alone: its fields and variants MUST stay unknown to the importer's type checker, as if the definition were absent.
 
 #### Scenario: A private field type is recorded
 - **WHEN** `lib/a.prism` declares `struct Secret : Copy { val k: Int }`, `public struct Outer : Copy { val s: Secret, val n: Int }` and the private `struct Helper { val h: Int }`, and `prism abi lib/a.prism` runs
@@ -12,6 +12,10 @@ Each file's ABI MUST record the definition (kind, type parameters, marker, and f
 #### Scenario: A type of a module the importer does not import
 - **WHEN** `geo/core.prism` exports `public struct Vec : Copy { val x: Int }`, and `geo/shapes.prism` imports `/geo/core` and exports `public struct Circle : Copy { val center: Vec, val r: Int }`
 - **THEN** the ABI of `geo/shapes` records the definition of `Vec` from module `geo/core`, so a file importing only `/geo/shapes` can lay out a `Circle`
+
+#### Scenario: A reachable private type keeps its members hidden
+- **WHEN** `lib/a.prism` declares `struct Secret : Copy { val k: Int }`, `enum Mode : Copy { On, Off }`, `public struct Outer : Copy { val s: Secret, val m: Mode }` and `public fun make(): Outer = Outer(Secret(1), Mode.On)`, and `app/main.prism` imports `/lib/a` and prints `make().s.k`, or prints `when (make().m) { On -> 1; else -> 2 }`
+- **THEN** `prism check app/main.prism` reports `E4006` for the field `k`, or `E4001` for the variant name `On`, as it does for any type whose definition it does not know
 
 #### Scenario: Changing a reachable type changes the hashes
 - **WHEN** in that workspace `Vec` gains a field `val y: Int`, or the private `Secret` of `lib/a` gains a field

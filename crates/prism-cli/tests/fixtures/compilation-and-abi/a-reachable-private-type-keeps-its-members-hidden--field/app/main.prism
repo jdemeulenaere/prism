@@ -1,0 +1,9 @@
+// expect: E4006
+// entry: app/main.prism
+package app
+
+import /lib/a
+
+fun main() {
+    println(make().s.k)
+}

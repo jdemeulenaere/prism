@@ -1,0 +1,9 @@
+// expect: E4001
+// entry: app/main.prism
+package app
+
+import /lib/a
+
+fun main() {
+    println(when (make().m) { On -> 1; else -> 2 })
+}
