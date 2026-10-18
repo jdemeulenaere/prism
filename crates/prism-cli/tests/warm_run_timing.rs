@@ -5,8 +5,8 @@
 //! body edit and warm after a generic body edit. It reports the front end (resolution, Phase 1,
 //! and Phase 2 or reading cached verdicts), code generation (checks, planning, instantiation and
 //! compiling what missed) and linking (defining every artifact, fresh or loaded). Under
-//! `PRISM_ASSERT_TIMING=1` it asserts that each stage grows at most twice as fast as the size,
-//! and that the unchanged warm run compiles no function.
+//! `PRISM_ASSERT_TIMING=1` it asserts that each stage grows near-linearly, at most 1.5 times as
+//! fast as the size, and that the unchanged warm run compiles no function.
 //!
 //! `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test warm_run_timing -- --ignored --nocapture`
 
@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const SIZES: [usize; 3] = [64, 256, 1024];
+
+/// The number of times each workspace is measured, keeping each stage's fastest time.
+const TRIALS: usize = 3;
 
 /// A shape's name and its generator for a size.
 type Shape = (&'static str, fn(usize) -> Generated);
@@ -208,7 +211,18 @@ fn warm_runs_take_linear_time() {
     for (shape, generate) in shapes {
         let mut by_size = Vec::new();
         for size in SIZES {
-            let results = measure(&format!("{}_{}", shape, size), &generate(size));
+            let generated = generate(size);
+            // The fastest of a few trials, each on a fresh workspace and cache, since file
+            // system activity after a cold run's writes makes single runs noisy.
+            let mut results = measure(&format!("{}_{}", shape, size), &generated);
+            for trial in 1..TRIALS {
+                let again = measure(&format!("{}_{}_{}", shape, size, trial), &generated);
+                for ((stages, _), (other, _)) in results.iter_mut().zip(&again) {
+                    for (stage, other) in stages.iter_mut().zip(other) {
+                        *stage = (*stage).min(*other);
+                    }
+                }
+            }
             for (run, (stages, compiled)) in RUNS.iter().zip(&results) {
                 println!(
                     "{:16} {:5} {:13} front end {:9.2} ms  code generation {:9.2} ms  linking {:8.2} ms  compiled {:6}",
@@ -229,8 +243,11 @@ fn warm_runs_take_linear_time() {
             }
             by_size.push(results);
         }
-        // Each stage of each run grows at most twice as fast as the size, with a floor of one
-        // millisecond under which noise dominates.
+        // Each stage of each run grows near-linearly: at most 1.5 times as fast as the size, so
+        // 6x for 4x the files (a quadratic step would show 16x), with a floor of one
+        // millisecond under which noise dominates. Reading every import's directory once per
+        // import made the warm front end of `many_files` grow 6.6x before the resolver read each
+        // directory once.
         for pair in by_size.windows(2) {
             for (run_index, run) in RUNS.iter().enumerate() {
                 for (stage_index, stage) in ["front end", "code generation", "linking"]
@@ -239,7 +256,7 @@ fn warm_runs_take_linear_time() {
                 {
                     let small = milliseconds(pair[0][run_index].0[stage_index]).max(1.0);
                     let large = milliseconds(pair[1][run_index].0[stage_index]);
-                    if large > small * 8.0 {
+                    if large > small * 6.0 {
                         failures.push(format!(
                             "{} {} {}: {:.2} ms to {:.2} ms for 4x the size",
                             shape, run, stage, small, large

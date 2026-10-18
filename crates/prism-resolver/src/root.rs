@@ -5,6 +5,8 @@
 
 use crate::error::ResolveError;
 use prism_ast::PackageDecl;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// Representation of a parsed path with normalized separators and resolved relative components.
@@ -132,14 +134,34 @@ pub fn absolute_path(path: &Path) -> PathBuf {
 /// On case-insensitive filesystems (such as macOS APFS and Windows NTFS), standard existence checks
 /// ignore case. This function reads directory entries directly to enforce strict case sensitivity.
 pub fn verify_disk_casing_exists(parent: &Path, segment: &str) -> bool {
-    if let Ok(entries) = std::fs::read_dir(parent) {
-        for entry in entries.flatten() {
-            if entry.file_name() == segment {
-                return true;
-            }
-        }
+    DirectoryListings::new().contains(parent, segment)
+}
+
+/// The names of the entries of every directory a resolution looked into, each directory read
+/// once, so that resolving every import of a program costs time linear in its imports and its
+/// directories' sizes rather than their product (a directory of `n` files importing each other
+/// would otherwise be read `n` times). A directory that cannot be read has no entries.
+#[derive(Debug, Default)]
+pub struct DirectoryListings {
+    listings: HashMap<PathBuf, HashSet<OsString>>,
+}
+
+impl DirectoryListings {
+    pub fn new() -> Self {
+        Self::default()
     }
-    false
+
+    /// Whether an entry named exactly `segment`, with its exact case, exists inside `parent`, as
+    /// [`verify_disk_casing_exists`] checks it.
+    pub fn contains(&mut self, parent: &Path, segment: &str) -> bool {
+        self.listings
+            .entry(parent.to_path_buf())
+            .or_insert_with(|| match std::fs::read_dir(parent) {
+                Ok(entries) => entries.flatten().map(|entry| entry.file_name()).collect(),
+                Err(_) => HashSet::new(),
+            })
+            .contains(OsStr::new(segment))
+    }
 }
 
 /// Discovers the workspace root from a source file path and its parsed package declaration.
@@ -147,11 +169,20 @@ pub fn discover_root(
     source_path: &Path,
     package_decl: Option<&PackageDecl>,
 ) -> Result<PathBuf, ResolveError> {
+    discover_root_with(source_path, package_decl, &mut DirectoryListings::new())
+}
+
+/// [`discover_root`], reading each directory's entries through `listings`.
+pub fn discover_root_with(
+    source_path: &Path,
+    package_decl: Option<&PackageDecl>,
+    listings: &mut DirectoryListings,
+) -> Result<PathBuf, ResolveError> {
     let segments: Vec<String> = match package_decl {
         Some(pkg) => pkg.path.clone(),
         None => Vec::new(),
     };
-    discover_root_from_segments(source_path, &segments)
+    discover_root_from_segments_with(source_path, &segments, listings)
 }
 
 /// Discovers the workspace root from a source file path and package path segments.
@@ -168,6 +199,15 @@ pub fn discover_root(
 pub fn discover_root_from_segments(
     source_path: &Path,
     package_segments: &[impl AsRef<str>],
+) -> Result<PathBuf, ResolveError> {
+    discover_root_from_segments_with(source_path, package_segments, &mut DirectoryListings::new())
+}
+
+/// [`discover_root_from_segments`], reading each directory's entries through `listings`.
+pub fn discover_root_from_segments_with(
+    source_path: &Path,
+    package_segments: &[impl AsRef<str>],
+    listings: &mut DirectoryListings,
 ) -> Result<PathBuf, ResolveError> {
     let norm = NormalizedPath::parse(source_path);
     let normalized = norm.to_path_buf();
@@ -247,7 +287,7 @@ pub fn discover_root_from_segments(
         let mut curr = check_base.to_path_buf();
         for pkg_seg in package_segments {
             let seg_str = pkg_seg.as_ref();
-            if !verify_disk_casing_exists(&curr, seg_str) {
+            if !listings.contains(&curr, seg_str) {
                 return Err(ResolveError::PackagePathMismatch {
                     file: normalized,
                     declared_package: declared_pkg_str,

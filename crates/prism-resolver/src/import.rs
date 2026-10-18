@@ -4,7 +4,7 @@
 //! `package-resolution` spec, and upholds the zero-marker invariant.
 
 use crate::error::ResolveError;
-use crate::root::{normalize_path, verify_disk_casing_exists};
+use crate::root::{normalize_path, DirectoryListings};
 use prism_ast::ImportDecl;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,22 @@ pub fn resolve_import(
     source_file: &Path,
     import: &ImportDecl,
     workspace_root: &Path,
+) -> Result<PathBuf, ResolveError> {
+    resolve_import_with(
+        source_file,
+        import,
+        workspace_root,
+        &mut DirectoryListings::new(),
+    )
+}
+
+/// [`resolve_import`], reading each directory's entries through `listings`, so that resolving
+/// every import of a program reads each directory once.
+pub fn resolve_import_with(
+    source_file: &Path,
+    import: &ImportDecl,
+    workspace_root: &Path,
+    listings: &mut DirectoryListings,
 ) -> Result<PathBuf, ResolveError> {
     let import_str = import.path_string();
 
@@ -124,7 +140,7 @@ pub fn resolve_import(
     if base_dir.exists() {
         let mut curr = base_dir;
         for dir in relative_dirs {
-            if !verify_disk_casing_exists(&curr, dir) {
+            if !listings.contains(&curr, dir) {
                 return Err(ResolveError::FileNotFound {
                     import_path: import_str,
                     target_path: normalized_candidate,
@@ -132,7 +148,7 @@ pub fn resolve_import(
             }
             curr = curr.join(dir);
         }
-        if !verify_disk_casing_exists(&curr, &file_name) {
+        if !listings.contains(&curr, &file_name) {
             return Err(ResolveError::FileNotFound {
                 import_path: import_str,
                 target_path: normalized_candidate,

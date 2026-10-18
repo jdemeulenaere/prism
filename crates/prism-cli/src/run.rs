@@ -659,6 +659,12 @@ pub fn dump_layout(entry: &Path) -> Result<String, WorkspaceError> {
 
 /// The path under which `graph` knows the entry file `entry`.
 fn entry_in_graph(graph: &DependencyGraph, entry: &Path) -> Result<PathBuf, WorkspaceError> {
+    // The graph adds its entry under its absolute path, so this finds it without canonicalizing
+    // every file's path.
+    let absolute = prism_resolver::absolute_path(entry);
+    if graph.nodes.contains_key(&absolute) {
+        return Ok(absolute);
+    }
     let canonical = entry.canonicalize().map_err(|e| WorkspaceError::Io {
         path: entry.to_path_buf(),
         message: e.to_string(),

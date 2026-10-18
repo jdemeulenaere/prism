@@ -5,8 +5,8 @@
 //! compilation unit and zero-marker invariants.
 
 use crate::error::ResolveError;
-use crate::import::resolve_import;
-use crate::root::{absolute_path, discover_root};
+use crate::import::resolve_import_with;
+use crate::root::{absolute_path, discover_root_with, DirectoryListings};
 use prism_ast::SourceFile;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -79,7 +79,10 @@ impl DependencyGraph {
                 path: first_entry.clone(),
                 error: e,
             })?;
-        let authoritative_root = discover_root(&first_entry, first_ast.package.as_ref())?;
+        // Every directory the resolution looks into is read once (compile speed).
+        let mut listings = DirectoryListings::new();
+        let authoritative_root =
+            discover_root_with(&first_entry, first_ast.package.as_ref(), &mut listings)?;
 
         let mut worklist: VecDeque<PathBuf> = VecDeque::new();
         let mut visited: HashSet<PathBuf> = HashSet::new();
@@ -105,7 +108,8 @@ impl DependencyGraph {
                     error: e,
                 })?;
 
-            let current_root = discover_root(&current_path, source_file.package.as_ref())?;
+            let current_root =
+                discover_root_with(&current_path, source_file.package.as_ref(), &mut listings)?;
 
             // Root consistency check (E1004 InconsistentWorkspaceRoot)
             let roots_differ = if current_root == authoritative_root {
@@ -129,8 +133,12 @@ impl DependencyGraph {
 
             let mut direct_imports = Vec::new();
             for import_decl in &source_file.imports {
-                let resolved_target =
-                    resolve_import(&current_path, import_decl, &authoritative_root)?;
+                let resolved_target = resolve_import_with(
+                    &current_path,
+                    import_decl,
+                    &authoritative_root,
+                    &mut listings,
+                )?;
                 if !direct_imports.contains(&resolved_target) {
                     direct_imports.push(resolved_target.clone());
                 }
