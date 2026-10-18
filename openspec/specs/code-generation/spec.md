@@ -279,11 +279,14 @@ Comparing the contents of two boxes whose contents are a struct, an enum or a nu
 - **THEN** it prints `function main#equals(main::Expr)`, which calls itself for the boxed payloads of `Add`, and `same` compares the variants inline and calls the glue for `Add`'s payloads
 
 ### Requirement: Large Aggregates Are Compared by Equality Glue
-Each `==` and `!=`, and each equality glue function, MUST expand inline at most 32 comparisons of the struct, enum and nullable parts it compares, counting one for each scalar, string, enum tag, nullable presence and box compared by glue that a part's expansion holds. A struct, an enum or a nullable in memory whose expansion does not fit in what remains MUST be compared by calling its equality glue, `<module>#equals(<type>)`, whose body expands that type's own fields, tag and payloads, or presence and payload, under its own budget. The results MUST be the same as those of the full expansion: padding, inactive payloads and addresses are never compared. Generating code for equality MUST take time linear in the number of fields and payloads of the types compared.
+Each `==` and `!=`, and each equality glue function, MUST expand inline at most 32 comparisons of the struct, enum and nullable parts it compares, counting one for each scalar, string, enum tag, nullable presence and box compared by glue that a part's expansion holds. A part in memory whose expansion does not fit in what remains MUST be compared by calling its equality glue, `<module>#equals(<type>)`, which expands that type's own parts under its own budget.
 
 #### Scenario: A large struct is compared by equality glue
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct P : Copy { val a: Int, val b: Int, val c: Int, val d: Int }`, `struct Q : Copy { val a: P, val b: P, val c: P, val d: P }`, `struct R : Copy { val a: Q, val b: Q, val c: Q }` and `fun same(x: R, y: R): Bool = x == y`
 - **THEN** `same` calls `main#equals(main::R)`, which compares the fields `a` and `b` inline and calls `main#equals(main::Q)` for `c`, and `main#equals(main::Q)` compares its sixteen `Int`s inline, calling no equality glue
+
+### Requirement: Equality Glue Gives the Full Expansion's Result
+Comparing through equality glue MUST give the same result as the full inline expansion: padding, inactive payloads and addresses are never compared. Generating code for equality MUST take time linear in the number of fields and payloads of the types compared.
 
 #### Scenario: Equality of a large aggregate
 - **WHEN** a program declares a struct of five structs, each holding two `Copy` structs of two `Int`s, a `String`, an `Int?` and an enum with a `Double` and a struct payload, and prints the comparisons of such values that are equal, that differ in the `Int?` of the first part, in the struct payload, the string, the presence of the `Int?` or the variant of the last part, and of a value holding `NaN` with itself
