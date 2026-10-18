@@ -166,11 +166,15 @@ Where the input has one or more blank lines between two declarations, members, s
 - **THEN** the result is `val a = 1\nval b = 2\n\nfun f() {}\n\nstruct S {}\n`
 
 ### Requirement: File Structure
-The formatter MUST put exactly one blank line after the package declaration and after the last import when something follows them, and print import paths with `/` between segments. The output MUST end with exactly one newline, and an input without declarations or comments MUST format to the empty file.
+The formatter MUST put exactly one blank line after the package declaration and after the last import when something follows them, and print import paths with `/` between segments. The output MUST end with exactly one newline, and an input without declarations or comments MUST format to the empty file. Every line MUST end with `\n`: `\r\n` line endings, in code and in comments, are normalized.
 
 #### Scenario: Package and imports separated
 - **WHEN** formatting `package app\nimport /core/fmt\nimport util\nfun main() {}`
 - **THEN** the result is `package app\n\nimport /core/fmt\nimport util\n\nfun main() {}\n`
+
+#### Scenario: Line endings normalized
+- **WHEN** running `prism fmt main.prism` on a file containing `val x = 1 // one\r\nval y = 2\r\n`, laid out canonically apart from its line endings
+- **THEN** the file then contains `val x = 1 // one\nval y = 2\n` and the command prints `main.prism`
 
 ### Requirement: Comment Placement
 The formatter MUST keep every line and block comment. A comment on its own line MUST stay on its own line, before the item (declaration, member, statement, branch, argument or parameter) that follows it, at that item's indentation. A comment after an item on the item's last line MUST stay at the end of that line, after one space. A comment before a closing brace or parenthesis MUST stay on its own line before it.

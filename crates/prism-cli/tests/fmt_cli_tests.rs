@@ -1,6 +1,7 @@
 //! `prism fmt`: the command scenarios of `openspec/specs/formatting` ("Format Command",
 //! "Formatting Directories", "Formatting Standard Input", "Check Mode" and "Files With Syntax
-//! Errors Are Not Formatted"), run on the binary.
+//! Errors Are Not Formatted", and "Line endings normalized" of "File Structure"), run on the
+//! binary.
 
 use std::fs;
 use std::io::Write;
@@ -116,6 +117,17 @@ fn formatting_a_directory() {
     assert!(explicit.status.success(), "{}", stderr(&explicit));
     assert_eq!(read(&src.join("notes.txt")), FORMATTED);
     fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn line_endings_normalized() {
+    let directory = temporary_directory("line_endings");
+    let file = directory.join("main.prism");
+    write(&file, "val x = 1 // one\r\nval y = 2\r\n");
+    let output = prism(&["fmt", "main.prism"], &directory);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "main.prism\n");
+    assert_eq!(read(&file), "val x = 1 // one\nval y = 2\n");
 }
 
 #[test]
