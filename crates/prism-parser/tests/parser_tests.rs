@@ -1173,7 +1173,7 @@ mod tests {
         );
         assert_eq!(
             expr_of(&stmts[0]).to_string(),
-            "run({ -> ... (0 statements, tail) })"
+            "run() { -> ... (0 statements, tail) }"
         );
     }
 
@@ -1530,7 +1530,7 @@ mod tests {
                 "value (g(1) + 1)",
                 "g(3)",
                 "value f(x).y",
-                "value h(1, { ... (0 statements, tail) })",
+                "value h(1) { ... (0 statements, tail) }",
                 "Shape.Rect(val w, _)",
                 "else",
             ]
