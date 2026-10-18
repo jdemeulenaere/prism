@@ -307,3 +307,16 @@ fn a_dependency_with_errors_stops_the_run() {
         stderr(&run)
     );
 }
+
+/// The reference program `examples/run/main.prism`, which the timing benchmark also runs.
+#[test]
+fn the_reference_program_runs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = prism(&["run", "examples/run/main.prism"], &root);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n"
+    );
+    assert_eq!(stderr(&output), "");
+}

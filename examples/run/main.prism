@@ -1,0 +1,21 @@
+// The reference program of `prism run`: run it with `prism run examples/run/main.prism`, and
+// time it with `prism run --timings examples/run/main.prism`.
+package run
+
+import /run/math/numbers
+
+fun main() {
+    var primes = 0
+    for (n in 1..LIMIT) {
+        if (!isPrime(n)) continue
+        print(n)
+        print(' ')
+        primes += 1
+    }
+    println()
+    println(primes)
+    println(gcd(84, 36))
+    println(sumTo(100))
+    println(sumTo(100, 7))
+    println(1.0 / 3.0)
+}

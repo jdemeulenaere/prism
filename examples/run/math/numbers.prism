@@ -1,0 +1,39 @@
+package run.math
+
+// Scalar helpers for the reference program of `prism run` (examples/run/main.prism).
+
+// How many numbers `main` scans for primes.
+public val LIMIT: Int = 50
+
+// Whether `n` is prime, by trial division.
+public fun isPrime(n: Int): Bool {
+    if (n < 2) return false
+    var divisor = 2
+    while (divisor * divisor <= n) {
+        if (n % divisor == 0) return false
+        divisor += 1
+    }
+    return true
+}
+
+// The greatest common divisor of `a` and `b`, by Euclid's algorithm.
+public fun gcd(a: Int, b: Int): Int {
+    var x = a
+    var y = b
+    while (y != 0) {
+        val rest = x % y
+        x = y
+        y = rest
+    }
+    return x
+}
+
+// The sum of the multiples of `step` from 1 to `n`.
+public fun sumTo(n: Int, step: Int = 1): Int {
+    var sum = 0
+    for (i in 1..n) {
+        if (i % step != 0) continue
+        sum += i
+    }
+    return sum
+}

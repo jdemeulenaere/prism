@@ -51,8 +51,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 9. Reference program and startup timing (D22)
 
-- [ ] 9.1 Add `examples/run/main.prism` and `examples/run/math/numbers.prism` (a scalar program over two files: primes, gcd, a range sum, a top-level `val`, a default value), with a `crates/prism-cli/tests/run_cli_tests.rs` test that runs it and compares its output. Verify that `prism check examples/run` passes and the test passes.
-- [ ] 9.2 Add `crates/prism-cli/tests/run_timing.rs` per D22: an `#[ignore]` benchmark running `prism run --timings examples/run/main.prism` 20 times and printing the median and 90th percentile per stage against 15 ms, asserting only under `PRISM_ASSERT_TIMING=1`. Run it with `cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture` and record the measured median in the commit message; if it is above 15 ms, profile and note the cause there (the scenario "Tier 1 instant script execution" is verified by this run).
+- [x] 9.1 Add `examples/run/main.prism` and `examples/run/math/numbers.prism` (a scalar program over two files: primes, gcd, a range sum, a top-level `val`, a default value), with a `crates/prism-cli/tests/run_cli_tests.rs` test that runs it and compares its output. Verify that `prism check examples/run` passes and the test passes.
+- [x] 9.2 Add `crates/prism-cli/tests/run_timing.rs` per D22: an `#[ignore]` benchmark running `prism run --timings examples/run/main.prism` 20 times and printing the median and 90th percentile per stage against 15 ms, asserting only under `PRISM_ASSERT_TIMING=1`. Run it with `cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture` and record the measured median in the commit message; if it is above 15 ms, profile and note the cause there (the scenario "Tier 1 instant script execution" is verified by this run).
 
 ## 10. Integration
 
