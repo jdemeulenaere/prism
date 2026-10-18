@@ -74,7 +74,7 @@ The compiler identity is `H(compiler version, BLAKE3 of the running executable)`
 prism-cache 1
 kind check
 key <64 hex>
-instance <module>\t<receiver constructor or empty>\t<name>\t<type-arguments hash>\t<display>
+instance\t<module>\t<receiver constructor or empty>\t<name>\t<type-arguments hash>\t<display>
 checksum <64 hex>
 ```
 

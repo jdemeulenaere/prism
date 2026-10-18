@@ -17,7 +17,10 @@ USAGE:
     prism <COMMAND> [OPTIONS] <FILE>
 
 COMMANDS:
-    check <path>           Lex, parse, and validate source file or directory and ABI
+    check [--no-cache] [--explain-cache] <path>
+                           Lex, parse, and validate source file or directory and ABI, skipping
+                           files whose inputs a build cache already checked; --no-cache
+                           ignores the cache, --explain-cache lists what was checked or reused
     dump-ast <file.prism>  Print the Abstract Syntax Tree for a source file
     dump-typed-tree <file.prism>
                            Print the typed tree of a source file, checked against the ABIs of
@@ -33,6 +36,10 @@ COMMANDS:
 OPTIONS:
     -h, --help             Show help
     -v, --version          Show version
+
+ENVIRONMENT:
+    PRISM_CACHE            The build cache directory, or 'off' to disable the cache
+                           (default: the platform's per-user cache directory, then 'prism')
 "#,
         VERSION
     );
@@ -54,11 +61,18 @@ fn main() {
             print_usage();
         }
         "check" => {
-            if args.len() < 3 {
-                eprintln!("Error: 'check' command requires a file path argument");
-                process::exit(1);
+            let flag = |name: &str| args[2..].iter().any(|arg| arg == name);
+            let (no_cache, explain_cache) = (flag("--no-cache"), flag("--explain-cache"));
+            let mut paths = args[2..]
+                .iter()
+                .filter(|arg| !matches!(arg.as_str(), "--no-cache" | "--explain-cache"));
+            match (paths.next(), paths.next()) {
+                (Some(path), None) => run_check(path, no_cache, explain_cache),
+                _ => {
+                    eprintln!("Error: 'check' command requires a file path argument");
+                    process::exit(1);
+                }
             }
-            run_check(&args[2]);
         }
         "dump-ast" => {
             if args.len() < 3 {
@@ -117,9 +131,18 @@ fn read_file_or_exit(path: &str) -> String {
     }
 }
 
-fn run_check(path: &str) {
+/// Checks `path` with the build cache the environment selects, unless `no_cache`, and with
+/// `explain_cache` lists after the report which files were checked or reused (`build-cache`).
+fn run_check(path: &str, no_cache: bool, explain_cache: bool) {
     let p = std::path::Path::new(path);
-    match prism_cli::check_path(p) {
+    let options = prism_cli::CheckOptions {
+        cache: if no_cache {
+            None
+        } else {
+            prism_cli::BuildCache::from_environment()
+        },
+    };
+    match prism_cli::check_path_with(p, &options) {
         Ok(report) => {
             println!(
                 "✓ Check passed: '{}' (Workspace root: {}, Total units: {})",
@@ -136,10 +159,53 @@ fn run_check(path: &str) {
                     file.abi_hash
                 );
             }
+            if explain_cache {
+                print_cache_explanation(&report, options.cache.as_ref());
+            }
         }
         Err(err) => {
             eprint!("{}", err.render());
             process::exit(1);
+        }
+    }
+}
+
+/// Prints the cache directory, then each file in check order as checked or reused, with the
+/// instances it requests, under its path relative to the workspace root.
+fn print_cache_explanation(report: &prism_cli::CheckReport, cache: Option<&prism_cli::BuildCache>) {
+    match cache {
+        Some(cache) => println!("Cache: {}", cache.directory().display()),
+        None => println!("Cache: off"),
+    }
+    let root = match report.workspace_root.as_os_str().is_empty() {
+        true => std::path::Path::new("."),
+        false => report.workspace_root.as_path(),
+    };
+    let root = root.canonicalize().ok();
+    for file in &report.checked_files {
+        let canonical = file.path.canonicalize().ok();
+        let relative = root
+            .as_ref()
+            .zip(canonical.as_ref())
+            .and_then(|(root, path)| path.strip_prefix(root).ok())
+            .unwrap_or(&file.path);
+        let shown: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let shown = shown.join("/");
+        let outcome = match file.cache {
+            prism_cli::CacheOutcome::Checked => "checked",
+            prism_cli::CacheOutcome::Reused => "reused",
+        };
+        println!("  {} {}", outcome, shown);
+        for instance in &file.instances {
+            let outcome = if instance.reused {
+                "reused instance"
+            } else {
+                "instantiate"
+            };
+            println!("  {} {} for {}", outcome, instance.instance, shown);
         }
     }
 }

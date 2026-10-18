@@ -63,7 +63,7 @@ The compiler MUST compute, for each file, an interface hash: a deterministic 256
 
 #### Scenario: An incompatible signature change is reported in the importer
 - **WHEN** in that workspace the parameter of `shout` becomes `s: Int`, and nothing else changes
-- **THEN** the next `prism check` re-checks `app/main` and reports its `E4002`, although `app/main` itself was not edited
+- **THEN** the next `prism check` re-checks `app/main` and reports its `E4004`, although `app/main` itself was not edited
 
 #### Scenario: Modifying private helper function
 - **WHEN** a private helper function of `lib/text.prism` is added, removed or modified

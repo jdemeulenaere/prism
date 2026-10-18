@@ -100,6 +100,7 @@ dependencies = [
  "prism-parser",
  "prism-resolver",
  "prism-typechecker",
+ "prism-typed-tree",
 ]
 
 [[package]]

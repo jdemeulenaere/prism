@@ -2,8 +2,11 @@
 
 #![allow(clippy::result_large_err)]
 
+use crate::cache::{BuildCache, InstanceRequest};
 use crate::diagnostics;
-use prism_abi::{declared_types, AbiError, FileAbi, NominalHeader};
+use prism_abi::{
+    declared_types, AbiError, ContentHash, DeterministicHasher, FileAbi, NominalHeader,
+};
 use prism_mir::MirFile;
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
@@ -19,6 +22,35 @@ pub struct CheckedFile {
     pub package: String,
     pub exported_symbols: usize,
     pub abi_hash: String,
+    /// Whether Phase 2 ran for the file or its cached verdict was reused.
+    pub cache: CacheOutcome,
+    /// The instances of imported generics the file requests, in order (D9 of `abi-cache`).
+    pub instances: Vec<InstanceOutcome>,
+}
+
+/// Whether a file's Phase 2 ran or was skipped thanks to the build cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheOutcome {
+    /// Phase 2 ran: there was no cache or no entry for the file's inputs.
+    Checked,
+    /// A cached verdict for exactly these inputs was reused.
+    Reused,
+}
+
+/// An instance a file requests, and whether its record already existed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceOutcome {
+    /// The instance as shown to the user (`lib/box::keep<Int>`).
+    pub instance: String,
+    /// Whether the instance was already recorded; otherwise it must be instantiated.
+    pub reused: bool,
+}
+
+/// How `prism check` runs.
+#[derive(Debug, Default)]
+pub struct CheckOptions {
+    /// The build cache to read and write, or `None` to check every file (D10 of `abi-cache`).
+    pub cache: Option<BuildCache>,
 }
 
 /// The result of running `prism check` on a workspace or entry file.
@@ -109,13 +141,21 @@ impl From<ResolveError> for WorkspaceError {
 /// Follows import-directed compilation isolation: unimported sibling files
 /// in the same directory are completely excluded from parsing and checking.
 pub fn check_file(entry_file: &Path) -> Result<CheckReport, WorkspaceError> {
+    check_file_with(entry_file, &CheckOptions::default())
+}
+
+/// [`check_file`] with `options`.
+pub fn check_file_with(
+    entry_file: &Path,
+    options: &CheckOptions,
+) -> Result<CheckReport, WorkspaceError> {
     validate_entry_file(entry_file)?;
     let graph = DependencyGraph::from_entry(entry_file)?;
 
     // Assert that all reachable files reside inside the discovered workspace root
     assert_workspace_boundary(&graph)?;
 
-    validate_and_extract_abi(&graph)
+    validate_and_extract_abi(&graph, options)
 }
 
 /// Rejects an entry that is not an existing `.prism` file.
@@ -150,6 +190,14 @@ fn validate_entry_file(entry_file: &Path) -> Result<(), WorkspaceError> {
 /// Checks a directory (either a package directory or workspace root), recursively
 /// scanning all subdirectories and asserting package homogeneity.
 pub fn check_directory(dir: &Path) -> Result<CheckReport, WorkspaceError> {
+    check_directory_with(dir, &CheckOptions::default())
+}
+
+/// [`check_directory`] with `options`.
+pub fn check_directory_with(
+    dir: &Path,
+    options: &CheckOptions,
+) -> Result<CheckReport, WorkspaceError> {
     if !dir.exists() {
         return Err(WorkspaceError::Io {
             path: dir.to_path_buf(),
@@ -190,15 +238,20 @@ pub fn check_directory(dir: &Path) -> Result<CheckReport, WorkspaceError> {
     // Assert that all files reside inside the discovered workspace root
     assert_workspace_boundary(&graph)?;
 
-    validate_and_extract_abi(&graph)
+    validate_and_extract_abi(&graph, options)
 }
 
-/// Universal check dispatcher accepting either a file or a directory.
+/// Universal check dispatcher accepting either a file or a directory. It uses no build cache.
 pub fn check_path(path: &Path) -> Result<CheckReport, WorkspaceError> {
+    check_path_with(path, &CheckOptions::default())
+}
+
+/// [`check_path`] with `options`, such as a build cache.
+pub fn check_path_with(path: &Path, options: &CheckOptions) -> Result<CheckReport, WorkspaceError> {
     if path.is_file() {
-        check_file(path)
+        check_file_with(path, options)
     } else if path.is_dir() {
-        check_directory(path)
+        check_directory_with(path, options)
     } else {
         Err(WorkspaceError::Io {
             path: path.to_path_buf(),
@@ -306,9 +359,14 @@ fn module_path(node: &SourceNode) -> String {
 
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 in topological SCC
 /// order: typechecking each file, lowering each file that typechecks to MIR and borrow-checking
-/// that MIR, stopping at the first file with type or borrow errors.
-fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, WorkspaceError> {
+/// that MIR, stopping at the first file with type or borrow errors. With a build cache, a file
+/// whose inputs have a cached verdict skips Phase 2 (`abi-cache`).
+fn validate_and_extract_abi(
+    graph: &DependencyGraph,
+    options: &CheckOptions,
+) -> Result<CheckReport, WorkspaceError> {
     let abis = extract_abis(graph)?;
+    let cache = options.cache.as_ref();
 
     // Phase 2: Typecheck function bodies and expressions in topological SCC order
     let mut checked_files = Vec::new();
@@ -316,27 +374,31 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
     for cluster in graph.topological_order() {
         for file_path in &cluster.files {
             let node = graph.get_node(file_path).expect("node must exist in graph");
-            let (tree, errors) = typecheck_file(graph, &abis, file_path);
-            if !errors.is_empty() {
-                let source = fs::read_to_string(file_path).unwrap_or_default();
-                return Err(WorkspaceError::Type {
-                    path: file_path.clone(),
-                    source,
-                    errors,
-                });
-            }
-            // Phase 2 lowers each file that typechecks to MIR from its typed tree alone (D1 of
-            // `mir-lowering`), and borrow-checks that MIR alone, never another file's (D1 of
-            // `borrowck-moves`). Nothing consumes the elaborated MIR yet: the backend will.
-            let mir = prism_mir::lower_file(&tree);
-            if let Err(errors) = prism_borrowck::check_file(&mir) {
-                let source = fs::read_to_string(file_path).unwrap_or_default();
-                return Err(WorkspaceError::Borrow {
-                    path: file_path.clone(),
-                    source,
-                    errors,
-                });
-            }
+            let imports: Vec<&FileAbi> = node
+                .direct_imports
+                .iter()
+                .filter_map(|dep| abis.get(dep))
+                .collect();
+            // The verdict depends on the imports' interfaces only, never on their generic bodies
+            // (D2 of `abi-cache`).
+            let key = cache.map(|cache| {
+                let interfaces: Vec<ContentHash> =
+                    imports.iter().map(|abi| abi.interface_hash).collect();
+                cache.check_key(&module_path(node), &node.source, &interfaces)
+            });
+            let cached = cache.zip(key.as_ref()).and_then(|(c, k)| c.read_check(k));
+
+            let (outcome, requests) = match cached {
+                Some(requests) => (CacheOutcome::Reused, requests),
+                None => {
+                    let requests = check_phase_two(graph, &abis, file_path)?;
+                    if let Some((cache, key)) = cache.zip(key.as_ref()) {
+                        cache.write_check(key, &requests);
+                    }
+                    (CacheOutcome::Checked, requests)
+                }
+            };
+            let instances = instance_outcomes(cache, &imports, &requests);
 
             let abi = abis.get(file_path).expect("abi must exist");
             let package_str = if node.package.is_empty() {
@@ -350,6 +412,8 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
                 package: package_str,
                 exported_symbols: abi.symbols.len(),
                 abi_hash: abi.abi_hash_hex(),
+                cache: outcome,
+                instances,
             });
         }
     }
@@ -359,6 +423,142 @@ fn validate_and_extract_abi(graph: &DependencyGraph) -> Result<CheckReport, Work
         total_files: checked_files.len(),
         checked_files,
     })
+}
+
+/// Phase 2 of the file at `file_path`: type checking, MIR lowering and borrow checking. Returns
+/// the instances its elaborated MIR requests, or its type or borrow errors.
+fn check_phase_two(
+    graph: &DependencyGraph,
+    abis: &HashMap<PathBuf, FileAbi>,
+    file_path: &Path,
+) -> Result<Vec<InstanceRequest>, WorkspaceError> {
+    let (tree, errors) = typecheck_file(graph, abis, file_path);
+    if !errors.is_empty() {
+        let source = fs::read_to_string(file_path).unwrap_or_default();
+        return Err(WorkspaceError::Type {
+            path: file_path.to_path_buf(),
+            source,
+            errors,
+        });
+    }
+    // Phase 2 lowers each file that typechecks to MIR from its typed tree alone (D1 of
+    // `mir-lowering`), and borrow-checks that MIR alone, never another file's (D1 of
+    // `borrowck-moves`). Nothing consumes the elaborated MIR yet but the instance requests: the
+    // backend will.
+    let mir = prism_mir::lower_file(&tree);
+    match prism_borrowck::check_file(&mir) {
+        Ok(elaborated) => {
+            let node = graph.get_node(file_path).expect("node must exist in graph");
+            let import_modules: Vec<String> = node
+                .direct_imports
+                .iter()
+                .filter_map(|dep| graph.get_node(dep))
+                .map(module_path)
+                .collect();
+            Ok(instance_requests(&elaborated, &import_modules))
+        }
+        Err(errors) => {
+            let source = fs::read_to_string(file_path).unwrap_or_default();
+            Err(WorkspaceError::Borrow {
+                path: file_path.to_path_buf(),
+                source,
+                errors,
+            })
+        }
+    }
+}
+
+/// The instances `mir` requests: its calls to generics of the modules `import_modules` (its
+/// direct imports) with type arguments that mention no type parameter, deduplicated and sorted
+/// (D9 of `abi-cache`). Polymorphic calls are instantiated with their caller, and calls to the
+/// file's own generics are re-checked with the file.
+fn instance_requests(mir: &MirFile, import_modules: &[String]) -> Vec<InstanceRequest> {
+    let mut requests = Vec::new();
+    for (_, body) in mir.bodies.iter() {
+        for (_, block) in body.blocks.iter() {
+            let prism_mir::TerminatorKind::Call {
+                callee: prism_mir::Callee::Function(path),
+                type_arguments,
+                ..
+            } = &block.terminator.kind
+            else {
+                continue;
+            };
+            if type_arguments.is_empty()
+                || path.module == mir.module
+                || !import_modules.contains(&path.module)
+                || type_arguments
+                    .iter()
+                    .any(prism_typed_tree::Type::mentions_parameter)
+            {
+                continue;
+            }
+            let mut hasher = DeterministicHasher::new();
+            hasher.write_u64(type_arguments.len() as u64);
+            for argument in type_arguments {
+                hasher.write_str(&argument.qualified());
+            }
+            let shown: Vec<String> = type_arguments.iter().map(ToString::to_string).collect();
+            requests.push(InstanceRequest {
+                module: path.module.clone(),
+                receiver: path.receiver.as_ref().map(receiver_constructor),
+                name: path.name.clone(),
+                type_arguments: hasher.finish(),
+                display: format!("{}<{}>", path, shown.join(", ")),
+            });
+        }
+    }
+    requests.sort();
+    requests.dedup();
+    requests
+}
+
+/// The constructor of an extension's receiver type, as [`prism_abi::receiver_constructor`]
+/// writes it for the same type in an ABI, so a MIR callee finds its ABI symbol.
+fn receiver_constructor(ty: &prism_typed_tree::Type) -> String {
+    use prism_typed_tree::{NominalId, Type};
+    match ty {
+        Type::Struct { id, .. } | Type::Enum { id, .. } if *id == NominalId::builtin_range() => {
+            "Range".to_string()
+        }
+        Type::Struct { id, .. } | Type::Enum { id, .. } => format!("{}.{}", id.module, id.name),
+        Type::Opaque(name) => name.clone(),
+        Type::Unit => "Unit".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Looks up, or records, the instance of each of `requests` in `cache`, keyed by the generic's
+/// current Monomorphization Hash in the importing file's direct imports `imports`. Without a
+/// cache every instance is one to instantiate.
+fn instance_outcomes(
+    cache: Option<&BuildCache>,
+    imports: &[&FileAbi],
+    requests: &[InstanceRequest],
+) -> Vec<InstanceOutcome> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            let body_hash = imports
+                .iter()
+                .filter(|abi| abi.module == request.module)
+                .find_map(|abi| {
+                    abi.generic_body_hash_of(&request.name, request.receiver.as_deref())
+                })?;
+            let reused = cache.is_some_and(|cache| {
+                let key = cache.instance_key(request, &body_hash);
+                let reused = cache.has_instance(&key);
+                if !reused {
+                    cache.record_instance(&key);
+                }
+                reused
+            });
+            Some(InstanceOutcome {
+                instance: request.display.clone(),
+                reused,
+            })
+        })
+        .collect()
 }
 
 /// Phase 1: extracts the ABI of every file of `graph` from its AST alone. No body is read.
@@ -731,6 +931,52 @@ mod tests {
         // core/math must precede app/main
         assert_eq!(report.checked_files[0].path, math);
         assert_eq!(report.checked_files[1].path, main);
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_cached_report_matches_uncached_report() {
+        let temp = create_temp_dir("cached_report");
+        let lib = temp.join("lib");
+        let app = temp.join("app");
+        fs::create_dir_all(&lib).unwrap();
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            lib.join("box.prism"),
+            "package lib\npublic fun <T> keep(x: T): T = x\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("main.prism"),
+            "package app\nimport /lib/box\nfun f(): Int = keep(1)\n",
+        )
+        .unwrap();
+        let options = CheckOptions {
+            cache: Some(BuildCache::open(
+                temp.join(".cache"),
+                crate::cache::identity_of("test", &ContentHash([5; 32])),
+            )),
+        };
+
+        let uncached = check_path(&temp).unwrap();
+        let cold = check_path_with(&temp, &options).unwrap();
+        let warm = check_path_with(&temp, &options).unwrap();
+        assert_eq!(uncached, cold);
+        for file in &uncached.checked_files {
+            assert_eq!(file.cache, CacheOutcome::Checked);
+        }
+        assert_eq!(uncached.checked_files[1].instances.len(), 1);
+        assert!(!uncached.checked_files[1].instances[0].reused);
+
+        let mut expected = uncached.clone();
+        for file in &mut expected.checked_files {
+            file.cache = CacheOutcome::Reused;
+            for instance in &mut file.instances {
+                instance.reused = true;
+            }
+        }
+        assert_eq!(warm, expected);
 
         fs::remove_dir_all(&temp).ok();
     }

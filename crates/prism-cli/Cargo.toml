@@ -20,6 +20,7 @@ prism-resolver = { path = "../prism-resolver" }
 prism-typechecker = { path = "../prism-typechecker" }
 prism-mir = { path = "../prism-mir" }
 prism-borrowck = { path = "../prism-borrowck" }
+prism-typed-tree = { path = "../prism-typed-tree" }
 
 [dev-dependencies]
 prism-mir = { path = "../prism-mir" }

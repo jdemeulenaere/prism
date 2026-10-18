@@ -19,13 +19,25 @@ fn prism_bin() -> &'static str {
     env!("CARGO_BIN_EXE_prism")
 }
 
+/// The `prism` binary, with a build cache shared by these tests in the temporary directory, so
+/// that they exercise the cache without touching the user's (`cache_tests.rs` tests the cache
+/// itself).
+fn prism() -> Command {
+    let mut command = Command::new(prism_bin());
+    command.env(
+        "PRISM_CACHE",
+        std::env::temp_dir().join("prism_cli_e2e_build_cache"),
+    );
+    command
+}
+
 #[test]
 fn test_cli_binary_check_single_file_success() {
     let temp = create_temp_dir("single_file");
     let file = temp.join("main.prism");
     fs::write(&file, "fun main(): Int = 42\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -62,7 +74,7 @@ fn test_cli_binary_root_anchored_import() {
     .unwrap();
 
     // Check entry file with root-anchored import
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&main)
         .output()
@@ -98,7 +110,7 @@ fn test_cli_binary_sibling_import() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&page)
         .output()
@@ -131,7 +143,7 @@ fn test_cli_binary_check_directory_multi_package() {
     .unwrap();
 
     // Check whole workspace directory
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&temp)
         .output()
@@ -155,7 +167,7 @@ fn test_cli_binary_package_path_mismatch_e1001() {
     // Directory is sub, but declared package is other.pkg
     fs::write(&file, "package other.pkg\nfun f(): Int = 1\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -175,7 +187,7 @@ fn test_cli_binary_file_not_found_e1002() {
     let file = temp.join("main.prism");
     fs::write(&file, "import /core/missing\nfun main(): Int = 0\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -200,7 +212,7 @@ fn test_cli_binary_package_heterogeneity_e1003() {
     fs::write(&f1, "package pkg\nfun a(): Int = 1\n").unwrap();
     fs::write(&f2, "package other\nfun b(): Int = 2\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&pkg_dir)
         .output()
@@ -224,7 +236,7 @@ fn test_cli_binary_mutual_recursion_succeeds() {
     fs::write(&a, "package cycle\nimport b\npublic fun a(): Int = 1\n").unwrap();
     fs::write(&b, "package cycle\nimport a\npublic fun b(): Int = 2\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&a)
         .output()
@@ -251,7 +263,7 @@ fn test_cli_binary_symlink_escape_rejected_e1005() {
     let link = pkg_dir.join("escaped.prism");
     std::os::unix::fs::symlink(&secret, &link).unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&link)
         .output()
@@ -271,7 +283,7 @@ fn test_cli_binary_syntax_error_e2001() {
     let file = temp.join("bad.prism");
     fs::write(&file, "fun main(\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -291,7 +303,7 @@ fn test_cli_binary_abi_violation_e3001() {
     // Public function without explicit return type
     fs::write(&file, "public fun compute(x: Int) = x * 2\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -311,7 +323,7 @@ fn test_cli_binary_return_type_mismatch_e4005() {
     let file = temp.join("main.prism");
     fs::write(&file, "fun main(): Int = \"wrong type\"\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -347,7 +359,7 @@ fn test_cli_binary_package_visibility_e4007() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&main)
         .output()
@@ -370,7 +382,7 @@ fn test_cli_binary_compose_context_e4008() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -393,7 +405,7 @@ fn test_cli_binary_non_exhaustive_when_e4009() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -412,7 +424,7 @@ fn test_cli_binary_val_immutability_e4003() {
     let file = temp.join("reassign.prism");
     fs::write(&file, "fun main(): Unit {\n    val x = 1\n    x = 2\n}\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -435,7 +447,7 @@ fn test_cli_binary_struct_and_nominal_type_success() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -458,7 +470,7 @@ fn test_cli_binary_default_params_success() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -481,7 +493,7 @@ fn test_cli_binary_exhaustive_enum_when_success() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -500,7 +512,7 @@ fn test_cli_binary_top_level_return_rejected_e4005() {
     let file = temp.join("top_return.prism");
     fs::write(&file, "val x = return 10\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -523,7 +535,7 @@ fn test_cli_binary_unannotated_private_block_function_success() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -546,7 +558,7 @@ fn test_cli_binary_field_access_through_annotated_params_success() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -582,7 +594,7 @@ fn test_cli_binary_field_access_on_imported_struct_success() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&service)
         .output()
@@ -607,7 +619,7 @@ fn test_cli_binary_missing_return_type_e4011() {
     // Block-bodied exported function: passes ABI extraction but omits its return type
     fs::write(&file, "public fun greet(name: String) {\n}\n").unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&file)
         .output()
@@ -636,7 +648,7 @@ fn test_cli_binary_syntax_error_location_and_lexer_message() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&lexer_err)
         .output()
@@ -652,7 +664,7 @@ fn test_cli_binary_syntax_error_location_and_lexer_message() {
     );
     assert!(!stderr.contains("<Error"), "{}", stderr);
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&too_deep)
         .output()
@@ -693,7 +705,7 @@ fn test_cli_binary_imported_signatures_keep_their_declared_types() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&main)
         .output()
@@ -728,7 +740,7 @@ fn test_cli_binary_member_of_unimported_type_e4014() {
     )
     .unwrap();
 
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("check")
         .arg(&main)
         .output()
@@ -748,7 +760,7 @@ fn test_cli_binary_nonexistent_target_e1000() {
     let temp = create_temp_dir("missing_target_e1000");
 
     for missing in [temp.join("nowhere.prism"), temp.join("nowhere")] {
-        let output = Command::new(prism_bin())
+        let output = prism()
             .arg("check")
             .arg(&missing)
             .output()
@@ -784,7 +796,7 @@ fn test_cli_binary_symlinked_directory_entry_rejected_e1005() {
 
     // Both the package directory and the workspace root that contains it reject the entry.
     for target in [&pkg_dir, &temp] {
-        let output = Command::new(prism_bin())
+        let output = prism()
             .arg("check")
             .arg(target)
             .output()
@@ -804,7 +816,7 @@ fn dump_typed_tree(test_name: &str, source: &str) -> std::process::Output {
     let temp = create_temp_dir(test_name);
     let file = temp.join("main.prism");
     fs::write(&file, source).unwrap();
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("dump-typed-tree")
         .arg(&file)
         .output()
@@ -858,7 +870,7 @@ fn dump_mir(test_name: &str, source: &str) -> std::process::Output {
     let temp = create_temp_dir(test_name);
     let file = temp.join("main.prism");
     fs::write(&file, source).unwrap();
-    let output = Command::new(prism_bin())
+    let output = prism()
         .arg("dump-mir")
         .arg(&file)
         .output()
@@ -900,7 +912,7 @@ fn run_on_source(test_name: &str, args: &[&str], source: &str) -> std::process::
     let temp = create_temp_dir(test_name);
     let file = temp.join("main.prism");
     fs::write(&file, source).unwrap();
-    let output = Command::new(prism_bin())
+    let output = prism()
         .args(args)
         .arg(&file)
         .output()
@@ -1026,7 +1038,7 @@ fn hashes_printed_in_full() {
         "ABI Hash: 0x"
     ));
 
-    let check = run_on_source("hashes_in_full_check", &["check"], source);
+    let check = run_on_source("hashes_in_full_check", &["check", "--no-cache"], source);
     assert!(check.status.success());
     assert!(has_full_hash(
         &String::from_utf8_lossy(&check.stdout),
