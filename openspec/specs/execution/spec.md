@@ -18,7 +18,7 @@ The execution specification defines what happens when a Prism program runs: how 
 - **THEN** it reports `E4002`, or `E5001`, on stderr, prints nothing to stdout and exits with status 1
 
 ### Requirement: Program Arguments and Options
-Arguments after `--` MUST be passed to the program and never interpreted by `prism`; no built-in reads them yet. The `--timings` option, before the file, MUST print to stderr the time spent in each stage (front end, code generation, linking) and the total time from the start of `prism` until `main` is called, before `main` runs.
+Arguments after `--` MUST be passed to the program and never interpreted by `prism`; no built-in reads them yet. The `--timings` option, before the file, MUST print to stderr the time spent in each stage (front end, code generation, linking) and the total time from the start of `prism` until `main` is called, before `main` runs. `--no-cache` and `--explain-cache`, before the file, MUST act as the `build-cache` spec states.
 
 #### Scenario: Arguments after the separator
 - **WHEN** `prism run main.prism -- --timings x` runs on `fun main() { println(1) }`
@@ -27,6 +27,10 @@ Arguments after `--` MUST be passed to the program and never interpreted by `pri
 #### Scenario: Reporting timings
 - **WHEN** `prism run --timings main.prism` runs on `fun main() { println(1) }`
 - **THEN** stderr holds one line per stage and one line with the total time to `main`, each in milliseconds, and stdout holds `1`
+
+#### Scenario: Cache options before the file
+- **WHEN** `prism run --no-cache --explain-cache main.prism` runs on `fun main() { println(1) }`
+- **THEN** stderr holds `Cache: off` and `  checked main.prism`, stdout holds `1`, and it exits with status 0
 
 ### Requirement: Program Entry Point
 The entry file MUST declare a top-level function `main` that has no type parameters, receiver or parameters, returns `Unit` (written or omitted) and is not `compose`. Without one, `prism run` MUST report `E6002` (`MissingMain`); a `main` breaking these rules, or a top-level `val` named `main`, MUST be reported as `E6003` (`InvalidMain`). A `main` of any other file is an ordinary function.
@@ -813,6 +817,17 @@ A closure using its implicit `it` MUST run exactly as the closure `{ it -> ... }
 #### Scenario: Nested closures with their own implicit parameters
 - **WHEN** `fun <T> List<T>.forEach(f: (&T) -> Unit) { for (x in this) f(x) }` and `fun run(f: () -> Unit) { f() }` are declared and `fun main() { val rows = listOf("ab", "c"); val columns = listOf(1, 2); rows.forEach { val row = it; columns.forEach { println(row + it.toString()) }; run { println(it.length) } } }` runs with `--check-allocations`
 - **THEN** it prints `ab1`, `ab2`, `2`, `c1`, `c2` and `1`, reports no live allocation and exits with status 0
+
+### Requirement: A Run From Cached Code Behaves as a Cold Run
+A program whose units and instances are loaded from the build cache MUST behave exactly as the same program compiled afresh: the same output, the same exit status, the same runtime errors at the same source locations, and the same result of the allocation check.
+
+#### Scenario: A runtime error in a cached instance
+- **WHEN** `lib/math.prism` declares `public fun <T> divide(x: T, n: Int): Int = 10 / n`, `app/main.prism` imports `/lib/math` and declares `fun main() { println(divide("a", 0)) }`, and `prism run app/main.prism` runs twice with the cache enabled
+- **THEN** both runs print the same `panic: division by zero` diagnostic located in `lib/math.prism` at `10 / n` to stderr and exit with status 101
+
+#### Scenario: Every executable fixture runs warm as cold
+- **WHEN** each executable fixture is run with `prism run --check-allocations` on an empty cache and then again on the cache that run filled
+- **THEN** the second run matches the same expected output and status, and writes no new entry
 
 ## Design Rationale
 

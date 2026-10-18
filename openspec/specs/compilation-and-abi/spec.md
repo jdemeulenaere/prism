@@ -21,10 +21,14 @@ The compiler MUST extract each source file's exported ABI surface (`public` and 
 - **THEN** ABI extraction fails with a missing explicit return type error naming the function and its visibility
 
 ### Requirement: Deterministic ABI Hash
-The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exported ABI that covers exported signatures, enum variant shapes, default parameter values and the definitions of reachable types, and excludes every other private declaration, non-generic function bodies and source positions.
+The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exported ABI that covers exported signatures, enum variant shapes, default parameter values and the definitions of reachable types, and excludes every other private declaration, every function body, generic ones included, and source positions.
 
 #### Scenario: Modifying non-generic function body
 - **WHEN** a developer modifies the internal implementation of a public function without changing its signature
+- **THEN** the file's exported ABI hash remains unchanged
+
+#### Scenario: Modifying a generic function body keeps the ABI hash
+- **WHEN** a developer modifies the body of the exported generic function `public fun <T> keep(x: T): T` without changing its signature
 - **THEN** the file's exported ABI hash remains unchanged
 
 #### Scenario: Modifying public function signature
@@ -49,41 +53,7 @@ The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exp
 
 #### Scenario: Hashes printed in full
 - **WHEN** a developer runs `prism abi` on a source file, or `prism check` on a workspace
-- **THEN** each ABI hash is printed as `0x` followed by 64 lowercase hexadecimal digits
-
-### Requirement: Monomorphization Hash for Generics
-Exported generic functions, including generic extension functions, MUST record a Monomorphization Hash of their body in their ABI signature, computed independently of source positions, comments and whitespace.
-
-#### Scenario: Changing generic function body
-- **WHEN** the body of an exported generic function changes
-- **THEN** its Monomorphization Hash and the file's ABI hash change
-
-#### Scenario: Generic body hash ignores formatting
-- **WHEN** comments or blank lines are added to an exported generic function without changing its code
-- **THEN** its Monomorphization Hash and the file's ABI hash remain unchanged
-
-#### Scenario: Changing a generic extension body
-- **WHEN** the body of the exported extension `public fun <T> Box<T>.get(): &T` changes
-- **THEN** its Monomorphization Hash and the file's ABI hash change
-
-#### Scenario: Changing a non-generic extension of a generic type
-- **WHEN** the body of the exported extension `public fun Box<Int>.sum(): Int` changes
-- **THEN** it records no Monomorphization Hash and the file's ABI hash is unchanged
-
-### Requirement: Interface Hash
-The compiler MUST compute, for each file, an interface hash: a deterministic 256-bit BLAKE3 hash of its exported ABI with the Monomorphization Hashes of its generic bodies left out. It MUST cover everything else the ABI hash covers, and the ABI hash MUST be a function of the interface hash and the Monomorphization Hashes.
-
-#### Scenario: Changing a generic body keeps the interface hash
-- **WHEN** the body of the exported generic function `public fun <T> keep(x: T): T` changes
-- **THEN** the file's ABI hash changes and its interface hash is unchanged
-
-#### Scenario: Changing a signature changes the interface hash
-- **WHEN** a parameter type of an exported function changes, or an exported struct gains a field
-- **THEN** the file's interface hash and its ABI hash both change
-
-#### Scenario: Interface hash printed by `prism abi`
-- **WHEN** a developer runs `prism abi` on a source file
-- **THEN** it prints the file's interface hash after its ABI hash, in the same format
+- **THEN** each ABI hash is printed as `0x` followed by 64 lowercase hexadecimal digits, and `prism abi` prints no other hash
 
 ### Requirement: Structured ABI Types
 Phase 1 MUST record every type in an exported signature (parameter, return, struct field, enum payload, exported variable) as a structured type tree, never as source text that must be re-parsed. The ABI hash MUST cover that structure. An importer MUST obtain exactly the type the exporter declared, including nested function, nullable and reference types.
@@ -245,16 +215,20 @@ Each exported generic struct or enum, and each reference to a nominal type in an
 - **WHEN** `lib/state.prism` exports `public struct Handle<T> : Copy { val id: Int }` and `public struct Box<T> : Copy { val v: T }`, `app/api.prism` imports it and exports `public fun handle(): Handle<String>` and `public fun box(): Box<String>`, and `app/main.prism` imports only `/app/api` and declares `fun f(): Int { val h = handle(); val g = h; val k = h; val b = box(); val c = b; val d = b; return 1 }`
 - **THEN** the ABI of `lib/state` records `Handle` with no marker parameter and `Box` with type parameter 0, the ABI of `app/api` records both return types with the same marker parameters, and `prism check app/main.prism` emits `E5001` at the second use of `b` only, because `Handle<String>` is `Copy` and `Box<String>` is not
 
-### Requirement: Compilation Avoidance via Interface Hashes
-`prism check` MUST skip Phase 2 (type checking, MIR lowering and borrow checking) for a file whose content, module path and direct imports' interface hashes are those of an earlier successful check by the same compiler, recorded in the build cache (the `build-cache` spec). It MUST run Phase 2 for every other file. The report and the exit status MUST be the same either way.
+### Requirement: Compilation Avoidance via ABI Hashes
+`prism check` and `prism run` MUST skip Phase 2 (type checking, MIR lowering and borrow checking) for a file whose content, module path and direct imports' ABI hashes are those of an earlier successful check by the same compiler, recorded in the build cache (the `build-cache` spec), unless `prism run` needs the file's MIR to build an instance whose record entry is missing. They MUST run Phase 2 for every other file. The report and the exit status MUST be the same either way.
 
 #### Scenario: Modifying non-generic function body
 - **WHEN** `lib/text.prism` exports `public fun shout(s: &String): String`, `app/main.prism` imports `/lib/text`, both have been checked, and the body of `shout` changes
 - **THEN** the next `prism check` re-checks `lib/text` only, and reuses `app/main`: zero downstream files that import it are recompiled
 
+#### Scenario: Modifying a generic function body re-checks no importer
+- **WHEN** `lib/box.prism` exports `public fun <T> keep(x: T): T`, `app/main.prism` imports `/lib/box` and calls `keep(1)`, both have been checked, and the body of `keep` changes
+- **THEN** the next `prism check` re-checks `lib/box` only, and reuses `app/main`, whose direct import's ABI hash is unchanged
+
 #### Scenario: Modifying public function signature
-- **WHEN** in that workspace `shout` gains a parameter with a default value, `n: Int = 1`, and `app/main`, whose exported signatures do not mention `lib/text`, is itself imported by `app/cli`
-- **THEN** the next `prism check` re-checks `lib/text` and its direct importer `app/main`, and reuses `app/cli`, whose direct import's interface hash is unchanged
+- **WHEN** in the workspace of `lib/text` `shout` gains a parameter with a default value, `n: Int = 1`, and `app/main`, whose exported signatures do not mention `lib/text`, is itself imported by `app/cli`
+- **THEN** the next `prism check` re-checks `lib/text` and its direct importer `app/main`, and reuses `app/cli`, whose direct import's ABI hash is unchanged
 
 #### Scenario: An incompatible signature change is reported in the importer
 - **WHEN** in that workspace the parameter of `shout` becomes `s: Int`, and nothing else changes
@@ -273,7 +247,7 @@ Each exported generic struct or enum, and each reference to a nominal type in an
 - **THEN** both runs print the same report and exit with the same status
 
 ### Requirement: Reachable Type Changes Re-Check Importers
-A change to a struct or enum MUST re-check every file whose direct import's ABI records that type, as a symbol or as a reachable definition, through the existing interface-hash keys of the build cache, and no other file because of it.
+A change to a struct or enum MUST re-check every file whose direct import's ABI records that type, as a symbol or as a reachable definition, through the ABI-hash keys of the build cache, and no other file because of it.
 
 #### Scenario: A field added to a transitively reached type
 - **WHEN** `geo/core.prism` also exports `public fun origin(): Vec = Vec(0)`, `geo/shapes.prism` exports `public fun unit(): Circle = Circle(origin(), 1)`, `app/main.prism` imports only `/geo/shapes` and prints `unit().r`, all three have been checked, and then only `geo/core.prism` changes: `Vec` gains a field `val y: Int` and `origin` returns `Vec(0, 0)`
@@ -282,21 +256,6 @@ A change to a struct or enum MUST re-check every file whose direct import's ABI 
 #### Scenario: A body change in the defining file
 - **WHEN** in that workspace only the body of a function of `geo/core` changes
 - **THEN** the next `prism check --explain-cache app/main.prism` checks `geo/core` again and reuses `geo/shapes` and `app/main`
-
-### Requirement: Instantiation Records for Generic Body Changes
-When a file that passes Phase 2 calls an exported generic function or extension of a direct import with type arguments that mention no type parameter of the caller, `prism check` MUST record an instance for that generic, its signature, its Monomorphization Hash and those type arguments. An instance already recorded MUST be reported as reused, any other as one to instantiate.
-
-#### Scenario: Changing generic function body
-- **WHEN** `lib/box.prism` exports `public fun <T> keep(x: T): T` and `public fun <T> drop(x: T): Int`, `app/a.prism` calls `keep(1)`, `app/b.prism` calls `drop("s")`, the workspace has been checked, and the body of `keep` changes
-- **THEN** the next `prism check` re-checks `lib/box` only, reports that `app/a` must instantiate `lib/box::keep<Int>` again, and reports the instance `lib/box::drop<String>` of `app/b` as reused: re-monomorphization is triggered only in downstream files that instantiate that generic
-
-#### Scenario: Changing a generic signature instantiates again
-- **WHEN** `app/a.prism` calls `drop(1)` of that `lib/box`, the workspace has been checked, then the parameter of `drop` becomes `x: &T` with its body unchanged and the call becomes `drop(&1)`
-- **THEN** the next `prism check` re-checks `lib/box` and `app/a`, and reports that `app/a` must instantiate `lib/box::drop<Int>` again, since an instance depends on the generic's signature as well as on its body
-
-#### Scenario: Polymorphic calls are not recorded
-- **WHEN** `app/a.prism` declares `fun <T> wrap(x: T): T = keep(x)`, calling the imported generic `keep` with its own type parameter
-- **THEN** no instance is recorded for that call, since its type arguments are known only when `wrap` is instantiated
 
 ### Requirement: Phase 3 Generates Each File's Code From Its Elaborated MIR
 Code generation MUST run on each file only after the file passes Phase 2, and MUST generate the file's code from its elaborated MIR alone, never from another file's bodies or MIR, so that a file's code depends only on the file, the ABIs of its direct imports, the compiler and the target. A file's code MUST NOT contain any instance of a generic, its own generics' included: it calls instances by symbol.
@@ -328,7 +287,7 @@ Phase 3 MUST build each instance from its generic's record and the definitions o
 - **THEN** `prism run --check-allocations app/main.prism` prints `7`, compiling the instances `lib/box::first<Int>` and `lib/util::twin<Int>`
 
 ### Requirement: Escaping Parameters in the ABI
-Phase 1 MUST record whether each parameter of an exported function, and each parameter of every function type in an exported signature, is `escaping`, and the ABI and interface hashes MUST cover it, so an importer obtains the flags the exporter declared and is re-checked when one changes.
+Phase 1 MUST record whether each parameter of an exported function, and each parameter of every function type in an exported signature, is `escaping`, and the ABI hash MUST cover it, so an importer obtains the flags the exporter declared and is re-checked when one changes.
 
 #### Scenario: Escaping parameters round-trip
 - **WHEN** `lib/ui.prism` exports `public fun button(onClick: escaping () -> Unit, register: (escaping () -> Unit) -> Unit): Int` and `app/main.prism` imports `/lib/ui` and declares `fun greet(s: &String) {}` and `fun f(s: String): Int = button({ greet(s) }) { h -> h() }`
@@ -336,12 +295,84 @@ Phase 1 MUST record whether each parameter of an exported function, and each par
 
 #### Scenario: Marking a parameter escaping changes the hashes
 - **WHEN** an exported `public fun store(f: () -> Unit): Int` becomes `public fun store(f: escaping () -> Unit): Int`
-- **THEN** the file's ABI hash and interface hash both change, and an importing file is checked again
+- **THEN** the file's ABI hash changes, and an importing file is checked again
+
+### Requirement: Monomorphization Hash of Generic Records
+Each generic function and extension of a file that passes Phase 2, private ones included, MUST have a Monomorphization Hash: the BLAKE3 hash of the canonical encoding of its generic record, which covers its elaborated MIR with source positions and the definitions of the types that MIR mentions. It MUST NOT be part of the ABI, and it MUST NOT depend on the body of any other declaration.
+
+#### Scenario: Changing a generic function body changes its hash
+- **WHEN** the body of the generic function `public fun <T> keep(x: T): T` of `lib/box` changes from `= x` to the block `{ val y = x; return y }`
+- **THEN** its Monomorphization Hash changes and the ABI hash of `lib/box` does not
+
+#### Scenario: A private type held by the generic gains a field
+- **WHEN** `lib/box.prism` declares the private `struct Tag(val n: Int)`, `fun makeTag(): Tag = Tag(1)` and `public fun <T> tagged(x: T): Int = makeTag().n`, and `Tag` gains a field `val m: Int`, with `makeTag` returning `Tag(1, 2)`
+- **THEN** the Monomorphization Hash of `tagged` changes, while the ABI hash of `lib/box`, whose exports do not reach `Tag`, does not
+
+#### Scenario: A callee's signature changes under an unchanged body
+- **WHEN** `lib/box.prism` declares `public fun <T> outer(x: T, n: Int): Int = helper(n)` and, after it, `fun helper(n: Int): Int = n`, and only the helper changes, to `fun helper(n: &Int): Int = n`
+- **THEN** the Monomorphization Hash of `outer` changes, although its body's text does not, because its call now lends `n`
+
+#### Scenario: A non-generic helper's body change keeps the hash
+- **WHEN** in the file with the first `helper` only its body changes, to `n + 0`
+- **THEN** the Monomorphization Hash of `outer` is unchanged, since its instances call `helper` by symbol and `outer`'s source positions do not move
+
+#### Scenario: An edit after the generic keeps the hash
+- **WHEN** a function declared after `outer` in its file is added, removed or changed
+- **THEN** the Monomorphization Hash of `outer` is unchanged, while any edit before `outer` that moves its source, such as an added line, changes it, since its instances report runtime errors at its source positions
+
+#### Scenario: Changing a generic extension body
+- **WHEN** the body of the exported extension `public fun <T> Box<T>.get(): &T` changes
+- **THEN** its Monomorphization Hash changes and the file's ABI hash does not
+
+#### Scenario: Changing a non-generic extension of a generic type
+- **WHEN** the body of the exported extension `public fun Box<Int>.sum(): Int` changes
+- **THEN** it has no Monomorphization Hash and the file's ABI hash is unchanged
+
+### Requirement: Instances Are Planned per Program
+`prism check` and `prism run` MUST find every instance a program needs: the calls with concrete type arguments in its non-generic bodies and, transitively, the generic calls inside each needed instance, across files and through modules a caller does not import. They MUST find them from each file's summary alone, without reading or rebuilding any file's MIR.
+
+#### Scenario: Transitive instances through a module the caller does not import
+- **WHEN** `lib/util.prism` declares `public struct Pair<A, B>(val a: A, val b: B)` and `public fun <T : Copy> twin(x: T): Pair<T, T> = Pair(x, x)`, `lib/box.prism` imports `/lib/util` and declares `public fun <T : Copy> first(x: T): T = twin(x).a`, `app/main.prism` imports only `/lib/box` and declares `fun main() { println(first(7)) }`, and `prism check --explain-cache app/main.prism` runs twice
+- **THEN** both runs list `  instantiate lib/box::first<Int>` and `  instantiate lib/util::twin<Int>`, the second reusing every file
+
+#### Scenario: Polymorphic calls are instantiated with their caller
+- **WHEN** `app/a.prism` imports `/lib/box` and declares `public fun <T> wrap(x: T): T = keep(x)`, and `app/main.prism` imports `/app/a` and calls `wrap(1)`
+- **THEN** `prism check --explain-cache app/main.prism` lists the instances `app/a::wrap<Int>` and `lib/box::keep<Int>`
+
+### Requirement: Instances Are Keyed by Their Record and Type Arguments
+Each instance MUST be keyed by its symbol, its generic's Monomorphization Hash and a hash of the definitions, markers included, of every struct and enum its type arguments reach. Its code MUST be generated again when one of these changes, and only then.
+
+#### Scenario: Changing generic function body
+- **WHEN** `lib/box.prism` exports `public fun <T> drop(x: T): Int` and, after it, `public fun <T> keep(x: T): T`, `app/a.prism` calls `keep(1)`, `app/b.prism` calls `drop("s")`, `app/main.prism` imports both, the program has been run, and the body of `keep` changes
+- **THEN** the next `prism run --explain-cache app/main.prism` prints `  checked lib/box.prism`, `  reused app/a.prism`, `  reused app/b.prism`, `  reused app/main.prism`, `  reused instance lib/box::drop<String>` and `  instantiate lib/box::keep<Int>`: re-monomorphization happens only for the instances of that generic
+
+#### Scenario: Changing a generic signature instantiates again
+- **WHEN** `app/a.prism` calls `drop(1)` of that `lib/box`, the program has been run, then the parameter of `drop` becomes `x: &T` with its body unchanged and the call becomes `drop(&1)`
+- **THEN** the next `prism run --explain-cache` checks `lib/box` and `app/a` again and lists `  instantiate lib/box::drop<Int>`
+
+#### Scenario: A type argument gains a field
+- **WHEN** `app/main.prism` imports `/lib/box`, declares the private `struct Thing(val a: Int)` and `fun main() { println(keep(Thing(1)).a); println(keep(2)) }`, the program has been run, and `Thing` becomes `struct Thing(val b: Int, val a: Int)` with the call `keep(Thing(0, 1))`
+- **THEN** the next `prism run --explain-cache app/main.prism` prints `1` and `2`, lists `  instantiate lib/box::keep<app/main::Thing>` and `  reused instance lib/box::keep<Int>`, and reuses `lib/box.prism`
+
+#### Scenario: A private helper's signature change regenerates the instances
+- **WHEN** `lib/box.prism` declares `public fun <T> outer(x: T, n: Int): Int = helper(n)` and, after it, `fun helper(n: Int): Int = n + 1`, `app/main.prism` prints `outer("a", 1)`, the program has been run, and the helper becomes `fun helper(n: &Int): Int = n`
+- **THEN** the next `prism run --explain-cache app/main.prism` prints `1`, checks `lib/box` again, reuses `app/main` and lists `  instantiate lib/box::outer<String>`
+
+#### Scenario: A private helper's body change keeps the instances
+- **WHEN** in the program with the first `helper` only its body changes, to `n + 2`
+- **THEN** the next `prism run --explain-cache app/main.prism` prints `3`, checks `lib/box` again and lists `  reused instance lib/box::outer<String>`, whose code calls the new `helper` through its slot
+
+### Requirement: Code Generation Avoidance
+`prism run` MUST load from the build cache the code of every file and every instance whose code entry exists, without checking, lowering or compiling it again, and MUST generate code for the others alone.
+
+#### Scenario: A body edit regenerates one file's code
+- **WHEN** `lib/text.prism` exports `public fun shout(s: &String): String`, `app/main.prism` imports `/lib/text` and prints `shout("a")`, the program has been run, and the body of `shout` changes
+- **THEN** the next `prism run --explain-cache app/main.prism` prints `  checked lib/text.prism` and `  reused app/main.prism`, and its output follows the new body
 
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
-- **The hash ignores spans and formatting.** Source positions, comments and whitespace are excluded, including from a generic function's body hash, so reformatting never invalidates downstream files.
+- **The hash ignores spans and formatting.** Source positions, comments and whitespace are excluded, and since `instance-cache` the ABI hash covers no body at all, generic ones included, so reformatting never invalidates downstream files. Only the Monomorphization Hash of a generic record covers positions, which regenerates instances, never importers (below).
 - **Block-bodied exports default to `Unit` here.** ABI extraction only rejects expression-bodied exports without a return type. The type checker rejects both forms (`E4011`). Whether to tighten the ABI rule or relax the specs is an open item in `ROADMAP.md` (`resolve-nominal-type-annotations`).
 - **The hash algorithm is BLAKE3 at 256 bits** (`abi-cache`, D1). See the `abi-cache` decisions below.
 - **Markers on declarations and on every reference** (`value-semantics`, decided by the user). Each exported struct and enum records its marker (`Copy`, `Clone` or none), and so does each nominal reference in an exported signature, so an importer knows how values of a type may be duplicated without importing its module. Phase 1a reads markers from the AST alone, so no body is read and import cycles still work. Changing a type's marker therefore changes the ABI hash of every file whose exported signatures mention it, which is correct, because what importers may do with those values changes. Requiring the import (`E4014`) whenever Copy-ness is needed was rejected because an import would change whether unrelated code compiles, and treating an unknown marker as "none" because it gives false errors.
@@ -358,18 +389,18 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 
 Decisions from `abi-cache` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
-- **BLAKE3, 256 bits, everywhere** (D1). The ABI, interface and Monomorphization Hashes and every cache key are full 256-bit BLAKE3 hashes, printed as 64 hex digits. `DeterministicHasher` kept its stream of tags, lengths and `0xFF`-terminated strings, so every equality the specs state survived the switch. Once the ABI hash keys a cache, a collision silently reuses a verdict computed against another interface, and FNV-1a has no collision resistance at all. BLAKE3 is cryptographic, faster than byte-wise FNV-1a on all but tiny inputs, and what the original design named. Rejected: FNV-1a; SHA-256 (slower, nothing gained); BLAKE3 truncated to 128 bits.
-- **An interface hash keys an importer's Phase 2** (D2). It is the ABI hash's walk with the Monomorphization Hashes left out, and the ABI hash is `H(interface hash, each symbol's body hash or its absence)`, so it changes exactly when it used to. Phase 2 reads signatures only, never a generic body, so a verdict holds for every body with the same interface and a generic body edit re-checks no importer; the deterministic hermetic builds invariant holds because the verdict depends on less than the import ABI hashes, never more. Rejected: keying by ABI hashes (re-checks every importer on a generic body edit). Deferred: per-symbol fingerprints, re-checking an importer only when a symbol it uses changes, as Kotlin's and Zig's incremental compilers do.
-- **The check key** (D5). It covers the cache format version, the compiler's identity (the `build-cache` spec), the file's module path, its exact source text as the resolver parsed it, and its direct imports' interface hashes in import order. The package follows from the module path, and nothing in Phase 2 depends on the target, so the target triple joins keys with the first object-code entry. Phase 1 still runs for every file, since the resolver parses every file to build the import graph.
-- **Instance records stand in for re-monomorphization** (D9, D12). After a file passes, its MIR is scanned for calls to generics of its direct imports whose type arguments mention no type parameter; each becomes an instance request stored in the check entry, so a reused file keeps its requests. An instance is keyed by the generic's identity, its signature hash (its own part of the interface hash stream), its Monomorphization Hash and a hash of its module-qualified type arguments. After a generic body changes, importers are reused and exactly the requests naming that generic miss, which is "re-monomorphization only where a generic body changed" at the granularity code generation needs. The signature joined the key in review: the body hash alone reused `drop<Int>` after `drop(x: T)` became `drop(x: &T)`. Polymorphic calls are instantiated with their caller, calls to the file's own generics are re-checked with the file, and default value generators are already part of the interface hash, so none is recorded. `monomorphization` compiles instances from generic records without these records, which keep these keys and their gaps (the Monomorphization Hash ignores the private helpers a body calls, and the type-arguments hash ignores the layout and markers of the types it names) until `instance-cache` replaces them (below). Rejected: recording nothing until `monomorphization` (the scenario would stay untested); storing the body hash seen at check time in the check entry (its value would depend on history, not on its key).
+- **BLAKE3, 256 bits, everywhere** (D1). The ABI and Monomorphization Hashes and every cache key are full 256-bit BLAKE3 hashes, printed as 64 hex digits. `DeterministicHasher` kept its stream of tags, lengths and `0xFF`-terminated strings, so every equality the specs state survived the switch. Once the ABI hash keys a cache, a collision silently reuses a verdict computed against another interface, and FNV-1a has no collision resistance at all. BLAKE3 is cryptographic, faster than byte-wise FNV-1a on all but tiny inputs, and what the original design named. Rejected: FNV-1a; SHA-256 (slower, nothing gained); BLAKE3 truncated to 128 bits.
+- **An interface hash keys an importer's Phase 2** (D2; superseded by `instance-cache` D3, which made it the only ABI hash). It is the ABI hash's walk with the Monomorphization Hashes left out, and the ABI hash is `H(interface hash, each symbol's body hash or its absence)`, so it changes exactly when it used to. Phase 2 reads signatures only, never a generic body, so a verdict holds for every body with the same interface and a generic body edit re-checks no importer; the deterministic hermetic builds invariant holds because the verdict depends on less than the import ABI hashes, never more. Rejected: keying by ABI hashes (re-checks every importer on a generic body edit). Deferred: per-symbol fingerprints, re-checking an importer only when a symbol it uses changes, as Kotlin's and Zig's incremental compilers do.
+- **The check key** (D5). It covers the cache format version, the compiler's identity (the `build-cache` spec), the file's module path, its exact source text as the resolver parsed it, and its direct imports' interface hashes in import order (their ABI hashes since `instance-cache`). The package follows from the module path, and nothing in Phase 2 depends on the target, so the target joined keys with the first object-code entry (`instance-cache` D8). Phase 1 still runs for every file, since the resolver parses every file to build the import graph.
+- **Instance records stand in for re-monomorphization** (D9, D12; replaced by `instance-cache`, whose planning, instance keys and cached code are below). After a file passes, its MIR is scanned for calls to generics of its direct imports whose type arguments mention no type parameter; each becomes an instance request stored in the check entry, so a reused file keeps its requests. An instance is keyed by the generic's identity, its signature hash (its own part of the interface hash stream), its Monomorphization Hash and a hash of its module-qualified type arguments. After a generic body changes, importers are reused and exactly the requests naming that generic miss, which is "re-monomorphization only where a generic body changed" at the granularity code generation needs. The signature joined the key in review: the body hash alone reused `drop<Int>` after `drop(x: T)` became `drop(x: &T)`. Polymorphic calls are instantiated with their caller, calls to the file's own generics are re-checked with the file, and default value generators are already part of the interface hash, so none is recorded. `monomorphization` compiles instances from generic records without these records, which keep these keys and their gaps (the Monomorphization Hash ignores the private helpers a body calls, and the type-arguments hash ignores the layout and markers of the types it names) until `instance-cache` replaces them (below). Rejected: recording nothing until `monomorphization` (the scenario would stay untested); storing the body hash seen at check time in the check entry (its value would depend on history, not on its key).
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **Phase 3 is per file** (D3 and D20). Each file's code is generated from its own elaborated MIR, which names other files' functions only by symbol, so its code depends on the same inputs as its check (the file, its direct imports' ABIs, the compiler, and now the target) and can be cached per file later, keyed like a check entry plus the target triple. `prism run` does not use the build cache yet: a cached verdict carries no MIR.
+- **Phase 3 is per file** (D3 and D20). Each file's code is generated from its own elaborated MIR, which names other files' functions only by symbol, so its code depends on the same inputs as its check (the file, its direct imports' ABIs, the compiler, and now the target) and can be cached per file, keyed like a check entry plus the target, which `instance-cache` does (D8 there).
 
 Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **The ABI carries the definitions of reachable types** (D2, settling `codegen-core`'s D24). A file's ABI records, besides its exported symbols, the definition of every struct and enum a value reached through its exports can hold, transitively, private types and types of modules the importer does not import included (never the built-in `Range`), sorted by module and name and covered by the interface hash. A layout change therefore changes the interface hash of every file whose exports reach the type, and the build cache's existing keys re-check exactly the importers of those files, while a file's code still depends only on its direct imports' ABIs (the deterministic hermetic builds invariant). Rejected: per-program layout at link time (code would depend on files it does not import), resilient layouts queried at run time (not zero-cost), only a size and alignment per type (an importer reading a field of an imported struct needs the whole shape, and the ABI would depend on the target), layout functions called through the function table.
+- **The ABI carries the definitions of reachable types** (D2, settling `codegen-core`'s D24). A file's ABI records, besides its exported symbols, the definition of every struct and enum a value reached through its exports can hold, transitively, private types and types of modules the importer does not import included (never the built-in `Range`), sorted by module and name and covered by the ABI hash. A layout change therefore changes the ABI hash of every file whose exports reach the type, and the build cache's existing keys re-check exactly the importers of those files, while a file's code still depends only on its direct imports' ABIs (the deterministic hermetic builds invariant). Rejected: per-program layout at link time (code would depend on files it does not import), resilient layouts queried at run time (not zero-cost), only a size and alignment per type (an importer reading a field of an imported struct needs the whole shape, and the ABI would depend on the target), layout functions called through the function table.
 - **Phase 1a reads every declared type; Phase 1b walks the closure** (D3). Each file's definitions, private ones included, are read from its AST and bound against its own declarations and its direct imports' headers, so all files' definitions are read in any order, import cycles included; `FileAbi::extract` then walks the closure over every file's definitions. Records keep field and variant names, so an importer's layout dump stays readable, at the cost of rebuilding importers when a reached private field is renamed. Rejected: anonymous records, computing the closure from the direct imports' ABIs in dependency order (a fixpoint for cycles).
 - **Reachable definitions serve layout only** (D4, tightened in review). The type checker inserts them into its type table so `MirFile::types` holds every type a body can hold, but defines no name, so a private type stays unnameable; members of a type from a module the file does not import are `E4014` as before, and the fields and variants of any other type that is neither the file's own, built in, nor exported by an import stay unknown (`E4006`, `E4001`), as they were before the ABI carried them. This keeps the type system's rule that using a type's members needs its module imported, and adds no visibility rule of its own.
 
@@ -377,8 +408,16 @@ Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined w
 
 - **What an exporter ships: a generic record per generic** (D2). For every generic function and extension of a file that passes Phase 2, private ones included, `prism_mir::GenericRecord` holds the elaborated polymorphic MIR of its body, its default generators and its closures, which is self-describing since calls record their callees' paths, declared parameter types and type arguments, and the definitions of every struct and enum those bodies mention, closed over fields and payloads (`TypeTable::restricted_to`, a subset of the file's table, private types and those of modules an importer does not import included). It holds no other body: a non-generic helper, private or not, is called by symbol through its slot, so an instance depends on its signature, never its body, and another generic is another instance, built from its own record. A private generic therefore has a record, an "instantiable" symbol no importer can name; visibility stays a type-checking rule, and Tier 2 must export these symbols from object files instead of giving them local linkage. Why MIR: the typed tree or the source would make the importer check or lower the body again, against the generic's own imports' ABIs, which it may not have. Why per generic: the record is what `instance-cache` hashes, so an edit to one generic, or to a type only another generic uses, must not touch it. Records are built in memory from the `MirFile`s `prism run` holds. Rejected: Swift's `@inlinable` rule (an exported body may use only exported declarations, which widens APIs for an implementation detail); shipping the source or typed tree; shipping the whole file's MIR (an instance would depend on unrelated bodies).
 - **An instance depends on its record and its arguments' definitions alone** (D3, D5). So it is the same whichever file requests it first, and a file's own code holds no instance and depends on no generic body: a generic body edit changes only that generic's instances (`code-generation`). Two tables never disagree about a type, since a `NominalId` is unique in a program and every definition comes from the same ABIs.
-- **Direction for `instance-cache`** (D13, recorded). The Monomorphization Hash becomes a hash of the generic record, computed after Phase 2: it then covers the private types a body uses and every callee's signature, which the AST hash misses, but not non-generic helpers' bodies or other generics' records, and it covers source positions, since an instance reports runtime errors at them (positions relative to the declaration can come later). The Phase 1 body hash then leaves the ABI, so a file's ABI hash and interface hash become one. An instance key adds a structural hash of the definitions, with markers, its type arguments reach, so `keep<Thing>` is regenerated when `Thing` gains a field. Records go in the defining file's check entry, so `prism check` can collect instances over the program and find `E6004` per import cycle. Rejected: keeping the Phase 1 AST hash as the instance key (wrong in both cases above); hashing the whole defining file (every edit regenerates all its instances).
+- **Direction for `instance-cache`** (D13; done in `instance-cache`, below). The Monomorphization Hash becomes a hash of the generic record, computed after Phase 2: it then covers the private types a body uses and every callee's signature, which the AST hash misses, but not non-generic helpers' bodies or other generics' records, and it covers source positions, since an instance reports runtime errors at them (positions relative to the declaration can come later). The Phase 1 body hash then leaves the ABI, so a file's ABI hash and interface hash become one. An instance key adds a structural hash of the definitions, with markers, its type arguments reach, so `keep<Thing>` is regenerated when `Thing` gains a field. Records go in the defining file's check entry, so `prism check` can collect instances over the program and find `E6004` per import cycle. Rejected: keeping the Phase 1 AST hash as the instance key (wrong in both cases above); hashing the whole defining file (every edit regenerates all its instances).
 
 Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **`escaping` flags are part of the ABI and both hashes** (D3). Every exported function's parameter (now an `AbiParameter` record) and every function type's parameter hashes one flag byte, so marking a parameter `escaping` re-checks importers, whose calls are checked differently, while flags come from declarations only and a body edit cannot change one. All hashes changed once when the flags were introduced, which the compiler-version key of the build cache covers.
+- **`escaping` flags are part of the ABI and its hash** (D3). Every exported function's parameter (now an `AbiParameter` record) and every function type's parameter hashes one flag byte, so marking a parameter `escaping` re-checks importers, whose calls are checked differently, while flags come from declarations only and a body edit cannot change one. All hashes changed once when the flags were introduced, which the compiler-version key of the build cache covers.
+
+Decisions from `instance-cache` (planned autonomously on 2026-10-17, implemented and reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **The Monomorphization Hash is the hash of the record's canonical encoding** (D2, from `monomorphization` D13). `BLAKE3(encode(record))` for every generic of a file that passes Phase 2, private ones included, so the hash covers exactly what is stored and decoded and no second walk can drift from the codec. It covers the private types the body holds (the record's restricted table), every callee's signature (each call's parameter, destination and type-argument types, so a helper's parameter becoming `&Int` regenerates the instances), the generic's own signature (its locals) and every span with its byte offsets, since an instance reports runtime errors, and `E6001` underlines source, at them. So any edit before a generic that moves its source regenerates its instances, and the instances of every generic declared after an edited one in the same file, though it re-checks no importer and compiles no other file's unit; positions relative to the declaration remain the follow-up. No other body is covered: a non-generic helper is called through its slot, so its body edit changes only its file's unit. Type-parameter names are encoded, because a decoded record must equal the original. Rejected: the Phase 1 AST hash (misses private types and callee signatures), hashing the defining file (every edit regenerates every instance), excluding positions (stale lines in runtime errors).
+- **One ABI hash** (D3). With no body hash left in the ABI, the interface hash and the ABI hash are one value, named "ABI hash" as the deterministic hermetic builds invariant names it; check keys use the direct imports' ABI hashes, and `prism abi` prints only `ABI Hash:`.
+- **What an instance key covers** (D6, answering `abi-cache` D9). The format, the compiler and target identities, the instance's symbol (the generic and its module-qualified type arguments), its generic's Monomorphization Hash and a hash of the definitions, markers and marker parameters included, of every struct and enum the type arguments reach through fields and payloads over every module, sorted by module and name. The definitions come from Phase 1a, which every run computes for every file, and each nominal's hash is memoized per run. It needs neither the generic's signature (the record holds it), nor private helpers' bodies (called by symbol), nor other generics' records (other instances), nor the requester (one instance serves every caller).
+- **Instances are planned per program from summaries, in `prism check` too** (D7). `plan_instances` runs Tarjan's components over every summary's generic calls (`E6004`) and then the worklist over summaries, substituting each distinct instance's calls once; `build_instance_unit` instantiates a record only for an instance whose code misses. A reused file's summary comes from its check entry, so `prism check` lists every instance of the program, transitively and through modules a caller does not import, and finds `E6004` across an import cycle from reused verdicts. A test compares planning with instantiating bodies over the fixture corpus. Cost: linear in the summaries' generic calls plus the distinct instances, with no MIR read.
+- **A program-wide type table for instance units** (D13). A missed instance's requester may be cached, with no MIR in memory, so instance units take their type arguments' definitions from the program's Phase 1a definitions, converted once per run as an importer converts ABI definitions (`type_definition_from_abi`) and built only when an instance misses. Every `NominalId` has one definition per program, so this agrees with every file's table, which a library test checks.

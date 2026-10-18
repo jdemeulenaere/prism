@@ -7,7 +7,7 @@ The code generation specification defines the Tier 1 backend: how the elaborated
 ## Requirements
 
 ### Requirement: Tier 1 Compiles Elaborated MIR in Memory
-`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, without invoking any external program such as a linker or an assembler. Every body MUST be compiled, closure bodies included, except generic bodies and the closures inside them, which are compiled only as the instances the program calls.
+`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, or load that code from the build cache (the `build-cache` spec), without invoking any external program such as a linker or an assembler. Every body MUST be compiled, closure bodies included, except generic bodies and the closures inside them, which are compiled only as the instances the program calls.
 
 #### Scenario: Running a scalar program
 - **WHEN** `fun square(x: Int): Int = x * x` and `fun main() { println(square(7)) }` are declared in `main.prism` and `prism run main.prism` runs
@@ -24,6 +24,10 @@ The code generation specification defines the Tier 1 backend: how the elaborated
 #### Scenario: A closure is compiled
 - **WHEN** `fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))` and `fun main() { println(twice({ n -> n * 3 }, 2)) }` are declared and `prism run main.prism` runs
 - **THEN** it prints `18` and exits with status 0
+
+#### Scenario: A warm run starts no compilation
+- **WHEN** `prism run main.prism` runs twice, with the cache enabled, on the program that calls `keep(1)` and `keep(true)`
+- **THEN** the second run prints `1` and `true` and compiles no function, every unit and instance being loaded from the cache
 
 ### Requirement: One Code Unit per File
 Each file MUST be compiled into its own code unit from its own elaborated MIR alone. A code unit MUST refer to the functions and top-level values of other files only by their symbols, so that its code does not depend on how those files are compiled.
@@ -514,6 +518,17 @@ Every list type MUST have drop and clone glue, whatever its element type. Droppi
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `fun same(a: &List<Int>, b: &List<Int>): Bool = a == b`
 - **THEN** it prints the equality glue of `List<Int>`, headed `function main#equals(List<Int>)`, and `same` calls it directly
 
+### Requirement: Compiled Units Are Relocatable Artifacts
+The backend MUST compile each file's and each instance's code unit into an artifact of machine code, data objects and relocations that name their targets by symbol, and MUST define every unit of a load from its artifact, whether it was just compiled or read from the build cache, so that cached code is linked exactly as fresh code is.
+
+#### Scenario: Cached units run as fresh ones
+- **WHEN** a program whose files and instances hold string literals, top-level values, drop glue and calls between files is run twice with `prism run --check-allocations` and the cache enabled
+- **THEN** the second run loads every unit from the cache, and both runs print the same output, report no leak and exit with status 0
+
+#### Scenario: Dumps never read the cache
+- **WHEN** `prism dump-clif app/main.prism` runs before and after `prism run app/main.prism` fills the cache
+- **THEN** it prints the same text both times
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -615,3 +630,7 @@ Decisions from `collections` (planned autonomously on 2026-10-18, refined while 
 - **Fast paths inline, slow paths in the runtime, per-type work in glue** (D15). `size`, element addresses with their bounds check, `add`, `removeLast` and `listOf`'s stores are a few inline instructions; growing, gaps, reversal and freeing are type-erased runtime calls; dropping, cloning, comparing and searching are per-element-type glue loops (`#drop`, `#clone`, `#equals`, `#indexOf`) that check the stack, since a type may reach itself through a list. Rejected: everything in the runtime with drop-function pointers (an indirect call per element), everything inline (code size).
 - **Bounds checks carry their words through the frame** (D20). The index and size reach the cold error block through two frame words stored before the branch: a block value used in a cold block, which comes last in block order, stayed live over every block between, making Cranelift's single-pass register allocator quadratic (a body of 4096 `xs[0] += i` compiled in 1 s instead of 54 ms). Rejected: a runtime call per access, a non-cold block, an error without the index and size.
 - **Short-lived locals share Cranelift variables** (D23, every body). Cranelift's SSA builder keeps a map per variable indexed by block, so one variable per loop counter or call result over a long body cost their product (4096 pairs of range loops lowered in 434 ms). Scalar locals live in at most 16 blocks (found walking back from their upward-exposed reads to their whole writes) take one of the 16 variables of their machine type last given a local whose locals occupy none of their blocks; longer-lived locals, borrowed locals, arguments, captures and the result keep their own. Two locals of one variable never live in one block, so SSA construction keeps their values apart. Linear in the body; those loops now lower in 76 ms. Rejected: stack slots beyond a count (slower code), full interference-graph colouring (quadratic for many long-lived locals).
+
+Decisions from `instance-cache` (planned autonomously on 2026-10-17, implemented and reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Compiled units are relocatable artifacts, defined through one path** (D8). `Linker::compile_unit` lowers a file's or an instance's unit and compiles every function to bytes with `context.compile` (the single-pass ISA for large functions), into a `UnitArtifact` of functions (symbol, linkage, slot, signature, alignment, code, relocations), data objects (string literals, closure descriptors with their data relocations, top-level storage) and relocations naming their targets by symbol (functions and data of the unit, glue, `<symbol>#slot`, runtime functions, `STACK_LIMIT_SYMBOL`, library calls). `Linker::define_artifact` declares those names in the load and defines the bytes, so cached and fresh code are linked the same way, and debug builds round-trip every artifact through its encoding before defining it, which makes the whole test suite exercise the codec. A unit whose relocations name something the encoding cannot is compiled every run and never written. `CodeUnit::lower_named` lowers through a module wrapper that forwards declarations and records the unit's data, so lowering is unchanged. Unwind information is not cached: Tier 1 registers none for functions defined from bytes, and Prism code never unwinds, since a runtime error ends the process. Rejected: caching Cranelift IR (saves only lowering); object files loaded by a custom loader (a second code path, which Tier 2 needs in another shape anyway).
