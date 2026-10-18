@@ -96,14 +96,14 @@ Prerequisites (design, "Baseline"): `monomorphization`, `instance-cache`, `closu
 
 ## 8. Documentation and checks
 
-- [ ] 8.1 Update `ROADMAP.md`:
+- [x] 8.1 Update `ROADMAP.md`:
   - item 25 records the shape this change chose;
   - the Phase 3 item "Hot-reload runtime prototype" points at this change;
   - the `codegen-aggregates` follow-up on live values of a changed layout is answered by D7.
 
   At archive time, add the follow-ups of the proposal's non-goals and the design's open questions: a restart command, per-function reload reports, reclaiming modules, incremental Phase 1, and parallel reload compilation.
-- [ ] 8.2 In `docs/architecture.md` §2, update the "Implemented today" paragraph, and move the scenario "Tier 1 hot reload with disabled cross-file inlining" out (it is implemented by this change's `code-generation` and `hot-reload` requirements) when archiving.
-- [ ] 8.3 Run every check of `openspec/config.yaml`'s apply guidance:
+- [x] 8.2 In `docs/architecture.md` §2, update the "Implemented today" paragraph, and move the scenario "Tier 1 hot reload with disabled cross-file inlining" out (it is implemented by this change's `code-generation` and `hot-reload` requirements) when archiving.
+- [x] 8.3 Run every check of `openspec/config.yaml`'s apply guidance:
   - `cargo fmt --all -- --check`;
   - `cargo clippy --workspace --all-targets`, with no new warnings;
   - `cargo test --workspace`;
