@@ -8,7 +8,8 @@ use prism_typed_tree::{Type, TypeTable};
 /// Whether a value of type `ty` can hold loans: a reference or a function type outside a
 /// nominal type (`&T`, `&mut T`, `() -> Int`), or a nullable or `Heap<T>` of one. Structs and
 /// enums never carry loans, since their fields and payloads cannot be borrows and a capturing
-/// closure cannot be stored in them.
+/// closure cannot be stored in them. Neither does a value of a type parameter: type arguments
+/// are borrow-free, and a capturing closure is never passed for one (D7 of `generics`).
 pub fn carries_loans(ty: &Type) -> bool {
     match ty {
         Type::Reference { .. } | Type::Fn { .. } => true,
@@ -17,7 +18,8 @@ pub fn carries_loans(ty: &Type) -> bool {
     }
 }
 
-/// Whether `ty` is a function type, or a nullable or `Heap<T>` of one.
+/// Whether `ty` is a function type, or a nullable or `Heap<T>` of one. A type parameter is not:
+/// what it stands for holds no capture loans (D7 of `generics`).
 pub fn contains_function(ty: &Type) -> bool {
     match ty {
         Type::Fn { .. } => true,
@@ -162,6 +164,31 @@ mod tests {
     use super::*;
     use crate::test_bodies::{body, lower};
     use prism_mir::{LocalId, Rvalue, StatementKind};
+
+    #[test]
+    fn type_parameters_are_borrow_free_and_function_free() {
+        for bound in [None, Some(prism_ast::TypeMarker::Copy)] {
+            let parameter = Type::Parameter(prism_typed_tree::TypeParameter {
+                index: 0,
+                name: "T".to_string(),
+                bound,
+            });
+            let nullable = parameter.clone().nullable();
+            for ty in [&parameter, &nullable] {
+                assert!(!carries_loans(ty), "{}", ty);
+                assert!(!contains_function(ty), "{}", ty);
+                assert!(!writes_loans_through(ty), "{}", ty);
+                assert!(!is_input_borrow(ty), "{}", ty);
+                assert!(!can_borrow_reference(ty), "{}", ty);
+            }
+            // A borrow of a type-parameter value is an input borrow like any other.
+            let borrowed = Type::Reference {
+                mutable: false,
+                inner: Box::new(parameter),
+            };
+            assert!(is_input_borrow(&borrowed) && carries_loans(&borrowed));
+        }
+    }
 
     const SOURCE: &str = "\
 struct User { var name: String }

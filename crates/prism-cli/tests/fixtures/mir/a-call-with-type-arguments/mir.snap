@@ -1,0 +1,22 @@
+module main
+fun <T> main::id(_1: T): T @2:1
+  local _0: T (return)
+  local _1 x: T (argument)
+  bb0:
+    _0 = move _1 @2:23
+    drop _1 -> bb1 @2:1
+  bb1:
+    return @2:1
+fun main::f(_1: String): String @3:1
+  local _0: String (return)
+  local _1 s: String (argument)
+  local _2: String (temporary)
+  bb0:
+    storage_live _2 @3:31
+    _2 = move _1 @3:31
+    _0 = call main::id<String>(move _2) -> bb1 @3:28
+  bb1:
+    storage_dead _2 @3:28
+    drop _1 -> bb2 @3:1
+  bb2:
+    return @3:1

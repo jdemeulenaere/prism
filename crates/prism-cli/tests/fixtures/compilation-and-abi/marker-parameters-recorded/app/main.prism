@@ -1,0 +1,13 @@
+// expect: E5001
+// entry: app/main.prism
+package app
+import /app/api
+fun f(): Int {
+    val h = handle()
+    val g = h
+    val k = h
+    val b = box()
+    val c = b
+    val d = b
+    return 1
+}

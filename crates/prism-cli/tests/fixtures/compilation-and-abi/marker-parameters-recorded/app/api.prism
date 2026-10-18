@@ -1,0 +1,4 @@
+package app
+import /lib/state
+public fun handle(): Handle<String> = Handle(1)
+public fun box(): Box<String> = Box("a")

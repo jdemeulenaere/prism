@@ -7,7 +7,9 @@ use crate::mir::{
     TerminatorKind,
 };
 use crate::types::{needs_drop, projection_type};
-use prism_typed_tree::{ArenaId, BinaryOperator, Type, TypeTable, UnaryOperator};
+use prism_typed_tree::{
+    foreign_parameters, ArenaId, BinaryOperator, Type, TypeTable, UnaryOperator,
+};
 use std::collections::VecDeque;
 
 impl MirFile {
@@ -133,6 +135,15 @@ impl Validator<'_> {
                         Some(kind) => format!("a {:?} local", kind),
                         None => "a binding or temporary".to_string(),
                     }
+                ));
+            }
+        }
+        // A body's types mention its own type parameters only (D9 of `generics`).
+        for (local, declaration) in body.locals.iter() {
+            for parameter in foreign_parameters(&declaration.ty, &body.type_parameters) {
+                self.report(format!(
+                    "_{} mentions type parameter {}, which the body does not declare",
+                    local.0, parameter
                 ));
             }
         }
@@ -355,6 +366,14 @@ impl Validator<'_> {
                         parameters.len()
                     );
                     self.report(message);
+                }
+                for argument in type_arguments {
+                    for parameter in foreign_parameters(argument, &self.body.type_parameters) {
+                        self.report(format!(
+                            "{} has a type argument mentioning type parameter {}, which the body does not declare",
+                            at, parameter
+                        ));
+                    }
                 }
                 // An operand has its parameter's declared type with the call's type arguments.
                 for (index, (argument, parameter)) in arguments.iter().zip(parameters).enumerate() {
@@ -894,6 +913,36 @@ mod tests {
         });
         assert_reports(&file, "operand 0 has type Int, expected String");
         assert_reports(&file, "has a String destination and no successor");
+    }
+
+    fn parameter_t() -> Type {
+        Type::Parameter(prism_typed_tree::TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: None,
+        })
+    }
+
+    #[test]
+    fn substituted_call_operands_and_foreign_type_parameters_are_checked() {
+        // `g<String>(1)` for `fun <T> g(x: T)`: the operand must be a `String`.
+        let mut file = small_file();
+        body(&mut file).blocks[BlockId(0)].terminator = terminator(TerminatorKind::Call {
+            callee: Callee::Function(prism_typed_tree::DeclarationPath::new("main", "g")),
+            arguments: vec![Operand::Constant(Constant::Int(1))],
+            parameters: vec![parameter_t()],
+            type_arguments: vec![Type::String],
+            destination: Place::local(LocalId(2)),
+            target: Some(BlockId(1)),
+            is_compose: false,
+        });
+        assert_reports(&file, "operand 0 has type Int, expected String");
+        let mut file = small_file();
+        body(&mut file).locals[LocalId(2)].ty = parameter_t();
+        assert_reports(
+            &file,
+            "_2 mentions type parameter T, which the body does not declare",
+        );
     }
 
     #[test]

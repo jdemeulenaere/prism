@@ -14,7 +14,7 @@ use crate::mir::{
 };
 use crate::types::projection_type;
 use prism_ast::Span;
-use prism_typed_tree::{BuiltinFunction, NominalId, Type, TypeTable};
+use prism_typed_tree::{BuiltinFunction, NominalId, Type, TypeParameter, TypeTable};
 use std::fmt::Write;
 
 impl MirFile {
@@ -60,11 +60,14 @@ impl MirFile {
                     BodyOwner::Default { .. } => "default",
                     _ => "closure",
                 };
+                // A generic body shows its type parameters, as its function declares them.
+                let type_parameters = render_type_parameters(&body.type_parameters);
                 writeln!(
                     out,
-                    "{}{} {}({}): {} {}",
+                    "{}{} {}{}({}): {} {}",
                     compose,
                     keyword,
+                    type_parameters,
                     self.body_name(id),
                     arguments.join(", "),
                     body.return_type(),
@@ -284,13 +287,16 @@ impl Printer<'_> {
             TerminatorKind::Call {
                 callee,
                 arguments,
+                type_arguments,
                 destination,
                 target,
                 is_compose,
                 ..
             } => {
                 let callee = match callee {
-                    Callee::Function(path) => path.to_string(),
+                    Callee::Function(path) => {
+                        format!("{}{}", path, render_type_arguments(type_arguments))
+                    }
                     Callee::Builtin(BuiltinFunction::Clone) => "builtin clone".to_string(),
                     Callee::Value(place, _) => self.place(place),
                     Callee::Default { function, name, .. } => {
@@ -317,6 +323,15 @@ impl Printer<'_> {
             TerminatorKind::Unreachable => "unreachable".to_string(),
         }
     }
+}
+
+/// Renders a body's type parameters as declared, followed by a space (`<T : Copy> `), or nothing
+/// for a body that is not generic.
+fn render_type_parameters(parameters: &[TypeParameter]) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    format!("{} ", TypeParameter::render_list(parameters))
 }
 
 /// Renders type arguments as written after a name (`<Int, String>`), qualified by module, or
@@ -434,6 +449,7 @@ pub(crate) mod tests {
         let body = Body {
             owner: BodyOwner::Function(DeclarationPath::new("main", "f")),
             is_compose: false,
+            type_parameters: Vec::new(),
             locals,
             argument_count: 1,
             capture_count: 0,

@@ -1,0 +1,7 @@
+// expect: E5007
+fun <T> keep(x: T): T = x
+fun greet(s: &String): Int = 1
+fun f(s: String): Int {
+    val g = keep({ greet(s) })
+    return g()
+}

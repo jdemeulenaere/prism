@@ -1,0 +1,3 @@
+// expect: ok
+fun <T> pass(x: T): T = x
+fun <T> pick(a: T, b: T, c: Bool): T = if (c) a else b

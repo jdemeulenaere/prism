@@ -1,0 +1,11 @@
+module main
+fun <T> main::id(x: T): T @2:1
+  local %0 x: T (parameter)
+  move: T @2:23
+    local %0 x: T @2:23
+struct main::Box<T> @3:1
+  field 0 val v: T
+fun main::f(): Box<Int> @4:1
+  construct main::Box: Box<Int> @4:21
+    field v: call main::id<Int>: Int @4:25
+      argument x: literal 1: Int @4:28

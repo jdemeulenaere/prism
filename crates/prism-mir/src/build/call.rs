@@ -378,6 +378,7 @@ impl<'a> Builder<'a> {
             name,
         };
         let mut builder = Builder::new(file, types, bodies, tree, id, owner, span);
+        builder.type_parameters = function.type_parameters.clone();
         builder.set_return_type(parameter_ty.clone(), span);
         for &parameter in &tree.parameters[..receiver_count + index] {
             let local = &tree.locals[parameter];

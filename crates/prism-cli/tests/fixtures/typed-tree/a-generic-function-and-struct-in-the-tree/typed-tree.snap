@@ -1,0 +1,8 @@
+module main
+struct main::Box<T> : Copy if T @2:1
+  field 0 val v: T
+fun <T : Copy> main::wrap(x: T): Box<T> @3:1
+  local %0 x: T (parameter)
+  construct main::Box: Box<T> @3:37
+    field v: copy: T @3:41
+      local %0 x: T @3:41

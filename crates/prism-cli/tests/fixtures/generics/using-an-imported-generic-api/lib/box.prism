@@ -1,0 +1,4 @@
+package lib
+public struct Box<T> : Copy { val v: T }
+public fun <T : Copy> twice(x: T): Box<T> = Box(x)
+public fun <T> Box<T>.get(): &T = &v

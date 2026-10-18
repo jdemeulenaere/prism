@@ -5,9 +5,11 @@
 //! (of a function, a closure, a default value's generator, or a top-level `val`'s
 //! initializer), used as an operand of an aggregate (a struct field or an enum payload),
 //! written to a place with a projection (a field, or through a reference) or written to a
-//! capture local. It is rejected as `EscapingClosure` (`E5007`) when, by the loan flow, it may
-//! hold a closure capture's loan or a function input. Passing a closure to a call is not an
-//! escape, and a closure without captures holds neither.
+//! capture local, or passed for a parameter whose declared type has a type parameter outside a
+//! function type, since the generic body may store, return or keep it (D7 of `generics`). It is
+//! rejected as `EscapingClosure` (`E5007`) when, by the loan flow, it may hold a closure
+//! capture's loan or a function input. Passing a closure to any other parameter of a call is not
+//! an escape, and a closure without captures holds neither.
 
 use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::dataflow::Results;
@@ -18,7 +20,7 @@ use crate::places;
 use prism_ast::Span;
 use prism_mir::{
     AggregateKind, Body, BodyOwner, LocalId, LocalKind, MirFile, Operand, Place, Projection,
-    Rvalue, StatementKind,
+    Rvalue, StatementKind, TerminatorKind,
 };
 use std::collections::HashSet;
 
@@ -38,6 +40,40 @@ pub(crate) fn check_escapes(
             .statements
             .get(location.statement)
         else {
+            let terminator = &body.blocks[location.block].terminator;
+            let TerminatorKind::Call {
+                arguments,
+                parameters,
+                ..
+            } = &terminator.kind
+            else {
+                continue;
+            };
+            let state = cursor.seek(location).clone();
+            let checker = Escapes {
+                file,
+                body,
+                borrows,
+            };
+            for (operand, parameter) in arguments.iter().zip(parameters) {
+                // A generic slot: the callee's body sees a value of a type parameter.
+                if !parameter.mentions_parameter_outside_functions() {
+                    continue;
+                }
+                let Some(place) = operand.place() else {
+                    continue;
+                };
+                if !places::contains_function(&place.ty(body, &file.types)) {
+                    continue;
+                }
+                let items = flow.analysis.holds(&state, place.local);
+                escaped.extend(checker.capture_loans(&items));
+                errors.extend(checker.error(
+                    &items,
+                    "passed to a generic parameter here",
+                    operand_span(operand, terminator.span),
+                ));
+            }
             continue;
         };
         let StatementKind::Assign(destination, rvalue) = &statement.kind else {

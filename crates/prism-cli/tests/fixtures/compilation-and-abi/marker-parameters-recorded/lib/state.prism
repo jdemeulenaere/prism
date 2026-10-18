@@ -1,0 +1,3 @@
+package lib
+public struct Handle<T> : Copy { val id: Int }
+public struct Box<T> : Copy { val v: T }

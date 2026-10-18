@@ -214,3 +214,57 @@ fun f(t: Team, s: String, g: (&String) -> Int): Int {
     // `t.captain(&s)`, `first(&s)`, `clone()`, `g(&s)`.
     assert_eq!(calls, vec![true, false, true, false]);
 }
+
+// --- Generic Bodies Are Lowered Once (the `mir` spec)
+
+#[test]
+fn dropping_a_type_parameter_value() {
+    let actual = mir("fun <T> discard(x: T) {}\nfun <T : Copy> keep(x: T): Int = 1\n");
+    // `discard` records `T` and drops its argument; a `Copy` value is never dropped.
+    assert!(
+        actual.contains("fun <T> main::discard(_1: T): Unit"),
+        "{}",
+        actual
+    );
+    assert!(actual.contains("drop _1 -> bb1"), "{}", actual);
+    let keep = &actual[actual.find("fun <T : Copy> main::keep").expect("keep")..];
+    assert!(!keep.contains("drop"), "{}", keep);
+}
+
+#[test]
+fn a_call_with_type_arguments() {
+    let actual = mir("fun <T> id(x: T): T = x\nfun f(s: String): String = id(s)\n");
+    assert!(
+        actual.contains("= call main::id<String>(move _"),
+        "{}",
+        actual
+    );
+}
+
+#[test]
+fn defaults_and_closures_of_a_generic_function_share_its_type_parameters() {
+    let file = prism_parser::parse_source(
+        "fun <T> pass(x: T, f: () -> Int = { 1 }, n: Int = 2): T = x\nfun g(): Int = pass(3)\n",
+    )
+    .expect("the source parses");
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+    let tree = checker.check_module(&file);
+    assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+    let mir = prism_mir::lower_file(&tree);
+    assert!(mir.validate().is_empty(), "{:?}", mir.validate());
+    let generic: Vec<(String, usize)> = mir
+        .bodies
+        .iter()
+        .map(|(id, body)| (mir.body_name(id), body.type_parameters.len()))
+        .collect();
+    assert_eq!(
+        generic,
+        vec![
+            ("main::pass".to_string(), 1),
+            ("main::pass f".to_string(), 1),
+            ("main::pass f#closure0".to_string(), 1),
+            ("main::pass n".to_string(), 1),
+            ("main::g".to_string(), 0),
+        ]
+    );
+}

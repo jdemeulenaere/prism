@@ -1,0 +1,3 @@
+// expect: ok
+fun <T> keep(x: T): T = x
+fun n(): Int = keep({ 1 })()

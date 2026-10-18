@@ -1,0 +1,11 @@
+module main
+fun <T> main::id(x: T): T @2:1
+  local %0 x: T (parameter)
+  move: T @2:23
+    local %0 x: T @2:23
+fun <U> main::twice(x: U): U @3:1
+  local %0 x: U (parameter)
+  call main::id<U>: U @3:26
+    argument x: call main::id<U>: U @3:29
+      argument x: move: U @3:32
+        local %0 x: U @3:32

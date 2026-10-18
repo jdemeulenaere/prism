@@ -1,0 +1,9 @@
+// expect: ok
+// entry: app/main.prism
+package app
+import /lib/box
+fun f(): Int {
+    val b = twice(3)
+    val c = b
+    return b.get() + c.v
+}

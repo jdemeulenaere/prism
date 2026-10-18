@@ -1,0 +1,4 @@
+// expect: ok
+fun <T> id(x: T): T = x
+struct Box<T>(val v: T)
+fun f(): Box<Int> = Box(id(1))

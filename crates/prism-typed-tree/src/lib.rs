@@ -16,3 +16,4 @@ pub use tree::*;
 pub use types::{
     NominalId, NominalMarker, Type, TypeDef, TypeParameter, TypeTable, BUILTIN_MODULE,
 };
+pub use validate::foreign_parameters;

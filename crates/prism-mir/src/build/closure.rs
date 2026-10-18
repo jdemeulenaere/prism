@@ -43,6 +43,7 @@ impl Builder<'_> {
             span,
         );
         closure.is_compose = *is_compose;
+        closure.type_parameters = self.type_parameters.clone();
         closure.set_return_type(ret.as_ref().clone(), span);
         for &parameter in parameters {
             closure.bind_argument(parameter);

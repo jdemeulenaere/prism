@@ -89,6 +89,7 @@ fn lower_function(
         let owner = BodyOwner::Function(function.path.clone());
         let mut builder = Builder::new(file, types, bodies, tree, id, owner, function.span);
         builder.is_compose = function.is_compose;
+        builder.type_parameters = function.type_parameters.clone();
         builder.set_return_type(function.return_type.clone(), function.span);
         for &parameter in &tree.parameters {
             builder.bind_argument(parameter);
@@ -288,6 +289,8 @@ pub(crate) struct Builder<'a> {
     return_block: Option<BlockId>,
     /// The number of closures lowered in this body, which names the next one (D3).
     closure_count: usize,
+    /// The type parameters of the body's function.
+    type_parameters: Vec<prism_typed_tree::TypeParameter>,
 }
 
 impl<'a> Builder<'a> {
@@ -322,6 +325,7 @@ impl<'a> Builder<'a> {
             preallocated: HashMap::new(),
             return_block: None,
             closure_count: 0,
+            type_parameters: Vec::new(),
         };
         builder.current = Some(builder.new_block());
         // The arguments' scope: arguments are dropped when the body returns, after its locals,
@@ -428,6 +432,7 @@ impl<'a> Builder<'a> {
         Body {
             owner: self.owner,
             is_compose: self.is_compose,
+            type_parameters: self.type_parameters,
             locals: self.locals,
             argument_count: self.argument_count,
             capture_count: self.capture_count,

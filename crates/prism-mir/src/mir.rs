@@ -21,8 +21,8 @@
 
 use prism_ast::Span;
 use prism_typed_tree::{
-    define_id, Arena, BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, Type, TypeTable,
-    UnaryOperator,
+    define_id, Arena, BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, Type,
+    TypeParameter, TypeTable, UnaryOperator,
 };
 
 define_id!(
@@ -100,6 +100,10 @@ pub struct Body {
     pub owner: BodyOwner,
     /// Whether the body is a `compose fun` or a composable closure.
     pub is_compose: bool,
+    /// The type parameters the body's types may mention: its function's, also for the
+    /// function's default generators and closures, and none for a top-level `val`. A generic
+    /// body is lowered once, polymorphically (D9 of `generics`).
+    pub type_parameters: Vec<TypeParameter>,
     /// `_0` the return place, then the arguments, then the captures, then bindings and
     /// temporaries in order of creation.
     pub locals: Arena<LocalId, LocalDeclaration>,

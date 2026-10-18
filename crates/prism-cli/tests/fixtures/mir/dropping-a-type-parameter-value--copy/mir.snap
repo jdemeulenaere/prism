@@ -1,0 +1,7 @@
+module main
+fun <T : Copy> main::keep(_1: T): Int @2:1
+  local _0: Int (return)
+  local _1 x: T (argument)
+  bb0:
+    _0 = const 1 @2:34
+    return @2:1

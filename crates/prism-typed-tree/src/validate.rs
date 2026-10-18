@@ -910,7 +910,7 @@ impl Validator<'_> {
 }
 
 /// The type parameters `ty` mentions that are not among `declared`, as they are declared.
-pub(crate) fn foreign_parameters(ty: &Type, declared: &[TypeParameter]) -> Vec<TypeParameter> {
+pub fn foreign_parameters(ty: &Type, declared: &[TypeParameter]) -> Vec<TypeParameter> {
     let mut foreign = Vec::new();
     collect_foreign_parameters(ty, declared, &mut foreign);
     foreign
@@ -1424,6 +1424,72 @@ mod tests {
             found
                 .iter()
                 .any(|v| v.contains("0 arguments for 1 parameters")),
+            "{:?}",
+            found
+        );
+    }
+
+    fn parameter_t() -> Type {
+        Type::Parameter(crate::types::TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: None,
+        })
+    }
+
+    #[test]
+    fn a_mistyped_substituted_slot_is_reported() {
+        // `g<String>(1)` for `fun <T> g(x: T)`: the slot is `T` with `T = String`.
+        let mut file = file();
+        let body = body(&mut file);
+        let one = add(body, ExpressionKind::Literal(Literal::Int(1)), Type::Int);
+        let call = add(
+            body,
+            ExpressionKind::Call(Call {
+                callee: Callee::Function(DeclarationPath::new("main", "g")),
+                arguments: vec![Argument::Written(one)],
+                parameters: vec![(Some("x".to_string()), parameter_t())],
+                type_arguments: vec![Type::String],
+                evaluation_order: vec![0],
+                has_receiver: false,
+                is_compose: false,
+            }),
+            Type::Int,
+        );
+        let old = body.value.replace(call).unwrap();
+        let statement = body.statements.alloc(Statement {
+            kind: StatementKind::Expression { value: old },
+            span: Span::dummy(),
+        });
+        let block = add(
+            body,
+            ExpressionKind::Block {
+                statements: vec![statement],
+                tail: Some(call),
+                close_brace: Span::dummy(),
+            },
+            Type::Int,
+        );
+        body.value = Some(block);
+        let found = violations(&file);
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("has type Int, but its slot expects String")),
+            "{:?}",
+            found
+        );
+    }
+
+    #[test]
+    fn a_foreign_type_parameter_is_reported() {
+        let mut file = file();
+        let body = body(&mut file);
+        body.locals[LocalId(0)].ty = parameter_t();
+        let found = violations(&file);
+        assert!(
+            found.iter().any(|v| v
+                .contains("binding 'a' mentions type parameter T, which main::f does not declare")),
             "{:?}",
             found
         );

@@ -1,0 +1,3 @@
+// expect: ok
+fun <T> id(x: T): T = x
+fun <U> twice(x: U): U = id(id(x))
