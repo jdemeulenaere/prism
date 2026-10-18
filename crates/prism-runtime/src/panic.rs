@@ -85,11 +85,15 @@ pub enum PanicKind {
     ListIndexOutOfRange = 8,
     /// `removeLast()` of an empty list.
     EmptyList = 9,
+    /// A misuse of the composition protocol: a stale handle, a composer outside its pass, an
+    /// unbalanced group, or a composition operation during a pass; the detail says which (D12
+    /// of `compose-runtime`). Reported without a location, since an entry point has none.
+    CompositionMisuse = 10,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 10] = [
+    pub const ALL: [PanicKind; 11] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
@@ -100,6 +104,7 @@ impl PanicKind {
         PanicKind::StringIndexOutOfRange,
         PanicKind::ListIndexOutOfRange,
         PanicKind::EmptyList,
+        PanicKind::CompositionMisuse,
     ];
 
     /// The kind with code `code`.
@@ -128,6 +133,7 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         PanicKind::StringIndexOutOfRange => format!("string index {}", detail),
         PanicKind::ListIndexOutOfRange => format!("list index {}", detail),
         PanicKind::EmptyList => "removeLast() on an empty list".to_string(),
+        PanicKind::CompositionMisuse => format!("composition misuse: {}", detail),
     }
 }
 
@@ -183,7 +189,8 @@ fn report_at(message: &str, file: &str, line: u32, column: u32) -> ! {
 }
 
 /// Reports the runtime error `kind` with `detail` without a location line and ends the process:
-/// "out of memory", which can happen inside the runtime, far from any expression.
+/// "out of memory", which can happen inside the runtime, far from any expression, and
+/// "composition misuse", raised by entry points that have no caller location.
 pub fn panic_without_location(kind: PanicKind, detail: &str) -> ! {
     report(&format!("panic: {}\n", panic_message(kind, detail)))
 }
@@ -271,6 +278,11 @@ mod tests {
                 "list index -1 out of range for size 1",
             ),
             (PanicKind::EmptyList, "", "removeLast() on an empty list"),
+            (
+                PanicKind::CompositionMisuse,
+                "group left open",
+                "composition misuse: group left open",
+            ),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());
         for (kind, detail, message) in cases {

@@ -25,6 +25,7 @@
 
 mod allocation;
 mod double;
+mod function_value;
 mod functions;
 mod list;
 mod output;
@@ -36,11 +37,12 @@ mod string;
 
 pub use allocation::{
     allocation_layout, allocation_statistics, prism_rt_allocate, prism_rt_free,
-    prism_rt_reallocate, prism_rt_register_top_level_value, test_lock, AllocationMap,
-    AllocationStatistics, DropFunction, InvalidFree, ALLOCATION_CHECK_EXIT_STATUS,
-    INVALID_FREE_MESSAGE,
+    prism_rt_reallocate, prism_rt_register_top_level_value, set_finish_report, test_lock,
+    AllocationMap, AllocationStatistics, DropFunction, FinishReport, InvalidFree,
+    ALLOCATION_CHECK_EXIT_STATUS, INVALID_FREE_MESSAGE,
 };
 pub use double::format_double;
+pub use function_value::{Descriptor, FunctionValue};
 pub use functions::{
     runtime_function, RuntimeAddress, RuntimeFunction, RuntimeType, RUNTIME_FUNCTIONS,
 };

@@ -6,15 +6,15 @@ Prerequisites (design, "Baseline"): groups 1 to 6 need only `closures`' function
 
 ## 1. Runtime support in `prism-runtime` (D2, D12, D13)
 
-- [ ] 1.1 Add `crates/prism-runtime/src/function_value.rs`:
+- [x] 1.1 Add `crates/prism-runtime/src/function_value.rs`:
   - `#[repr(C)] FunctionValue { descriptor: *const Descriptor, environment: *mut u8 }` and `#[repr(C)] Descriptor { slot: *const AtomicUsize, drop_environment: Option<unsafe extern "C" fn(*mut u8)> }`, the layout of `closures` D2 and D3;
   - `unsafe fn call_with_word(&self, word: u64)`, which loads the slot with acquire ordering and calls the code as `extern "C" fn(*mut u8, u64)`;
   - `unsafe fn release(self)`, which calls the drop entry when it is not null;
   - `unsafe fn read_from(address: *const u8) -> FunctionValue`, for a value passed by address.
 
   Export them from `lib.rs`. Verify with unit tests that call a Rust `extern "C"` function through a hand-built descriptor and slot, see a repointed slot reach the new function, and see `release` call the drop entry once and skip a null one.
-- [ ] 1.2 In `panic.rs`, add `PanicKind::CompositionMisuse` with the next free code, its message `composition misuse: <detail>`, and its entry in `PanicKind::ALL`. Verify with the existing `panic_message` tests extended to the new kind.
-- [ ] 1.3 In `allocation.rs`, add `set_finish_report(report: fn() -> Option<String>)`, stored in a static. Make `finish_tracking` call it after dropping top-level values and before the leak report, and join a returned line before the leak line, so that either line makes `finish` return `ALLOCATION_CHECK_EXIT_STATUS`. Do nothing when checking is off. Verify with a unit test that installs a report returning a line and checks the combined report and the status.
+- [x] 1.2 In `panic.rs`, add `PanicKind::CompositionMisuse` with the next free code, its message `composition misuse: <detail>`, and its entry in `PanicKind::ALL`. Verify with the existing `panic_message` tests extended to the new kind.
+- [x] 1.3 In `allocation.rs`, add `set_finish_report(report: fn() -> Option<String>)`, stored in a static. Make `finish_tracking` call it after dropping top-level values and before the leak report, and join a returned line before the leak line, so that either line makes `finish` return `ALLOCATION_CHECK_EXIT_STATUS`. Do nothing when checking is off. Verify with a unit test that installs a report returning a line and checks the combined report and the status.
 
 ## 2. The `prism-compose` crate: handles, thread state, entry table (D2, D3, D4)
 

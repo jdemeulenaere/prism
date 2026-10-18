@@ -170,9 +170,25 @@ pub(crate) fn start_tracking(check_allocations: bool) {
     CHECKING.store(check_allocations, Ordering::Relaxed);
 }
 
+/// A report of something else still live when `main` returns, which the check writes before
+/// its leak report: `prism-compose`'s count of undisposed compositions (D13 of
+/// `compose-runtime`). It runs on the program's thread.
+pub type FinishReport = fn() -> Option<String>;
+
+static FINISH_REPORT: Mutex<Option<FinishReport>> = Mutex::new(None);
+
+/// Installs `report`, which [`crate::finish`] calls under the allocation check after dropping
+/// the top-level values and before the leak report. A line it returns is written before the
+/// leak line, and either one makes the run fail the check. `None` removes it.
+pub fn set_finish_report(report: Option<FinishReport>) {
+    *FINISH_REPORT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = report;
+}
+
 /// Ends a checked run whose `main` returned: drops the registered top-level values in reverse
-/// order of initialization, then gives the report of the allocations still live, if any. Without
-/// the check, gives nothing.
+/// order of initialization, then gives the finish report's line and the report of the
+/// allocations still live, if any, one per line. Without the check, gives nothing.
 pub(crate) fn finish_tracking() -> Option<String> {
     if !CHECKING.load(Ordering::Relaxed) {
         return None;
@@ -182,7 +198,15 @@ pub(crate) fn finish_tracking() -> Option<String> {
     for (storage, drop) in values.into_iter().rev() {
         drop(storage as *mut u8);
     }
-    with_tracking(|tracking| tracking.allocations.leak_report())
+    let report = *FINISH_REPORT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let first = report.and_then(|report| report());
+    let leaks = with_tracking(|tracking| tracking.allocations.leak_report());
+    match (first, leaks) {
+        (Some(first), Some(leaks)) => Some(format!("{}\n{}", first, leaks)),
+        (first, leaks) => first.or(leaks),
+    }
 }
 
 /// The totals of the current run's allocation check; all zero when it is off.
@@ -417,6 +441,40 @@ mod tests {
         );
         // SAFETY: allocated above with this size and alignment.
         unsafe { prism_rt_free(leaked, 5, 1) };
+        start_tracking(false);
+    }
+
+    fn a_live_thing() -> Option<String> {
+        Some("allocation check: things still live at exit: 1".to_string())
+    }
+
+    /// The finish report's line comes before the leak line, and fails the check alone.
+    #[test]
+    fn the_finish_report_comes_before_the_leak_report() {
+        let _lock = test_lock();
+        set_finish_report(Some(a_live_thing));
+        start_tracking(true);
+        assert_eq!(
+            finish_tracking().as_deref(),
+            Some("allocation check: things still live at exit: 1")
+        );
+        start_tracking(true);
+        let leaked = prism_rt_allocate(5, 1);
+        assert_eq!(
+            finish_tracking().as_deref(),
+            Some(
+                "allocation check: things still live at exit: 1\n\
+                 allocation check: allocations still live at exit: 1 (5 bytes)"
+            )
+        );
+        // SAFETY: allocated above with this size and alignment.
+        unsafe { prism_rt_free(leaked, 5, 1) };
+        // Without the check, the report is not called.
+        start_tracking(false);
+        assert_eq!(finish_tracking(), None);
+        set_finish_report(None);
+        start_tracking(true);
+        assert_eq!(finish_tracking(), None);
         start_tracking(false);
     }
 
