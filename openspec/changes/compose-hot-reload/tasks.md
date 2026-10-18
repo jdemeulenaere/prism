@@ -80,7 +80,7 @@ Prerequisites (design, "Baseline"): `hot-reload`, `standard-library`, `compose-r
 
 ## 9. Documentation and checks
 
-- [ ] 9.1 Update `ROADMAP.md`: tick item 32 with what was built and the measured latency, and list the follow-ups (per-body hashes for D4, function values received from unaffected files, resetting edited `remember` calculations, the content closure of a running `runApp`).
+- [ ] 9.1 Update `ROADMAP.md`: tick item 33 with what was built and the measured latency, and list the follow-ups (per-body hashes for D4, function values received from unaffected files, resetting edited `remember` calculations, the content closure of a running `runApp`).
 - [ ] 9.2 In `docs/architecture.md` §5, update the "Implemented today" paragraph, and on archive remove "Hot Reload of Composables Keeps State" and the `edit` command of "Headless Rendering and Scripted Input".
 - [ ] 9.3 Run every check of `openspec/config.yaml`'s apply guidance:
   - `cargo fmt --all -- --check`;

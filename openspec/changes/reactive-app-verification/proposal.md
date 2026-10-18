@@ -2,7 +2,7 @@
 
 ## Why
 
-After `standard-library`, `compose-runtime`, `compose-transform`, `state-handles`, `ui-toolkit`, `desktop-window` and `compose-hot-reload`, every layer of the compose engine exists and is tested on its own, mostly through small fixtures written for one rule each. Nothing yet shows that they add up to what Milestone 2 promises: real reactive apps, written as a Jetpack Compose programmer would write them, running natively in a window and headless, reloading while they keep their state, and doing so "with zero GC pauses". That last claim is not measured anywhere. `examples/demo/ui/ui.prism` still uses an API that never existed, and the apply guidance of `openspec/config.yaml` still lets it fail. This change is item 33 of "Then: the road to Milestone 2" in `ROADMAP.md`, the last item of Phase 4. It implements `docs/architecture.md` §5 "Reactive App Verification" and `compose-architecture` D24 (scripted apps and measured frames), keeps D25's scope (no effects, animation or GPU renderer), and ends with the documentation pass that closes Milestone 2.
+After `standard-library`, `compose-runtime`, `compose-transform`, `state-handles`, `ui-toolkit`, `desktop-window` and `compose-hot-reload`, every layer of the compose engine exists and is tested on its own, mostly through small fixtures written for one rule each. Nothing yet shows that they add up to what Milestone 2 promises: real reactive apps, written as a Jetpack Compose programmer would write them, running natively in a window and headless, reloading while they keep their state, and doing so "with zero GC pauses". That last claim is not measured anywhere. `examples/demo/ui/ui.prism` still uses an API that never existed, and the apply guidance of `openspec/config.yaml` still lets it fail. This change is item 34 of "Then: the road to Milestone 2" in `ROADMAP.md`, the last item of Phase 4. It implements `docs/architecture.md` §5 "Reactive App Verification" and `compose-architecture` D24 (scripted apps and measured frames), keeps D25's scope (no effects, animation or GPU renderer), and ends with the documentation pass that closes Milestone 2.
 
 ## What Changes
 
@@ -23,7 +23,7 @@ After `standard-library`, `compose-runtime`, `compose-transform`, `state-handles
 - **A manual verification checklist** (D12) for the desktop window, run on a release build and recorded in this change's design with the date, the machine and the frame statistics: opening each app, clicking, typing, resizing, a hot-reload edit while the window keeps its state, and closing. Screenshots of the counter and todo windows are written with `--screenshot` to `docs/images/` and shown in `README.md`.
 - **The documentation pass that closes Milestone 2** (D13, D14):
   - `README.md` gains a "What works today" section: the apps, the commands that run them, and the known limits;
-  - `ROADMAP.md`: the Phase 4 items and item 33 are ticked, Milestone 2 is marked complete with its date, Phase 5 becomes current, and the follow-ups are listed;
+  - `ROADMAP.md`: the Phase 4 items and item 34 are ticked, Milestone 2 is marked complete with its date, Phase 5 becomes current, and the follow-ups are listed;
   - `AGENTS.md`'s "Current Milestone & Focus" moves to Milestone 3, and its spec list gains the capabilities Phase 4 added;
   - `docs/architecture.md` §5 loses its last requirement;
   - `docs/decisions-for-review.md` is completed as the user's review document, with a summary at its top that groups the most consequential decisions by revert cost;

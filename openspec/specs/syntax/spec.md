@@ -290,7 +290,7 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 - **THEN** the declaration parses
 
 ### Requirement: Contextual Keyword Identifier Permissibility
-`compose`, `consuming`, `escaping`, `external` and `intrinsic` MUST be contextual modifiers, usable as identifiers in member access and parameter declarations. `consuming` is one only directly before `fun` at a declaration's start; `external` and `intrinsic` only at a top-level declaration's start, where "Library Declaration Modifiers" places them; `escaping` only at a parameter type's start, before `(` or `compose`. Elsewhere each is a name, `escaping` also a type name.
+`compose`, `consuming`, `context`, `escaping`, `external` and `intrinsic` MUST be contextual modifiers, usable as identifiers in member access and parameter declarations. `consuming` is one only directly before `fun`; `context`, `external` and `intrinsic` only at a top-level declaration's start, `context` directly before `(`; `escaping` only at a parameter type's start, before `(`, `compose`, `mut` or a type name. Elsewhere each is a name, `escaping` also a type name.
 
 #### Scenario: Member access on compose identifier
 - **WHEN** code accesses a property or method named compose (`pipeline.compose(step)`)
@@ -311,6 +311,10 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 #### Scenario: external and intrinsic as identifiers
 - **WHEN** parsing `fun external(intrinsic: Int): Int = intrinsic`, `fun f() { val external = 1; g(intrinsic = external) }` and `x.intrinsic()`
 - **THEN** each `external` and `intrinsic` parses as a function, parameter, variable, argument or member name, not as a modifier
+
+#### Scenario: context as an identifier
+- **WHEN** parsing `fun context(context: Int): Int = context`, `fun f() { val context = 1; g(context = context); context(context) }`, `struct context { val x: Int }` and `x.context()`
+- **THEN** each `context` parses as a function, parameter, variable, argument, callee, type or member name, not as a modifier
 
 ### Requirement: Braces Are Closures in Expression Position
 A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST declare no parameters, and the syntax tree MUST record whether a closure has a header, so that the empty header `{ -> body }` stays distinct from no header. Every closure body MUST be a block.
@@ -340,7 +344,7 @@ A `{` in expression position MUST start a closure, with or without a parameter h
 - **THEN** the first and third closures have a header declaring zero parameters, and the second has no header
 
 ### Requirement: Function Type Syntax
-The type grammar MUST accept function types `(A, B) -> R`, including the zero-parameter form `() -> R`, optionally prefixed by `compose` to mark a composable function type. `()` alone is the unit type, a single parenthesized type without an arrow is that type, and `->` is right-associative.
+The type grammar MUST accept function types `(A, B) -> R`, including the zero-parameter form `() -> R`, optionally prefixed by `compose` to mark a composable function type. A function type MAY name a receiver before its parameter list, `T.(A, B) -> R`, and `mut` before the receiver marks it mutable, `mut T.(A) -> R`; `compose` comes before `mut`. `()` alone is the unit type, a single parenthesized type without an arrow is that type, and `->` is right-associative.
 
 #### Scenario: Parameterless function type
 - **WHEN** parsing `fun f(onClick: () -> Unit) { }`
@@ -357,6 +361,10 @@ The type grammar MUST accept function types `(A, B) -> R`, including the zero-pa
 #### Scenario: Nullable function type needs parentheses
 - **WHEN** parsing `fun f(a: (() -> Unit)?, b: () -> Unit?) { }`
 - **THEN** `a` is a nullable function type, and `b` is a function type returning `Unit?`
+
+#### Scenario: Function types with a receiver
+- **WHEN** parsing `fun Column(content: compose ColumnScope.() -> Unit) { }`, `fun build(f: mut Builder.(String) -> Unit) { }`, `fun later(f: escaping compose mut Builder.() -> Unit) { }` and `fun g(h: Scope.() -> Scope.() -> Int) { }`
+- **THEN** `content` is a composable function type with the shared receiver `ColumnScope` and no other parameters, `f` of `build` a function type with the mutable receiver `Builder` and one `String` parameter, `f` of `later` an escaping composable function type with the mutable receiver `Builder`, and `h` a function type with the receiver `Scope` returning a function type with the receiver `Scope`
 
 ### Requirement: Declarations in Statement Position Only
 A local `val` or `var` declaration MUST appear only as a statement directly inside a block or closure body, and the parser MUST reject it anywhere else with `E2001`. That includes call arguments, operands, assigned values, conditions, returned values, expression function bodies, and unbraced `if`/`else`, `when` or loop bodies. A declaration's initializer MUST NOT be an assignment.
@@ -769,6 +777,28 @@ A `fun` declaration without `external` or `intrinsic` MUST have a body, an `=` e
 - **WHEN** parsing `val String.twice: Int = 2` or `intrinsic val String.a: Int = 1`
 - **THEN** the parser reports `E2001`
 
+### Requirement: Receivers of Function Types
+The receiver of a function type MUST be a single type name, optionally with type arguments, and MAY be a type parameter in scope. A nullable, `&` or `&mut`, parenthesized, function or `Heap<...>` receiver MUST be rejected with `E2001`, with the message an extension receiver of that form gets, and `consuming` before a receiver MUST be rejected with `E2001`, saying that a function type's receiver is shared or `mut`.
+
+#### Scenario: Receiver forms
+- **WHEN** parsing `fun <T> with(receiver: &T, block: T.() -> Unit) { }`, `fun f(a: List<Int>.(Int) -> Bool) { }` and `fun g(h: (ColumnScope.() -> Unit)?) { }`
+- **THEN** the receivers are the type parameter `T` and `List<Int>`, and `h` is a nullable function type whose receiver is `ColumnScope`
+
+#### Scenario: Unsupported receivers rejected
+- **WHEN** parsing `fun f(a: User?.() -> Unit) { }`, `fun g(a: &User.() -> Unit) { }`, `fun h(a: Heap<User>.() -> Unit) { }` or `fun k(a: consuming User.() -> Unit) { }`
+- **THEN** the parser reports `E2001` for each
+
+### Requirement: Context Parameter Declarations
+A top-level function declaration MAY start with one context parameter, `context(name: Type)`, before its visibility and every other modifier. The type MUST follow the rules of an extension receiver and MUST NOT mention the declaration's own type parameters. A second context parameter, an empty `context()`, a context parameter without a name or type, and `context(...)` before a struct, enum or `val` declaration or before an `external` or `intrinsic` function MUST be rejected with `E2001`.
+
+#### Scenario: Context parameter declarations
+- **WHEN** parsing `context(scope: RowScope) public fun Modifier.weight(weight: Double, fill: Bool = true): Modifier = this`, `context(scope: ColumnScope) compose fun Divider() { }` and `context(s: RowScope) fun <T> Box<T>.cell(): Int = 1`
+- **THEN** each parses as a function with the context parameter `scope` of type `RowScope`, `scope` of type `ColumnScope` or `s` of type `RowScope`, with its visibility, `compose` flag and receiver as written
+
+#### Scenario: Invalid context parameters rejected
+- **WHEN** parsing `context(a: RowScope, b: ColumnScope) fun f() { }`, `context() fun g() { }`, `context(RowScope) fun h() { }`, `context(s: RowScope) struct S { }`, `context(s: RowScope) val v = 1`, `context(s: RowScope) private external fun e(): Int`, `public context(s: RowScope) fun m() { }` or `context(s: Box<T>) fun <T> k() { }`
+- **THEN** the parser reports `E2001` for each
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -848,3 +878,8 @@ Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while 
 
 - **The tree records a closure's header** (D2). `ExprKind::Closure` holds `arrow: Option<Span>`, the header's `->`, so `{ -> body }` declares zero parameters and never gets an implicit `it`, while `{ body }` has no header and gets one against a one-parameter type, as in Kotlin. A span rather than a flag serves the formatter's comment placement and a future LSP, and the span-free body hash covers whether a closure has a header. Rejected: reading `{ -> body }` as `{ body }`, which leaves no way to say "this closure takes nothing"; `params: Option<Vec<ClosureParameter>>`, which changes the meaning of an existing field.
 - **`it` is an ordinary identifier** (D3): no token, keyword or reserved name, so `val it`, `fun it`, a field or parameter `it` and `{ it -> ... }` stay valid, and the parser never adds a parameter (it does not know the expected type). Rejected: a contextual keyword, which needs a rule for every place a name may appear and buys nothing, since lookup is already lexical.
+
+Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`T.(A) -> R` and `mut T.(A) -> R`** (D1). A function type may name a receiver before its parameter list, Kotlin's syntax; `mut` before it makes the receiver mutable, mirroring the `mut fun` modifier of extensions, since Kotlin has no borrows. The prefixes keep the order of declarations (`escaping compose mut Builder.() -> Unit`), and the parser decides with one token of lookahead: a named type followed by `.(` is a receiver, and `mut` cannot otherwise start a type. The receiver follows the rules of extension receivers, except that a type parameter is allowed (`fun <T> with(receiver: &T, block: T.() -> Unit)`), because a lambda checked against `T.() -> R` is checked once `T` is known. Rejected: only shared receivers (builders such as `buildList { add(x) }` need to mutate theirs), `(&mut T).() -> R` (references are no receivers anywhere), and `consuming T.() -> R` for now (no use case; a follow-up).
+- **`context(name: T)` declarations, one parameter, before every modifier** (D6). Kotlin 2.2's context parameters, limited to one, on any function with a body; the parameter is named, typed like a receiver and may not mention the declaration's own type parameters. `context` is a contextual keyword only at a top-level declaration's start directly followed by `(`, so it stays an identifier everywhere it was one. Rejected: `fun RowScope.weight(m: Modifier, ...)` or an explicit scope argument (unlike Compose's `Modifier.weight(1f)`), Kotlin's member extensions (Prism has no members), several context parameters (nothing needs them while contexts resolve to the innermost receiver; a follow-up), and context parameters on `external` and `intrinsic` declarations (a follow-up).

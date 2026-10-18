@@ -2,7 +2,7 @@
 
 ## Why
 
-After `ui-toolkit`, a Prism app composes, lays out, builds a display list and reacts to input, but only headless: `runApp` without `--headless` ends with `ui misuse: no window system is available; run with --headless`, and nobody can see or click what a program builds. This change is item 31 of "Then: the road to Milestone 2" in `ROADMAP.md`, the window half of `docs/architecture.md` §5 ("Rendering Through a Display List", `compose-architecture` D1 and D20). It puts `runApp` on screen in a native window: rasterized on the CPU, with the bundled Inter font, driven by the mouse and keyboard, and sharp on HiDPI displays. The program keeps running on its own thread, while macOS requires the window's event loop on the process's main thread.
+After `ui-toolkit`, a Prism app composes, lays out, builds a display list and reacts to input, but only headless: `runApp` without `--headless` ends with `ui misuse: no window system is available; run with --headless`, and nobody can see or click what a program builds. This change is item 32 of "Then: the road to Milestone 2" in `ROADMAP.md`, the window half of `docs/architecture.md` §5 ("Rendering Through a Display List", `compose-architecture` D1 and D20). It puts `runApp` on screen in a native window: rasterized on the CPU, with the bundled Inter font, driven by the mouse and keyboard, and sharp on HiDPI displays. The program keeps running on its own thread, while macOS requires the window's event loop on the process's main thread.
 
 ## What Changes
 

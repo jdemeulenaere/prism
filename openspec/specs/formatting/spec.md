@@ -263,6 +263,13 @@ The formatter MUST print a closure's header exactly when it was written, includi
 - **WHEN** `prism fmt -` reads `public   intrinsic  mut fun <T> List<T>.add( element :T )` and `public intrinsic val <T> List<T>.size :Int`
 - **THEN** it writes `public intrinsic mut fun <T> List<T>.add(element: T)` and `public intrinsic val <T> List<T>.size: Int`, each on its own line
 
+### Requirement: Receivers and Context Parameters Are Printed
+The formatter MUST print a function type's receiver as written, with no space around its `.` and one space after `compose`, `mut` and `escaping`, and MUST print a context parameter on its own line directly above the rest of its declaration, as `context(name: Type)`. Comments before a declaration MUST stay above its context line.
+
+#### Scenario: Receiver types and contexts printed
+- **WHEN** formatting `fun f(a: ColumnScope . ()->Unit, b: escaping  compose  mut Builder.(Int)->Unit) {}` and `// Weight.` followed by `context( scope : RowScope ) public fun Modifier.weight(w: Double): Modifier = this`
+- **THEN** the results are `fun f(a: ColumnScope.() -> Unit, b: escaping compose mut Builder.(Int) -> Unit) {}`, and `// Weight.`, `context(scope: RowScope)` and `public fun Modifier.weight(w: Double): Modifier = this` on three lines
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -288,3 +295,7 @@ Decisions from `string-templates` (planned autonomously on 2026-10-17, refined w
 Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Closure headers are kept as written** (D2, BREAKING): since `{ -> 1 }` declares zero parameters and `{ 1 }` may have an implicit `it`, the printer prints a header whenever the tree records one, including `{ -> }`, and never adds, removes or renames a parameter; the meaning check compares headers and erases only the arrow's span. Before, an empty header was printed as `{ 1 }`, which no fixture or example wrote.
+
+Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **A context parameter goes on its own line above its declaration** (D11), like an annotation, which keeps scoped modifiers' signatures within the line width; comments above a declaration stay above its context line. Receiver function types print as written, with one space after `compose`, `mut` and `escaping` and none around the `.`. The meaning check compares receivers and contexts. Rejected: the context on the declaration's line, which made most scoped modifiers' parameter lists break.

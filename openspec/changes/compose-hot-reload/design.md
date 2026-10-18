@@ -2,7 +2,7 @@
 
 ## Context
 
-See `proposal.md` for motivation. This is item 32 of "Then: the road to Milestone 2" in `ROADMAP.md`, the development-loop layer of `docs/architecture.md` §5. It implements `compose-architecture` D23 ("Hot reload recomposes the reloaded files' scopes") and the requirement "Hot Reload of Composables Keeps State", and refines both where the packets written since then make a better answer possible. It fills the seams that the earlier packets left for it:
+See `proposal.md` for motivation. This is item 33 of "Then: the road to Milestone 2" in `ROADMAP.md`, the development-loop layer of `docs/architecture.md` §5. It implements `compose-architecture` D23 ("Hot reload recomposes the reloaded files' scopes") and the requirement "Hot Reload of Composables Keeps State", and refines both where the packets written since then make a better answer possible. It fills the seams that the earlier packets left for it:
 
 - `hot-reload` D4: reload points for frame loops, and `AppliedReload` naming the reloaded units. Its D5 and D6 give slot contracts and 256-bit type fingerprints.
 - `compose-runtime` D6 and D15: slots that check their type fingerprint on every read, so a key that matches the wrong group costs state but never memory safety. It also planned an `invalidate_where` over restart descriptors and a forced-pass flag for this change (D6 below drops both).

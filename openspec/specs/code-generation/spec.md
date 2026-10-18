@@ -37,11 +37,18 @@ Each file MUST be compiled into its own code unit from its own elaborated MIR al
 - **THEN** each of the two files is code-generated as a standalone unit, and `prism dump-clif app/main.prism` names the functions of `lib/math` only by their symbols
 
 ### Requirement: Symbols Derive from Declaration Paths
-Every compiled function of a declaration MUST have a symbol derived from its declaration's identity alone: `<module>::<name>` for a function, `<module>::<receiver>.<name>` for an extension, where the receiver is written as the ABI writes its type constructor, `<function symbol>#default(<parameter>)` for a default value's generator, and `<module>::<name>#init` and `<module>::<name>#get` for a top-level `val`'s initializer and accessor. Symbols MUST be unique in a program.
+Every compiled function of a declaration MUST have a symbol derived from its declaration's identity alone: `<module>::<name>` for a function, `<module>::<receiver>.<name>` for an extension without a context, where the receiver is written as the ABI writes its type constructor, `<function symbol>#default(<parameter>)` for a default value's generator, and `<module>::<name>#init` and `<module>::<name>#get` for a top-level `val`'s initializer and accessor. Symbols MUST be unique in a program.
 
 #### Scenario: Symbols of a file
 - **WHEN** `lib/math.prism`, in package `lib`, declares `public fun Int.double(): Int = this * 2`, `public fun scale(a: Int, b: Int = 2): Int = a * b` and `public val BASE: Int = 3`
 - **THEN** `prism dump-clif lib/math.prism` prints the functions `lib/math::Int.double`, `lib/math::scale`, `lib/math::scale#default(b)`, `lib/math::BASE#init` and `lib/math::BASE#get`
+
+### Requirement: Extensions With a Context Have Their Own Symbols
+An extension with a context parameter MUST have the symbol `<module>::<receiver>.<name>#context(<context>)`, the receiver and the context type written as the ABI writes their type constructors, so extensions differing only by context have distinct symbols; its default generators MUST append `#default(<parameter>)` to it.
+
+#### Scenario: Symbols of extensions differing by context
+- **WHEN** `lib/layout.prism`, in package `lib`, declares `public struct Modifier : Copy { val fraction: Double }`, `public struct RowScope : Copy {}`, `public struct ColumnScope : Copy {}`, `context(scope: RowScope) public fun Modifier.weight(w: Double, fill: Bool = true): Modifier = Modifier(w)` and `context(scope: ColumnScope) public fun Modifier.weight(w: Double): Modifier = Modifier(w)`
+- **THEN** `prism dump-clif lib/layout.prism` prints the functions `lib/layout::lib/layout.Modifier.weight#context(lib/layout.RowScope)`, `lib/layout::lib/layout.Modifier.weight#context(lib/layout.RowScope)#default(fill)` and `lib/layout::lib/layout.Modifier.weight#context(lib/layout.ColumnScope)`, the receiver and the context written as the ABI writes their type constructors
 
 ### Requirement: Glue Has No Function Table Slot
 Drop, clone, equality and index-of glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<unit>#drop(<type>)`, `<unit>#clone(<type>)`, `<unit>#equals(<type>)` or `<unit>#indexOf(<type>)` after that unit's name and the type it handles. A file's unit is named by its module, and an instance's unit by the instance's symbol.
@@ -689,3 +696,7 @@ Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and
 Decisions from `standard-library` (2026-10-18):
 
 - **Externals are direct calls checked against the runtime's table** (D5, R9 of `standard-library`). An `external fun` is declared as an import of its symbol and called directly with the target's C calling convention: the runtime is never reloaded, so it needs no slot. Its machine signature is the one `lower.rs::signature` gives the same Prism signature, so one convention serves Prism and runtime calls. MIR records the externals a file declares (`MirFile::externals`), and the support check compares each with the runtime entry `prism_codegen::externals::entry_point` finds, so an external is checked at its declaration (`E6005`) even when nothing calls it, and `prism run` runs every unit's support check before compiling any, so a rejected program writes no code to the cache. Checking at `prism check` was rejected: it needs layouts, which only the backend computes.
+
+Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Extensions with a context get a `#context(<type>)` suffix** (D9). Extensions may differ only by context, so their symbols must too; the context type is written as the ABI writes its type constructor, like the receiver, and default generators append `#default(<parameter>)` as usual. Every other symbol is unchanged, including plain functions with a context, which cannot be overloaded by it. Glue names write a receiver function type as source does (`main::Scope.() -> Unit`), since it and its plain form are distinct types that a unit may need glue for.

@@ -823,6 +823,66 @@ A closure without a header checked against a function type with two or more para
 - **WHEN** `fun pairs(f: (Int, String) -> Unit) { f(1, "a") }` is declared and a body runs `pairs { println(it) }`
 - **THEN** the type checker emits `E4004` at the closure, saying that it expected 2 parameters of types `Int` and `String` but declares none, with help suggesting `{ a, b -> ... }`
 
+### Requirement: Function Types With a Receiver
+A function type with a receiver `T.(A) -> R` MUST be a function type whose first parameter is the receiver, of type `&T`, followed by the written parameters; with `mut`, the receiver's parameter MUST be `&mut T`. Whether a function type has a receiver MUST be part of its identity and of how it is rendered (`ColumnScope.(Int) -> Unit`, `mut Builder.() -> Unit`, `compose ColumnScope.() -> Unit`), and its `compose` and `escaping` flags MUST behave as for any function type.
+
+#### Scenario: Receiver function types in diagnostics
+- **WHEN** `struct ColumnScope : Copy {}` and `fun Column(content: ColumnScope.(Int) -> Unit) {}` are declared and `fun f(): String = Column` is checked
+- **THEN** the type checker emits `E4005`, naming the type `(ColumnScope.(Int) -> Unit) -> Unit`
+
+#### Scenario: Composable receiver function types keep their compose flag
+- **WHEN** `struct ColumnScope : Copy {}`, `compose fun Item() {}`, `compose fun Column(content: compose ColumnScope.() -> Unit) { content(ColumnScope()) }`, `compose fun Screen() { Column { Item() } }` and `fun later(f: ColumnScope.() -> Unit) {}` are declared, and `compose fun P(content: compose ColumnScope.() -> Unit) { later(content) }` is checked
+- **THEN** `Screen` typechecks, the lambda being checked in a composable context, and the type checker emits `E4004` at `content` in `later(content)`, because the compose flags differ
+
+### Requirement: Receiver and Plain Function Types Convert in Place
+A function value of a receiver function type MUST convert to the plain function type with the same parameters (`T.(A) -> R` to `(&T, A) -> R`, `mut T.(A) -> R` to `(&mut T, A) -> R`) and back, in place, under the other rules of "Function Values Convert Only Without Changing Representation": a shared receiver's type MAY become a mutable receiver's, and a mutable receiver's MUST NOT become a shared one's.
+
+#### Scenario: Converting between receiver and plain function types
+- **WHEN** `struct Scope : Copy {}`, `fun header(s: &Scope) {}`, `fun column(content: Scope.() -> Unit) { content(Scope()) }` and `fun plain(f: (&Scope) -> Unit) { f(Scope()) }` are declared, and a body runs `val h: (&Scope) -> Unit = header`, `column(h)`, `val c: Scope.() -> Unit = { }`, `plain(c)`, `val d: Scope.() -> Unit = { }`, `val m: mut Scope.() -> Unit = d` and `val p: (&mut Scope) -> Unit = m`
+- **THEN** the file passes `prism check`
+
+#### Scenario: A mutable receiver does not become a shared one
+- **WHEN** `struct Builder { var size: Int }` and `fun read(f: Builder.() -> Unit) {}` are declared and a body runs `val m: mut Builder.() -> Unit = { size += 1 }; read(m)`
+- **THEN** the type checker emits `E4004` at `m` in `read(m)`
+
+### Requirement: Lambdas With a Receiver
+A closure checked against a function type with a receiver MUST bind `this`, as a `val` of the receiver's parameter type, in its own scope before its parameters. Its header MUST declare the other parameters only, and a closure without a header MUST have the implicit `it` exactly when there is one other parameter. A closure with no expected type, or checked against a function type without a receiver, MUST have no receiver of its own.
+
+#### Scenario: this in a lambda with a receiver
+- **WHEN** `struct Scope : Copy { val depth: Int }` and `fun nest(f: Scope.(String) -> Int): Int = f(Scope(1), "ab")` are declared and a body runs `val a = nest { this.depth + it.length }` and `val b = nest { s -> depth + s.length }`
+- **THEN** the file typechecks successfully: `this` has type `&Scope`, `it` and `s` have type `String`, and `depth` reads `this.depth`
+
+#### Scenario: Receiver lambdas from every expected type
+- **WHEN** `struct Scope : Copy { val depth: Int }`, `struct Section { val content: Scope.() -> Int }` and `fun <T> with(receiver: &T, block: T.() -> Int): Int = block(receiver)` are declared, and a body runs `val f: Scope.() -> Int = { depth }`, `val g: (Scope.() -> Int)? = { depth + 1 }`, `val s = Section { depth * 2 }` and `val n = with(Scope(3)) { depth }`
+- **THEN** the file typechecks successfully, each closure having a receiver of type `&Scope`, the last one after `T` is inferred as `Scope` from the first argument
+
+#### Scenario: A mutable receiver may be written through
+- **WHEN** `struct Builder { var size: Int }` is declared and a body runs `val f: mut Builder.() -> Unit = { size += 1 }` and `val g: Builder.() -> Unit = { size += 1 }`
+- **THEN** the type checker accepts `f` and emits `E4003` in `g`, because its `this` is a shared borrow
+
+#### Scenario: A closure against a plain function type has no receiver
+- **WHEN** `struct Scope : Copy { val depth: Int }` and `fun plain(f: (&Scope) -> Int): Int = f(Scope(1))` are declared and `fun f(): Int = plain { depth }` and `fun g(): Int = plain { this.depth }` are checked
+- **THEN** the type checker emits `E4001` at `depth` in `f` and at `this` in `g`, saying that `this` is only available in an extension function or a lambda with a receiver
+
+#### Scenario: The receiver is no implicit it
+- **WHEN** `struct Scope : Copy { val depth: Int }` and `fun none(f: Scope.() -> Int): Int = f(Scope(1))` are declared and `fun g(): Int = none { it.depth }` is checked
+- **THEN** the type checker emits `E4001` at `it`, with help saying that the closure's type `Scope.() -> Int` has no parameters besides its receiver, so it has no implicit `it`
+
+#### Scenario: Parameter counts exclude the receiver
+- **WHEN** `struct Scope : Copy {}` and `fun pair(f: Scope.(Int, Int) -> Int): Int = f(Scope(), 1, 2)` are declared and a body runs `pair { a, b -> a + b }` and `pair { it }`
+- **THEN** the type checker accepts the first closure and emits `E4004` for the second, saying that it expected 2 parameters of types `Int` and `Int` but declares none
+
+### Requirement: Calling Function Values With a Receiver
+A value `f` of a receiver function type MUST be callable as `f(r, a)`, with the receiver as the first argument, as `r.f(a)`, and as `f(a)` when the innermost `this` has the receiver's type, which is then passed as the receiver. A call `f(a)` with one argument fewer than its parameters and no innermost `this` of the receiver's type MUST be rejected with `E4004`, saying that `f` takes a receiver of that type and how to pass one.
+
+#### Scenario: Three ways to call a receiver function value
+- **WHEN** `struct Scope : Copy { val depth: Int }` is declared and `fun a(f: Scope.(Int) -> Int): Int = f(Scope(1), 2)`, `fun b(f: Scope.(Int) -> Int): Int { val s = Scope(1); return s.f(2) }` and `fun Scope.c(f: Scope.(Int) -> Int): Int = f(2)` are checked
+- **THEN** the file typechecks successfully, each call passing a `Scope` as the receiver of `f`
+
+#### Scenario: A receiver function value called without a receiver
+- **WHEN** `struct Scope : Copy {}` and `struct Other : Copy {}` are declared and `fun a(f: Scope.() -> Int): Int = f()` and `fun Other.b(f: Scope.() -> Int): Int = f()` are checked
+- **THEN** the type checker emits `E4004` for each call, saying that `f` takes a receiver of type `Scope`, passed as `f(scope)` or `scope.f()`
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -922,3 +982,10 @@ Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while 
 Decisions from the trailing-lambda binding fix (a plain fix of 2026-10-18; the syntax spec already passed the trailing lambda "as the final argument"):
 
 - **A trailing lambda binds to the last parameter, as in Kotlin.** The parser marks the argument (`CallArg::is_trailing_lambda`), and argument matching binds it to the last parameter, field or payload after the parenthesized arguments bind as they would alone, so `Button(onClick = { }) { }` fills `content` and lets `label` take its default. Before, the lambda was one more positional argument and filled the first unset parameter, so the call bound `onClick` twice or the lambda to `label`. The cost is one slot check per call. A last parameter already given, or a callee without parameters, is `E4004` naming that parameter, like the other twice-assigned arguments. Rejected: binding to the first unset parameter (not Kotlin, and it makes a content lambda depend on which earlier parameters are written), and a new code for a conflict that is one more kind of call mismatch.
+
+Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The receiver is the first parameter, and the flag is part of the type** (D2). `Type::Fn` has `receiver: bool`; when set, `params[0]` is `&T` or `&mut T`, so everything that walks parameters (the borrow checker, MIR, the backend, change words) needs no change. The flag decides how a lambda is checked against the type, so it is part of its identity and display (`ColumnScope.(Int) -> Unit`). Rejected: a separate receiver field beside `params`, which every consumer counting parameters would need to handle, and a flag outside identity, which would have to travel through inference and substitution beside the type.
+- **Receiver and plain function types convert in place, both ways** (D2). `T.(A) -> R` and `(&T, A) -> R` share one representation, so `converts_in_place` ignores the flag, as Kotlin lets `T.() -> R` and `(T) -> R` stand for each other; the other rules apply to the receiver's parameter as to any, so a shared receiver may become a mutable one but never the reverse. Glue names write the receiver as source does, since glue is keyed by type and a unit may need both forms; the contract hash, which describes representations, ignores it. Rejected: no conversion, which would need a calling closure to pass a `(&ColumnScope) -> Unit` as content.
+- **A lambda against a receiver function type binds `this`** (D3). The closure binds `this` in its own scope before its parameters, as a `val` of the receiver's parameter type declared at its `{`, whatever the expected type's source (a parameter, an annotation, a return type, a field, a deferred closure of a generic call, a nullable function type). Its header and the implicit `it` count the other parameters only. A closure with no expected type, or checked against a plain function type, has no receiver of its own. Rejected: rewriting the lambda in the parser (it does not know the expected type). Cost: one binding per receiver lambda.
+- **Receiver function values are called in Kotlin's three ways** (D5): `f(r, a)` as an ordinary call; `r.f(a)`, where a local or parameter `f` of a receiver function type whose receiver is `r`'s type is considered after members and before extensions (Kotlin resolves locals first, and a parameter named like an imported extension would otherwise be unreachable in method form); and `f(a)` with the innermost `this` as the receiver when its type matches, which is how Compose's scopes call their content. Without such a `this`, the call is `E4004`, naming the receiver type and the two ways to pass one. Cost: one scoped lookup for a method call that found no member, and one comparison for `f(a)`.

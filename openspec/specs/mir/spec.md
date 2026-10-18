@@ -549,6 +549,13 @@ A `for` loop over a list MUST evaluate its iterable once into a hidden local hol
 - **WHEN** `fun f(): Int { var xs = listOf(1, 2); xs.add(3); return xs.removeAt(0) }` is lowered
 - **THEN** the MIR calls `builtin listOf` with `1` and `2` into `xs`, `builtin add` with a mutable borrow of `xs` and `3`, and `builtin removeAt` with a mutable borrow of `xs` and `0` into the return place
 
+### Requirement: Context Arguments Lead the Operands of Calls
+A call of a function with a context parameter MUST pass the context argument as its first operand, before the receiver and the other arguments. A lambda with a receiver MUST lower like any closure, its receiver being its first parameter.
+
+#### Scenario: A context call and a receiver lambda in MIR
+- **WHEN** `struct Modifier : Copy { val fraction: Double }`, `struct RowScope : Copy {}`, `fun row(f: RowScope.() -> Modifier): Modifier = f(RowScope())` and `context(scope: RowScope) fun Modifier.weight(w: Double): Modifier = Modifier(w)` are declared and `prism dump-mir` runs on a file adding `fun g(): Modifier = row { Modifier(0.0).weight(1.0) }`
+- **THEN** the closure's body is a separate body whose first parameter is `this` of type `&RowScope`, and its call of `main::Modifier.weight#context(RowScope)` passes a shared borrow of `*this` first, then a shared borrow of the `Modifier` temporary, then `1.0`
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -648,3 +655,7 @@ Decisions from `instance-cache` (planned autonomously on 2026-10-17, implemented
 
 - **A canonical, hand-written binary codec for records and summaries** (D4). `prism_mir::codec` encodes every MIR and typed-tree type a generic record or a file summary holds: fixed-width little-endian integers, LEB128 lengths, indices and positions, length-prefixed UTF-8 strings and a tag byte per variant, with type tables in `NominalId` order and derived indices rebuilt on decode, never encoded. The matches are exhaustive with no wildcard arm, so a MIR construct added later is a compile error in the codec until it is encoded, and a round trip over the elaborated MIR of every fixture catches a field left out. Decoding returns `None` on any malformed input, checks every length against the bytes left before allocating, and a decoded table rejects ids out of order, so a record decodes to exactly what was encoded; the bytes are a function of the record, which is what makes their hash the Monomorphization Hash (`compilation-and-abi`). Rejected: `serde` with `bincode` or `postcard` (a first serialization dependency, derives everywhere, and determinism at the mercy of field types such as a `HashMap`); the text dump as the stored form (no parser, several times larger).
 - **Summaries keep each body's calls apart** (D5). A generic's summary holds the generic calls of its function body and, separately, of each default generator, each with the closures lowered inside it, so an instance of the function never requests what only its defaults call.
+
+Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **No new construct for receivers and contexts** (D9). A receiver lambda lowers as a closure whose first parameter is its receiver, and a context argument leads a call's operands, before the receiver; a default generator's parameter index skips both, and a default value may read the context.
