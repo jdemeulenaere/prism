@@ -80,10 +80,12 @@ The engine has four layers, each owned by one or two changes of the road to Mile
 
 | Layer | What it is | Changes |
 |-------|------------|---------|
-| Bundled library | `/prism/compose` (a prelude) and `/prism/ui`, Prism source shipped with the compiler, with `external` and `intrinsic` declarations | `standard-library` |
+| Bundled library | `/prism/compose` (a prelude module) and `/prism/ui`, added as modules to the bundled library, whose mechanism (`/prism/...` imports, the prelude, `external` and `intrinsic` declarations, the intrinsic catalog) is implemented ([`standard-library`](../openspec/changes/standard-library/design.md)) | `compose-transform`, `state-handles`, `ui-toolkit` |
 | Composition | the `prism-compose` crate (composer, slot table, restart scopes, state cells) and the MIR transform of composables | `compose-runtime`, `compose-transform`, `state-handles` |
 | UI | the `prism-ui` crate (node tree, layout, display list, headless renderer, input) and the `prism-desktop` crate (window) | `ui-toolkit`, `desktop-window` |
 | Development loop | hot reload of composables keeping slot-table state, and the verification apps | `compose-hot-reload`, `reactive-app-verification` |
+
+The compose modules are added to the bundled library by the changes that fill them (`standard-library` D14). `compose-transform` creates `/prism/compose` and adds it to the prelude after `/prism/collections`, so that `compose fun Counter() { val count = remember { mutableStateOf(0) } }` checks in a file without imports, `remember` and `mutableStateOf` resolving to `/prism/compose` and the ABI writing the handle type as `prism/compose.MutableState<Int>` (with `state-handles`). `ui-toolkit` creates `/prism/ui` outside the prelude, so a file calling `Column { }` without `import /prism/ui` reports an unresolved symbol (`E4001`).
 
 ### Requirement: Compose Runtime Crates Behind C Entry Points
 The composition runtime MUST be Rust code in a `prism-compose` crate that knows nothing about UI, depending on no crate but `prism-runtime`. The UI node tree, layout, drawing and the headless renderer MUST be in a `prism-ui` crate, and the desktop window in a `prism-desktop` crate that only the CLI links. Generated code MUST reach them only through `extern "C"` entry points (`prism_compose_*`, `prism_ui_*`) called by symbol, as it reaches `prism-runtime` today. The runtime MUST run user code only through function values (descriptor, slot, environment) and drop entries, so a hot reload reaches every callback.
@@ -91,21 +93,6 @@ The composition runtime MUST be Rust code in a `prism-compose` crate that knows 
 #### Scenario: Headless programs link no window code
 - **WHEN** a program using `/prism/ui` runs with `prism run --headless`
 - **THEN** it runs without opening a window, and the fixture tests of `prism-ui` build without `prism-desktop`
-
-### Requirement: Bundled Standard Library and Compose Prelude
-The compiler MUST ship Prism source packages under the reserved root package `prism`: `import /prism/ui` MUST resolve to the bundled library rather than the workspace, and a workspace package whose path starts with `prism` MUST be rejected. Their files MUST be checked like any file, and their ABI MUST be covered by the compiler version. Two declaration forms MUST be accepted only in bundled files: `external fun`, a body-less declaration of a runtime entry point called directly by symbol with the C calling convention and no function-table slot, and `intrinsic`, a declaration whose calls the compiler lowers itself. The public declarations of `/prism/compose` MUST be in scope in every file without an import, shadowed by any declaration or import of the same name.
-
-#### Scenario: Compose primitives need no import
-- **WHEN** `compose fun Counter() { val count = remember { mutableStateOf(0) } }` is checked in a file without imports
-- **THEN** `remember` and `mutableStateOf` resolve to `/prism/compose`, and the ABI writes the handle type as `prism/compose.MutableState<Int>`
-
-#### Scenario: UI toolkit is imported
-- **WHEN** a file calls `Column { }` without `import /prism/ui`
-- **THEN** the type checker reports an unresolved symbol (`E4001`)
-
-#### Scenario: External declarations outside the bundled library rejected
-- **WHEN** a workspace file declares `external fun f(): Int`
-- **THEN** the compiler rejects it with a new error code taken by `standard-library`
 
 ### Requirement: Composable Calling Convention
 The `compose fun` transform MUST give every composable function, composable closure and composable function type a machine signature of its declared parameters (the receiver first) followed by the address of the current composer and its change words: one 64-bit word per 32 parameters, two bits per parameter (uncertain, same, different, static) and a force bit. Default values MUST stay caller-evaluated generators, so no default mask is passed. The transform MUST be a pass over each body's elaborated MIR, run once per body before instantiation: a generic composable is transformed once, in its generic record, and its instances substitute the composed MIR. It MUST produce composed MIR that `prism dump-mir --composed` prints.

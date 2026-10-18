@@ -24,6 +24,8 @@ The user was not available, so every decision a reviewer might take differently 
 
 The deltas are ADDED requirements of `compose`, `ui` and `hot-reload`, which are not in the main specs yet. If `hot-reload` is archived when this change is applied, task 1.1 turns "Edit Steps Wait for the Reload Point of a Frame Loop" into a MODIFIED block of its "Edit Triggers".
 
+**Baseline update (`standard-library`, applied 2026-10-18).** Library modules are graph nodes of origin `SourceOrigin::Library`, never read through the session's `SourceStore` or watched, and their units are never rebuilt or reloaded, since their keys cannot change during a session (`standard-library` R3). A program that calls `exitProcess` ends its run as `main` returning does: `prism_runtime::StopHandler` takes `(status, exited)`.
+
 ## Goals / Non-Goals
 
 **Goals:**

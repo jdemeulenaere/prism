@@ -20,6 +20,13 @@ What exists today:
 - **MIR** (`crates/prism-mir`). `Body::is_compose` marks composable functions and closures, and `TerminatorKind::Call { is_compose }` marks composable calls (`build/call.rs`). Default generators are never composable bodies (`build/mod.rs`). Scope exits emit drops and storage ends on every path that leaves a scope (`build/scope.rs`). Closures are separate bodies named by their parent and index (`BodyOwner::Closure`). Records (`record.rs`) hold a generic's elaborated bodies, and `instantiate.rs` substitutes them.
 - **Backend** (`crates/prism-codegen`). `supported.rs::first_unsupported` reports every composable body as `E6001` (`Construct::ComposableFunctions`). Descriptors are two words (`unit.rs::descriptor`). Equality glue exists for aggregates, taking two addresses and returning an `i8` (`glue.rs::glue_signature`), the signature a slot type record's equality entry has.
 
+**Baseline update (`standard-library`, applied 2026-10-18).** Names and mechanisms that differ from what this design assumed:
+- The catalog is `intrinsics::CATALOG: &[Intrinsic]`, entries of functions and properties keyed by (module, receiver type constructor, name) with a `BuiltinFunction`, the canonical declaration text (visibility, modifiers, explicit `: Unit`, no defaults) and a `rule_typed` flag; `intrinsics::lookup` finds one. It has no type entries: intrinsic structs need a list of their own.
+- Rule-typed intrinsic calls are dispatched in `checker.rs::infer_call_expr` through `intrinsic_callee`, which resolves the callee name as any name (locals, the file, imports, then the prelude) and matches its `BuiltinFunction`; `remember` with keys gets an arm there. An intrinsic named as a value is `E4013`.
+- Members are `Extension` records with a `builtin` and a `property` flag, in the checker's `members` table and the shared `PreludeScope`, found by `TypeChecker::member`. Adding `/prism/compose` to `PRELUDE` needs no other change; `library_tests.rs` checks that prelude names stay distinct.
+- Runtime entry points are looked up through `prism_codegen::externals::entry_point` (see `compose-runtime`'s baseline update), not `UnitContext::entry_point`.
+- Library units are never reloaded under `--watch` (`standard-library` R3).
+
 ## Goals / Non-Goals
 
 **Goals:**

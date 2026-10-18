@@ -45,6 +45,12 @@ What exists today beyond those packets:
 - **The `prism run` command.** `crates/prism-cli/src/main.rs::run_program` parses `--timings`, `--check-allocations`, `--no-cache` and `--explain-cache` before the file, and reports usage errors with status 1. `run.rs::RunOptions` carries them. `Program::run` (`crates/prism-codegen/src/program.rs`) runs `main` on a thread of its own, between `prism_runtime::start` and `finish`.
 - **Runtime output.** Program output goes through `prism-runtime`'s buffer (`output.rs::append`, which is crate-private), flushed before runtime errors.
 
+**Baseline update (`standard-library`, applied 2026-10-18).** Names and mechanisms that differ from what this design assumed:
+- Default values on intrinsic parameters are already allowed: the catalog compares declarations without their defaults, and a default is checked and generated in the declaring library file (`standard-library` R8).
+- Name lookup has a prelude layer below the imports (`ScopeStack::lookup` and `resolve`: scopes, imports, then the shared prelude names), which companion values must also consult; `/prism/ui` is outside the prelude, so it is reached by `import /prism/ui` as any module.
+- Runtime entry points are looked up through `prism_codegen::externals::entry_point`, which `UI_FUNCTIONS` extends, not `UnitContext::entry_point`; `E6005` is checked by `check_file` over `MirFile::externals`.
+- `library_tests.rs` checks, formats and compiles every module through `prism_cli::check_library`, and requires a `//` comment directly above every declaration line.
+
 ## Goals / Non-Goals
 
 **Goals:**

@@ -18,6 +18,12 @@ What exists today:
 - **`prism-codegen`**: `link.rs::Linker::new` registers `RUNTIME_FUNCTIONS` with the JIT's symbol table, `unit.rs::runtime_function` imports an entry with the signature the table records, and `program.rs::Program::run` runs `main` on a thread of its own between `prism_runtime::start` and `prism_runtime::finish`.
 - **Compose today** is syntax and checking only: `compose fun`, composable function types, `E4008`, composable calls marked in the typed tree and MIR, and `E6001` for composables in the backend.
 
+**Baseline update (`standard-library`, applied 2026-10-18).** Names and mechanisms that differ from what this design assumed:
+- The one lookup of runtime entry points is `prism_codegen::externals::entry_point(symbol)` (`crates/prism-codegen/src/externals.rs`), not `unit.rs::entry_point`: the external check and the lowering of `Callee::External` calls both use it. Extend it to search `COMPOSE_FUNCTIONS` after `RUNTIME_FUNCTIONS`; `UnitContext::runtime_function` still reads `RUNTIME_FUNCTIONS` alone and needs the same extension for runtime imports.
+- `E6005` is checked by `prism_codegen::check_file` (`externals::check_externals`) over the externals a file declares, recorded in `MirFile::externals`, so an external is checked at its declaration even when nothing calls it; `UnitContext::external_function` does not exist.
+- `prism_runtime::StopHandler` takes `(status, exited)`: `prism_rt_exit` reports `exited`, which a watch session treats as `main` returning.
+- `MODULES` is a list of `(module path, source)` pairs, and every public library function writes its result type (`: Unit` too, `E4011`); `library_tests.rs` requires a `//` comment directly above every declaration line.
+
 ## Goals / Non-Goals
 
 **Goals:**

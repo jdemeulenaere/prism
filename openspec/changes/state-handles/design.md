@@ -23,6 +23,11 @@ What exists today, beyond those packets:
 - **Borrow checker** (`crates/prism-borrowck`): a reference from `Constant::TopLevelValue` holds no loan, and `returns.rs` lets it be returned under any rule.
 - **Backend** (`crates/prism-codegen`): runtime errors with locations go through `prism_rt_panic(kind, detail, file, line, column)` from a cold block; list bounds checks set the pattern of an inline test with a located slow path (`collections` D8, D20).
 
+**Baseline update (`standard-library`, applied 2026-10-18).** Names and mechanisms that differ from what this design assumed:
+- Intrinsic properties are members with `property: true` (`TypeChecker::has_intrinsic_property`). Their reads are typed by arms of `member_type` and `build_member_access` per receiver type (today `String` and `List`), gated on the member being visible, so `value` on a handle needs its own arm keyed by the member's `BuiltinFunction`; writes (`intrinsic var`) are new.
+- The catalog (`intrinsics::CATALOG`) holds functions and properties only, with canonical declaration texts that write `: Unit` and leave defaults out (see `compose-transform`'s baseline update).
+- Runtime entry points are looked up through `prism_codegen::externals::entry_point`, not `UnitContext::entry_point`.
+
 ## Goals / Non-Goals
 
 **Goals:**

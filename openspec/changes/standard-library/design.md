@@ -92,6 +92,8 @@ Only the reached modules are parsed. In Phase 1 of every process, that means the
 
 Compile-time cost: linear in the size of the reached modules, once per process for Phase 1 and once per cache for Phase 2 and code. Nothing is per workspace file.
 
+Measured at apply time (release build, Apple arm64, medians of 20 runs of `run_timing.rs`): `examples/run/main.prism`, which now prints through a `toString()` and calls `map` and `joinToString`, reaches `main` in 7.8 ms cold (no cache: the library's Phase 2 runs too) and 1.5 ms warm. A one-line program (`fun main() { println(1) }`, medians of 11 runs) reaches `main` in 1.8 ms cold, of which the front end, the prelude's check included, is 1.7 ms, and 0.73 ms warm. Both stay well under the 15 ms target. `compile_timing.rs`'s `prelude_costs_a_lookup_per_file` checks 256 to 4096 small workspace files that call `println`, `listOf`, `map` and `count`: Phase 2 costs about 13 us per file whatever their number with the shared prelude scope (built once in under 0.1 ms), and about 28 us per file when each checker ingests the prelude's ABIs instead.
+
 Rejected:
 - An ABI serialized at build time and embedded: a second ABI codec and a source of truth that must match the parse. It saves well under a millisecond, and the `.abi` cache entries of the `abi-cache` follow-up will serve library and workspace files alike.
 - Trusting the library and skipping its Phase 2: `prism run` needs its MIR and records anyway, and the cache already makes it free.
