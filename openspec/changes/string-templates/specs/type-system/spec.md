@@ -58,3 +58,5 @@ An `E4026` diagnostic MUST carry help naming a fix: for a nullable part, a fallb
 #### Scenario: Nullable help gives a fallback
 - **WHEN** `fun f(n: Int?): String = "n = $n"` is checked
 - **THEN** the type checker emits `E4026` at `n`, saying that a nullable `Int?` has no text form, with help suggesting `${n ?: ...}`
+- **WHEN** `fun f(a: Int?, b: Int): String = "${if (b > 0) a else null}"` is checked
+- **THEN** the help parenthesizes the part, suggesting `${(if (b > 0) a else null) ?: ...}`, since `?:` binds more tightly than `if`

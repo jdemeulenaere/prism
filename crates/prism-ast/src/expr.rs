@@ -405,7 +405,13 @@ impl fmt::Display for Expr {
                 then_branch,
                 else_branch,
             } => {
-                write!(f, "if ({}) {}", cond, then_branch)?;
+                // A binary or unary condition is written parenthesized already.
+                match cond.kind {
+                    ExprKind::Binary { .. } | ExprKind::Unary { .. } => {
+                        write!(f, "if {} {}", cond, then_branch)?
+                    }
+                    _ => write!(f, "if ({}) {}", cond, then_branch)?,
+                }
                 if let Some(els) = else_branch {
                     write!(f, " else {}", els)?;
                 }

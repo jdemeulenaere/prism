@@ -7885,7 +7885,6 @@ const TO_STRING: &str = "toString";
 /// The name of the built-in `unbox()` of `Heap<T>` (D6 of `heap-boxes`).
 const UNBOX: &str = "unbox";
 
-/// Whether values of `ty` have the built-in `toString()`: `Int`, `Double`, `Bool` and `Char`.
 /// The help of an `E4026` diagnostic for the template part `part` of type `ty` (D8 of
 /// `string-templates`), with `following`, the text after the part.
 fn template_part_help(
@@ -7894,10 +7893,14 @@ fn template_part_help(
     reason: &NoTextFormReason,
     following: &str,
 ) -> Vec<String> {
+    let operand = template_part_operand(part);
     let mut help = Vec::new();
     match reason {
         NoTextFormReason::Nullable => {
-            help.push(format!("give a fallback for null: '${{{} ?: ...}}'", part));
+            help.push(format!(
+                "give a fallback for null: '${{{} ?: ...}}'",
+                operand
+            ));
         }
         NoTextFormReason::NoToString => {
             if matches!(ty, Type::Struct { .. } | Type::Enum { .. }) {
@@ -7917,19 +7920,39 @@ fn template_part_help(
                         .collect();
                     help.push(format!(
                         "to insert a member, write '${{{}.{}}}'",
-                        part, name
+                        operand, name
                     ));
                 }
             }
         }
         NoTextFormReason::ToStringReceiver { .. } => {
-            help.push(format!("call it explicitly: '${{{}.toString()}}'", part));
+            help.push(format!("call it explicitly: '${{{}.toString()}}'", operand));
         }
         NoTextFormReason::ToStringReturns(_) | NoTextFormReason::ToStringNeedsArguments => {}
     }
     help
 }
 
+/// The template part `part` as the operand of `?:` or `.` in a help: as written when it binds
+/// at least as tightly as both, and parenthesized otherwise, so that following the help keeps
+/// the part whole (`${(if (c) a else b) ?: ...}`, not `${if (c) a else b ?: ...}`).
+fn template_part_operand(part: &Expr) -> String {
+    match &part.kind {
+        // A binary or unary expression is written parenthesized already.
+        ExprKind::Literal(_)
+        | ExprKind::Ident(_)
+        | ExprKind::This
+        | ExprKind::Call { .. }
+        | ExprKind::MemberAccess { .. }
+        | ExprKind::Index { .. }
+        | ExprKind::Template(_)
+        | ExprKind::Binary { .. }
+        | ExprKind::Unary { .. } => part.to_string(),
+        _ => format!("({})", part),
+    }
+}
+
+/// Whether values of `ty` have the built-in `toString()`: `Int`, `Double`, `Bool` and `Char`.
 fn has_builtin_to_string(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Float | Type::Bool | Type::Char)
 }

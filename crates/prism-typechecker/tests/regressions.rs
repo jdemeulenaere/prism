@@ -1201,6 +1201,26 @@ fn nullable_help_gives_a_fallback() {
     );
 }
 
+/// "Nullable help gives a fallback": a part that binds less tightly than `?:` and `.` is
+/// parenthesized in the help, so that the suggested code keeps the part whole.
+#[test]
+fn nullable_help_parenthesizes_a_loose_part() {
+    let (_, help) = no_text_form("fun f(a: Int?, b: Int): String = \"${if (b > 0) a else null}\"");
+    assert_eq!(
+        help,
+        ["give a fallback for null: '${(if (b > 0) a else null) ?: ...}'"]
+    );
+    let source = "struct User { val name: String }\nfun f(u: User, v: User, c: Bool): String = \"${if (c) u else v}.name\"";
+    let (_, help) = no_text_form(source);
+    assert_eq!(
+        help,
+        [
+            "declare 'fun User.toString(): String' to give it one",
+            "to insert a member, write '${(if (c) u else v).name}'",
+        ]
+    );
+}
+
 #[test]
 fn a_struct_without_tostring_rejected() {
     let source = "struct User { val name: String }\nfun f(u: User): String = \"user $u.name\"";
