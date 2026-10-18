@@ -359,6 +359,25 @@ fn changing_a_generic_function_body_changes_the_monomorphization_and_abi_hashes(
     assert_ne!(before.abi_hash, after.abi_hash);
 }
 
+#[test]
+fn changing_a_template_in_a_generic_body_changes_its_hash() {
+    let hash = |source: &str| extract(source).generic_body_hash_of("show", None);
+    let base = hash("public fun <T> show(x: T, n: Int): String = \"n = $n\"\n");
+    for edited in [
+        "public fun <T> show(x: T, n: Int): String = \"m = $n\"\n",
+        "public fun <T> show(x: T, n: Int): String = \"n = ${n + 1}\"\n",
+        "public fun <T> show(x: T, n: Int): String = \"n = $n$n\"\n",
+    ] {
+        assert!(base.is_some());
+        assert_ne!(base, hash(edited), "{}", edited);
+    }
+    // `$n` and `${n}` are the same tree, so the same body.
+    assert_eq!(
+        base,
+        hash("public fun <T> show(x: T, n: Int): String = \"n = ${n}\"\n")
+    );
+}
+
 // --- Interface hash
 
 #[test]

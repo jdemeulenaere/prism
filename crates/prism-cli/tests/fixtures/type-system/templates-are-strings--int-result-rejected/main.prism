@@ -1,0 +1,2 @@
+// expect: E4005
+fun g(n: Int): Int = "n = $n"

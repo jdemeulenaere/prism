@@ -36,9 +36,12 @@ use cranelift_module::{DataId, FuncId, Module};
 use prism_ast::Span;
 use prism_mir::{
     AggregateKind, BasicBlock, Body, Callee, Constant, LocalId, LocalKind, Operand, Place,
-    Projection, Rvalue, StatementKind, TerminatorKind,
+    Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
 };
-use prism_runtime::PanicKind;
+use prism_runtime::{
+    PanicKind, TEMPLATE_BOOL, TEMPLATE_CHAR, TEMPLATE_DOUBLE, TEMPLATE_INT, TEMPLATE_STRING,
+    TEMPLATE_TEXT,
+};
 use prism_typed_tree::{BinaryOperator, BuiltinFunction, DeclarationPath, Type, UnaryOperator};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -735,6 +738,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     .call(function, &[destination, left, right]);
                 Ok(())
             }
+            Rvalue::Template(parts) => self.template(place, parts, span),
             Rvalue::Subtype(operand) => match self.operand_type(operand) {
                 // `Nothing?` to any nullable is `null`.
                 Some(Type::Nullable(inner)) if *inner == Type::Nothing => {
@@ -751,6 +755,91 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 self.write_place(place, value, false)
             }
         }
+    }
+
+    /// A string template into `place` (D13 of `string-templates`): a table of its parts in a
+    /// stack slot, 32 bytes each (a kind word, then text's address, byte length and character
+    /// count, a string's address, or a scalar's value), then one call of
+    /// `prism_rt_string_template`, which measures the parts and allocates the result once.
+    fn template(
+        &mut self,
+        place: &Place,
+        parts: &[TemplatePart],
+        span: Span,
+    ) -> Result<(), BackendError> {
+        const PART_SIZE: u32 = 32;
+        let pointer = self.pointer();
+        let size = u32::try_from(parts.len())
+            .ok()
+            .and_then(|count| count.checked_mul(PART_SIZE))
+            .ok_or_else(|| BackendError::new("a template with too many parts"))?;
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            size,
+            3,
+        ));
+        let table = self.builder.ins().stack_addr(pointer, slot, 0);
+        for (index, part) in parts.iter().enumerate() {
+            let offset = (index as u32 * PART_SIZE) as i32;
+            let (kind, words): (u64, Vec<Value>) = match part {
+                TemplatePart::Text(text) => {
+                    let data = self.context.text(text)?;
+                    let address = self.data(data);
+                    let bytes = self.builder.ins().iconst(types::I64, text.len() as i64);
+                    let characters = self
+                        .builder
+                        .ins()
+                        .iconst(types::I64, text.chars().count() as i64);
+                    (TEMPLATE_TEXT, vec![address, bytes, characters])
+                }
+                TemplatePart::Value(operand) => {
+                    let ty = self
+                        .operand_type(operand)
+                        .ok_or_else(|| BackendError::new("template part of unknown type"))?;
+                    if matches!(ty, Type::Reference { .. } | Type::String) {
+                        let address = self.string_address(operand, span)?;
+                        (TEMPLATE_STRING, vec![address])
+                    } else {
+                        let kind = match ty {
+                            Type::Int => TEMPLATE_INT,
+                            Type::Float => TEMPLATE_DOUBLE,
+                            Type::Bool => TEMPLATE_BOOL,
+                            Type::Char => TEMPLATE_CHAR,
+                            other => {
+                                return Err(BackendError::new(format!(
+                                    "a template part of type {}",
+                                    other
+                                )))
+                            }
+                        };
+                        let Lowered::Scalar(value) = self.operand(operand, span)? else {
+                            return Err(BackendError::new("a scalar template part in memory"));
+                        };
+                        // A `Bool` and a `Char` fill their word, zero-extended.
+                        let value = match self.builder.func.dfg.value_type(value) {
+                            types::I8 | types::I32 => self.builder.ins().uextend(types::I64, value),
+                            _ => value,
+                        };
+                        (kind, vec![value])
+                    }
+                }
+            };
+            let kind = self.builder.ins().iconst(types::I64, kind as i64);
+            self.builder.ins().store(aligned(), kind, table, offset);
+            for (word, value) in words.into_iter().enumerate() {
+                let word_offset = offset + 8 * (word as i32 + 1);
+                self.builder
+                    .ins()
+                    .store(aligned(), value, table, word_offset);
+            }
+        }
+        let count = self.builder.ins().iconst(pointer, parts.len() as i64);
+        let destination = self.address(place)?;
+        let function = self.runtime_function("prism_rt_string_template")?;
+        self.builder
+            .ins()
+            .call(function, &[destination, table, count]);
+        Ok(())
     }
 
     /// Writes the value of `operand` to `place`.
@@ -1564,6 +1653,9 @@ fn block_local_temporaries(body: &Body) -> Vec<bool> {
                             used.push(place)
                         }
                         Rvalue::Closure { captures, .. } => used.extend(captures),
+                        Rvalue::Template(_) => {
+                            used.extend(rvalue.template_operands().filter_map(operand_place))
+                        }
                     }
                     for place in used {
                         mention(&mut seen, place.local, block, false);

@@ -766,3 +766,49 @@ fn glue_of_an_imported_recursive_type() {
     }
     fs::remove_dir_all(&directory).ok();
 }
+
+/// code-generation: "A template calls the runtime once" (`string-templates`).
+#[test]
+fn a_template_calls_the_runtime_once() {
+    let directory = single_file(
+        "template_clif",
+        "fun label(n: Int, d: Double, s: &String): String = \"Count: $n of $s at $d\"\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let label = function_ir(&dump, "main::label");
+    // The callee `fnN` of each call, besides the stack check's panic.
+    let callee = |name: &str| {
+        label
+            .lines()
+            .find(|line| line.contains(&format!("= %\"{}\"", name)))
+            .and_then(|line| line.split_whitespace().next())
+            .map(str::to_string)
+    };
+    let panic = callee("prism_rt_panic");
+    let calls: Vec<&str> = label
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("call "))
+        .filter(|line| {
+            panic
+                .as_ref()
+                .is_none_or(|panic| !line.starts_with(&format!("call {}(", panic)))
+        })
+        .collect();
+    let template = callee("prism_rt_string_template").expect("the template function is imported");
+    assert_eq!(calls.len(), 1, "{}", label);
+    assert!(
+        calls[0].starts_with(&format!("call {}(", template)),
+        "{}",
+        label
+    );
+    for other in [
+        "prism_rt_string_concatenate",
+        "prism_rt_int_to_string",
+        "prism_rt_double_to_string",
+    ] {
+        assert!(!label.contains(other), "{}", label);
+    }
+}

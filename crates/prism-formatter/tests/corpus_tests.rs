@@ -63,15 +63,29 @@ fn with_comments_everywhere(source: &str) -> Option<String> {
             break;
         }
         out.push_str(&source[copied..token.span.start]);
-        if token.is_preceded_by_newline {
-            out.push_str(&format!("// line {}\n", index));
+        if !is_template_text_level(&token.kind) {
+            if token.is_preceded_by_newline {
+                out.push_str(&format!("// line {}\n", index));
+            }
+            out.push_str(&format!(" /* block {} */ ", index));
         }
-        out.push_str(&format!(" /* block {} */ ", index));
         out.push_str(&source[token.span.start..token.span.end]);
         copied = token.span.end;
     }
     out.push_str(&source[copied..]);
     Some(out)
+}
+
+/// Whether a token sits at the text level of a string template, where anything inserted before
+/// it would change the template's text (D14 of `string-templates`).
+fn is_template_text_level(kind: &prism_lexer::TokenKind) -> bool {
+    matches!(
+        kind,
+        prism_lexer::TokenKind::TemplateText(_)
+            | prism_lexer::TokenKind::TemplateName(_)
+            | prism_lexer::TokenKind::TemplateExpressionStart
+            | prism_lexer::TokenKind::TemplateEnd
+    )
 }
 
 /// `source` without comments and with its tokens joined by one space, or by one newline where
@@ -85,7 +99,7 @@ fn squeezed(source: &str) -> Option<String> {
             prism_lexer::TokenKind::Error(_) => return None,
             _ => {}
         }
-        if !out.is_empty() {
+        if !out.is_empty() && !is_template_text_level(&token.kind) {
             out.push(if token.is_preceded_by_newline {
                 '\n'
             } else {
@@ -127,6 +141,11 @@ fn with_long_names(source: &str) -> Option<String> {
         match &token.kind {
             prism_lexer::TokenKind::Error(_) => return None,
             prism_lexer::TokenKind::Ident(_) => {
+                out.push_str(&source[copied..token.span.end]);
+                out.push_str("_abcdefghijklmnopqrstuvw");
+                copied = token.span.end;
+            }
+            prism_lexer::TokenKind::TemplateName(name) if name != "this" => {
                 out.push_str(&source[copied..token.span.end]);
                 out.push_str("_abcdefghijklmnopqrstuvw");
                 copied = token.span.end;

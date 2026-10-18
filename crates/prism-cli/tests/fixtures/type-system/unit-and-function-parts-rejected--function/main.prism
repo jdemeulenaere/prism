@@ -1,0 +1,2 @@
+// expect: E4026
+fun g(h: () -> Int): String = "$h"

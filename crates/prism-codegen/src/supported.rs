@@ -314,6 +314,9 @@ impl BodyChecker<'_> {
                 })
             }),
             Rvalue::Closure { .. } => Some(Construct::FunctionValues),
+            Rvalue::Template(_) => rvalue
+                .template_operands()
+                .find_map(|operand| self.operand(operand)),
         }
     }
 

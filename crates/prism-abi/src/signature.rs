@@ -1150,5 +1150,21 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
             }
             hash_block_span_free(body, hasher);
         }
+        ExprKind::Template(parts) => {
+            hasher.write_u8(33);
+            hasher.write_u64(parts.len() as u64);
+            for part in parts {
+                match part {
+                    TemplatePart::Text(text) => {
+                        hasher.write_u8(1);
+                        hasher.write_str(text);
+                    }
+                    TemplatePart::Expression(part) => {
+                        hasher.write_u8(2);
+                        hash_expr_span_free(part, hasher);
+                    }
+                }
+            }
+        }
     }
 }

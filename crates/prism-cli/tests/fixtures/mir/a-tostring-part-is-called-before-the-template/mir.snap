@@ -1,0 +1,28 @@
+module main
+fun main::Point.toString(_1: &Point): String @3:1
+  local _0: String (return)
+  local _1 this: &Point (argument)
+  bb0:
+    _0 = const "p" @3:32
+    return @3:1
+fun main::f(_1: Point): String @4:1
+  local _0: String (return)
+  local _1 p: Point (argument)
+  local _2: String (temporary)
+  local _3: &Point (temporary)
+  local _4: &String (temporary)
+  bb0:
+    storage_live _2 @4:32
+    storage_live _3 @4:32
+    _3 = &_1 (receiver) @4:32
+    _2 = call main::Point.toString(move _3) -> bb1 @4:32
+  bb1:
+    storage_live _4 @4:32
+    _4 = &_2 (operator) @4:32
+    _0 = template("at ", move _4) @4:27
+    storage_dead _4 @4:27
+    storage_dead _3 @4:27
+    drop _2 -> bb2 @4:27
+  bb2:
+    storage_dead _2 @4:27
+    return @4:1

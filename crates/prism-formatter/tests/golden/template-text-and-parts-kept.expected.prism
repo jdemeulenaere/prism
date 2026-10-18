@@ -1,0 +1,4 @@
+val s = "Count: $count, sum ${a + b}, \$5 \u{1F680} ${name}"
+val t = "$a$b ${this.name}!"
+
+fun f(n: Int): String = "${if (n > 1) "many ($n)" else "one"} ${"${n * 2}"}"

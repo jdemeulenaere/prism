@@ -9,7 +9,7 @@ use crate::mir::{
 use prism_ast::{Literal, Span};
 use prism_typed_tree::{
     CoercionKind, ConstructKind, ExpressionId, ExpressionKind, NominalId, StatementId,
-    StatementKind as TreeStatementKind, Type,
+    StatementKind as TreeStatementKind, TemplatePart, Type,
 };
 
 impl Builder<'_> {
@@ -151,6 +151,7 @@ impl Builder<'_> {
                 let (operator, left, right) = (*operator, *left, *right);
                 self.lower_binary(destination, operator, left, right, &ty, span);
             }
+            ExpressionKind::Template { parts } => self.lower_template(destination, parts, span),
             ExpressionKind::Unary { operator, operand } => {
                 let operator = *operator;
                 let operand = self.operand(*operand);
@@ -335,13 +336,11 @@ impl Builder<'_> {
     /// copied or moved into a temporary, so that each operand holds the value its place had
     /// when it was evaluated, as rustc's operands do (`n + inc(&mut n)` adds the old `n`).
     pub(super) fn ordered_operands(&mut self, values: &[ExpressionId]) -> Vec<Operand> {
+        let later_may_write = self.later_may_write(values);
         let mut operands = Vec::with_capacity(values.len());
         for (position, &value) in values.iter().enumerate() {
             let operand = self.operand(value);
-            let later_may_write = values[position + 1..]
-                .iter()
-                .any(|&later| self.may_write(later));
-            if later_may_write {
+            if later_may_write[position] {
                 let expression = self.expression(value);
                 let (ty, span) = (expression.ty.clone(), expression.span);
                 operands.push(self.stabilize(operand, ty, span));
@@ -350,6 +349,19 @@ impl Builder<'_> {
             }
         }
         operands
+    }
+
+    /// For each of `values`, whether one of the values after it may write a place
+    /// ([`Self::may_write`]), found in one backward pass, so that ordering many operands stays
+    /// linear in their number.
+    pub(super) fn later_may_write(&self, values: &[ExpressionId]) -> Vec<bool> {
+        let mut later = vec![false; values.len()];
+        let mut any = false;
+        for (position, &value) in values.iter().enumerate().rev() {
+            later[position] = any;
+            any = any || self.may_write(value);
+        }
+        later
     }
 
     /// `operand`, or, when it reads a place that code running before its use could write (a
@@ -405,6 +417,10 @@ impl Builder<'_> {
             ExpressionKind::Binary { left, right, .. }
             | ExpressionKind::Logical { left, right, .. } => any(&[*left, *right]),
             ExpressionKind::Elvis { nullable, fallback } => any(&[*nullable, *fallback]),
+            ExpressionKind::Template { parts } => parts.iter().any(|part| match part {
+                TemplatePart::Value(value) => self.may_write(*value),
+                TemplatePart::Text(_) => false,
+            }),
             ExpressionKind::If {
                 condition,
                 then_branch,
@@ -863,6 +879,7 @@ impl Builder<'_> {
                     rvalue.as_ref(),
                     Rvalue::Use(_)
                         | Rvalue::Binary(..)
+                        | Rvalue::Template(_)
                         | Rvalue::Unary(..)
                         | Rvalue::WrapNullable(_)
                         | Rvalue::Subtype(_)

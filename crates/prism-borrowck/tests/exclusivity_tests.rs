@@ -230,3 +230,24 @@ fn closures_without_captures_may_escape() {
     accept("fun g(): Button = Button({ 2 })\n");
     accept("fun h(s: String): Int = run { s.clone(); 3 }\n");
 }
+
+/// references: "A later part mutating a borrowed part rejected" (`string-templates`): a string
+/// part stays borrowed until the template is built, as an operand of `+` does.
+#[test]
+fn a_later_part_mutating_a_borrowed_part_rejected() {
+    let declarations = "fun grow(s: &mut String): Int { *s = s + \"!\"; return s.length }\n";
+    let body = "fun f() { var s = \"a\"; val t = \"$s ${grow(&mut s)}\" }\n";
+    assert_eq!(
+        rendered(&format!("{}{}", declarations, body)),
+        "\
+E5003 cannot borrow 's' as mutable because it is also borrowed as shared @2:43 mutable borrow occurs here
+  related @2:34 shared borrow occurs here
+  related @2:34 shared borrow later used here"
+    );
+    // A scalar part is read at its position, so a later part may write it.
+    passes(
+        "fun bump(r: &mut Int): Int { *r = r + 1; return r }\nfun f(): String { var n = 1; return \"$n ${bump(&mut n)} $n\" }\n",
+    );
+    // Parts are never moved: the string stays usable after the template.
+    passes("fun f(s: String): String { val t = \"$s$s\"; return s + t }\n");
+}

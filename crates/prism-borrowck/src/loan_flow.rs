@@ -319,10 +319,12 @@ impl<'a> LoanFlow<'a> {
                 .iter()
                 .flat_map(|place| self.held(state, place.local))
                 .collect(),
+            // A template's result is a new string, holding no borrow of its parts.
             Rvalue::Binary(..)
             | Rvalue::Unary(..)
             | Rvalue::Discriminant(_)
-            | Rvalue::Aggregate(..) => Vec::new(),
+            | Rvalue::Aggregate(..)
+            | Rvalue::Template(_) => Vec::new(),
         };
         if matches!(rvalue, Rvalue::Borrow { .. } | Rvalue::Closure { .. }) {
             items.extend(
@@ -507,6 +509,7 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
         | Rvalue::Subtype(operand) => vec![operand],
         Rvalue::Binary(_, left, right) => vec![left, right],
         Rvalue::Aggregate(_, operands) => operands.iter().collect(),
+        Rvalue::Template(_) => rvalue.template_operands().collect(),
         Rvalue::Borrow { .. } | Rvalue::Discriminant(_) | Rvalue::Closure { .. } => Vec::new(),
     }
 }

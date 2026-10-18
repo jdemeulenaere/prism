@@ -1,0 +1,2 @@
+// expect: ok
+fun f(s: String, r: &mut String): String { val t = "$s and $r"; *r = t; return s }

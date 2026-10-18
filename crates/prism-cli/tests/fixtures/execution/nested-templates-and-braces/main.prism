@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun describe(n: Int): String = when (n) {
+    0 -> "none"
+    1 -> "one {item}"
+    else -> "${n} ${if (n > 9) "many" else "few"} items"
+}
+
+fun main() {
+    println("[${describe(0)}] [${describe(1)}] [${describe(12)}]")
+}

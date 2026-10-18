@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun main() {
+    val count = 3
+    val name = "Ada"
+    println("Count: $count")
+    println("${count * 2} items for $name's team")
+    println("$name$count")
+    println("${if (count > 1) "many ($count)" else "one"}")
+}

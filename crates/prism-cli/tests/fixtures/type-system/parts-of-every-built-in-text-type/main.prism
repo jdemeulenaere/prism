@@ -1,0 +1,2 @@
+// expect: ok
+fun f(n: Int, d: &Double, b: Bool, c: Char, s: &String, t: String, h: Heap<Int>): String = "$n $d $b $c $s $t $h ${s.length} ${n > 0}"

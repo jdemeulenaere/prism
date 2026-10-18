@@ -16,7 +16,7 @@ pub mod scope;
 pub mod types;
 
 pub use checker::TypeChecker;
-pub use error::TypeError;
+pub use error::{NoTextFormReason, TypeError};
 pub use prism_typed_tree::TypedFile;
 pub use scope::{Mutability, ScopeStack, Symbol, SymbolKind};
 pub use types::{

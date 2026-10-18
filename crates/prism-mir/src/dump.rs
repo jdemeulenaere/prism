@@ -10,7 +10,7 @@
 
 use crate::mir::{
     AggregateKind, Body, BodyId, BodyOwner, Callee, CaptureMode, Constant, LocalKind, MirFile,
-    MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TerminatorKind,
+    MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
 };
 use crate::types::projection_type;
 use prism_ast::Span;
@@ -284,6 +284,16 @@ impl Printer<'_> {
                     ),
                 };
                 format!("{}({})", name, self.operands(operands))
+            }
+            Rvalue::Template(parts) => {
+                let parts: Vec<String> = parts
+                    .iter()
+                    .map(|part| match part {
+                        TemplatePart::Text(text) => format!("{:?}", text),
+                        TemplatePart::Value(operand) => self.operand(operand),
+                    })
+                    .collect();
+                format!("template({})", parts.join(", "))
             }
             Rvalue::WrapNullable(operand) => format!("wrap {}", self.operand(operand)),
             Rvalue::Subtype(operand) => format!("subtype {}", self.operand(operand)),

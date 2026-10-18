@@ -1,0 +1,4 @@
+// expect: ok
+struct Point : Copy { val x: Int }
+fun Point.toString(): String = "p"
+fun f(p: Point): String = "at $p"

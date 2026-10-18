@@ -1,0 +1,2 @@
+// expect: E4026
+fun <T> k(t: T): String = "$t"

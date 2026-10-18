@@ -88,6 +88,22 @@ pub enum TokenKind {
     LBracket,      // [
     RBracket,      // ]
 
+    // String templates (D3 of `string-templates`): a literal with a `$name` or `${...}` part is
+    // a flat run of these tokens, with the ordinary tokens of each expression part between its
+    // `TemplateExpressionStart` and `TemplateExpressionEnd`.
+    /// The opening quote of a string template.
+    TemplateStart,
+    /// A run of a template's text between its quotes and parts, escapes decoded; never empty.
+    TemplateText(String),
+    /// A `$name` part, holding the name (an identifier or `this`); its span covers the `$`.
+    TemplateName(String),
+    /// The `${` that opens an expression part.
+    TemplateExpressionStart,
+    /// The `}` that closes an expression part.
+    TemplateExpressionEnd,
+    /// The closing quote of a string template.
+    TemplateEnd,
+
     // Special
     Eof,
     Error(String),
@@ -198,6 +214,11 @@ impl fmt::Display for TokenKind {
             TokenKind::RBrace => write!(f, "}}"),
             TokenKind::LBracket => write!(f, "["),
             TokenKind::RBracket => write!(f, "]"),
+            TokenKind::TemplateStart | TokenKind::TemplateEnd => write!(f, "\""),
+            TokenKind::TemplateText(text) => write!(f, "{}", text),
+            TokenKind::TemplateName(name) => write!(f, "${}", name),
+            TokenKind::TemplateExpressionStart => write!(f, "${{"),
+            TokenKind::TemplateExpressionEnd => write!(f, "}}"),
             TokenKind::Eof => write!(f, "<EOF>"),
             TokenKind::Error(err) => write!(f, "<Error: {}>", err),
         }

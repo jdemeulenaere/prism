@@ -14,8 +14,8 @@ The formatter MUST print the text runs and name parts of a string template exact
 - **THEN** the template stays on one line with the part unbroken
 
 ### Requirement: Templates That Cannot Be Flat Are Kept Verbatim
-A template whose expression parts hold a comment, were written over several lines, or hold an expression that the formatter always breaks (a block, a `when`, a closure with several statements) MUST be printed exactly as written, from its opening to its closing quote, with its comments printed once.
+A template whose expression parts hold a comment, were written over several lines, or hold an expression that the formatter always breaks (a block, a `when`, a closure with several statements) MUST be printed exactly as written, from its opening to its closing quote, with its comments printed once. Such a template written over several lines MUST stay on the line of the `=`, `return` or assignment operator before it.
 
 #### Scenario: A template part over lines kept as written
 - **WHEN** formatting `val s = "a ${when (n) {\n    1 -> "one"\n    else -> "many" // plural\n}} b"`
-- **THEN** the template is printed exactly as written, with the comment once, and formatting the result again leaves it unchanged
+- **THEN** the template is printed exactly as written, after `val s = ` on its first line, with the comment once, and formatting the result again leaves it unchanged

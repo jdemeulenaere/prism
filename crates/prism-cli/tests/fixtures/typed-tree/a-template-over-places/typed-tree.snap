@@ -1,0 +1,10 @@
+module main
+fun main::f(n: &Int, s: String): String @2:1
+  local %0 n: &Int (parameter)
+  local %1 s: String (parameter)
+  template: String @2:37
+    text "n="
+    deref: Int @2:41
+      local %0 n: &Int @2:41
+    text ", s="
+    local %1 s: String @2:47

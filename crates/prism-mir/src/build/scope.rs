@@ -257,6 +257,11 @@ impl Builder<'_> {
                     self.record_operand_moved(operand);
                 }
             }
+            Rvalue::Template(_) => {
+                for operand in rvalue.template_operands() {
+                    self.record_operand_moved(operand);
+                }
+            }
             Rvalue::Borrow { .. } | Rvalue::Discriminant(_) | Rvalue::Closure { .. } => {}
         }
     }

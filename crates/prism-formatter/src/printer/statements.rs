@@ -196,6 +196,7 @@ impl<'a> Printer<'a> {
             | ExprKind::Closure { .. }
             | ExprKind::Block(_)
             | ExprKind::When { .. } => true,
+            ExprKind::Template(_) => self.is_multiline_template(value),
             ExprKind::If { then_branch, .. } => {
                 matches!(&then_branch.kind, ExprKind::Block(block) if self.is_braced(block))
             }

@@ -15,7 +15,7 @@ use crate::string::{
     prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
     prism_rt_int_to_string, prism_rt_print_string, prism_rt_string_character,
     prism_rt_string_clone, prism_rt_string_concatenate, prism_rt_string_drop,
-    prism_rt_string_equals,
+    prism_rt_string_equals, prism_rt_string_template,
 };
 
 /// The type of a runtime function's parameter or result, as the code generator maps it to a
@@ -125,6 +125,13 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
     RuntimeFunction {
         name: "prism_rt_string_concatenate",
         address: RuntimeAddress(prism_rt_string_concatenate as *const u8),
+        parameters: &[Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_string_template",
+        address: RuntimeAddress(prism_rt_string_template as *const u8),
         parameters: &[Pointer, Pointer, Pointer],
         result: None,
         never_returns: false,

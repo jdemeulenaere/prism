@@ -3,6 +3,18 @@
 use crate::token::{Comment, CommentKind, Token, TokenKind};
 use prism_ast::Span;
 
+/// What the lexer is reading inside a string template (D3 of `string-templates`). Outside any
+/// template the stack of modes is empty, and the lexer reads ordinary tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// A template's text, between its quotes and parts. `start` is the offset, line and column
+    /// of its opening quote, which the errors of an unterminated template span from.
+    Template { start: (usize, u32, u32) },
+    /// The ordinary tokens of an expression part, with the number of `{` opened inside it and
+    /// not closed yet: the `}` met with none open closes the part.
+    TemplateExpression { open_braces: usize },
+}
+
 /// Tokenizer for Prism source code.
 pub struct Lexer<'a> {
     input: &'a str,
@@ -14,6 +26,8 @@ pub struct Lexer<'a> {
     /// The comments skipped so far, collected only in the comment-collecting mode
     /// ([`Self::tokenize_with_comments`]); `None` when compiling, which never needs them.
     comments: Option<Vec<Comment>>,
+    /// The templates and expression parts open at the cursor, innermost last.
+    modes: Vec<Mode>,
 }
 
 impl<'a> Lexer<'a> {
@@ -36,6 +50,7 @@ impl<'a> Lexer<'a> {
             column: 1,
             unclosed_comment_span: None,
             comments: None,
+            modes: Vec::new(),
         }
     }
 
@@ -82,6 +97,9 @@ impl<'a> Lexer<'a> {
 
     /// Fetches the next token from the input stream.
     pub fn next_token(&mut self) -> Token {
+        if let Some(Mode::Template { start }) = self.modes.last().copied() {
+            return self.lex_template_text(start);
+        }
         let saw_newline = self.skip_whitespace_and_comments();
 
         let start_pos = self.cursor;
@@ -97,6 +115,16 @@ impl<'a> Lexer<'a> {
         }
 
         if self.is_eof() {
+            if let Some(Mode::Template { start }) = self.outermost_template() {
+                // An expression part still open at the end of the file: one error for the whole
+                // template, then the end of the file.
+                self.modes.clear();
+                return Token::with_newline(
+                    TokenKind::Error("Unterminated string template".to_string()),
+                    Span::new(start.0, self.cursor, start.1, start.2),
+                    saw_newline,
+                );
+            }
             return Token::with_newline(
                 TokenKind::Eof,
                 Span::new(start_pos, start_pos, start_line, start_col),
@@ -253,11 +281,24 @@ impl<'a> Lexer<'a> {
             }
             b'{' => {
                 self.bump();
+                if let Some(Mode::TemplateExpression { open_braces }) = self.modes.last_mut() {
+                    *open_braces += 1;
+                }
                 TokenKind::LBrace
             }
             b'}' => {
                 self.bump();
-                TokenKind::RBrace
+                match self.modes.last_mut() {
+                    Some(Mode::TemplateExpression { open_braces: 0 }) => {
+                        self.modes.pop();
+                        TokenKind::TemplateExpressionEnd
+                    }
+                    Some(Mode::TemplateExpression { open_braces }) => {
+                        *open_braces -= 1;
+                        TokenKind::RBrace
+                    }
+                    _ => TokenKind::RBrace,
+                }
             }
             b'[' => {
                 self.bump();
@@ -393,8 +434,14 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Lexes a string literal from its opening quote. A literal without parts is one `String`
+    /// token. At the first `$` that starts a part, the lexer goes back to just after the opening
+    /// quote, enters the `Template` mode and returns `TemplateStart`, so the literal's text is
+    /// then read as template text runs and parts (D3 of `string-templates`).
     fn lex_string(&mut self) -> TokenKind {
+        let quote = (self.cursor, self.line, self.column);
         self.bump(); // consume opening '"'
+        let after_quote = (self.cursor, self.line, self.column);
         let mut result = String::new();
 
         while !self.is_eof() {
@@ -416,6 +463,10 @@ impl<'a> Lexer<'a> {
                     Ok(c) => result.push(c),
                     Err(msg) => return TokenKind::Error(msg),
                 }
+            } else if b == b'$' && self.starts_template_part() {
+                (self.cursor, self.line, self.column) = after_quote;
+                self.modes.push(Mode::Template { start: quote });
+                return TokenKind::TemplateStart;
             } else {
                 match self.bump_char() {
                     Some(ch) => result.push(ch),
@@ -425,6 +476,118 @@ impl<'a> Lexer<'a> {
         }
 
         TokenKind::Error("Unterminated string literal".to_string())
+    }
+
+    /// Whether the `$` at the cursor begins a template part: a name part when an ASCII letter or
+    /// `_` follows it, an expression part when `{` does. Any other `$` is the character `$`.
+    fn starts_template_part(&self) -> bool {
+        matches!(
+            self.bytes.get(self.cursor + 1),
+            Some(b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'{')
+        )
+    }
+
+    /// The outermost template open at the cursor, which an error that ends every open mode
+    /// spans from.
+    fn outermost_template(&self) -> Option<Mode> {
+        self.modes
+            .iter()
+            .find(|mode| matches!(mode, Mode::Template { .. }))
+            .copied()
+    }
+
+    /// Lexes the next token of a template's text, in the `Template` mode: its closing quote, a
+    /// `$name` part, the `${` of an expression part, or a run of text up to one of those. The
+    /// text is read as written, without skipping whitespace or comments. A raw newline ends the
+    /// template's mode with an error, without consuming the newline, and the end of the file ends
+    /// every open mode with one error. An error inside the text (an unknown escape, a keyword
+    /// after `$`) is one error token, after which the template goes on, so that its closing quote
+    /// still closes it.
+    fn lex_template_text(&mut self, template_start: (usize, u32, u32)) -> Token {
+        let (start, line, column) = (self.cursor, self.line, self.column);
+        let span = |lexer: &Self| Span::new(start, lexer.cursor, line, column);
+        if self.is_eof() {
+            let outermost = match self.outermost_template() {
+                Some(Mode::Template { start }) => start,
+                _ => template_start,
+            };
+            self.modes.clear();
+            return Token::new(
+                TokenKind::Error("Unterminated string template".to_string()),
+                Span::new(outermost.0, self.cursor, outermost.1, outermost.2),
+            );
+        }
+        let kind = match self.peek_byte() {
+            b'"' => {
+                self.bump();
+                self.modes.pop();
+                TokenKind::TemplateEnd
+            }
+            b'\n' => {
+                self.modes.pop();
+                let (start, line, column) = template_start;
+                return Token::new(
+                    TokenKind::Error(
+                        "Unterminated string template: raw unescaped newline".to_string(),
+                    ),
+                    Span::new(start, self.cursor, line, column),
+                );
+            }
+            b'$' if self.bytes.get(self.cursor + 1) == Some(&b'{') => {
+                self.bump();
+                self.bump();
+                self.modes.push(Mode::TemplateExpression { open_braces: 0 });
+                TokenKind::TemplateExpressionStart
+            }
+            b'$' if self.starts_template_part() => {
+                self.bump();
+                let name_start = self.cursor;
+                while self.peek_byte().is_ascii_alphanumeric() || self.peek_byte() == b'_' {
+                    self.bump();
+                }
+                let name = &self.input[name_start..self.cursor];
+                match TokenKind::keyword_from_str(name) {
+                    // `compose` is a soft keyword, an identifier wherever one is expected.
+                    None | Some(TokenKind::This | TokenKind::Compose) => {
+                        TokenKind::TemplateName(name.to_string())
+                    }
+                    Some(_) => TokenKind::Error(format!(
+                        "'${name}' starts no template part, since '{name}' is a keyword: write \
+                         '\\${name}' for the text, or '${{...}}' around an expression"
+                    )),
+                }
+            }
+            _ => self.lex_template_text_run(),
+        };
+        Token::new(kind, span(self))
+    }
+
+    /// A run of template text from the cursor up to the closing quote, a raw newline, the end of
+    /// the file or a `$` that starts a part, with escapes decoded; or the error of a malformed
+    /// escape, consuming the escape. The run is never empty, since the cursor is at none of those.
+    fn lex_template_text_run(&mut self) -> TokenKind {
+        let mut text = String::new();
+        while !self.is_eof() {
+            match self.peek_byte() {
+                b'"' | b'\n' => break,
+                b'$' if self.starts_template_part() => break,
+                b'\\' => {
+                    self.bump();
+                    if self.is_eof() {
+                        return TokenKind::Error("Unterminated string escape".to_string());
+                    }
+                    match self.lex_escape(b'"') {
+                        Ok(c) => text.push(c),
+                        Err(message) => return TokenKind::Error(message),
+                    }
+                }
+                _ => match self.bump_char() {
+                    Some(ch) => text.push(ch),
+                    None => break,
+                },
+            }
+        }
+        TokenKind::TemplateText(text)
     }
 
     fn lex_char(&mut self) -> TokenKind {
@@ -483,6 +646,7 @@ impl<'a> Lexer<'a> {
             '"' => Ok('"'),
             '\'' => Ok('\''),
             '0' => Ok('\0'),
+            '$' => Ok('$'),
             'u' => self.lex_unicode_escape(quote),
             other => Err(format!(
                 "Unknown escape sequence '\\{}'",

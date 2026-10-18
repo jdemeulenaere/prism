@@ -1,0 +1,2 @@
+// expect: E4026
+fun f(name: String?, n: Int?): String = "Hello $name, ${n}"

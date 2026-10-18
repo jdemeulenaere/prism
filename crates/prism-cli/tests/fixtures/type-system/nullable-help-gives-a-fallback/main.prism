@@ -1,0 +1,2 @@
+// expect: E4026
+fun f(n: Int?): String = "n = $n"

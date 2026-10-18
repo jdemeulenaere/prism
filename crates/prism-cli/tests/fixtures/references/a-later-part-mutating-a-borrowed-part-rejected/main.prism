@@ -1,0 +1,3 @@
+// expect: E5003
+fun grow(s: &mut String): Int { *s = s + "!"; return s.length }
+fun f() { var s = "a"; val t = "$s ${grow(&mut s)}" }

@@ -1,0 +1,9 @@
+val s = "a ${when (n) {
+    1 -> "one"
+    else -> "many" // plural
+}} b"
+fun f(a: Int, b: Int) {
+    val t = "x ${a /* why */ + b} y"
+    val u = "${when (a) { 1 -> "one"; else -> "many" }}"
+    println(t)
+}

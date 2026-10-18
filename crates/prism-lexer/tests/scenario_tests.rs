@@ -337,3 +337,241 @@ fn byte_order_mark_elsewhere_rejected() {
         );
     }
 }
+
+// --- String Templates (`string-templates`)
+
+fn text(run: &str) -> TokenKind {
+    TokenKind::TemplateText(run.to_string())
+}
+
+fn name(part: &str) -> TokenKind {
+    TokenKind::TemplateName(part.to_string())
+}
+
+#[test]
+fn dollar_sign_escape() {
+    assert_eq!(
+        kinds(r#""\$count costs \$5" '\$'"#),
+        vec![
+            TokenKind::String("$count costs $5".to_string()),
+            TokenKind::Char('$'),
+            TokenKind::Eof
+        ]
+    );
+}
+
+#[test]
+fn template_tokens() {
+    let source = r#""a $b ${c + d}!""#;
+    let found: Vec<(TokenKind, &str)> = tokens(source)
+        .into_iter()
+        .map(|t| {
+            let slice = &source[t.span.start..t.span.end];
+            (t.kind, slice)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (TokenKind::TemplateStart, "\""),
+            (text("a "), "a "),
+            (name("b"), "$b"),
+            (text(" "), " "),
+            (TokenKind::TemplateExpressionStart, "${"),
+            (ident("c"), "c"),
+            (TokenKind::Plus, "+"),
+            (ident("d"), "d"),
+            (TokenKind::TemplateExpressionEnd, "}"),
+            (text("!"), "!"),
+            (TokenKind::TemplateEnd, "\""),
+            (TokenKind::Eof, ""),
+        ]
+    );
+    // Columns count characters inside templates too.
+    let toks = tokens(r#"val s = "é $x""#);
+    let part = toks.iter().find(|t| t.kind == name("x")).unwrap();
+    assert_eq!((part.span.line, part.span.column), (1, 12));
+}
+
+#[test]
+fn adjacent_parts_and_this() {
+    assert_eq!(
+        kinds(r#""$a$b" "[$this]""#),
+        vec![
+            TokenKind::TemplateStart,
+            name("a"),
+            name("b"),
+            TokenKind::TemplateEnd,
+            TokenKind::TemplateStart,
+            text("["),
+            name("this"),
+            text("]"),
+            TokenKind::TemplateEnd,
+            TokenKind::Eof
+        ]
+    );
+}
+
+#[test]
+fn a_dollar_sign_that_starts_no_part() {
+    assert_eq!(
+        kinds(r#""$5, $ x, a$, $$y, $é""#),
+        vec![
+            TokenKind::TemplateStart,
+            text("$5, $ x, a$, $"),
+            name("y"),
+            text(", $é"),
+            TokenKind::TemplateEnd,
+            TokenKind::Eof
+        ]
+    );
+    assert_eq!(
+        kinds(r#""cost: $5" "$" "a$""#),
+        vec![
+            TokenKind::String("cost: $5".to_string()),
+            TokenKind::String("$".to_string()),
+            TokenKind::String("a$".to_string()),
+            TokenKind::Eof
+        ]
+    );
+    // A name is the longest run of identifier characters, ASCII only.
+    assert_eq!(
+        kinds(r#""$a.b $name's $x_1é""#),
+        vec![
+            TokenKind::TemplateStart,
+            name("a"),
+            text(".b "),
+            name("name"),
+            text("'s "),
+            name("x_1"),
+            text("é"),
+            TokenKind::TemplateEnd,
+            TokenKind::Eof
+        ]
+    );
+}
+
+#[test]
+fn braces_and_strings_inside_an_expression_part() {
+    assert_eq!(
+        kinds(r#""${when (n) { 1 -> "}" else -> "$n {" }} done""#),
+        vec![
+            TokenKind::TemplateStart,
+            TokenKind::TemplateExpressionStart,
+            TokenKind::When,
+            TokenKind::LParen,
+            ident("n"),
+            TokenKind::RParen,
+            TokenKind::LBrace,
+            TokenKind::Int(1),
+            TokenKind::Arrow,
+            TokenKind::String("}".to_string()),
+            TokenKind::Else,
+            TokenKind::Arrow,
+            TokenKind::TemplateStart,
+            name("n"),
+            text(" {"),
+            TokenKind::TemplateEnd,
+            TokenKind::RBrace,
+            TokenKind::TemplateExpressionEnd,
+            text(" done"),
+            TokenKind::TemplateEnd,
+            TokenKind::Eof
+        ]
+    );
+    // Braces in char literals and comments are not counted either.
+    assert_eq!(
+        kinds("\"${f('}') /* } */}\""),
+        vec![
+            TokenKind::TemplateStart,
+            TokenKind::TemplateExpressionStart,
+            ident("f"),
+            TokenKind::LParen,
+            TokenKind::Char('}'),
+            TokenKind::RParen,
+            TokenKind::TemplateExpressionEnd,
+            TokenKind::TemplateEnd,
+            TokenKind::Eof
+        ]
+    );
+}
+
+#[test]
+fn a_keyword_after_a_dollar_sign_rejected() {
+    for (source, keyword) in [(r#"val s = "$if""#, "if"), (r#"val t = "$null""#, "null")] {
+        let found = kinds(source);
+        let errors: Vec<&String> = found
+            .iter()
+            .filter_map(|kind| match kind {
+                TokenKind::Error(message) => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors.len(), 1, "{:?}", found);
+        assert!(
+            errors[0].contains(&format!("'{keyword}' is a keyword")),
+            "{}",
+            errors[0]
+        );
+        // The template goes on after the error, so its closing quote still closes it.
+        assert_eq!(found[found.len() - 2], TokenKind::TemplateEnd);
+    }
+}
+
+#[test]
+fn unterminated_templates_rejected() {
+    for source in [
+        "val s = \"a $b\nval next = 1",
+        "val s = \"${a\n",
+        "val s = \"${a + \"$x",
+        "val s = \"${a + \"$x\n}\"",
+        "val s = \"$",
+        "val s = \"${",
+        "val s = \"$x",
+        "val s = \"${a /* open",
+        "val s = \"${a}\\",
+    ] {
+        let found = kinds(source);
+        assert!(found.iter().any(is_error), "{:?}: {:?}", source, found);
+        assert_eq!(found.last(), Some(&TokenKind::Eof), "{:?}", source);
+        assert_eq!(
+            found.iter().filter(|kind| **kind == TokenKind::Eof).count(),
+            1
+        );
+    }
+    // A raw newline ends the template without consuming the next line.
+    let source = "val s = \"a $b\nval next = 1";
+    let toks = tokens(source);
+    let error = toks.iter().find(|t| is_error(&t.kind)).unwrap();
+    assert_eq!((error.span.start, error.span.end), (8, 13));
+    assert!(toks.iter().any(|t| t.kind == ident("next")));
+}
+
+#[test]
+fn comment_collecting_lexer_inside_templates() {
+    use prism_lexer::CommentKind;
+    let source = r#""x ${a /* why */ + b} // not a comment""#;
+    let (with_comments, comments) = Lexer::new(source).tokenize_with_comments();
+    assert_eq!(with_comments, tokens(source));
+    assert_eq!(
+        with_comments.iter().map(|t| &t.kind).collect::<Vec<_>>(),
+        vec![
+            &TokenKind::TemplateStart,
+            &text("x "),
+            &TokenKind::TemplateExpressionStart,
+            &ident("a"),
+            &TokenKind::Plus,
+            &ident("b"),
+            &TokenKind::TemplateExpressionEnd,
+            &text(" // not a comment"),
+            &TokenKind::TemplateEnd,
+            &TokenKind::Eof
+        ]
+    );
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].kind, CommentKind::Block);
+    assert_eq!(
+        &source[comments[0].span.start..comments[0].span.end],
+        "/* why */"
+    );
+}

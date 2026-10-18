@@ -41,6 +41,12 @@ pub enum Document {
     },
     /// A sequence.
     Concat(Vec<Document>),
+    /// The contents laid out flat whatever the width, for what is never broken across lines
+    /// (the expression parts of a string template, D14 of `string-templates`).
+    Flat(Box<Document>),
+    /// Source text printed exactly as written: its later lines are not indented, and a newline
+    /// in it breaks its enclosing groups (a string template kept as written).
+    Verbatim(String),
     /// A comment, printed verbatim (a block comment may span lines). With `newline_before`, it
     /// starts a new line unless the current line is still empty; with `newline_after`, it ends
     /// its line: whatever is printed next starts on a new line.
@@ -90,6 +96,14 @@ pub fn concat(parts: Vec<Document>) -> Document {
     Document::Concat(parts)
 }
 
+pub fn flat(contents: Document) -> Document {
+    Document::Flat(Box::new(contents))
+}
+
+pub fn verbatim(value: impl Into<String>) -> Document {
+    Document::Verbatim(value.into())
+}
+
 pub fn comment(text: impl Into<String>, newline_before: bool, newline_after: bool) -> Document {
     Document::Comment {
         text: text.into(),
@@ -111,11 +125,12 @@ impl Document {
 
     /// Whether laying this document out always breaks its enclosing groups. Nested groups
     /// answer from their cached flag, so building a tree bottom-up stays linear.
-    fn forces_break(&self) -> bool {
+    pub(crate) fn forces_break(&self) -> bool {
         match self {
             Document::Empty | Document::Text(_) | Document::Line | Document::SoftLine => false,
             Document::HardLine => true,
-            Document::Indent(contents) => contents.forces_break(),
+            Document::Indent(contents) | Document::Flat(contents) => contents.forces_break(),
+            Document::Verbatim(value) => value.contains('\n'),
             Document::Group { broken, .. } => *broken,
             Document::IfBreak { broken, flat } => broken.forces_break() || flat.forces_break(),
             Document::Concat(parts) => parts.iter().any(Document::forces_break),
@@ -154,7 +169,14 @@ pub fn render(document: &Document) -> String {
     while let Some(command) = commands.pop() {
         match command.document {
             Document::Empty => {}
-            Document::Text(value) => output.write(value, command.indent),
+            Document::Text(value) | Document::Verbatim(value) => {
+                output.write(value, command.indent)
+            }
+            Document::Flat(contents) => commands.push(Command {
+                mode: Mode::Flat,
+                document: contents,
+                ..command
+            }),
             Document::Line | Document::SoftLine | Document::HardLine => {
                 let breaks = command.mode == Mode::Break
                     || matches!(command.document, Document::HardLine)
@@ -258,6 +280,21 @@ fn fits(next: Command, rest: &[Command], mut width: usize) -> bool {
                 Some(left) => width = left,
                 None => return false,
             },
+            Document::Verbatim(value) => {
+                let first_line = value.split('\n').next().unwrap_or_default();
+                match width.checked_sub(first_line.chars().count()) {
+                    Some(left) => width = left,
+                    None => return false,
+                }
+                if value.contains('\n') {
+                    return true;
+                }
+            }
+            Document::Flat(contents) => stack.push(Command {
+                mode: Mode::Flat,
+                document: contents,
+                ..command
+            }),
             Document::Line | Document::SoftLine | Document::HardLine => {
                 if command.mode == Mode::Break || matches!(command.document, Document::HardLine) {
                     return true;
@@ -444,6 +481,33 @@ mod tests {
             comment("/* y */", true, false),
         ]);
         assert_eq!(render(&document), "a\n/* x */ b\n/* y */");
+    }
+
+    #[test]
+    fn a_flat_document_stays_on_one_line_whatever_the_width() {
+        let long = "x".repeat(60);
+        let document = concat(vec![text("\"${"), flat(call(&[&long, &long])), text("}\"")]);
+        assert_eq!(render(&document), format!("\"${{f({}, {})}}\"", long, long));
+        // Its width still counts towards the fitting of an enclosing group.
+        let enclosing = group(concat(vec![
+            text("g("),
+            indent(concat(vec![soft_line(), document])),
+            soft_line(),
+            text(")"),
+        ]));
+        assert!(render(&enclosing).starts_with("g(\n    \"${f("));
+    }
+
+    #[test]
+    fn a_verbatim_text_keeps_its_lines_and_breaks_its_groups() {
+        let source = "\"a ${when (n) {\n    1 -> \"one\"\n}} b\"";
+        let document = indent(concat(vec![
+            hard_line(),
+            group(concat(vec![text("val s ="), line(), verbatim(source)])),
+        ]));
+        assert_eq!(render(&document), format!("\n    val s =\n    {}", source));
+        assert!(verbatim(source).forces_break());
+        assert!(!verbatim("\"one line\"").forces_break());
     }
 
     #[test]

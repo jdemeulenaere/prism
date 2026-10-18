@@ -324,6 +324,11 @@ pub enum ExpressionKind {
         nullable: ExpressionId,
         fallback: ExpressionId,
     },
+    /// A string template, of type `String`: its text runs and the values of its parts, in source
+    /// order (D9 of `string-templates`). A value part is a `String`, `Int`, `Double`, `Bool` or
+    /// `Char` read in place, as an operator's operand is: a place is not wrapped in a move or a
+    /// copy, and a computed value (a `toString()` call among them) is a temporary.
+    Template { parts: Vec<TemplatePart> },
 
     // Control flow (D9).
     /// A block: its statements, and its tail, which is the block's value. A block whose value is
@@ -425,6 +430,13 @@ impl ExpressionKind {
                 vec![*left, *right]
             }
             ExpressionKind::Elvis { nullable, fallback } => vec![*nullable, *fallback],
+            ExpressionKind::Template { parts } => parts
+                .iter()
+                .filter_map(|part| match part {
+                    TemplatePart::Value(value) => Some(*value),
+                    TemplatePart::Text(_) => None,
+                })
+                .collect(),
             ExpressionKind::Block {
                 statements: s,
                 tail,
@@ -459,6 +471,15 @@ impl ExpressionKind {
             ExpressionKind::Error { children } => children.clone(),
         }
     }
+}
+
+/// A part of a [`ExpressionKind::Template`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemplatePart {
+    /// A run of text, its escapes decoded.
+    Text(String),
+    /// A value inserted as its text.
+    Value(ExpressionId),
 }
 
 /// A normalized call (D8).

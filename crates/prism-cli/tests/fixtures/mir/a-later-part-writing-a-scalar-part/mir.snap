@@ -1,0 +1,34 @@
+module main
+fun main::bump(_1: &mut Int): Int @2:1
+  local _0: Int (return)
+  local _1 r: &mut Int (argument)
+  local _2: Int (temporary)
+  bb0:
+    storage_live _2 @2:35
+    _2 = copy (*_1) + const 1 @2:35
+    (*_1) = move _2 @2:31
+    storage_dead _2 @2:30
+    _0 = copy (*_1) @2:49
+    return @2:1
+fun main::f(): String @3:1
+  local _0: String (return)
+  local _1 n: Int (user, var)
+  local _2: Int (temporary)
+  local _3: Int (temporary)
+  local _4: &mut Int (temporary)
+  bb0:
+    storage_live _1 @3:19
+    _1 = const 1 @3:27
+    storage_live _2 @3:39
+    _2 = copy _1 @3:39
+    storage_live _3 @3:43
+    storage_live _4 @3:48
+    _4 = &mut _1 (written) @3:48
+    _3 = call main::bump(move _4) -> bb1 @3:43
+  bb1:
+    _0 = template(move _2, " ", move _3) @3:37
+    storage_dead _4 @3:30
+    storage_dead _3 @3:30
+    storage_dead _2 @3:30
+    storage_dead _1 @3:30
+    return @3:1

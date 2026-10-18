@@ -140,6 +140,11 @@ fn rvalue_effects(rvalue: &Rvalue, span: Span, effects: &mut Vec<PlaceEffect>) {
                 operand_effects(operand, effects);
             }
         }
+        Rvalue::Template(_) => {
+            for operand in rvalue.template_operands() {
+                operand_effects(operand, effects);
+            }
+        }
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
                 use_place(capture, UseKind::Captured, span, effects);

@@ -1,0 +1,20 @@
+module main
+struct main::Point : Copy @2:1
+  field 0 val x: Int
+fun main::Point.toString(this): String @3:1
+  local %0 this: &Point (receiver)
+  literal "p": String @3:32
+fun main::f(p: Point, a: String, b: String): String @4:1
+  local %0 p: Point (parameter)
+  local %1 a: String (parameter)
+  local %2 b: String (parameter)
+  template: String @4:49
+    temporary: String @4:51
+      call main::Point.toString: String @4:51
+        receiver: borrow (receiver): &Point @4:51
+          local %0 p: Point @4:51
+    text " "
+    temporary: String @4:55
+      binary +: String @4:55
+        local %1 a: String @4:55
+        local %2 b: String @4:59

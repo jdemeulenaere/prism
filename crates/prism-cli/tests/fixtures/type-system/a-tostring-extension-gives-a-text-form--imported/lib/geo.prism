@@ -1,0 +1,3 @@
+package lib
+public struct Point(val x: Int, val y: Int)
+public fun Point.toString(): String = "($x, $y)"

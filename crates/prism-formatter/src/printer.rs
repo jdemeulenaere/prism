@@ -137,7 +137,7 @@ impl<'a> Printer<'a> {
         self.comment_before(offset).is_some()
     }
 
-    fn take_comment(&mut self) -> &'a Comment {
+    pub(crate) fn take_comment(&mut self) -> &'a Comment {
         let comment = &self.comments[self.next_comment];
         self.next_comment += 1;
         self.consumed_end = self.consumed_end.max(comment.span.end);

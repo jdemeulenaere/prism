@@ -1,0 +1,12 @@
+module main
+fun main::f(_1: Int, _2: &String): String @2:1
+  local _0: String (return)
+  local _1 n: Int (argument)
+  local _2 s: &String (argument)
+  local _3: &String (temporary)
+  bb0:
+    storage_live _3 @2:43
+    _3 = &(*_2) (operator) @2:43
+    _0 = template(copy _1, ": ", move _3) @2:37
+    storage_dead _3 @2:37
+    return @2:1

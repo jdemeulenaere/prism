@@ -10,7 +10,7 @@
 use crate::arena::{ExpressionId, StatementId};
 use crate::tree::{
     Argument, Body, BorrowOrigin, Callee, CoercionKind, ConstructKind, ExpressionKind, Item,
-    LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TypedFile,
+    LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TemplatePart, TypedFile,
 };
 use crate::types::{NominalId, Type, TypeDef, TypeParameter, BUILTIN_MODULE};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
@@ -336,6 +336,7 @@ impl Printer<'_> {
             ExpressionKind::Unary { operator, .. } => format!("unary {}", operator.as_str()),
             ExpressionKind::Logical { operator, .. } => format!("logical {}", operator.as_str()),
             ExpressionKind::Elvis { .. } => "elvis".to_string(),
+            ExpressionKind::Template { .. } => "template".to_string(),
             ExpressionKind::Block { .. } => "block".to_string(),
             ExpressionKind::If { .. } => "if".to_string(),
             ExpressionKind::When { exhaustive, .. } => {
@@ -433,6 +434,16 @@ impl Printer<'_> {
             ExpressionKind::Elvis { nullable, fallback } => {
                 self.expression(*nullable, depth, "nullable");
                 self.expression(*fallback, depth, "fallback");
+            }
+            ExpressionKind::Template { parts } => {
+                for part in parts {
+                    match part {
+                        TemplatePart::Text(text) => {
+                            self.line(depth, "", &format!("text {:?}", text))
+                        }
+                        TemplatePart::Value(value) => self.expression(*value, depth, ""),
+                    }
+                }
             }
             ExpressionKind::Block {
                 statements, tail, ..

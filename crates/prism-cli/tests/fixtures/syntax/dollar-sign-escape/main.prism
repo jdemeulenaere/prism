@@ -1,0 +1,3 @@
+// expect: ok
+val price = "\$count costs \$5"
+val sign = '\$'

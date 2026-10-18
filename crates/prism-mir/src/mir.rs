@@ -426,6 +426,33 @@ pub enum Rvalue {
         body: BodyId,
         captures: Vec<Place>,
     },
+    /// A string template's `String`, built from its parts in order (D10 of
+    /// `string-templates`): constant text, and values, each a `&String` (a shared `Operator`
+    /// borrow) or an `Int`, `Double`, `Bool` or `Char`.
+    Template(Vec<TemplatePart>),
+}
+
+/// A part of an [`Rvalue::Template`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemplatePart {
+    /// Constant text.
+    Text(String),
+    /// A value inserted as its text: a `&String`, or a scalar.
+    Value(Operand),
+}
+
+impl Rvalue {
+    /// The value parts of a template rvalue, in order; none for any other rvalue.
+    pub fn template_operands(&self) -> impl Iterator<Item = &Operand> {
+        let parts: &[TemplatePart] = match self {
+            Rvalue::Template(parts) => parts,
+            _ => &[],
+        };
+        parts.iter().filter_map(|part| match part {
+            TemplatePart::Value(operand) => Some(operand),
+            TemplatePart::Text(_) => None,
+        })
+    }
 }
 
 /// What an aggregate builds, with the type arguments of a generic struct or enum.
@@ -514,8 +541,9 @@ pub enum BorrowOrigin {
     /// Made by a nullable conversion (`&(T?)` read as `(&T)?`).
     Conversion,
     /// An operand of an operator over a type that is not `Copy`, which reads it in place
-    /// (D14): `==`, `!=` or string concatenation; or the pinned target of a compound
-    /// assignment whose value may re-point it (D5 of `compound-assignment`).
+    /// (D14): `==`, `!=` or string concatenation, or a `String` part of a string template (D10
+    /// of `string-templates`); or the pinned target of a compound assignment whose value may
+    /// re-point it (D5 of `compound-assignment`).
     Operator,
     /// An input of a default value's generator, or the slot it may fill (D11).
     Default,

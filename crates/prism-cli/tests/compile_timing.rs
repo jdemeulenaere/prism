@@ -243,6 +243,63 @@ fn moves_and_drops(n: usize) -> String {
     )
 }
 
+/// One template of `n` parts, alternating `Int`, `String` and `Bool` parts with text between
+/// them (`string-templates`).
+fn template_parts(n: usize) -> String {
+    let parts = join(n, " ", |i| match i % 3 {
+        0 => format!("n{i}=$n"),
+        1 => format!("s{i}=$s"),
+        _ => format!("b{i}=${{n > {i}}}"),
+    });
+    format!(
+        "fun f(n: Int, s: &String): String = \"{parts}\"\nfun main() {{ println(f(1, \"x\").length) }}\n"
+    )
+}
+
+/// One template of `n` computed parts, each a string temporary (`${s + s}`) or an `Int`
+/// computed by a call (`${next(i)}`), so that every string part's borrow is live until the
+/// template is built and every scalar part before a call is stabilized.
+fn template_computed_parts(n: usize) -> String {
+    let parts = join(n, "", |i| {
+        if i % 2 == 0 {
+            "${s + s}".to_string()
+        } else {
+            format!("${{next({i})}}")
+        }
+    });
+    format!(
+        "fun next(i: Int): Int = i + 1\nfun f(s: &String): String = \"{parts}\"\nfun main() {{ println(f(\"x\").length) }}\n"
+    )
+}
+
+/// One template of `n` lines' worth of text (64 characters each) around a single part.
+fn template_long_text(n: usize) -> String {
+    let text = "abcdefghijklmnopqrstuvwxyz \\$ ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456";
+    format!(
+        "fun f(n: Int): String = \"{}${{n}}{}\"\nfun main() {{ println(f(1).length) }}\n",
+        text.repeat(n / 2),
+        text.repeat(n / 2)
+    )
+}
+
+/// `n` statements, each printing a template of a few parts.
+fn many_templates(n: usize) -> String {
+    let mut body = String::from("    val s = \"x\"\n");
+    for i in 0..n {
+        writeln!(body, "    println(\"v{i} = ${{n + {i}}} of $s\")").unwrap();
+    }
+    format!("fun f(n: Int) {{\n{body}}}\nfun main() {{ f(1) }}\n")
+}
+
+/// Templates nested `n` deep, each the only part of the next.
+fn nested_templates(n: usize) -> String {
+    let mut template = "\"$n\"".to_string();
+    for _ in 1..n {
+        template = format!("\"(${{{template}}})\"");
+    }
+    format!("fun f(n: Int): String = {template}\nfun main() {{ println(f(1)) }}\n")
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -268,6 +325,16 @@ fn shapes() -> Vec<Shape> {
         shape("string-concatenation", true, SIZES, string_concatenation),
         shape("live-borrows", true, SIZES, live_borrows),
         shape("moves-and-drops", true, SIZES, moves_and_drops),
+        shape("template-parts", true, SIZES, template_parts),
+        shape(
+            "template-computed-parts",
+            true,
+            SIZES,
+            template_computed_parts,
+        ),
+        shape("template-long-text", true, SIZES, template_long_text),
+        shape("many-templates", true, SIZES, many_templates),
+        shape("nested-templates", true, DEPTHS, nested_templates),
     ]
 }
 

@@ -301,6 +301,170 @@ pub unsafe extern "C" fn prism_rt_char_to_string(destination: *mut PrismString, 
     write(destination, PrismString::owned(&format_char(value)));
 }
 
+/// One part of a string template, as generated code lays out the table it passes to
+/// [`prism_rt_string_template`] (D12 of `string-templates`): a kind word and three payload words,
+/// 32 bytes on a 64-bit target.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TemplatePart {
+    /// One of the `TEMPLATE_*` kinds.
+    pub kind: u64,
+    /// For [`TEMPLATE_TEXT`], the address, byte length and character count of static text; for
+    /// [`TEMPLATE_STRING`], the address of a `PrismString`; for a scalar, its value in the first
+    /// word (an `Int`, the bits of a `Double`, 0 or 1 for a `Bool`, a `Char`'s scalar value).
+    pub words: [u64; 3],
+}
+
+/// Static text: address, byte length, character count.
+pub const TEMPLATE_TEXT: u64 = 0;
+/// A borrowed string, by address.
+pub const TEMPLATE_STRING: u64 = 1;
+/// An `Int`.
+pub const TEMPLATE_INT: u64 = 2;
+/// A `Double`, by its bits.
+pub const TEMPLATE_DOUBLE: u64 = 3;
+/// A `Bool`, 0 or 1.
+pub const TEMPLATE_BOOL: u64 = 4;
+/// A `Char`, by its scalar value.
+pub const TEMPLATE_CHAR: u64 = 5;
+
+/// The decimal digits of `value`, with its sign, written at the end of `buffer`; returns where
+/// they start. 20 bytes hold `i64::MIN`.
+fn int_digits(value: i64, buffer: &mut [u8; 20]) -> usize {
+    let mut magnitude = value.unsigned_abs();
+    let mut start = buffer.len();
+    loop {
+        start -= 1;
+        buffer[start] = b'0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if value < 0 {
+        start -= 1;
+        buffer[start] = b'-';
+    }
+    start
+}
+
+/// The number of bytes of the text of `value`, its sign included.
+fn int_length(value: i64) -> usize {
+    let mut magnitude = value.unsigned_abs();
+    let mut length = usize::from(value < 0) + 1;
+    while magnitude >= 10 {
+        magnitude /= 10;
+        length += 1;
+    }
+    length
+}
+
+/// A string template's value (D12 of `string-templates`): the texts of the `count` parts of
+/// `parts`, in order, in a new string of exactly their length, allocated once, or the empty
+/// string, which owns nothing. A scalar part has the text `print` writes. The parts are measured
+/// first: text and strings by their stored lengths and counts, `Int`, `Bool` and `Char` without
+/// formatting them, and each `Double` by its text, formatted once into the runtime's own scratch
+/// memory, which is not a program allocation. A total that does not fit an `isize` is "out of
+/// memory".
+///
+/// # Safety
+///
+/// `parts` must point at `count` parts, whose text parts point at their bytes and whose string
+/// parts point at strings, and `destination` must be valid for a write of a string; the
+/// destination may not be the address of a string part.
+#[no_mangle]
+pub unsafe extern "C" fn prism_rt_string_template(
+    destination: *mut PrismString,
+    parts: *const TemplatePart,
+    count: usize,
+) {
+    let parts = if count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(parts, count)
+    };
+    let out_of_memory = || panic_without_location(PanicKind::OutOfMemory, "");
+    let mut doubles: Vec<String> = Vec::new();
+    let (mut byte_length, mut character_count) = (0usize, 0usize);
+    for part in parts {
+        let [first, second, third] = part.words;
+        let (bytes, characters) = match part.kind {
+            TEMPLATE_TEXT => (second as usize, third as usize),
+            TEMPLATE_STRING => {
+                let string = &*(first as usize as *const PrismString);
+                (string.byte_length, string.character_count)
+            }
+            TEMPLATE_INT => {
+                let length = int_length(first as i64);
+                (length, length)
+            }
+            TEMPLATE_DOUBLE => {
+                let text = format_double(f64::from_bits(first));
+                let length = text.len();
+                doubles.push(text);
+                (length, length)
+            }
+            TEMPLATE_BOOL => (format_bool(first != 0).len(), format_bool(first != 0).len()),
+            _ => (template_char(first).len_utf8(), 1),
+        };
+        byte_length = byte_length.checked_add(bytes).unwrap_or_else(out_of_memory);
+        character_count += characters;
+    }
+    if byte_length > isize::MAX as usize {
+        out_of_memory();
+    }
+    if byte_length == 0 {
+        write(destination, PrismString::empty());
+        return;
+    }
+    let buffer = prism_rt_allocate(byte_length, 1);
+    let mut offset = 0;
+    let mut doubles = doubles.iter();
+    let mut put = |bytes: &[u8]| {
+        // SAFETY: the parts measured `byte_length` bytes in all, and the buffer overlaps none.
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.add(offset), bytes.len());
+        offset += bytes.len();
+    };
+    for part in parts {
+        let [first, second, _] = part.words;
+        match part.kind {
+            TEMPLATE_TEXT => put(std::slice::from_raw_parts(
+                first as usize as *const u8,
+                second as usize,
+            )),
+            TEMPLATE_STRING => put((*(first as usize as *const PrismString)).bytes()),
+            TEMPLATE_INT => {
+                let mut digits = [0u8; 20];
+                let start = int_digits(first as i64, &mut digits);
+                put(&digits[start..]);
+            }
+            TEMPLATE_DOUBLE => put(doubles.next().map_or(&[][..], String::as_bytes)),
+            TEMPLATE_BOOL => put(format_bool(first != 0).as_bytes()),
+            _ => {
+                let mut encoded = [0u8; 4];
+                put(template_char(first).encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+    }
+    write(
+        destination,
+        PrismString {
+            pointer: buffer,
+            byte_length,
+            character_count,
+            capacity: byte_length,
+        },
+    );
+}
+
+/// The `Char` of a template part's word, as [`format_char`] reads it.
+fn template_char(word: u64) -> char {
+    u32::try_from(word)
+        .ok()
+        .and_then(char::from_u32)
+        .unwrap_or(char::REPLACEMENT_CHARACTER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +657,105 @@ mod tests {
             });
             assert_eq!(made, 0);
         }
+    }
+
+    fn template(parts: &[TemplatePart]) -> PrismString {
+        // SAFETY: the parts point at live texts and strings.
+        call(|destination| unsafe {
+            prism_rt_string_template(destination, parts.as_ptr(), parts.len())
+        })
+    }
+
+    fn text_part(text: &'static str) -> TemplatePart {
+        TemplatePart {
+            kind: TEMPLATE_TEXT,
+            words: [
+                text.as_ptr() as u64,
+                text.len() as u64,
+                text.chars().count() as u64,
+            ],
+        }
+    }
+
+    fn string_part(string: &PrismString) -> TemplatePart {
+        TemplatePart {
+            kind: TEMPLATE_STRING,
+            words: [string as *const PrismString as u64, 0, 0],
+        }
+    }
+
+    fn scalar_part(kind: u64, word: u64) -> TemplatePart {
+        TemplatePart {
+            kind,
+            words: [word, 0, 0],
+        }
+    }
+
+    #[test]
+    fn the_template_part_layout_is_four_words() {
+        assert_eq!(std::mem::size_of::<TemplatePart>(), 32);
+    }
+
+    #[test]
+    fn a_template_formats_every_kind_of_part_with_one_allocation() {
+        let allocations = checked(|| {
+            let owned = PrismString::owned("Ada");
+            let result = template(&[
+                text_part("é "),
+                string_part(&owned),
+                text_part(" "),
+                scalar_part(TEMPLATE_INT, (-42i64) as u64),
+                text_part("|"),
+                scalar_part(TEMPLATE_INT, i64::MIN as u64),
+                text_part("|"),
+                scalar_part(TEMPLATE_DOUBLE, 1.0e7f64.to_bits()),
+                text_part("|"),
+                scalar_part(TEMPLATE_DOUBLE, 4.9e-324f64.to_bits()),
+                text_part("|"),
+                scalar_part(TEMPLATE_BOOL, 1),
+                scalar_part(TEMPLATE_BOOL, 0),
+                scalar_part(TEMPLATE_CHAR, 'é' as u64),
+                scalar_part(TEMPLATE_INT, 0),
+            ]);
+            assert_eq!(
+                result.as_str(),
+                "é Ada -42|-9223372036854775808|1.0E7|4.9E-324|truefalseé0"
+            );
+            assert_eq!(result.character_count, result.as_str().chars().count());
+            assert_eq!(result.capacity, result.byte_length);
+            drop_string(result);
+            drop_string(owned);
+        });
+        // One for `owned`, one for the template.
+        assert_eq!(allocations, 2);
+    }
+
+    #[test]
+    fn scalar_parts_have_the_text_print_writes() {
+        checked(|| {
+            for value in [0, 7, -7, 10, 99, 100, -100, i64::MAX, i64::MIN] {
+                let result = template(&[scalar_part(TEMPLATE_INT, value as u64)]);
+                assert_eq!(result.as_str(), format_int(value));
+                drop_string(result);
+            }
+            for value in [0.1 + 0.2, -0.0, f64::NAN, f64::INFINITY, 123.0] {
+                let result = template(&[scalar_part(TEMPLATE_DOUBLE, value.to_bits())]);
+                assert_eq!(result.as_str(), format_double(value));
+                drop_string(result);
+            }
+        });
+    }
+
+    #[test]
+    fn an_empty_template_allocates_nothing() {
+        let allocations = checked(|| {
+            let empty = PrismString::empty();
+            let result = template(&[string_part(&empty), string_part(&empty)]);
+            assert_eq!(result.byte_length, 0);
+            assert!(!result.owns_buffer());
+            assert_eq!(template(&[]).byte_length, 0);
+        });
+        assert_eq!(allocations, 0);
     }
 
     #[test]

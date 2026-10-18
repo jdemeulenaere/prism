@@ -5,7 +5,7 @@
 //! point that decides something (a coercion, a move, a borrow, a receiver pass) records it.
 
 use crate::builder::{BodyBuilder, FileBuilder};
-use crate::error::TypeError;
+use crate::error::{NoTextFormReason, TypeError};
 use crate::exhaustiveness;
 use crate::inference::Unknowns;
 use crate::scope::{is_type_symbol, ImportLookup, Mutability, ScopeStack, Symbol, SymbolKind};
@@ -16,7 +16,8 @@ use crate::types::{
 use prism_abi::{AbiType, AbiTypeMembers, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
-    BinaryOp, CallArg, Expr, ExprKind, Literal, PatternKind, UnaryOp, WhenBranch, WhenPattern,
+    BinaryOp, CallArg, Expr, ExprKind, Literal, PatternKind, TemplatePart, UnaryOp, WhenBranch,
+    WhenPattern,
 };
 use prism_ast::module::SourceFile;
 use prism_ast::statement::{Block, Statement, StatementKind};
@@ -25,8 +26,8 @@ use prism_typed_tree::{
     Argument, BinaryOperator, BorrowOrigin, BuiltinFunction, Call, Callee, CoercionKind,
     ConstructField, ConstructKind, DeclarationPath, EnumItem, ExpressionId, ExpressionKind,
     FunctionItem, Item, Local, LocalKind, LogicalOperator, Pattern, SafeNavigationOrigin,
-    StatementId, StatementKind as TreeStatementKind, StructItem, TypeTable, TypedFile,
-    UnaryOperator, ValueItem,
+    StatementId, StatementKind as TreeStatementKind, StructItem, TemplatePart as TreeTemplatePart,
+    TypeTable, TypedFile, UnaryOperator, ValueItem,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -3194,6 +3195,8 @@ impl TypeChecker {
                 self.add(kind, Type::Nothing, expr.span)
             }
 
+            ExprKind::Template(parts) => self.infer_template(parts, expr.span),
+
             ExprKind::Closure { params, body } => {
                 let prev = self.enter_closure(false, None);
 
@@ -3242,6 +3245,163 @@ impl TypeChecker {
                 };
                 self.add(kind, ty, expr.span)
             }
+        }
+    }
+
+    /// Types a string template (D6 to D9 of `string-templates`): a `String` holding its text runs
+    /// and the text form of each part, in source order.
+    fn infer_template(&mut self, parts: &[TemplatePart], span: Span) -> ExpressionId {
+        let mut typed = Vec::with_capacity(parts.len());
+        for (index, part) in parts.iter().enumerate() {
+            match part {
+                TemplatePart::Text(text) => typed.push(TreeTemplatePart::Text(text.clone())),
+                TemplatePart::Expression(expr) => {
+                    let following = match parts.get(index + 1) {
+                        Some(TemplatePart::Text(text)) => text.as_str(),
+                        _ => "",
+                    };
+                    let value = self.check_template_part(expr, following);
+                    typed.push(TreeTemplatePart::Value(value));
+                }
+            }
+        }
+        self.add(
+            ExpressionKind::Template { parts: typed },
+            Type::String,
+            span,
+        )
+    }
+
+    /// Checks one part of a string template, with no expected type, and gives the node of its
+    /// text form, read in place (D6 and D9 of `string-templates`). The part is read like an
+    /// operator's operand, through its `&`, `&mut` and `Heap<T>` layers: a `String` is a place
+    /// (a computed one a temporary), a scalar is used as it is, and any other type is the result
+    /// of its `toString()`, resolved as the method call `part.toString()` is, in a temporary.
+    /// `following` is the text after the part, for the help of `$u.name`.
+    fn check_template_part(&mut self, part: &Expr, following: &str) -> ExpressionId {
+        let is_place = self.is_place(part) || self.is_optional_place(part);
+        let id = self.with_origin(Origin::Value, |c| c.infer_read(part));
+        let ty = self.ty(id);
+        let reason = match peel_indirection(&ty) {
+            Type::Error => return id,
+            Type::String => {
+                let read = self.peel_indirection_nodes(id);
+                return self.as_place(read);
+            }
+            Type::Int | Type::Float | Type::Bool | Type::Char => {
+                return self.peel_indirection_nodes(id);
+            }
+            Type::Nothing => {
+                let value = self.coerce_to(id, &Type::String);
+                return self.as_place(value);
+            }
+            Type::Nullable(_) => Some(NoTextFormReason::Nullable),
+            Type::Unit | Type::Fn { .. } | Type::Parameter(_) | Type::Opaque(_) => {
+                Some(NoTextFormReason::NoToString)
+            }
+            _ => self.template_to_string_problem(&ty, part.span),
+        };
+        if let Some(reason) = reason {
+            let referent = peel_indirection(&ty).clone();
+            let help = template_part_help(part, &referent, &reason, following);
+            self.errors.push(TypeError::NoTextForm {
+                ty: referent,
+                reason,
+                help,
+                span: part.span,
+            });
+            return self.wrap_error(id);
+        }
+        // The conversion is exactly the explicit call `part.toString()`.
+        let callee = Expr::new(
+            ExprKind::MemberAccess {
+                target: Box::new(part.clone()),
+                member: TO_STRING.to_string(),
+                is_safe_nav: false,
+            },
+            part.span,
+        );
+        let call = MethodCall {
+            callee: &callee,
+            target: part,
+            member: TO_STRING,
+            is_safe_nav: false,
+            type_arguments: &[],
+            args: &[],
+            expected: None,
+        };
+        let text = self.method_call_on(call, id, is_place, false, part.span);
+        self.as_place(text)
+    }
+
+    /// Why the `toString()` that `part.toString()` resolves to cannot give a part of type `ty`
+    /// its text form, or `None` when it can: it must exist, be callable without arguments,
+    /// return `String` and, for an extension, take a shared receiver (D6 of `string-templates`).
+    /// An ambiguous import is left to the call, which reports it (`E4012`).
+    fn template_to_string_problem(&mut self, ty: &Type, span: Span) -> Option<NoTextFormReason> {
+        let signature = if self.has_field(ty, TO_STRING) {
+            let field = match peel_indirection(ty) {
+                Type::Struct { id, arguments } => self.struct_fields(id).and_then(|fields| {
+                    fields
+                        .into_iter()
+                        .find(|(name, _, _)| name == TO_STRING)
+                        .map(|(_, _, field)| field.substitute(arguments))
+                }),
+                _ => None,
+            };
+            match field {
+                Some(Type::Fn { params, ret, .. }) => (params.len(), Vec::new(), *ret),
+                // A field of another type cannot be called: the call reports it.
+                _ => return None,
+            }
+        } else {
+            let mut layers = Vec::new();
+            let (lookup, reached) =
+                self.find_extension_through_indirection(ty.clone(), TO_STRING, &mut layers);
+            let extension = match lookup {
+                ExtensionLookup::None => return Some(NoTextFormReason::NoToString),
+                ExtensionLookup::Ambiguous(_) => return None,
+                ExtensionLookup::Found { extension, own } => {
+                    if own {
+                        let key = InferenceKey::Extension {
+                            receiver: ReceiverKey::of(&reached),
+                            name: TO_STRING.to_string(),
+                        };
+                        self.ensure_key_inferred(&key, span);
+                    }
+                    match self.find_extension(&reached, TO_STRING) {
+                        ExtensionLookup::Found { extension, .. } => extension,
+                        _ => extension,
+                    }
+                }
+            };
+            match extension.mode {
+                ReceiverMode::Shared => {}
+                ReceiverMode::Mutable => {
+                    return Some(NoTextFormReason::ToStringReceiver { mutable: true })
+                }
+                ReceiverMode::Consuming => {
+                    return Some(NoTextFormReason::ToStringReceiver { mutable: false })
+                }
+            }
+            match &extension.symbol.kind {
+                SymbolKind::Function {
+                    fn_type: Type::Fn { params, ret, .. },
+                    has_default,
+                    ..
+                } => (params.len(), has_default.clone(), (**ret).clone()),
+                _ => return None,
+            }
+        };
+        let (parameters, has_default, returned) = signature;
+        let required =
+            (0..parameters).any(|index| !has_default.get(index).copied().unwrap_or(false));
+        if required {
+            Some(NoTextFormReason::ToStringNeedsArguments)
+        } else if returned != Type::String && returned != Type::Error {
+            Some(NoTextFormReason::ToStringReturns(returned))
+        } else {
+            None
         }
     }
 
@@ -5564,6 +5724,39 @@ impl TypeChecker {
                 (c.with_consuming(true, |c| c.infer_expr(target)), true)
             }
         });
+        let call = MethodCall {
+            callee,
+            target,
+            member,
+            is_safe_nav,
+            type_arguments,
+            args,
+            expected,
+        };
+        self.method_call_on(call, receiver, is_place, writable, span)
+    }
+
+    /// Types the method call `call` on `receiver`, the node of its already inferred target, a
+    /// place (`is_place`) that may be written (`writable`) or a value: a field of function type
+    /// first, then the built-ins, then an extension (the `extension-functions` spec). A string
+    /// template's `toString()` part is resolved here too (D6 of `string-templates`).
+    fn method_call_on(
+        &mut self,
+        call: MethodCall,
+        receiver: ExpressionId,
+        is_place: bool,
+        writable: bool,
+        span: Span,
+    ) -> ExpressionId {
+        let MethodCall {
+            callee,
+            target,
+            member,
+            is_safe_nav,
+            type_arguments,
+            args,
+            expected,
+        } = call;
         let receiver_ty = self.ty(receiver);
         if receiver_ty == Type::Error {
             return self.give_up_call(receiver, args, span);
@@ -5613,7 +5806,7 @@ impl TypeChecker {
             other => (other.clone(), false),
         };
         let mut layers = Vec::new();
-        let mut reached = if through_nullable {
+        let start = if through_nullable {
             // The references around the nullable are looked through too.
             let mut outer = &receiver_ty;
             while let Type::Reference { mutable, inner } = outer {
@@ -5624,23 +5817,7 @@ impl TypeChecker {
         } else {
             receiver_ty.clone()
         };
-        let lookup = loop {
-            match self.find_extension(&reached, member) {
-                ExtensionLookup::None => {}
-                found => break found,
-            }
-            match reached {
-                Type::Reference { mutable, inner } => {
-                    layers.push(Layer::Reference { mutable });
-                    reached = *inner;
-                }
-                Type::Heap(inner) => {
-                    layers.push(Layer::Heap);
-                    reached = *inner;
-                }
-                _ => break ExtensionLookup::None,
-            }
-        };
+        let (lookup, reached) = self.find_extension_through_indirection(start, member, &mut layers);
         match lookup {
             ExtensionLookup::Ambiguous(modules) => {
                 let call = self.give_up_call(receiver, args, span);
@@ -6062,6 +6239,34 @@ impl TypeChecker {
                 own: false,
             },
             Some(many) => ExtensionLookup::Ambiguous(many.iter().map(|(m, _)| m.clone()).collect()),
+        }
+    }
+
+    /// The extension `member` of `reached` or of what it reaches through its `&`, `&mut` and
+    /// `Heap<T>` layers, the outermost first, with the type it was found on; each layer looked
+    /// through is pushed onto `layers`.
+    fn find_extension_through_indirection(
+        &self,
+        mut reached: Type,
+        member: &str,
+        layers: &mut Vec<Layer>,
+    ) -> (ExtensionLookup, Type) {
+        loop {
+            match self.find_extension(&reached, member) {
+                ExtensionLookup::None => {}
+                found => return (found, reached),
+            }
+            match reached {
+                Type::Reference { mutable, inner } => {
+                    layers.push(Layer::Reference { mutable });
+                    reached = *inner;
+                }
+                Type::Heap(inner) => {
+                    layers.push(Layer::Heap);
+                    reached = *inner;
+                }
+                _ => return (ExtensionLookup::None, reached),
+            }
         }
     }
 
@@ -7681,6 +7886,50 @@ const TO_STRING: &str = "toString";
 const UNBOX: &str = "unbox";
 
 /// Whether values of `ty` have the built-in `toString()`: `Int`, `Double`, `Bool` and `Char`.
+/// The help of an `E4026` diagnostic for the template part `part` of type `ty` (D8 of
+/// `string-templates`), with `following`, the text after the part.
+fn template_part_help(
+    part: &Expr,
+    ty: &Type,
+    reason: &NoTextFormReason,
+    following: &str,
+) -> Vec<String> {
+    let mut help = Vec::new();
+    match reason {
+        NoTextFormReason::Nullable => {
+            help.push(format!("give a fallback for null: '${{{} ?: ...}}'", part));
+        }
+        NoTextFormReason::NoToString => {
+            if matches!(ty, Type::Struct { .. } | Type::Enum { .. }) {
+                help.push(format!(
+                    "declare 'fun {}.toString(): String' to give it one",
+                    ty
+                ));
+                let mut member = following.strip_prefix('.').unwrap_or_default().chars();
+                if following.starts_with('.')
+                    && member
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                {
+                    let name: String = following[1..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect();
+                    help.push(format!(
+                        "to insert a member, write '${{{}.{}}}'",
+                        part, name
+                    ));
+                }
+            }
+        }
+        NoTextFormReason::ToStringReceiver { .. } => {
+            help.push(format!("call it explicitly: '${{{}.toString()}}'", part));
+        }
+        NoTextFormReason::ToStringReturns(_) | NoTextFormReason::ToStringNeedsArguments => {}
+    }
+    help
+}
+
 fn has_builtin_to_string(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Float | Type::Bool | Type::Char)
 }

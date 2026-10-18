@@ -136,7 +136,109 @@ impl<'a> Printer<'a> {
                 None => text("return"),
             },
             ExprKind::Closure { params, body } => self.closure(params, body, expression.span),
+            ExprKind::Template(parts) => self.template(expression, parts),
         }
+    }
+
+    // --- String templates ---
+
+    /// The indices of the `TemplateStart` and `TemplateEnd` tokens of `template`, past the
+    /// parentheses it may be written in.
+    fn template_tokens(&self, template: &Expr) -> (usize, usize) {
+        let start = self.token_index_at(template.span.start)
+            + self.tokens[self.token_index_at(template.span.start)..]
+                .iter()
+                .position(|token| token.kind == TokenKind::TemplateStart)
+                .expect("a template starts with a TemplateStart token");
+        let mut depth = 0usize;
+        for (index, token) in self.tokens.iter().enumerate().skip(start) {
+            match token.kind {
+                TokenKind::TemplateStart => depth += 1,
+                TokenKind::TemplateEnd => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return (start, index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        unreachable!("a parsed template ends with a TemplateEnd token")
+    }
+
+    /// Whether `template` was written over several lines, so that it is kept as written and
+    /// stays on the line of the operator before it.
+    pub(crate) fn is_multiline_template(&self, template: &Expr) -> bool {
+        let (start, end) = self.template_tokens(template);
+        !self.same_line(self.tokens[start].span.start, self.tokens[end].span.end)
+    }
+
+    /// A string template (D14 of `string-templates`): its text runs and `$name` parts exactly as
+    /// written, and each `${...}` part's expression formatted flat, so a template never breaks
+    /// across lines. A template whose expression parts hold a comment or a newline, or an
+    /// expression that always breaks, is printed exactly as written, and the comments inside it
+    /// are passed.
+    fn template(&mut self, template: &Expr, parts: &[TemplatePart]) -> Document {
+        let (start, end) = self.template_tokens(template);
+        let source_start = self.tokens[start].span.start;
+        let source_end = self.tokens[end].span.end;
+        let verbatim_source = |printer: &mut Self| {
+            while printer.has_comment_before(source_end) {
+                printer.take_comment();
+            }
+            verbatim(printer.slice(Span::new(source_start, source_end, 0, 0)))
+        };
+        let first_comment_after = self
+            .comments
+            .partition_point(|comment| comment.span.start < source_start);
+        let holds_comment = self
+            .comments
+            .get(first_comment_after)
+            .is_some_and(|comment| comment.span.start < source_end);
+        if !self.same_line(source_start, source_end) || holds_comment {
+            return verbatim_source(self);
+        }
+        let mut expressions = parts.iter().filter_map(|part| match part {
+            TemplatePart::Expression(expression) => Some(expression),
+            TemplatePart::Text(_) => None,
+        });
+        let mut printed = vec![text("\"")];
+        let mut index = start + 1;
+        while index < end {
+            let token = &self.tokens[index];
+            match token.kind {
+                TokenKind::TemplateText(_) => printed.push(text(self.slice(token.span))),
+                TokenKind::TemplateName(_) => {
+                    expressions.next();
+                    printed.push(text(self.slice(token.span)));
+                }
+                TokenKind::TemplateExpressionStart => {
+                    let expression = expressions
+                        .next()
+                        .expect("every '${' of a template holds an expression part");
+                    let part = self.expression(expression);
+                    if part.forces_break() {
+                        return verbatim_source(self);
+                    }
+                    printed.push(concat(vec![text("${"), flat(part), text("}")]));
+                    // Skip the part's tokens, up to its matching `}`.
+                    let mut depth = 0usize;
+                    loop {
+                        index += 1;
+                        match self.tokens[index].kind {
+                            TokenKind::TemplateExpressionStart => depth += 1,
+                            TokenKind::TemplateExpressionEnd if depth == 0 => break,
+                            TokenKind::TemplateExpressionEnd => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                }
+                _ => unreachable!("a template's own tokens are text, names and parts"),
+            }
+            index += 1;
+        }
+        printed.push(text("\""));
+        concat(printed)
     }
 
     /// Whether an operand printed after a prefix `-` starts with `-`, which would join into

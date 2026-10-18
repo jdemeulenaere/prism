@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Point : Copy { val x: Int, val y: Int }
+struct User { val name: String, val home: Point }
+fun Point.toString(): String = "($x, $y)"
+fun User.toString(): String = "$name at $home"
+
+fun main() {
+    val u = User("Ada" + "!", Point(1, 2))
+    println("user: $u")
+    println(u.name)
+}

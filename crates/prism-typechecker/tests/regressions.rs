@@ -1164,3 +1164,125 @@ fn a_cycle_across_modules_is_reported_in_each_file() {
         );
     }
 }
+
+// --- String templates (`string-templates`, D8): every `E4026` message and help.
+
+/// The `(message, helps)` of the only `E4026` of `src`.
+fn no_text_form(src: &str) -> (String, Vec<String>) {
+    let errors = check(src);
+    let found: Vec<&TypeError> = errors.iter().filter(|e| e.code() == "E4026").collect();
+    assert_eq!(found.len(), 1, "{:?}", errors);
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    match found[0] {
+        TypeError::NoTextForm { help, .. } => (found[0].message(), help.clone()),
+        other => panic!("expected NoTextForm, got {:?}", other),
+    }
+}
+
+#[test]
+fn nullable_help_gives_a_fallback() {
+    let (message, help) = no_text_form("fun f(n: Int?): String = \"n = $n\"");
+    assert_eq!(
+        message,
+        "a nullable 'Int?' has no text form in a string template"
+    );
+    assert_eq!(help, ["give a fallback for null: '${n ?: ...}'"]);
+    // The fallback is written with the part's own text, and `null` itself is nullable.
+    let (message, help) = no_text_form("fun f(u: String?): String = \"${u}\"");
+    assert_eq!(
+        message,
+        "a nullable 'String?' has no text form in a string template"
+    );
+    assert_eq!(help, ["give a fallback for null: '${u ?: ...}'"]);
+    let (message, _) = no_text_form("fun f(): String = \"${null}\"");
+    assert_eq!(
+        message,
+        "a nullable 'Nothing?' has no text form in a string template"
+    );
+}
+
+#[test]
+fn a_struct_without_tostring_rejected() {
+    let source = "struct User { val name: String }\nfun f(u: User): String = \"user $u.name\"";
+    let (message, help) = no_text_form(source);
+    assert_eq!(message, "'User' has no text form in a string template");
+    assert_eq!(
+        help,
+        [
+            "declare 'fun User.toString(): String' to give it one",
+            "to insert a member, write '${u.name}'",
+        ]
+    );
+    let enumeration = "enum Color { Red }\nfun f(c: Color): String = \"$c.\"";
+    let (message, help) = no_text_form(enumeration);
+    assert_eq!(message, "'Color' has no text form in a string template");
+    assert_eq!(
+        help,
+        ["declare 'fun Color.toString(): String' to give it one"]
+    );
+}
+
+#[test]
+fn an_unusable_tostring_rejected() {
+    let returns_int = "struct Point : Copy { val x: Int }\nfun Point.toString(): Int = x\nfun f(p: Point): String = \"$p\"";
+    let (message, help) = no_text_form(returns_int);
+    assert_eq!(
+        message,
+        "'toString()' of 'Point' returns 'Int', not 'String'"
+    );
+    assert!(help.is_empty());
+
+    let needs_arguments = "struct Point : Copy { val x: Int }\nfun Point.toString(n: Int): String = \"p\"\nfun f(p: Point): String = \"$p\"";
+    let (message, help) = no_text_form(needs_arguments);
+    assert_eq!(message, "'toString' of 'Point' needs arguments");
+    assert!(help.is_empty());
+    // A parameter with a default is not required.
+    let defaulted = "struct Point : Copy { val x: Int }\nfun Point.toString(n: Int = 1): String = \"p\"\nfun f(p: Point): String = \"$p\"";
+    assert!(check(defaulted).is_empty(), "{:?}", check(defaulted));
+
+    let mutating = "struct Counter { var n: Int }\nmut fun Counter.toString(): String { n += 1; return \"c\" }\nfun g(c: Counter): String = \"$c\"";
+    let (message, help) = no_text_form(mutating);
+    assert_eq!(
+        message,
+        "a string template does not call the 'mut' 'toString()' of 'Counter' implicitly"
+    );
+    assert_eq!(help, ["call it explicitly: '${c.toString()}'"]);
+    // The explicit call is accepted.
+    let explicit = "struct Counter { var n: Int }\nmut fun Counter.toString(): String { n += 1; return \"c\" }\nfun g(c: Counter): String { var d = c; return \"${d.toString()}\" }";
+    assert!(check(explicit).is_empty(), "{:?}", check(explicit));
+
+    let consuming = "struct Token { val s: String }\nconsuming fun Token.toString(): String = \"t\"\nfun g(t: Token): String = \"$t\"";
+    let (message, help) = no_text_form(consuming);
+    assert_eq!(
+        message,
+        "a string template does not call the 'consuming' 'toString()' of 'Token' implicitly"
+    );
+    assert_eq!(help, ["call it explicitly: '${t.toString()}'"]);
+}
+
+#[test]
+fn unit_and_function_parts_rejected() {
+    for (source, ty) in [
+        ("fun log() {}\nfun f(): String = \"${log()}\"", "Unit"),
+        ("fun g(h: () -> Int): String = \"$h\"", "() -> Int"),
+        ("fun <T> k(t: T): String = \"$t\"", "T"),
+    ] {
+        let (message, help) = no_text_form(source);
+        assert_eq!(
+            message,
+            format!("'{}' has no text form in a string template", ty)
+        );
+        assert!(help.is_empty(), "{:?}", help);
+    }
+}
+
+#[test]
+fn a_field_named_tostring_gives_a_text_form() {
+    // A part means what `.toString()` means: a field of function type comes first.
+    let source = "struct Label { val toString: () -> String }\nfun f(l: Label): String = \"$l\"";
+    assert!(check(source).is_empty(), "{:?}", check(source));
+    let arguments =
+        "struct Label { val toString: (Int) -> String }\nfun f(l: Label): String = \"$l\"";
+    let (message, _) = no_text_form(arguments);
+    assert_eq!(message, "'toString' of 'Label' needs arguments");
+}

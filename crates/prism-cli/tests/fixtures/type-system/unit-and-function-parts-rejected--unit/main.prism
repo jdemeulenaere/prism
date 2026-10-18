@@ -1,0 +1,3 @@
+// expect: E4026
+fun log() {}
+fun f(): String = "${log()}"

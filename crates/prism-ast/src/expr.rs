@@ -318,6 +318,19 @@ pub enum ExprKind {
         target: Box<Expr>,
         index: Box<Expr>,
     },
+    /// A string template, `"Count: $count, ${a + b}"`: its text runs and parts in source order
+    /// (D5 of `string-templates`). A `$name` part is an `Ident` (or `This`) spanning the name
+    /// without its `$`, so `"$x"` and `"${x}"` are the same tree.
+    Template(Vec<TemplatePart>),
+}
+
+/// A part of a string template.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TemplatePart {
+    /// A run of text, its escapes decoded.
+    Text(String),
+    /// A `$name` or `${...}` part.
+    Expression(Expr),
 }
 
 /// A parameter of a closure `{ a, b -> ... }`: its name and where it is declared.
@@ -419,6 +432,16 @@ impl fmt::Display for Expr {
             }
             ExprKind::Index { target, index } => {
                 write!(f, "{}[{}]", target, index)
+            }
+            ExprKind::Template(parts) => {
+                write!(f, "\"")?;
+                for part in parts {
+                    match part {
+                        TemplatePart::Text(text) => write!(f, "{}", text.replace('$', "\\$"))?,
+                        TemplatePart::Expression(expr) => write!(f, "${{{}}}", expr)?,
+                    }
+                }
+                write!(f, "\"")
             }
         }
     }

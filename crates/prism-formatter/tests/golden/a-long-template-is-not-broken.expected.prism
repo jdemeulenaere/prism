@@ -1,0 +1,9 @@
+val label =
+    "The first value is $first, the second is $second, and all of them: ${format(first, second, third)}"
+
+fun f() {
+    show(
+        "The first value is $first, the second is $second, and all of them: ${format(first, second, third)}",
+        1,
+    )
+}

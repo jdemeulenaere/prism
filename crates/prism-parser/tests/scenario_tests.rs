@@ -1390,3 +1390,129 @@ fn double_minus_needs_a_space() {
         "(-(-x))"
     );
 }
+
+// --- String Templates (`string-templates`)
+
+/// The initializers of the top-level `val`s of `src`, in order.
+fn initializers(src: &str) -> Vec<Expr> {
+    parse(src)
+        .declarations
+        .into_iter()
+        .map(|declaration| match declaration {
+            Declaration::Var(var) => var.initializer,
+            other => panic!("expected a top-level val, got {:?}", other),
+        })
+        .collect()
+}
+
+/// The parts of a template expression.
+#[track_caller]
+fn template_parts(e: &Expr) -> &[TemplatePart] {
+    match &e.kind {
+        ExprKind::Template(parts) => parts,
+        other => panic!("expected a template, got {:?}", other),
+    }
+}
+
+#[track_caller]
+fn text_part(part: &TemplatePart) -> &str {
+    match part {
+        TemplatePart::Text(text) => text,
+        other => panic!("expected a text part, got {:?}", other),
+    }
+}
+
+#[track_caller]
+fn expression_part(part: &TemplatePart) -> &Expr {
+    match part {
+        TemplatePart::Expression(e) => e,
+        other => panic!("expected an expression part, got {:?}", other),
+    }
+}
+
+#[test]
+fn template_expression_tree() {
+    let src = r#"val s = "Hi $name, ${a + b}!".length"#;
+    let initializer = &initializers(src)[0];
+    let ExprKind::MemberAccess { target, member, .. } = &initializer.kind else {
+        panic!("expected a member access, got {:?}", initializer.kind);
+    };
+    assert_eq!(member, "length");
+    let parts = template_parts(target);
+    assert_eq!(parts.len(), 5);
+    assert_eq!(text_part(&parts[0]), "Hi ");
+    let name = expression_part(&parts[1]);
+    assert_eq!(ident(name), "name");
+    // A name part spans the name without its `$`.
+    assert_eq!(&src[name.span.start..name.span.end], "name");
+    assert_eq!(text_part(&parts[2]), ", ");
+    let ExprKind::Binary { op, left, right } = &expression_part(&parts[3]).kind else {
+        panic!("expected a binary expression");
+    };
+    assert_eq!((*op, ident(left), ident(right)), (BinaryOp::Add, "a", "b"));
+    assert_eq!(text_part(&parts[4]), "!");
+    // The template spans from its opening to its closing quote.
+    assert_eq!(
+        &src[target.span.start..target.span.end],
+        r#""Hi $name, ${a + b}!""#
+    );
+}
+
+#[test]
+fn name_and_braced_parts_are_the_same_expression() {
+    let found = initializers("val a = \"$x\"\nval b = \"${x}\"\nval c = \"$this\"");
+    for initializer in &found[..2] {
+        let parts = template_parts(initializer);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(ident(expression_part(&parts[0])), "x");
+    }
+    assert_eq!(
+        expression_part(&template_parts(&found[2])[0]).kind,
+        ExprKind::This
+    );
+    // A literal without parts stays a string literal.
+    assert_eq!(
+        initializers("val s = \"$5\"")[0].kind,
+        ExprKind::Literal(Literal::String("$5".to_string()))
+    );
+}
+
+#[test]
+fn newlines_inside_an_expression_part() {
+    let found = initializers("val s = \"${a +\n    b}\"");
+    let parts = template_parts(&found[0]);
+    assert_eq!(parts.len(), 1);
+    let ExprKind::Binary { op, left, right } = &expression_part(&parts[0]).kind else {
+        panic!("expected a binary expression");
+    };
+    assert_eq!((*op, ident(left), ident(right)), (BinaryOp::Add, "a", "b"));
+}
+
+#[test]
+fn nested_templates_and_braces_parse() {
+    let src = r#"val s = "${when (n) { 1 -> "}"; else -> "$n {" }} done""#;
+    let found = initializers(src);
+    let parts = template_parts(&found[0]);
+    assert_eq!(parts.len(), 2);
+    assert!(matches!(
+        expression_part(&parts[0]).kind,
+        ExprKind::When { .. }
+    ));
+    assert_eq!(text_part(&parts[1]), " done");
+}
+
+#[test]
+fn an_empty_or_statement_part_rejected() {
+    for src in [
+        "val s = \"${}\"",
+        "val t = \"${val x = 1}\"",
+        "val u = \"${a b}\"",
+    ] {
+        let error = parse_source(src).expect_err(src);
+        assert_eq!(error.code, "E2001", "{}", src);
+    }
+    let error = parse_source("val s = \"${}\"").unwrap_err();
+    assert!(error.message.contains("Expected an expression in '${}'"));
+    let error = parse_source("val s = \"${a b}\"").unwrap_err();
+    assert!(error.message.contains("to close '${'"), "{}", error.message);
+}

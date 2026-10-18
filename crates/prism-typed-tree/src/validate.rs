@@ -5,7 +5,7 @@ use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
     Argument, BindingMode, Body, BuiltinFunction, Call, Callee, CoercionKind, ConstructKind,
     DeclarationPath, ExpressionKind, FunctionItem, Item, LocalKind, Pattern, StatementKind,
-    StructItem, TypedFile, UnaryOperator,
+    StructItem, TemplatePart, TypedFile, UnaryOperator,
 };
 use crate::types::{NominalId, Type, TypeParameter, TypeTable};
 use prism_ast::ReceiverMode;
@@ -673,6 +673,29 @@ impl Validator<'_> {
                                 format!("elvis {} over a {} gives a {}", id.0, nullable_ty, ty);
                             self.report(message);
                         }
+                    }
+                }
+            }
+            ExpressionKind::Template { parts } => {
+                self.expect_type_of_node(id, &Type::String, "template");
+                for part in parts.clone() {
+                    let TemplatePart::Value(value) = part else {
+                        continue;
+                    };
+                    self.expression(value);
+                    // A part is a value with a text form, read in place: a string is a place
+                    // (a computed one a temporary), never moved (D9 of `string-templates`).
+                    match self.type_of(value).cloned() {
+                        Some(Type::String) => self.expect_place(value, "string template part"),
+                        Some(Type::Int | Type::Float | Type::Bool | Type::Char) => {}
+                        Some(other) if self.error_free => {
+                            let message = format!(
+                                "template {} has a part (node {}) of type {}, which has no text form",
+                                id.0, value.0, other
+                            );
+                            self.report(message);
+                        }
+                        _ => {}
                     }
                 }
             }

@@ -871,3 +871,45 @@ fn a_large_function_is_compiled_with_the_single_pass_allocator() {
     let f: IntToInt = function(&program, "main::f");
     assert_eq!([f(3), f(-1), f(999)], [3 - 999, -1000, 999 - 999]);
 }
+
+// String templates (D12 and D13 of `string-templates`).
+
+#[test]
+fn a_template_allocates_its_result_once() {
+    // The scenario "A template allocates its result once", both forms.
+    let program = compile(
+        "fun label(n: Int, s: &String): String = \"Count: $n, ${n * 2} of $s\"\n\
+         fun empty(s: &String): String = \"$s$s\"\n\
+         fun scalars(d: Double, b: Bool, c: Char): String = \"$d $b $c\"\n",
+    );
+    let label: extern "C" fn(*mut PrismString, i64, *const PrismString) =
+        function(&program, "main::label");
+    let empty: extern "C" fn(*mut PrismString, *const PrismString) =
+        function(&program, "main::empty");
+    let scalars: extern "C" fn(*mut PrismString, f64, u8, u32) =
+        function(&program, "main::scalars");
+    let allocations = checked(|| {
+        let x = PrismString::of_static("x");
+        let result = returned(|r| label(r, 7, &x));
+        assert_eq!(result.as_str(), "Count: 7, 14 of x");
+        assert_eq!(result.capacity, result.byte_length);
+        drop_string(result);
+    });
+    assert_eq!(allocations, 1);
+    let allocations = checked(|| {
+        let nothing = PrismString::of_static("");
+        let result = returned(|r| empty(r, &nothing));
+        assert_eq!(result.byte_length, 0);
+        assert!(!result.owns_buffer());
+    });
+    assert_eq!(allocations, 0);
+    let allocations = checked(|| {
+        let result = returned(|r| scalars(r, 0.1 + 0.2, 1, 'é' as u32));
+        assert_eq!(
+            (result.as_str(), result.character_count),
+            ("0.30000000000000004 true é", 26)
+        );
+        drop_string(result);
+    });
+    assert_eq!(allocations, 1);
+}

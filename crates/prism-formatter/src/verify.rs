@@ -296,6 +296,13 @@ fn erase_expression(expression: &mut Expr) {
             erase_expression(target);
             erase_expression(index);
         }
+        ExprKind::Template(parts) => {
+            for part in parts {
+                if let TemplatePart::Expression(expression) = part {
+                    erase_expression(expression);
+                }
+            }
+        }
     }
 }
 

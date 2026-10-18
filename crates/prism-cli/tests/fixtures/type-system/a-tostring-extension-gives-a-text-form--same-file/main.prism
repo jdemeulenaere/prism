@@ -1,0 +1,6 @@
+// expect: ok
+struct Point : Copy { val x: Int, val y: Int }
+enum Color { Red, Green }
+fun Point.toString(): String = "($x, $y)"
+fun Color.toString(): String = when (this) { Color.Red -> "red"; Color.Green -> "green" }
+fun f(p: &Point, c: Color): String = "$p is $c"

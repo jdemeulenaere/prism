@@ -3,7 +3,7 @@
 
 use crate::mir::{
     AggregateKind, BasicBlock, BlockId, Body, BodyId, BodyOwner, Callee, Constant, LocalId,
-    LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind,
+    LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart,
     TerminatorKind,
 };
 use crate::types::{needs_drop, projection_type};
@@ -659,6 +659,26 @@ impl Validator<'_> {
                 };
                 self.expect(result, ty, &what);
             }
+            Rvalue::Template(parts) => {
+                // A template reads strings through shared borrows and scalars by value (D10 of
+                // `string-templates`).
+                self.expect(Some(Type::String), ty, &what);
+                for part in parts {
+                    let TemplatePart::Value(operand) = part else {
+                        continue;
+                    };
+                    match self.operand_type(operand, at) {
+                        Some(Type::Int | Type::Float | Type::Bool | Type::Char) | None => {}
+                        Some(Type::Reference {
+                            mutable: false,
+                            inner,
+                        }) if *inner == Type::String => {}
+                        Some(other) => {
+                            self.report(format!("{} inserts a {} into a template", at, other))
+                        }
+                    }
+                }
+            }
             Rvalue::Unary(operator, operand) => {
                 let found = self.operand_type(operand, at);
                 let result = match operator {
@@ -931,6 +951,11 @@ fn used_by_rvalue(rvalue: &Rvalue, used: &mut Vec<LocalId>) {
                 used_by_place(capture, used);
             }
         }
+        Rvalue::Template(_) => {
+            for operand in rvalue.template_operands() {
+                used_by_operand(operand, used);
+            }
+        }
     }
 }
 
@@ -1002,6 +1027,37 @@ mod tests {
             Place::local(LocalId(2)).project(Projection::Index(index)),
         ));
         assert_reports(&file, "projects Index(LocalId(3)) out of a String");
+    }
+
+    #[test]
+    fn template_rvalues_are_printed_and_checked() {
+        let template = |parts| {
+            let mut file = small_file();
+            body(&mut file).blocks[BlockId(0)].statements[3] = statement(StatementKind::assign(
+                Place::return_place(),
+                Rvalue::Template(parts),
+            ));
+            file
+        };
+        let valid = template(vec![
+            TemplatePart::Text("n = ".to_string()),
+            TemplatePart::Value(Operand::Constant(Constant::Int(7))),
+            TemplatePart::Text("!".to_string()),
+        ]);
+        assert_eq!(violations(&valid), "");
+        assert!(
+            valid
+                .dump()
+                .contains(r#"_0 = template("n = ", const 7, "!")"#),
+            "{}",
+            valid.dump()
+        );
+        // A string part is read through a shared borrow, never by value.
+        let moved = template(vec![TemplatePart::Value(Operand::Move(
+            Place::local(LocalId(2)),
+            prism_ast::Span::default(),
+        ))]);
+        assert_reports(&moved, "inserts a String into a template");
     }
 
     #[test]

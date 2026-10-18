@@ -1,0 +1,4 @@
+// expect: E4026
+struct Counter { var n: Int }
+mut fun Counter.toString(): String { n += 1; return "c" }
+fun g(c: Counter): String = "$c"

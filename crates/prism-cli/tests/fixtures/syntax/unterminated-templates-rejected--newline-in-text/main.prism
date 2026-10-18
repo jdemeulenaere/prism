@@ -1,0 +1,4 @@
+// expect: E2001
+val b = 1
+val s = "a $b
+val next = 1

@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+fun main() {
+    var i = 0
+    var all = ""
+    while (i < 3) {
+        val line = "line ${i.toString() + "."} of ${"" + "3"}"
+        println(line)
+        all = "$all$line;"
+        i += 1
+    }
+    println(all.length)
+}

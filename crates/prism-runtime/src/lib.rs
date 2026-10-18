@@ -53,5 +53,6 @@ pub use string::{
     prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
     prism_rt_int_to_string, prism_rt_print_string, prism_rt_string_character,
     prism_rt_string_clone, prism_rt_string_concatenate, prism_rt_string_drop,
-    prism_rt_string_equals, PrismString,
+    prism_rt_string_equals, prism_rt_string_template, PrismString, TemplatePart, TEMPLATE_BOOL,
+    TEMPLATE_CHAR, TEMPLATE_DOUBLE, TEMPLATE_INT, TEMPLATE_STRING, TEMPLATE_TEXT,
 };

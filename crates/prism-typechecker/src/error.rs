@@ -257,6 +257,31 @@ pub enum TypeError {
     /// E4025: The patterns of one branch bind different names, or one name with different types
     /// or binding modes (D10 of `payload-patterns`). `message` names the binding.
     InconsistentAlternativeBindings { message: String, span: Span },
+
+    /// E4026: A string template part of type `ty` has no text form (D8 of `string-templates`),
+    /// for `reason`. `help` names the fixes, one per line of help.
+    NoTextForm {
+        ty: Type,
+        reason: NoTextFormReason,
+        help: Vec<String>,
+        span: Span,
+    },
+}
+
+/// Why a string template part has no text form (D8 of `string-templates`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoTextFormReason {
+    /// The part is nullable.
+    Nullable,
+    /// The part's type has no `toString()`: `Unit`, a function, a type parameter, or a struct or
+    /// enum without a visible `toString()` member.
+    NoToString,
+    /// The part's `toString()` returns another type.
+    ToStringReturns(Type),
+    /// The part's `toString()` needs arguments.
+    ToStringNeedsArguments,
+    /// The part's `toString()` takes a `mut` (`true`) or `consuming` (`false`) receiver.
+    ToStringReceiver { mutable: bool },
 }
 
 impl TypeError {
@@ -300,6 +325,7 @@ impl TypeError {
             TypeError::InfinitelySizedType { .. } => "E4023",
             TypeError::InvalidPattern { .. } => "E4024",
             TypeError::InconsistentAlternativeBindings { .. } => "E4025",
+            TypeError::NoTextForm { .. } => "E4026",
         }
     }
 
@@ -343,6 +369,7 @@ impl TypeError {
             TypeError::InfinitelySizedType { span, .. } => *span,
             TypeError::InvalidPattern { span, .. } => *span,
             TypeError::InconsistentAlternativeBindings { span, .. } => *span,
+            TypeError::NoTextForm { span, .. } => *span,
         }
     }
 
@@ -446,6 +473,25 @@ impl TypeError {
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),
             TypeError::InvalidPattern { message, .. } => message.clone(),
             TypeError::InconsistentAlternativeBindings { message, .. } => message.clone(),
+            TypeError::NoTextForm { ty, reason, .. } => match reason {
+                NoTextFormReason::Nullable => {
+                    format!("a nullable '{}' has no text form in a string template", ty)
+                }
+                NoTextFormReason::NoToString => {
+                    format!("'{}' has no text form in a string template", ty)
+                }
+                NoTextFormReason::ToStringReturns(returned) => {
+                    format!("'toString()' of '{}' returns '{}', not 'String'", ty, returned)
+                }
+                NoTextFormReason::ToStringNeedsArguments => {
+                    format!("'toString' of '{}' needs arguments", ty)
+                }
+                NoTextFormReason::ToStringReceiver { mutable } => format!(
+                    "a string template does not call the '{}' 'toString()' of '{}' implicitly",
+                    if *mutable { "mut" } else { "consuming" },
+                    ty
+                ),
+            },
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
             TypeError::BuiltinNameDeclared { name, .. } => {

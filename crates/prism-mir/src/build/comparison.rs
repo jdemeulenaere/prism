@@ -1,12 +1,12 @@
 //! Operators over borrowed operands, and optional reborrows (D12 and D14 of `mir-lowering`).
 //!
-//! An operator over a type that is not `Copy` (`==`, `!=`, string concatenation) reads shared
-//! borrows of its operands (`Operator` origin), nullable ones as optional borrows `(&T)?`, so no
+//! An operator over a type that is not `Copy` (`==`, `!=`, string concatenation), and a string
+//! template's `String` parts, read shared borrows of their operands (`Operator` origin), nullable ones as optional borrows `(&T)?`, so no
 //! operand is moved or copied; a comparison with `null` reads the tag. A `(&mut T)?` place lent as a `(&T)?` or as a
 //! `(&mut T)?` is reborrowed through a tag test.
 
 use super::Builder;
-use crate::mir::{BorrowOrigin, Constant, Operand, Place, Projection, Rvalue};
+use crate::mir::{BorrowOrigin, Constant, Operand, Place, Projection, Rvalue, TemplatePart};
 use prism_ast::Span;
 use prism_typed_tree::{BinaryOperator, CoercionKind, ExpressionId, ExpressionKind, Type};
 
@@ -70,6 +70,54 @@ impl Builder<'_> {
             )
         };
         self.assign(destination, Rvalue::Binary(operator, left, right), span);
+    }
+
+    /// A string template into `destination` (D10 and D11 of `string-templates`): its value
+    /// parts evaluated left to right, each `String` as a shared `Operator` borrow of its place
+    /// (a computed one a temporary of the statement), each scalar as an operand of its type,
+    /// held in a temporary when a later part may write the place it reads, then one
+    /// [`Rvalue::Template`] over the text and those operands.
+    pub(super) fn lower_template(
+        &mut self,
+        destination: Option<&Place>,
+        parts: &[prism_typed_tree::TemplatePart],
+        span: Span,
+    ) {
+        let destination = self.destination_or_temporary(destination, &Type::String, span);
+        let values: Vec<ExpressionId> = parts
+            .iter()
+            .filter_map(|part| match part {
+                prism_typed_tree::TemplatePart::Value(value) => Some(*value),
+                prism_typed_tree::TemplatePart::Text(_) => None,
+            })
+            .collect();
+        let later_may_write = self.later_may_write(&values);
+        let mut position = 0;
+        let mut lowered = Vec::with_capacity(parts.len());
+        for part in parts {
+            let value = match part {
+                prism_typed_tree::TemplatePart::Text(text) => {
+                    lowered.push(TemplatePart::Text(text.clone()));
+                    continue;
+                }
+                prism_typed_tree::TemplatePart::Value(value) => *value,
+            };
+            let expression = self.expression(value);
+            let (ty, value_span) = (expression.ty.clone(), expression.span);
+            let operand = if ty == Type::String {
+                self.comparison_operand(value)
+            } else {
+                let operand = self.operand(value);
+                if later_may_write[position] {
+                    self.stabilize(operand, ty, value_span)
+                } else {
+                    operand
+                }
+            };
+            position += 1;
+            lowered.push(TemplatePart::Value(operand));
+        }
+        self.assign(destination, Rvalue::Template(lowered), span);
     }
 
     /// `target op= value` (D5 of `compound-assignment`): the target's place, evaluated once, is

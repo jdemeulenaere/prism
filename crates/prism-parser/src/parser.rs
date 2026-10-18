@@ -1315,6 +1315,8 @@ impl Parser {
             | TokenKind::This
             | TokenKind::Compose => self.parse_atom(),
 
+            TokenKind::TemplateStart => self.parse_template(),
+
             // Unary operators
             TokenKind::Minus | TokenKind::Bang | TokenKind::Amp | TokenKind::AmpAmp => {
                 self.parse_unary()
@@ -1392,6 +1394,63 @@ impl Parser {
         Ok(Expr::new(kind, tok.span))
     }
 
+    /// A string template, from its `TemplateStart` to its `TemplateEnd` (D5 of
+    /// `string-templates`). A `$name` part is the identifier (or `this`) spanning the name
+    /// without its `$`; a `${...}` part holds one expression, parsed with newlines insignificant
+    /// as inside parentheses.
+    fn parse_template(&mut self) -> Result<Expr, ParseError> {
+        let start = self.expect(TokenKind::TemplateStart)?.span;
+        let mut parts = Vec::new();
+        loop {
+            let token = self.peek().clone();
+            match token.kind {
+                TokenKind::TemplateText(text) => {
+                    self.bump();
+                    parts.push(TemplatePart::Text(text));
+                }
+                TokenKind::TemplateName(name) => {
+                    self.bump();
+                    let span = token.span;
+                    let name_span = Span::new(span.start + 1, span.end, span.line, span.column + 1);
+                    let kind = if name == "this" {
+                        ExprKind::This
+                    } else {
+                        ExprKind::Ident(name)
+                    };
+                    parts.push(TemplatePart::Expression(Expr::new(kind, name_span)));
+                }
+                TokenKind::TemplateExpressionStart => {
+                    self.bump();
+                    if self.peek_kind() == &TokenKind::TemplateExpressionEnd {
+                        return Err(ParseError::new(
+                            "Expected an expression in '${}'",
+                            self.peek().span,
+                        ));
+                    }
+                    let part = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
+                    if self.peek_kind() != &TokenKind::TemplateExpressionEnd {
+                        return Err(ParseError::new(
+                            format!("Expected '}}' to close '${{', found '{}'", self.peek_kind()),
+                            self.peek().span,
+                        ));
+                    }
+                    self.bump();
+                    parts.push(TemplatePart::Expression(part));
+                }
+                TokenKind::TemplateEnd => {
+                    let end = self.bump().span;
+                    return Ok(Expr::new(ExprKind::Template(parts), start.merge(end)));
+                }
+                other => {
+                    return Err(ParseError::new(
+                        format!("Unexpected token in string template: '{}'", other),
+                        token.span,
+                    ))
+                }
+            }
+        }
+    }
+
     /// Prefix operators: `-`, `!`, `&` and `&mut`.
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         if let Some(min) = self.try_parse_int_min() {
@@ -1455,6 +1514,7 @@ impl Parser {
             TokenKind::Int(_)
                 | TokenKind::Float(_)
                 | TokenKind::String(_)
+                | TokenKind::TemplateStart
                 | TokenKind::Char(_)
                 | TokenKind::True
                 | TokenKind::False

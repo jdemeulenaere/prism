@@ -260,6 +260,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }
+        TypeError::NoTextForm { help, .. } => {
+            for help in help {
+                out.push_str(&format!("   = help: {}\n", help));
+            }
+        }
         TypeError::ImmutabilityViolation { .. } => {
             out.push_str("   = help: use 'var' to declare a mutable binding or field\n");
         }

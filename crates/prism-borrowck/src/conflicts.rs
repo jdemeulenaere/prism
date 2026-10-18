@@ -258,6 +258,11 @@ fn rvalue_events(
                 operand_events(file, body, operand, events);
             }
         }
+        Rvalue::Template(_) => {
+            for operand in rvalue.template_operands() {
+                operand_events(file, body, operand, events);
+            }
+        }
         Rvalue::Borrow { mutable, place, .. } => {
             let kind = if *mutable {
                 AccessKind::MutableBorrow

@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun main() {
+    val n = -42
+    val d = 1.0E7
+    println("$n|$d|${0.1 + 0.2}|${n > 0}|${'é'}|${4.9E-324}")
+}
