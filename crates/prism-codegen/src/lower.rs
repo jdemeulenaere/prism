@@ -6,7 +6,9 @@
 //! that call `prism_rt_panic` at the operator's span (D10); `Double` follows IEEE 754, its `%`
 //! calling the runtime (D11). Every call of a generated function loads its target from its slot
 //! of the function table (D4), and a read of a top-level value calls its accessor the same way,
-//! panicking on the null pointer of a value read during its own initialization (D18).
+//! panicking on the null pointer of a value read during its own initialization (D18). Each body
+//! starts by comparing the stack pointer with the runtime's stack limit, raising "stack overflow"
+//! below it (D27).
 
 use crate::error::BackendError;
 use crate::representation::{
@@ -150,6 +152,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 .ok_or_else(|| BackendError::new("fewer parameters than arguments"))?;
             self.write_place(&Place::local(local), Lowered::Scalar(value))?;
         }
+        self.check_stack()?;
         self.builder.ins().jump(self.blocks[0], &[]);
         for (index, (_, block)) in self.body.blocks.iter().enumerate() {
             self.builder.switch_to_block(self.blocks[index]);
@@ -556,6 +559,24 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         );
         self.builder.ins().trap(UNREACHABLE);
         Ok(())
+    }
+
+    /// Raises "stack overflow" at the body's declaration when the stack pointer is below the
+    /// runtime's stack limit (D27), before the body runs.
+    fn check_stack(&mut self) -> Result<(), BackendError> {
+        let pointer = self.pointer();
+        let limit = self.context.stack_limit()?;
+        let limit_address = self.data(limit);
+        let limit = self
+            .builder
+            .ins()
+            .load(pointer, MemFlagsData::trusted(), limit_address, 0);
+        let stack_pointer = self.builder.ins().get_stack_pointer(pointer);
+        let overflow = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedLessThan, stack_pointer, limit);
+        self.check(overflow, PanicKind::StackOverflow, "", self.body.span)
     }
 
     // Calls.

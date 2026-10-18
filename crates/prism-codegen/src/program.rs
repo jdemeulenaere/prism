@@ -1,4 +1,4 @@
-//! A linked program and how it runs (D19 of `codegen-core`).
+//! A linked program and how it runs (D19 and D27 of `codegen-core`).
 
 use crate::error::BackendError;
 use crate::link::{FunctionTable, Linker};
@@ -59,11 +59,17 @@ impl Program {
             .name("main".to_string())
             .stack_size(PROGRAM_STACK_SIZE)
             .spawn(move || {
+                // The stack grows down from about here: generated code raises "stack overflow"
+                // before it reaches the end (D27).
+                let top = 0u8;
+                let top = std::hint::black_box(std::ptr::addr_of!(top)) as usize;
+                prism_runtime::set_stack_limit(top, PROGRAM_STACK_SIZE);
                 prism_runtime::start(arguments);
                 // SAFETY: `address` is the compiled `main`, whose signature `find_main` checked:
                 // no parameters, no result, the host's C calling convention.
                 let main: extern "C" fn() = unsafe { std::mem::transmute(address) };
                 main();
+                prism_runtime::clear_stack_limit();
                 prism_runtime::finish()
             })
             .map_err(|error| BackendError::new(format!("starting the program: {}", error)))?;

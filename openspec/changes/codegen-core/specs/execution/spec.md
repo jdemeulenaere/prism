@@ -101,6 +101,13 @@ A runtime error MUST flush the program's output, write `panic: <message>` and th
 - **WHEN** `app/main.prism` declares `fun zero(): Int = 0` on line 2 and `fun main() { val a = 1; println(a / zero()) }` on line 3, with `a / zero()` starting at column 33
 - **THEN** stderr is exactly `panic: division by zero` and `  at app/main.prism:3:33`, each followed by a newline
 
+### Requirement: Stack Overflow Is a Runtime Error
+A program whose calls nest deeper than its stack allows MUST raise the runtime error "stack overflow" at the declaration of the function being entered, which ends the program as any runtime error does. A program MUST get a stack of the same size on every platform.
+
+#### Scenario: Unbounded recursion
+- **WHEN** `fun deep(n: Int): Int = 1 + deep(n + 1)` is declared and `fun main() { println(1); println(deep(0)) }` runs
+- **THEN** stdout holds `1` and a newline, stderr holds `panic: stack overflow` and the location of the declaration of `deep`, and the exit status is 101
+
 ### Requirement: Top-Level Values Initialize on First Read
 A top-level `val`'s initializer MUST run when the program first reads the value, and only then; later reads MUST give the same value without running it again. A value the program never reads MUST never be initialized. Reading a value while its own initializer runs MUST raise the runtime error "top-level value '<name>' read during its own initialization".
 

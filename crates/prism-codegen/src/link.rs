@@ -19,7 +19,9 @@ use crate::unit::CodeUnit;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{default_libcall_names, FuncId, Module};
 use prism_mir::MirFile;
-use prism_runtime::{prism_rt_unlinked_function, RUNTIME_FUNCTIONS};
+use prism_runtime::{
+    prism_rt_unlinked_function, RUNTIME_FUNCTIONS, STACK_LIMIT, STACK_LIMIT_SYMBOL,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -117,7 +119,11 @@ impl Linker {
         builder.symbols(
             RUNTIME_FUNCTIONS
                 .iter()
-                .map(|function| (function.name, function.address.as_ptr())),
+                .map(|function| (function.name, function.address.as_ptr()))
+                .chain(std::iter::once((
+                    STACK_LIMIT_SYMBOL,
+                    std::ptr::addr_of!(STACK_LIMIT).cast::<u8>(),
+                ))),
         );
         let lookup_table = Arc::clone(&table);
         builder.symbol_lookup_fn(Box::new(move |name| {

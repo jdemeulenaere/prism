@@ -21,7 +21,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use prism_mir::{BodyOwner, MirFile};
-use prism_runtime::{RuntimeType, RUNTIME_FUNCTIONS};
+use prism_runtime::{RuntimeType, RUNTIME_FUNCTIONS, STACK_LIMIT_SYMBOL};
 use prism_typed_tree::{DeclarationPath, Type};
 use std::collections::HashMap;
 
@@ -97,6 +97,7 @@ pub(crate) struct UnitContext<'m, M: Module> {
     texts: HashMap<String, DataId>,
     runtime: HashMap<&'static str, FuncId>,
     slots: HashMap<String, DataId>,
+    stack_limit: Option<DataId>,
 }
 
 impl<'m, M: Module> UnitContext<'m, M> {
@@ -113,6 +114,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             texts: HashMap::new(),
             runtime: HashMap::new(),
             slots: HashMap::new(),
+            stack_limit: None,
         };
         let id = context.define_bytes(&format!("{}#file", file.module), name.as_bytes())?;
         context.file_name = (id, name.len());
@@ -201,6 +203,18 @@ impl<'m, M: Module> UnitContext<'m, M> {
             .module
             .declare_function(name, Linkage::Import, &signature)?;
         self.runtime.insert(name, id);
+        Ok(id)
+    }
+
+    /// The imported runtime static holding the stack limit (D27).
+    pub fn stack_limit(&mut self) -> Result<DataId, BackendError> {
+        if let Some(id) = self.stack_limit {
+            return Ok(id);
+        }
+        let id = self
+            .module
+            .declare_data(STACK_LIMIT_SYMBOL, Linkage::Import, false, false)?;
+        self.stack_limit = Some(id);
         Ok(id)
     }
 

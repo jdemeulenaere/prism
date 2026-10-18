@@ -1,0 +1,4 @@
+// expect: ok
+// run: 101
+fun deep(n: Int): Int = 1 + deep(n + 1)
+fun main() { println(1); println(deep(0)) }

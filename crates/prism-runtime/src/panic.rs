@@ -25,16 +25,19 @@ pub enum PanicKind {
     Unreachable = 3,
     /// A call through a slot of the function table that no function fills.
     UnlinkedFunction = 4,
+    /// A call entered a function with the stack pointer below the stack limit.
+    StackOverflow = 5,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 5] = [
+    pub const ALL: [PanicKind; 6] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
         PanicKind::Unreachable,
         PanicKind::UnlinkedFunction,
+        PanicKind::StackOverflow,
     ];
 
     /// The kind with code `code`.
@@ -58,6 +61,7 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         PanicKind::UnlinkedFunction => {
             "internal error: called a function that is not linked".to_string()
         }
+        PanicKind::StackOverflow => "stack overflow".to_string(),
     }
 }
 
@@ -155,6 +159,7 @@ mod tests {
                 "",
                 "internal error: called a function that is not linked",
             ),
+            (PanicKind::StackOverflow, "", "stack overflow"),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());
         for (kind, detail, message) in cases {

@@ -23,7 +23,7 @@ Current state:
 
 **Non-Goals:**
 - Optimization beyond what Cranelift does by itself; parallel compilation of files (the per-file units allow it later).
-- Caching generated code, Tier 2, debug information, backtraces, stack-overflow reporting.
+- Caching generated code, Tier 2, debug information, backtraces.
 - Layouts of aggregates and of types from transitively imported modules (D24 records the decision path).
 
 ## Decisions
@@ -106,7 +106,7 @@ This answers the `mir-lowering` follow-up "trap, wrap or check": trap, like Swif
 
 ### D12. Runtime errors abort with status 101 (autonomous)
 
-A runtime error ("panic") calls `prism_rt_panic(kind: u32, detail: *const u8, detail_length: usize, file: *const u8, file_length: usize, line: u32, column: u32) -> !`. The kinds are integer overflow (the detail is the operator), division by zero, a top-level value read during its own initialization (the detail is the value's name), unreachable code, and an unlinked function. The file is the module path plus `.prism` (`app/main.prism`); it and the details are read-only data in the file's code unit, so locations are workspace-relative and deterministic and a unit needs no shared table. Line and column are immediates from the MIR span. The runtime flushes the program's output, writes `panic: <message>` and `  at <file>:<line>:<column>` to stderr, and exits the process with status 101.
+A runtime error ("panic") calls `prism_rt_panic(kind: u32, detail: *const u8, detail_length: usize, file: *const u8, file_length: usize, line: u32, column: u32) -> !`. The kinds are integer overflow (the detail is the operator), division by zero, a top-level value read during its own initialization (the detail is the value's name), unreachable code, an unlinked function, and a stack overflow (D27). The file is the module path plus `.prism` (`app/main.prism`); it and the details are read-only data in the file's code unit, so locations are workspace-relative and deterministic and a unit needs no shared table. Line and column are immediates from the MIR span. The runtime flushes the program's output, writes `panic: <message>` and `  at <file>:<line>:<column>` to stderr, and exits the process with status 101.
 
 A panic does not unwind: no drop runs and no caller can catch it, as with Rust's `panic=abort`. Process exit releases memory, and with no unwinding there are no landing pads in MIR, no cleanup blocks for drop elaboration to build, and no unwind tables to register with the JIT. A `prism test` runner may later want recoverable failures; it can run each test in its own process, or unwinding can be designed then. Status 101 is Rust's panic status, distinct from 1 (the program did not compile) and from signal statuses. Rejected: unwinding now (cost above, for an error that ends the program), Cranelift traps and signal handlers (no message, platform-specific), status 1 or 134. No backtrace is printed yet.
 
@@ -142,7 +142,7 @@ Rejected: eager initialization before `main` in dependency order (a cross-file o
 
 ### D19. The program runs on its own thread (autonomous)
 
-`Program::run` spawns one thread with an 8 MiB stack, calls `prism_runtime::start`, calls `main` through its slot, calls `prism_runtime::finish`, and joins, so the stack a program gets does not depend on how `prism` was started or on the platform's main-thread size (1 MiB on Windows). A stack overflow hits the thread's guard page and aborts through Rust's handler ("has overflowed its stack", signal status); reporting it as a Prism panic is a follow-up.
+`Program::run` spawns one thread with an 8 MiB stack, calls `prism_runtime::start`, calls `main` through its slot, calls `prism_runtime::finish`, and joins, so the stack a program gets does not depend on how `prism` was started or on the platform's main-thread size (1 MiB on Windows). A stack overflow is reported as a Prism panic before it reaches the guard page (D27).
 
 ### D20. `prism run` reuses Phase 2 and does not use the build cache (autonomous)
 
@@ -177,6 +177,12 @@ A fixture whose header has `// run: <status>` beside its `// expect:` line (usua
 - **References are named by their referent in `E6001`** (D9's table): `fun f(s: &String)` reports strings.
 - **The unlinked stub reports no location.** `prism_rt_unlinked_function` is called with whatever arguments the call site passes, so it cannot know where it was called from; it reports an internal error without an `at` line. In a checked program it is never reached.
 
+### D27. Stack overflow is a runtime error, detected by a check on entry (autonomous)
+
+*Decided during the review before archiving.* An unbounded recursion used to run into the program thread's guard page, where Rust's handler printed "thread 'main' has overflowed its stack" and aborted (status 134), losing the program's buffered output. Now every compiled body starts by loading the runtime static `prism_rt_stack_limit` (`STACK_LIMIT` in `prism-runtime`, imported as a data symbol like the slots) and comparing it with the stack pointer (`get_stack_pointer`); below it, a cold block raises the runtime error "stack overflow" at the body's span, the declaration of the function being entered, which flushes the output and exits with 101 like every other panic (D12). `Program::run` sets the limit on the program's thread to 256 KiB (`STACK_RESERVE`) above the end of its 8 MiB stack (D19), measured from the address of a local at the start of the thread, which leaves room for the overflowing frame (frames of scalar code are small, and inline stack probes still stop a huge one at the guard page) and for the runtime's report; the limit is zero, which disables the check, outside a run, so tests calling compiled functions from Rust are unaffected. Every body checks, leaf functions included: skipping leaves would save a compare per call at the price of an analysis of which bodies can call generated code, through calls and top-level value accessors alike.
+
+Rejected: a `SIGSEGV`/`SIGBUS` handler on an alternate signal stack that recognizes a fault in the guard page (platform-specific `sigaction` layouts, a `libc` dependency for the runtime, which depends on nothing, and flushing output from a signal handler, where the output lock may be held); Cranelift's own `stack_limit` prologue check (it raises a trap, so a signal with no message or location, as D12 rejected); leaving the abort as a follow-up (output lost, a status other than 101 for what is a runtime error).
+
 ## Risks / Trade-offs
 
 - [Cranelift's API changes between versions] → the exact pin (D2); upgrades are deliberate commits that re-run the fixtures.
@@ -186,7 +192,7 @@ A fixture whose header has `// run: <status>` beside its `// expect:` line (usua
 - [Panics do not unwind, so a future in-process test runner cannot recover from one] → run tests in subprocesses, or design unwinding with `prism test`; nothing here prevents it.
 - [Lazy top-level values make the order of side effects in initializers depend on first use] → initializers with side effects are unusual, the order is deterministic and specified, and a cycle is a runtime error, not a hang.
 - [The JIT needs writable then executable memory, which hardened macOS processes restrict] → `cranelift-jit`'s default memory provider handles `MAP_JIT` and write protection on Apple silicon; `prism` is not built with the hardened runtime.
-- [Stack overflow aborts with a signal status rather than 101] → listed as a follow-up; the 8 MiB stack makes it consistent across platforms.
+- [Every function entry pays a load, a compare and a branch for the stack check (D27)] → the same order of cost as the slot load every call already pays, in a development tier; Tier 2 can use guard pages instead.
 
 ## Migration Plan
 

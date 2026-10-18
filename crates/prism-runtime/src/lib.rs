@@ -11,6 +11,9 @@
 //! ([`prism_rt_panic`]) flushes the output, reports the error and ends the process with status
 //! [`PANIC_EXIT_STATUS`], without unwinding (D12).
 //!
+//! Generated code also reads one runtime static, [`STACK_LIMIT`], to detect a stack overflow
+//! before it reaches the guard page.
+//!
 //! This crate depends on nothing, so Tier 2 can link it into native executables without
 //! Cranelift (D1).
 
@@ -18,6 +21,7 @@ mod double;
 mod functions;
 mod output;
 mod panic;
+mod stack;
 
 pub use double::format_double;
 pub use functions::{
@@ -30,4 +34,7 @@ pub use output::{
 pub use panic::{
     panic_message, prism_rt_double_remainder, prism_rt_panic, prism_rt_unlinked_function,
     PanicKind, PANIC_EXIT_STATUS,
+};
+pub use stack::{
+    clear_stack_limit, set_stack_limit, STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,
 };
