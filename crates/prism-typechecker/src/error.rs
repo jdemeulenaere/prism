@@ -190,6 +190,9 @@ pub enum TypeError {
         /// For the contents of a box, the call that moves them out (`h.unbox()`, D6 of
         /// `heap-boxes`).
         unbox: Option<String>,
+        /// For an element of a list, the call that takes it out (`xs.removeAt(0)`, D7 of
+        /// `collections`).
+        remove: Option<String>,
         /// Whether the source is a capture of the closure being checked, which never gives away
         /// what it captures, whether it borrows or owns it (D15 of `escaping-closures`).
         captured: bool,

@@ -1,0 +1,11 @@
+module main
+fun main::f(_1: &List<String>): &String @2:1
+  local _0: &String (return)
+  local _1 xs: &List<String> (argument)
+  local _2: Int (temporary)
+  bb0:
+    storage_live _2 @2:41
+    _2 = const 0 @2:41
+    _0 = &(*_1)[_2] (written) @2:37
+    storage_dead _2 @2:37
+    return @2:1

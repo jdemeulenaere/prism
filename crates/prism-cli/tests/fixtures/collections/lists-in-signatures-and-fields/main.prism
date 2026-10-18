@@ -1,0 +1,4 @@
+// expect: ok
+struct Todo { val title: String, var done: Bool }
+struct Model { var todos: List<Todo> }
+public fun count(m: &Model): Int = m.todos.size

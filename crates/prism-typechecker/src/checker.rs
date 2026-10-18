@@ -26,9 +26,9 @@ use prism_ast::{Span, TypeMarker, Visibility};
 use prism_typed_tree::{
     Argument, BinaryOperator, BorrowOrigin, BuiltinFunction, Call, Callee, CoercionKind,
     ConstructField, ConstructKind, DeclarationPath, EnumItem, ExpressionId, ExpressionKind,
-    FunctionItem, Item, Local, LocalKind, LogicalOperator, Pattern, SafeNavigationOrigin,
-    StatementId, StatementKind as TreeStatementKind, StructItem, TemplatePart as TreeTemplatePart,
-    TypeTable, TypedFile, UnaryOperator, ValueItem,
+    ForIteration, FunctionItem, Item, Local, LocalKind, LogicalOperator, Pattern,
+    SafeNavigationOrigin, StatementId, StatementKind as TreeStatementKind, StructItem,
+    TemplatePart as TreeTemplatePart, TypeTable, TypedFile, UnaryOperator, ValueItem,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -43,6 +43,14 @@ const HEAP: &str = "Heap";
 
 /// The name of the built-in list type (D2 of `collections`), reserved like [`HEAP`].
 const LIST: &str = "List";
+
+/// The name of the built-in list constructor (D4 of `collections`), which declarations of the
+/// name shadow, like the output built-ins.
+const LIST_OF: &str = "listOf";
+
+/// The help of an element type `listOf` cannot infer (`E4013`, D4 of `collections`).
+const LIST_ELEMENT_HELP: &str =
+    "write the element type, as in 'listOf<Int>()', or annotate the expected type, as in 'val xs: List<Int> = listOf()'";
 
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
@@ -256,6 +264,70 @@ struct Extension {
     /// The function's signature, parameter names, defaults and visibility. Its name is the
     /// method's name.
     symbol: Symbol,
+    /// The built-in function a built-in member is a call of (a list member, D6 of
+    /// `collections`); `None` for a declared extension.
+    builtin: Option<BuiltinFunction>,
+}
+
+impl Extension {
+    /// The built-in list member named `name`, as an extension on `List<T>` with `T` its type
+    /// parameter, from a table built once (D6 of `collections`). `size` and `indices` are read
+    /// without parentheses, so they are not members a call finds.
+    fn list_member(name: &str) -> Option<&'static Extension> {
+        static MEMBERS: std::sync::OnceLock<HashMap<&'static str, Extension>> =
+            std::sync::OnceLock::new();
+        MEMBERS
+            .get_or_init(|| {
+                BuiltinFunction::LIST_MEMBERS
+                    .into_iter()
+                    .filter(|builtin| {
+                        !matches!(
+                            builtin,
+                            BuiltinFunction::ListSize | BuiltinFunction::ListIndices
+                        )
+                    })
+                    .filter_map(|builtin| {
+                        let signature = builtin.list_member_signature()?;
+                        let parameter = BuiltinFunction::list_element_parameter();
+                        let receiver = Type::List(Box::new(parameter.as_type()));
+                        let (names, params): (Vec<String>, Vec<Type>) = signature
+                            .parameters
+                            .into_iter()
+                            .map(|(name, ty)| (name.to_string(), ty))
+                            .unzip();
+                        let has_default = vec![false; params.len()];
+                        let symbol = Symbol::function_with_defaults(
+                            builtin.name(),
+                            Type::function(false, params, signature.result),
+                            names,
+                            has_default,
+                            Visibility::Public,
+                            None,
+                            Span::dummy(),
+                        )
+                        .with_module(BUILTIN_MODULE)
+                        .with_type_parameters(vec![parameter]);
+                        let extension = Extension {
+                            mode: signature.mode,
+                            receiver,
+                            module: BUILTIN_MODULE.to_string(),
+                            symbol,
+                            builtin: Some(builtin),
+                        };
+                        Some((builtin.name(), extension))
+                    })
+                    .collect()
+            })
+            .get(name)
+    }
+}
+
+/// Whether `name` is the name of a built-in list member, `size` and `indices` included: an
+/// extension of that name on `List` could never be called (D6 of `collections`).
+fn is_list_member_name(name: &str) -> bool {
+    BuiltinFunction::LIST_MEMBERS
+        .iter()
+        .any(|builtin| builtin.name() == name)
 }
 
 /// What extensions are keyed by: the type constructor of their receiver, without type arguments
@@ -264,15 +336,20 @@ struct Extension {
 enum ReceiverKey {
     /// A struct or enum, by identity.
     Nominal(NominalId),
+    /// Any list, whatever its element type (D2 of `collections`).
+    List,
     /// Any other receiver type, as it is.
     Other(Type),
 }
 
 impl ReceiverKey {
     fn of(ty: &Type) -> Self {
-        match ty.nominal_id() {
-            Some(id) => ReceiverKey::Nominal(id.clone()),
-            None => ReceiverKey::Other(ty.clone()),
+        match ty {
+            Type::List(_) => ReceiverKey::List,
+            _ => match ty.nominal_id() {
+                Some(id) => ReceiverKey::Nominal(id.clone()),
+                None => ReceiverKey::Other(ty.clone()),
+            },
         }
     }
 }
@@ -476,6 +553,10 @@ pub struct TypeChecker {
     /// While a guard is checked: the bindings of its branch and their modes, which the guard may
     /// neither move nor mutate (D9 of `payload-patterns`).
     guard_bindings: Vec<(prism_typed_tree::LocalId, prism_typed_tree::BindingMode)>,
+    /// The variables of `for` loops over lists borrowed shared, by the span of their
+    /// declaration, with the iterable's source, so that a write through one suggests iterating
+    /// `&mut` (D9 of `collections`).
+    shared_loop_variables: HashMap<Span, String>,
 }
 
 impl TypeChecker {
@@ -510,6 +591,7 @@ impl TypeChecker {
             variant_owners: HashMap::new(),
             ambiguous_variants: HashSet::new(),
             guard_bindings: Vec::new(),
+            shared_loop_variables: HashMap::new(),
         }
     }
 
@@ -1063,7 +1145,10 @@ impl TypeChecker {
                 Some(sym)
             }
             Err(TypeError::UnresolvedSymbol { .. })
-                if output_builtin_named(name).is_some() || name == HEAP || name == LIST =>
+                if output_builtin_named(name).is_some()
+                    || name == HEAP
+                    || name == LIST
+                    || name == LIST_OF =>
             {
                 // An output built-in can only be called (D15 of `codegen-core`).
                 self.errors.push(TypeError::BuiltinFunctionAsValue {
@@ -1617,6 +1702,7 @@ impl TypeChecker {
                                     receiver: receiver_ty,
                                     module: abi.module.clone(),
                                     symbol,
+                                    builtin: None,
                                 };
                                 candidates.push((abi.module.clone(), extension));
                             }
@@ -2114,12 +2200,14 @@ impl TypeChecker {
             _ => false,
         };
         let builtin_clash = (f.name == TO_STRING && has_builtin_to_string(&receiver_ty))
-            || (f.name == STRING_LENGTH && receiver_ty == Type::String);
+            || (f.name == STRING_LENGTH && receiver_ty == Type::String)
+            || (matches!(receiver_ty, Type::List(_)) && is_list_member_name(&f.name));
         if self.own_extensions.contains_key(&key) {
             // Extensions are keyed by the receiver's type constructor (D10 of `generics`), so
             // `Box<Int>.size` and `Box<T>.size` are one name.
             let constructor = match &key.0 {
                 ReceiverKey::Nominal(id) => id.name.clone(),
+                ReceiverKey::List => LIST.to_string(),
                 ReceiverKey::Other(ty) => ty.to_string(),
             };
             self.errors.push(TypeError::DuplicateSymbol {
@@ -2158,6 +2246,7 @@ impl TypeChecker {
             receiver: receiver_ty,
             module: self.module_path.clone(),
             symbol,
+            builtin: None,
         };
         self.own_extensions.insert(key, extension);
     }
@@ -2391,6 +2480,7 @@ impl TypeChecker {
                     InferenceKey::Declaration(name) => name.clone(),
                     InferenceKey::Extension { receiver, name } => match receiver {
                         ReceiverKey::Nominal(id) => format!("{}.{}", id.name, name),
+                        ReceiverKey::List => format!("{}.{}", LIST, name),
                         ReceiverKey::Other(ty) => format!("{}.{}", ty, name),
                     },
                 };
@@ -2689,6 +2779,9 @@ impl TypeChecker {
                 is_safe_nav: false,
                 ..
             } => self.type_name_symbol(target).is_none(),
+            // An element of a list, from any root, as a field path is (D7 of `collections`); a
+            // string's character is a value, which reading in place makes a temporary.
+            ExprKind::Index { .. } => true,
             _ => false,
         }
     }
@@ -3204,37 +3297,7 @@ impl TypeChecker {
                 is_safe_nav,
             } => self.infer_member_access(target, member, *is_safe_nav, expr.span),
 
-            ExprKind::Index { target, index } => {
-                let index_id = self.check_expr(index, &Type::Int);
-                // A string's character is computed, not stored: `s[i]` is a call of the
-                // built-in `get` with a shared receiver borrow of the string, read in place
-                // when it is a place and consumed into a temporary otherwise, as the receiver of
-                // `clone()` is (D5 of `runtime-strings-and-drops`).
-                let target_id = if self.is_place(target) {
-                    self.infer_place(target).0
-                } else {
-                    self.with_consuming(true, |c| c.infer_expr(target))
-                };
-                let base = self.peel_indirection_nodes(target_id);
-                match self.ty(base) {
-                    Type::String => self.builtin_member_call(
-                        BuiltinFunction::StringCharacter,
-                        base,
-                        vec![index_id],
-                        expr.span,
-                    ),
-                    Type::Error => self.error_node(vec![index_id, base], expr.span),
-                    other => {
-                        self.errors.push(TypeError::TypeMismatch {
-                            expected: Type::String,
-                            found: other,
-                            span: expr.span,
-                            help: None,
-                        });
-                        self.error_node(vec![index_id, base], expr.span)
-                    }
-                }
-            }
+            ExprKind::Index { target, index } => self.infer_index(target, index, expr.span).0,
 
             ExprKind::Return(opt_expr) => {
                 if !self.in_function {
@@ -3966,7 +4029,24 @@ impl TypeChecker {
                 (node, referent, true)
             }
             (ExprKind::Index { .. }, _) => {
-                let node = self.with_origin(Origin::Value, |c| c.infer_expr(target));
+                let (node, writable) = self.with_origin(Origin::Value, |c| c.infer_place(target));
+                if matches!(self.builder.kind(node), ExpressionKind::Index { .. }) {
+                    // An element of a list (D7 of `collections`).
+                    let element_ty = self.ty(node);
+                    if !writable {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot assign to '{}': the list is not a mutable place (a 'val' binding or field, or reached through a shared '&' borrow)",
+                                target
+                            ),
+                            span,
+                            help: Some(
+                                "a list is changed through a 'var' or a '&mut'".to_string(),
+                            ),
+                        });
+                    }
+                    return (node, element_ty, writable);
+                }
                 if self.ty(node) != Type::Error {
                     self.errors.push(TypeError::ImmutabilityViolation {
                         message: format!("cannot assign to '{}'", target),
@@ -4223,16 +4303,26 @@ impl TypeChecker {
                     mutable
                 };
                 if !through && !refused {
+                    // The variable of a loop over a list borrowed shared (D9 of `collections`).
+                    let loop_help = binding_name(reference)
+                        .and_then(|name| self.env.lookup(name))
+                        .and_then(|sym| self.shared_loop_variables.get(&sym.span))
+                        .map(|list| {
+                            format!(
+                                "iterate the list mutably to write its elements: 'for ({} in &mut {})'",
+                                reference, list
+                            )
+                        });
                     self.errors.push(TypeError::ImmutabilityViolation {
                         message: format!(
                             "cannot write through '{}': it is a shared '&' borrow, which cannot be written through",
                             reference
                         ),
                         span,
-                        help: Some(
+                        help: Some(loop_help.unwrap_or_else(|| {
                             "take a mutable borrow '&mut' where the reference is created"
-                                .to_string(),
-                        ),
+                                .to_string()
+                        })),
                     });
                 }
                 let referent = self.deref(node);
@@ -4438,14 +4528,17 @@ impl TypeChecker {
                 iterable,
                 body,
             } => {
-                let range =
-                    self.check_operand(iterable, &Type::plain_struct(NominalId::builtin_range()));
+                let (iterable_id, iteration, variable_ty) = self.check_iterable(iterable);
+                if iteration == (ForIteration::List { mutable: false }) {
+                    self.shared_loop_variables
+                        .insert(*variable_span, iterable.to_string());
+                }
                 // The loop variable sits in a scope level above the body, so the body may
                 // shadow it, as a function body may shadow a parameter.
                 self.env.enter_scope();
                 let sym = self.bind_local(
                     variable,
-                    Type::Int,
+                    variable_ty,
                     Mutability::Val,
                     LocalKind::ForVariable,
                     *variable_span,
@@ -4459,11 +4552,54 @@ impl TypeChecker {
                     id,
                     TreeStatementKind::For {
                         variable: local,
-                        range,
+                        iterable: iterable_id,
+                        iteration,
                         body,
                     },
                 );
                 id
+            }
+        }
+    }
+
+    /// Checks the iterable of a `for` loop (the `loops` spec, "For Loops Over Ranges", and D9 of
+    /// `collections`): read in place when it is a place and evaluated into a temporary
+    /// otherwise, then read through its `&`, `&mut` and `Heap<T>` layers. A `Range` is iterated
+    /// by value, binding an `Int`. A list is borrowed for the whole loop, mutably when the
+    /// iterable is a `&mut` (`&mut xs`, or a `&mut List<T>` parameter), binding a `&T` or
+    /// `&mut T`. Anything else is `E4002`. Returns the iterable's node, how the loop iterates and
+    /// the variable's type.
+    fn check_iterable(&mut self, iterable: &Expr) -> (ExpressionId, ForIteration, Type) {
+        let id = self.with_origin(Origin::Value, |c| c.infer_read(iterable));
+        let iterable_ty = self.ty(id);
+        let peeled = self.peel_indirection_nodes(id);
+        let range = Type::plain_struct(NominalId::builtin_range());
+        match self.ty(peeled) {
+            Type::List(element) => {
+                let mutable = matches!(iterable_ty, Type::Reference { mutable: true, .. })
+                    && contents_writable(&iterable_ty, false);
+                let borrow = self.borrow(mutable, BorrowOrigin::Iteration, peeled);
+                let variable_ty = Type::Reference {
+                    mutable,
+                    inner: element,
+                };
+                (borrow, ForIteration::List { mutable }, variable_ty)
+            }
+            ty if ty.is_assignable_to(&range) => (
+                self.coerce_to(peeled, &range),
+                ForIteration::Range,
+                Type::Int,
+            ),
+            ty => {
+                self.with_origin(Origin::Value, |c| {
+                    c.report_mismatch_with_help(
+                        &range,
+                        ty,
+                        iterable.span,
+                        Some("a 'for' loop iterates a 'Range' or a 'List<T>'".to_string()),
+                    )
+                });
+                (self.wrap_error(peeled), ForIteration::Range, Type::Int)
             }
         }
     }
@@ -4821,6 +4957,10 @@ impl TypeChecker {
         if let Some(builtin) = self.output_builtin(callee) {
             return self.infer_output_call(builtin, type_arguments, args, span);
         }
+        // `listOf(...)` likewise (D4 of `collections`).
+        if self.is_list_construction(callee) {
+            return self.infer_list_construction(type_arguments, args, expected.as_ref(), span);
+        }
         // `recv.name(...)`: a field, the built-in `clone()` or an extension function.
         if let ExprKind::MemberAccess {
             target,
@@ -4914,6 +5054,90 @@ impl TypeChecker {
         let declared = self.env.lookup(name).is_some()
             || !matches!(self.env.lookup_import(name, |_| true), ImportLookup::None);
         (!declared).then_some(builtin)
+    }
+
+    /// Whether the callee `callee` is the built-in `listOf`: a bare `listOf` with no local,
+    /// parameter, top-level declaration or import of that name in scope (D4 of `collections`).
+    fn is_list_construction(&self, callee: &Expr) -> bool {
+        matches!(&callee.kind, ExprKind::Ident(name) if name == LIST_OF)
+            && self.env.lookup(LIST_OF).is_none()
+            && matches!(
+                self.env.lookup_import(LIST_OF, |_| true),
+                ImportLookup::None
+            )
+    }
+
+    /// Checks `listOf(e1, ..., en)`, typed as a call of `fun <T> listOf(e1: T, ..., en: T):
+    /// List<T>` with as many parameters as arguments (D4 of `collections`): the element type
+    /// comes from the written type argument, else from an expected `List<T>` (or `List<T>?`),
+    /// else from the joined arguments, each checked against it in a consuming position.
+    /// Named arguments are `E4004`; an element type nothing gives is `E4013`.
+    fn infer_list_construction(
+        &mut self,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> ExpressionId {
+        if args.iter().any(|arg| arg.name.is_some()) {
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!("'{}' takes no named arguments", LIST_OF),
+                span,
+            });
+            let children = args
+                .iter()
+                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
+                .collect();
+            return self.error_node(children, span);
+        }
+        let parameter = BuiltinFunction::list_element_parameter();
+        let element = parameter.as_type();
+        let signature = GenericSignature {
+            owner: format!("'{}'", LIST_OF),
+            type_parameters: vec![parameter],
+            params: vec![element.clone(); args.len()],
+            ret: Type::List(Box::new(element)),
+            receiver: None,
+        };
+        // A list assigned to a nullable list takes its element type from it too.
+        let expected = match expected {
+            Some(Type::Nullable(inner)) if matches!(**inner, Type::List(_)) => Some(&**inner),
+            other => other,
+        };
+        let names: Vec<String> = (1..=args.len()).map(|i| format!("e{}", i)).collect();
+        let has_default = vec![false; args.len()];
+        let checked = self.check_generic_call_arguments(
+            &signature,
+            type_arguments,
+            expected,
+            &names,
+            &has_default,
+            args,
+            span,
+        );
+        match checked {
+            Err(CheckedArguments(children)) => self.error_node(children, span),
+            Ok((
+                NormalizedArguments {
+                    arguments,
+                    evaluation_order,
+                },
+                solution,
+            )) => {
+                let ty = signature.ret.substitute(&solution);
+                let call = Call {
+                    callee: Callee::Builtin(BuiltinFunction::ListOf),
+                    arguments,
+                    parameters: parameter_list(&names, &signature.params),
+                    escaping: vec![false; signature.params.len()],
+                    type_arguments: solution,
+                    evaluation_order,
+                    has_receiver: false,
+                    is_compose: false,
+                };
+                self.add(ExpressionKind::Call(call), ty, span)
+            }
+        }
     }
 
     /// Checks a call of the output built-in `builtin`: `print` takes one positional argument and
@@ -5438,8 +5662,13 @@ impl TypeChecker {
         let (solution, unsolved, _) = state.unknowns.solve();
         if let Some(unsolved) = unsolved {
             let parameter = &state.type_parameters[unsolved.index];
+            let help = if state.owner == format!("'{}'", LIST_OF) {
+                LIST_ELEMENT_HELP
+            } else {
+                TYPE_ARGUMENTS_HELP
+            };
             self.errors.push(TypeError::CannotInferType {
-                help: Some(TYPE_ARGUMENTS_HELP.to_string()),
+                help: Some(help.to_string()),
                 message: format!(
                     "cannot infer the type argument '{}' of {}",
                     parameter.name, state.owner
@@ -6118,6 +6347,7 @@ impl TypeChecker {
                 clone,
                 destructure: None,
                 unbox: None,
+                remove: None,
                 captured: false,
                 span: target.span,
             });
@@ -6345,13 +6575,36 @@ impl TypeChecker {
                 order.extend(evaluation_order.iter().map(|index| index + 1));
                 let mut parameters = vec![(Some(THIS.to_string()), this_ty)];
                 parameters.extend(parameter_list(&param_names, &params));
-                let path = DeclarationPath::extension(
-                    extension.module.clone(),
-                    extension.receiver.clone(),
-                    member,
-                );
+                // Searching compares elements with `==`, which a type parameter lacks (D12 of
+                // `collections`).
+                if let (
+                    Some(BuiltinFunction::ListContains | BuiltinFunction::ListIndexOf),
+                    Some(element),
+                ) = (extension.builtin, type_arguments.first())
+                {
+                    if element.mentions_parameter_outside_functions() {
+                        self.errors.push(TypeError::OperatorMismatch {
+                            operator: "==".to_string(),
+                            left: element.clone(),
+                            right: element.clone(),
+                            span,
+                            help: Some(format!(
+                                "'{}' compares the elements with '==', and type parameters have no equality, with or without a bound, until traits exist",
+                                member
+                            )),
+                        });
+                    }
+                }
+                let callee = match extension.builtin {
+                    Some(builtin) => Callee::Builtin(builtin),
+                    None => Callee::Function(DeclarationPath::extension(
+                        extension.module.clone(),
+                        extension.receiver.clone(),
+                        member,
+                    )),
+                };
                 let call = Call {
-                    callee: Callee::Function(path),
+                    callee,
                     arguments: all_arguments,
                     parameters,
                     escaping,
@@ -6395,6 +6648,15 @@ impl TypeChecker {
         layers: &mut Vec<Layer>,
     ) -> (ExtensionLookup, Type) {
         loop {
+            // A list's built-in members take precedence over its extensions (D6 of
+            // `collections`).
+            if let (Type::List(_), Some(extension)) = (&reached, Extension::list_member(member)) {
+                let found = ExtensionLookup::Found {
+                    extension: Box::new(extension.clone()),
+                    own: false,
+                };
+                return (found, reached);
+            }
             match self.find_extension(&reached, member) {
                 ExtensionLookup::None => {}
                 found => return (found, reached),
@@ -6431,6 +6693,20 @@ impl TypeChecker {
                     && !contents_writable(receiver.ty, receiver.writable)
                 {
                     self.report_immutable_receiver(receiver, method);
+                    // D3 of `collections`: there is no separate mutable list type.
+                    if extension.builtin.is_some() {
+                        if let Some(TypeError::ImmutabilityViolation { help, .. }) =
+                            self.errors.last_mut()
+                        {
+                            let fix = help
+                                .take()
+                                .map_or(String::new(), |fix| format!(": {}", fix));
+                            *help = Some(format!(
+                                "a list is changed through a 'var' or a '&mut'{}",
+                                fix
+                            ));
+                        }
+                    }
                 }
                 ReceiverPass::MutableBorrow
             }
@@ -6472,6 +6748,7 @@ impl TypeChecker {
                         clone,
                         destructure: None,
                         unbox: None,
+                        remove: None,
                         captured: false,
                         span: expr.span,
                     });
@@ -6924,6 +7201,7 @@ impl TypeChecker {
                     clone: None,
                     destructure: None,
                     unbox: Some(format!("{}.unbox()", expr)),
+                    remove: None,
                     captured: false,
                     span: expr.span,
                 });
@@ -6941,6 +7219,7 @@ impl TypeChecker {
                     clone,
                     destructure: None,
                     unbox: None,
+                    remove: None,
                     captured: false,
                     span: expr.span,
                 });
@@ -7136,6 +7415,11 @@ impl TypeChecker {
             ExprKind::This => !self.is_default_input(THIS) && self.is_capture(THIS),
             _ => false,
         };
+        // An element of a list is taken out by `removeAt` (D7 of `collections`).
+        let remove = match &expr.kind {
+            ExprKind::Index { target, index } => Some(format!("{}.removeAt({})", target, index)),
+            _ => None,
+        };
         self.errors.push(TypeError::CannotMoveOut {
             source,
             ty: ty.clone(),
@@ -7143,6 +7427,7 @@ impl TypeChecker {
             clone,
             destructure,
             unbox: None,
+            remove,
             captured,
             span: expr.span,
         });
@@ -7253,6 +7538,8 @@ impl TypeChecker {
                         .is_some_and(|fields| fields.iter().any(|(f, _, _)| f == name))
                 }
                 Type::String => return name == STRING_LENGTH,
+                // `size` and `indices` read like fields (D6 of `collections`).
+                Type::List(_) => return name == LIST_SIZE || name == LIST_INDICES,
                 _ => return false,
             }
         }
@@ -7346,6 +7633,34 @@ impl TypeChecker {
             arguments: written,
             parameters,
             type_arguments: Vec::new(),
+            has_receiver: true,
+            is_compose: false,
+        };
+        self.add(ExpressionKind::Call(call), result, span)
+    }
+
+    /// A call of the list member `builtin` (`size` or `indices`) on the list `base` of elements
+    /// of type `element`, with a shared receiver borrow of it (D6 of `collections`). A list that
+    /// is not a place is borrowed in a temporary.
+    fn list_member_read(
+        &mut self,
+        builtin: BuiltinFunction,
+        element: Type,
+        base: ExpressionId,
+        span: Span,
+    ) -> ExpressionId {
+        let result = builtin
+            .list_member_signature()
+            .expect("a list member")
+            .result;
+        let borrow = self.borrow(false, BorrowOrigin::Receiver, base);
+        let call = Call {
+            callee: Callee::Builtin(builtin),
+            arguments: vec![Argument::Written(borrow)],
+            parameters: builtin.list_member_parameters().expect("a list member"),
+            escaping: vec![false],
+            type_arguments: vec![element],
+            evaluation_order: vec![0],
             has_receiver: true,
             is_compose: false,
         };
@@ -7495,6 +7810,14 @@ impl TypeChecker {
             }
             Type::String => {
                 self.builtin_member_call(BuiltinFunction::StringLength, base, Vec::new(), span)
+            }
+            Type::List(element) => {
+                let builtin = if member == LIST_SIZE {
+                    BuiltinFunction::ListSize
+                } else {
+                    BuiltinFunction::ListIndices
+                };
+                self.list_member_read(builtin, (**element).clone(), base, span)
             }
             _ => {
                 let variant = self.variant_node(&reached, member, reached.clone(), span);
@@ -7681,6 +8004,13 @@ impl TypeChecker {
             }
             // The built-in `length`, which cannot be assigned: strings are immutable.
             Type::String if member == STRING_LENGTH => (wrap(Type::Int), Some(false)),
+            // The built-in `size` and `indices` of a list, which are not assignable (D6 of
+            // `collections`).
+            Type::List(_) if member == LIST_SIZE => (wrap(Type::Int), Some(false)),
+            Type::List(_) if member == LIST_INDICES => (
+                wrap(Type::plain_struct(NominalId::builtin_range())),
+                Some(false),
+            ),
             other => {
                 let help = matches!(other, Type::Parameter(_)).then(|| {
                     format!(
@@ -7695,6 +8025,54 @@ impl TypeChecker {
                     help,
                 });
                 (Type::Error, None)
+            }
+        }
+    }
+
+    /// Infers `target[index]` (D7 of `collections`), returning its node and whether the element
+    /// may be written. The target is read in place when it is a place and consumed into a
+    /// temporary otherwise, then read through its `&`, `&mut` and `Heap<T>` layers; the index
+    /// is an `Int`. An element of a list is the place `Index { base, index }`, writable when
+    /// every layer above it is. A string's character is computed, not stored: `s[i]` is a call
+    /// of the built-in `get` with a shared receiver borrow of the string (D5 of
+    /// `runtime-strings-and-drops`), never writable. Any other target is `E4002`.
+    fn infer_index(&mut self, target: &Expr, index: &Expr, span: Span) -> (ExpressionId, bool) {
+        let (target_id, target_writable) = if self.is_place(target) {
+            self.infer_place(target)
+        } else {
+            (self.with_consuming(true, |c| c.infer_expr(target)), true)
+        };
+        let index_id = self.with_origin(Origin::Value, |c| c.check_expr(index, &Type::Int));
+        let target_ty = self.ty(target_id);
+        let base = self.peel_indirection_nodes(target_id);
+        match self.ty(base) {
+            Type::List(element) => {
+                let base = self.as_place(base);
+                let writable = contents_writable(&target_ty, target_writable);
+                let kind = ExpressionKind::Index {
+                    base,
+                    index: index_id,
+                };
+                (self.add(kind, *element, span), writable)
+            }
+            Type::String => {
+                let call = self.builtin_member_call(
+                    BuiltinFunction::StringCharacter,
+                    base,
+                    vec![index_id],
+                    span,
+                );
+                (call, false)
+            }
+            Type::Error => (self.error_node(vec![base, index_id], span), false),
+            other => {
+                self.errors.push(TypeError::TypeMismatch {
+                    expected: Type::String,
+                    found: other,
+                    span,
+                    help: Some("only a 'List' or a 'String' can be indexed".to_string()),
+                });
+                (self.error_node(vec![base, index_id], span), false)
             }
         }
     }
@@ -7743,6 +8121,7 @@ impl TypeChecker {
                 };
                 (node, writable)
             }
+            ExprKind::Index { target, index } => self.infer_index(target, index, expr.span),
             // Any other root is a temporary, so what its branches and `?:` operands give is
             // consumed (the `ownership` spec, "Consuming Positions").
             _ => (self.infer_read(expr), true),
@@ -8122,6 +8501,11 @@ fn clone_target(receiver_ty: &Type, is_safe_nav: bool) -> (Type, bool) {
 
 /// The name of the built-in `length` member of `String` (D6 of `runtime-strings-and-drops`).
 const STRING_LENGTH: &str = "length";
+
+/// The names of the built-in `size` and `indices` of a list, read without parentheses (D6 of
+/// `collections`).
+const LIST_SIZE: &str = "size";
+const LIST_INDICES: &str = "indices";
 
 /// The name of the built-in `toString()` of the scalar types.
 const TO_STRING: &str = "toString";

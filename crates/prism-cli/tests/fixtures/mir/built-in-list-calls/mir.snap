@@ -1,0 +1,27 @@
+module main
+fun main::f(): Int @2:1
+  local _0: Int (return)
+  local _1 xs: List<Int> (user, var)
+  local _2: &mut List<Int> (temporary)
+  local _3: Unit (temporary)
+  local _4: &mut List<Int> (temporary)
+  bb0:
+    storage_live _1 @3:5
+    _1 = call builtin listOf<Int>(const 1, const 2) -> bb1 @3:14
+  bb1:
+    storage_live _2 @4:5
+    _2 = &mut _1 (receiver) @4:5
+    storage_live _3 @4:5
+    _3 = call builtin add<Int>(move _2, const 3) -> bb2 @4:5
+  bb2:
+    storage_dead _3 @4:5
+    storage_dead _2 @4:5
+    storage_live _4 @5:12
+    _4 = &mut _1 (receiver) @5:12
+    _0 = call builtin removeAt<Int>(move _4, const 0) -> bb3 @5:12
+  bb3:
+    storage_dead _4 @5:5
+    drop _1 -> bb4 @5:5
+  bb4:
+    storage_dead _1 @5:5
+    return @2:1

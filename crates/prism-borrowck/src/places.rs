@@ -269,6 +269,39 @@ fun f(o: &mut Order, h: Heap<Point>, s: String) {
         assert!(places_overlap(&first, &second));
     }
 
+    /// D11 of `collections`: a list owns its elements, as a box owns its contents, and two
+    /// elements of one list always overlap.
+    #[test]
+    fn a_list_owns_its_elements() {
+        let file = lower(
+            "fun f(xs: List<String>, ys: &List<String>) {\n    val a = &xs[0]\n    val b = &ys[1]\n}\n",
+        );
+        let f = body(&file, "f");
+        let mut places = Vec::new();
+        for (_, block) in f.blocks.iter() {
+            for statement in &block.statements {
+                if let StatementKind::Assign(_, rvalue) = &statement.kind {
+                    if let Rvalue::Borrow { place, .. } = rvalue.as_ref() {
+                        places.push(place.clone());
+                    }
+                }
+            }
+        }
+        let (element, borrowed_element) = (&places[0], &places[1]);
+        let xs = Place::local(LocalId(1));
+        assert!(is_prefix(&xs, element) && places_overlap(&xs, element));
+        // Writing, moving or dropping `xs` reaches its elements.
+        assert!(!extends_through_reference(f, &file.types, element, &xs));
+        assert_eq!(place_name(f, &file.types, element).as_deref(), Some("xs"));
+        let other = xs.project(Projection::Index(LocalId(9)));
+        assert!(places_overlap(element, &other));
+        // An element of a borrowed list continues `ys` through its reference only.
+        let ys = Place::local(LocalId(2));
+        let list = ys.project(Projection::Deref);
+        assert!(extends_through_reference(f, &file.types, borrowed_element, &ys));
+        assert!(!extends_through_reference(f, &file.types, borrowed_element, &list));
+    }
+
     #[test]
     fn loan_carrying_types() {
         let int_reference = Type::Reference {

@@ -8,8 +8,8 @@ use crate::mir::{
 };
 use prism_ast::{Literal, Span};
 use prism_typed_tree::{
-    CoercionKind, ConstructKind, ExpressionId, ExpressionKind, NominalId, StatementId,
-    StatementKind as TreeStatementKind, TemplatePart, Type,
+    CoercionKind, ConstructKind, ExpressionId, ExpressionKind, ForIteration, NominalId,
+    StatementId, StatementKind as TreeStatementKind, TemplatePart, Type,
 };
 
 impl Builder<'_> {
@@ -695,11 +695,17 @@ impl Builder<'_> {
             }
             TreeStatementKind::For {
                 variable,
-                range,
+                iterable,
+                iteration,
                 body,
             } => {
                 self.push_scope(span);
-                self.lower_for(id, *variable, *range, *body, span);
+                match iteration {
+                    ForIteration::Range => self.lower_for(id, *variable, *iterable, *body, span),
+                    ForIteration::List { mutable } => {
+                        self.lower_list_for(id, *variable, *iterable, *mutable, *body, span)
+                    }
+                }
                 self.pop_scope();
             }
             TreeStatementKind::Destructure { pattern, value } => {
@@ -853,8 +859,15 @@ impl Builder<'_> {
             self.relocate_last_write(&place, target_span);
             return;
         }
-        let mut operand = self.operand(value);
-        let place = self.place(target);
+        // An element's index is evaluated before the value, as Kotlin's `xs.set(i, v)` evaluates
+        // its arguments; the bounds check runs at the write, after both (D8 of `collections`).
+        let (mut operand, place) = if self.indexes(target) {
+            let place = self.place(target);
+            (self.operand(value), place)
+        } else {
+            let operand = self.operand(value);
+            (operand, self.place(target))
+        };
         if self.needs_drop(&target_ty) {
             let value = self.expression(value);
             let (value_ty, value_span) = (value.ty.clone(), value.span);
@@ -891,6 +904,18 @@ impl Builder<'_> {
     /// Whether `id` has a nullable type.
     pub(super) fn is_nullable(&self, id: ExpressionId) -> bool {
         matches!(self.expression(id).ty, Type::Nullable(_))
+    }
+
+    /// Whether the place `id` is reached through an element of a list, whose index lowering
+    /// evaluates.
+    fn indexes(&self, id: ExpressionId) -> bool {
+        match &self.expression(id).kind {
+            ExpressionKind::Index { .. } => true,
+            ExpressionKind::Field { base, .. } => self.indexes(*base),
+            ExpressionKind::Deref { pointer } => self.indexes(*pointer),
+            ExpressionKind::NonNullPayload { nullable } => self.indexes(*nullable),
+            _ => false,
+        }
     }
 
     /// Whether the place `id` is a binding, whose lowering evaluates nothing.

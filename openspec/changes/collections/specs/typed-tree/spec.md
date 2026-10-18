@@ -35,4 +35,4 @@ An assignment MUST be a statement whose target is a place: a binding (re-pointin
 
 #### Scenario: Built-in list calls and element places
 - **WHEN** `fun f(xs: &List<Int>, i: Int): Int { var ys = listOf(1, 2); ys.add(xs[i]); return ys.size + xs[0] }` is checked
-- **THEN** `listOf(1, 2)` is a call of the built-in list-construction function with type argument `Int`; `ys.add(...)` is a call of the built-in `add` with a mutable receiver borrow of the binding `ys` and a copy of the index node of the dereferenced binding `xs` by the binding `i`; `ys.size` is a call of the built-in `size` with a shared receiver borrow of `ys`; and `xs[0]` is a copy of an index node by the literal `0`
+- **THEN** `listOf(1, 2)` is a call of the built-in list-construction function with type argument `Int`; `ys.add(...)` is a call of the built-in `add` with a mutable receiver borrow of the binding `ys` and a copy of the index node of the dereferenced binding `xs` by the binding `i`; `ys.size` is a call of the built-in `size` with a shared receiver borrow of `ys`; and `xs[0]`, an operand read in place, is an index node of the dereferenced binding `xs` by the literal `0`

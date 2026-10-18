@@ -1,0 +1,6 @@
+// expect: E5001
+fun f(s: String): List<String> {
+    val xs = listOf(s, "b")
+    println(s)
+    return xs
+}

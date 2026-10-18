@@ -1,0 +1,6 @@
+// expect: E4003
+fun f(xs: &List<Int>) { xs.add(1) }
+fun g() {
+    val ys = listOf(1)
+    ys.clear()
+}

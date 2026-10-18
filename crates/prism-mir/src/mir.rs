@@ -376,9 +376,9 @@ pub enum Projection {
     /// Payload `field` of variant `variant` of an enum, typed with the enum's type arguments
     /// substituted (D15 of `payload-patterns`). Payloads of different variants share storage.
     VariantField { variant: usize, field: usize },
-    /// The element at the index held in the local. Reserved for collections whose elements are
-    /// stored (`List<T>`): no MIR has one today, since a string's character is computed by the
-    /// built-in `get`, and the validator rejects it (D5 of `runtime-strings-and-drops`).
+    /// The element of a `List<T>` at the index held in the `Int` local, which is never moved
+    /// out of (D16 of `collections`). A string is never indexed: its character is computed by
+    /// the built-in `get` (D5 of `runtime-strings-and-drops`).
     Index(LocalId),
 }
 
@@ -556,8 +556,10 @@ impl Callee {
     /// whose declaration path names its receiver type, and of the built-in members: `clone`,
     /// `length` and `get` (a string's character), which take a shared receiver borrow (D3 of
     /// `borrowck-elision`), `toString`, which takes the receiver copied out, and `unbox`, which
-    /// takes the box moved. The argument of `print`, `println` and `Heap` is not a receiver. A function value is never an extension, since an extension
-    /// cannot be named as a value.
+    /// takes the box moved, and the list members, which borrow the list as their mode says (D16
+    /// of `collections`). The arguments of `print`, `println`, `Heap` and `listOf` are not
+    /// receivers. A function value is never an extension, since an extension cannot be named as
+    /// a value.
     pub fn has_receiver(&self) -> bool {
         match self {
             Callee::Function(path) => path.receiver.is_some(),
@@ -591,6 +593,9 @@ pub enum BorrowOrigin {
     /// the guard cannot assign, move or mutably borrow what the branch then takes apart (D9 of
     /// `payload-patterns`).
     Guard,
+    /// The borrow of the list a `for` loop iterates, and the borrows of its elements the loop
+    /// variable takes (D16 of `collections`).
+    Iteration,
 }
 
 impl From<prism_typed_tree::BorrowOrigin> for BorrowOrigin {
@@ -600,6 +605,7 @@ impl From<prism_typed_tree::BorrowOrigin> for BorrowOrigin {
             prism_typed_tree::BorrowOrigin::Argument => BorrowOrigin::Argument,
             prism_typed_tree::BorrowOrigin::Receiver => BorrowOrigin::Receiver,
             prism_typed_tree::BorrowOrigin::Conversion => BorrowOrigin::Conversion,
+            prism_typed_tree::BorrowOrigin::Iteration => BorrowOrigin::Iteration,
         }
     }
 }
@@ -611,6 +617,7 @@ impl BorrowOrigin {
             BorrowOrigin::Argument => "argument",
             BorrowOrigin::Receiver => "receiver",
             BorrowOrigin::Conversion => "conversion",
+            BorrowOrigin::Iteration => "iteration",
             BorrowOrigin::Operator => "operator",
             BorrowOrigin::Default => "default",
             BorrowOrigin::Pattern => "pattern",

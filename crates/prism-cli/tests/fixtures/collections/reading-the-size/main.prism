@@ -1,0 +1,6 @@
+// expect: ok
+fun f(a: List<Int>, b: &List<String>, c: List<Int>?): Int {
+    var n = a.size + b.size + (c?.size ?: 0)
+    for (i in a.indices) n += a[i]
+    return n
+}

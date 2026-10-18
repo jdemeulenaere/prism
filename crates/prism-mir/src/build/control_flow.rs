@@ -7,14 +7,14 @@
 use super::pattern::BranchLocals;
 use super::{Builder, ChainContext, LoopContext};
 use crate::mir::{
-    BlockId, BorrowOrigin, Constant, LocalId, Operand, Place, Projection, Rvalue, StatementKind,
-    TerminatorKind,
+    BlockId, BorrowOrigin, Callee, Constant, LocalId, Operand, Place, Projection, Rvalue,
+    StatementKind, TerminatorKind,
 };
 use crate::types::RANGE_END_INCLUSIVE;
 use prism_ast::Span;
 use prism_typed_tree::{
-    BinaryOperator, ExpressionId, ExpressionKind, LocalId as TreeLocalId, LogicalOperator, Pattern,
-    StatementId, Type, WhenBranch,
+    BinaryOperator, BuiltinFunction, ExpressionId, ExpressionKind, LocalId as TreeLocalId,
+    LogicalOperator, Pattern, StatementId, Type, WhenBranch,
 };
 
 impl Builder<'_> {
@@ -1033,6 +1033,142 @@ impl Builder<'_> {
                 Operand::Constant(Constant::Int(1)),
             );
             self.assign(Place::local(value), next, span);
+            self.goto(iteration, span);
+        }
+        self.close_loop();
+    }
+
+    /// A `for` loop over a list (D16 of `collections`): the iterable, a borrow of the list by
+    /// the loop, is evaluated once into a hidden local `_l`, in the scope of the `for` statement
+    /// so that a temporary list lives until the loop ends; `_n = builtin size(&*_l)` is read once
+    /// and the loop is skipped when it is 0. Each iteration binds the variable, in a fresh
+    /// scope, to a borrow of the loop's kind of `(*_l)[_i]`; the latch increments the counter
+    /// `_i` and exits once it equals `_n`, so `_i` stays below `_n` and never overflows.
+    pub(super) fn lower_list_for(
+        &mut self,
+        id: StatementId,
+        variable: TreeLocalId,
+        iterable: ExpressionId,
+        mutable: bool,
+        body: ExpressionId,
+        span: Span,
+    ) {
+        let borrow_ty = self.expression(iterable).ty.clone();
+        let element = match &borrow_ty {
+            Type::Reference { inner, .. } => match inner.as_ref() {
+                Type::List(element) => element.as_ref().clone(),
+                other => panic!("internal error: a list loop over a {}", other),
+            },
+            other => panic!("internal error: a list loop over a {}", other),
+        };
+        let list = self.new_temporary(borrow_ty, span);
+        self.expression_into(Some(&Place::local(list)), iterable);
+        if self.current.is_none() {
+            return;
+        }
+        let size = self.new_temporary(Type::Int, span);
+        let counter = self.new_temporary(Type::Int, span);
+        let test = self.new_temporary(Type::Bool, span);
+        let depth = self.scope_depth();
+        self.loops.push(LoopContext {
+            statement: id,
+            break_depth: depth,
+            continue_depth: depth,
+            exit: None,
+            next: None,
+            body_scope: None,
+            continues: Vec::new(),
+        });
+        let index = self.loops.len() - 1;
+        let shared_list = Type::Reference {
+            mutable: false,
+            inner: Box::new(Type::List(Box::new(element.clone()))),
+        };
+        let receiver = self.new_temporary(shared_list, span);
+        self.assign(
+            Place::local(receiver),
+            Rvalue::Borrow {
+                mutable: false,
+                origin: BorrowOrigin::Iteration,
+                place: Self::deref(Place::local(list)),
+            },
+            span,
+        );
+        let parameters = BuiltinFunction::ListSize
+            .list_member_parameters()
+            .expect("a list member")
+            .into_iter()
+            .map(|(_, ty)| ty)
+            .collect();
+        self.emit_call(
+            Callee::Builtin(BuiltinFunction::ListSize),
+            vec![Operand::Move(Place::local(receiver), span)],
+            parameters,
+            vec![false],
+            vec![element],
+            Place::local(size),
+            false,
+            true,
+            span,
+        );
+        self.assign(
+            Place::local(counter),
+            Rvalue::Use(Operand::Constant(Constant::Int(0))),
+            span,
+        );
+        let empty = Rvalue::Binary(
+            BinaryOperator::Equal,
+            Operand::Copy(Place::local(size), span),
+            Operand::Constant(Constant::Int(0)),
+        );
+        self.assign(Place::local(test), empty, span);
+        let (skipped, entered) = self.switch_on_bool(Operand::Copy(Place::local(test), span), span);
+        self.current = Some(skipped);
+        let exit = self.loop_exit(index);
+        self.goto(exit, span);
+        self.current = Some(entered);
+        let iteration = self.new_block();
+        self.goto(iteration, span);
+        self.current = Some(iteration);
+        let body_exit = self.block_exit_span(body);
+        self.push_block_scope(body_exit);
+        let variable_local = self.declare_binding(variable, span);
+        let element_place = Self::deref(Place::local(list)).project(Projection::Index(counter));
+        self.assign(
+            Place::local(variable_local),
+            Rvalue::Borrow {
+                mutable,
+                origin: BorrowOrigin::Iteration,
+                place: element_place,
+            },
+            span,
+        );
+        self.expression_into(None, body);
+        self.pop_scope();
+        if self.current.is_some() {
+            let latch = self.loop_next(index);
+            self.goto(latch, span);
+        }
+        if let Some(latch) = self.loops[index].next {
+            self.current = Some(latch);
+            let next = Rvalue::Binary(
+                BinaryOperator::Add,
+                Operand::Copy(Place::local(counter), span),
+                Operand::Constant(Constant::Int(1)),
+            );
+            self.assign(Place::local(counter), next, span);
+            let done = Rvalue::Binary(
+                BinaryOperator::Equal,
+                Operand::Copy(Place::local(counter), span),
+                Operand::Copy(Place::local(size), span),
+            );
+            self.assign(Place::local(test), done, span);
+            let (finished, more) =
+                self.switch_on_bool(Operand::Copy(Place::local(test), span), span);
+            self.current = Some(finished);
+            let exit = self.loop_exit(index);
+            self.goto(exit, span);
+            self.current = Some(more);
             self.goto(iteration, span);
         }
         self.close_loop();

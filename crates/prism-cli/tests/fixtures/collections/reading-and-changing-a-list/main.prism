@@ -1,0 +1,12 @@
+// expect: ok
+fun f(): Int {
+    var xs = listOf(1, 2)
+    xs.add(3)
+    xs.insert(0, 0)
+    val last = xs.removeLast()
+    val first = xs.removeAt(0)
+    xs.reverse()
+    if (xs.isEmpty() || !xs.contains(2)) return -1
+    xs.clear()
+    return last + first + xs.indexOf(5)
+}

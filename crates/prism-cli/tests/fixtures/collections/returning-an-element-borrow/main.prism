@@ -1,0 +1,6 @@
+// expect: E5008
+fun first(xs: &List<String>): &String = &xs[0]
+fun bad(): &Int {
+    val xs = listOf(1)
+    return &xs[0]
+}

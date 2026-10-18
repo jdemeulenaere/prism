@@ -1,0 +1,3 @@
+// expect: E4004 E4013
+fun f() { val a = listOf(1, "a") }
+fun g() { val b = listOf() }

@@ -1,0 +1,6 @@
+// expect: ok
+fun f(i: Int): Int {
+    var xs = listOf(1, 2)
+    xs[i + 1] = 3
+    return xs[0]
+}

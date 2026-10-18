@@ -1,0 +1,3 @@
+// expect: ok
+fun g(x: &Int) {}
+fun f(xs: List<Int>) { for (x in xs) g(x) }

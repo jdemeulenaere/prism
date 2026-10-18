@@ -1,0 +1,13 @@
+module main
+fun main::f(i: Int): Unit @2:1
+  local %0 i: Int (parameter)
+  local %1 xs: List<Int> (var)
+  block: Unit @2:15
+    let %1 xs @3:5
+      call builtin listOf<Int>: List<Int> @3:14
+        argument e1: literal 1: Int @3:21
+    assign @4:5
+      target: index: Int @4:5
+        base: local %1 xs: List<Int> @4:5
+        index: local %0 i: Int @4:8
+      value: literal 2: Int @4:13

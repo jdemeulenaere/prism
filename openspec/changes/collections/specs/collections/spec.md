@@ -70,7 +70,7 @@ A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have built-
 
 #### Scenario: Wrong element types rejected
 - **WHEN** `fun f() { var xs = listOf(1); xs.add("a"); xs.insert("b", 1) }` is checked
-- **THEN** the type checker emits `E4004` for `"a"`, for `"b"` and for the second argument `1`
+- **THEN** the type checker emits `E4004` for `"a"` and for the index `"b"`, while the element `1` fits
 
 #### Scenario: Searching borrows the element
 - **WHEN** `fun f(xs: &List<String>, name: String): Bool = xs.contains(name) && xs.indexOf(name) >= 0 && !xs.isEmpty()` is checked
@@ -193,6 +193,10 @@ A borrow of an element MUST be a borrow of a part of its list, which owns its el
 - **WHEN** `fun f() { var xs = listOf(1, 2); val first = &xs[0]; xs.add(3); println(first) }` is checked
 - **THEN** the borrow checker emits `E5003` at `xs.add(3)`, labelling the borrow `&xs[0]` and its later use in `println(first)`
 
+#### Scenario: Replacing, moving or dropping a list while an element is borrowed rejected
+- **WHEN** `fun f() { var xs = listOf("a"); val first = &xs[0]; xs = listOf(); println(first) }`, `fun g() { val xs = listOf("a"); val first = &xs[0]; val ys = xs; println(first) }` or `fun h(other: &String) { var first = other; if (other.length > 0) { val xs = listOf("a"); first = &xs[0] }; println(first) }` is checked
+- **THEN** the borrow checker emits `E5004`, `E5005` or `E5006` respectively, because the list owns the borrowed element
+
 #### Scenario: Returning an element borrow
 - **WHEN** `fun first(xs: &List<String>): &String = &xs[0]` and `fun bad(): &Int { val xs = listOf(1); return &xs[0] }` are checked
 - **THEN** the borrow checker accepts `first` and emits `E5008` for `bad`
@@ -201,7 +205,7 @@ A borrow of an element MUST be a borrow of a part of its list, which owns its el
 Two element places of one list MUST be treated as overlapping whatever their indices, as the borrow checker does not compare indices. A mutating member call's receiver MUST be borrowed after its arguments are evaluated, as every mutable receiver is, so its arguments may read the list.
 
 #### Scenario: Two elements borrowed mutably rejected
-- **WHEN** `fun f() { var xs = listOf(1, 2); val a = &mut xs[0]; val b = &mut xs[1]; *a = *b }` is checked
+- **WHEN** `fun f() { var xs = listOf(1, 2); val a = &mut xs[0]; val b = &mut xs[1]; *a = b }` is checked
 - **THEN** the borrow checker emits `E5003` at `&mut xs[1]`
 
 #### Scenario: Arguments read the list before a mutating call
@@ -218,6 +222,17 @@ Two element places of one list MUST be treated as overlapping whatever their ind
 #### Scenario: Comparing lists of a type parameter rejected
 - **WHEN** `fun <T> same(a: &List<T>, b: &List<T>): Bool = a == b` and `fun <T> has(a: &List<T>, x: &T): Bool = a.contains(x)` are checked
 - **THEN** the type checker emits `E4002` for each
+
+### Requirement: Lists Are Matched as Values
+A `when` over a list, read through any `&`, `&mut` and `Heap<T>` layers, MUST accept value patterns, compared with `==` as "Lists Compare Their Elements" says, bindings, wildcards and `else`, as for a `String`: a list has no constructor patterns, so only a binding, a wildcard or `else` covers every list. A destructuring declaration of a list MUST be rejected with `E4024`, as for any type other than a struct.
+
+#### Scenario: Matching a list
+- **WHEN** `fun f(xs: List<Int>): Int = when (xs) { listOf(1) -> 1; val other -> other.size }` and `fun g(xs: &List<Int>): Int = when (xs) { listOf() -> 0; else -> 1 }` are checked
+- **THEN** the file typechecks successfully
+
+#### Scenario: Destructuring a list rejected
+- **WHEN** `fun f(xs: List<Int>) { val (a) = xs }` is checked
+- **THEN** the type checker emits `E4024`
 
 ### Requirement: Elements Are Stored Values
 A value given to `listOf`, `add` or `insert`, or assigned to an element, MUST be stored in the list as a value given to a parameter of a type parameter is, with the same rules for function values: a closure that may hold borrows MUST be rejected with `E5007`, and one that owns its captures (`escaping-closures`) MUST be stored. An element that is a function value MUST be callable in place (`handlers[0]()`).

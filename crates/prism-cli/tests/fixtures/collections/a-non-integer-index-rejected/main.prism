@@ -1,0 +1,2 @@
+// expect: E4002
+fun f(xs: List<Int>): Int = xs["a"]

@@ -1702,6 +1702,12 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let layout = self.layout(&result_type)?;
                 free_box(self.context, &mut self.builder, address, &layout)?;
             }
+            Callee::Builtin(builtin) => {
+                return Err(BackendError::new(format!(
+                    "the list built-in '{}' is not lowered yet",
+                    builtin.name()
+                )))
+            }
         }
         match target {
             Some(target) => self.go_to(target),

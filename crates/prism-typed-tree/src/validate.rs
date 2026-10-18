@@ -3,9 +3,9 @@
 
 use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
-    Argument, BindingMode, Body, BuiltinFunction, Call, Callee, CaptureMode, CoercionKind,
-    ConstructKind, DeclarationPath, ExpressionKind, FunctionItem, Item, LocalKind, Pattern,
-    StatementKind, StructItem, TemplatePart, TypedFile, UnaryOperator,
+    Argument, BindingMode, Body, BorrowOrigin, BuiltinFunction, Call, Callee, CaptureMode,
+    CoercionKind, ConstructKind, DeclarationPath, ExpressionKind, ForIteration, FunctionItem, Item,
+    LocalKind, Pattern, StatementKind, StructItem, TemplatePart, TypedFile, UnaryOperator,
 };
 use crate::types::{NominalId, Type, TypeParameter, TypeTable};
 use prism_ast::ReceiverMode;
@@ -376,16 +376,67 @@ impl Validator<'_> {
             }
             StatementKind::For {
                 variable,
-                range,
+                iterable,
+                iteration,
                 body,
             } => {
                 self.check_local(*variable);
-                self.expression(*range);
-                self.expect_type(
-                    *range,
-                    &Type::plain_struct(NominalId::builtin_range()),
-                    "loop range",
-                );
+                self.expression(*iterable);
+                let variable_ty = self
+                    .body
+                    .locals
+                    .get(*variable)
+                    .map(|local| local.ty.clone());
+                match iteration {
+                    ForIteration::Range => {
+                        self.expect_type(
+                            *iterable,
+                            &Type::plain_struct(NominalId::builtin_range()),
+                            "loop range",
+                        );
+                        if self.error_free && variable_ty.is_some_and(|ty| ty != Type::Int) {
+                            self.report(format!("range loop {} binds a non-Int variable", id.0));
+                        }
+                    }
+                    // D10 of `collections`: a borrow of the list by the loop, and a variable
+                    // borrowing each element likewise.
+                    ForIteration::List { mutable } => {
+                        let borrows = matches!(
+                            self.kind(*iterable),
+                            Some(ExpressionKind::Borrow {
+                                mutable: borrow_mutable,
+                                origin: BorrowOrigin::Iteration,
+                                ..
+                            }) if borrow_mutable == mutable
+                        );
+                        let element = match self.type_of(*iterable) {
+                            Some(Type::Reference { inner, .. }) => match inner.as_ref() {
+                                Type::List(element) => Some(element.as_ref().clone()),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        match element {
+                            Some(element) if borrows => {
+                                let expected = Type::Reference {
+                                    mutable: *mutable,
+                                    inner: Box::new(element),
+                                };
+                                if self.error_free && variable_ty != Some(expected.clone()) {
+                                    self.report(format!(
+                                        "list loop {} binds a variable that is not a {}",
+                                        id.0, expected
+                                    ));
+                                }
+                            }
+                            _ if self.error_free => self.report(format!(
+                                "list loop {} does not iterate a borrow of a list by the loop",
+                                id.0
+                            )),
+                            _ => {}
+                        }
+                    }
+                }
                 self.loops.push(id);
                 self.expression(*body);
                 self.loops.pop();
@@ -466,6 +517,17 @@ impl Validator<'_> {
                 self.expression(*index);
                 self.expect_place(*base, "index base");
                 self.expect_type(*index, &Type::Int, "index");
+                // Only a list's elements are stored (D7 of `collections`).
+                match self.type_of(*base).cloned() {
+                    Some(Type::List(element)) => {
+                        self.expect_type_of_node(id, &element, "element");
+                    }
+                    Some(Type::Error) | None => {}
+                    Some(other) => self.report(format!(
+                        "index {} of a {}, which is not a list",
+                        id.0, other
+                    )),
+                }
             }
             ExpressionKind::NonNullPayload { nullable } => {
                 if self.chain_depth == 0 {
@@ -1192,11 +1254,12 @@ impl Validator<'_> {
                 | StatementKind::DoWhile { body, condition } => vec![*condition, *body],
                 StatementKind::For {
                     variable,
-                    range,
+                    iterable,
                     body,
+                    ..
                 } => {
                     declared.insert(*variable);
-                    vec![*range, *body]
+                    vec![*iterable, *body]
                 }
                 StatementKind::Destructure { pattern, value } => {
                     declared.extend(pattern.bindings().into_iter().map(|(local, _)| local));
@@ -1264,7 +1327,42 @@ impl Validator<'_> {
                     }
                 }
             }
-            _ => {}
+            // D4 of `collections`: one parameter `T` per element, the result `List<T>`.
+            BuiltinFunction::ListOf => {
+                let element = BuiltinFunction::list_element_parameter().as_type();
+                let shape = call.type_arguments.len() == 1
+                    && !call.has_receiver
+                    && call.parameters.iter().all(|(_, ty)| *ty == element);
+                if !shape {
+                    self.report(format!("call {} of builtin listOf is malformed", id.0));
+                    return;
+                }
+                let list = Type::List(Box::new(call.type_arguments[0].clone()));
+                self.expect_type_of_node(id, &list, "call");
+            }
+            // D6 of `collections`: the member's declared signature, with the element type as the
+            // type argument.
+            _ => {
+                let (Some(parameters), Some(signature)) = (
+                    builtin.list_member_parameters(),
+                    builtin.list_member_signature(),
+                ) else {
+                    return;
+                };
+                if call.type_arguments.len() != 1
+                    || !call.has_receiver
+                    || call.parameters != parameters
+                {
+                    self.report(format!(
+                        "call {} of builtin {} does not repeat its signature",
+                        id.0,
+                        builtin.name()
+                    ));
+                    return;
+                }
+                let result = signature.result.substitute(&call.type_arguments);
+                self.expect_type_of_node(id, &result, "call");
+            }
         }
     }
 }

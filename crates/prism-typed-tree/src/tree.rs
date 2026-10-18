@@ -244,10 +244,9 @@ pub enum ExpressionKind {
     },
     /// The referent of `pointer`, a `&T`, `&mut T` or `Heap<T>`.
     Deref { pointer: ExpressionId },
-    /// The element `index` of the place `base`. Reserved for collections whose elements are
-    /// stored (`List<T>`): a character of a `String` is computed, not stored, so `s[i]` is a call
-    /// of [`BuiltinFunction::StringCharacter`] and the type checker produces no index node today
-    /// (D5 of `runtime-strings-and-drops`).
+    /// The element `index` of the place `base`, a `List<T>` (D7 of `collections`). A character
+    /// of a `String` is computed, not stored, so `s[i]` is a call of
+    /// [`BuiltinFunction::StringCharacter`] instead (D5 of `runtime-strings-and-drops`).
     Index {
         base: ExpressionId,
         index: ExpressionId,
@@ -564,6 +563,46 @@ pub enum BuiltinFunction {
     /// `h.unbox()` of a `Heap<T>`, called with the box moved as its receiver: moves the contents
     /// out and frees the box (D6 of `heap-boxes`).
     Unbox,
+    /// `listOf(e1, ..., en)`: a list of exactly its arguments, in order (D4 of `collections`).
+    /// Declared like `fun <T> listOf(e1: T, ..., en: T): List<T>`, with as many parameters as the
+    /// call has arguments; its type argument is the element type.
+    ListOf,
+    /// `xs.size` of a `List<T>`: its number of elements. Like every list member below, declared
+    /// as an extension on `List<T>` ([`BuiltinFunction::list_member_signature`]) with the
+    /// element type as its type argument (D6 of `collections`).
+    ListSize,
+    /// `xs.indices` of a `List<T>`: the `Range` `0..<xs.size`.
+    ListIndices,
+    /// `xs.isEmpty()`.
+    ListIsEmpty,
+    /// `xs.isNotEmpty()`.
+    ListIsNotEmpty,
+    /// `xs.contains(element)`: whether an element equals `element`.
+    ListContains,
+    /// `xs.indexOf(element)`: the first index of an element equal to `element`, or -1.
+    ListIndexOf,
+    /// `xs.add(element)`: appends `element`.
+    ListAdd,
+    /// `xs.insert(index, element)`: places `element` at `index`, moving the later elements up.
+    ListInsert,
+    /// `xs.removeAt(index)`: gives the element at `index` by move, moving the later ones down.
+    ListRemoveAt,
+    /// `xs.removeLast()`: gives the last element by move.
+    ListRemoveLast,
+    /// `xs.reverse()`: reverses the order of the elements in place.
+    ListReverse,
+    /// `xs.clear()`: drops every element, keeping the buffer.
+    ListClear,
+}
+
+/// The declared signature of a built-in list member (D5 of `collections`), written with the
+/// element type parameter [`BuiltinFunction::list_element_parameter`]: how it takes its
+/// receiver, its parameters after the receiver and its result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListMemberSignature {
+    pub mode: ReceiverMode,
+    pub parameters: Vec<(&'static str, Type)>,
+    pub result: Type,
 }
 
 impl BuiltinFunction {
@@ -579,16 +618,131 @@ impl BuiltinFunction {
             BuiltinFunction::ToString => "toString",
             BuiltinFunction::HeapAllocate => "Heap",
             BuiltinFunction::Unbox => "unbox",
+            BuiltinFunction::ListOf => "listOf",
+            BuiltinFunction::ListSize => "size",
+            BuiltinFunction::ListIndices => "indices",
+            BuiltinFunction::ListIsEmpty => "isEmpty",
+            BuiltinFunction::ListIsNotEmpty => "isNotEmpty",
+            BuiltinFunction::ListContains => "contains",
+            BuiltinFunction::ListIndexOf => "indexOf",
+            BuiltinFunction::ListAdd => "add",
+            BuiltinFunction::ListInsert => "insert",
+            BuiltinFunction::ListRemoveAt => "removeAt",
+            BuiltinFunction::ListRemoveLast => "removeLast",
+            BuiltinFunction::ListReverse => "reverse",
+            BuiltinFunction::ListClear => "clear",
         }
     }
 
+    /// The built-in list members, in the order of D5 of `collections`.
+    pub const LIST_MEMBERS: [BuiltinFunction; 12] = [
+        BuiltinFunction::ListSize,
+        BuiltinFunction::ListIndices,
+        BuiltinFunction::ListIsEmpty,
+        BuiltinFunction::ListIsNotEmpty,
+        BuiltinFunction::ListContains,
+        BuiltinFunction::ListIndexOf,
+        BuiltinFunction::ListAdd,
+        BuiltinFunction::ListInsert,
+        BuiltinFunction::ListRemoveAt,
+        BuiltinFunction::ListRemoveLast,
+        BuiltinFunction::ListReverse,
+        BuiltinFunction::ListClear,
+    ];
+
+    /// The type parameter `T` of the list built-ins' declarations, the element type of
+    /// `List<T>` in `fun <T> listOf(...)` and `fun <T> List<T>.add(element: T)`.
+    pub fn list_element_parameter() -> crate::types::TypeParameter {
+        crate::types::TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: None,
+        }
+    }
+
+    /// The declared signature of a list member, `None` for any other built-in (`listOf`
+    /// included, whose parameters are as many as its call's arguments).
+    pub fn list_member_signature(self) -> Option<ListMemberSignature> {
+        let element = Self::list_element_parameter().as_type();
+        let borrowed = Type::Reference {
+            mutable: false,
+            inner: Box::new(element.clone()),
+        };
+        let (mode, parameters, result) = match self {
+            BuiltinFunction::ListSize => (ReceiverMode::Shared, vec![], Type::Int),
+            BuiltinFunction::ListIndices => (
+                ReceiverMode::Shared,
+                vec![],
+                Type::plain_struct(NominalId::builtin_range()),
+            ),
+            BuiltinFunction::ListIsEmpty | BuiltinFunction::ListIsNotEmpty => {
+                (ReceiverMode::Shared, vec![], Type::Bool)
+            }
+            BuiltinFunction::ListContains => (
+                ReceiverMode::Shared,
+                vec![("element", borrowed)],
+                Type::Bool,
+            ),
+            BuiltinFunction::ListIndexOf => {
+                (ReceiverMode::Shared, vec![("element", borrowed)], Type::Int)
+            }
+            BuiltinFunction::ListAdd => (
+                ReceiverMode::Mutable,
+                vec![("element", element)],
+                Type::Unit,
+            ),
+            BuiltinFunction::ListInsert => (
+                ReceiverMode::Mutable,
+                vec![("index", Type::Int), ("element", element)],
+                Type::Unit,
+            ),
+            BuiltinFunction::ListRemoveAt => {
+                (ReceiverMode::Mutable, vec![("index", Type::Int)], element)
+            }
+            BuiltinFunction::ListRemoveLast => (ReceiverMode::Mutable, vec![], element),
+            BuiltinFunction::ListReverse | BuiltinFunction::ListClear => {
+                (ReceiverMode::Mutable, vec![], Type::Unit)
+            }
+            _ => return None,
+        };
+        Some(ListMemberSignature {
+            mode,
+            parameters,
+            result,
+        })
+    }
+
+    /// The parameters a call of the list member `self` records, as [`Call::parameters`]: `this`
+    /// first, of the type its receiver mode passes (`&List<T>` or `&mut List<T>`).
+    pub fn list_member_parameters(self) -> Option<Vec<(Option<String>, Type)>> {
+        let signature = self.list_member_signature()?;
+        let list = Type::List(Box::new(Self::list_element_parameter().as_type()));
+        let this = Type::Reference {
+            mutable: signature.mode == ReceiverMode::Mutable,
+            inner: Box::new(list),
+        };
+        Some(
+            std::iter::once((Some("this".to_string()), this))
+                .chain(
+                    signature
+                        .parameters
+                        .into_iter()
+                        .map(|(name, ty)| (Some(name.to_string()), ty)),
+                )
+                .collect(),
+        )
+    }
+
     /// Whether the built-in's first argument is a receiver: that of every built-in member
-    /// (`clone`, `length`, `get`, `toString` and `unbox`), not the argument of `print`,
-    /// `println` and `Heap`.
+    /// (`clone`, `length`, `get`, `toString`, `unbox` and the list members), not the arguments
+    /// of `print`, `println`, `Heap` and `listOf`.
     pub fn has_receiver(self) -> bool {
         !matches!(
             self,
-            BuiltinFunction::Print | BuiltinFunction::PrintLine | BuiltinFunction::HeapAllocate
+            BuiltinFunction::Print
+                | BuiltinFunction::PrintLine
+                | BuiltinFunction::HeapAllocate
+                | BuiltinFunction::ListOf
         )
     }
 
@@ -623,6 +777,19 @@ pub enum BorrowOrigin {
     Receiver,
     /// Made by a nullable conversion (`&(T?)` read as `(&T)?`).
     Conversion,
+    /// The borrow of the list a `for` loop iterates, held for the whole loop (D9 of
+    /// `collections`).
+    Iteration,
+}
+
+/// How a `for` loop iterates its iterable (D10 of `collections`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForIteration {
+    /// Over a `Range` held by value: the variable is each `Int` in turn.
+    Range,
+    /// Over a list, held as a borrow of origin [`BorrowOrigin::Iteration`], mutable when
+    /// `mutable`: the variable is a `&T` (or `&mut T`) to each element in turn.
+    List { mutable: bool },
 }
 
 /// How a [`ExpressionKind::Coerce`] converts its value.
@@ -1041,10 +1208,12 @@ pub enum StatementKind {
         body: ExpressionId,
         condition: ExpressionId,
     },
-    /// `for (variable in range) body`.
+    /// `for (variable in iterable) body`, iterating as `iteration` says: a `Range` value, or a
+    /// borrow of a list (D10 of `collections`).
     For {
         variable: LocalId,
-        range: ExpressionId,
+        iterable: ExpressionId,
+        iteration: ForIteration,
         body: ExpressionId,
     },
     /// A destructuring declaration `val (a, b) = value` (D14 of `payload-patterns`): `value` read
@@ -1066,7 +1235,7 @@ impl StatementKind {
             StatementKind::Expression { value } => vec![*value],
             StatementKind::While { condition, body } => vec![*condition, *body],
             StatementKind::DoWhile { body, condition } => vec![*body, *condition],
-            StatementKind::For { range, body, .. } => vec![*range, *body],
+            StatementKind::For { iterable, body, .. } => vec![*iterable, *body],
             StatementKind::Destructure { value, .. } => vec![*value],
         }
     }

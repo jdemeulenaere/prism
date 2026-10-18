@@ -1,0 +1,8 @@
+// expect: ok
+fun f(): List<Int?> {
+    val a = listOf(1, 2, 3)
+    val b = listOf(1, null)
+    val c: List<String> = listOf()
+    val d = listOf<Double>()
+    return b
+}

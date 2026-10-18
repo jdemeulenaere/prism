@@ -1,0 +1,7 @@
+// expect: E5005
+fun g() {
+    val xs = listOf("a")
+    val first = &xs[0]
+    val ys = xs
+    println(first)
+}

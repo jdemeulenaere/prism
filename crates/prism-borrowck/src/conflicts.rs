@@ -635,6 +635,15 @@ impl Checker<'_, '_> {
                     helps,
                 };
             }
+            // The list a `for` loop iterates (D11 of `collections`).
+            LoanKind::Borrow(BorrowOrigin::Iteration) if conflict => related.push(Label {
+                span: loan.span,
+                message: if loan.mutable {
+                    "borrowed mutably by this 'for' loop here".to_string()
+                } else {
+                    "borrowed by this 'for' loop here".to_string()
+                },
+            }),
             LoanKind::Borrow(_) => related.push(Label {
                 span: loan.span,
                 message: if !conflict {

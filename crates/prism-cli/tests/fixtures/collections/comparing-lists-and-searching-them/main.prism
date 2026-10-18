@@ -1,0 +1,2 @@
+// expect: ok
+fun f(a: List<String>, b: &List<String>, name: String): Bool = a == b && a.contains(name) && a.indexOf("x") < 0

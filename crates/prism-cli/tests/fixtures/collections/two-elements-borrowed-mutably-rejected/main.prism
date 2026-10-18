@@ -1,0 +1,7 @@
+// expect: E5003
+fun f() {
+    var xs = listOf(1, 2)
+    val a = &mut xs[0]
+    val b = &mut xs[1]
+    *a = b
+}

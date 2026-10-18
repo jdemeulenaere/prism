@@ -1,0 +1,7 @@
+// expect: ok
+fun f() {
+    var xs = listOf(1)
+    xs.add(xs.size)
+    xs.add(xs[0])
+    xs[xs.size - 1] = 0
+}

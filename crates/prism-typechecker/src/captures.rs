@@ -530,10 +530,11 @@ impl<'a> Graph<'a> {
             }
             StatementKind::For {
                 variable,
-                range,
+                iterable,
                 body: loop_body,
+                ..
             } => {
-                self.expression(*range);
+                self.expression(*iterable);
                 self.enter_scope();
                 self.declare(*variable);
                 self.expression(*loop_body);

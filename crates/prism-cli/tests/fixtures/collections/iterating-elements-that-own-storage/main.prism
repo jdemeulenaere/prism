@@ -1,0 +1,7 @@
+// expect: ok
+struct Todo { val title: String, var done: Bool }
+fun f(todos: &List<Todo>) {
+    for (t in todos) {
+        if (!t.done) println(t.title)
+    }
+}

@@ -1,0 +1,29 @@
+module main
+fun main::f(xs: &List<Int>, i: Int): Int @2:1
+  local %0 xs: &List<Int> (parameter)
+  local %1 i: Int (parameter)
+  local %2 ys: List<Int> (var)
+  block: Int @2:36
+    let %2 ys @3:5
+      call builtin listOf<Int>: List<Int> @3:14
+        argument e1: literal 1: Int @3:21
+        argument e2: literal 2: Int @3:24
+    expression @4:5
+      call builtin add<Int>: Unit @4:5
+        receiver: borrow mut (receiver): &mut List<Int> @4:5
+          local %2 ys: List<Int> @4:5
+        argument element: copy: Int @4:12
+          index: Int @4:12
+            base: deref: List<Int> @4:12
+              local %0 xs: &List<Int> @4:12
+            index: local %1 i: Int @4:15
+    tail: coerce diverge: Int @5:5
+      return: Nothing @5:5
+        binary +: Int @5:12
+          call builtin size<Int>: Int @5:12
+            receiver: borrow (receiver): &List<Int> @5:12
+              local %2 ys: List<Int> @5:12
+          index: Int @5:22
+            base: deref: List<Int> @5:22
+              local %0 xs: &List<Int> @5:22
+            index: literal 0: Int @5:25

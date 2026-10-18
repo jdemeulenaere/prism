@@ -1,0 +1,3 @@
+// expect: E4002
+fun <T> same(a: &List<T>, b: &List<T>): Bool = a == b
+fun <T> has(a: &List<T>, x: &T): Bool = a.contains(x)

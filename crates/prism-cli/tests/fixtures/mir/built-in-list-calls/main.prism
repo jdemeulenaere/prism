@@ -1,0 +1,6 @@
+// expect: ok
+fun f(): Int {
+    var xs = listOf(1, 2)
+    xs.add(3)
+    return xs.removeAt(0)
+}

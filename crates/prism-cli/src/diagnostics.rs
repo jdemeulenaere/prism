@@ -400,6 +400,7 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             clone,
             destructure,
             unbox,
+            remove,
             ty,
             captured,
             ..
@@ -408,6 +409,12 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 out.push_str(&format!("   = help: borrow it instead: '{}'\n", borrow));
                 if let Some(clone) = clone {
                     out.push_str(&format!("   = help: or clone it: '{}'\n", clone));
+                }
+                if let Some(remove) = remove {
+                    out.push_str(&format!(
+                        "   = help: or take it out of the list: '{}'\n",
+                        remove
+                    ));
                 }
                 if let Some(destructure) = destructure {
                     out.push_str(&format!(
@@ -465,6 +472,19 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 parameter,
                 parameter,
                 bound.as_str()
+            ));
+        }
+        // A list of borrows, often inferred from a loop variable (D9 of `collections`).
+        TypeError::BorrowInTypeArgument {
+            owner, argument, ..
+        } if owner == "'listOf'" || owner == "'List'" => {
+            let element = match argument {
+                Type::Reference { inner, .. } => inner.to_string(),
+                other => other.to_string(),
+            };
+            out.push_str(&format!(
+                "   = help: lists hold owned values; write the element type to copy the values in, as in 'listOf<{}>(...)'\n",
+                element
             ));
         }
         TypeError::BorrowInTypeArgument { .. } => {

@@ -1,0 +1,7 @@
+// expect: E5004
+fun f() {
+    var xs = listOf("a")
+    val first = &xs[0]
+    xs = listOf()
+    println(first)
+}

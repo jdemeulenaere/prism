@@ -1,0 +1,6 @@
+// expect: ok
+fun f(xs: List<Int>, ys: &List<Int>) {
+    for (x in xs) {}
+    for (y in ys) {}
+    for (i in xs.indices) {}
+}

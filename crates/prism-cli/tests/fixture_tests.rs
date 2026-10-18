@@ -946,7 +946,7 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// The passing `loops` cases that use a construct the Tier 1 backend rejects, and the construct.
-const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[];
+const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[("loops/a-list-is-iterable", "lists")];
 
 /// code-generation: "Unsupported Constructs Are Rejected Before Code Generation". Every passing
 /// case of the `loops` spec that uses only scalars, strings, nullables and ranges passes the backend's

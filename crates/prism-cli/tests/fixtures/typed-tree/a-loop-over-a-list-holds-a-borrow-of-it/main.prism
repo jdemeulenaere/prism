@@ -1,0 +1,6 @@
+// expect: ok
+fun f(xs: List<Int>) {
+    var ys = listOf(1)
+    for (x in xs) {}
+    for (y in &mut ys) {}
+}

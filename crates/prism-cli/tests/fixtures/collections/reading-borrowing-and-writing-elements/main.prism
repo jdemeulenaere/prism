@@ -1,0 +1,13 @@
+// expect: ok
+struct Todo { val title: String, var done: Bool }
+fun show(t: &Todo) {}
+fun f(n: Int) {
+    var xs = listOf(1, 2)
+    xs[0] = xs[1] + n
+    xs[1] *= 2
+    var todos = listOf(Todo("a", false))
+    todos[0].done = true
+    show(todos[0])
+    val t: &Todo = &todos[0]
+    val title = todos[0].title.clone()
+}

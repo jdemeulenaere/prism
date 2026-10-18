@@ -1,0 +1,9 @@
+// expect: E5006
+fun h(other: &String) {
+    var first = other
+    if (other.length > 0) {
+        val xs = listOf("a")
+        first = &xs[0]
+    }
+    println(first)
+}

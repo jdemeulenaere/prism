@@ -1,0 +1,3 @@
+// expect: ok
+fun make(): List<String> = listOf("a")
+fun f() { for (s in make()) println(s) }

@@ -1,0 +1,6 @@
+// expect: ok
+fun f() {
+    var handlers = listOf<() -> Unit>()
+    handlers.add { println("hi") }
+    handlers[0]()
+}

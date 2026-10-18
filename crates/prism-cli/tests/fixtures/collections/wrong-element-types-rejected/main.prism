@@ -1,0 +1,6 @@
+// expect: E4004
+fun f() {
+    var xs = listOf(1)
+    xs.add("a")
+    xs.insert("b", 1)
+}

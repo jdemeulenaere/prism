@@ -1,0 +1,8 @@
+// expect: ok
+fun List<Int>.sum(): Int {
+    var total = 0
+    for (n in this) total += n
+    return total
+}
+fun <T> List<T>.second(): &T = &this[1]
+fun f(xs: &List<Int>): Int = xs.sum() + xs.second()

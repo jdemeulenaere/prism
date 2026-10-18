@@ -1,0 +1,9 @@
+// expect: ok
+fun f(xs: List<Int>): Int = when (xs) {
+    listOf(1) -> 1
+    val other -> other.size
+}
+fun g(xs: &List<Int>): Int = when (xs) {
+    listOf() -> 0
+    else -> 1
+}

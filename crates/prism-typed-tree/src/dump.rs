@@ -10,7 +10,8 @@
 use crate::arena::{ExpressionId, StatementId};
 use crate::tree::{
     Argument, Body, BorrowOrigin, Callee, CaptureMode, CoercionKind, ConstructKind, ExpressionKind,
-    Item, LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TemplatePart, TypedFile,
+    ForIteration, Item, LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TemplatePart,
+    TypedFile,
 };
 use crate::types::{NominalId, Type, TypeDef, TypeParameter, BUILTIN_MODULE};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
@@ -264,6 +265,7 @@ impl Printer<'_> {
                     BorrowOrigin::Argument => "argument",
                     BorrowOrigin::Receiver => "receiver",
                     BorrowOrigin::Conversion => "conversion",
+                    BorrowOrigin::Iteration => "iteration",
                 }
             ),
             ExpressionKind::SafeNavigation { origin, .. } => match origin {
@@ -654,12 +656,21 @@ impl Printer<'_> {
             }
             StatementKind::For {
                 variable,
-                range,
+                iterable,
+                iteration,
                 body,
             } => {
                 let text = format!("for {} {} {}", id, self.local_name(*variable), at);
                 self.line(depth, "", &text);
-                self.expression(*range, depth + 1, "range");
+                match iteration {
+                    ForIteration::Range => self.expression(*iterable, depth + 1, "range"),
+                    ForIteration::List { mutable: false } => {
+                        self.expression(*iterable, depth + 1, "list")
+                    }
+                    ForIteration::List { mutable: true } => {
+                        self.expression(*iterable, depth + 1, "mutable list")
+                    }
+                }
                 self.expression(*body, depth + 1, "body");
             }
             StatementKind::Destructure { pattern, value } => {

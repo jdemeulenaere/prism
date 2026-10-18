@@ -1,0 +1,5 @@
+// expect: E4017
+fun f(names: List<String>): String {
+    val first = names[0]
+    return first
+}

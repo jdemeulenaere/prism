@@ -56,8 +56,10 @@ pub fn projection_type(base: &Type, projection: Projection, types: &TypeTable) -
             .and_then(|variants| variants.get(variant))
             .and_then(|(_, payloads)| payloads.get(field))
             .map(|ty| ty.substitute(arguments)),
-        // An index applies to no type yet: a string's character is computed by the built-in
-        // `get`, not stored (D5 of `runtime-strings-and-drops`). Collections will index places.
+        // An element of a list (D16 of `collections`). A string's character is computed by
+        // the built-in `get`, not stored, so a string is never indexed (D5 of
+        // `runtime-strings-and-drops`).
+        (Projection::Index(_), Type::List(element)) => Some(element.as_ref().clone()),
         _ => None,
     }
 }

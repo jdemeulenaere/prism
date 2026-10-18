@@ -1,0 +1,7 @@
+// expect: E5003
+fun f() {
+    var xs = listOf(1, 2)
+    for (x in xs) {
+        if (x == 1) xs.add(3)
+    }
+}

@@ -290,6 +290,15 @@ impl Validator<'_> {
                 if place.projections.contains(&Projection::Deref) {
                     self.report(format!("{} moves out of a dereference", at));
                 }
+                // An element stays in its list; only `removeAt` and `removeLast` take one out
+                // (D7 of `collections`).
+                if place
+                    .projections
+                    .iter()
+                    .any(|p| matches!(p, Projection::Index(_)))
+                {
+                    self.report(format!("{} moves out of an element of a list", at));
+                }
                 // A payload moves only by a destructuring of its whole enum (D15 of
                 // `payload-patterns`).
                 if place
@@ -524,6 +533,7 @@ impl Validator<'_> {
                     }
                     if let Callee::Builtin(builtin) = callee {
                         self.box_builtin(&at, *builtin, arguments, type_arguments, &ty);
+                        self.list_builtin(&at, *builtin, parameters, type_arguments, &ty);
                     }
                 }
             }
@@ -595,6 +605,50 @@ impl Validator<'_> {
             }
             _ => {}
         }
+    }
+
+    /// Checks a call of a list built-in (D16 of `collections`): `listOf` declares one parameter
+    /// `T` per element and gives a `List<T>`; a member declares its signature, receiver first,
+    /// and gives its result, both with the element type as the one type argument.
+    fn list_builtin(
+        &mut self,
+        at: &str,
+        builtin: BuiltinFunction,
+        parameters: &[Type],
+        type_arguments: &[Type],
+        destination: &Type,
+    ) {
+        let element = BuiltinFunction::list_element_parameter().as_type();
+        let (declared, result) = match builtin {
+            BuiltinFunction::ListOf => (
+                vec![element.clone(); parameters.len()],
+                Type::List(Box::new(element)),
+            ),
+            _ => match (
+                builtin.list_member_parameters(),
+                builtin.list_member_signature(),
+            ) {
+                (Some(declared), Some(signature)) => (
+                    declared.into_iter().map(|(_, ty)| ty).collect(),
+                    signature.result,
+                ),
+                _ => return,
+            },
+        };
+        if type_arguments.len() != 1 || parameters != declared.as_slice() {
+            self.report(format!(
+                "{} calls builtin {} with a wrong shape",
+                at,
+                builtin.name()
+            ));
+            return;
+        }
+        let result = result.substitute(type_arguments);
+        self.expect(
+            Some(destination.clone()),
+            &result,
+            &format!("{} destination", at),
+        );
     }
 
     /// The drop flags of `block`: each is assigned only a `Bool` constant, as a whole local, and
@@ -1101,7 +1155,7 @@ mod tests {
             Place::local(LocalId(2)).project(Projection::Index(LocalId(2))),
         ));
         assert_reports(&file, "indexes by _2 of type String");
-        // No type has an index projection: a string's character is computed.
+        // Only a list has an index projection: a string's character is computed.
         let mut file = small_file();
         let index = body(&mut file)
             .locals
@@ -1110,6 +1164,29 @@ mod tests {
             Place::local(LocalId(2)).project(Projection::Index(index)),
         ));
         assert_reports(&file, "projects Index(LocalId(3)) out of a String");
+    }
+
+    #[test]
+    fn elements_of_lists_are_places_never_moved_out() {
+        let mut file = small_file();
+        let list = body(&mut file).locals.alloc(local(
+            Type::List(Box::new(Type::String)),
+            LocalKind::User,
+            Some("xs"),
+        ));
+        let index = body(&mut file)
+            .locals
+            .alloc(local(Type::Int, LocalKind::Temporary, None));
+        let element = Place::local(list).project(Projection::Index(index));
+        body(&mut file).blocks[BlockId(0)].statements[2] =
+            statement(StatementKind::Read(element.clone()));
+        let read = violations(&file);
+        assert!(!read.contains("projects"), "{}", read);
+        body(&mut file).blocks[BlockId(0)].statements[3] = statement(StatementKind::assign(
+            Place::return_place(),
+            Rvalue::Use(Operand::Move(element, prism_ast::Span::default())),
+        ));
+        assert_reports(&file, "moves out of an element of a list");
     }
 
     #[test]
