@@ -78,11 +78,15 @@ The compiler MUST compute, for each file, an interface hash: a deterministic 256
 - **THEN** both runs print the same report and exit with the same status
 
 ### Requirement: Instantiation Records for Generic Body Changes
-When a file that passes Phase 2 calls an exported generic function or extension of a direct import with type arguments that mention no type parameter of the caller, `prism check` MUST record an instance for that generic, its Monomorphization Hash and those type arguments. An instance already recorded MUST be reported as reused, any other as one to instantiate.
+When a file that passes Phase 2 calls an exported generic function or extension of a direct import with type arguments that mention no type parameter of the caller, `prism check` MUST record an instance for that generic, its signature, its Monomorphization Hash and those type arguments. An instance already recorded MUST be reported as reused, any other as one to instantiate.
 
 #### Scenario: Changing generic function body
 - **WHEN** `lib/box.prism` exports `public fun <T> keep(x: T): T` and `public fun <T> drop(x: T): Int`, `app/a.prism` calls `keep(1)`, `app/b.prism` calls `drop("s")`, the workspace has been checked, and the body of `keep` changes
 - **THEN** the next `prism check` re-checks `lib/box` only, reports that `app/a` must instantiate `lib/box::keep<Int>` again, and reports the instance `lib/box::drop<String>` of `app/b` as reused: re-monomorphization is triggered only in downstream files that instantiate that generic
+
+#### Scenario: Changing a generic signature instantiates again
+- **WHEN** `app/a.prism` calls `drop(1)` of that `lib/box`, the workspace has been checked, then the parameter of `drop` becomes `x: &T` with its body unchanged and the call becomes `drop(&1)`
+- **THEN** the next `prism check` re-checks `lib/box` and `app/a`, and reports that `app/a` must instantiate `lib/box::drop<Int>` again, since an instance depends on the generic's signature as well as on its body
 
 #### Scenario: Polymorphic calls are not recorded
 - **WHEN** `app/a.prism` declares `fun <T> wrap(x: T): T = keep(x)`, calling the imported generic `keep` with its own type parameter

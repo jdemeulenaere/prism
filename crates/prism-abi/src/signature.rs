@@ -59,6 +59,130 @@ pub enum ExportedSymbol {
 }
 
 impl ExportedSymbol {
+    /// Feeds what the symbol shows importers into `hasher`: everything the ABI records about it
+    /// but a generic function's Monomorphization Hash. The file's interface hash is this stream
+    /// for every symbol in order.
+    fn hash_interface_into(&self, hasher: &mut DeterministicHasher) {
+        match self {
+            ExportedSymbol::Function {
+                visibility,
+                is_compose,
+                receiver,
+                name,
+                type_parameters,
+                params,
+                return_type,
+                generic_body_hash: _,
+            } => {
+                hasher.write_str("fun");
+                hasher.write_str(visibility.as_str());
+                hasher.write_u8(if *is_compose { 1 } else { 0 });
+                match receiver {
+                    Some(receiver) => {
+                        hasher.write_u8(1);
+                        hasher.write_u8(match receiver.mode {
+                            ReceiverMode::Shared => 0,
+                            ReceiverMode::Mutable => 1,
+                            ReceiverMode::Consuming => 2,
+                        });
+                        receiver.ty.hash_into(hasher);
+                    }
+                    None => hasher.write_u8(0),
+                }
+                hasher.write_str(name);
+                hash_type_parameters(type_parameters, hasher);
+                hasher.write_u64(params.len() as u64);
+                for (pname, pty, pdef) in params {
+                    hasher.write_str(pname);
+                    pty.hash_into(hasher);
+                    if let Some(def) = pdef {
+                        hasher.write_u8(1);
+                        hasher.write_str(def);
+                    } else {
+                        hasher.write_u8(0);
+                    }
+                }
+                return_type.hash_into(hasher);
+            }
+            ExportedSymbol::Struct {
+                visibility,
+                name,
+                type_parameters,
+                marker,
+                marker_parameters,
+                fields,
+            } => {
+                hasher.write_str("struct");
+                hasher.write_str(visibility.as_str());
+                hasher.write_str(name);
+                hash_marker(*marker, hasher);
+                hash_marker_parameters(marker_parameters, hasher);
+                hash_type_parameters(type_parameters, hasher);
+                hasher.write_u64(fields.len() as u64);
+                for (fname, is_var, fty) in fields {
+                    hasher.write_str(fname);
+                    hasher.write_u8(if *is_var { 1 } else { 0 });
+                    fty.hash_into(hasher);
+                }
+            }
+            ExportedSymbol::Enum {
+                visibility,
+                name,
+                type_parameters,
+                marker,
+                marker_parameters,
+                variants,
+            } => {
+                hasher.write_str("enum");
+                hasher.write_str(visibility.as_str());
+                hasher.write_str(name);
+                hash_marker(*marker, hasher);
+                hash_marker_parameters(marker_parameters, hasher);
+                hash_type_parameters(type_parameters, hasher);
+                // Write variants count to eliminate canonicalization collisions
+                hasher.write_u64(variants.len() as u64);
+                for (vname, vflds) in variants {
+                    hasher.write_str(vname);
+                    // Write field count for this variant
+                    hasher.write_u64(vflds.len() as u64);
+                    for fty in vflds {
+                        fty.hash_into(hasher);
+                    }
+                }
+            }
+            ExportedSymbol::Var {
+                visibility,
+                name,
+                ty,
+            } => {
+                hasher.write_str("val");
+                hasher.write_str(visibility.as_str());
+                hasher.write_str(name);
+                ty.hash_into(hasher);
+            }
+        }
+    }
+
+    /// The hash of [`ExportedSymbol::hash_interface_into`]'s stream for this symbol alone: a
+    /// generic function's signature, which with its Monomorphization Hash keys its instances
+    /// (D9 of `abi-cache`).
+    pub fn interface_hash(&self) -> ContentHash {
+        let mut hasher = DeterministicHasher::new();
+        self.hash_interface_into(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The Monomorphization Hash of a generic function or extension, `None` for any other
+    /// symbol.
+    pub fn generic_body_hash(&self) -> Option<ContentHash> {
+        match self {
+            ExportedSymbol::Function {
+                generic_body_hash, ..
+            } => *generic_body_hash,
+            _ => None,
+        }
+    }
+
     /// The key symbols are sorted by: kind, name, then a function's receiver type, qualified by
     /// its module (empty for a plain function), so extensions sharing a name keep a fixed order.
     fn sort_key(&self) -> (u8, &str, String) {
@@ -378,104 +502,7 @@ impl FileAbi {
         hasher.write_u64(symbols.len() as u64);
 
         for sym in symbols {
-            match sym {
-                ExportedSymbol::Function {
-                    visibility,
-                    is_compose,
-                    receiver,
-                    name,
-                    type_parameters,
-                    params,
-                    return_type,
-                    generic_body_hash: _,
-                } => {
-                    hasher.write_str("fun");
-                    hasher.write_str(visibility.as_str());
-                    hasher.write_u8(if *is_compose { 1 } else { 0 });
-                    match receiver {
-                        Some(receiver) => {
-                            hasher.write_u8(1);
-                            hasher.write_u8(match receiver.mode {
-                                ReceiverMode::Shared => 0,
-                                ReceiverMode::Mutable => 1,
-                                ReceiverMode::Consuming => 2,
-                            });
-                            receiver.ty.hash_into(&mut hasher);
-                        }
-                        None => hasher.write_u8(0),
-                    }
-                    hasher.write_str(name);
-                    hash_type_parameters(type_parameters, &mut hasher);
-                    hasher.write_u64(params.len() as u64);
-                    for (pname, pty, pdef) in params {
-                        hasher.write_str(pname);
-                        pty.hash_into(&mut hasher);
-                        if let Some(def) = pdef {
-                            hasher.write_u8(1);
-                            hasher.write_str(def);
-                        } else {
-                            hasher.write_u8(0);
-                        }
-                    }
-                    return_type.hash_into(&mut hasher);
-                }
-                ExportedSymbol::Struct {
-                    visibility,
-                    name,
-                    type_parameters,
-                    marker,
-                    marker_parameters,
-                    fields,
-                } => {
-                    hasher.write_str("struct");
-                    hasher.write_str(visibility.as_str());
-                    hasher.write_str(name);
-                    hash_marker(*marker, &mut hasher);
-                    hash_marker_parameters(marker_parameters, &mut hasher);
-                    hash_type_parameters(type_parameters, &mut hasher);
-                    hasher.write_u64(fields.len() as u64);
-                    for (fname, is_var, fty) in fields {
-                        hasher.write_str(fname);
-                        hasher.write_u8(if *is_var { 1 } else { 0 });
-                        fty.hash_into(&mut hasher);
-                    }
-                }
-                ExportedSymbol::Enum {
-                    visibility,
-                    name,
-                    type_parameters,
-                    marker,
-                    marker_parameters,
-                    variants,
-                } => {
-                    hasher.write_str("enum");
-                    hasher.write_str(visibility.as_str());
-                    hasher.write_str(name);
-                    hash_marker(*marker, &mut hasher);
-                    hash_marker_parameters(marker_parameters, &mut hasher);
-                    hash_type_parameters(type_parameters, &mut hasher);
-                    // Write variants count to eliminate canonicalization collisions
-                    hasher.write_u64(variants.len() as u64);
-                    for (vname, vflds) in variants {
-                        hasher.write_str(vname);
-                        // Write field count for this variant
-                        hasher.write_u64(vflds.len() as u64);
-                        for fty in vflds {
-                            fty.hash_into(&mut hasher);
-                        }
-                    }
-                }
-                ExportedSymbol::Var {
-                    visibility,
-                    name,
-                    ty,
-                } => {
-                    hasher.write_str("val");
-                    hasher.write_str(visibility.as_str());
-                    hasher.write_str(name);
-                    ty.hash_into(&mut hasher);
-                }
-            }
+            sym.hash_interface_into(&mut hasher);
         }
 
         let interface_hash = hasher.finish();
@@ -508,27 +535,38 @@ impl FileAbi {
         self.interface_hash.to_hex()
     }
 
+    /// The exported generic function or extension `name`, whose receiver's constructor is
+    /// `receiver` ([`receiver_constructor`]) or which has no receiver. `None` when the file
+    /// exports no such generic.
+    pub fn generic_function_of(
+        &self,
+        name: &str,
+        receiver: Option<&str>,
+    ) -> Option<&ExportedSymbol> {
+        self.symbols.iter().find(|symbol| match symbol {
+            ExportedSymbol::Function {
+                name: symbol_name,
+                receiver: symbol_receiver,
+                generic_body_hash: Some(_),
+                ..
+            } => {
+                symbol_name == name
+                    && symbol_receiver
+                        .as_ref()
+                        .map(|r| receiver_constructor(&r.ty))
+                        .as_deref()
+                        == receiver
+            }
+            _ => false,
+        })
+    }
+
     /// The Monomorphization Hash of the exported generic function or extension `name`, whose
     /// receiver's constructor is `receiver` ([`receiver_constructor`]) or which has no receiver.
     /// `None` when the file exports no such generic.
     pub fn generic_body_hash_of(&self, name: &str, receiver: Option<&str>) -> Option<ContentHash> {
-        self.symbols.iter().find_map(|symbol| match symbol {
-            ExportedSymbol::Function {
-                name: symbol_name,
-                receiver: symbol_receiver,
-                generic_body_hash,
-                ..
-            } if symbol_name == name
-                && symbol_receiver
-                    .as_ref()
-                    .map(|r| receiver_constructor(&r.ty))
-                    .as_deref()
-                    == receiver =>
-            {
-                *generic_body_hash
-            }
-            _ => None,
-        })
+        self.generic_function_of(name, receiver)?
+            .generic_body_hash()
     }
 }
 

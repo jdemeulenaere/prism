@@ -549,8 +549,8 @@ fn receiver_constructor(ty: &prism_typed_tree::Type) -> String {
 }
 
 /// Looks up, or records, the instance of each of `requests` in `cache`, keyed by the generic's
-/// current Monomorphization Hash in the importing file's direct imports `imports`. Without a
-/// cache every instance is one to instantiate.
+/// current signature and Monomorphization Hash in the importing file's direct imports
+/// `imports`. Without a cache every instance is one to instantiate.
 fn instance_outcomes(
     cache: Option<&BuildCache>,
     imports: &[&FileAbi],
@@ -559,14 +559,15 @@ fn instance_outcomes(
     requests
         .iter()
         .filter_map(|request| {
-            let body_hash = imports
+            let generic = imports
                 .iter()
                 .filter(|abi| abi.module == request.module)
                 .find_map(|abi| {
-                    abi.generic_body_hash_of(&request.name, request.receiver.as_deref())
+                    abi.generic_function_of(&request.name, request.receiver.as_deref())
                 })?;
+            let body_hash = generic.generic_body_hash()?;
             let reused = cache.is_some_and(|cache| {
-                let key = cache.instance_key(request, &body_hash);
+                let key = cache.instance_key(request, &generic.interface_hash(), &body_hash);
                 let reused = cache.has_instance(&key);
                 if !reused {
                     cache.record_instance(&key);

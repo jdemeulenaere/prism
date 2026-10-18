@@ -361,6 +361,42 @@ fn changing_generic_function_body() {
     );
 }
 
+/// compilation-and-abi: "Changing a generic signature instantiates again".
+#[test]
+fn changing_a_generic_signature_instantiates_again() {
+    let workspace = Workspace::new(
+        "generic_signature",
+        &[
+            ("lib/box.prism", BOX),
+            (
+                "app/a.prism",
+                "package app\nimport /lib/box\nfun f(): Int = drop(1)\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/a.prism"),
+        lines(&[
+            "checked lib/box.prism",
+            "checked app/a.prism",
+            "instantiate lib/box::drop<Int> for app/a.prism",
+        ])
+    );
+    workspace.write("lib/box.prism", &BOX.replace("drop(x: T)", "drop(x: &T)"));
+    workspace.write(
+        "app/a.prism",
+        "package app\nimport /lib/box\nfun f(): Int = drop(&1)\n",
+    );
+    assert_eq!(
+        workspace.explain("app/a.prism"),
+        lines(&[
+            "checked lib/box.prism",
+            "checked app/a.prism",
+            "instantiate lib/box::drop<Int> for app/a.prism",
+        ])
+    );
+}
+
 /// compilation-and-abi: "Polymorphic calls are not recorded".
 #[test]
 fn polymorphic_calls_are_not_recorded() {

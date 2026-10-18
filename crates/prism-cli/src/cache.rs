@@ -158,9 +158,16 @@ impl BuildCache {
         hasher.finish()
     }
 
-    /// The key of the instance record of `request`, whose generic has the Monomorphization Hash
-    /// `body_hash` (D9).
-    pub fn instance_key(&self, request: &InstanceRequest, body_hash: &ContentHash) -> ContentHash {
+    /// The key of the instance record of `request`, whose generic has the signature hash
+    /// `signature_hash` ([`prism_abi::ExportedSymbol::interface_hash`]) and the Monomorphization
+    /// Hash `body_hash` (D9): an instance depends on the generic's signature as much as on its
+    /// body.
+    pub fn instance_key(
+        &self,
+        request: &InstanceRequest,
+        signature_hash: &ContentHash,
+        body_hash: &ContentHash,
+    ) -> ContentHash {
         let mut hasher = self.key_hasher(EntryKind::Instance);
         hasher.write_str(&request.module);
         match &request.receiver {
@@ -171,6 +178,7 @@ impl BuildCache {
             None => hasher.write_u8(0),
         }
         hasher.write_str(&request.name);
+        hasher.write_hash(signature_hash);
         hasher.write_hash(body_hash);
         hasher.write_hash(&request.type_arguments);
         hasher.finish()
@@ -401,13 +409,20 @@ mod tests {
     #[test]
     fn instance_records_round_trip() {
         let (directory, cache) = temporary_cache("instances");
-        let key = cache.instance_key(&request("keep"), &ContentHash([3; 32]));
+        let signature = ContentHash([2; 32]);
+        let key = cache.instance_key(&request("keep"), &signature, &ContentHash([3; 32]));
         assert!(!cache.has_instance(&key));
         cache.record_instance(&key);
         assert!(cache.has_instance(&key));
-        let other = cache.instance_key(&request("keep"), &ContentHash([4; 32]));
+        let other = cache.instance_key(&request("keep"), &signature, &ContentHash([4; 32]));
         assert_ne!(key, other, "the body hash is part of the key");
         assert!(!cache.has_instance(&other));
+        let other = cache.instance_key(
+            &request("keep"),
+            &ContentHash([5; 32]),
+            &ContentHash([3; 32]),
+        );
+        assert_ne!(key, other, "the signature hash is part of the key");
         fs::remove_dir_all(&directory).ok();
     }
 
