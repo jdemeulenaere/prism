@@ -6,7 +6,7 @@ The references specification defines how borrowed references are used: as the ty
 ## Requirements
 
 ### Requirement: Implicit Shared Borrow at Argument Sites
-Where a call's parameter has type `&T`, an argument of type `T` MUST be borrowed implicitly. A place argument (a variable, a `.` field path, or an index) MUST be borrowed where it lives, without being consumed. Any other argument MUST be evaluated as a temporary, in a consuming position, that lives until the end of the statement. Default values are arguments. Elsewhere a borrow MUST be written with `&`.
+Where a call's parameter has type `&T`, an argument of type `T` MUST be borrowed implicitly. A place argument (a variable or a `.` field path) MUST be borrowed where it lives, without being consumed. A string's character `s[i]` is a value, not a place. Any other argument MUST be evaluated as a temporary, in a consuming position, that lives until the end of the statement. Default values are arguments. Elsewhere a borrow MUST be written with `&`.
 
 #### Scenario: Implicit shared borrow at argument sites
 - **WHEN** `fun greet(name: &String)` and `struct User { val name: String }` are declared and a body of `fun f(u: &User, name: String)` runs `greet(name)`, `greet(u.name)` and `greet("Ada")`
@@ -31,6 +31,10 @@ Where a call's parameter has type `&T`, an argument of type `T` MUST be borrowed
 #### Scenario: Borrows outside arguments are written
 - **WHEN** `struct User { val name: String }` is declared, and `fun f(name: String) { val r: &String = name }` and `fun g(u: &User): &String = u.name` are checked
 - **THEN** the type checker emits `E4002` for `f`, with help suggesting `&name`, and `E4005` for `g`, with help suggesting `&u.name`
+
+#### Scenario: A string character is borrowed as a temporary
+- **WHEN** `fun show(c: &Char): Int = 1` is declared and `fun f() { var s = "ab"; val r = &s[0]; s = "cd"; println(show(s[1])); println(r) }` is checked
+- **THEN** the file typechecks successfully: `r` and the argument of `show` borrow temporaries holding the characters, not `s`
 
 ### Requirement: Explicit Mutable Borrows at Call Sites
 A parameter of type `&mut T` MUST NOT borrow an owned argument implicitly. The caller MUST write `&mut`, and an owned place passed without it MUST be rejected with `E4004`, with help suggesting `&mut` before the argument. The receiver of a `mut fun` call is the one exception: it is borrowed mutably without `&mut` (see "Mutable Receivers Must Be Mutable Places").
@@ -596,3 +600,7 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **One conflict per compound assignment.** Under a live mutable borrow, `x += 1` reads and writes `x` at the same span; the existing rule that, of the accesses at one span conflicting with one loan, only the last is reported gives the write's `E5004` alone, whatever the borrow's kind. `x = x + 1` keeps reporting both, since the user wrote the read and the write separately. Rejected: putting the read at the operator's span so both are reported; reporting the read's `E5003`, which would not apply to a shared borrow.
+
+Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **A string's character is borrowed as a temporary** (D5). `s[i]` is a value, not a place (see `type-system`), so `&s[i]`, and `s[i]` passed to a `&Char` parameter, borrow a temporary holding the character by the rules for non-places, and `val r = &s[0]; s = "cd"` is accepted, since `r` does not borrow `s`. This was a breaking change for programs relying on `&s[i]` borrowing `s`, which nothing could run.

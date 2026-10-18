@@ -34,7 +34,7 @@ The instances of an exported generic function MUST be generated again when what 
 
 ## 2. Two-Tier Native Execution
 
-Implemented today (`codegen-core`, [`code-generation`](../openspec/specs/code-generation/spec.md) and [`execution`](../openspec/specs/execution/spec.md)): the Tier 1 Cranelift JIT behind `prism run`, for programs over `Int`, `Double`, `Bool`, `Char` and references to them, reaching `main` well under 15 ms; every call goes through a patchable function table and nothing is inlined, which hot reload needs. Aggregates, strings, drops, generics, closures and composable functions are rejected with `E6001` until their changes land. Hot reload and Tier 2 are planned below.
+Implemented today (`codegen-core`, `codegen-aggregates` and `runtime-strings-and-drops`, [`code-generation`](../openspec/specs/code-generation/spec.md) and [`execution`](../openspec/specs/execution/spec.md)): the Tier 1 Cranelift JIT behind `prism run`, for programs over `Int`, `Double`, `Bool`, `Char`, `String`, structs, enums, nullables and references to them, reaching `main` well under 15 ms, with drop and clone glue freeing owned memory deterministically and `prism run --check-allocations` verifying it; every call goes through a patchable function table and nothing is inlined, which hot reload needs. `Heap<T>` values, generic bodies, closures and composable functions are rejected with `E6001` until their changes land. Hot reload and Tier 2 are planned below.
 
 ### Requirement: Two-Tier Native Execution Engine
 The compiler MUST support two distinct native execution backends: Tier 1 (Cranelift JIT) for development and Tier 2 (LLVM AOT) for release.
@@ -53,16 +53,20 @@ The compiler MUST support two distinct native execution backends: Tier 1 (Cranel
 
 Compile-time memory safety: zero runtime garbage collection, zero hidden automatic reference counting (ARC), single-owner value semantics, stack-confined borrows with automatic lifetime elision, and data-oriented handles.
 
-Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)); and, from `borrowck-moves`, single-owner values checked by the borrow checker: use after move (`E5001`) through branches, loops, consuming receivers and closure captures, reinitialization by assignment, uninitialized reads (`E5002`), and drops elaborated so that each value is dropped exactly once where its owner's scope ends ([`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)); and, from `borrowck-exclusivity`, stack-scoped borrows checked by the borrow checker: any number of shared borrows or one mutable borrow, each lasting until the last use of the references holding it, with conflicting borrows and reads (`E5003`), assignments and moves of borrowed values (`E5004`, `E5005`) and values that end while borrowed (`E5006`) rejected, disjoint field borrows, two-phase receiver borrows, call results that keep their input borrows (the caller's half of the elision rules), closures that capture by inferred borrow and never move a capture (`E4017`), and capturing closures and function-typed parameters that cannot escape (`E5007`) ([`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)); and, from `borrowck-elision`, the four lifetime elision rules from signatures alone, for callers and callees, with returned borrows of locals, temporaries and by-value parameters (`E5008` `DanglingBorrowReturn`) and returned borrows derived from untied inputs (`E5009`) rejected, function types eliding by the same rules, defaults borrowing only through shared references, and borrows of top-level `val`s valid everywhere ([`references`](../openspec/specs/references/spec.md)). Everything below is planned.
+Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)); and, from `borrowck-moves`, single-owner values checked by the borrow checker: use after move (`E5001`) through branches, loops, consuming receivers and closure captures, reinitialization by assignment, uninitialized reads (`E5002`), and drops elaborated so that each value is dropped exactly once where its owner's scope ends ([`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)); and, from `borrowck-exclusivity`, stack-scoped borrows checked by the borrow checker: any number of shared borrows or one mutable borrow, each lasting until the last use of the references holding it, with conflicting borrows and reads (`E5003`), assignments and moves of borrowed values (`E5004`, `E5005`) and values that end while borrowed (`E5006`) rejected, disjoint field borrows, two-phase receiver borrows, call results that keep their input borrows (the caller's half of the elision rules), closures that capture by inferred borrow and never move a capture (`E4017`), and capturing closures and function-typed parameters that cannot escape (`E5007`) ([`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)); and, from `borrowck-elision`, the four lifetime elision rules from signatures alone, for callers and callees, with returned borrows of locals, temporaries and by-value parameters (`E5008` `DanglingBorrowReturn`) and returned borrows derived from untied inputs (`E5009`) rejected, function types eliding by the same rules, defaults borrowing only through shared references, and borrows of top-level `val`s valid everywhere ([`references`](../openspec/specs/references/spec.md)); and, from `runtime-strings-and-drops`, deterministic cleanup at run time: each drop the elaborated MIR keeps runs the value's drop glue, freeing its owned memory where its owner's scope ends, where it is overwritten (`*r = v` drops the old referent) or in the code it was moved to, `clone()` builds values sharing no owned memory, top-level values are never dropped, and `prism run --check-allocations` checks that every allocation is freed exactly once ([`execution`](../openspec/specs/execution/spec.md), [`code-generation`](../openspec/specs/code-generation/spec.md)). Everything below is planned.
 
 The "road to the borrow checker" in [`ROADMAP.md`](../ROADMAP.md), agreed with the user on 2026-10-17, is complete; escaping, move-capturing closures are left to `closures`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors (`E5xxx`, see section 1 for the pipeline).
 
 ### Requirement: Recursive Heap Indirection via Heap<T>
-Self-referential or recursive structures MUST use the standard `Heap<T>` primitive to provide single-owner heap allocation. Constructing a `Heap<T>` and moving its contents out are not designed yet (see `ROADMAP.md`).
+Self-referential or recursive structures MUST use the standard `Heap<T>` primitive to provide single-owner heap allocation. Constructing a `Heap<T>` and moving its contents out are not designed yet (see `ROADMAP.md`). Dropping a `Heap<T>` MUST drop its contents and free its allocation, through the drop glue that `runtime-strings-and-drops` built for strings, structs, enums and nullables. A `Heap<T>` clone MUST allocate a new box holding a clone of its contents, running no user code.
 
 #### Scenario: Dropping Heap<T> allocation
 - **WHEN** an instance of `Heap<T>` leaves scope
 - **THEN** the allocated heap buffer and the inner value `T` are freed deterministically with zero reference-counter traffic
+
+#### Scenario: Struct clone clones each field
+- **WHEN** `struct User : Clone { val name: String, val tags: Heap<Int> }` is cloned
+- **THEN** the clone holds a new `String` buffer and a new `Heap` box with equal contents
 
 ### Requirement: Data-Oriented Typed Handles for Graphs
 Graph topologies and cyclic data structures MUST use typed integer/handle IDs instead of raw pointers or reference-counting pointer cycles.
@@ -86,61 +90,9 @@ Why the requirements above were chosen; each change's `design.md` repeats the de
 
 ---
 
-## 4. Runtime Semantics Awaiting Code Generation
+## 4. Runtime Semantics
 
-The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs the backend to support them: the Tier 1 backend runs programs over scalars, structs, enums, nullables and references to them today, and their runtime semantics, with those of `when`, loops and ranges, are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`, `codegen-aggregates`); their layouts are in [`code-generation`](../openspec/specs/code-generation/spec.md). What remains below needs strings, `Heap<T>` values and drop glue (`runtime-strings-and-drops`). The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement), and its elaborated form which drops run, some under a drop flag; the scenarios below are what the backend must make observable at run time.
-
-### Requirement: Clone Evaluation Semantics
-`x.clone()` MUST produce a value that owns no storage shared with `x`, and MUST run no user code. A `Copy` value is copied bitwise. A `String` clone allocates a new buffer with the same contents. A `Heap<T>` clone allocates a new box holding a clone of its contents. A `T?` clone is `null` when `x` is, and otherwise a clone of its contents. A user struct or enum clones each field or payload in declaration order.
-
-#### Scenario: String clone is independent
-- **WHEN** `var a = "hi"` is cloned into `b`, and `a` is then reassigned
-- **THEN** `b` still holds `"hi"`, and dropping `b` frees only `b`'s buffer
-
-#### Scenario: Struct clone clones each field
-- **WHEN** `struct User : Clone { val name: String, val tags: Heap<Int> }` is cloned
-- **THEN** the clone holds a new `String` buffer and a new `Heap` box with equal contents
-
-### Requirement: Reference Evaluation Semantics
-The type checker decides every implicit operation on a reference ([`references`](../openspec/specs/references/spec.md), from `reference-access`). At runtime, a borrow MUST point at the borrowed place itself, never at a copy of it, and a copy-out MUST be a bitwise copy that runs no user code; both are implemented for every type the backend supports (the [`execution`](../openspec/specs/execution/spec.md) spec, "Borrows Refer to the Borrowed Place", from `codegen-aggregates`), and the scenarios below need strings and drop glue. A temporary created for a borrow MUST be dropped at the end of the statement that created it.
-
-#### Scenario: Implicitly borrowed place is not copied
-- **WHEN** `greet(u.name)` runs for `fun greet(n: &String)`
-- **THEN** `greet` receives a pointer to `u.name`'s storage, and nothing is copied or allocated
-
-#### Scenario: Argument temporary dropped at the end of the statement
-- **WHEN** `greet(make())` runs for `fun greet(n: &String)` and `fun make(): String`
-- **THEN** the `String` returned by `make()` lives until `greet` returns and the statement ends, and is then dropped
-
-#### Scenario: Writing through a reference drops the old referent
-- **WHEN** `*r = v` runs for `r: &mut String`
-- **THEN** the `String` that `r` referred to is dropped and `v` is moved into its place, so the owner of that place sees `v`
-
-### Requirement: Scope Exit Cleanup
-At runtime, each drop that the elaborated MIR runs MUST execute the value's drop glue at that point, deterministically and without a garbage collector or reference counting: dropping a struct or an enum drops its owned fields or payload, and dropping a `String` or a `Heap<T>` frees its allocation. A drop guarded by a drop flag MUST run exactly when the flag is set. Which drops run is decided by the borrow checker's drop elaboration ([`mir`](../openspec/specs/mir/spec.md)); what a drop does is `runtime-strings-and-drops`'.
-
-#### Scenario: Deterministic scope exit cleanup
-- **WHEN** an owning variable that still holds a value leaves its enclosing block scope
-- **THEN** its destructor runs immediately and deterministically, dropping owned fields and heap allocations without garbage collector intervention
-
-#### Scenario: A conditionally moved value is dropped only if present
-- **WHEN** `if (c) take(s)` runs for an owned `s: String` and the scope of `s` ends
-- **THEN** the `String` is freed once: by `take` when `c` is true, and at the end of the scope otherwise
-
-### Requirement: Method Call Evaluation Semantics
-The type checker decides how each extension call passes its receiver (the `extension-functions` spec, from `extension-methods`). At runtime, a call `recv.name(args)` MUST evaluate `recv` first: a receiver the call takes by value (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, before the arguments, and a receiver the call borrows has its place evaluated then and is borrowed after the arguments. The arguments MUST be evaluated left to right, and then the call made. A temporary receiver MUST be dropped at the end of the statement. A `?.` call MUST evaluate its receiver once, and MUST evaluate no argument and give `null` when it is `null`.
-
-#### Scenario: Receiver evaluated before the arguments
-- **WHEN** `make().greet(next())` runs for `fun make(): User`, `fun next(): Int` and `fun User.greet(n: Int)`
-- **THEN** `make()` is called before `next()`, and the `User` it returned lives until the statement ends, when it is dropped
-
-#### Scenario: A mutable receiver is borrowed after the arguments
-- **WHEN** `v.push(v.size())` runs for `mut fun Stack.push(n: Int)` and `fun Stack.size(): Int`
-- **THEN** `v.size()` runs before `v` is borrowed mutably for `push`, which is what lets two-phase borrows accept it
-
-#### Scenario: A consuming receiver is moved before the arguments
-- **WHEN** `s.into(next())` runs for `consuming fun Stack.into(n: Int): Int` and `fun next(): Int`
-- **THEN** `s` is moved before `next()` is called
+Implemented: the runtime semantics of every construct the type checker accepts and the Tier 1 backend runs, over scalars, strings, structs, enums, nullables and references to them, are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`, `codegen-aggregates`, `runtime-strings-and-drops`), and their layouts, drop glue and clone glue in [`code-generation`](../openspec/specs/code-generation/spec.md). The order of evaluation, including when receivers are evaluated and borrowed, and where each temporary is dropped are fixed by the MIR ([`mir`](../openspec/specs/mir/spec.md)), which the backend follows. Nothing remains planned here: the runtime semantics of `Heap<T>` are in section 3 (`heap-boxes`), and those of closures and composable functions come with `closures` and the compose changes (section 5).
 
 ---
 

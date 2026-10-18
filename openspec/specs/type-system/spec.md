@@ -538,6 +538,47 @@ A call whose callee is the bare name `print` or `println` MUST call the output b
 - **WHEN** `fun f() { print(); println(1, 2); println(value = 1) }` is checked
 - **THEN** the type checker emits `E4004` for each of the three calls
 
+### Requirement: String Length
+A `String` MUST have a built-in member `length` of type `Int`, read without parentheses through any `&`, `&mut` and `Heap<T>` layers, and `s?.length` on a `String?` MUST have type `Int?`. `length` is not a function: `s.length()` MUST be rejected as calling an `Int` (`E4004`), as a call of a field of type `Int` is.
+
+#### Scenario: Reading the length
+- **WHEN** `fun f(a: String, b: &String, c: String?): Int = a.length + b.length + (c?.length ?: 0)` is checked
+- **THEN** the file typechecks successfully
+
+#### Scenario: Calling the length
+- **WHEN** `fun f(s: String): Int = s.length()` is checked
+- **THEN** the type checker emits `E4004`, saying that `Int` cannot be called
+
+### Requirement: String Characters Are Values
+`s[i]` on a `String`, read through any `&`, `&mut` and `Heap<T>` layers, MUST take an `Int` index (`E4002` otherwise) and have type `Char`. A string's character MUST be a value, not a place: it is computed from the string, so `s[i] = c` MUST be rejected with `E4003`, with help saying that strings are immutable, and a borrow of `s[i]`, written or implicit, MUST borrow a temporary holding the character.
+
+#### Scenario: Reading a character
+- **WHEN** `fun f(s: &String, i: Int): Char = s[i + 1]` is checked
+- **THEN** the file typechecks successfully
+
+#### Scenario: Assigning a character rejected
+- **WHEN** `fun f() { var s = "ab"; s[0] = 'c' }` is checked
+- **THEN** the type checker emits `E4003` at `s[0]`, with help saying that the characters of a string cannot be assigned
+
+#### Scenario: A non-integer index rejected
+- **WHEN** `fun f(s: String): Char = s['a']` is checked
+- **THEN** the type checker emits `E4002`, expecting `Int`
+
+### Requirement: Scalars Have a Built-In toString
+An `Int`, `Double`, `Bool` or `Char`, read through any `&` and `&mut` layers, MUST have a built-in member function `toString()` taking no arguments and returning `String`, and `x?.toString()` on a nullable of one of these MUST have type `String?`. Arguments MUST be rejected with `E4004`. On any other type, `toString` MUST be an ordinary name, resolved to a field or an extension like any other member (`E4006` when none exists).
+
+#### Scenario: Converting scalars to strings
+- **WHEN** `fun f(n: Int, d: &Double, b: Bool, c: Char, m: Int?): String = n.toString() + d.toString() + b.toString() + c.toString() + (m?.toString() ?: "")` is checked
+- **THEN** the file typechecks successfully
+
+#### Scenario: toString takes no arguments
+- **WHEN** `fun f(n: Int): String = n.toString(10)` is checked
+- **THEN** the type checker emits `E4004`, saying that `toString()` takes no arguments
+
+#### Scenario: toString of a struct is an extension
+- **WHEN** `struct Point : Copy { val x: Int, val y: Int }`, `enum Color { Red }`, `fun Point.toString(): String = x.toString() + "," + y.toString()`, `fun f(p: Point): String = p.toString()` and `fun g(c: Color): String = c.toString()` are checked
+- **THEN** the type checker accepts `f` and the extension, and emits `E4006` for `toString` on `Color`
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -595,8 +636,15 @@ Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refine
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **`print` and `println` are compiler built-ins, found last** (D15). Prism has no overloading, traits or prelude through which a library function could accept several types, so the type checker resolves a bare `print` or `println` callee as the built-in only when no local, top-level declaration or import of that name exists, like the built-in `Range` type; fixtures declaring their own `fun print(n: &Int)` keep their meaning. A `Copy` argument is copied out of references, a `String` borrowed like a `&String` argument, anything else is `E4004` with help listing the printable types, and a built-in named without a call is `E4001`. `String` arguments typecheck now and wait for `runtime-strings-and-drops` in the backend. Rejected: a Prism-written prelude (needs overloading or traits), string templates (need strings).
+- **`print` and `println` are compiler built-ins, found last** (D15). Prism has no overloading, traits or prelude through which a library function could accept several types, so the type checker resolves a bare `print` or `println` callee as the built-in only when no local, top-level declaration or import of that name exists, like the built-in `Range` type; fixtures declaring their own `fun print(n: &Int)` keep their meaning. A `Copy` argument is copied out of references, a `String` borrowed like a `&String` argument, anything else is `E4004` with help listing the printable types, and a built-in named without a call is `E4001`. `String` arguments typecheck now and wait for `runtime-strings-and-drops` in the backend (they run since that change). Rejected: a Prism-written prelude (needs overloading or traits), string templates (need strings).
 
 Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Infinitely sized types are a type error** (D20). A struct or enum that contains itself by value, through fields, payloads, nullables and other structs and enums with their arguments substituted, but not through `Heap<T>`, references or function types, is `E4023` at its name, with a note naming the path and help suggesting a `Heap<...>` field. Each declaration is walked over its own type parameters; a cycle that does not lead back to the declaration is reported at the types on it, not at every type holding one, and a depth limit of 64 and a size limit of 256 type nodes only guard termination for generic types growing their own arguments (`struct W<T> { val w: W<Pair<T, T>>? }` is reported at once). A cycle across modules is visible because the ABI carries reachable definitions, and each file declaring one of its types reports it when checked. Rejected: rejecting it in the backend (it is wrong in every tier, and `prism check` should say so), a parse-time check, a user-visible recursion limit.
+
+Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **A string's character is a value, not a place** (D5). A `Char` decoded from UTF-8 has no address, so `s[i]` on a `String` is a call of the built-in `StringCharacter` with a shared receiver borrow and the index, like `clone()`, and `is_place` is false for an index expression. `&s[i]` borrows a temporary (see `references`), and `s[i] = c` is `E4003` with help saying that strings are immutable. Rejected: keeping a place that cannot be borrowed (a special case in every analysis), or copying the character out in the MIR builder (the borrow checker would still see a borrow of `s`).
+- **Built-in `length` and `toString()`** (D6). `s.length` is a built-in member read without parentheses, through `&`, `&mut`, `Heap<T>` and `?.`, counting as a field of `String` for member precedence (`s.length()` is `E4004`); `x.toString()` is a built-in member function of `Int`, `Double`, `Bool` and `Char`, through references and `?.`, giving the text `print(x)` writes, and wins over extensions. On every other type `toString` is an ordinary name, so `fun Point.toString(): String` is how a struct will display in templates. Rejected: `String.toString()` (a clone under another name), a generated `toString()` for every type (no text form committed for aggregates), a library `fun Int.toString()` (no prelude), `length()` or `size`.
+- **The receiver of `s[i]` and `s.length` is borrowed after the other arguments** (D22). Both are calls of built-ins with a receiver borrow, so the index of `s[i]` is evaluated before `s` is borrowed, as for every receiver; the order is observable only through an index that reassigns the string (`s[{ s = "cd"; 0 }]` reads the new `s`, where Kotlin reads the old one). Rejected: a special evaluation order for the built-in members alone.
+- **`s.length = n` is `E4003`** (D22): `length` counts as an immutable field, so assigning it reports "cannot assign to immutable 'val' struct field 'length'". Rejected: `E4006`, a string-specific message.

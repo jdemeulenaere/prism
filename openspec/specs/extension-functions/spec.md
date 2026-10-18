@@ -68,11 +68,15 @@ A call `value.name(...)` MUST resolve to an extension named `name` whose receive
 - **THEN** the type checker emits `E4006` naming `fly` and `User`
 
 ### Requirement: Members Take Precedence Over Extensions
-A call `value.name(...)` MUST invoke a field named `name` of the receiver's struct when it has one, and the built-in `clone()` when `name` is `clone` and the receiver's type is `Clone`, whatever extensions are visible. An extension MUST be considered only when no such member exists.
+A call `value.name(...)` MUST invoke a field named `name` of the receiver's struct when it has one, the built-in `clone()` when `name` is `clone` and the receiver's type is `Clone`, and the built-in `toString()` when `name` is `toString` and the receiver's type is `Int`, `Double`, `Bool` or `Char`, whatever extensions are visible; the built-in `length` of a `String` counts as a field. An extension MUST be considered only when no such member exists.
 
 #### Scenario: A field wins over an extension
 - **WHEN** a file declares `struct Button { val onClick: () -> String }` and `fun Button.onClick(): Int = 1`, and `fun f(b: Button) { val s: String = b.onClick() }`
 - **THEN** the type checker emits `E4010` for the extension and nothing for `f`, because the call invokes the field
+
+#### Scenario: A built-in toString wins over an extension
+- **WHEN** a file declares `fun Int.toString(): String = "x"` and `fun f(n: Int): String = n.toString()`
+- **THEN** the type checker emits `E4010` for the extension and nothing for `f`, whose call is the built-in `toString()`
 
 ### Requirement: The Receiver in Extension Bodies
 Inside an extension body, `this` MUST be the receiver, a `val` binding of type `&T` in a `fun`, `&mut T` in a `mut fun` and `T` in a `consuming fun`, in scope in the body and in parameter defaults. A bare name that is not a local or parameter MUST resolve to `this.name` when the receiver's struct has that field, and, when called, to `this.name(...)` when an extension on the receiver type matches, before top-level declarations and imports. `this` elsewhere MUST be `E4001`.
@@ -106,7 +110,7 @@ Inside an extension body, `this` MUST be the receiver, a `val` binding of type `
 - **THEN** the type checker emits `E4001`, saying that `this` is only available in an extension function
 
 ### Requirement: Extension Declarations Are Checked
-Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`) and name MUST be rejected with `E4010`, as MUST an extension named like a field of its receiver struct and an extension named `clone` on a `Clone` type, which could never be called. Extensions on different receivers, and an extension and a top-level function, MAY share a name. The receiver type MUST follow the rules of type annotations (`E4007`, `E4012`, `E4014`).
+Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`) and name MUST be rejected with `E4010`, as MUST an extension that could never be called: one named like a field of its receiver struct, named `clone` on a `Clone` type, named `toString` on `Int`, `Double`, `Bool` or `Char`, or named `length` on `String`. Extensions on different receivers, and an extension and a top-level function, MAY share a name. The receiver type MUST follow the rules of type annotations (`E4007`, `E4012`, `E4014`).
 
 #### Scenario: Duplicate extension rejected
 - **WHEN** a file declares `fun User.greet(): String = "a"` and `fun User.greet(x: Int): String = "b"`
@@ -119,6 +123,10 @@ Two extensions in one file with the same receiver type constructor (`Box` for `B
 #### Scenario: Extension named clone on a Clone type rejected
 - **WHEN** a file declares `struct User : Clone { val name: String }`, `fun User.clone(): User = User("x")` and `fun String.clone(): String = "x"`
 - **THEN** the type checker emits `E4010` for each, saying that the built-in `clone()` always takes precedence
+
+#### Scenario: Extensions named like built-in members rejected
+- **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun Char.toString(): String = "c"` and `fun String.length(): Int = 0`
+- **THEN** the type checker emits `E4010` for each, saying that the built-in member always takes precedence
 
 #### Scenario: Receiver type from an unimported module
 - **WHEN** `shop/api` exports `public fun first(): Order`, where `Order` is declared in `shop/models`, and a file that imports only `/shop/api` declares `fun Order.total(): Int = 0`
@@ -155,3 +163,7 @@ Decisions from `extension-methods` (the core agreed with the user in the borrow-
 - **`this` is a `val` in every mode.** Parameters are immutable everywhere, so a `consuming fun` moves `this` into a `var` to mutate it. It is its own expression node, not an identifier, and is bound before the parameters so defaults may read it.
 - **Unannotated private extensions are inferred on demand, keyed by receiver type and name,** so `User.size` and `Team.size` are inferred separately.
 - **No new error codes.** `this` outside an extension is an unresolved name (`E4001`), a `mut fun` receiver that is not a mutable place is `E4003`, an unknown method or an extension read without a call is `E4006`, and the other cases are the kinds of error their codes already name.
+
+Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Built-in members win over extensions** (D6). `length` counts as a field of `String` and `toString()` is a member of `Int`, `Double`, `Bool` and `Char`, so, like `clone()` on a `Clone` type, they win over extensions, and an extension named `length` on `String` or `toString` on those four types could never be called and is `E4010`. On every other type `toString` is an ordinary extension name.

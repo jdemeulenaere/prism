@@ -44,11 +44,15 @@ The entry file MUST declare a top-level function `main` that has no type paramet
 - **THEN** `prism run app/main.prism` prints `2` and exits with status 0
 
 ### Requirement: Output Built-Ins Print Their Argument
-`print(x)` MUST write the text of `x` to stdout, `println(x)` the text of `x` followed by a newline, and `println()` a newline. An `Int` MUST be written in decimal with a leading `-` when negative, a `Bool` as `true` or `false`, and a `Char` as its UTF-8 encoding.
+`print(x)` MUST write the text of `x` to stdout, `println(x)` the text of `x` followed by a newline, and `println()` a newline. An `Int` MUST be written in decimal with a leading `-` when negative, a `Bool` as `true` or `false`, a `Char` as its UTF-8 encoding and a `String` as its text in UTF-8.
 
 #### Scenario: Printing scalars
 - **WHEN** `fun main() { print(1); print(true); println('x'); println(-5); println() }` runs
 - **THEN** stdout holds `1truex`, a newline, `-5`, a newline, and a newline
+
+#### Scenario: Printing strings
+- **WHEN** `fun main() { val s = "Grüße, \u{1F680}"; print(s); println("!"); println(s) }` runs
+- **THEN** stdout holds `Grüße, 🚀!`, a newline, `Grüße, 🚀` and a newline
 
 ### Requirement: Double Text Form
 A `Double` MUST be written as Kotlin writes it (Java's `Double.toString`): as the shortest decimal that reads back as the same value, or, when that decimal has a single significant digit, as the closest decimal of one or two significant digits that reads back as the same value; with at least one digit after the point; in scientific notation (`1.0E7`, `1.0E-4`) when its magnitude is at least 10^7 or below 10^-3; and as `NaN`, `Infinity`, `-Infinity` and `-0.0` for those values.
@@ -95,7 +99,7 @@ Output MUST appear in the order the program writes it. It MUST be written to std
 - **THEN** it prints `-1.5`, `true`, `false` and `true`
 
 ### Requirement: Runtime Errors End the Program
-A runtime error MUST flush the program's output, write `panic: <message>` and then `  at <path>:<line>:<column>` to stderr, where the path is the file's path relative to the workspace root and the position is that of the failing operation, and exit with status 101. No further code of the program MUST run, and no drop MUST run.
+A runtime error MUST flush the program's output, write `panic: <message>` and then `  at <path>:<line>:<column>` to stderr, where the path is the file's path relative to the workspace root and the position is that of the failing operation, and exit with status 101. "out of memory" MUST write no location line. No further code of the program MUST run, and no drop MUST run.
 
 #### Scenario: Runtime error location
 - **WHEN** `app/main.prism` declares `fun zero(): Int = 0` on line 2 and `fun main() { val a = 1; println(a / zero()) }` on line 3, with `a / zero()` starting at column 33
@@ -262,6 +266,106 @@ On a release build, `prism run` MUST reach the program's `main` in under 15 ms f
 - **WHEN** `prism run --timings examples/run/main.prism` runs on a release build of `prism`
 - **THEN** no other process is started, and the reported total time to `main` is under 15 ms
 
+### Requirement: String Values
+A string literal MUST evaluate to a string holding its decoded text. `a + b` MUST give a new string holding the text of `a` followed by that of `b`, leaving both operands unchanged, and `s += t` MUST give `s` the value of `s + t`. `a == b` MUST be `true` exactly when both strings hold the same sequence of characters, and `a != b` its negation.
+
+#### Scenario: Concatenation and equality
+- **WHEN** `fun main() { val a = "pri"; val b = a + "sm"; println(b); println(a); println(b == "prism"); println(a != "pri") }` runs
+- **THEN** it prints `prism`, `pri`, `true` and `false`
+
+#### Scenario: Compound assignment of strings
+- **WHEN** `fun main() { var s = "a"; val t = "b"; s += t; s += t; println(s); println(t) }` runs
+- **THEN** it prints `abb` and then `b`
+
+#### Scenario: When over strings
+- **WHEN** `fun f(s: String): Int = when (s) { "one" -> 1; "two" -> 2; else -> 0 }` is declared and a program prints `f("two")`, `f("one")` and `f("three")`
+- **THEN** it prints `2`, `1` and `0`
+
+#### Scenario: Strings in structs and top-level values
+- **WHEN** `lib/names.prism` declares `public struct User { val name: String, val nick: String? }` and `public val ADMIN: String = "ro" + "ot"`, and `app/main.prism` imports `/lib/names` and declares `fun main() { val u = User(ADMIN.clone(), null); println(u.name); println(u.nick == null); println(ADMIN) }`
+- **THEN** `prism run --check-allocations app/main.prism` prints `root`, `true` and `root`, writes nothing to stderr and exits with status 0
+
+### Requirement: String Length and Characters
+`s.length` MUST be the number of characters (Unicode scalar values) of `s`, and `s[i]` the character at index `i`, counting characters from 0. An index outside `0..<s.length` MUST raise the runtime error "string index <i> out of range for length <n>" at the indexing expression.
+
+#### Scenario: Characters beyond ASCII
+- **WHEN** `fun main() { val s = "héllo"; println(s.length); println(s[1]); println(s[4]) }` runs
+- **THEN** it prints `5`, `é` and `o`
+
+#### Scenario: An index out of range
+- **WHEN** `fun main() { val s = "abc"; println(s[0]); println(s[3]) }` runs
+- **THEN** stdout holds `a` and a newline, stderr holds `panic: string index 3 out of range for length 3` and the location of `s[3]`, and the exit status is 101
+
+### Requirement: Scalars Convert to Text
+`x.toString()` of an `Int`, `Double`, `Bool` or `Char` MUST give a new string holding the text that `print(x)` writes.
+
+#### Scenario: Converting scalars
+- **WHEN** `fun main() { val n = -42; println(n.toString() + "!"); println(0.1.toString()); println(1.0E7.toString()); println(true.toString()); println('é'.toString().length) }` runs
+- **THEN** it prints `-42!`, `0.1`, `1.0E7`, `true` and `1`
+
+### Requirement: Values Are Freed Where Their Owner's Scope Ends
+Each drop that the elaborated MIR runs MUST free, at that point, the memory the dropped value owns, deterministically and without a garbage collector or reference counting, so that every allocation a value owns is freed exactly once: where its owner's scope ends, where it is overwritten by an assignment or a write through a reference, or by the code it was moved to. A top-level value MUST never be dropped.
+
+#### Scenario: Deterministic scope exit cleanup
+- **WHEN** `fun main() { var total = 0; for (i in 0..<1000) { val s = i.toString() + "x"; total += s.length }; println(total) }` runs with `--check-allocations`
+- **THEN** it prints `3890`, writes nothing to stderr and exits with status 0
+
+#### Scenario: A conditionally moved value is dropped only if present
+- **WHEN** `fun take(s: String): Int = s.length` and `fun f(c: Bool) { val s = 1.toString(); if (c) println(take(s)) }` are declared and `fun main() { f(true); f(false) }` runs with `--check-allocations`
+- **THEN** it prints `1`, writes nothing to stderr and exits with status 0
+
+#### Scenario: Writing through a reference drops the old referent
+- **WHEN** `fun set(r: &mut String, v: String) { *r = v }` is declared and `fun main() { var s = 1.toString(); set(&mut s, 2.toString()); s = 3.toString(); println(s) }` runs with `--check-allocations`
+- **THEN** it prints `3`, writes nothing to stderr and exits with status 0
+
+#### Scenario: Argument temporary dropped at the end of the statement
+- **WHEN** `fun make(): String = 5.toString()` and `fun greet(n: &String): Int = n.length` are declared and `fun main() { println(greet(make())); println(greet(make())) }` runs with `--check-allocations`
+- **THEN** it prints `1` twice, writes nothing to stderr and exits with status 0
+
+#### Scenario: Top-level values are kept
+- **WHEN** `val NAME: String = 4.toString() + "2"` is declared and `fun main() { println(NAME); println(NAME.length) }` runs with `--check-allocations`
+- **THEN** it prints `42` and then `2`, writes nothing to stderr and exits with status 0
+
+### Requirement: Cloning Values That Own Storage
+`x.clone()` of a value that owns storage MUST give a value equal to `x` that shares no owned memory with it, so that changing or dropping either leaves the other unchanged, and MUST run no user code.
+
+#### Scenario: String clone is independent
+- **WHEN** `fun main() { var a = 1.toString(); val b = a.clone(); a = 2.toString(); println(a); println(b) }` runs with `--check-allocations`
+- **THEN** it prints `2` and then `1`, writes nothing to stderr and exits with status 0
+
+#### Scenario: Struct clone clones each field
+- **WHEN** `struct User : Clone { var name: String, val nick: String? }` is declared and `fun main() { var a = User(1.toString(), 2.toString()); val b = a.clone(); a.name = 3.toString(); println(a.name); println(b.name); println(b.nick == a.nick) }` runs with `--check-allocations`
+- **THEN** it prints `3`, `1` and `true`, writes nothing to stderr and exits with status 0
+
+### Requirement: Allocation Checking
+With the option `--check-allocations` before the file, `prism run` MUST track every allocation of the program; without it nothing MUST be tracked. When `main` returns, allocations still live that no top-level value owns MUST be reported, after the output is flushed, as `allocation check: allocations still live at exit: <n> (<b> bytes)` on stderr, and the program MUST exit with status 102. A program ending with a runtime error MUST NOT be checked.
+
+#### Scenario: A program that frees what it allocates
+- **WHEN** `prism run --check-allocations main.prism` runs on `fun main() { val s = "a" + "b"; println(s) }`
+- **THEN** it prints `ab`, writes nothing to stderr and exits with status 0
+
+#### Scenario: A leak is reported
+- **WHEN** a program run with `--check-allocations` returns from `main` while one allocation of 5 bytes, owned by no top-level value, is still live
+- **THEN** stderr holds `allocation check: allocations still live at exit: 1 (5 bytes)` and the exit status is 102
+
+#### Scenario: A runtime error is not checked
+- **WHEN** `prism run --check-allocations main.prism` runs on `fun zero(): Int = 0` and `fun main() { val s = "a" + "b"; println(1 / zero()) }`
+- **THEN** stderr holds only the runtime error, and the exit status is 101
+
+### Requirement: Invalid Frees Are Reported
+Under `--check-allocations`, a free of memory that is not a live allocation, or that gives another size or alignment than its allocation, MUST flush the output, write `allocation check: freed memory that is not allocated` to stderr and end the program with status 102.
+
+#### Scenario: A double free is reported
+- **WHEN** a program run with `--check-allocations` frees the same allocation twice
+- **THEN** stderr holds `allocation check: freed memory that is not allocated` and the exit status is 102
+
+### Requirement: Running Out of Memory Is a Runtime Error
+An allocation the system cannot satisfy, or a string whose length would not fit in memory, MUST raise the runtime error "out of memory", which ends the program as any runtime error does but reports no location.
+
+#### Scenario: An allocation that fails
+- **WHEN** the runtime cannot allocate the memory a program asks for
+- **THEN** the output is flushed, stderr holds exactly `panic: out of memory` and a newline, and the exit status is 101
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -283,8 +387,17 @@ Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while
 
 Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **Copy and move are the same at run time** (D12): both copy the value's bytes; `Copy` only decides at check time whether the source stays usable, and no value has drop glue yet, so a move runs no code and leaves the source untouched.
+- **Copy and move are the same at run time** (D12): both copy the value's bytes; `Copy` only decides at check time whether the source stays usable, and no value has drop glue yet, so a move runs no code and leaves the source untouched. (With the glue of `runtime-strings-and-drops`, a move is still a copy of the bytes: the elaborated MIR drops only the value's new owner.)
 - **Arguments and results are values** (D10): an argument is the value it had when evaluated, even if the callee writes through another argument to the same place, and a result assigned over its own argument (`p = mirror(p)`) is the value the callee built.
 - **Structural equality** (D13): `==` over structs, enums and nullables compares fields, then variant and payloads, then presence and payload, each as its type does, so a struct holding `NaN` is not equal to itself, as Rust's derived equality; borrows compare their referents, never addresses.
 - **`print` and `println` stay scalar** (D16): an aggregate or nullable argument is still `E4004`, because a text form for structs (Kotlin's data-class `toString`, or a user `toString`) belongs with a `Display`-like design once traits or overloading exist. Programs print fields, or `n ?: 0`.
 - **`Range` is an ordinary `Copy` struct** (D1, D9): `<builtin>::Range(start, end, endInclusive)` of the MIR's type table, so it can be passed, returned, borrowed and stored at top level; a `for` loop reads it once before iterating.
+
+Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`length` and indexing count characters** (D4). `Char` is a Unicode scalar value and `s[i]` already had type `Char`, so `s.length` is the number of scalar values and `s[i]` the character at that index, as a Kotlin programmer expects of `length` and `[]`, with scalar values in place of Kotlin's UTF-16 code units (`"🚀".length` is 1). `length` reads the stored count; `s[i]` is O(1) on ASCII text and a scan otherwise, so a loop over `s[i]` on non-ASCII text is quadratic until a character iterator exists. Rejected: bytes (meaningless with a scalar `Char`), UTF-16 code units (a second representation, splits emoji), grapheme clusters (Unicode tables in the runtime, O(n) counts), iteration only (the language already has `s[i]`), a stored index of character offsets.
+- **Which values are dropped, and when; top-level values never are** (D12). The elaborated MIR decides every drop, so a value's owned memory is freed where its owner's scope ends, where an assignment or a write through a reference overwrites it, at the end of the statement for a temporary, or by the code it was moved into. A top-level `val` lives until the program ends, like a Rust `static`: borrows of it are valid everywhere, and running glue at exit would cost time for memory the process gives back and, once destructors run user code, bring C++'s static destruction order problems. Rejected: dropping initialized top-level values at exit in reverse order.
+- **Allocation checking with `prism run --check-allocations`** (D13). The runtime then keeps a map from address to size and alignment; without the option, allocation and free test one relaxed atomic flag. An invalid free (unknown address, double free, free of static text, another size or alignment) flushes the output, writes its message and exits with 102. When `main` returns, `finish` first releases the initialized top-level values that own memory (each accessor registers its storage and drop glue with `prism_rt_register_top_level_value` after its initializer returns; this runs no user code), then reports the allocations still live with 102. 102 is distinct from 0, 1 and 101, so a harness tells a compiler bug from a program error without reading stderr. The fixture runner runs every executable case with the option, so every program fixture asserts that it leaks nothing and frees nothing twice; this is also Phase 4's "no allocation outlives its owner" verification. Codegen tests read `prism_runtime::allocation_statistics()` to assert that literals and `Bool` text allocate nothing, and runtime tests run themselves as child processes to check the failures that end the process. Rejected: an environment variable (leaks into child processes), counting without the map (a double free and a leak cancel out), checking at every drop, always-on checking, status 101, counting top-level values as leaks.
+- **Panics do not unwind, so values are not dropped on a panic** (D14). Confirmed from `codegen-core`: a runtime error flushes, reports and exits with 101 with no landing pads, and the operating system reclaims the memory, so `--check-allocations` does not check a program that panics. Unwinding for an in-process `prism test` would add cleanup edges to the MIR's calls, which elaboration and glue already support in shape.
+- **`s += t` stays a concatenation** (D15). An in-place append needs a MIR form taking `&mut s` after `t` is evaluated, which turns the accepted `val r = &s; s += r` into a borrow conflict, or a post-borrow-checking rewrite of `tmp = &s + &t; drop s; s = move tmp` across blocks and drop flags. Neither is needed while UI code builds short strings, and Kotlin's `+=` also builds a new string; the capacity field leaves room for the append. A loop of `s += t` is quadratic, though fast in practice (100 000 one-character appends run in about 0.1 s in a debug build).
+- **Runtime errors of strings and allocation** (D17). "string index <i> out of range for length <n>", negative indexes included, is reported at the indexing expression, whose location the runtime function receives; "out of memory" is reported without a location line, since an allocation can fail deep in the runtime, and passing a location to every allocating function would cost an argument everywhere for an error programs rarely see. Rejected: aborting as Rust does (the output would be lost), Kotlin's `index: 3, length: 3`.
