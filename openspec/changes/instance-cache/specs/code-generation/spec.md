@@ -16,7 +16,7 @@ The backend MUST compile each file's and each instance's code unit into an artif
 ## MODIFIED Requirements
 
 ### Requirement: Tier 1 Compiles Elaborated MIR in Memory
-`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, or load that code from the build cache (the `build-cache` spec), without invoking any external program such as a linker or an assembler. Every body MUST be compiled except generic bodies, which are compiled only as the instances the program calls, and closure bodies, which wait for closure conversion.
+`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, or load that code from the build cache (the `build-cache` spec), without invoking any external program such as a linker or an assembler. Every body MUST be compiled, closure bodies included, except generic bodies and the closures inside them, which are compiled only as the instances the program calls.
 
 #### Scenario: Running a scalar program
 - **WHEN** `fun square(x: Int): Int = x * x` and `fun main() { println(square(7)) }` are declared in `main.prism` and `prism run main.prism` runs
@@ -30,6 +30,10 @@ The backend MUST compile each file's and each instance's code unit into an artif
 - **WHEN** `fun <T> keep(x: T): T = x` and `fun main() { println(keep(1)); println(keep(true)) }` are declared and `prism run main.prism` runs
 - **THEN** it prints `1` and `true` and exits with status 0
 
+#### Scenario: A closure is compiled
+- **WHEN** `fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))` and `fun main() { println(twice({ n -> n * 3 }, 2)) }` are declared and `prism run main.prism` runs
+- **THEN** it prints `18` and exits with status 0
+
 #### Scenario: A warm run starts no compilation
-- **WHEN** `prism run main.prism` runs twice on that program with the cache enabled
+- **WHEN** `prism run main.prism` runs twice, with the cache enabled, on the program that calls `keep(1)` and `keep(true)`
 - **THEN** the second run prints `1` and `true` and compiles no function, every unit and instance being loaded from the cache
