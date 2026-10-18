@@ -1,0 +1,13 @@
+fun f(): Int {
+    val value =
+        computeTheFirstPartOfTheValue(argument) - computeTheSecondPartOfTheValue(argument) - third
+    val ok =
+        isTheFirstConditionTrueForThisParticularUser(user) &&
+            isTheSecondConditionTrueForThisUser(user)
+    if (someCondition && anotherCondition)
+        someValueWithALongNameHereAndThere
+    else
+        otherValueWithAVeryLongName
+    return computeTheFirstPartOfTheValue(argumentNumberOne) +
+        computeTheSecondPartOfTheValue(argumentTwo)
+}

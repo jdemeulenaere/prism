@@ -11,6 +11,7 @@ members = [
     "crates/prism-typed-tree",
     "crates/prism-mir",
     "crates/prism-borrowck",
+    "crates/prism-formatter",
 ]
 
 [workspace.package]

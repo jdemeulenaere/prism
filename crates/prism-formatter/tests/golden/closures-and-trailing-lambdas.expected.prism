@@ -1,0 +1,15 @@
+fun f() {
+    val f = { x -> x + 1 }
+    run { compute() }
+    items.forEach { x ->
+        total += x
+        count += 1
+    }
+    val empty = {}
+    val ignored = { a, b -> }
+    val long = { veryLongParameterName ->
+        someFunctionCall(veryLongParameterName, anotherArgumentHere) + more
+    }
+    val typed = remember<Int> { 0 }
+    val explicit = identity<String>("a")
+}

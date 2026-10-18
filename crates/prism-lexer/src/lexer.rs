@@ -1,6 +1,6 @@
 //! Fast hand-written tokenizer for the Prism language.
 
-use crate::token::{Token, TokenKind};
+use crate::token::{Comment, CommentKind, Token, TokenKind};
 use prism_ast::Span;
 
 /// Tokenizer for Prism source code.
@@ -11,6 +11,9 @@ pub struct Lexer<'a> {
     line: u32,
     column: u32,
     unclosed_comment_span: Option<Span>,
+    /// The comments skipped so far, collected only in the comment-collecting mode
+    /// ([`Self::tokenize_with_comments`]); `None` when compiling, which never needs them.
+    comments: Option<Vec<Comment>>,
 }
 
 impl<'a> Lexer<'a> {
@@ -22,6 +25,7 @@ impl<'a> Lexer<'a> {
             line: 1,
             column: 1,
             unclosed_comment_span: None,
+            comments: None,
         }
     }
 
@@ -37,6 +41,33 @@ impl<'a> Lexer<'a> {
             }
         }
         tokens
+    }
+
+    /// Tokenizes the entire source input like [`Self::tokenize_all`], which yields the same
+    /// tokens, and also returns every comment in source order, for tools that rewrite source
+    /// (the formatter).
+    pub fn tokenize_with_comments(mut self) -> (Vec<Token>, Vec<Comment>) {
+        self.comments = Some(Vec::new());
+        let mut tokens = Vec::new();
+        loop {
+            let tok = self.next_token();
+            let is_eof = tok.kind == TokenKind::Eof;
+            tokens.push(tok);
+            if is_eof {
+                break;
+            }
+        }
+        (tokens, self.comments.take().unwrap_or_default())
+    }
+
+    /// Records a comment from `start` (with its line and column) to the cursor, when collecting.
+    fn record_comment(&mut self, kind: CommentKind, start: usize, line: u32, column: u32) {
+        if let Some(comments) = &mut self.comments {
+            comments.push(Comment {
+                kind,
+                span: Span::new(start, self.cursor, line, column),
+            });
+        }
     }
 
     /// Fetches the next token from the input stream.
@@ -518,11 +549,13 @@ impl<'a> Lexer<'a> {
                         let next = self.bytes[self.cursor + 1];
                         if next == b'/' {
                             // Line comment
+                            let (start, line, column) = (self.cursor, self.line, self.column);
                             self.bump();
                             self.bump();
                             while !self.is_eof() && self.peek_byte() != b'\n' {
                                 self.bump();
                             }
+                            self.record_comment(CommentKind::Line, start, line, column);
                         } else if next == b'*' {
                             // Block comment with nesting
                             let comment_start_pos = self.cursor;
@@ -562,6 +595,12 @@ impl<'a> Lexer<'a> {
                                 ));
                                 break;
                             }
+                            self.record_comment(
+                                CommentKind::Block,
+                                comment_start_pos,
+                                comment_start_line,
+                                comment_start_col,
+                            );
                         } else {
                             break;
                         }

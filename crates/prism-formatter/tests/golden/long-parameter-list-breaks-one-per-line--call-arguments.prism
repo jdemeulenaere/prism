@@ -1,0 +1,6 @@
+fun f() {
+    val user = createUser(identifier = 42, name = "Ada Lovelace", email = "ada@example.org", active = true)
+    Column(padding = 16, modifier = someModifierExpressionThatIsLong, background = colorValue) {
+        Text("Hello")
+    }
+}

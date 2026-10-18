@@ -21,6 +21,7 @@ prism-typechecker = { path = "../prism-typechecker" }
 prism-mir = { path = "../prism-mir" }
 prism-borrowck = { path = "../prism-borrowck" }
 prism-typed-tree = { path = "../prism-typed-tree" }
+prism-formatter = { path = "../prism-formatter" }
 
 [dev-dependencies]
 prism-mir = { path = "../prism-mir" }

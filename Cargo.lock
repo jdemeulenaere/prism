@@ -95,12 +95,22 @@ dependencies = [
  "prism-abi",
  "prism-ast",
  "prism-borrowck",
+ "prism-formatter",
  "prism-lexer",
  "prism-mir",
  "prism-parser",
  "prism-resolver",
  "prism-typechecker",
  "prism-typed-tree",
+]
+
+[[package]]
+name = "prism-formatter"
+version = "0.1.0"
+dependencies = [
+ "prism-ast",
+ "prism-lexer",
+ "prism-parser",
 ]
 
 [[package]]

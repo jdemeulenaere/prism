@@ -1,0 +1,5 @@
+enum Color{Red;Green,Blue}
+enum Shape {
+Circle(Double), Square(Double)}
+struct Point { val x: Double, val y: Double }
+enum Wide { FirstVariantWithAName, SecondVariantWithAName, ThirdVariantWithAName, FourthVariant }

@@ -1,0 +1,11 @@
+[package]
+name = "prism-formatter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-ast = { path = "../prism-ast" }
+prism-lexer = { path = "../prism-lexer" }
+prism-parser = { path = "../prism-parser" }

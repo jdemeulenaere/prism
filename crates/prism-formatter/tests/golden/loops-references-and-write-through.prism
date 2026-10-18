@@ -1,0 +1,10 @@
+fun f(r: &mut Int, n: Int) {
+    for(i in 0..<n){*r+=i}
+    do{n-=1}while(n>0)
+    val r=&mut x
+    val s = &y
+    while (i < n) i += 1
+    for (j in 0..n) total = total + j
+    **pointer = 5
+    { val scoped = 1 }
+}

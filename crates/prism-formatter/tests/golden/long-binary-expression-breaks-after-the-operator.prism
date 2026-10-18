@@ -1,0 +1,5 @@
+fun f() {
+    val total = firstVeryLongOperandNameForTheSum + secondVeryLongOperandNameForTheSum + thirdVeryLongOperandName + fourthOperand
+    val fits = firstVeryLongOperandName + secondVeryLongOperandName + thirdVeryLongOperandName + fourth
+    val condition = isTheFirstConditionTrueForThisUser && isTheSecondConditionTrueForThisUser || isTheThirdConditionTrue
+}

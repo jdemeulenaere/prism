@@ -1,0 +1,9 @@
+fun f(
+    alpha: Int,
+    beta: String,
+    gamma: Double,
+    delta: Bool,
+    epsilon: Char,
+    zeta: Int,
+    eta: Int,
+): Int = 0

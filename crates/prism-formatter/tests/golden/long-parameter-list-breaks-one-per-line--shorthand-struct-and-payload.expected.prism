@@ -1,0 +1,6 @@
+struct Account(val identifier: Int, var owner: String, val balance: Double, val active: Bool) : Copy
+
+enum Event {
+    Click(Int, Int)
+    Resize(Double, Double, Double, Double, Double, Double, Double, Double, Double)
+}

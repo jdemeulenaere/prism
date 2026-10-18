@@ -1,0 +1,6 @@
+fun f() {
+    val name =
+        maybeTheFirstNameOfTheUserWhenKnown
+            ?: maybeTheNicknameOfTheUserWhenKnown
+            ?: theDefaultDisplayNameForUsers
+}
