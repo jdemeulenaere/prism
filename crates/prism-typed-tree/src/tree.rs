@@ -525,6 +525,13 @@ pub enum BuiltinFunction {
     /// `x.toString()` of an `Int`, `Double`, `Bool` or `Char`, called with the receiver copied
     /// out of any reference: the text `print(x)` writes (D6).
     ToString,
+    /// `Heap(value)`: allocates a box and moves the value into it (D2 of `heap-boxes`). Declared
+    /// like `fun <T> Heap(value: T): Heap<T>`: its parameter is the type parameter `T` and its
+    /// type argument the contents' type.
+    HeapAllocate,
+    /// `h.unbox()` of a `Heap<T>`, called with the box moved as its receiver: moves the contents
+    /// out and frees the box (D6 of `heap-boxes`).
+    Unbox,
 }
 
 impl BuiltinFunction {
@@ -538,13 +545,29 @@ impl BuiltinFunction {
             // The name Kotlin gives the `[]` operator.
             BuiltinFunction::StringCharacter => "get",
             BuiltinFunction::ToString => "toString",
+            BuiltinFunction::HeapAllocate => "Heap",
+            BuiltinFunction::Unbox => "unbox",
         }
     }
 
     /// Whether the built-in's first argument is a receiver: that of every built-in member
-    /// (`clone`, `length`, `get` and `toString`), not the argument of `print` and `println`.
+    /// (`clone`, `length`, `get`, `toString` and `unbox`), not the argument of `print`,
+    /// `println` and `Heap`.
     pub fn has_receiver(self) -> bool {
-        !matches!(self, BuiltinFunction::Print | BuiltinFunction::PrintLine)
+        !matches!(
+            self,
+            BuiltinFunction::Print | BuiltinFunction::PrintLine | BuiltinFunction::HeapAllocate
+        )
+    }
+
+    /// The type parameter of [`BuiltinFunction::HeapAllocate`]'s declaration, `T` in
+    /// `fun <T> Heap(value: T): Heap<T>`.
+    pub fn heap_contents_parameter() -> crate::types::TypeParameter {
+        crate::types::TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: None,
+        }
     }
 }
 

@@ -19,7 +19,7 @@ A call `Heap(value)` MUST construct a `Heap<T>` holding `value`, where `T` is th
 
 #### Scenario: Wrong arguments of Heap rejected
 - **WHEN** `fun f() { val a = Heap(); val b = Heap(1, 2); val c = Heap(value = 1); val d = Heap<Int>("x") }` is checked
-- **THEN** the type checker emits `E4004` for each of the first three calls and `E4002` for `"x"`
+- **THEN** the type checker emits `E4004` for each call, the last for `"x"`, an argument that does not fit `Int`
 
 #### Scenario: Borrows in the type argument rejected
 - **WHEN** `fun f(a: Int) { val h = Heap<&Int>(&a) }` is checked

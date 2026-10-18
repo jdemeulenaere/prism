@@ -1,0 +1,2 @@
+// expect: E4010
+struct Heap(val x: Int)

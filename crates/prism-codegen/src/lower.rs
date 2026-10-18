@@ -1408,6 +1408,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.builder.ins().call(function, &[]);
                 }
             }
+            Callee::Builtin(BuiltinFunction::HeapAllocate | BuiltinFunction::Unbox) => {
+                return Err(BackendError::new("a box built-in"))
+            }
             Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
         }
         match target {

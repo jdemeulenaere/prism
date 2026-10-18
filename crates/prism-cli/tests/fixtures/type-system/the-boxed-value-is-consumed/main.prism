@@ -1,0 +1,6 @@
+// expect: E4017
+struct User { val name: String }
+
+fun f(u: User): Heap<String> = Heap(u.name)
+
+fun g(u: User): Heap<User> = Heap(u)

@@ -36,6 +36,9 @@ mod patterns;
 const TYPE_ARGUMENTS_HELP: &str =
     "write the type arguments, as in 'name<...>(...)', or annotate the expected type";
 
+/// The name of the built-in box type and of its constructor (D2 of `heap-boxes`).
+const HEAP: &str = "Heap";
+
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
 const THIS: &str = "this";
@@ -951,7 +954,9 @@ impl TypeChecker {
                 self.check_visibility(&sym, span);
                 Some(sym)
             }
-            Err(TypeError::UnresolvedSymbol { .. }) if output_builtin_named(name).is_some() => {
+            Err(TypeError::UnresolvedSymbol { .. })
+                if output_builtin_named(name).is_some() || name == HEAP =>
+            {
                 // An output built-in can only be called (D15 of `codegen-core`).
                 self.errors.push(TypeError::BuiltinFunctionAsValue {
                     name: name.to_string(),
@@ -1707,6 +1712,23 @@ impl TypeChecker {
     /// Every struct and enum name is declared before any annotation is lowered, so field and
     /// signature types may name types declared later in the file.
     pub fn register_module_declarations(&mut self, source_file: &SourceFile) {
+        // `Heap(...)` always constructs a box, so a top-level declaration named `Heap` could
+        // never be called or named (D2 of `heap-boxes`). An extension is named by its receiver.
+        for decl in &source_file.declarations {
+            let (name, span) = match decl {
+                Declaration::Function(f) if f.receiver.is_none() => (&f.name, f.span),
+                Declaration::Struct(s) => (&s.name, s.span),
+                Declaration::Enum(e) => (&e.name, e.span),
+                Declaration::Var(v) => (&v.name, v.span),
+                Declaration::Function(_) => continue,
+            };
+            if name == HEAP {
+                self.errors.push(TypeError::BuiltinNameDeclared {
+                    name: name.clone(),
+                    span,
+                });
+            }
+        }
         for decl in &source_file.declarations {
             let symbol = match decl {
                 Declaration::Struct(s) => {
@@ -4407,6 +4429,11 @@ impl TypeChecker {
         span: Span,
         expected: Option<Type>,
     ) -> ExpressionId {
+        // `Heap(...)` always constructs a box: the name is built in, like a type name, which
+        // no local value hides (D2 of `heap-boxes`).
+        if matches!(&callee.kind, ExprKind::Ident(name) if name == HEAP) {
+            return self.infer_heap_construction(type_arguments, args, expected.as_ref(), span);
+        }
         // In an extension body, `name(...)` may call a field or another extension of `this`.
         if let Some(member) = self.implicit_this_callee(callee) {
             return self.infer_call_expr(&member, type_arguments, args, span, expected);
@@ -4566,6 +4593,76 @@ impl TypeChecker {
             is_compose: false,
         };
         self.add(ExpressionKind::Call(call), Type::Unit, span)
+    }
+
+    /// Checks `Heap(value)` or `Heap<T>(value)`, a call of the built-in box constructor, typed as
+    /// `fun <T> Heap(value: T): Heap<T>` (D2 of `heap-boxes`): the contents' type comes from the
+    /// written type argument, else from an expected `Heap<T>` (or `Heap<T>?`), else from the
+    /// argument, which is checked against it in a consuming position. It takes exactly one
+    /// positional argument (`E4004`), and the contents' type may hold no borrow (`E4022`).
+    fn infer_heap_construction(
+        &mut self,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> ExpressionId {
+        if args.iter().any(|arg| arg.name.is_some()) {
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!("'{}' takes no named arguments", HEAP),
+                span,
+            });
+            let children = args
+                .iter()
+                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
+                .collect();
+            return self.error_node(children, span);
+        }
+        let parameter = BuiltinFunction::heap_contents_parameter();
+        let signature = GenericSignature {
+            owner: format!("'{}'", HEAP),
+            type_parameters: vec![parameter.clone()],
+            params: vec![parameter.as_type()],
+            ret: Type::Heap(Box::new(parameter.as_type())),
+            receiver: None,
+        };
+        // A box assigned to a nullable box takes its contents' type from it too.
+        let expected = match expected {
+            Some(Type::Nullable(inner)) if matches!(**inner, Type::Heap(_)) => Some(&**inner),
+            other => other,
+        };
+        let names = vec!["value".to_string()];
+        let checked = self.check_generic_call_arguments(
+            &signature,
+            type_arguments,
+            expected,
+            &names,
+            &[false],
+            args,
+            span,
+        );
+        match checked {
+            Err(CheckedArguments(children)) => self.error_node(children, span),
+            Ok((
+                NormalizedArguments {
+                    arguments,
+                    evaluation_order,
+                },
+                solution,
+            )) => {
+                let ty = signature.ret.substitute(&solution);
+                let call = Call {
+                    callee: Callee::Builtin(BuiltinFunction::HeapAllocate),
+                    arguments,
+                    parameters: parameter_list(&names, &signature.params),
+                    type_arguments: solution,
+                    evaluation_order,
+                    has_receiver: false,
+                    is_compose: false,
+                };
+                self.add(ExpressionKind::Call(call), ty, span)
+            }
+        }
     }
 
     /// Checks the argument of an output built-in named `name`, adjusted as for a parameter of

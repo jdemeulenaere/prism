@@ -1,0 +1,7 @@
+// expect: E4004
+fun f() {
+    val a = Heap()
+    val b = Heap(1, 2)
+    val c = Heap(value = 1)
+    val d = Heap<Int>("x")
+}

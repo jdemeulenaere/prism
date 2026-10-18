@@ -1,0 +1,9 @@
+// expect: ok
+enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }
+
+fun f(): Expr = Expr.Add(Heap(Expr.Lit(1)), Heap(Expr.Lit(2)))
+
+fun g(): Heap<Int> {
+    val h = Heap(1)
+    return h
+}

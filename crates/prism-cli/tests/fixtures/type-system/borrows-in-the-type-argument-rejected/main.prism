@@ -1,0 +1,4 @@
+// expect: E4022
+fun f(a: Int) {
+    val h = Heap<&Int>(&a)
+}

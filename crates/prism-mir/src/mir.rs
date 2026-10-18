@@ -490,8 +490,8 @@ impl Callee {
     /// Whether the call's first operand is a receiver: exactly for a call of an extension,
     /// whose declaration path names its receiver type, and of the built-in members: `clone`,
     /// `length` and `get` (a string's character), which take a shared receiver borrow (D3 of
-    /// `borrowck-elision`), and `toString`, which takes the receiver copied out. The argument of `print` and
-    /// `println` is not a receiver. A function value is never an extension, since an extension
+    /// `borrowck-elision`), `toString`, which takes the receiver copied out, and `unbox`, which
+    /// takes the box moved. The argument of `print`, `println` and `Heap` is not a receiver. A function value is never an extension, since an extension
     /// cannot be named as a value.
     pub fn has_receiver(&self) -> bool {
         match self {

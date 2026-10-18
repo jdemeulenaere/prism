@@ -3,9 +3,9 @@
 
 use crate::arena::{ExpressionId, LocalId, StatementId};
 use crate::tree::{
-    Argument, BindingMode, Body, Callee, CoercionKind, ConstructKind, DeclarationPath,
-    ExpressionKind, FunctionItem, Item, LocalKind, Pattern, StatementKind, StructItem, TypedFile,
-    UnaryOperator,
+    Argument, BindingMode, Body, BuiltinFunction, Call, Callee, CoercionKind, ConstructKind,
+    DeclarationPath, ExpressionKind, FunctionItem, Item, LocalKind, Pattern, StatementKind,
+    StructItem, TypedFile, UnaryOperator,
 };
 use crate::types::{NominalId, Type, TypeParameter, TypeTable};
 use prism_ast::ReceiverMode;
@@ -209,6 +209,10 @@ impl Validator<'_> {
 
     fn type_of(&self, id: ExpressionId) -> Option<&Type> {
         self.body.expressions.get(id).map(|e| &e.ty)
+    }
+
+    fn kind(&self, id: ExpressionId) -> Option<&ExpressionKind> {
+        self.body.expressions.get(id).map(|e| &e.kind)
     }
 
     /// Reports every type parameter `ty` mentions that is not one of the item's own, with the
@@ -566,6 +570,9 @@ impl Validator<'_> {
                         let return_type = function.return_type.substitute(&call.type_arguments);
                         self.expect_type_of_node(id, &return_type, "call");
                     }
+                }
+                if let Callee::Builtin(builtin) = &call.callee {
+                    self.builtin_call(id, *builtin, call);
                 }
                 for argument in &call.type_arguments {
                     self.check_type_parameters_of(argument, &format!("call {}", id.0));
@@ -1134,6 +1141,49 @@ impl Validator<'_> {
             }
         }
     }
+
+    /// Checks the shape of a call of the box built-ins (D10 of `heap-boxes`): `Heap` takes one
+    /// argument of its declared parameter `T`, with one type argument, and has type `Heap<T>`;
+    /// `unbox` takes one box that is moved, not borrowed, and has the type of its contents.
+    fn builtin_call(&mut self, id: ExpressionId, builtin: BuiltinFunction, call: &Call) {
+        match builtin {
+            BuiltinFunction::HeapAllocate => {
+                let parameter = BuiltinFunction::heap_contents_parameter().as_type();
+                let shape = call.parameters.len() == 1
+                    && call.parameters[0].1 == parameter
+                    && call.type_arguments.len() == 1
+                    && !call.has_receiver;
+                if !shape {
+                    self.report(format!("call {} of builtin Heap is malformed", id.0));
+                    return;
+                }
+                let boxed = Type::Heap(Box::new(call.type_arguments[0].clone()));
+                self.expect_type_of_node(id, &boxed, "call");
+            }
+            BuiltinFunction::Unbox => {
+                let receiver = match call.arguments.as_slice() {
+                    [Argument::Written(receiver)] if call.has_receiver => *receiver,
+                    _ => {
+                        self.report(format!("call {} of builtin unbox is malformed", id.0));
+                        return;
+                    }
+                };
+                if matches!(self.kind(receiver), Some(ExpressionKind::Borrow { .. })) {
+                    self.report(format!("call {} unboxes a borrow", id.0));
+                }
+                match self.type_of(receiver).cloned() {
+                    Some(Type::Heap(contents)) => {
+                        self.expect_type_of_node(id, &contents, "call");
+                    }
+                    Some(Type::Error) | None => {}
+                    Some(other) => {
+                        self.report(format!("call {} unboxes a {}", id.0, other));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The type parameters `ty` mentions that are not among `declared`, as they are declared.
@@ -1619,6 +1669,71 @@ mod tests {
             found
                 .iter()
                 .any(|v| v.contains("0 arguments for 1 parameters")),
+            "{:?}",
+            found
+        );
+    }
+
+    /// `unbox(Heap(a + 1))` as the body of `f`, with the box typed `boxed` and the call of
+    /// `unbox` typed `contents`.
+    fn box_round_trip(boxed: Type, contents: Type) -> TypedFile {
+        let mut file = file();
+        let body = body(&mut file);
+        let sum = body.value.unwrap();
+        let heap = add(
+            body,
+            ExpressionKind::Call(Call {
+                callee: Callee::Builtin(BuiltinFunction::HeapAllocate),
+                arguments: vec![Argument::Written(sum)],
+                parameters: vec![(
+                    Some("value".to_string()),
+                    BuiltinFunction::heap_contents_parameter().as_type(),
+                )],
+                type_arguments: vec![Type::Int],
+                evaluation_order: vec![0],
+                has_receiver: false,
+                is_compose: false,
+            }),
+            boxed.clone(),
+        );
+        let unbox = add(
+            body,
+            ExpressionKind::Call(Call {
+                callee: Callee::Builtin(BuiltinFunction::Unbox),
+                arguments: vec![Argument::Written(heap)],
+                parameters: vec![(Some("this".to_string()), boxed)],
+                type_arguments: vec![],
+                evaluation_order: vec![0],
+                has_receiver: true,
+                is_compose: false,
+            }),
+            contents,
+        );
+        body.value = Some(unbox);
+        file
+    }
+
+    #[test]
+    fn well_formed_box_built_ins_have_no_violation() {
+        let file = box_round_trip(Type::Heap(Box::new(Type::Int)), Type::Int);
+        assert_eq!(violations(&file), Vec::<String>::new());
+    }
+
+    #[test]
+    fn mistyped_box_built_ins_are_reported() {
+        let file = box_round_trip(Type::Heap(Box::new(Type::Bool)), Type::Bool);
+        let found = violations(&file);
+        assert!(
+            found
+                .iter()
+                .any(|v| v.contains("has type Heap<Bool>, but its operand implies Heap<Int>")),
+            "{:?}",
+            found
+        );
+        let file = box_round_trip(Type::Int, Type::Int);
+        let found = violations(&file);
+        assert!(
+            found.iter().any(|v| v.contains("unboxes a Int")),
             "{:?}",
             found
         );

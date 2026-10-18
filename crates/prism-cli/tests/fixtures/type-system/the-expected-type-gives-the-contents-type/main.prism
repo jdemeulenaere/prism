@@ -1,0 +1,4 @@
+// expect: ok
+fun f(): Heap<Int?> = Heap(1)
+
+fun g(): Heap<Int?> = Heap<Int?>(null)

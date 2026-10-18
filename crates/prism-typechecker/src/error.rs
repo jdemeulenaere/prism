@@ -116,6 +116,9 @@ pub enum TypeError {
 
     /// E4010: Declaring a duplicate symbol within the identical lexical scope.
     DuplicateSymbol { name: String, span: Span },
+    /// A top-level declaration named like a built-in that a call always reaches (`Heap`), so it
+    /// could never be used (D2 of `heap-boxes`).
+    BuiltinNameDeclared { name: String, span: Span },
 
     /// E4010: An extension function that could never be called, because a member of its
     /// receiver type of the same name always takes precedence (a field, or the built-in
@@ -274,6 +277,7 @@ impl TypeError {
             TypeError::InvalidComposeContext { .. } => "E4008",
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
+            TypeError::BuiltinNameDeclared { .. } => "E4010",
             TypeError::UncallableExtension { .. } => "E4010",
             TypeError::InvalidTypeParameterName { .. } => "E4010",
             TypeError::MissingReturnType { .. } => "E4011",
@@ -318,6 +322,7 @@ impl TypeError {
             TypeError::InvalidComposeContext { span, .. } => *span,
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
+            TypeError::BuiltinNameDeclared { span, .. } => *span,
             TypeError::UncallableExtension { span, .. } => *span,
             TypeError::InvalidTypeParameterName { span, .. } => *span,
             TypeError::MissingReturnType { span, .. } => *span,
@@ -440,6 +445,9 @@ impl TypeError {
             TypeError::InconsistentAlternativeBindings { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
+            TypeError::BuiltinNameDeclared { name, .. } => {
+                format!("a top-level declaration named '{}' would hide the built-in '{}'", name, name)
+            }
             TypeError::DuplicateSymbol { name, .. } => {
                 format!("duplicate symbol declaration '{}' in the same scope", name)
             }

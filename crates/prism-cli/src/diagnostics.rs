@@ -274,6 +274,15 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 function
             ));
         }
+        TypeError::BuiltinFunctionAsValue { name, .. } if name == "Heap" => {
+            out.push_str("   = help: 'Heap' is the built-in box constructor and can only be called, as in 'Heap(x)'\n");
+        }
+        TypeError::BuiltinNameDeclared { name, .. } => {
+            out.push_str(&format!(
+                "   = help: rename the declaration; '{}(...)' always constructs a box\n",
+                name
+            ));
+        }
         TypeError::BuiltinFunctionAsValue { name, .. } => {
             out.push_str(&format!(
                 "   = help: '{}' is a built-in function and can only be called, as in '{}(x)'\n",

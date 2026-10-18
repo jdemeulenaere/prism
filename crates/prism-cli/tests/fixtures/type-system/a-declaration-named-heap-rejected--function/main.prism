@@ -1,0 +1,2 @@
+// expect: E4010
+fun Heap(x: Int): Int = x
