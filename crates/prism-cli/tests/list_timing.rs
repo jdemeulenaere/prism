@@ -24,7 +24,9 @@ const PROGRAM: &str = "tests/benchmarks/list_adds.prism";
 /// The wall time of one `prism run` of the program, in milliseconds.
 fn run_once(root: &Path) -> f64 {
     let start = Instant::now();
+    // Without the cache, so that every run compiles the program.
     let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+        .env("PRISM_CACHE", "off")
         .args(["run", PROGRAM])
         .current_dir(root)
         .output()

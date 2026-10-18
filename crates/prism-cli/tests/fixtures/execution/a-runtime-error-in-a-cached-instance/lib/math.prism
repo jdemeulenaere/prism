@@ -1,0 +1,3 @@
+package lib
+
+public fun <T> divide(x: T, n: Int): Int = 10 / n

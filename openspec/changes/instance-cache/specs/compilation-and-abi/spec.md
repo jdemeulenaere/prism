@@ -157,7 +157,7 @@ Each generic function and extension of a file that passes Phase 2, private ones 
 Each instance MUST be keyed by its symbol, its generic's Monomorphization Hash and a hash of the definitions, markers included, of every struct and enum its type arguments reach. Its code MUST be generated again when one of these changes, and only then.
 
 #### Scenario: Changing generic function body
-- **WHEN** `lib/box.prism` exports `public fun <T> keep(x: T): T` and `public fun <T> drop(x: T): Int`, `app/a.prism` calls `keep(1)`, `app/b.prism` calls `drop("s")`, `app/main.prism` imports both, the program has been run, and the body of `keep` changes
+- **WHEN** `lib/box.prism` exports `public fun <T> drop(x: T): Int` and, after it, `public fun <T> keep(x: T): T`, `app/a.prism` calls `keep(1)`, `app/b.prism` calls `drop("s")`, `app/main.prism` imports both, the program has been run, and the body of `keep` changes
 - **THEN** the next `prism run --explain-cache app/main.prism` prints `  checked lib/box.prism`, `  reused app/a.prism`, `  reused app/b.prism`, `  reused app/main.prism`, `  reused instance lib/box::drop<String>` and `  instantiate lib/box::keep<Int>`: re-monomorphization happens only for the instances of that generic
 
 #### Scenario: Changing a generic signature instantiates again

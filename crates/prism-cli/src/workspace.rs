@@ -476,7 +476,6 @@ pub(crate) fn file_check_key(
 
 /// A file that passed Phase 2: its elaborated MIR, its generic records with their encodings,
 /// and its summary.
-#[allow(dead_code)] // The MIR and records are compiled by `prism run` (group 6).
 pub(crate) struct ElaboratedFile {
     pub mir: MirFile,
     pub records: Vec<GenericRecord>,

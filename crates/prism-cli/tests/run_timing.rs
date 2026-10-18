@@ -21,7 +21,9 @@ const STAGES: [&str; 4] = ["front end", "code generation", "linking", "total to 
 
 /// The milliseconds of each stage of one `prism run --timings` run.
 fn run_once(root: &Path) -> Vec<f64> {
+    // Without the cache, so that every run compiles the program.
     let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+        .env("PRISM_CACHE", "off")
         .args(["run", "--timings", "examples/run/main.prism"])
         .current_dir(root)
         .output()

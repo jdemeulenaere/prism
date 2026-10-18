@@ -173,7 +173,9 @@ impl Drop for TemporaryDirectory {
 fn code_generation_milliseconds(directory: &Path, file: &str) -> f64 {
     (0..3)
         .map(|_| {
+            // Without the cache, so that every run compiles the program.
             let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+                .env("PRISM_CACHE", "off")
                 .args(["run", "--timings", file])
                 .current_dir(directory)
                 .output()

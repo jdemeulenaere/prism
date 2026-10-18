@@ -279,28 +279,59 @@ fn run(case: &Case) -> Result<(), String> {
 }
 
 /// Runs an executable case with `prism run --check-allocations` and compares its exit status and
-/// output, so that every program also asserts it leaks nothing and frees nothing twice.
+/// output, so that every program also asserts it leaks nothing and frees nothing twice. Each
+/// case runs twice on a fresh build cache of its own: cold, then warm on the entries the cold run
+/// wrote, which must give the same output and status and write no entry (the `execution`
+/// scenario "Every executable fixture runs warm as cold", D9 of `instance-cache`).
 fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
     let Some(expected_status) = case.run_status else {
         return Ok(());
     };
     let relative = entry.strip_prefix(&case.dir).unwrap_or(entry);
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
-        .arg("run")
-        .arg("--check-allocations")
-        .arg(relative)
-        .current_dir(&case.dir)
-        .output()
-        .map_err(|error| format!("{}: cannot run prism: {}", case.name, error))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let status = output.status.code();
+    let cache = std::env::temp_dir().join(format!(
+        "prism_fixture_cache_{}_{}",
+        std::process::id(),
+        case.name.replace('/', "_")
+    ));
+    let _ = fs::remove_dir_all(&cache);
+    let run = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
+            .arg("run")
+            .arg("--check-allocations")
+            .arg(relative)
+            .current_dir(&case.dir)
+            .env("PRISM_CACHE", &cache)
+            .output()
+            .map_err(|error| format!("{}: cannot run prism: {}", case.name, error))
+    };
+    let cold = run()?;
+    let entries = cache_entries(&cache);
+    let warm = run()?;
+    let warm_entries = cache_entries(&cache);
+    let _ = fs::remove_dir_all(&cache);
+    let stdout = String::from_utf8_lossy(&cold.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&cold.stderr).to_string();
+    let status = cold.status.code();
     let bless = std::env::var_os("PRISM_BLESS").is_some();
     let mut problems = Vec::new();
     if status != Some(expected_status) {
         problems.push(format!(
             "exit status {:?}, expected {}",
             status, expected_status
+        ));
+    }
+    if (warm.status.code(), &warm.stdout, &warm.stderr) != (status, &cold.stdout, &cold.stderr) {
+        problems.push(format!(
+            "the warm run differs from the cold one: status {:?}\n--- stdout\n{}--- stderr\n{}",
+            warm.status.code(),
+            String::from_utf8_lossy(&warm.stdout),
+            String::from_utf8_lossy(&warm.stderr)
+        ));
+    }
+    if warm_entries != entries {
+        problems.push(format!(
+            "the warm run wrote {} new cache entries",
+            warm_entries.difference(&entries).count()
         ));
     }
     for (file, actual) in [("stdout.snap", &stdout), ("stderr.snap", &stderr)] {
@@ -326,6 +357,28 @@ fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
     } else {
         Err(format!("{}: {}", case.name, problems.join("\n")))
     }
+}
+
+/// Every entry file under the build cache `directory`, with its modification time, so that an
+/// entry rewritten in place counts as written.
+fn cache_entries(directory: &Path) -> BTreeSet<(PathBuf, Option<std::time::SystemTime>)> {
+    let mut entries = BTreeSet::new();
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(read) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
+                entries.insert((path, modified));
+            }
+        }
+    }
+    entries
 }
 
 /// A text snapshot a case may hold: its file name, and the dump it records.

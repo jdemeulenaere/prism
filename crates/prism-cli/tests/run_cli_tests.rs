@@ -22,8 +22,14 @@ fn write(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
+/// Runs `prism` with a build cache shared by these tests in the temporary directory, so that they
+/// exercise the cache without touching the user's (`cache_tests.rs` tests the cache itself).
 fn prism(arguments: &[&str], directory: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_prism"))
+        .env(
+            "PRISM_CACHE",
+            std::env::temp_dir().join("prism_run_cli_build_cache"),
+        )
         .args(arguments)
         .current_dir(directory)
         .output()
@@ -96,6 +102,29 @@ fn reporting_timings() {
         let milliseconds: f64 = value.parse().unwrap();
         assert!(milliseconds >= 0.0);
     }
+}
+
+/// execution: "Cache options before the file".
+#[test]
+fn cache_options_before_the_file() {
+    let directory = single_file("cache_options", "fun main() { println(1) }\n");
+    let output = prism(
+        &["run", "--no-cache", "--explain-cache", "main.prism"],
+        &directory,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "1\n");
+    let stderr = stderr(&output);
+    assert!(
+        stderr.lines().any(|line| line == "Cache: off"),
+        "{}",
+        stderr
+    );
+    assert!(
+        stderr.lines().any(|line| line == "  checked main.prism"),
+        "{}",
+        stderr
+    );
 }
 
 #[test]

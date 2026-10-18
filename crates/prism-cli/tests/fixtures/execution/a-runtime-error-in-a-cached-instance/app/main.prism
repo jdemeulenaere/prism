@@ -1,0 +1,9 @@
+// expect: ok
+// run: 101
+package app
+
+import /lib/math
+
+fun main() {
+    println(divide("a", 0))
+}

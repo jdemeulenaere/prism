@@ -77,6 +77,17 @@ impl Workspace {
         explanation(&output)
     }
 
+    /// A successful `prism run --explain-cache <entry>`: its standard output and the
+    /// explanation lines it printed to stderr.
+    fn run_explain(&self, entry: &str) -> (String, Vec<String>) {
+        let output = self.run(&["run", "--explain-cache", entry]);
+        assert_success(&output);
+        (
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            run_explanation(&output),
+        )
+    }
+
     /// Every file and directory under the workspace root.
     fn tree(&self) -> BTreeSet<PathBuf> {
         let mut paths = BTreeSet::new();
@@ -130,6 +141,17 @@ fn explanation(output: &Output) -> Vec<String> {
         .lines()
         .skip_while(|line| !line.starts_with("Cache: "))
         .skip(1)
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+/// The explanation lines a `prism run --explain-cache` printed to stderr, after `Cache: ...`.
+fn run_explanation(output: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .skip_while(|line| !line.starts_with("Cache: "))
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
         .map(|line| line.trim().to_string())
         .collect()
 }
@@ -343,7 +365,7 @@ fn cached_and_uncached_checks_agree() {
 // --- Instances planned per program (D7 and D10 of `instance-cache`)
 
 const BOX: &str =
-    "package lib\npublic fun <T> keep(x: T): T = x\npublic fun <T> drop(x: T): Int = 1\n";
+    "package lib\npublic fun <T> drop(x: T): Int = 1\npublic fun <T> keep(x: T): T = x\n";
 
 /// compilation-and-abi: "Polymorphic calls are instantiated with their caller".
 #[test]
@@ -542,9 +564,10 @@ fn checking_writes_nothing_in_the_workspace() {
 /// build-cache: "Cache shared across checkouts".
 #[test]
 fn cache_shared_across_checkouts() {
-    let first = text_workspace("checkout_one");
+    let first = program_workspace("checkout_one");
     first.explain("app/main.prism");
-    let second = text_workspace("checkout_two");
+    first.run_explain("app/main.prism");
+    let second = program_workspace("checkout_two");
     let output = second.run_with_cache(
         first.cache.to_str().unwrap(),
         &["check", "--explain-cache", "app/main.prism"],
@@ -552,8 +575,19 @@ fn cache_shared_across_checkouts() {
     assert_success(&output);
     assert_eq!(
         explanation(&output),
-        lines(&["reused lib/text.prism", "reused app/main.prism"])
+        lines(&[
+            "reused lib/box.prism",
+            "reused app/main.prism",
+            "reused instance lib/box::keep<Int>"
+        ])
     );
+    let output = second.run_with_cache(
+        first.cache.to_str().unwrap(),
+        &["run", "--explain-cache", "app/main.prism"],
+    );
+    assert_success(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+    assert_eq!(run_explanation(&output), lines(&WARM));
 }
 
 /// build-cache: "Unchanged workspace reuses every file", which is also the system-invariants
@@ -771,4 +805,501 @@ fn a_body_change_in_the_defining_file() {
         ])
     );
     assert_eq!(run_main(&workspace), "1\n");
+}
+
+// --- prism run with the cache (D9 of `instance-cache`)
+
+const KEEP: &str = "package lib\npublic fun <T> keep(x: T): T = x\n";
+const KEEP_MAIN: &str = "package app\nimport /lib/box\nfun main() { println(keep(1)) }\n";
+const COLD: [&str; 3] = [
+    "checked lib/box.prism",
+    "checked app/main.prism",
+    "instantiate lib/box::keep<Int>",
+];
+const WARM: [&str; 3] = [
+    "reused lib/box.prism",
+    "reused app/main.prism",
+    "reused instance lib/box::keep<Int>",
+];
+
+/// The program of "Explaining a warm check": `app/main` prints `keep(1)` of `lib/box`.
+fn program_workspace(name: &str) -> Workspace {
+    Workspace::new(
+        name,
+        &[("lib/box.prism", KEEP), ("app/main.prism", KEEP_MAIN)],
+    )
+}
+
+/// build-cache: "Explaining a warm check".
+#[test]
+fn explaining_a_warm_check() {
+    let workspace = program_workspace("warm_check");
+    assert_eq!(workspace.explain("app/main.prism"), lines(&COLD));
+    let output = workspace.run(&["run", "app/main.prism"]);
+    assert_success(&output);
+    assert_eq!(workspace.explain("app/main.prism"), lines(&WARM));
+}
+
+/// build-cache: "Explaining a warm run".
+#[test]
+fn explaining_a_warm_run() {
+    let workspace = program_workspace("warm_run");
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        ("1\n".to_string(), lines(&COLD))
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        ("1\n".to_string(), lines(&WARM))
+    );
+}
+
+/// build-cache: "A checked program compiles its units".
+#[test]
+fn a_checked_program_compiles_its_units() {
+    let workspace = program_workspace("compiles_its_units");
+    assert_success(&workspace.run(&["check", "app/main.prism"]));
+    assert_eq!(
+        workspace.run_explain("app/main.prism").1,
+        lines(&[
+            "compiled lib/box.prism",
+            "compiled app/main.prism",
+            "instantiate lib/box::keep<Int>",
+        ])
+    );
+}
+
+/// build-cache: "An unchanged program compiles nothing".
+#[test]
+fn an_unchanged_program_compiles_nothing() {
+    let workspace = program_workspace("compiles_nothing");
+    workspace.run_explain("app/main.prism");
+    let entries = workspace.entries();
+    assert_eq!(workspace.run_explain("app/main.prism").1, lines(&WARM));
+    assert_eq!(workspace.entries(), entries, "a warm run writes no entry");
+}
+
+/// build-cache: "Running without the cache".
+#[test]
+fn running_without_the_cache() {
+    let workspace = program_workspace("run_without");
+    workspace.run_explain("app/main.prism");
+    let entries = workspace.entries();
+    for output in [
+        workspace.run(&["run", "--no-cache", "--explain-cache", "app/main.prism"]),
+        workspace.run_with_cache("off", &["run", "--explain-cache", "app/main.prism"]),
+    ] {
+        assert_success(&output);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Cache: off"));
+        assert_eq!(run_explanation(&output), lines(&COLD));
+    }
+    assert_eq!(workspace.entries(), entries, "no entry is written");
+}
+
+/// build-cache: "Running writes nothing in the workspace".
+#[test]
+fn running_writes_nothing_in_the_workspace() {
+    let workspace = program_workspace("run_nothing_written");
+    let before = workspace.tree();
+    workspace.run_explain("app/main.prism");
+    assert_eq!(workspace.run_explain("app/main.prism").1, lines(&WARM));
+    assert_eq!(workspace.tree(), before);
+}
+
+/// build-cache: "Corrupt code entry is a miss".
+#[test]
+fn corrupt_code_entry_is_a_miss() {
+    let workspace = program_workspace("corrupt_code");
+    let cold = workspace.run_explain("app/main.prism");
+    let entries = workspace.entries();
+    assert!(entries.len() >= 5, "{:?}", entries);
+    for (index, entry) in entries.iter().enumerate() {
+        let bytes = fs::read(entry).unwrap();
+        if index % 2 == 0 {
+            fs::write(entry, &bytes[..bytes.len() / 2]).unwrap();
+        } else {
+            fs::write(entry, "garbage\n").unwrap();
+        }
+    }
+    assert_eq!(workspace.run_explain("app/main.prism"), cold);
+    assert_eq!(workspace.run_explain("app/main.prism").1, lines(&WARM));
+}
+
+/// A flipped byte in the middle of a code entry's body is a miss too: the checksum catches it.
+#[test]
+fn a_flipped_code_byte_is_a_miss() {
+    let workspace = program_workspace("flipped_code");
+    workspace.run_explain("app/main.prism");
+    for entry in workspace.entries() {
+        let mut bytes = fs::read(&entry).unwrap();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0x01;
+        fs::write(&entry, bytes).unwrap();
+    }
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        ("1\n".to_string(), lines(&COLD))
+    );
+}
+
+/// build-cache: "Unwritable cache directory for a run".
+#[test]
+fn unwritable_cache_directory_for_a_run() {
+    let workspace = program_workspace("unwritable_run");
+    let file = workspace.root.parent().unwrap().join("not-a-directory");
+    fs::write(&file, "a regular file").unwrap();
+    let without = workspace.run(&["run", "--no-cache", "app/main.prism"]);
+    for _ in 0..2 {
+        let output = workspace.run_with_cache(file.to_str().unwrap(), &["run", "app/main.prism"]);
+        assert_eq!(output.status.code(), without.status.code());
+        assert_eq!(output.stdout, without.stdout);
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// build-cache: "Concurrent runs share a cache".
+#[test]
+fn concurrent_runs_share_a_cache() {
+    let workspace = program_workspace("concurrent_runs");
+    let children: Vec<_> = (0..8)
+        .map(|_| {
+            Command::new(env!("CARGO_BIN_EXE_prism"))
+                .current_dir(&workspace.root)
+                .env("PRISM_CACHE", &workspace.cache)
+                .args(["run", "app/main.prism"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert_success(&output);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+    }
+    assert_eq!(workspace.run_explain("app/main.prism").1, lines(&WARM));
+}
+
+/// build-cache: "A missing record is rebuilt from its file".
+#[test]
+fn a_missing_record_is_rebuilt_from_its_file() {
+    let workspace = program_workspace("missing_record");
+    workspace.run_explain("app/main.prism");
+    let mut removed = 0;
+    for entry in workspace.entries() {
+        if fs::read(&entry)
+            .unwrap()
+            .starts_with(b"prism-cache 2\nkind record\n")
+        {
+            fs::remove_file(entry).unwrap();
+            removed += 1;
+        }
+    }
+    assert_eq!(removed, 1);
+    workspace.write(
+        "app/main.prism",
+        "package app\nimport /lib/box\nfun main() { println(keep(1)); println(keep(\"a\")) }\n",
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "1\na\n".to_string(),
+            lines(&[
+                "checked lib/box.prism",
+                "checked app/main.prism",
+                "reused instance lib/box::keep<Int>",
+                "instantiate lib/box::keep<String>",
+            ])
+        )
+    );
+}
+
+// --- Compilation and code generation avoidance (`compilation-and-abi`)
+
+/// compilation-and-abi: "Modifying a generic function body re-checks no importer".
+#[test]
+fn modifying_a_generic_function_body_re_checks_no_importer() {
+    let workspace = program_workspace("generic_body_importer");
+    assert_eq!(workspace.explain("app/main.prism"), lines(&COLD));
+    workspace.write(
+        "lib/box.prism",
+        "package lib\npublic fun <T> keep(x: T): T { val y = x; return y }\n",
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked lib/box.prism",
+            "reused app/main.prism",
+            "instantiate lib/box::keep<Int>",
+        ])
+    );
+}
+
+/// The workspace of "Changing generic function body": `app/a` calls `keep(1)`, `app/b` calls
+/// `drop("s")`, and `app/main` imports both.
+fn two_generics_workspace(name: &str, a: &str) -> Workspace {
+    Workspace::new(
+        name,
+        &[
+            ("lib/box.prism", BOX),
+            (
+                "app/a.prism",
+                &format!(
+                    "package app\nimport /lib/box\npublic fun a(): Int = {}\n",
+                    a
+                ),
+            ),
+            (
+                "app/b.prism",
+                "package app\nimport /lib/box\npublic fun b(): Int = drop(\"s\")\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport a\nimport b\nfun main() { println(a()); println(b()) }\n",
+            ),
+        ],
+    )
+}
+
+/// compilation-and-abi: "Changing generic function body".
+#[test]
+fn changing_generic_function_body() {
+    let workspace = two_generics_workspace("generic_body", "keep(1)");
+    workspace.run_explain("app/main.prism");
+    workspace.write(
+        "lib/box.prism",
+        &BOX.replace("): T = x", "): T { val y = x; return y }"),
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "1\n1\n".to_string(),
+            lines(&[
+                "checked lib/box.prism",
+                "reused app/a.prism",
+                "reused app/b.prism",
+                "reused app/main.prism",
+                "reused instance lib/box::drop<String>",
+                "instantiate lib/box::keep<Int>",
+            ])
+        )
+    );
+}
+
+/// compilation-and-abi: "Changing a generic signature instantiates again".
+#[test]
+fn changing_a_generic_signature_instantiates_again() {
+    let workspace = two_generics_workspace("generic_signature_run", "drop(1)");
+    workspace.run_explain("app/main.prism");
+    workspace.write("lib/box.prism", &BOX.replace("drop(x: T)", "drop(x: &T)"));
+    workspace.write(
+        "app/a.prism",
+        "package app\nimport /lib/box\npublic fun a(): Int = drop(&1)\n",
+    );
+    workspace.write(
+        "app/b.prism",
+        "package app\nimport /lib/box\npublic fun b(): Int = drop(&\"s\")\n",
+    );
+    let (stdout, explanation) = workspace.run_explain("app/main.prism");
+    assert_eq!(stdout, "1\n1\n");
+    assert!(explanation.contains(&"checked lib/box.prism".to_string()));
+    assert!(explanation.contains(&"checked app/a.prism".to_string()));
+    assert!(explanation.contains(&"instantiate lib/box::drop<Int>".to_string()));
+}
+
+/// compilation-and-abi: "A type argument gains a field".
+#[test]
+fn a_type_argument_gains_a_field() {
+    let workspace = Workspace::new(
+        "type_argument_field",
+        &[
+            ("lib/box.prism", KEEP),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/box\nstruct Thing(val a: Int)\n\
+                 fun main() { println(keep(Thing(1)).a); println(keep(2)) }\n",
+            ),
+        ],
+    );
+    workspace.run_explain("app/main.prism");
+    workspace.write(
+        "app/main.prism",
+        "package app\nimport /lib/box\nstruct Thing(val b: Int, val a: Int)\n\
+         fun main() { println(keep(Thing(0, 1)).a); println(keep(2)) }\n",
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "1\n2\n".to_string(),
+            lines(&[
+                "reused lib/box.prism",
+                "checked app/main.prism",
+                "reused instance lib/box::keep<Int>",
+                "instantiate lib/box::keep<app/main::Thing>",
+            ])
+        )
+    );
+}
+
+/// The program of "A private helper's signature change regenerates the instances".
+fn helper_workspace(name: &str, helper: &str) -> Workspace {
+    Workspace::new(
+        name,
+        &[
+            (
+                "lib/box.prism",
+                &format!(
+                    "package lib\npublic fun <T> outer(x: T, n: Int): Int = helper(n)\n{}\n",
+                    helper
+                ),
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/box\nfun main() { println(outer(\"a\", 1)) }\n",
+            ),
+        ],
+    )
+}
+
+/// compilation-and-abi: "A private helper's signature change regenerates the instances".
+#[test]
+fn a_private_helpers_signature_change_regenerates_the_instances() {
+    let workspace = helper_workspace("helper_signature", "fun helper(n: Int): Int = n + 1");
+    assert_eq!(workspace.run_explain("app/main.prism").0, "2\n");
+    workspace.write(
+        "lib/box.prism",
+        "package lib\npublic fun <T> outer(x: T, n: Int): Int = helper(n)\nfun helper(n: &Int): Int = n\n",
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "1\n".to_string(),
+            lines(&[
+                "checked lib/box.prism",
+                "reused app/main.prism",
+                "instantiate lib/box::outer<String>",
+            ])
+        )
+    );
+}
+
+/// compilation-and-abi: "A private helper's body change keeps the instances".
+#[test]
+fn a_private_helpers_body_change_keeps_the_instances() {
+    let workspace = helper_workspace("helper_body", "fun helper(n: Int): Int = n + 1");
+    assert_eq!(workspace.run_explain("app/main.prism").0, "2\n");
+    workspace.write(
+        "lib/box.prism",
+        "package lib\npublic fun <T> outer(x: T, n: Int): Int = helper(n)\nfun helper(n: Int): Int = n + 2\n",
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "3\n".to_string(),
+            lines(&[
+                "checked lib/box.prism",
+                "reused app/main.prism",
+                "reused instance lib/box::outer<String>",
+            ])
+        )
+    );
+}
+
+/// compilation-and-abi: "A body edit regenerates one file's code".
+#[test]
+fn a_body_edit_regenerates_one_files_code() {
+    let workspace = Workspace::new(
+        "body_edit_code",
+        &[
+            ("lib/text.prism", TEXT),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/text\nfun main() { println(shout(\"a\")) }\n",
+            ),
+        ],
+    );
+    assert_eq!(workspace.run_explain("app/main.prism").0, "a\n");
+    workspace.write(
+        "lib/text.prism",
+        "package lib\npublic fun shout(s: &String): String = s + \"!\"\n",
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "a!\n".to_string(),
+            lines(&["checked lib/text.prism", "reused app/main.prism"])
+        )
+    );
+}
+
+// --- code-generation: "Compiled Units Are Relocatable Artifacts"
+
+/// code-generation: "Cached units run as fresh ones".
+#[test]
+fn cached_units_run_as_fresh_ones() {
+    let workspace = Workspace::new(
+        "cached_units",
+        &[
+            (
+                "lib/text.prism",
+                "package lib\npublic val greeting: String = \"hello\"\n\
+                 public struct Named(val name: String, val n: Int)\n\
+                 public fun <T> label(x: T, name: String): Named = Named(name + \"!\", 1)\n\
+                 public fun shout(s: &String): String = s + \"?\"\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/text\n\
+                 fun apply(f: (String) -> String, s: String): String = f(s)\n\
+                 fun main() {\n\
+                     val n = label(1, shout(greeting))\n\
+                     println(n.name)\n\
+                     val xs = listOf(n.name.clone(), \"x\")\n\
+                     println(xs.size)\n\
+                     println(apply({ s -> s + greeting }, \"a\"))\n\
+                 }\n",
+            ),
+        ],
+    );
+    let run = || {
+        let output = workspace.run(&[
+            "run",
+            "--check-allocations",
+            "--explain-cache",
+            "app/main.prism",
+        ]);
+        assert_success(&output);
+        (
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            run_explanation(&output),
+        )
+    };
+    let (cold, _) = run();
+    assert_eq!(cold, "hello?!\n2\nahello\n");
+    let (warm, explanation) = run();
+    assert_eq!(warm, cold);
+    assert!(
+        explanation.iter().all(|line| line.starts_with("reused ")),
+        "{:?}",
+        explanation
+    );
+}
+
+/// code-generation: "Dumps never read the cache".
+#[test]
+fn dumps_never_read_the_cache() {
+    let workspace = program_workspace("dumps");
+    let before = workspace.run(&["dump-clif", "app/main.prism"]);
+    assert_success(&before);
+    workspace.run_explain("app/main.prism");
+    let after = workspace.run(&["dump-clif", "app/main.prism"]);
+    assert_eq!(before.stdout, after.stdout);
+    let instances = workspace.run(&["dump-clif", "--instances", "app/main.prism"]);
+    assert_success(&instances);
 }

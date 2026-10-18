@@ -170,6 +170,65 @@ pub fn instance_code_key(
     )
 }
 
+/// A program's build plan (D12 of `instance-cache`): every file unit and instance unit with the
+/// key of its code. Two plans of one program, before and after an edit, differ exactly in the
+/// units whose code must be generated or loaded again, which is what `hot-reload` compiles.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BuildPlan {
+    /// The file units, in check order.
+    pub units: Vec<PlannedUnit>,
+    /// The instance units, in symbol order.
+    pub instances: Vec<PlannedInstanceKey>,
+}
+
+/// One file's unit in a [`BuildPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedUnit {
+    pub path: std::path::PathBuf,
+    pub module: String,
+    pub check_key: ContentHash,
+    /// The key of the unit's code: its check key and the target identity.
+    pub code_key: ContentHash,
+}
+
+/// One instance's unit in a [`BuildPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedInstanceKey {
+    pub symbol: String,
+    /// How the instance is shown ([`instance_display`]).
+    pub display: String,
+    /// The key of the instance's code ([`instance_code_key`]).
+    pub code_key: ContentHash,
+}
+
+impl BuildPlan {
+    /// The file units and instance units of this plan whose code key is not in `previous`:
+    /// those whose code must be generated, or loaded from the cache, after the edit that turned
+    /// `previous` into this plan. Linear in the two plans' sizes.
+    pub fn changed_since(
+        &self,
+        previous: &BuildPlan,
+    ) -> (Vec<&PlannedUnit>, Vec<&PlannedInstanceKey>) {
+        let units: std::collections::HashSet<&ContentHash> =
+            previous.units.iter().map(|unit| &unit.code_key).collect();
+        let instances: std::collections::HashSet<&ContentHash> = previous
+            .instances
+            .iter()
+            .map(|instance| &instance.code_key)
+            .collect();
+        (
+            self.units
+                .iter()
+                .filter(|unit| !units.contains(&unit.code_key))
+                .collect(),
+            self.instances
+                .iter()
+                .filter(|instance| !instances.contains(&instance.code_key))
+                .collect(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

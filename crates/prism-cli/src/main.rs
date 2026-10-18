@@ -33,14 +33,17 @@ COMMANDS:
                            --elaborated, borrow-check it and print its elaborated MIR; with
                            --instances, compile the program the file is the entry of and
                            print the MIR of every instance of a generic it needs
-    run [--timings] [--check-allocations] <file.prism> [-- <argument>...]
+    run [--timings] [--check-allocations] [--no-cache] [--explain-cache] <file.prism>
+        [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
                            'fun main()', exiting with the program's status (101 after a
-                           runtime error, 1 when it does not compile); --timings prints the
-                           time of each stage before main runs; --check-allocations tracks
+                           runtime error, 1 when it does not compile), loading from the build
+                           cache every unit and instance whose code it holds; --timings prints
+                           the time of each stage before main runs; --check-allocations tracks
                            every allocation and, when main returns, reports those still live
-                           and any invalid free, exiting with 102; the arguments after '--'
-                           are the program's
+                           and any invalid free, exiting with 102; --no-cache ignores the
+                           cache; --explain-cache lists on stderr what was checked, compiled or
+                           loaded; the arguments after '--' are the program's
     dump-clif [--instances] <file.prism>
                            Print the Cranelift IR the backend generates for a source file;
                            with --instances, compile the program the file is the entry of
@@ -177,21 +180,26 @@ fn main() {
 
 /// `prism run [--timings] [--check-allocations] <file.prism> [-- <argument>...]` (D14 of
 /// `codegen-core`, D13 of `runtime-strings-and-drops`): options before the file, and everything
-/// after `--` for the program.
+/// after `--` for the program. The build cache the environment selects is used unless
+/// `--no-cache` (D9 of `instance-cache`).
 fn run_program(args: &[String], started: std::time::Instant) {
     let usage = || -> ! {
         eprintln!(
-            "Error: usage: prism run [--timings] [--check-allocations] <file.prism> [-- <argument>...]"
+            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] <file.prism> [-- <argument>...]"
         );
         process::exit(1);
     };
     let mut timings = false;
     let mut check_allocations = false;
+    let mut no_cache = false;
+    let mut explain_cache = false;
     let mut rest = args.iter();
     let file = loop {
         match rest.next().map(String::as_str) {
             Some("--timings") => timings = true,
             Some("--check-allocations") => check_allocations = true,
+            Some("--no-cache") => no_cache = true,
+            Some("--explain-cache") => explain_cache = true,
             Some(option) if option.starts_with('-') => usage(),
             Some(file) => break file,
             None => usage(),
@@ -207,6 +215,12 @@ fn run_program(args: &[String], started: std::time::Instant) {
         check_allocations,
         arguments,
         started,
+        cache: if no_cache {
+            None
+        } else {
+            prism_cli::BuildCache::from_environment()
+        },
+        explain_cache,
     };
     match prism_cli::run_file(std::path::Path::new(file), &options) {
         Ok(status) => process::exit(status),

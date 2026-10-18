@@ -1,0 +1,2 @@
+panic: division by zero
+  at lib/math.prism:3:44
