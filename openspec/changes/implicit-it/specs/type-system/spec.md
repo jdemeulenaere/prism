@@ -17,6 +17,10 @@ A closure without a parameter header, checked against a function type with exact
 - **WHEN** `fun each(xs: &List<String>, f: (&String) -> Unit) { for (x in xs) f(x) }` and `fun count(s: &String): Int = s.length` are declared, and a body runs `var total = 0; each(listOf("a", "bc")) { total += it.length; total += count(it) }`
 - **THEN** the file typechecks successfully, `it` having type `&String`, read through it by `.length` and passed on by `count(it)`
 
+#### Scenario: it where a nullable function type is expected
+- **WHEN** `fun apply(f: ((Int) -> Int)?, x: Int): Int { val fallback: (Int) -> Int = { -it }; val g = f ?: fallback; return g(x) }` is declared and `main` runs `val f: ((Int) -> Int)? = { it + 1 }`, `println(apply(f, 1))`, `println(apply({ x -> x * 2 }, 2))` and `println(apply({ it * 10 }, 4))`
+- **THEN** the file typechecks successfully, each closure being checked against `(Int) -> Int` and then made nullable, and it prints `2`, `4` and `40`
+
 #### Scenario: Unused it is accepted
 - **WHEN** `fun each(f: (Int) -> Unit) { f(1) }` is declared and a body runs `each { println("x") }`
 - **THEN** the file typechecks successfully

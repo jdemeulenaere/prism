@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+fun apply(f: ((Int) -> Int)?, x: Int): Int {
+    val fallback: (Int) -> Int = { -it }
+    val g = f ?: fallback
+    return g(x)
+}
+
+fun main() {
+    val f: ((Int) -> Int)? = { it + 1 }
+    println(apply(f, 1))
+    println(apply({ x -> x * 2 }, 2))
+    println(apply({ it * 10 }, 4))
+}

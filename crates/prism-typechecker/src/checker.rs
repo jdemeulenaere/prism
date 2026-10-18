@@ -1175,10 +1175,22 @@ impl TypeChecker {
             Err(TypeError::UnresolvedSymbol { .. }) if name == IMPLICIT_PARAMETER => {
                 // No closure around this use binds `it`: say why the innermost one has none (D6
                 // of `implicit-it`).
-                let missing = self
+                let missing = match self
                     .missing_implicit_parameter
                     .clone()
-                    .unwrap_or(MissingImplicitParameter::OutsideClosures);
+                    .unwrap_or(MissingImplicitParameter::OutsideClosures)
+                {
+                    // Name the closure's type, from the return type and compose flag its body is
+                    // checked with, rather than keep it for every closure.
+                    MissingImplicitParameter::NoExpectedParameters(None) => {
+                        MissingImplicitParameter::NoExpectedParameters(
+                            self.current_expected_return
+                                .clone()
+                                .map(|ret| Type::function(self.is_in_compose(), Vec::new(), ret)),
+                        )
+                    }
+                    other => other,
+                };
                 self.errors
                     .push(TypeError::UnresolvedImplicitParameter { missing, span });
                 None
@@ -2911,21 +2923,27 @@ impl TypeChecker {
             }
         }
 
-        // Special handling for closures checked against expected function type
+        // Special handling for closures checked against expected function type, also inside a
+        // nullable one (`val f: ((Int) -> Int)? = { it + 1 }`), where the closure is checked
+        // against the function type and then made nullable.
         if let ExprKind::Closure {
             params,
             arrow,
             body,
         } = &expr.kind
         {
+            let (function_type, nullable) = match expected {
+                Type::Nullable(inner) => (inner.as_ref(), true),
+                other => (other, false),
+            };
             if let Type::Fn {
                 is_compose,
                 params: exp_params,
                 escaping: exp_escaping,
                 ret: exp_ret,
-            } = expected
+            } = function_type
             {
-                return self.check_closure(
+                let closure = self.check_closure(
                     params,
                     arrow.is_some(),
                     body,
@@ -2935,6 +2953,11 @@ impl TypeChecker {
                     Some(exp_ret),
                     expr.span,
                 );
+                return if nullable {
+                    self.coerce_to(closure, expected)
+                } else {
+                    closure
+                };
             }
         }
 
@@ -3067,7 +3090,7 @@ impl TypeChecker {
                 params.iter().map(|p| p.name.clone()).collect(),
             ))
         } else {
-            Some(MissingImplicitParameter::NoExpectedParameters)
+            Some(MissingImplicitParameter::NoExpectedParameters(None))
         };
         let prev = self.enter_closure(is_compose, exp_ret.cloned(), missing);
         let mut parameters = Vec::new();

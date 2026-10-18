@@ -359,8 +359,9 @@ pub enum MissingImplicitParameter {
     DeclaredParameters(Vec<String>),
     /// The closure has no expected function type.
     NoExpectedType,
-    /// The closure's expected function type has no parameters.
-    NoExpectedParameters,
+    /// The closure's expected function type has no parameters. It holds that function type when
+    /// its return type is known, which the checker fills in only when it reports the error.
+    NoExpectedParameters(Option<Type>),
 }
 
 impl MissingImplicitParameter {
@@ -386,7 +387,11 @@ impl MissingImplicitParameter {
                 "this closure has no expected function type, so it has no implicit 'it'; {}",
                 WHERE
             ),
-            MissingImplicitParameter::NoExpectedParameters => {
+            MissingImplicitParameter::NoExpectedParameters(Some(function_type)) => format!(
+                "this closure's type '{}' has no parameters, so it has no implicit 'it'",
+                function_type
+            ),
+            MissingImplicitParameter::NoExpectedParameters(None) => {
                 "this closure's expected function type has no parameters, so it has no implicit 'it'".to_string()
             }
         }
