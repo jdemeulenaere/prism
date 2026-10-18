@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Point : Copy { val x: Int, val y: Int }
+fun mirror(p: Point): Point = Point(p.y, p.x)
+fun main() {
+    var p = Point(1, 2)
+    p = mirror(p)
+    println(p.x)
+    println(p.y)
+}

@@ -57,6 +57,10 @@ A `when` over an enum MUST run the branch of the subject's variant, and a `when`
 - **WHEN** `fun f(n: Int?): Int = when (n) { null -> 0; 1 -> 10; else -> 20 }` is declared and a program prints `f(null)`, `f(1)` and `f(2)`
 - **THEN** it prints `0`, `10` and `20`
 
+#### Scenario: Exhaustive when over a nullable Bool
+- **WHEN** `fun f(b: Bool?): Int = when (b) { true -> 1; false -> 2; null -> 3 }` is declared and a program prints `f(true)`, `f(false)` and `f(null)`
+- **THEN** it prints `1`, `2` and `3`, with no `else` branch
+
 ### Requirement: Equality of Structs, Enums and Nullables
 `==` MUST compare structs field by field, enums by variant and then payload, and nullables as equal when both are `null` or both hold equal values, each field or payload with `==` of its type; `!=` MUST be its negation. Comparing borrows MUST compare what they refer to.
 

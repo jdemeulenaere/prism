@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+enum Color { Red, Green, Blue }
+fun g(c: Color): Int = when (c) {
+    Red -> 1
+    Green -> 2
+    Blue -> 3
+}
+fun main() {
+    println(g(Color.Blue))
+    println(g(Color.Red))
+}

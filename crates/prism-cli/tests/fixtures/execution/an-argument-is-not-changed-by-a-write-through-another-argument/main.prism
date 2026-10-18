@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Point : Copy { var x: Int }
+fun f(p: Point, r: &mut Point): Int {
+    r.x = 9
+    return p.x
+}
+fun main() {
+    var a = Point(1)
+    println(f(a, &mut a))
+    println(a.x)
+}

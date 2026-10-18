@@ -1,0 +1,33 @@
+package run.geometry
+
+// Aggregates for the reference program of `prism run` (examples/run/main.prism).
+
+// A point on the integer grid.
+public struct Point : Copy {
+    val x: Int
+    val y: Int
+}
+
+// Where a point lies relative to the origin.
+public enum Place : Copy {
+    Origin
+    // On an axis: true for the x axis.
+    Axis(Bool)
+    // In a quadrant, numbered 1 to 4 counterclockwise.
+    Quadrant(Int)
+}
+
+// The point `p` mirrored across the diagonal.
+public fun mirror(p: Point): Point = Point(p.y, p.x)
+
+// Where `p` lies.
+public fun placeOf(p: Point): Place {
+    if (p.x == 0 && p.y == 0) return Place.Origin
+    if (p.y == 0) return Place.Axis(true)
+    if (p.x == 0) return Place.Axis(false)
+    if (p.x > 0) return if (p.y > 0) Place.Quadrant(1) else Place.Quadrant(4)
+    return if (p.y > 0) Place.Quadrant(2) else Place.Quadrant(3)
+}
+
+// The x coordinate of `p` divided by its y coordinate, or null on the x axis.
+public fun slope(p: Point): Int? = if (p.y == 0) null else p.x / p.y

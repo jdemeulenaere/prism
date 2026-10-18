@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Point : Copy { var x: Int, var y: Int }
+fun set(r: &mut Point, v: Point) { *r = v }
+fun main() {
+    var a = Point(1, 2)
+    set(&mut a, Point(5, 6))
+    println(a.x)
+    println(a.y)
+}

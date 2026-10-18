@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Point : Copy { var x: Int }
+fun main() {
+    var p = Point(1)
+    val q = p.clone()
+    p.x = 2
+    println(q.x)
+}

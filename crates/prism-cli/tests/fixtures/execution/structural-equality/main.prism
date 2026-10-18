@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+struct Point : Copy { val x: Int, val y: Int }
+enum Shape : Copy { Circle(Double), Square(Double), Empty }
+fun main() {
+    println(Point(1, 2) == Point(1, 2))
+    println(Point(1, 2) == Point(2, 1))
+    println(Shape.Circle(1.0) == Shape.Circle(2.0))
+    println(Shape.Circle(1.0) != Shape.Square(1.0))
+    println(Shape.Empty == Shape.Empty)
+}

@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Point : Copy { var x: Int, var y: Int }
+fun main() {
+    var p = Point(1, 2)
+    p.y = 5
+    println(p.x)
+    println(p.y)
+}

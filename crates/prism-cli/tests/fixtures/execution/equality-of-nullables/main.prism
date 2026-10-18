@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun main() {
+    val a: Int? = null
+    val b: Int? = 1
+    val c: Int? = 1
+    println(a == null)
+    println(a == b)
+    println(b == c)
+    println(b != null)
+}

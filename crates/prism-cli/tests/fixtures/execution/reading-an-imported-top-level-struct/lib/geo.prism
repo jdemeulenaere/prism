@@ -1,0 +1,3 @@
+package lib
+public struct Point : Copy { val x: Int, val y: Int }
+public val ORIGIN: Point = Point(0, 7)

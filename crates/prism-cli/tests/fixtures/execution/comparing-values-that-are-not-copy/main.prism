@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+struct Counter { val n: Int }
+fun same(a: Counter, b: Counter): Bool = a == b
+fun main() {
+    println(same(Counter(1), Counter(1)))
+}

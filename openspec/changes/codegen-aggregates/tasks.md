@@ -38,9 +38,9 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 7. Runtime semantics fixtures
 
-- [ ] 7.1 Add executable fixtures under `execution/` for every scenario of "Struct Values", "Copies and Moves Are Independent Values", "Aggregate Arguments and Results Are Values", "Borrows Refer to the Borrowed Place", "When Over Enum Variants and Nullables", "Equality of Structs, Enums and Nullables", "Null-Safe Operators Short-Circuit", "Cloning a Value That Owns Nothing", "Ranges Are Values" and "Top-Level Values of Aggregate Types" (two files). Verify with `cargo test -p prism-cli --test fixture_tests`.
-- [ ] 7.2 Add CLI tests in `crates/prism-cli/tests/cache_tests.rs` for "A field added to a transitively reached type" and "A body change in the defining file" (`--explain-cache` lines and `prism run` output before and after the edit, in a temporary workspace with its own `PRISM_CACHE`).
-- [ ] 7.3 Extend `examples/run/` with a struct, an enum with a payload and a nullable used by the reference program (keeping it a valid `prism check` input and the `run_cli_tests.rs` output test passing), and run the `run_timing` benchmark (`cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture`), recording the median time to `main` in the commit message.
+- [x] 7.1 Add executable fixtures under `execution/` for every scenario of "Struct Values", "Copies and Moves Are Independent Values", "Aggregate Arguments and Results Are Values", "Borrows Refer to the Borrowed Place", "When Over Enum Variants and Nullables", "Equality of Structs, Enums and Nullables", "Null-Safe Operators Short-Circuit", "Cloning a Value That Owns Nothing", "Ranges Are Values" and "Top-Level Values of Aggregate Types" (two files). Verify with `cargo test -p prism-cli --test fixture_tests`.
+- [x] 7.2 Add CLI tests in `crates/prism-cli/tests/cache_tests.rs` for "A field added to a transitively reached type" and "A body change in the defining file" (`--explain-cache` lines and `prism run` output before and after the edit, in a temporary workspace with its own `PRISM_CACHE`).
+- [x] 7.3 Extend `examples/run/` with a struct, an enum with a payload and a nullable used by the reference program (keeping it a valid `prism check` input and the `run_cli_tests.rs` output test passing), and run the `run_timing` benchmark (`cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture`), recording the median time to `main` in the commit message.
 
 ## 8. Integration
 

@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun f(n: Int?): Int = when (n) {
+    null -> 0
+    1 -> 10
+    else -> 20
+}
+fun main() {
+    println(f(null))
+    println(f(1))
+    println(f(2))
+}

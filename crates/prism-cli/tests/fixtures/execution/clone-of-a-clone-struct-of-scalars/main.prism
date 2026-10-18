@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Tally : Clone { var n: Int }
+fun main() {
+    val a = Tally(3)
+    var b = a.clone()
+    b.n = 4
+    println(a.n)
+    println(b.n)
+}

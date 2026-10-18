@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct User : Copy { val nick: Int? }
+fun show(n: (&Int)?): Int {
+    val r = n ?: &0
+    return r
+}
+fun nick(u: &User): Int = show(&u.nick)
+fun main() {
+    println(nick(&User(4)))
+    println(nick(&User(null)))
+}

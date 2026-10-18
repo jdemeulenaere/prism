@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+struct User : Copy { val age: Int }
+fun age(u: User?): Int = u?.age ?: 0
+fun main() {
+    println(age(null))
+    println(age(User(3)))
+}

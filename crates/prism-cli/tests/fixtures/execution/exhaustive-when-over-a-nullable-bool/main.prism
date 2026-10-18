@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun f(b: Bool?): Int = when (b) {
+    true -> 1
+    false -> 2
+    null -> 3
+}
+fun main() {
+    println(f(true))
+    println(f(false))
+    println(f(null))
+}

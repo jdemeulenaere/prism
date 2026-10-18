@@ -668,3 +668,80 @@ fn explaining_a_warm_check() {
         ])
     );
 }
+
+// --- Reachable type definitions (D2 of `codegen-aggregates`)
+
+const GEO_CORE: &str = "package geo\n\
+     public struct Vec : Copy { val x: Int }\n\
+     public fun origin(): Vec = Vec(0)\n";
+const GEO_SHAPES: &str = "package geo\nimport /geo/core\n\
+     public struct Circle : Copy { val center: Vec, val r: Int }\n\
+     public fun unit(): Circle = Circle(origin(), 1)\n";
+const GEO_MAIN: &str = "package app\nimport /geo/shapes\nfun main() { println(unit().r) }\n";
+
+fn geo_workspace(name: &str) -> Workspace {
+    let workspace = Workspace::new(
+        name,
+        &[
+            ("geo/core.prism", GEO_CORE),
+            ("geo/shapes.prism", GEO_SHAPES),
+            ("app/main.prism", GEO_MAIN),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked geo/core.prism",
+            "checked geo/shapes.prism",
+            "checked app/main.prism"
+        ])
+    );
+    workspace
+}
+
+/// The standard output of `prism run app/main.prism`, which must succeed.
+fn run_main(workspace: &Workspace) -> String {
+    let output = workspace.run(&["run", "app/main.prism"]);
+    assert_success(&output);
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+/// compilation-and-abi: "A field added to a transitively reached type". `app/main` imports only
+/// `geo/shapes`, whose ABI records the definition of `geo/core`'s `Vec`, so a field added to
+/// `Vec` changes that ABI too and re-checks `app/main`.
+#[test]
+fn a_field_added_to_a_transitively_reached_type() {
+    let workspace = geo_workspace("reachable_field");
+    assert_eq!(run_main(&workspace), "1\n");
+    workspace.write(
+        "geo/core.prism",
+        "package geo\n\
+         public struct Vec : Copy { val x: Int, val y: Int }\n\
+         public fun origin(): Vec = Vec(0, 0)\n",
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked geo/core.prism",
+            "checked geo/shapes.prism",
+            "checked app/main.prism"
+        ])
+    );
+    assert_eq!(run_main(&workspace), "1\n");
+}
+
+/// compilation-and-abi: "A body change in the defining file".
+#[test]
+fn a_body_change_in_the_defining_file() {
+    let workspace = geo_workspace("reachable_body");
+    workspace.write("geo/core.prism", &GEO_CORE.replace("Vec(0)\n", "Vec(5)\n"));
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked geo/core.prism",
+            "reused geo/shapes.prism",
+            "reused app/main.prism"
+        ])
+    );
+    assert_eq!(run_main(&workspace), "1\n");
+}

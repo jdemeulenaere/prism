@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+struct User : Copy { val age: Int }
+fun User.older(by: Int): Int = age + by
+fun next(): Int {
+    println(9)
+    return 1
+}
+fun main() {
+    val u: User? = null
+    println(u?.older(next()) ?: 0)
+    val v: User? = User(3)
+    println(v?.older(next()) ?: 0)
+}
