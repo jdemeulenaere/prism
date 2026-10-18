@@ -1,10 +1,9 @@
-# Patterns Specification Delta
+# Patterns Specification
 
 ## Purpose
-
 Defines Prism's patterns: what a `when` branch and a destructuring declaration may match and bind, how a pattern is checked against its subject, how its bindings hold the subject's parts (copied, moved or borrowed), and when a `when` covers every value of its subject.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Variant Patterns Mirror Construction
 A `when` branch pattern `Enum.Variant(p1, ..., pn)`, or `Variant(...)` when the bare name resolves as a variant pattern does today, MUST match a subject holding that variant whose payloads match the sub-patterns `p1` to `pn` in declaration order. There MUST be one sub-pattern per payload, and sub-patterns are positional, as payloads are.
@@ -146,7 +145,7 @@ A branch of a `when` with a subject MUST accept a guard, `if condition`, after i
 - **THEN** the parser reports `E2001` for each
 
 ### Requirement: Guards Do Not Move or Mutate Bindings
-Inside a guard, every binding of its branch MUST be read-only and MUST NOT be moved. A move of a by-value binding there MUST be `E4017` naming the binding "in a guard", and an assignment, `&mut` or `mut fun` receiver through any binding MUST be `E4003`, since the guard may fail and later branches still test the subject. A guard MUST NOT assign, move or mutably borrow a subject that its pattern takes apart after it, which the borrow checker reports as for any shared borrow of the subject held from the pattern to the take-apart (`E5003` to `E5005`).
+Inside a guard, every binding of its branch MUST be read-only and MUST NOT be moved. A move of a by-value binding there MUST be `E4017` naming the binding "in a guard", and an assignment, `&mut` or `mut fun` receiver through any binding MUST be `E4003`, since the guard may fail and later branches still test the subject.
 
 #### Scenario: Moving a binding in a guard rejected
 - **WHEN** `enum Msg { Text(String) }` and `fun take(s: String): Bool = true` are declared and `fun f(m: Msg): Int = when (m) { Msg.Text(val s) if take(s) -> 1; else -> 2 }` is checked
@@ -156,13 +155,16 @@ Inside a guard, every binding of its branch MUST be read-only and MUST NOT be mo
 - **WHEN** `enum Box { Of(Int) }` and `fun set(n: &mut Int): Bool = true` are declared and `fun f(b: &mut Box): Int = when (b) { Box.Of(val n) if set(n) -> 1; else -> 2 }` is checked
 - **THEN** the type checker emits `E4003` for `n`, stating that a binding cannot be mutated in a guard
 
-#### Scenario: Mutating a subject the branch takes apart rejected
-- **WHEN** with that `Msg`, `fun clear(m: &mut Msg): Bool = true` and `fun f(m: Msg): String { var v = m; return when (v) { Msg.Text(val s) if clear(&mut v) -> s; else -> "" } }` are checked
-- **THEN** the borrow checker emits `E5003` at `&mut v`, labelling `val s` as where the pattern takes `v` apart after the guard
-
 #### Scenario: Reading a binding in a guard
 - **WHEN** with that `Msg`, `fun short(s: &String): Bool = true` and `fun f(m: Msg): String = when (m) { Msg.Text(val s) if short(s) -> s; Msg.Text(_) -> "long" }` are checked
 - **THEN** the file typechecks: the guard borrows the payload, and the body moves it
+
+### Requirement: Guards Do Not Change a Subject They Take Apart
+A guard MUST NOT assign, move or mutably borrow the subject of a pattern that takes it apart once the guard is true, since the branch would then take apart a value that may no longer hold the matched variant. The borrow checker MUST report it as a conflict with a shared borrow of the subject held from the pattern to the take-apart (`E5003` to `E5005`).
+
+#### Scenario: Mutating a subject the branch takes apart rejected
+- **WHEN** `enum Msg { Text(String) }` and `fun clear(m: &mut Msg): Bool = true` are declared and `fun f(m: Msg): String { var v = m; return when (v) { Msg.Text(val s) if clear(&mut v) -> s; else -> "" } }` is checked
+- **THEN** the borrow checker emits `E5003` at `&mut v`, labelling `val s` as where the pattern takes `v` apart after the guard
 
 ### Requirement: Alternatives Bind the Same Names
 In a branch with several comma-separated patterns, every pattern MUST bind the same names, each with the same type and binding mode in every pattern; otherwise the type checker MUST report `InconsistentAlternativeBindings` (`E4025`) naming the binding.
@@ -279,3 +281,20 @@ A destructuring declaration MUST bind its entries as a pattern does over its val
 #### Scenario: Copy fields do not consume
 - **WHEN** with that `Account`, `fun f(a: Account): Int { val (id) = a; val (name) = a; return id }` is checked
 - **THEN** the file typechecks, since copying `id` leaves `a` whole
+
+## Design Rationale
+Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Patterns mirror construction, and `val` marks a binding** (D1). `Shape.Circle(val r)`, `Point(0, val y)` and `Point(y = val y)` are written as the value is built. A binding needs `val` or `var`, as Java's and C#'s record patterns need `var` and Swift's `case .circle(let r)` needs `let`; a bare identifier keeps Kotlin's meaning, a value compared with `==`, so a pattern never changes meaning when a name comes into scope. Rejected: Rust's rule (a bare identifier binds unless it names a constant), which turns `Box.Of(limit)` into a binding when `limit` is renamed; Kotlin's `is` with smart casts, which has nothing to read unnamed payloads by.
+- **Constructor patterns are told apart from values by speculation** (D2). A dotted name followed by `(` on the same line is parsed as a constructor pattern and kept when `,`, `->`, `if` or a closing `)` follows; otherwise (`g(1) + 1`, `f(x).y`, `f(1) { }`) it is reparsed as an expression. The type checker resolves the name: a variant or a struct is a constructor pattern, a function is the value it spells when every argument is a value, and `E4024` otherwise. Only a local shadows the name; a module-level or imported name does not (fixed at review for imported structs).
+- **`_` is the wildcard in pattern position, and a payload variant named alone matches the variant** (D3). `Shape.Circle` matches any `Circle`, as Swift's `case .circle:` and Kotlin's `is Circle`; before, it was a constructor function compared with an enum, a type error, so no program changed meaning. Rust's `Rect(..)` rest pattern is deferred.
+- **Struct patterns are positional or named, like calls** (D4). A positional list gives every field, since a short one would be ambiguous about what it skipped; a named one may leave fields out. Variant patterns are positional only: payloads have no names. Rust's `Point { x, .. }` braces would collide with a branch body.
+- **Binding modes follow the subject's type** (D5). An owned subject binds by value (copying `Copy` parts, moving the rest), `&E` copies `Copy` parts and borrows the rest, and `&mut E` borrows every part mutably, so `when (this)` borrows in a `fun`, borrows mutably in a `mut fun` and takes the receiver apart in a `consuming fun`. This is Rust's default binding modes plus Prism's copy-out of `Copy` values, minus partial moves. To borrow from an owned local, match on `&m`. Rejected: Swift's rule for noncopyable values (a place subject is borrowed and only `consume x` consumes), which would add the language's only explicit move operator; inferring the mode from later uses of the subject.
+- **Guards are Kotlin 2.1's `pattern if condition ->`** (D9). The guard applies to every alternative of its branch and sees its bindings read-only: moving a binding there is `E4017` and mutating through one `E4003`, because a false guard continues with the next pattern, which must find the subject whole. Copying and borrowing bindings are made before the guard and moving ones after it, the guard reading a moving binding's part in place. A guard may not change a subject its pattern takes apart either: MIR holds a shared borrow of the subject across such a guard (found at review, when `if clear(&mut v)` let the branch take apart a value that no longer held its variant), so the borrow checker reports it. Rejected: Rust's mutable access through bindings in guards, which needs fake borrows of the whole subject.
+- **Alternatives bind the same names, types, modes and mutability** (D10), as Rust's and Swift's or-patterns, so `Circle(val d), Square(val d) -> d` needs no duplicated body; any difference is `E4025`.
+- **Exhaustiveness and usefulness by Maranget's algorithm** (D11), as `rustc_pattern_analysis` and Swift's space engine. Its constructors are an enum's variants, a struct's single constructor, `true`/`false`, and `null`/present for `T?`; a literal of an open type (`Int`, `Double`, `Char`, `String`) never completes its type, and a guarded branch, a range or a non-literal value covers nothing. The witness of a missing value is printed as a pattern in `E4009` (`Shape.Rect(_, _)`, `Outer.Wrap(Inner.B)`, `null`, `_`). An enum without variants still needs `else` in value position. Patterns do not look through `Heap<T>`.
+- **Unreachable branches are not reported** (D12) until a warnings channel exists: an error would reject today's valid `when (b) { true -> 1; false -> 2; else -> 3 }`. Usefulness is computed and unit-tested.
+- **Destructuring declarations name fields** (D13). `val (name, email) = user` binds by field name, `field as local` renames, order is free and fields may be left out. Kotlin's positional `componentN` destructuring was rejected because reordering two fields of one type silently swaps the bindings; a positional-looking entry that is not a field is `E4006` with a `first as a` help. Only structs (or references to them) are destructured; `as` is a keyword only inside the list.
+- **Variant names match through a nullable subject** (D22). Over `c: Color?`, `Red` matches a non-null `Red`, so `null`, `Red` and `Green` cover `Color?`, as constructor patterns of `T` do.
+- **A pattern error does not also report `E4009`** (D23): a pattern that failed to check covers nothing reliably, so the witness would be noise.
+- **A binding at the top binds the whole subject**, `T?` included: a binding of a nullable's non-null value waits for smart casts and `if`-patterns.

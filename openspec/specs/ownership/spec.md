@@ -160,11 +160,11 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 - **THEN** the type checker emits `E4017` for `u?.name`, with help suggesting `u?.name?.clone()`, and accepts `&u?.id`, whose temporary is a copy
 
 ### Requirement: Moves Take Whole Values Only
-A non-`Copy` value in a consuming position MUST be a whole owned local or by-value parameter, or a temporary (a call, constructor, literal or variant). Taking it from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation or a top-level `val` MUST be rejected with `CannotMoveOut` (`E4017`), naming the source. Its help MUST suggest a borrow and, for a `Clone` type, `.clone()`. The error type is never reported.
+A non-`Copy` value in a consuming position MUST be a whole owned local or by-value parameter, or a temporary (a call, constructor, literal or variant). Taking it from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation or a top-level `val` MUST be rejected with `CannotMoveOut` (`E4017`), naming the source. Its help MUST suggest a borrow, `.clone()` for a `Clone` type, and a destructuring declaration for a field of a whole owned local. The error type is never reported.
 
 #### Scenario: Moving a non-Copy field rejected
 - **WHEN** `struct User { val id: Int, val name: String }` is declared and a body of `fun f(u: User)` declares `val n = u.name`
-- **THEN** the type checker emits `E4017` stating that `name` cannot be moved out of `u`, with help suggesting `&u.name` or `u.name.clone()`, while `val i = u.id` in the same body is accepted
+- **THEN** the type checker emits `E4017` stating that `name` cannot be moved out of `u`, with help suggesting `&u.name`, `u.name.clone()` or `val (name) = u`, while `val i = u.id` in the same body is accepted
 
 #### Scenario: Help for a field that cannot be cloned
 - **WHEN** `struct Token { val id: Int }` and `struct Session { val token: Token }` are declared and `fun f(s: Session): Token = s.token` is checked
@@ -376,6 +376,48 @@ A marker's parameters MUST be the type parameters that occur in a field or paylo
 - **WHEN** `struct W<T> : Copy { val h: Heap<T> }` and `struct C<T> : Clone { val h: Heap<T>, val n: T? }` are declared
 - **THEN** the type checker emits `E4016` for `W.h` and accepts `C`
 
+### Requirement: Taking a Value Apart Moves It Whole
+A pattern or destructuring declaration that binds a non-`Copy` part by value MUST move its whole subject. That subject MUST be a whole owned local, a by-value parameter, the `this` of a `consuming fun`, or a call, constructor or literal temporary. A field, a borrow's referent, a top-level `val`, a captured or default-borrowed binding, or a branch, block or `?:` expression MUST be `E4017`, with help suggesting a borrow (`&`).
+
+#### Scenario: Taking a field apart rejected
+- **WHEN** `enum Msg { Text(String), Empty }` and `struct Inbox { val last: Msg }` are declared and `fun f(i: Inbox): String = when (i.last) { Msg.Text(val s) -> s; Msg.Empty -> "" }` is checked
+- **THEN** the type checker emits `E4017` stating that field `last` of `i` cannot be taken apart, with help suggesting `when (&i.last)`
+
+#### Scenario: Taking a top-level value apart rejected
+- **WHEN** with that `Msg`, a file declares `val WELCOME = Msg.Text("hi")` and `fun f(): String = when (WELCOME) { Msg.Text(val s) -> s; Msg.Empty -> "" }`
+- **THEN** the type checker emits `E4017` for the top-level value `WELCOME`
+
+#### Scenario: Taking a branch result apart rejected
+- **WHEN** with that `Msg`, `fun f(c: Bool, a: Msg, b: Msg): String = when (if (c) a else b) { Msg.Text(val s) -> s; Msg.Empty -> "" }` is checked
+- **THEN** the type checker emits `E4017`, with help suggesting binding the value to a `val` first
+
+#### Scenario: Taking apart through a safe navigation rejected
+- **WHEN** `struct User { val name: String, val id: Int }` and `struct Box { val u: User? }` are declared and `fun f(b: Box?): Int = when (b?.u) { null -> 0; User(name = val s) -> 1 }` is checked
+- **THEN** the type checker emits `E4017` for field `u` of `b`, with help suggesting a match on `&b` with a `null` branch, since `&b?.u` would move the field
+
+#### Scenario: Owned locals and temporaries are taken apart
+- **WHEN** with that `Msg`, `fun make(): Msg` is declared and `fun f(m: Msg): String = when (m) { Msg.Text(val s) -> s; Msg.Empty -> "" }` and `fun g(): String = when (make()) { Msg.Text(val s) -> s; Msg.Empty -> "" }` are checked
+- **THEN** both typecheck successfully
+
+#### Scenario: Copy parts and wildcards do not take a value apart
+- **WHEN** `enum Pair { Of(String, Int) }` and `struct Inbox { val last: Pair }` are declared and `fun f(i: Inbox): Int = when (i.last) { Pair.Of(_, val n) -> n }` is checked
+- **THEN** the file typechecks, since `n` is copied and the field is only read
+
+### Requirement: Use After Taking Apart Is Rejected
+A value that a branch or destructuring declaration took apart MUST be moved on that path, so a later use of it MUST be `E5001`, whose "value moved here" label points at the binding that moved a part. When the value was a `when` subject, the help MUST suggest matching on its borrow (`when (&m)`).
+
+#### Scenario: Using a subject after a branch took it apart
+- **WHEN** `enum Msg { Text(String), Empty }` and `fun show(m: &Msg) {}` are declared and `fun f(m: Msg) { when (m) { Msg.Text(val s) -> println(s); Msg.Empty -> {} }; show(m) }` is checked
+- **THEN** the borrow checker emits `E5001` at `m` in `show(m)`, labelling `val s` as where the value moved, with help suggesting `when (&m)`
+
+#### Scenario: A branch that does not take the subject apart leaves it usable
+- **WHEN** with that `Msg` and `show`, `fun f(m: Msg) { when (m) { Msg.Text(_) -> println(1); Msg.Empty -> {} }; show(m) }` is checked
+- **THEN** the file passes the borrow checker
+
+#### Scenario: Using a destructured value
+- **WHEN** `struct User { val name: String, val id: Int }` and `fun show(u: &User) {}` are declared and `fun f(u: User) { val (name) = u; show(u) }` is checked
+- **THEN** the borrow checker emits `E5001` at `u` in `show(u)`, labelling the entry `name` as where the value moved
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -420,3 +462,9 @@ Decisions from `borrowck-exclusivity`:
 Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Markers of generic types are conditional on the type parameters their fields use.** For `struct Pair<A, B> : Copy`, the marker parameters are the type parameters that occur syntactically in a field or payload type, read from the AST alone so Phase 1 can record them. `Pair<X, Y>` is `Copy` when every marker parameter's argument is, and the declaration check treats each marker parameter as satisfying the marker, so `struct Box<T> : Copy { val v: T }` is accepted and a phantom `struct Handle<T> : Copy { val id: Int }` is `Copy` for every `T`, which `State<T>` needs. Rejected: unconditional markers requiring bounds (no `Box<String>` could exist), Rust's derive rule conditioning on every parameter (a phantom handle would not be `Copy`), and a semantic condition from the field types' own markers, which needs imported marker parameters in Phase 1a; the syntactic rule only ever errs towards "not `Copy`".
+
+Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Taking a value apart moves it whole** (D6). A branch or destructuring declaration that binds a non-`Copy` part by value moves its whole subject on that path, so the borrow checker sees one whole-value move plus one initialization per part, and nothing is ever partly moved or partly dropped. The source must be one a move already accepts (a whole owned local, a by-value parameter, a consuming `this`, a temporary); a field, a borrow's referent, a top-level `val`, a capture or a branch, block or `?:` expression is `E4017`, with help suggesting the borrow to match on (for a safe navigation, the borrow of what `?.` reads). A branch expression is rejected rather than consumed because the subject is checked before its patterns decide whether it moves.
+- **Partial moves stay out of the language** (D7), closing the "possible relaxation" left by `value-semantics`. Every use it had is covered by taking the value apart: `val (name, email) = user` instead of moving `user.name` then reading `user.email`, `val (name) = this` in a `consuming fun`, a `when` that moves a payload. Partial moves would make drop elaboration track fields (field-level drop flags, partial drops of the remainder) and make every later use ask which fields are left. `E4017`'s help for a field of a whole owned local suggests the destructuring. Revisit only if real programs show patterns destructuring cannot express.
+- **A use after taking apart is labelled at the binding** (D16, D24). `E5001` points at the binding that moved a part, and when the moved value was destructured its help suggests matching on its borrow (`when (&m)` or `val (...) = &m`).

@@ -159,15 +159,15 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 
 #### Scenario: Non-exhaustive when expression rejected
 - **WHEN** a `when` expression is used in value position and fails to cover all possible enum variants or omit an `else` branch
-- **THEN** the type checker rejects the expression with a non-exhaustive pattern match error (`E4009`)
+- **THEN** the type checker rejects the expression with a non-exhaustive pattern match error (`E4009`) naming a value no branch covers (see the [`patterns`](../patterns/spec.md) spec, "Uncovered Values Are Named")
 
 #### Scenario: Boolean subject covered by true and false
 - **WHEN** a `when` over a `Bool` subject (or a `&Bool`) in value position has a branch for the literal `true` and one for `false`, or a `Bool?` subject has branches for `true`, `false` and `null`, each alone or among several patterns of a branch
 - **THEN** it is exhaustive without an `else` branch, as a `when` over an enum naming every variant is, and the typed tree records it as exhaustive; with only one of the literals, or without `null` over a `Bool?`, it still needs `else` (`E4009`)
 
 #### Scenario: Only a variant name covers that variant
-- **WHEN** a `when` over an enum has a pattern naming a payload-free variant (`Color.Red`, or bare `Red` when no local binding shadows it)
-- **THEN** the pattern covers that variant, while a pattern that only evaluates to a variant value, such as `Shape.Circle(1)` or a field `h.Green`, covers nothing, so a variant with a payload is covered only by `else`
+- **WHEN** a `when` over an enum has a pattern naming a payload-free variant (`Color.Red`, or bare `Red` when no local binding shadows it), a payload variant alone (`Shape.Circle`), or a constructor pattern whose sub-patterns cover every payload (`Shape.Circle(val r)`, `Shape.Circle(_)`)
+- **THEN** the pattern covers that variant, while a constructor pattern with a refutable sub-pattern, such as `Shape.Circle(1)`, covers only the values it matches, and a value that only evaluates to a variant, such as a field `h.Green`, covers nothing
 
 #### Scenario: When statement needs no else branch
 - **WHEN** a `when` is used as a statement, either before the last statement of a block or as the last statement of a block whose expected type is `Unit`
