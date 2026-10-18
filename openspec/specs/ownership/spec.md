@@ -159,6 +159,10 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 - **WHEN** `struct User { val name: String, val nick: String? }` is declared and a body of `fun f(c: Bool, u: User)` uses `(if (c) u.name else "x") == "a"` or `"a" + (u.nick ?: "x")` as an operand, `(u.nick ?: "x").length`, `when (u.nick ?: "x") { ... }` or `s += (if (c) u.name else "x")`
 - **THEN** the type checker emits `E4017` for `u.name` and `u.nick`, because each operand is a temporary made by moving them, while the same expressions over owned locals run
 
+#### Scenario: A field of a branch result is read from a temporary
+- **WHEN** `struct User { val name: String }` is declared and `fun main() { val c = 1 > 0; val a = User("a".clone()); val b = User("b".clone()); println((if (c) a else b).name.clone()); val o: User? = null; println((o ?: User("x".clone())).name.length) }` runs with `--check-allocations`
+- **THEN** it prints `a` and then `1`, reports no live allocation and exits with status 0: the branch and the `?:` are temporaries made by moving their operands, and the field is read from them
+
 #### Scenario: Borrowing a safe navigation
 - **WHEN** `struct User { val name: String, val id: Int }` is declared and a body of `fun f(u: User?)` runs `val r = &u?.name` and `val i = &u?.id`
 - **THEN** the type checker emits `E4017` for `u?.name`, with help suggesting `u?.name?.clone()`, and accepts `&u?.id`, whose temporary is a copy

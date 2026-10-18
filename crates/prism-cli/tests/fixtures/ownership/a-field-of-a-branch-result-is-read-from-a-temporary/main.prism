@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct User { val name: String }
+
+fun main() {
+    val c = 1 > 0
+    val a = User("a".clone())
+    val b = User("b".clone())
+    println((if (c) a else b).name.clone())
+    val o: User? = null
+    println((o ?: User("x".clone())).name.length)
+}

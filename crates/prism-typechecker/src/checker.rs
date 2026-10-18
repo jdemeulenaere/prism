@@ -7690,7 +7690,9 @@ impl TypeChecker {
                 };
                 (node, writable)
             }
-            _ => (self.infer_expr(expr), true),
+            // Any other root is a temporary, so what its branches and `?:` operands give is
+            // consumed (the `ownership` spec, "Consuming Positions").
+            _ => (self.infer_read(expr), true),
         }
     }
 }
