@@ -64,7 +64,7 @@ impl Program {
                 let top = 0u8;
                 let top = std::hint::black_box(std::ptr::addr_of!(top)) as usize;
                 prism_runtime::set_stack_limit(top, PROGRAM_STACK_SIZE);
-                prism_runtime::start(arguments);
+                prism_runtime::start(arguments, false);
                 // SAFETY: `address` is the compiled `main`, whose signature `find_main` checked:
                 // no parameters, no result, the host's C calling convention.
                 let main: extern "C" fn() = unsafe { std::mem::transmute(address) };

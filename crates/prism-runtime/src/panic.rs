@@ -27,17 +27,25 @@ pub enum PanicKind {
     UnlinkedFunction = 4,
     /// A call entered a function with the stack pointer below the stack limit.
     StackOverflow = 5,
+    /// An allocation the system cannot satisfy, or a size no allocation can have. Reported
+    /// without a location, since it can happen deep in the runtime (D17 of
+    /// `runtime-strings-and-drops`).
+    OutOfMemory = 6,
+    /// `s[i]` outside `0..<s.length`; the detail is `<i> out of range for length <n>`.
+    StringIndexOutOfRange = 7,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 6] = [
+    pub const ALL: [PanicKind; 8] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
         PanicKind::Unreachable,
         PanicKind::UnlinkedFunction,
         PanicKind::StackOverflow,
+        PanicKind::OutOfMemory,
+        PanicKind::StringIndexOutOfRange,
     ];
 
     /// The kind with code `code`.
@@ -62,6 +70,8 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
             "internal error: called a function that is not linked".to_string()
         }
         PanicKind::StackOverflow => "stack overflow".to_string(),
+        PanicKind::OutOfMemory => "out of memory".to_string(),
+        PanicKind::StringIndexOutOfRange => format!("string index {}", detail),
     }
 }
 
@@ -100,10 +110,20 @@ pub unsafe extern "C" fn prism_rt_panic(
         Some(kind) => panic_message(kind, &detail),
         None => format!("internal error: unknown runtime error {}", kind),
     };
+    report_at(&message, &file, line, column)
+}
+
+fn report_at(message: &str, file: &str, line: u32, column: u32) -> ! {
     report(&format!(
         "panic: {}\n  at {}:{}:{}\n",
         message, file, line, column
     ))
+}
+
+/// Reports the runtime error `kind` with `detail` without a location line and ends the process:
+/// "out of memory", which can happen inside the runtime, far from any expression.
+pub fn panic_without_location(kind: PanicKind, detail: &str) -> ! {
+    report(&format!("panic: {}\n", panic_message(kind, detail)))
 }
 
 /// What a slot of the function table holds until a function fills it. In a program that
@@ -160,6 +180,12 @@ mod tests {
                 "internal error: called a function that is not linked",
             ),
             (PanicKind::StackOverflow, "", "stack overflow"),
+            (PanicKind::OutOfMemory, "", "out of memory"),
+            (
+                PanicKind::StringIndexOutOfRange,
+                "3 out of range for length 3",
+                "string index 3 out of range for length 3",
+            ),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());
         for (kind, detail, message) in cases {

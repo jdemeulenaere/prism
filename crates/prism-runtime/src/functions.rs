@@ -2,6 +2,7 @@
 //! symbol, address and signature, from which the code generator declares its imports and the JIT
 //! resolves them.
 
+use crate::allocation::{prism_rt_allocate, prism_rt_free, prism_rt_register_top_level_value};
 use crate::output::{
     prism_rt_print_bool, prism_rt_print_char, prism_rt_print_double, prism_rt_print_int,
     prism_rt_print_newline,
@@ -106,6 +107,27 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: true,
     },
     RuntimeFunction {
+        name: "prism_rt_allocate",
+        address: RuntimeAddress(prism_rt_allocate as *const u8),
+        parameters: &[Pointer, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_free",
+        address: RuntimeAddress(prism_rt_free as *const u8),
+        parameters: &[Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_register_top_level_value",
+        address: RuntimeAddress(prism_rt_register_top_level_value as *const u8),
+        parameters: &[Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_rt_unlinked_function",
         address: RuntimeAddress(prism_rt_unlinked_function as *const u8),
         parameters: &[],
@@ -133,6 +155,7 @@ mod tests {
             include_str!("output.rs"),
             include_str!("panic.rs"),
             include_str!("double.rs"),
+            include_str!("allocation.rs"),
         ];
         let mut names = HashSet::new();
         for source in sources {

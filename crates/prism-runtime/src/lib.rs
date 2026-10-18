@@ -6,8 +6,12 @@
 //! each import with the signature the entry records. The runtime is never reloaded, so these
 //! calls do not go through the function table.
 //!
-//! A run is bracketed by [`start`], which records the program's arguments and whether stdout is
-//! a terminal, and [`finish`], which flushes the program's output. A runtime error
+//! A run is bracketed by [`start`], which records the program's arguments, whether stdout is a
+//! terminal and whether allocations are checked, and [`finish`], which flushes the program's
+//! output and reports the allocations still live under the check. Every allocation goes through
+//! [`prism_rt_allocate`] and [`prism_rt_free`]; strings are [`PrismString`] values built and
+//! freed by the runtime's string functions (D2 to D8 of `runtime-strings-and-drops`). A runtime
+//! error
 //! ([`prism_rt_panic`]) flushes the output, reports the error and ends the process with status
 //! [`PANIC_EXIT_STATUS`], without unwinding (D12).
 //!
@@ -17,12 +21,18 @@
 //! This crate depends on nothing, so Tier 2 can link it into native executables without
 //! Cranelift (D1).
 
+mod allocation;
 mod double;
 mod functions;
 mod output;
 mod panic;
 mod stack;
 
+pub use allocation::{
+    allocation_layout, allocation_statistics, prism_rt_allocate, prism_rt_free,
+    prism_rt_register_top_level_value, test_lock, AllocationMap, AllocationStatistics,
+    DropFunction, InvalidFree, ALLOCATION_CHECK_EXIT_STATUS, INVALID_FREE_MESSAGE,
+};
 pub use double::format_double;
 pub use functions::{
     runtime_function, RuntimeAddress, RuntimeFunction, RuntimeType, RUNTIME_FUNCTIONS,
@@ -32,8 +42,8 @@ pub use output::{
     prism_rt_print_double, prism_rt_print_int, prism_rt_print_newline, start, OUTPUT_BUFFER_SIZE,
 };
 pub use panic::{
-    panic_message, prism_rt_double_remainder, prism_rt_panic, prism_rt_unlinked_function,
-    PanicKind, PANIC_EXIT_STATUS,
+    panic_message, panic_without_location, prism_rt_double_remainder, prism_rt_panic,
+    prism_rt_unlinked_function, PanicKind, PANIC_EXIT_STATUS,
 };
 pub use stack::{
     clear_stack_limit, set_stack_limit, STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,

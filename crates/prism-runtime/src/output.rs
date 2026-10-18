@@ -5,6 +5,7 @@
 //! and after each newline when stdout is a terminal, so an interactive program shows each line as
 //! it is written while output to a pipe or file costs one write per buffer.
 
+use crate::allocation::{finish_tracking, start_tracking, ALLOCATION_CHECK_EXIT_STATUS};
 use crate::double::format_double;
 use std::io::{IsTerminal, Write};
 use std::sync::Mutex;
@@ -37,21 +38,33 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
     f(&mut state)
 }
 
-/// Starts a run of a program with `arguments`: clears the output buffer and records whether
-/// stdout is a terminal.
-pub fn start(arguments: Vec<String>) {
+/// Starts a run of a program with `arguments`: clears the output buffer, records whether
+/// stdout is a terminal, and turns the allocation check on or off (`prism run
+/// --check-allocations`, D13 of `runtime-strings-and-drops`).
+pub fn start(arguments: Vec<String>, check_allocations: bool) {
     with_state(|state| {
         state.output.clear();
         state.output.reserve(OUTPUT_BUFFER_SIZE);
         state.line_buffered = std::io::stdout().is_terminal();
         state.arguments = arguments;
     });
+    start_tracking(check_allocations);
 }
 
-/// Ends a run whose `main` returned: flushes the output and gives the exit status, `0`.
+/// Ends a run whose `main` returned: flushes the output and gives the exit status, `0`, or,
+/// when the allocation check finds allocations still live once the top-level values are
+/// released, reports them on stderr and gives [`ALLOCATION_CHECK_EXIT_STATUS`].
 pub fn finish() -> i32 {
     flush();
-    0
+    match finish_tracking() {
+        None => 0,
+        Some(report) => {
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "{}", report);
+            let _ = stderr.flush();
+            ALLOCATION_CHECK_EXIT_STATUS
+        }
+    }
 }
 
 /// Writes the buffered output to stdout.
@@ -72,7 +85,7 @@ fn write_out(state: &mut State) {
 }
 
 /// Appends `text` to the output, writing it out as D16 says.
-fn append(text: &[u8]) {
+pub(crate) fn append(text: &[u8]) {
     with_state(|state| {
         state.output.extend_from_slice(text);
         let at_newline = state.line_buffered && text.contains(&b'\n');

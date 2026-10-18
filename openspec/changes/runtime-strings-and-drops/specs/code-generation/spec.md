@@ -35,7 +35,11 @@ Every allocation and every free of a running program MUST go through the runtime
 - **THEN** the body of `join` builds its result with a call of a runtime function and calls neither `malloc` nor `free`
 
 ### Requirement: Drops Run Drop Glue
-Each drop that the elaborated MIR keeps, guarded by a drop flag or not, MUST run the drop glue of the dropped place's type on that place. A type that owns no storage MUST have no drop glue.
+Each drop that the elaborated MIR keeps, guarded by a drop flag or not, MUST run the drop glue of the dropped place's type on that place. A type that owns no storage (no `String`, `Heap<T>` or function value in it, through any field, payload or nullable) MUST have no drop glue: its drops MUST run no code.
+
+#### Scenario: A non-Copy struct is moved and dropped
+- **WHEN** `struct Counter { var n: Int }`, `fun take(c: Counter): Int = c.n` and `fun flag(): Bool = false` are declared and `fun main() { val c = Counter(4); if (flag()) println(take(c)); println(1) }` runs
+- **THEN** the program prints `1` and exits with status 0
 
 #### Scenario: Dropping a struct frees its strings
 - **WHEN** `struct User { val name: String, val nick: String?, val age: Int }` is declared and `fun main() { val u = User("A" + "da", "a".clone() + "da", 36); println(u.age) }` runs with `--check-allocations`
@@ -94,17 +98,6 @@ A parameter whose type is a `String`, a struct, an enum or a nullable laid out w
 - **WHEN** `fun greet(name: String, n: Int): String = name` is declared and `prism dump-clif main.prism` runs
 - **THEN** `greet` takes three machine values, the result's address, the address of `name` and the 64-bit `n`, and returns nothing
 
-### Requirement: Drops of Values That Own Nothing Do Nothing
-A value whose type owns no storage (no `String`, `Heap<T>` or function value in it, through any field, payload or nullable) MUST be dropped without running any code. A struct or enum holding a `Heap<T>` or a function value MUST be rejected with `E6001` naming what it holds, until `heap-boxes` and `closures` support them.
-
-#### Scenario: A non-Copy struct is moved and dropped
-- **WHEN** `struct Counter { var n: Int }`, `fun take(c: Counter): Int = c.n` and `fun flag(): Bool = false` are declared and `fun main() { val c = Counter(4); if (flag()) println(take(c)); println(1) }` runs
-- **THEN** the program prints `1` and exits with status 0
-
-#### Scenario: A struct holding a heap value
-- **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming `'Heap' values`, and exits with status 1
-
 ### Requirement: Layout Dump
 `prism dump-layout <file.prism>` MUST print, as deterministic text, the layout of each struct and enum the file declares, in declaration order, then of every other struct, enum and nullable type that a compiled body of the file holds, by rendered name: size, alignment, and the offset of every field, tag and payload. A type without a layout yet MUST be listed with the construct it waits for. With type or borrow errors it MUST report them, print nothing and exit with a failure status.
 
@@ -121,7 +114,11 @@ A value whose type owns no storage (no `String`, `Heap<T>` or function value in 
 - **THEN** it reports `E4001`, prints no layout, and exits with a failure status
 
 ### Requirement: Unsupported Constructs Are Rejected Before Code Generation
-Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
+Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. A struct, enum or nullable holding a `Heap<T>` or a function value MUST be rejected naming what it holds, until `heap-boxes` and `closures` support them. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
+
+#### Scenario: A struct holding a heap value
+- **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(1) }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming `'Heap' values`, and exits with status 1
 
 #### Scenario: A struct is rejected
 - **WHEN** `struct P { val next: Heap<Int>? }` and `fun main() { val p = P(null); println(1) }` are declared
@@ -149,3 +146,9 @@ Before generating any code, the backend MUST check every body it compiles and re
 #### Scenario: Dumping a file the backend rejects
 - **WHEN** `prism dump-clif main.prism` runs on a file holding `fun f(h: Heap<Int>): Int = 1`
 - **THEN** it reports `E6001`, prints no IR, and exits with a failure status
+
+## REMOVED Requirements
+
+### Requirement: Drops of Values That Own Nothing Do Nothing
+**Reason**: Drops of values that own storage now run drop glue, so the rule for values that own nothing is one clause of "Drops Run Drop Glue", which also takes its scenario "A non-Copy struct is moved and dropped"; the rejection of aggregates holding a `Heap<T>` or a function value moves to "Unsupported Constructs Are Rejected Before Code Generation", with the scenario "A struct holding a heap value". Its scenario "A struct holding a string" pinned strings as unsupported; the name now belongs to the layout scenario of "Strings Are a Pointer, Two Lengths and a Capacity".
+**Migration**: None: no program changes meaning beyond strings running.
