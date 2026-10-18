@@ -2,7 +2,10 @@
 //! that `abi_tests.rs` does not already pin down. Hash scenarios live here, not in the
 //! data-driven fixtures of `prism-cli`, because they compare two extractions.
 
-use prism_abi::{declared_types, no_imports, AbiError, AbiType, ExportedSymbol, FileAbi};
+use prism_abi::{
+    declared_types, no_imports, AbiError, AbiType, AbiTypeParameter, ExportedSymbol, FileAbi,
+    NominalKind,
+};
 use prism_ast::{ReceiverMode, TypeMarker, Visibility};
 use prism_parser::parse_source;
 
@@ -387,7 +390,7 @@ fn extract_importing(models: &str, api: &str) -> FileAbi {
     let bind = |name: &str| {
         exported
             .get(name)
-            .map(|header| (*header, "shop/models".to_string()))
+            .map(|header| (header.clone(), "shop/models".to_string()))
     };
     FileAbi::extract(
         &parse_source(api).expect("api must parse"),
@@ -522,7 +525,7 @@ fn extract_ui(ui: &str) -> FileAbi {
     let bind = |name: &str| {
         exported
             .get(name)
-            .map(|header| (*header, "models/user".to_string()))
+            .map(|header| (header.clone(), "models/user".to_string()))
     };
     FileAbi::extract(&parse_source(ui).expect("ui must parse"), "ui/ui", &bind)
         .expect("ABI must extract")
@@ -666,4 +669,215 @@ fn extension_body_or_private_extension_edits() {
         &format!("{}fun User.secret(x: Int): String = \"x\"\n", USER),
         "modifying a private extension",
     );
+}
+
+// --- Generic Signatures in the ABI
+
+#[test]
+fn type_parameters_recorded_by_position() {
+    let abi = FileAbi::extract(
+        &parse_source(
+            "public struct T { val n: Int }\npublic struct Box<T>(val v: T)\npublic fun <A, B : Copy> pair(a: A, b: B): Box<A> = Box(a)\n",
+        )
+        .expect("source must parse"),
+        "lib/box",
+        &no_imports,
+    )
+    .expect("ABI must extract");
+    let parameter = |index: u32, name: &str| AbiType::Parameter {
+        index,
+        name: name.to_string(),
+    };
+    let boxed = abi
+        .symbols
+        .iter()
+        .find(|s| matches!(s, ExportedSymbol::Struct { name, .. } if name == "Box"))
+        .expect("Box is exported");
+    let ExportedSymbol::Struct {
+        type_parameters,
+        fields,
+        marker_parameters,
+        ..
+    } = boxed
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        type_parameters,
+        &vec![AbiTypeParameter {
+            name: "T".to_string(),
+            bound: None
+        }]
+    );
+    assert_eq!(fields[0].2, parameter(0, "T"));
+    assert_eq!(marker_parameters, &vec![0]);
+    let Some(ExportedSymbol::Function {
+        type_parameters,
+        params,
+        return_type,
+        ..
+    }) = abi
+        .symbols
+        .iter()
+        .find(|s| matches!(s, ExportedSymbol::Function { name, .. } if name == "pair"))
+    else {
+        panic!("pair is exported");
+    };
+    assert_eq!(
+        type_parameters,
+        &vec![
+            AbiTypeParameter {
+                name: "A".to_string(),
+                bound: None
+            },
+            AbiTypeParameter {
+                name: "B".to_string(),
+                bound: Some(TypeMarker::Copy)
+            },
+        ]
+    );
+    assert_eq!(params[0].1, parameter(0, "A"));
+    assert_eq!(params[1].1, parameter(1, "B"));
+    assert_eq!(
+        return_type,
+        &AbiType::Nominal {
+            kind: NominalKind::Struct,
+            marker: None,
+            marker_parameters: vec![0],
+            module: "lib/box".to_string(),
+            name: "Box".to_string(),
+            args: vec![parameter(0, "A")],
+        }
+    );
+}
+
+#[test]
+fn changing_a_bound_changes_the_abi_hash() {
+    assert_hash_differs(
+        "public fun <T> keep(x: T): Int = 1\n",
+        "public fun <T : Copy> keep(x: T): Int = 1\n",
+        "bounding a type parameter",
+    );
+    assert_hash_differs(
+        "public struct Box<T>(val v: T)\n",
+        "public struct Box<T, U>(val v: T)\n",
+        "adding a type parameter to a struct",
+    );
+}
+
+#[test]
+fn renaming_a_type_parameter_of_a_struct() {
+    assert_hash_equal(
+        "public struct Box<T>(val v: T)\n",
+        "public struct Box<U>(val v: U)\n",
+        "renaming a type parameter",
+    );
+}
+
+/// The return type of exported function `name` in `abi`.
+fn return_type_of<'a>(abi: &'a FileAbi, function: &str) -> &'a AbiType {
+    abi.symbols
+        .iter()
+        .find_map(|s| match s {
+            ExportedSymbol::Function {
+                name, return_type, ..
+            } if name == function => Some(return_type),
+            _ => None,
+        })
+        .expect("function must be exported")
+}
+
+#[test]
+fn marker_parameters_recorded() {
+    let state = "public struct Handle<T> : Copy { val id: Int }\npublic struct Box<T> : Copy { val v: T }\n";
+    let state_abi = extract(state);
+    let markers: Vec<(&str, &Vec<u32>)> = state_abi
+        .symbols
+        .iter()
+        .filter_map(|s| match s {
+            ExportedSymbol::Struct {
+                name,
+                marker_parameters,
+                ..
+            } => Some((name.as_str(), marker_parameters)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers, vec![("Box", &vec![0]), ("Handle", &vec![])]);
+
+    let parsed = parse_source(state).expect("state must parse");
+    let exported = declared_types(&parsed, true);
+    let bind = |name: &str| {
+        exported
+            .get(name)
+            .map(|header| (header.clone(), "lib/state".to_string()))
+    };
+    let api = FileAbi::extract(
+        &parse_source(
+            "import /lib/state\npublic fun handle(): Handle<String> = handle()\npublic fun box(): Box<String> = box()\n",
+        )
+        .expect("api must parse"),
+        "app/api",
+        &bind,
+    )
+    .expect("ABI must extract");
+    let marker_parameters_of = |ty: &AbiType| match ty {
+        AbiType::Nominal {
+            marker_parameters, ..
+        } => marker_parameters.clone(),
+        other => panic!("expected a nominal type, got {:?}", other),
+    };
+    assert_eq!(
+        marker_parameters_of(return_type_of(&api, "handle")),
+        Vec::<u32>::new()
+    );
+    assert_eq!(marker_parameters_of(return_type_of(&api, "box")), vec![0]);
+
+    // The marker parameters are covered by the hash.
+    assert_hash_differs(
+        "public struct Box<T> : Copy { val v: T }\n",
+        "public struct Box<T> : Copy { val v: Int }\n",
+        "changing which type parameters condition a marker",
+    );
+}
+
+// --- Monomorphization Hash for generic extensions
+
+const BOX: &str = "public struct Box<T>(val v: T)\n";
+
+/// The Monomorphization Hash of the only exported function of `abi`.
+fn generic_body_hash_of(abi: &FileAbi) -> Option<u128> {
+    abi.symbols
+        .iter()
+        .find_map(|s| match s {
+            ExportedSymbol::Function {
+                generic_body_hash, ..
+            } => Some(*generic_body_hash),
+            _ => None,
+        })
+        .expect("a function is exported")
+}
+
+#[test]
+fn changing_a_generic_extension_body() {
+    let before = extract(&format!("{}public fun <T> Box<T>.get(): &T = &v\n", BOX));
+    let after = extract(&format!(
+        "{}public fun <T> Box<T>.get(): &T {{\n    val r = &v\n    return r\n}}\n",
+        BOX
+    ));
+    let (b, a) = (generic_body_hash_of(&before), generic_body_hash_of(&after));
+    assert!(
+        b.is_some() && a.is_some(),
+        "generic extensions record a hash"
+    );
+    assert_ne!(b, a);
+    assert_ne!(before.abi_hash, after.abi_hash);
+}
+
+#[test]
+fn changing_a_non_generic_extension_of_a_generic_type() {
+    let before = extract(&format!("{}public fun Box<Int>.sum(): Int = v\n", BOX));
+    let after = extract(&format!("{}public fun Box<Int>.sum(): Int = v + 1\n", BOX));
+    assert_eq!(generic_body_hash_of(&before), None);
+    assert_eq!(before.abi_hash, after.abi_hash);
 }

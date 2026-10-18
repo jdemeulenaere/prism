@@ -294,6 +294,7 @@ mod tests {
             AbiType::Nominal {
                 kind: NominalKind::Struct,
                 marker: None,
+                marker_parameters: Vec::new(),
                 module: "a/lib".to_string(),
                 name: "User".to_string(),
                 args: Vec::new(),
@@ -344,5 +345,6 @@ mod tests {
     const STRUCT: NominalHeader = NominalHeader {
         kind: NominalKind::Struct,
         marker: None,
+        marker_parameters: Vec::new(),
     };
 }

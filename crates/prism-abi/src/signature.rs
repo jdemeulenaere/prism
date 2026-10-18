@@ -1,6 +1,9 @@
 //! Surface ABI signature extraction and hashing engine.
 
-use crate::abi_type::{hash_marker, AbiType, NameBinder, NominalHeader, NominalKind};
+use crate::abi_type::{
+    hash_marker, hash_marker_parameters, hash_type_parameters, AbiType, AbiTypeParameter,
+    NameBinder, NominalHeader, NominalKind,
+};
 use crate::error::AbiError;
 use crate::hasher::DeterministicHasher;
 use prism_ast::*;
@@ -23,7 +26,7 @@ pub enum ExportedSymbol {
         /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
         receiver: Option<AbiReceiver>,
         name: String,
-        type_params: Vec<String>,
+        type_parameters: Vec<AbiTypeParameter>,
         params: Vec<(String, AbiType, Option<String>)>, // (name, type, default_value_expr)
         return_type: AbiType,
         generic_body_hash: Option<u128>,
@@ -31,15 +34,19 @@ pub enum ExportedSymbol {
     Struct {
         visibility: Visibility,
         name: String,
-        type_params: Vec<String>,
+        type_parameters: Vec<AbiTypeParameter>,
         marker: Option<TypeMarker>,
+        /// The type parameters occurring in field types, which condition the marker.
+        marker_parameters: Vec<u32>,
         fields: Vec<(String, bool, AbiType)>, // (name, is_var, type)
     },
     Enum {
         visibility: Visibility,
         name: String,
-        type_params: Vec<String>,
+        type_parameters: Vec<AbiTypeParameter>,
         marker: Option<TypeMarker>,
+        /// The type parameters occurring in payload types, which condition the marker.
+        marker_parameters: Vec<u32>,
         variants: Vec<(String, Vec<AbiType>)>, // (name, payload types)
     },
     /// An exported top-level `val` (top-level declarations are always immutable).
@@ -86,6 +93,68 @@ fn qualified_type_text(ty: &AbiType) -> String {
     }
 }
 
+/// The marker parameters of a struct or enum with `type_parameters` and field or payload types
+/// `member_types`: the indices, in order, of the type parameters that occur syntactically in a
+/// member type (D6 of `generics`). Read from the AST alone, so Phase 1a and the type checker
+/// compute the same answer.
+pub fn marker_parameters(type_parameters: &[TypeParameter], member_types: &[&Type]) -> Vec<u32> {
+    fn mentions(ty: &Type, name: &str) -> bool {
+        match &ty.kind {
+            TypeKind::Named {
+                name: written,
+                type_args,
+            } => {
+                (written == name && type_args.is_empty())
+                    || type_args.iter().any(|arg| mentions(arg, name))
+            }
+            TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => mentions(inner, name),
+            TypeKind::Unit => false,
+            TypeKind::Function {
+                params,
+                return_type,
+                ..
+            } => params.iter().any(|p| mentions(p, name)) || mentions(return_type, name),
+        }
+    }
+    type_parameters
+        .iter()
+        .enumerate()
+        .filter(|(_, parameter)| member_types.iter().any(|ty| mentions(ty, &parameter.name)))
+        .map(|(index, _)| index as u32)
+        .collect()
+}
+
+/// The header of struct `s`, read from its declaration alone.
+fn struct_header(s: &StructDecl) -> NominalHeader {
+    let members: Vec<&Type> = s.fields.iter().map(|field| &field.ty).collect();
+    NominalHeader {
+        kind: NominalKind::Struct,
+        marker: s.marker,
+        marker_parameters: marker_parameters(&s.type_parameters, &members),
+    }
+}
+
+/// The header of enum `e`, read from its declaration alone.
+fn enum_header(e: &EnumDecl) -> NominalHeader {
+    let members: Vec<&Type> = e.variants.iter().flat_map(|v| &v.fields).collect();
+    NominalHeader {
+        kind: NominalKind::Enum,
+        marker: e.marker,
+        marker_parameters: marker_parameters(&e.type_parameters, &members),
+    }
+}
+
+/// The type parameters of a declaration as the ABI records them.
+fn abi_type_parameters(parameters: &[TypeParameter]) -> Vec<AbiTypeParameter> {
+    parameters
+        .iter()
+        .map(|p| AbiTypeParameter {
+            name: p.name.clone(),
+            bound: p.bound,
+        })
+        .collect()
+}
+
 /// The structs and enums a file declares, with their headers, read from its AST alone (Phase 1a).
 /// With `exported_only`, private declarations are left out: those are what importers can bind.
 pub fn declared_types(file: &SourceFile, exported_only: bool) -> HashMap<&str, NominalHeader> {
@@ -93,20 +162,8 @@ pub fn declared_types(file: &SourceFile, exported_only: bool) -> HashMap<&str, N
         .iter()
         .filter(|decl| !exported_only || decl.visibility() != Visibility::Private)
         .filter_map(|decl| match decl {
-            Declaration::Struct(s) => Some((
-                s.name.as_str(),
-                NominalHeader {
-                    kind: NominalKind::Struct,
-                    marker: s.marker,
-                },
-            )),
-            Declaration::Enum(e) => Some((
-                e.name.as_str(),
-                NominalHeader {
-                    kind: NominalKind::Enum,
-                    marker: e.marker,
-                },
-            )),
+            Declaration::Struct(s) => Some((s.name.as_str(), struct_header(s))),
+            Declaration::Enum(e) => Some((e.name.as_str(), enum_header(e))),
             _ => None,
         })
         .collect()
@@ -144,10 +201,9 @@ impl FileAbi {
 
         let own_types = declared_types(file, false);
         let bind = |name: &str| match own_types.get(name) {
-            Some(header) => Some((*header, module.to_string())),
+            Some(header) => Some((header.clone(), module.to_string())),
             None => bind_import(name),
         };
-        let lower = |ty: &Type| AbiType::from_ast(ty, &bind);
 
         for decl in &file.declarations {
             // Default visibility is `private`. Private declarations are EXCLUDED from the ABI.
@@ -155,6 +211,18 @@ impl FileAbi {
             if vis == Visibility::Private {
                 continue;
             }
+
+            // Each declaration's types are lowered with its own type parameters in scope.
+            let parameter_names: Vec<&str> = match decl {
+                Declaration::Function(f) => &f.type_parameters[..],
+                Declaration::Struct(s) => &s.type_parameters[..],
+                Declaration::Enum(e) => &e.type_parameters[..],
+                Declaration::Var(_) => &[],
+            }
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+            let lower = |ty: &Type| AbiType::from_ast(ty, &parameter_names, &bind);
 
             match decl {
                 Declaration::Function(f) => {
@@ -187,7 +255,7 @@ impl FileAbi {
                         })
                         .collect();
 
-                    // For generic functions, compute monomorphization hash of the body (`compilation-and-abi` spec)
+                    // For generic functions and extensions, compute monomorphization hash of the body (`compilation-and-abi` spec)
                     // Hashing MUST be span-free to prevent comments/whitespace from altering ABI (hermetic builds invariant)
                     let generic_body_hash = if !f.type_parameters.is_empty() {
                         let mut h = DeterministicHasher::new();
@@ -209,7 +277,7 @@ impl FileAbi {
                         is_compose: f.is_compose,
                         receiver,
                         name: f.name.clone(),
-                        type_params: f.type_parameters.iter().map(|p| p.name.clone()).collect(),
+                        type_parameters: abi_type_parameters(&f.type_parameters),
                         params,
                         return_type,
                         generic_body_hash,
@@ -226,8 +294,9 @@ impl FileAbi {
                     symbols.push(ExportedSymbol::Struct {
                         visibility: vis,
                         name: s.name.clone(),
-                        type_params: s.type_parameters.iter().map(|p| p.name.clone()).collect(),
+                        type_parameters: abi_type_parameters(&s.type_parameters),
                         marker: s.marker,
+                        marker_parameters: struct_header(s).marker_parameters,
                         fields,
                     });
                 }
@@ -242,8 +311,9 @@ impl FileAbi {
                     symbols.push(ExportedSymbol::Enum {
                         visibility: vis,
                         name: e.name.clone(),
-                        type_params: e.type_parameters.iter().map(|p| p.name.clone()).collect(),
+                        type_parameters: abi_type_parameters(&e.type_parameters),
                         marker: e.marker,
+                        marker_parameters: enum_header(e).marker_parameters,
                         variants,
                     });
                 }
@@ -302,7 +372,7 @@ impl FileAbi {
                     is_compose,
                     receiver,
                     name,
-                    type_params,
+                    type_parameters,
                     params,
                     return_type,
                     generic_body_hash,
@@ -323,10 +393,7 @@ impl FileAbi {
                         None => hasher.write_u8(0),
                     }
                     hasher.write_str(name);
-                    hasher.write_u64(type_params.len() as u64);
-                    for tp in type_params {
-                        hasher.write_str(tp);
-                    }
+                    hash_type_parameters(type_parameters, &mut hasher);
                     hasher.write_u64(params.len() as u64);
                     for (pname, pty, pdef) in params {
                         hasher.write_str(pname);
@@ -349,18 +416,17 @@ impl FileAbi {
                 ExportedSymbol::Struct {
                     visibility,
                     name,
-                    type_params,
+                    type_parameters,
                     marker,
+                    marker_parameters,
                     fields,
                 } => {
                     hasher.write_str("struct");
                     hasher.write_str(visibility.as_str());
                     hasher.write_str(name);
                     hash_marker(*marker, &mut hasher);
-                    hasher.write_u64(type_params.len() as u64);
-                    for tp in type_params {
-                        hasher.write_str(tp);
-                    }
+                    hash_marker_parameters(marker_parameters, &mut hasher);
+                    hash_type_parameters(type_parameters, &mut hasher);
                     hasher.write_u64(fields.len() as u64);
                     for (fname, is_var, fty) in fields {
                         hasher.write_str(fname);
@@ -371,18 +437,17 @@ impl FileAbi {
                 ExportedSymbol::Enum {
                     visibility,
                     name,
-                    type_params,
+                    type_parameters,
                     marker,
+                    marker_parameters,
                     variants,
                 } => {
                     hasher.write_str("enum");
                     hasher.write_str(visibility.as_str());
                     hasher.write_str(name);
                     hash_marker(*marker, &mut hasher);
-                    hasher.write_u64(type_params.len() as u64);
-                    for tp in type_params {
-                        hasher.write_str(tp);
-                    }
+                    hash_marker_parameters(marker_parameters, &mut hasher);
+                    hash_type_parameters(type_parameters, &mut hasher);
                     // Write variants count to eliminate canonicalization collisions
                     hasher.write_u64(variants.len() as u64);
                     for (vname, vflds) in variants {

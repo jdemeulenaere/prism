@@ -45,7 +45,7 @@ fn check_workspace(modules: &[(&str, &str)], app_imports: &[&str], app: &str) ->
         })
         .collect();
     let exported =
-        |file: &prism_ast::SourceFile, name: &str| declared_types(file, true).get(name).copied();
+        |file: &prism_ast::SourceFile, name: &str| declared_types(file, true).get(name).cloned();
 
     let file = prism_parser::parse_source(app).expect("app must parse");
     let mut checker = TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), "app");

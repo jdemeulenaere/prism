@@ -11,7 +11,9 @@ pub mod error;
 pub mod hasher;
 pub mod signature;
 
-pub use abi_type::{no_imports, AbiType, NameBinder, NominalHeader, NominalKind, PrimKind};
+pub use abi_type::{
+    no_imports, AbiType, AbiTypeParameter, NameBinder, NominalHeader, NominalKind, PrimKind,
+};
 pub use error::AbiError;
 pub use hasher::DeterministicHasher;
-pub use signature::{declared_types, AbiReceiver, ExportedSymbol, FileAbi};
+pub use signature::{declared_types, marker_parameters, AbiReceiver, ExportedSymbol, FileAbi};

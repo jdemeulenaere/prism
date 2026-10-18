@@ -378,7 +378,7 @@ fn extract_abis(graph: &DependencyGraph) -> Result<HashMap<PathBuf, FileAbi>, Wo
         let bind_import = |name: &str| {
             let mut found = node.direct_imports.iter().filter_map(|dep| {
                 let header = exported_types.get(dep.as_path())?.get(name)?;
-                Some((*header, module_path(graph.get_node(dep)?)))
+                Some((header.clone(), module_path(graph.get_node(dep)?)))
             });
             match (found.next(), found.next()) {
                 // A name exported by several imports stays unbound; Phase 2 reports `E4012`.

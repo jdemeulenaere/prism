@@ -734,10 +734,12 @@ impl TypeChecker {
                 name,
                 args,
                 marker,
+                marker_parameters,
                 ..
             } => {
                 let id = NominalId::new(module.clone(), name.clone());
-                self.types.insert_marker(id.clone(), *marker, Vec::new());
+                self.types
+                    .insert_marker(id.clone(), *marker, marker_parameters.clone());
                 let ids = self.seen_nominals.entry(name.clone()).or_default();
                 if !ids.contains(&id) {
                     ids.push(id);
@@ -752,7 +754,7 @@ impl TypeChecker {
                 params.iter().for_each(|p| self.record_nominals(p));
                 self.record_nominals(ret);
             }
-            AbiType::Prim(_) | AbiType::Unit | AbiType::Range => {}
+            AbiType::Prim(_) | AbiType::Unit | AbiType::Range | AbiType::Parameter { .. } => {}
         }
     }
 
@@ -979,13 +981,23 @@ impl TypeChecker {
             self.record_nominals(ty);
         }
         for sym in &abi.symbols {
-            if let ExportedSymbol::Struct { name, marker, .. }
-            | ExportedSymbol::Enum { name, marker, .. } = sym
+            if let ExportedSymbol::Struct {
+                name,
+                marker,
+                marker_parameters,
+                ..
+            }
+            | ExportedSymbol::Enum {
+                name,
+                marker,
+                marker_parameters,
+                ..
+            } = sym
             {
                 self.types.insert_marker(
                     NominalId::new(abi.module.clone(), name.clone()),
                     *marker,
-                    Vec::new(),
+                    marker_parameters.clone(),
                 );
             }
             let symbol = match sym {
@@ -6057,7 +6069,7 @@ mod tests {
                     is_compose: false,
                     receiver: None,
                     name: "add".to_string(),
-                    type_params: Vec::new(),
+                    type_parameters: Vec::new(),
                     params: vec![
                         ("a".to_string(), AbiType::Prim(PrimKind::Int), None),
                         ("b".to_string(), AbiType::Prim(PrimKind::Int), None),
@@ -6070,7 +6082,7 @@ mod tests {
                     is_compose: false,
                     receiver: None,
                     name: "internal_calc".to_string(),
-                    type_params: Vec::new(),
+                    type_parameters: Vec::new(),
                     params: Vec::new(),
                     return_type: AbiType::Prim(PrimKind::Int),
                     generic_body_hash: None,
@@ -6765,7 +6777,7 @@ mod tests {
         let bind = |name: &str| {
             exported
                 .get(name)
-                .map(|header| (*header, "shop/models".to_string()))
+                .map(|header| (header.clone(), "shop/models".to_string()))
         };
         let api = prism_parser::parse_source(
             "package shop\nimport models\npublic struct Order { val price: Money, val note: Note }\n",

@@ -48,13 +48,43 @@ pub enum NominalKind {
     Enum,
 }
 
-/// What a struct or enum's declaration says about it, read from the AST alone: its kind and its
-/// marker (`Copy`, `Clone` or none). Every reference to the type in an ABI carries it, so an
-/// importer knows how values of the type may be duplicated without importing its module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// What a struct or enum's declaration says about it, read from the AST alone: its kind, its
+/// marker (`Copy`, `Clone` or none) and its marker parameters, the indices of the type parameters
+/// that occur in its field or payload types and so condition the marker. Every reference to the
+/// type in an ABI carries it, so an importer knows how values of the type may be duplicated
+/// without importing its module.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NominalHeader {
     pub kind: NominalKind,
     pub marker: Option<TypeMarker>,
+    pub marker_parameters: Vec<u32>,
+}
+
+/// A type parameter of an exported declaration: its name, recorded for diagnostics but not
+/// hashed (type arguments are positional), and its bound.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbiTypeParameter {
+    pub name: String,
+    pub bound: Option<TypeMarker>,
+}
+
+/// Feeds a declaration's type parameters into `hasher`: their number and bounds, not their names.
+pub(crate) fn hash_type_parameters(
+    parameters: &[AbiTypeParameter],
+    hasher: &mut DeterministicHasher,
+) {
+    hasher.write_u64(parameters.len() as u64);
+    for parameter in parameters {
+        hash_marker(parameter.bound, hasher);
+    }
+}
+
+/// Feeds a nominal type's marker parameters into `hasher`.
+pub(crate) fn hash_marker_parameters(parameters: &[u32], hasher: &mut DeterministicHasher) {
+    hasher.write_u64(parameters.len() as u64);
+    for index in parameters {
+        hasher.write_u64(u64::from(*index));
+    }
 }
 
 /// Feeds a marker into `hasher` as one byte.
@@ -74,17 +104,21 @@ pub enum AbiType {
     /// The unit type, written `Unit` or `()`.
     Unit,
     /// A struct or enum bound to its defining module (a root-relative path without extension),
-    /// with the marker its declaration carries.
+    /// with the marker and marker parameters its declaration carries.
     Nominal {
         kind: NominalKind,
         marker: Option<TypeMarker>,
+        marker_parameters: Vec<u32>,
         module: String,
         name: String,
         args: Vec<AbiType>,
     },
     /// The built-in `Range` type, written `Range` where no struct or enum of that name is in scope.
     Range,
-    /// A type name bound to no module: unknown, ambiguous between imports, or a type parameter.
+    /// A type parameter of the declaration whose signature holds the type, by its position in
+    /// the declaration's list; the name is for rendering.
+    Parameter { index: u32, name: String },
+    /// A type name bound to no module: unknown or ambiguous between imports.
     Unbound { name: String, args: Vec<AbiType> },
     /// A nullable type `T?`.
     Nullable(Box<AbiType>),
@@ -110,11 +144,20 @@ pub fn no_imports(_name: &str) -> Option<(NominalHeader, String)> {
 }
 
 impl AbiType {
-    /// Lowers an AST type, binding each nominal name with `bind`.
-    pub fn from_ast(ty: &AstType, bind: &NameBinder) -> Self {
+    /// Lowers an AST type of a declaration whose type parameters are named `parameters`: a name
+    /// without arguments that is one of them becomes [`AbiType::Parameter`], so a type parameter
+    /// never binds to a struct of the same name. Every other nominal name is bound with `bind`.
+    pub fn from_ast(ty: &AstType, parameters: &[&str], bind: &NameBinder) -> Self {
+        let lower = |inner: &AstType| Self::from_ast(inner, parameters, bind);
         match &ty.kind {
             TypeKind::Named { name, type_args } => {
                 if type_args.is_empty() {
+                    if let Some(index) = parameters.iter().position(|p| p == name) {
+                        return AbiType::Parameter {
+                            index: index as u32,
+                            name: name.clone(),
+                        };
+                    }
                     if let Some(prim) = PrimKind::from_name(name) {
                         return AbiType::Prim(prim);
                     }
@@ -123,13 +166,14 @@ impl AbiType {
                     }
                 }
                 if name == "Heap" && type_args.len() == 1 {
-                    return AbiType::Heap(Box::new(Self::from_ast(&type_args[0], bind)));
+                    return AbiType::Heap(Box::new(lower(&type_args[0])));
                 }
-                let args = type_args.iter().map(|a| Self::from_ast(a, bind)).collect();
+                let args = type_args.iter().map(lower).collect();
                 match bind(name) {
                     Some((header, module)) => AbiType::Nominal {
                         kind: header.kind,
                         marker: header.marker,
+                        marker_parameters: header.marker_parameters,
                         module,
                         name: name.clone(),
                         args,
@@ -142,10 +186,10 @@ impl AbiType {
                     },
                 }
             }
-            TypeKind::Nullable(inner) => AbiType::Nullable(Box::new(Self::from_ast(inner, bind))),
+            TypeKind::Nullable(inner) => AbiType::Nullable(Box::new(lower(inner))),
             TypeKind::Reference { mutable, inner } => AbiType::Ref {
                 mutable: *mutable,
-                inner: Box::new(Self::from_ast(inner, bind)),
+                inner: Box::new(lower(inner)),
             },
             TypeKind::Unit => AbiType::Unit,
             TypeKind::Function {
@@ -154,8 +198,8 @@ impl AbiType {
                 return_type,
             } => AbiType::Fn {
                 compose: *is_compose,
-                params: params.iter().map(|p| Self::from_ast(p, bind)).collect(),
-                ret: Box::new(Self::from_ast(return_type, bind)),
+                params: params.iter().map(lower).collect(),
+                ret: Box::new(lower(return_type)),
             },
         }
     }
@@ -171,6 +215,7 @@ impl AbiType {
             AbiType::Nominal {
                 kind,
                 marker,
+                marker_parameters,
                 module,
                 name,
                 args,
@@ -181,6 +226,7 @@ impl AbiType {
                     NominalKind::Enum => 1,
                 });
                 hash_marker(*marker, hasher);
+                hash_marker_parameters(marker_parameters, hasher);
                 hasher.write_str(module);
                 hasher.write_str(name);
                 Self::hash_list(args, hasher);
@@ -214,6 +260,11 @@ impl AbiType {
                 ret.hash_into(hasher);
             }
             AbiType::Range => hasher.write_u8(9),
+            // By position only: renaming a type parameter changes nothing an importer can do.
+            AbiType::Parameter { index, .. } => {
+                hasher.write_u8(10);
+                hasher.write_u64(u64::from(*index));
+            }
         }
     }
 
@@ -231,6 +282,7 @@ impl fmt::Display for AbiType {
             AbiType::Prim(prim) => write!(f, "{}", prim.as_str()),
             AbiType::Unit => write!(f, "Unit"),
             AbiType::Range => write!(f, "Range"),
+            AbiType::Parameter { name, .. } => write!(f, "{}", name),
             AbiType::Nominal { name, args, .. } | AbiType::Unbound { name, args } => {
                 write!(f, "{}", name)?;
                 if !args.is_empty() {

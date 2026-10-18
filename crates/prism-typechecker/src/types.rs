@@ -209,7 +209,9 @@ pub fn type_from_abi(ty: &AbiType) -> Type {
             }
         }
         AbiType::Range => Type::plain_struct(NominalId::builtin_range()),
-        AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
+        AbiType::Unbound { name, .. } | AbiType::Parameter { name, .. } => {
+            Type::Opaque(name.clone())
+        }
         AbiType::Nullable(inner) => Type::Nullable(Box::new(type_from_abi(inner))),
         AbiType::Ref { mutable, inner } => Type::Reference {
             mutable: *mutable,
