@@ -10,5 +10,6 @@ prism-ast = { path = "../prism-ast" }
 prism-typed-tree = { path = "../prism-typed-tree" }
 
 [dev-dependencies]
+prism-abi = { path = "../prism-abi" }
 prism-parser = { path = "../prism-parser" }
 prism-typechecker = { path = "../prism-typechecker" }

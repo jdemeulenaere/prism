@@ -443,6 +443,7 @@ dependencies = [
 name = "prism-mir"
 version = "0.1.0"
 dependencies = [
+ "prism-abi",
  "prism-ast",
  "prism-parser",
  "prism-typechecker",

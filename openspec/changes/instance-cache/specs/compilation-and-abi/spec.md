@@ -123,16 +123,16 @@ Each generic function and extension of a file that passes Phase 2, private ones 
 - **THEN** the Monomorphization Hash of `tagged` changes, while the ABI hash of `lib/box`, whose exports do not reach `Tag`, does not
 
 #### Scenario: A callee's signature changes under an unchanged body
-- **WHEN** `lib/box.prism` declares `fun helper(n: Int): Int = n` and `public fun <T> outer(x: T, n: Int): Int = helper(n)`, and only the helper changes, to `fun helper(n: &Int): Int = n`
+- **WHEN** `lib/box.prism` declares `public fun <T> outer(x: T, n: Int): Int = helper(n)` and, after it, `fun helper(n: Int): Int = n`, and only the helper changes, to `fun helper(n: &Int): Int = n`
 - **THEN** the Monomorphization Hash of `outer` changes, although its body's text does not, because its call now lends `n`
 
 #### Scenario: A non-generic helper's body change keeps the hash
 - **WHEN** in the file with the first `helper` only its body changes, to `n + 0`
-- **THEN** the Monomorphization Hash of `outer` is unchanged, since its instances call `helper` by symbol
+- **THEN** the Monomorphization Hash of `outer` is unchanged, since its instances call `helper` by symbol and `outer`'s source positions do not move
 
 #### Scenario: An edit after the generic keeps the hash
 - **WHEN** a function declared after `outer` in its file is added, removed or changed
-- **THEN** the Monomorphization Hash of `outer` is unchanged, while an added line before `outer` changes it, since its instances report runtime errors at its source positions
+- **THEN** the Monomorphization Hash of `outer` is unchanged, while any edit before `outer` that moves its source, such as an added line, changes it, since its instances report runtime errors at its source positions
 
 #### Scenario: Changing a generic extension body
 - **WHEN** the body of the exported extension `public fun <T> Box<T>.get(): &T` changes
@@ -169,7 +169,7 @@ Each instance MUST be keyed by its symbol, its generic's Monomorphization Hash a
 - **THEN** the next `prism run --explain-cache app/main.prism` prints `1` and `2`, lists `  instantiate lib/box::keep<app/main::Thing>` and `  reused instance lib/box::keep<Int>`, and reuses `lib/box.prism`
 
 #### Scenario: A private helper's signature change regenerates the instances
-- **WHEN** `lib/box.prism` declares `fun helper(n: Int): Int = n + 1` and `public fun <T> outer(x: T, n: Int): Int = helper(n)`, `app/main.prism` prints `outer("a", 1)`, the program has been run, and the helper becomes `fun helper(n: &Int): Int = n`
+- **WHEN** `lib/box.prism` declares `public fun <T> outer(x: T, n: Int): Int = helper(n)` and, after it, `fun helper(n: Int): Int = n + 1`, `app/main.prism` prints `outer("a", 1)`, the program has been run, and the helper becomes `fun helper(n: &Int): Int = n`
 - **THEN** the next `prism run --explain-cache app/main.prism` prints `1`, checks `lib/box` again, reuses `app/main` and lists `  instantiate lib/box::outer<String>`
 
 #### Scenario: A private helper's body change keeps the instances

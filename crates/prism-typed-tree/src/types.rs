@@ -202,6 +202,12 @@ impl TypeTable {
             .map_or(&[][..], |marker| &marker.parameters[..])
     }
 
+    /// The marker entry recorded for `id`, which may hold no marker: what the record codec
+    /// of `instance-cache` stores beside the definitions.
+    pub fn marker_entry(&self, id: &NominalId) -> Option<&NominalMarker> {
+        self.markers.get(id)
+    }
+
     /// Whether the table records `id`, with a definition or a marker.
     pub fn knows(&self, id: &NominalId) -> bool {
         self.definitions.contains_key(id) || self.markers.contains_key(id)

@@ -87,6 +87,17 @@ fn elaborate_program(entry: &Path) -> Result<(PathBuf, Vec<(PathBuf, MirFile)>),
     Ok((entry_path, files))
 }
 
+/// The elaborated MIR of every file of the program whose entry file is `entry`, in topological
+/// order, or the program's errors of any stage before code generation. For tools and tests,
+/// such as the record codec's round trip over the fixture corpus (`instance-cache`).
+pub fn program_mir(entry: &Path) -> Result<Vec<MirFile>, WorkspaceError> {
+    Ok(elaborate_program(entry)?
+        .1
+        .into_iter()
+        .map(|(_, mir)| mir)
+        .collect())
+}
+
 /// The `E6xxx` errors `errors` of `path`.
 fn codegen_error(path: &Path, errors: Vec<prism_codegen::CodegenError>) -> WorkspaceError {
     WorkspaceError::Codegen {

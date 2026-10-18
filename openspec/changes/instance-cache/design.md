@@ -57,6 +57,8 @@ Like D13, the hash covers source positions (line and column of every span), beca
 - every callee's signature, through each call's recorded parameter types, destination type and type arguments (a helper's parameter becoming `&Int` adds a borrow in the MIR);
 - the generic's own signature, through its locals.
 
+A span is encoded whole, with its byte offsets, which diagnostics use to underline the source, as well as its line and column. So any edit before a generic that moves its source changes its hash, even one that keeps the line count; only edits after it, or that keep every byte offset, do not. Encoding only lines and columns would let one record entry stand for records with different offsets, and an instance's `E6001` would then be underlined at stale offsets (implementation note, 2026-10-18: the scenarios of a helper's body edit declare the helper after the generic for this reason).
+
 It covers no other body. A non-generic helper is called by symbol through its slot (`monomorphization` D2), so a helper's body edit changes only its file's unit, and the instance's cached code calls the new helper.
 
 Type-parameter names are encoded with their indices and bounds, because a decoded record must equal the original and dumps print the names. So renaming a type parameter regenerates the generic's instances, though it re-checks no importer, since the ABI hash ignores the names (`generics`). Rejected: keeping the Phase 1 AST hash (it misses the private-type and callee-signature cases, as `monomorphization` D13 showed); hashing the defining file (every edit would regenerate every instance of the file); excluding positions (an instance's runtime error would report a stale line).

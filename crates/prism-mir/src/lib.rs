@@ -8,10 +8,12 @@
 //! `prism dump-mir` prints.
 
 mod build;
+pub mod codec;
 pub mod dump;
 pub mod instantiate;
 pub mod mir;
 pub mod record;
+pub mod summary;
 pub mod types;
 pub mod validate;
 
@@ -19,4 +21,5 @@ pub use build::{lower_file, merge_goto_blocks};
 pub use instantiate::instantiate;
 pub use mir::*;
 pub use record::GenericRecord;
+pub use summary::{DefaultParameter, FileSummary, GenericSummary, InstanceRequest};
 pub use types::{mir_range_definition, mir_type_table, needs_drop, projection_type};
