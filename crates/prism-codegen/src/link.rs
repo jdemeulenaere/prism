@@ -46,9 +46,7 @@ use cranelift_module::{
 };
 use prism_abi::{ContentHash, DeterministicHasher};
 use prism_mir::MirFile;
-use prism_runtime::{
-    prism_rt_unlinked_function, RUNTIME_FUNCTIONS, STACK_LIMIT, STACK_LIMIT_SYMBOL,
-};
+use prism_runtime::{prism_rt_unlinked_function, STACK_LIMIT, STACK_LIMIT_SYMBOL};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -369,8 +367,7 @@ impl Linker {
     ) -> Result<Self, BackendError> {
         let mut builder = JITBuilder::with_isa(isa()?, default_libcall_names());
         builder.symbols(
-            RUNTIME_FUNCTIONS
-                .iter()
+            crate::externals::entry_points()
                 .map(|function| (function.name, function.address.as_ptr()))
                 .chain(std::iter::once((
                     STACK_LIMIT_SYMBOL,

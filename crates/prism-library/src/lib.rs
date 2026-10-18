@@ -27,6 +27,7 @@ pub const MODULES: &[(&str, &str)] = &[
         include_str!("../prism/collections.prism"),
     ),
     ("prism/system", include_str!("../prism/system.prism")),
+    ("prism/composer", include_str!("../prism/composer.prism")),
 ];
 
 /// The prelude modules, in the order a workspace file sees them after its explicit imports.

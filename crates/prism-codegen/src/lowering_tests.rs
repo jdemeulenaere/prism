@@ -1065,3 +1065,41 @@ fn empty_lists_and_zero_sized_elements_allocate_nothing() {
     });
     assert_eq!(made, 0);
 }
+
+/// compose: "A compose entry point declared with the wrong signature".
+#[test]
+fn a_compose_entry_point_declared_with_the_wrong_signature() {
+    let source = "package prism\n\
+        public fun f(): Bool = prism_compose_recompose(1.0)\n\
+        external fun prism_compose_recompose(composition: Double): Bool\n";
+    let file = lower_files(&[("prism/test", source)]).remove(0);
+    let errors = check_file(&file).expect_err("the signature differs");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E6005");
+    let notes = errors[0].notes.join("\n");
+    assert!(
+        notes.contains("'prism_compose_recompose' is (i64) -> i8") && notes.contains("(f64) -> i8"),
+        "{}",
+        notes
+    );
+}
+
+/// compose: "Compose Entry Points Are Checked Like Runtime Entry Points": the JIT resolves a
+/// compose entry point an external names, and every one is found by the backend's lookup.
+#[test]
+fn compose_entry_points_resolve() {
+    for function in prism_compose::COMPOSE_FUNCTIONS {
+        let found = crate::externals::entry_point(function.name).expect("found");
+        assert_eq!(found.address, function.address);
+    }
+    let source = "package prism\n\
+        public fun stale(): Int = prism_compose_root_scope(0)\n\
+        public fun touch(): Unit = prism_compose_invalidate(12345)\n\
+        external fun prism_compose_root_scope(composition: Int): Int\n\
+        external fun prism_compose_invalidate(scope: Int): Unit\n";
+    let program = compile_files(lower_files(&[("prism/test", source)]));
+    let touch: extern "C" fn() = function(&program, "prism/test::touch");
+    // Invalidating a word that names no scope does nothing.
+    touch();
+    assert!(program.function_address("prism/test::stale").is_some());
+}

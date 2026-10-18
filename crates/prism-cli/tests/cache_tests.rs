@@ -921,6 +921,29 @@ fn unreached_modules_are_not_parsed() {
     fs::remove_dir_all(&base).ok();
 }
 
+/// standard-library: "The composer module is not in the prelude" (`compose-runtime`): a file
+/// without imports never reaches `/prism/composer`, and one importing it does.
+#[test]
+fn the_composer_module_is_not_in_the_prelude() {
+    let base = unique_temp_dir("composer_module");
+    let explain = |source: &str| {
+        fs::write(base.join("main.prism"), source).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+            .current_dir(&base)
+            .env("PRISM_CACHE", base.join("cache"))
+            .args(["check", "--explain-cache", "main.prism"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        all_explanation_lines(&output).join("\n")
+    };
+    let without = explain("fun main() {}\n");
+    assert!(!without.contains("prism/composer.prism"), "{}", without);
+    let with = explain("import /prism/composer\n\nfun main() { invalidate(0) }\n");
+    assert!(with.contains("prism/composer.prism"), "{}", with);
+    fs::remove_dir_all(&base).ok();
+}
+
 /// build-cache: "Library entries are shared between workspaces".
 #[test]
 fn library_entries_are_shared_between_workspaces() {

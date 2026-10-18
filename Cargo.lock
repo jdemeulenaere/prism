@@ -512,6 +512,7 @@ dependencies = [
  "prism-abi",
  "prism-ast",
  "prism-borrowck",
+ "prism-compose",
  "prism-mir",
  "prism-parser",
  "prism-runtime",

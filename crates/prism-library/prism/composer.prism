@@ -1,0 +1,142 @@
+// The composer protocol: the calls that composable functions are lowered to, for code written
+// by hand in that lowered form. It is not an application API, and not a prelude module; import
+// it with `import /prism/composer`. Composers, compositions and scopes are `Int` words, which
+// the compose runtime validates: misusing them is the runtime error `composition misuse`.
+package prism
+
+// Starts a composition of `content`, composes it once and gives its handle.
+public fun startComposition(content: escaping (Int) -> Unit): Int = prism_compose_start(content)
+
+// Replaces the content of `composition` and recomposes its root.
+public fun setCompositionContent(
+    composition: Int,
+    content: escaping (Int) -> Unit,
+): Unit = prism_compose_set_content(composition, content)
+
+// Recomposes the invalid scopes of `composition`, giving whether any was invalid.
+public fun recomposeComposition(composition: Int): Bool = prism_compose_recompose(composition)
+
+// Disposes `composition` and releases everything it holds.
+public fun disposeComposition(composition: Int): Unit = prism_compose_dispose(composition)
+
+// The root scope of `composition`.
+public fun rootScope(composition: Int): Int = prism_compose_root_scope(composition)
+
+// The dump of `composition`: its groups and slots, then its nodes.
+public fun dumpComposition(composition: Int): String = prism_compose_dump(composition)
+
+// Starts a replaceable group of `key`.
+public fun startGroup(composer: Int, key: Int): Unit = prism_compose_start_group(composer, key)
+
+// Starts a movable group of `key` and `dataKey`.
+public fun startMovableGroup(
+    composer: Int,
+    key: Int,
+    dataKey: Int,
+): Unit = prism_compose_start_movable_group(composer, key, dataKey)
+
+// Starts a restart group of `key`.
+public fun startRestartGroup(composer: Int, key: Int): Unit {
+    prism_compose_start_restart_group(composer, key)
+}
+
+// Starts a node group of `key` whose node has `kind`, giving its node.
+public fun startNodeGroup(composer: Int, key: Int, kind: Int): Int {
+    return prism_compose_start_node_group(composer, key, kind)
+}
+
+// Ends a replaceable, movable or node group.
+public fun endGroup(composer: Int): Unit = prism_compose_end_group(composer)
+
+// Ends a restart group, which keeps `restart` to recompose itself alone.
+public fun endRestartGroup(
+    composer: Int,
+    restart: escaping (Int) -> Unit,
+): Unit = prism_compose_end_restart_group(composer, restart)
+
+// Whether the innermost restart group existed before this pass and is not invalid.
+public fun skipping(composer: Int): Bool = prism_compose_skipping(composer)
+
+// Keeps the rest of the innermost group as it is.
+public fun skipToGroupEnd(composer: Int): Unit = prism_compose_skip_to_group_end(composer)
+
+// The innermost restart group open, or the composition's root.
+public fun currentScope(composer: Int): Int = prism_compose_current_scope(composer)
+
+// Marks `scope` invalid, for the next pass; a word that names no live scope is ignored.
+public fun invalidate(scope: Int): Unit = prism_compose_invalidate(scope)
+
+// The word slot of tag `typeTag` at the cursor, or `calc()` stored in a new one.
+public fun rememberInt(composer: Int, typeTag: Int, calc: () -> Int): Int {
+    if (prism_compose_has_word(composer, typeTag)) {
+        return prism_compose_word(composer)
+    }
+    val value = calc()
+    prism_compose_set_word(composer, typeTag, value)
+    return value
+}
+
+// Whether `value` differs from the word slot of tag `typeTag` at the cursor, storing it if so.
+public fun changedInt(composer: Int, typeTag: Int, value: Int): Bool {
+    return prism_compose_changed_word(composer, typeTag, value)
+}
+
+// The compose runtime's entry points.
+private external fun prism_compose_start(content: escaping (Int) -> Unit): Int
+
+// Replaces a composition's content.
+private external fun prism_compose_set_content(composition: Int, content: escaping (Int) -> Unit)
+
+// Runs a pass over a composition's invalid scopes.
+private external fun prism_compose_recompose(composition: Int): Bool
+
+// Disposes a composition.
+private external fun prism_compose_dispose(composition: Int)
+
+// A composition's root scope.
+private external fun prism_compose_root_scope(composition: Int): Int
+
+// A composition's dump.
+private external fun prism_compose_dump(composition: Int): String
+
+// Starts a replaceable group.
+private external fun prism_compose_start_group(composer: Int, key: Int)
+
+// Starts a movable group.
+private external fun prism_compose_start_movable_group(composer: Int, key: Int, dataKey: Int)
+
+// Starts a restart group.
+private external fun prism_compose_start_restart_group(composer: Int, key: Int)
+
+// Starts a node group.
+private external fun prism_compose_start_node_group(composer: Int, key: Int, kind: Int): Int
+
+// Ends a replaceable, movable or node group.
+private external fun prism_compose_end_group(composer: Int)
+
+// Ends a restart group.
+private external fun prism_compose_end_restart_group(composer: Int, restart: escaping (Int) -> Unit)
+
+// Whether the innermost restart group may skip.
+private external fun prism_compose_skipping(composer: Int): Bool
+
+// Keeps the rest of the innermost group.
+private external fun prism_compose_skip_to_group_end(composer: Int)
+
+// The current scope.
+private external fun prism_compose_current_scope(composer: Int): Int
+
+// Invalidates a scope.
+private external fun prism_compose_invalidate(scope: Int)
+
+// Whether the slot at the cursor is a word slot of a tag.
+private external fun prism_compose_has_word(composer: Int, tag: Int): Bool
+
+// The word slot at the cursor.
+private external fun prism_compose_word(composer: Int): Int
+
+// Writes a word slot at the cursor.
+private external fun prism_compose_set_word(composer: Int, tag: Int, value: Int)
+
+// Compares a value with the word slot at the cursor.
+private external fun prism_compose_changed_word(composer: Int, tag: Int, value: Int): Bool

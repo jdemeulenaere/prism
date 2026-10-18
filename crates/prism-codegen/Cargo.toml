@@ -10,6 +10,9 @@ prism-ast = { path = "../prism-ast" }
 prism-typed-tree = { path = "../prism-typed-tree" }
 prism-mir = { path = "../prism-mir" }
 prism-runtime = { path = "../prism-runtime" }
+# The compose runtime's entry points, which externals name and the JIT resolves (D2 of
+# `compose-runtime`).
+prism-compose = { path = "../prism-compose" }
 # Type fingerprints and slot contracts hash with the ABI's deterministic hasher (D6 of
 # `hot-reload`).
 prism-abi = { path = "../prism-abi" }

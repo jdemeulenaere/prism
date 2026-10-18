@@ -37,7 +37,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use prism_abi::ContentHash;
 use prism_mir::{BodyId, BodyOwner, MirFile};
-use prism_runtime::{RuntimeType, RUNTIME_FUNCTIONS, STACK_LIMIT_SYMBOL};
+use prism_runtime::{RuntimeType, STACK_LIMIT_SYMBOL};
 use prism_typed_tree::{ArenaId, DeclarationPath, Type};
 use std::collections::HashMap;
 
@@ -257,9 +257,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
         if let Some(id) = self.runtime.get(name) {
             return Ok(*id);
         }
-        let function = RUNTIME_FUNCTIONS
-            .iter()
-            .find(|function| function.name == name)
+        let function = crate::externals::entry_point(name)
             .ok_or_else(|| BackendError::new(format!("no runtime function {}", name)))?;
         let mut signature = ir::Signature::new(self.call_conv);
         let machine = |ty: RuntimeType| match ty {

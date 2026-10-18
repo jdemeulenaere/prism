@@ -196,7 +196,7 @@ A composition started through the entry points MUST use the built-in node tree a
 Disposing a composition MUST remove every group it holds and release them as the end of a pass does. It MUST then release its root content function and its applier, and make its handle stale.
 
 #### Scenario: Disposing a composition frees what it holds
-- **WHEN** `fun Greeting(k: Int, name: String) { startRestartGroup(k, 3); println("hello " + name); endRestartGroup(k) { c -> Greeting(c, name) } }` is declared, and `fun main() { val c = startComposition { k -> Greeting(k, "a" + "b") }; disposeComposition(c) }` runs with `--check-allocations` and `import /prism/composer`
+- **WHEN** `fun Greeting(k: Int, name: String) { startRestartGroup(k, 3); println("hello " + name); endRestartGroup(k) { c -> Greeting(c, name.clone()) } }` is declared (a closure never gives away what it captures, so the restart function clones the name it owns), and `fun main() { val c = startComposition { k -> Greeting(k, "a" + "b") }; disposeComposition(c) }` runs with `--check-allocations` and `import /prism/composer`
 - **THEN** stdout is `hello ab`, and the program exits with status 0: the restart function and the string it owns are freed
 
 ### Requirement: Handles Are Validated
