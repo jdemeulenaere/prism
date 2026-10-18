@@ -110,7 +110,7 @@ Inside an extension body, `this` MUST be the receiver, a `val` binding of type `
 - **THEN** the type checker emits `E4001`, saying that `this` is only available in an extension function
 
 ### Requirement: Extension Declarations Are Checked
-Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`) and name MUST be rejected with `E4010`, as MUST an extension that could never be called: one named like a field of its receiver struct, named `clone` on a `Clone` type, named `toString` on `Int`, `Double`, `Bool` or `Char`, or named `length` on `String`. Extensions on different receivers, and an extension and a top-level function, MAY share a name. The receiver type MUST follow the rules of type annotations (`E4007`, `E4012`, `E4014`).
+Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`) and name MUST be rejected with `E4010`, as MUST an extension that could never be called: one named like a field of its receiver struct, named `clone` on a `Clone` type, named `toString` on `Int`, `Double`, `Bool` or `Char`, or named `length` on `String`. Extensions on different receivers, and an extension and a top-level function, MAY share a name.
 
 #### Scenario: Duplicate extension rejected
 - **WHEN** a file declares `fun User.greet(): String = "a"` and `fun User.greet(x: Int): String = "b"`
@@ -128,13 +128,16 @@ Two extensions in one file with the same receiver type constructor (`Box` for `B
 - **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun Char.toString(): String = "c"` and `fun String.length(): Int = 0`
 - **THEN** the type checker emits `E4010` for each, saying that the built-in member always takes precedence
 
-#### Scenario: Receiver type from an unimported module
-- **WHEN** `shop/api` exports `public fun first(): Order`, where `Order` is declared in `shop/models`, and a file that imports only `/shop/api` declares `fun Order.total(): Int = 0`
-- **THEN** the type checker emits `E4014` at the receiver type, naming `import /shop/models`
-
 #### Scenario: Use before an inferred extension declaration
 - **WHEN** `fun g(u: User): String { val s: String = u.size(); return s }` precedes `fun User.size() = 42`
 - **THEN** the type checker emits `E4002`, exactly as when the declarations are swapped
+
+### Requirement: Extension Receiver Types Follow Type Annotations
+The receiver type of an extension MUST follow the rules of type annotations (`E4007`, `E4012`, `E4014`).
+
+#### Scenario: Receiver type from an unimported module
+- **WHEN** `shop/api` exports `public fun first(): Order`, where `Order` is declared in `shop/models`, and a file that imports only `/shop/api` declares `fun Order.total(): Int = 0`
+- **THEN** the type checker emits `E4014` at the receiver type, naming `import /shop/models`
 
 ### Requirement: Safe-Navigation Calls
 `value?.name(...)` MUST call the extension on the receiver when it is not `null` and give `null` otherwise, with the extension's return type made nullable (never nested). A chain of `?.` field accesses over a place (`t?.lead`) MUST be accepted as such a receiver. A `.` call on a nullable receiver MUST be rejected with `E4006`, with help suggesting `?.`. Extensions MUST NOT be declarable on nullable receiver types.

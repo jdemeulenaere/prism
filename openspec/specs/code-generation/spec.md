@@ -25,11 +25,14 @@ Each file MUST be compiled into its own code unit from its own elaborated MIR al
 - **THEN** each of the two files is code-generated as a standalone unit, and `prism dump-clif app/main.prism` names the functions of `lib/math` only by their symbols
 
 ### Requirement: Symbols Derive from Declaration Paths
-Every compiled function of a declaration MUST have a symbol derived from its declaration's identity alone: `<module>::<name>` for a function, `<module>::<receiver>.<name>` for an extension, where the receiver is written as the ABI writes its type constructor, `<function symbol>#default(<parameter>)` for a default value's generator, and `<module>::<name>#init` and `<module>::<name>#get` for a top-level `val`'s initializer and accessor. Symbols MUST be unique in a program. Drop and clone glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)` or `<module>#clone(<type>)` after that unit's module and the type it handles.
+Every compiled function of a declaration MUST have a symbol derived from its declaration's identity alone: `<module>::<name>` for a function, `<module>::<receiver>.<name>` for an extension, where the receiver is written as the ABI writes its type constructor, `<function symbol>#default(<parameter>)` for a default value's generator, and `<module>::<name>#init` and `<module>::<name>#get` for a top-level `val`'s initializer and accessor. Symbols MUST be unique in a program.
 
 #### Scenario: Symbols of a file
 - **WHEN** `lib/math.prism`, in package `lib`, declares `public fun Int.double(): Int = this * 2`, `public fun scale(a: Int, b: Int = 2): Int = a * b` and `public val BASE: Int = 3`
 - **THEN** `prism dump-clif lib/math.prism` prints the functions `lib/math::Int.double`, `lib/math::scale`, `lib/math::scale#default(b)`, `lib/math::BASE#init` and `lib/math::BASE#get`
+
+### Requirement: Glue Has No Function Table Slot
+Drop and clone glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)` or `<module>#clone(<type>)` after that unit's module and the type it handles.
 
 #### Scenario: Glue of one type in two files
 - **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User): Unit {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
@@ -142,7 +145,18 @@ Each top-level `val` MUST have storage in its file's code unit and an accessor t
 - **THEN** `prism run app/main.prism` prints `11`
 
 ### Requirement: Unsupported Constructs Are Rejected Before Code Generation
-Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. A struct, enum or nullable holding a `Heap<T>` or a function value MUST be rejected naming what it holds, until `heap-boxes` and `closures` support them. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
+Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
+
+#### Scenario: Unsupported constructs in several forms
+- **WHEN** a program's `main` runs `val h: Heap<Int>? = null`, or `val f = { 1 }`, or `println(id(1))` for `fun <T> id(x: T): T = x`, or the program declares `compose fun Label() {}` or `fun first(h: Heap<Int>): Int = 1`
+- **THEN** `prism run` reports `E6001` naming `'Heap' values` at `null`, closures at `{ 1 }`, calls of generic functions at `id(1)`, composable functions at `Label`, and `'Heap' values` at the declaration of `first`, and runs nothing
+
+#### Scenario: One error per body
+- **WHEN** `fun f(): Int { val a: Heap<Int>? = null; val b: Heap<Int>? = null; return 1 }` and `fun g(): Int { val c: Heap<Int>? = null; return 2 }` are declared with a `main` that calls neither
+- **THEN** `prism run` reports exactly two `E6001`, one at the first `null` in `f` and one at the `null` in `g`
+
+### Requirement: Aggregates Holding Heap or Function Values Are Rejected
+A struct, enum or nullable holding a `Heap<T>` or a function value MUST be rejected with `E6001`, naming what it holds, until `heap-boxes` and `closures` support them.
 
 #### Scenario: A struct holding a heap value
 - **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(1) }` are declared
@@ -156,16 +170,8 @@ Before generating any code, the backend MUST check every body it compiles and re
 - **WHEN** `enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun main() { val e = Expr.Literal(1) }` are declared
 - **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `Expr.Literal(1)`, naming `'Heap' values`, prints nothing to stdout and exits with status 1
 
-#### Scenario: Unsupported constructs in several forms
-- **WHEN** a program's `main` runs `val h: Heap<Int>? = null`, or `val f = { 1 }`, or `println(id(1))` for `fun <T> id(x: T): T = x`, or the program declares `compose fun Label() {}` or `fun first(h: Heap<Int>): Int = 1`
-- **THEN** `prism run` reports `E6001` naming `'Heap' values` at `null`, closures at `{ 1 }`, calls of generic functions at `id(1)`, composable functions at `Label`, and `'Heap' values` at the declaration of `first`, and runs nothing
-
-#### Scenario: One error per body
-- **WHEN** `fun f(): Int { val a: Heap<Int>? = null; val b: Heap<Int>? = null; return 1 }` and `fun g(): Int { val c: Heap<Int>? = null; return 2 }` are declared with a `main` that calls neither
-- **THEN** `prism run` reports exactly two `E6001`, one at the first `null` in `f` and one at the `null` in `g`
-
 ### Requirement: Cranelift IR Dump
-`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, each headed by its symbol, followed by the file's drop and clone glue, each headed by `<module>#drop(<type>)` or `<module>#clone(<type>)`, in order of their names. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
+`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's drop and clone glue in order of their names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
 
 #### Scenario: Dumping a file's IR
 - **WHEN** `prism dump-clif main.prism` runs twice on a file that `prism run` accepts
