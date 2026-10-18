@@ -40,6 +40,17 @@ A value of a function type, composable or not, MUST be 16 bytes with the alignme
 - **WHEN** `fun call(f: escaping () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs
 - **THEN** `call` takes one machine value, the address of `f`, and returns a 64-bit integer
 
+### Requirement: Environments of Borrowing Closures Hold Pointers in the Creating Frame
+The environment of a closure that captures only by borrow MUST hold the address of each captured place, one pointer per capture in capture order, in stack storage of the function that builds the closure. Building or calling such a closure MUST NOT allocate. A closure that owns any capture MUST NOT keep its environment in the creating frame.
+
+#### Scenario: A writing closure allocates nothing
+- **WHEN** `fun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }` is declared and `prism dump-clif main.prism` runs on a file holding `fun main() { var count = 0; repeat(3) { count += 1 }; println(count) }`
+- **THEN** no function of the file calls the runtime's allocation function, and `prism run main.prism` prints `3`
+
+#### Scenario: A closure built in an earlier iteration still runs
+- **WHEN** `fun main() { val a = 10; var keep: () -> Int = { 0 }; var i = 0; while (i < 3) { val g = { a + 1 }; if (i == 0) keep = g; i += 1 }; println(keep()) }` runs with `--check-allocations`
+- **THEN** it prints `11`, reports no live allocation and exits with status 0: `a` is declared in a block enclosing `keep`'s, so the closure keeps borrowing it
+
 ### Requirement: Each Closure Has a Descriptor
 Each compiled closure body MUST have one descriptor, static data of its code unit named `<closure symbol>#descriptor`, holding the address of the function-table slot of the closure's code and the environment's drop entry: the address of its `#drop-environment` function when its environment is allocated, and null when the closure only borrows or its environment is held inline. Every value the closure builds MUST point at that descriptor.
 

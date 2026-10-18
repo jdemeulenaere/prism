@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Closures That Escape Own Their Captures
-A closure whose value may escape MUST own every binding it captures. A value escapes when it is returned from a function, closure or default value, stored in a struct field, enum payload or box, written through a reference or to a field, assigned to a captured variable, passed for a generic parameter or an `escaping` parameter, or captured by value by another closure, also after flowing through locals, nullables and branches.
+A closure whose value may escape MUST own every binding it captures. A value escapes when it is returned from a function, closure or default value, initializes a top-level `val`, is stored in a struct field, an enum payload or a box, is written through a reference or to a field, is assigned to a captured variable, is passed for a generic parameter or an `escaping` parameter, or is captured by value by another closure, also after flowing through locals, nullables and branches.
 
 #### Scenario: Escaping closures own their captures
 - **WHEN** `struct Button { val onClick: () -> Int }` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): () -> Int = { greet(s) }`, `fun g(s: String): Button = Button({ greet(s) })`, `fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }` and `fun m(a: Int, p: () -> Int = { a }): Int = p()` are checked
@@ -14,8 +14,8 @@ A closure whose value may escape MUST own every binding it captures. A value esc
 - **THEN** the file passes `prism check`, and the closure `{ greet(s) }` owns `s`, because its value reaches the field through `h`, the nullable `k` and the `?:`
 
 #### Scenario: Boxed and generic closures own their captures
-- **WHEN** `fun <T> keep(x: T): T = x`, `struct Box<T>(val v: T)` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int { val g = keep({ greet(s) }); return g() }`, `fun h(s: String): Int { val b = Heap({ greet(s) }); return 1 }` and `fun k(s: String): Box<() -> Int> = Box({ greet(s) })` are checked
-- **THEN** the file passes `prism check`, and each closure owns `s`
+- **WHEN** `fun <T> keep(x: T): T = x`, `struct Box<T>(val v: T)` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int { val g = keep({ greet(s) }); return g() }`, `fun h(s: String): Int { val b = Heap({ greet(s) }); return 1 }`, `fun k(s: String): Box<() -> Int> = Box({ greet(s) })`, `fun m(): Heap<() -> Int> = Heap({ 2 })` and `fun n(): Int = keep({ 1 })()` are checked
+- **THEN** the file passes `prism check`, the closures of `f`, `h` and `k` own `s`, and those of `m` and `n` capture nothing
 
 #### Scenario: A nested closure captured by an escaping one
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String): () -> Int { val inner = { greet(s) }; return { inner() + 1 } }` is checked
@@ -154,8 +154,8 @@ An `E5006` diagnostic MUST point at the borrow, with related locations where the
 
 ### Requirement: Capturing Closures Do Not Escape
 **Reason**: A capturing closure that escapes now owns its captures instead of being rejected; only escaping values that may hold a borrow are rejected.
-**Migration**: "Closures That Escape Own Their Captures" lists the escapes, now including boxes, and "Escaping Function Values Hold No Borrows" and "Escaping Parameters Keep Function Values" keep `E5007` for values that may hold a borrow and for unmarked function-typed parameters.
+**Migration**: "Closures That Escape Own Their Captures" lists the same escapes, boxes and top-level `val`s included, and its scenario "Boxed and generic closures own their captures" takes over "Boxing a capturing closure"; "Escaping Function Values Hold No Borrows" keeps "A closure without captures may escape" and, with "Escaping Parameters Keep Function Values", keeps `E5007` for values that may hold a borrow and for unmarked function-typed parameters.
 
 ### Requirement: Capturing Closures Are Not Passed to Generic Parameters
 **Reason**: A capturing closure passed for a generic parameter now owns its captures, so a generic body may keep it.
-**Migration**: "Closures That Escape Own Their Captures" makes a generic parameter an escape, and "Escaping Function Values Hold No Borrows" rejects a value that may hold a borrow there, keeping the borrow-free rule of `generics`.
+**Migration**: "Closures That Escape Own Their Captures" makes a generic parameter an escape ("Boxed and generic closures own their captures", which also keeps `keep({ 1 })`, and "A closure passed to an unmarked parameter keeps borrowing", which keeps `remember { greet(s) }`), and "Escaping Function Values Hold No Borrows" and "An unmarked parameter cannot escape" reject a value that may hold a borrow there (`keep(p)`), keeping the borrow-free rule of `generics`.
