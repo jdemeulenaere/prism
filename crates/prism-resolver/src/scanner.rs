@@ -3,7 +3,7 @@
 //! Implements the "CLI Directory Scanner Homogeneity" requirement of the `package-resolution` spec.
 
 use crate::error::ResolveError;
-use crate::root::discover_root;
+use crate::root::{absolute_path, discover_root};
 use std::path::{Path, PathBuf};
 
 /// Scans all direct `.prism` files in a directory and verifies package homogeneity.
@@ -16,7 +16,11 @@ use std::path::{Path, PathBuf};
 /// Package Homogeneity Validation:
 /// - Every `.prism` file in `dir` must declare the exact same package statement.
 /// - If any file declares a conflicting package, emits `E1003: PackageHeterogeneity`.
+///
+/// A relative `dir` is made absolute against the current directory first (see
+/// [`absolute_path`]), so the returned files and any error paths are absolute.
 pub fn scan_directory(dir: &Path) -> Result<Vec<PathBuf>, ResolveError> {
+    let dir = &absolute_path(dir);
     if !dir.is_dir() {
         return Err(ResolveError::Io {
             path: dir.to_path_buf(),

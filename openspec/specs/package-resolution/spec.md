@@ -28,6 +28,10 @@ The resolver MUST deterministically discover the workspace root by comparing the
 - **WHEN** a file is located in directory `/workspace/App/UI` on a case-insensitive filesystem but declares `package app.ui`
 - **THEN** resolution MUST reject the path and emit `PackagePathMismatch` (`E1001`)
 
+#### Scenario: Relative entry path resolved before root discovery
+- **WHEN** a file at `/workspace/app/ui/main.prism` declares `package app.ui` and is checked by a relative path (`main.prism`, `./main.prism` or `../ui/main.prism`) from a current directory other than the workspace root, or its directory is checked as `.`
+- **THEN** the path is first made absolute against the current directory, so the workspace root resolves to `/workspace` exactly as for the absolute path, and diagnostics show file paths relative to the current directory when they lie inside it
+
 ### Requirement: Import Resolution and Workspace Anchoring
 The resolver MUST resolve imports into concrete, verified `.prism` files on disk, strictly distinguishing between sibling and root-anchored imports. Import paths MUST consist of identifier segments only; the parser rejects `.` and `..` segments before resolution.
 

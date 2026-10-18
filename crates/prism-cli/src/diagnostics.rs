@@ -43,6 +43,20 @@ fn render_labelled_snippet(source: &str, span: Span, label: &str) -> Option<Stri
     ))
 }
 
+/// How a path is shown to the user: relative to the current directory when it lies inside it
+/// (`ui/main.prism`), and as is otherwise. The resolver works on absolute paths (a relative entry
+/// is resolved before root discovery), so this brings them back to the spelling the user typed.
+pub fn display_path(path: &Path) -> String {
+    let relative = std::env::current_dir()
+        .ok()
+        .and_then(|current_dir| path.strip_prefix(current_dir).ok().map(Path::to_path_buf));
+    match relative {
+        Some(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+        Some(relative) => relative.display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
 /// Formats a [`ResolveError`] as a human-readable compiler diagnostic.
 pub fn format_resolve_error(err: &ResolveError) -> String {
     let mut out = String::new();
@@ -56,10 +70,10 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             actual_dir,
         } => {
             out.push_str(&format!("error[{}]: package path mismatch\n", code));
-            out.push_str(&format!("  --> {}:1:1\n", file.display()));
+            out.push_str(&format!("  --> {}:1:1\n", display_path(file)));
             out.push_str(&format!(
                 "   = note: directory path '{}' does not match declared package '{}' (expected suffix: '{}')\n",
-                actual_dir.display(),
+                display_path(actual_dir),
                 declared_package,
                 expected_suffix
             ));
@@ -72,7 +86,7 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             out.push_str(&format!(
                 "   = note: cannot resolve import '{}': target file '{}' does not exist\n",
                 import_path,
-                target_path.display()
+                display_path(target_path)
             ));
         }
         ResolveError::PackageHeterogeneity {
@@ -85,10 +99,10 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
                 "error[{}]: conflicting package in directory\n",
                 code
             ));
-            out.push_str(&format!("  --> {}:1:1\n", file.display()));
+            out.push_str(&format!("  --> {}:1:1\n", display_path(file)));
             out.push_str(&format!(
                 "   = note: file in directory '{}' declares package '{}' but expected package '{}'\n",
-                package_dir.display(),
+                display_path(package_dir),
                 declared_package,
                 expected_package
             ));
@@ -99,11 +113,11 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             workspace_root,
         } => {
             out.push_str(&format!("error[{}]: inconsistent workspace root\n", code));
-            out.push_str(&format!("  --> {}:1:1\n", file.display()));
+            out.push_str(&format!("  --> {}:1:1\n", display_path(file)));
             out.push_str(&format!(
                 "   = note: dependency root '{}' conflicts with workspace root '{}'\n",
-                file_root.display(),
-                workspace_root.display()
+                display_path(file_root),
+                display_path(workspace_root)
             ));
         }
         ResolveError::WorkspaceBoundaryViolation {
@@ -118,8 +132,8 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             out.push_str(&format!(
                 "   = note: import '{}' targets '{}' which escapes workspace root '{}'\n",
                 import_path,
-                target_path.display(),
-                workspace_root.display()
+                display_path(target_path),
+                display_path(workspace_root)
             ));
         }
         ResolveError::InvalidImportPath {
@@ -134,7 +148,7 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
         }
         ResolveError::Io { path, message } => {
             out.push_str(&format!("error[{}]: IO error\n", code));
-            out.push_str(&format!("  --> {}: {}\n", path.display(), message));
+            out.push_str(&format!("  --> {}: {}\n", display_path(path), message));
         }
         ResolveError::Parse { path, error } => {
             let source = std::fs::read_to_string(path).ok();
@@ -155,7 +169,7 @@ pub fn format_parse_error(path: &Path, source: Option<&str>, err: &ParseError) -
     out.push_str(&format!("error[{}]: syntax error\n", err.code));
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
-        path.display(),
+        display_path(path),
         err.span.line,
         err.span.column
     ));
@@ -178,7 +192,7 @@ pub fn format_abi_error(path: &Path, source: Option<&str>, err: &AbiError) -> St
     };
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
-        path.display(),
+        display_path(path),
         span.line,
         span.column
     ));
@@ -208,7 +222,7 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
     out.push_str(&format!("error[{}]: {}\n", err.code(), err.message()));
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
-        path.display(),
+        display_path(path),
         span.line,
         span.column
     ));
@@ -386,7 +400,7 @@ pub fn format_borrow_error(path: &Path, source: Option<&str>, error: &BorrowErro
     let mut location = |label: &Label| {
         out.push_str(&format!(
             "  --> {}:{}:{}\n",
-            path.display(),
+            display_path(path),
             label.span.line,
             label.span.column
         ));

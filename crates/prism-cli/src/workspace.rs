@@ -121,7 +121,7 @@ impl WorkspaceError {
             WorkspaceError::Io { path, message } => {
                 format!(
                     "error[E1000]: IO error at '{}': {}\n",
-                    path.display(),
+                    diagnostics::display_path(path),
                     message
                 )
             }
@@ -330,7 +330,7 @@ fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), WorkspaceErr
         if !canon_path.starts_with(&canon_root) {
             return Err(WorkspaceError::Resolve(
                 ResolveError::WorkspaceBoundaryViolation {
-                    import_path: path.display().to_string(),
+                    import_path: diagnostics::display_path(path),
                     target_path: canon_path,
                     workspace_root: effective_root,
                 },

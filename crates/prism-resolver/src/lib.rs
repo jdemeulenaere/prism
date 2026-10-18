@@ -16,6 +16,7 @@ pub use error::ResolveError;
 pub use graph::{DependencyGraph, SccCluster, SourceNode};
 pub use import::{candidate_target_path, resolve_import};
 pub use root::{
-    discover_root, discover_root_from_segments, normalize_path, verify_disk_casing_exists,
+    absolute_path, discover_root, discover_root_from_segments, normalize_path,
+    verify_disk_casing_exists,
 };
 pub use scanner::scan_directory;

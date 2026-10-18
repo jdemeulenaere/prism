@@ -107,6 +107,26 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     NormalizedPath::parse(path).to_path_buf()
 }
 
+/// Makes `path` absolute by joining a relative path onto the current directory, then normalizes
+/// it lexically (symlinks are not resolved, so a symlinked entry keeps the location it was
+/// given at).
+///
+/// Root discovery compares a file's location with its package declaration, which is only
+/// meaningful on an absolute path: `main.prism` run from inside `/workspace/app/ui` has no
+/// directory segments of its own. Every entry path is made absolute here before discovery, and
+/// everything the resolver derives from it (the root, import targets, graph keys) stays absolute
+/// and so agrees on one spelling per file. If the current directory is unavailable, the path is
+/// only normalized.
+pub fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return normalize_path(path);
+    }
+    match std::env::current_dir() {
+        Ok(current_dir) => normalize_path(&current_dir.join(path)),
+        Err(_) => normalize_path(path),
+    }
+}
+
 /// Verifies whether an entry with exact case-matching `segment` exists inside `parent` on disk.
 ///
 /// On case-insensitive filesystems (such as macOS APFS and Windows NTFS), standard existence checks

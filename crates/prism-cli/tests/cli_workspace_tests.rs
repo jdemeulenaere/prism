@@ -1063,3 +1063,68 @@ fn interface_hash_printed_by_prism_abi() {
     assert_eq!(interface_line, abi_line.map(|i| i + 1), "{}", stdout);
     assert!(has_full_hash(&stdout, "Interface Hash: 0x"), "{}", stdout);
 }
+
+/// "Relative entry path resolved before root discovery" (`package-resolution`): the entry is
+/// made absolute against the current directory, so a package directory can be checked from
+/// inside itself, by file or by directory, with imports resolving as for the absolute path.
+#[test]
+fn test_cli_relative_entry_path_resolved_before_root_discovery() {
+    let temp = create_temp_dir("relative_entry");
+    let core_dir = temp.join("core");
+    let ui_dir = temp.join("app").join("ui");
+    fs::create_dir_all(&core_dir).unwrap();
+    fs::create_dir_all(&ui_dir).unwrap();
+    fs::write(
+        core_dir.join("fmt.prism"),
+        "package core\npublic fun format_num(x: Int): Int = x\n",
+    )
+    .unwrap();
+    fs::write(
+        ui_dir.join("views.prism"),
+        "package app.ui\npackage fun view(): Int = 1\n",
+    )
+    .unwrap();
+    fs::write(
+        ui_dir.join("main.prism"),
+        "package app.ui\nimport /core/fmt\nimport views\nfun main(): Int = format_num(view())\n",
+    )
+    .unwrap();
+
+    for argument in [
+        "main.prism",
+        "./main.prism",
+        "../ui/main.prism",
+        ".",
+        "../ui",
+    ] {
+        let output = prism()
+            .current_dir(&ui_dir)
+            .arg("check")
+            .arg(argument)
+            .output()
+            .expect("failed to execute prism CLI");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{argument}: {stdout}{stderr}");
+        assert!(stdout.contains("✓ Check passed"), "{argument}: {stdout}");
+        assert!(stdout.contains("package: app.ui"), "{argument}: {stdout}");
+        // Paths inside the current directory are shown relative to it.
+        assert!(stdout.contains("  - main.prism ("), "{argument}: {stdout}");
+    }
+
+    // A mismatch is still reported from a relative path, with the file as the user can name it.
+    fs::write(ui_dir.join("main.prism"), "package app.models\n").unwrap();
+    fs::remove_file(ui_dir.join("views.prism")).unwrap();
+    let output = prism()
+        .current_dir(&ui_dir)
+        .arg("check")
+        .arg("main.prism")
+        .output()
+        .expect("failed to execute prism CLI");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E1001]"), "{stderr}");
+    assert!(stderr.contains("  --> main.prism:1:1"), "{stderr}");
+
+    fs::remove_dir_all(&temp).ok();
+}

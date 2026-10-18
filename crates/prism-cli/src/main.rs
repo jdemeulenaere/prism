@@ -147,13 +147,13 @@ fn run_check(path: &str, no_cache: bool, explain_cache: bool) {
             println!(
                 "✓ Check passed: '{}' (Workspace root: {}, Total units: {})",
                 path,
-                report.workspace_root.display(),
+                prism_cli::display_path(&report.workspace_root),
                 report.total_files
             );
             for file in &report.checked_files {
                 println!(
                     "  - {} (package: {}, exported: {}, ABI: 0x{})",
-                    file.path.display(),
+                    prism_cli::display_path(&file.path),
                     file.package,
                     file.exported_symbols,
                     file.abi_hash

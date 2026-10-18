@@ -6,7 +6,7 @@
 
 use crate::error::ResolveError;
 use crate::import::resolve_import;
-use crate::root::{discover_root, normalize_path};
+use crate::root::{absolute_path, discover_root};
 use prism_ast::SourceFile;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -57,6 +57,9 @@ impl DependencyGraph {
     }
 
     /// Constructs an import-directed dependency graph starting from one or more entry files.
+    ///
+    /// Relative entry paths are made absolute against the current directory first, so the root
+    /// is discovered from the file's real location; every path in the graph is absolute.
     pub fn from_entries(entry_files: &[impl AsRef<Path>]) -> Result<Self, ResolveError> {
         if entry_files.is_empty() {
             return Err(ResolveError::Io {
@@ -65,7 +68,7 @@ impl DependencyGraph {
             });
         }
 
-        let first_entry = normalize_path(entry_files[0].as_ref());
+        let first_entry = absolute_path(entry_files[0].as_ref());
         let first_content =
             std::fs::read_to_string(&first_entry).map_err(|e| ResolveError::Io {
                 path: first_entry.clone(),
@@ -83,8 +86,7 @@ impl DependencyGraph {
         let mut nodes: HashMap<PathBuf, SourceNode> = HashMap::new();
 
         for entry in entry_files {
-            let normalized = normalize_path(entry.as_ref());
-            worklist.push_back(normalized);
+            worklist.push_back(absolute_path(entry.as_ref()));
         }
 
         while let Some(current_path) = worklist.pop_front() {
