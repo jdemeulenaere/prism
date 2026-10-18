@@ -146,8 +146,37 @@ mod tests {
     }
 
     #[test]
+    fn concatenation_calls_the_runtime() {
+        // The scenario "Concatenation calls the runtime" of the `code-generation` spec.
+        let dump = dump_file(&lower_source(
+            "fun join(a: &String, b: &String): String = a + b\n",
+        ))
+        .unwrap();
+        // The import `fn<n> = %"prism_rt_string_concatenate" sig<m>`, and a call of it.
+        let callee = dump
+            .lines()
+            .find_map(|line| {
+                let (name, _) = line
+                    .trim()
+                    .split_once(" = %\"prism_rt_string_concatenate\"")?;
+                Some(name.to_string())
+            })
+            .unwrap_or_else(|| panic!("no import of the concatenation in\n{}", dump));
+        assert!(dump.contains(&format!("call {}(", callee)), "{}", dump);
+        for platform in ["malloc", "free", "memcpy"] {
+            assert!(!dump.contains(&format!("%\"{}\"", platform)), "{}", dump);
+        }
+        // The result's address, then the operands' addresses.
+        assert!(
+            dump.contains("function %\"main::join\"(i64, i64, i64)"),
+            "{}",
+            dump
+        );
+    }
+
+    #[test]
     fn a_file_the_backend_rejects_has_no_dump() {
-        match dump_file(&lower_source("fun f(s: String): Int = 1\n")) {
+        match dump_file(&lower_source("fun f(h: Heap<Int>): Int = 1\n")) {
             Err(DumpError::Unsupported(errors)) => assert_eq!(errors[0].code(), "E6001"),
             other => panic!("expected E6001, got {:?}", other.map(|_| ())),
         }

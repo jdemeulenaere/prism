@@ -1,4 +1,4 @@
 // expect: ok
 // run: 1
-struct P { val name: String }
-fun main() { val p = P("a"); println(1) }
+struct P { val next: Heap<Int>? }
+fun main() { val p = P(null); println(1) }

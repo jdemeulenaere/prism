@@ -6,7 +6,8 @@
 //! the current variant's payload, laid out like a struct's fields after the tag; a `T?` is a tag
 //! byte (0 for `null`) followed by `T`, except that a nullable reference or `Heap<T>` is one
 //! pointer whose `null` is 0. `Int`, `Double` and pointers take 8 bytes, `Char` 4, `Bool` 1,
-//! `Unit` and fieldless structs none. `String` and function types have no layout yet.
+//! `Unit` and fieldless structs none. A `String` is four pointer-sized words (D2 of
+//! `runtime-strings-and-drops`). Function types have no layout yet.
 //!
 //! Layouts depend only on the type table of the file, which holds the definition of every type
 //! its bodies can hold a value of (D2 and D4), so a file lays out every value from its own
@@ -73,6 +74,28 @@ pub enum Shape {
     /// A `T?` other than a nullable pointer: a tag byte at offset 0 (0 for `null`, 1 otherwise),
     /// then the payload.
     Nullable { payload: Member },
+    /// A `String`: the runtime's `PrismString`, four pointer-sized words ([`StringField`]).
+    String,
+}
+
+/// A word of a `String` value (D2 of `runtime-strings-and-drops`), in layout order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringField {
+    /// The first byte of the UTF-8 text, never null.
+    Pointer = 0,
+    /// The text's length in bytes.
+    ByteLength = 1,
+    /// The number of characters (Unicode scalar values) of the text.
+    CharacterCount = 2,
+    /// The size of the owned buffer in bytes, or 0 when the value owns none.
+    Capacity = 3,
+}
+
+impl StringField {
+    /// The field's offset in a `String` on a target whose pointers are `pointer`.
+    pub fn offset(self, pointer: MachineType) -> u32 {
+        self as u32 * pointer.bytes()
+    }
 }
 
 impl Layout {
@@ -124,8 +147,8 @@ impl<'t> LayoutTable<'t> {
         self.types
     }
 
-    /// The layout of `ty`, or the construct it waits for: strings, function values, a type
-    /// parameter (only generic bodies hold one) or an unknown type.
+    /// The layout of `ty`, or the construct it waits for: function values, a type parameter (only
+    /// generic bodies hold one) or an unknown type.
     pub fn layout(&self, ty: &Type) -> Result<Rc<Layout>, Construct> {
         if let Some(layout) = self.layouts.borrow().get(ty) {
             return Ok(layout.clone());
@@ -177,7 +200,11 @@ impl<'t> LayoutTable<'t> {
                 }
             },
             Type::Struct { .. } | Type::Enum { .. } => self.nominal(ty)?,
-            Type::String => return Err(Construct::Strings),
+            Type::String => Layout {
+                size: 4 * pointer.bytes(),
+                align: pointer.bytes(),
+                shape: Shape::String,
+            },
             Type::Fn { .. } => return Err(Construct::FunctionValues),
             Type::Parameter(_) => return Err(Construct::GenericCalls),
             Type::Opaque(name) => return Err(Construct::UnknownType(name.clone())),
@@ -476,7 +503,9 @@ fn write_entry(text: &mut String, layouts: &LayoutTable, ty: &Type) {
         }
         Shape::NullPointer => writeln!(text, "{} ({}, null pointer)", name, size).unwrap(),
         Shape::Uninhabited => writeln!(text, "{} ({}, uninhabited)", name, size).unwrap(),
-        Shape::Empty | Shape::Scalar(_) => writeln!(text, "{} ({})", name, size).unwrap(),
+        Shape::Empty | Shape::Scalar(_) | Shape::String => {
+            writeln!(text, "{} ({})", name, size).unwrap()
+        }
     }
 }
 
@@ -631,12 +660,39 @@ mod tests {
     }
 
     #[test]
+    fn strings_are_four_words() {
+        let source = "struct User { val name: String, val age: Int }\n";
+        let string = layout_in(source, &Type::String);
+        assert_eq!(
+            (string.size, string.align, string.shape),
+            (32, 8, Shape::String)
+        );
+        let user = layout_in(source, &main_struct("User"));
+        assert_eq!(
+            (user.size, user.align, offsets(&user)),
+            (40, 8, vec![0, 32])
+        );
+        let nullable = layout_in(source, &Type::String.nullable());
+        assert_eq!((nullable.size, offsets(&nullable)), (40, vec![8]));
+        assert_eq!(
+            [
+                StringField::Pointer,
+                StringField::ByteLength,
+                StringField::CharacterCount,
+                StringField::Capacity
+            ]
+            .map(|field| field.offset(POINTER)),
+            [0, 8, 16, 24]
+        );
+    }
+
+    #[test]
     fn types_without_a_layout_name_their_construct() {
-        let file = lower_source("struct User { val name: String }\nstruct Box<T>(val v: T)\n");
+        let file = lower_source("struct Task { val run: () -> Unit }\nstruct Box<T>(val v: T)\n");
         let layouts = LayoutTable::new(&file.types, POINTER);
         assert_eq!(
-            layouts.layout(&main_struct("User")),
-            Err(Construct::Strings)
+            layouts.layout(&main_struct("Task")),
+            Err(Construct::FunctionValues)
         );
         let generic = Type::Struct {
             id: NominalId::new("main", "Box"),
@@ -653,10 +709,11 @@ mod tests {
         let source = "struct Point : Copy { val x: Double, val y: Double }\n\
              enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }\n\
              struct User { val name: String }\n\
+             struct Task { val run: () -> Unit }\n\
              struct Box<T>(val v: T)\n\
-             fun f(a: (&Point)?, n: Int?): Int { val b = Box(true); return 1 }\n";
+             fun f(a: (&Point)?, n: Int?, s: &String?): Int { val b = Box(true); return 1 }\n";
         let file = lower_source(source);
-        let declared: Vec<NominalId> = ["Point", "Expr", "User", "Box"]
+        let declared: Vec<NominalId> = ["Point", "Expr", "User", "Task", "Box"]
             .iter()
             .map(|name| NominalId::new("main", *name))
             .collect();
@@ -671,11 +728,15 @@ mod tests {
              enum main::Expr (size 24, align 8, tag u8 at 0)\n\
              \x20 Literal(Int at 8)\n\
              \x20 Add(Heap<Expr> at 8, Heap<Expr> at 16)\n\
-             struct main::User (no layout yet: strings)\n\
+             struct main::User (size 32, align 8)\n\
+             \x20 name: String at 0\n\
+             struct main::Task (no layout yet: function values and closures)\n\
              struct main::Box<T> (generic: laid out per instance)\n\
              nullable (&Point)? (size 8, align 8, null pointer)\n\
              nullable Int? (size 16, align 8, tag u8 at 0)\n\
              \x20 payload Int at 8\n\
+             nullable String? (size 40, align 8, tag u8 at 0)\n\
+             \x20 payload String at 8\n\
              struct main::Box<Bool> (size 1, align 1)\n\
              \x20 v: Bool at 0\n"
         );

@@ -3,7 +3,8 @@
 //!
 //! An `Int` is an `i64`, a `Double` an `f64`, a `Bool` an `i8` holding 0 or 1, a `Char` an
 //! `i32` holding a Unicode scalar value, and a reference, a `Heap<T>` and a nullable of either a
-//! pointer (0 for `null`). A struct, an enum and any other nullable live in memory, laid out as
+//! pointer (0 for `null`). A `String`, a struct, an enum and any other nullable live in memory,
+//! laid out as
 //! [`crate::layout`] says. `Unit` and `Nothing` have no representation: they are left out of
 //! signatures. A value in memory is passed as its address, and returned through an address the
 //! caller passes before the arguments, so a machine signature depends on no layout. Every
@@ -21,18 +22,18 @@ pub enum Representation {
     Empty,
     /// One machine value.
     Scalar(MachineType),
-    /// Bytes in memory, laid out by the type's [`crate::layout::Layout`]: a struct, an enum, or
-    /// a nullable that is not a nullable pointer.
+    /// Bytes in memory, laid out by the type's [`crate::layout::Layout`]: a `String`, a struct,
+    /// an enum, or a nullable that is not a nullable pointer.
     Memory,
 }
 
-/// The representation of `ty`, or `None` for a type with none yet (strings, function values,
-/// type parameters and unknown types). It follows from the type's form alone, never from a
+/// The representation of `ty`, or `None` for a type with none yet (function values, type
+/// parameters and unknown types). It follows from the type's form alone, never from a
 /// layout, so callers and bodies agree on it.
 pub fn representation(ty: &Type, pointer: MachineType) -> Option<Representation> {
     match ty {
         Type::Unit | Type::Nothing => Some(Representation::Empty),
-        Type::Struct { .. } | Type::Enum { .. } => Some(Representation::Memory),
+        Type::String | Type::Struct { .. } | Type::Enum { .. } => Some(Representation::Memory),
         Type::Nullable(inner) if !is_pointer(inner) => Some(Representation::Memory),
         _ => machine_type(ty, pointer).map(Representation::Scalar),
     }
@@ -159,7 +160,10 @@ mod tests {
         ] {
             assert_eq!(machine_type(&ty, pointer), Some(pointer), "{}", ty);
         }
-        assert_eq!(representation(&Type::String, pointer), None);
+        assert_eq!(
+            representation(&Type::String, pointer),
+            Some(Representation::Memory)
+        );
     }
 
     #[test]

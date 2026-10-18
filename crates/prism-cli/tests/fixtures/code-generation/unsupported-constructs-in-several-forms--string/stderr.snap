@@ -1,5 +1,0 @@
-error[E6001]: the Tier 1 backend does not support strings yet
-  --> main.prism:3:22
-    3 | fun main() { println("hi") }
-      |                      ^
-   = note: support for strings is planned in the 'runtime-strings-and-drops' change

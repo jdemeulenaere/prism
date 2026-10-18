@@ -1,2 +1,2 @@
-struct main::User (no layout yet: strings)
+struct main::Task (no layout yet: function values and closures)
 struct main::Box<T> (generic: laid out per instance)

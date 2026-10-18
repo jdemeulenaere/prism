@@ -441,3 +441,132 @@ fn a_top_level_struct_initializes_once() {
     assert_eq!(read(), 344);
     assert_eq!(AGGREGATE_INITIALIZATIONS.load(Ordering::SeqCst), 1);
 }
+
+// Strings (D2 to D7 and D16 of `runtime-strings-and-drops`).
+
+use prism_runtime::{allocation_statistics, prism_rt_string_drop, PrismString};
+use std::mem::MaybeUninit;
+
+/// Runs `test` under the allocation check, with the runtime's process-wide state to itself, and
+/// returns the number of allocations it made, checking that it freed all of them.
+fn checked(test: impl FnOnce()) -> u64 {
+    let _lock = prism_runtime::test_lock();
+    prism_runtime::start(Vec::new(), true);
+    test();
+    let statistics = allocation_statistics();
+    assert_eq!(prism_runtime::finish(), 0);
+    prism_runtime::start(Vec::new(), false);
+    assert_eq!(statistics.live_allocations, 0, "{:?}", statistics);
+    statistics.allocations_made
+}
+
+/// The string a compiled function writes through the result address it is passed.
+fn returned(f: impl FnOnce(*mut PrismString)) -> PrismString {
+    let mut result = MaybeUninit::<PrismString>::uninit();
+    f(result.as_mut_ptr());
+    // SAFETY: a function returning a `String` writes its result address.
+    unsafe { result.assume_init() }
+}
+
+fn drop_string(mut string: PrismString) {
+    // SAFETY: the string is not used afterwards.
+    unsafe { prism_rt_string_drop(&mut string) };
+}
+
+type StringResult = extern "C" fn(*mut PrismString);
+type StringPair<R> = extern "C" fn(*const PrismString, *const PrismString) -> R;
+
+#[test]
+fn literals_and_their_clones_allocate_nothing() {
+    // The scenarios "Literals do not allocate" and "An empty concatenation owns nothing".
+    let program = compile(
+        "fun literal(): String = \"héllo\"\n\
+         fun cloned(): Int { val s = \"hi\"; val t = s.clone(); return t.length + s.length }\n\
+         fun empty(): String = \"\" + \"\"\n\
+         fun one_sided(): String = \"\" + \"ab\"\n",
+    );
+    let literal: StringResult = function(&program, "main::literal");
+    let cloned: ToInt = function(&program, "main::cloned");
+    let empty: StringResult = function(&program, "main::empty");
+    let one_sided: StringResult = function(&program, "main::one_sided");
+    let made = checked(|| {
+        let text = returned(|r| literal(r));
+        assert_eq!(
+            (
+                text.as_str(),
+                text.byte_length,
+                text.character_count,
+                text.capacity
+            ),
+            ("héllo", 6, 5, 0)
+        );
+        assert_eq!(cloned(), 4);
+        let nothing = returned(|r| empty(r));
+        assert_eq!((nothing.byte_length, nothing.capacity), (0, 0));
+        assert!(!nothing.pointer.is_null());
+        let other = returned(|r| one_sided(r));
+        assert_eq!((other.as_str(), other.capacity), ("ab", 0));
+        for string in [text, nothing, other] {
+            drop_string(string);
+        }
+    });
+    assert_eq!(made, 0);
+}
+
+#[test]
+fn string_operations_give_their_results() {
+    let program = compile(
+        "fun join(a: &String, b: &String): String = a + b\n\
+         fun same(a: &String, b: &String): Bool = a == b\n\
+         fun differ(a: &String, b: &String): Bool = a != b\n\
+         fun count(s: &String): Int = s.length\n\
+         fun at(s: &String, i: Int): Char = s[i]\n\
+         fun int(n: Int): String = n.toString()\n\
+         fun double(d: Double): String = d.toString()\n\
+         fun bool(b: Bool): String = b.toString()\n\
+         fun char(c: Char): String = c.toString()\n\
+         fun pick(s: String): Int = when (s) { \"one\" -> 1; \"two\" -> 2; else -> 0 }\n",
+    );
+    let join: extern "C" fn(*mut PrismString, *const PrismString, *const PrismString) =
+        function(&program, "main::join");
+    let same: StringPair<u8> = function(&program, "main::same");
+    let differ: StringPair<u8> = function(&program, "main::differ");
+    let count: extern "C" fn(*const PrismString) -> i64 = function(&program, "main::count");
+    let at: extern "C" fn(*const PrismString, i64) -> u32 = function(&program, "main::at");
+    let int: extern "C" fn(*mut PrismString, i64) = function(&program, "main::int");
+    let double: extern "C" fn(*mut PrismString, f64) = function(&program, "main::double");
+    let boolean: extern "C" fn(*mut PrismString, u8) = function(&program, "main::bool");
+    let char: extern "C" fn(*mut PrismString, u32) = function(&program, "main::char");
+    let pick: extern "C" fn(*const PrismString) -> i64 = function(&program, "main::pick");
+    checked(|| {
+        let pri = PrismString::of_static("pri");
+        let sm = PrismString::owned("sm");
+        let prism = returned(|result| join(result, &pri, &sm));
+        assert_eq!((prism.as_str(), prism.character_count), ("prism", 5));
+        assert_eq!(same(&prism, &PrismString::of_static("prism")), 1);
+        assert_eq!(same(&prism, &pri), 0);
+        assert_eq!(differ(&prism, &pri), 1);
+        let text = PrismString::of_static("héllo");
+        assert_eq!(count(&text), 5);
+        assert_eq!([at(&text, 1), at(&text, 4)], ['é' as u32, 'o' as u32]);
+        let texts: Vec<String> = [
+            returned(|result| int(result, -42)),
+            returned(|result| double(result, 1.0e7)),
+            returned(|result| boolean(result, 1)),
+            returned(|result| char(result, 'é' as u32)),
+        ]
+        .into_iter()
+        .map(|string| {
+            let text = string.as_str().to_string();
+            drop_string(string);
+            text
+        })
+        .collect();
+        assert_eq!(texts, ["-42", "1.0E7", "true", "é"]);
+        for (word, expected) in [("two", 2), ("one", 1), ("three", 0)] {
+            assert_eq!(pick(&PrismString::of_static(word)), expected);
+        }
+        drop_string(prism);
+        drop_string(sm);
+    });
+}

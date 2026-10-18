@@ -1,0 +1,5 @@
+error[E6001]: the Tier 1 backend does not support 'Heap' values yet
+  --> main.prism:4:1
+    4 | fun size(n: &Node): Int = 1
+      | ^
+   = note: support for 'Heap' values is planned in the 'heap-boxes' change

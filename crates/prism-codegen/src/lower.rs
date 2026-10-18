@@ -16,7 +16,7 @@
 //! "stack overflow" below it (D27). A drop does nothing: no supported value owns storage (D14).
 
 use crate::error::BackendError;
-use crate::layout::{Layout, Member, Shape};
+use crate::layout::{Layout, Member, Shape, StringField};
 use crate::representation::{is_pointer, representation, signature, Representation};
 use crate::symbols::{accessor_symbol, callee_symbol};
 use crate::unit::{data_global, UnitContext};
@@ -462,6 +462,12 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         .iconst(types::I32, i64::from(*value as u32)),
                 ),
                 Constant::Unit => Lowered::Empty,
+                // A literal used as an operand is built in a temporary.
+                Constant::String(text) => {
+                    let address = self.temporary(&Type::String)?;
+                    self.write_string_literal(address, text)?;
+                    Lowered::Memory(address)
+                }
                 Constant::TopLevelValue(path) => Lowered::Scalar(self.top_level_value(path, span)?),
                 // A `null` in memory is built in a temporary.
                 Constant::Null(ty) if self.is_memory(ty) => {
@@ -516,6 +522,60 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         }
     }
 
+    /// Writes the string literal `text` to the `String` at `address`: a pointer to the literal's
+    /// bytes in the unit's read-only data, its lengths in bytes and in characters, counted here,
+    /// and a capacity of 0, since the value owns no buffer (D3 of `runtime-strings-and-drops`).
+    fn write_string_literal(&mut self, address: Value, text: &str) -> Result<(), BackendError> {
+        let pointer = self.pointer();
+        let data = self.context.text(text)?;
+        let words = [
+            (StringField::Pointer, self.data(data)),
+            (
+                StringField::ByteLength,
+                self.builder.ins().iconst(pointer, text.len() as i64),
+            ),
+            (
+                StringField::CharacterCount,
+                self.builder
+                    .ins()
+                    .iconst(pointer, text.chars().count() as i64),
+            ),
+            (StringField::Capacity, self.builder.ins().iconst(pointer, 0)),
+        ];
+        for (field, value) in words {
+            let offset = field.offset(pointer) as i32;
+            self.builder.ins().store(aligned(), value, address, offset);
+        }
+        Ok(())
+    }
+
+    /// The address of the `String` an operand of type `String`, `&String`, `&&String`, ... holds
+    /// or refers to.
+    fn string_address(&mut self, operand: &Operand, span: Span) -> Result<Value, BackendError> {
+        let ty = self
+            .operand_type(operand)
+            .ok_or_else(|| BackendError::new("operand of unknown type"))?;
+        let pointer = self.pointer();
+        let mut address = match self.operand(operand, span)? {
+            Lowered::Memory(address) | Lowered::Scalar(address) => address,
+            Lowered::Empty => return Err(BackendError::new("a string without a value")),
+        };
+        // A `&String` is the string's address; each further layer is loaded.
+        let mut referent = &ty;
+        let mut layers = 0;
+        while let Type::Reference { inner, .. } = referent {
+            layers += 1;
+            referent = inner;
+        }
+        if *referent != Type::String {
+            return Err(BackendError::new(format!("{} is not a string", ty)));
+        }
+        for _ in 1..layers.max(1) {
+            address = self.builder.ins().load(pointer, aligned(), address, 0);
+        }
+        Ok(address)
+    }
+
     fn assign(&mut self, place: &Place, rvalue: &Rvalue, span: Span) -> Result<(), BackendError> {
         let ty = place.ty(self.body, self.types());
         match rvalue {
@@ -543,6 +603,22 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Rvalue::Use(Operand::Constant(Constant::Null(_))) => {
                 let location = self.location(place)?;
                 self.write_null(location, &ty)
+            }
+            Rvalue::Use(Operand::Constant(Constant::String(text))) => {
+                let address = self.address(place)?;
+                self.write_string_literal(address, text)
+            }
+            Rvalue::Binary(BinaryOperator::Add, left, right) if ty == Type::String => {
+                // The runtime reads both operands before it writes the result, so the
+                // destination may be either of them.
+                let left = self.string_address(left, span)?;
+                let right = self.string_address(right, span)?;
+                let destination = self.address(place)?;
+                let function = self.runtime_function("prism_rt_string_concatenate")?;
+                self.builder
+                    .ins()
+                    .call(function, &[destination, left, right]);
+                Ok(())
             }
             Rvalue::Subtype(operand) => match self.operand_type(operand) {
                 // `Nothing?` to any nullable is `null`.
@@ -770,6 +846,16 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.builder
                         .ins()
                         .fcmp(FloatCC::Equal, left.scalar()?, right.scalar()?);
+                self.continue_if(equal, unequal);
+            }
+            // Strings compare their text, in the runtime (D11 of `runtime-strings-and-drops`).
+            Type::String => {
+                let function = self.runtime_function("prism_rt_string_equals")?;
+                let call = self
+                    .builder
+                    .ins()
+                    .call(function, &[memory(left)?, memory(right)?]);
+                let equal = self.builder.inst_results(call)[0];
                 self.continue_if(equal, unequal);
             }
             // References compare what they refer to, never their addresses.
@@ -1161,15 +1247,67 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.write_place(destination, Lowered::Memory(temporary), false)?;
                 }
             }
+            Callee::Builtin(BuiltinFunction::Clone) if result_type == Type::String => {
+                let receiver = self.receiver(arguments, span)?;
+                let destination = self.address(destination)?;
+                let function = self.runtime_function("prism_rt_string_clone")?;
+                self.builder.ins().call(function, &[destination, receiver]);
+            }
             Callee::Builtin(BuiltinFunction::Clone) => {
                 // The clone of a value that owns nothing is a copy of the receiver's referent
                 // (D15), which may be the destination itself.
-                let receiver = arguments
-                    .first()
-                    .ok_or_else(|| BackendError::new("clone without a receiver"))?;
-                let receiver = self.operand(receiver, span)?.scalar()?;
+                let receiver = self.receiver(arguments, span)?;
                 let referent = self.read_location(Location::Memory(receiver), &result_type)?;
                 self.write_place(destination, referent, true)?;
+            }
+            Callee::Builtin(BuiltinFunction::StringLength) => {
+                // The stored count of characters (D2 and D4 of `runtime-strings-and-drops`).
+                let string = self.receiver(arguments, span)?;
+                let offset = StringField::CharacterCount.offset(self.pointer()) as i32;
+                let length = self
+                    .builder
+                    .ins()
+                    .load(types::I64, aligned(), string, offset);
+                self.write_place(destination, Lowered::Scalar(length), false)?;
+            }
+            Callee::Builtin(BuiltinFunction::StringCharacter) => {
+                let string = self.receiver(arguments, span)?;
+                let index = arguments
+                    .get(1)
+                    .ok_or_else(|| BackendError::new("a string index without an index"))?;
+                let index = self.operand(index, span)?.scalar()?;
+                let pointer = self.pointer();
+                let (file_data, file_length) = self.context.file_name();
+                let file = self.data(file_data);
+                let file_length = self.builder.ins().iconst(pointer, file_length as i64);
+                let line = self.builder.ins().iconst(types::I32, i64::from(span.line));
+                let column = self
+                    .builder
+                    .ins()
+                    .iconst(types::I32, i64::from(span.column));
+                let function = self.runtime_function("prism_rt_string_character")?;
+                let call = self
+                    .builder
+                    .ins()
+                    .call(function, &[string, index, file, file_length, line, column]);
+                let character = self.builder.inst_results(call)[0];
+                self.write_place(destination, Lowered::Scalar(character), false)?;
+            }
+            Callee::Builtin(BuiltinFunction::ToString) => {
+                let receiver = arguments
+                    .first()
+                    .ok_or_else(|| BackendError::new("toString without a receiver"))?;
+                let name = match parameters.first() {
+                    Some(Type::Int) => "prism_rt_int_to_string",
+                    Some(Type::Float) => "prism_rt_double_to_string",
+                    Some(Type::Bool) => "prism_rt_bool_to_string",
+                    Some(Type::Char) => "prism_rt_char_to_string",
+                    other => return Err(BackendError::new(format!("toString of {:?}", other))),
+                };
+                let value = self.operand(receiver, span)?.scalar()?;
+                let destination = self.address(destination)?;
+                let function = self.runtime_function(name)?;
+                self.builder.ins().call(function, &[destination, value]);
             }
             Callee::Builtin(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
                 let mut values = Vec::new();
@@ -1184,6 +1322,10 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         Type::Float => "prism_rt_print_double",
                         Type::Bool => "prism_rt_print_bool",
                         Type::Char => "prism_rt_print_char",
+                        // A `String` is printed through a shared borrow of it.
+                        Type::Reference { inner, .. } if **inner == Type::String => {
+                            "prism_rt_print_string"
+                        }
                         other => return Err(BackendError::new(format!("print of {}", other))),
                     };
                     let function = self.runtime_function(name)?;
@@ -1194,11 +1336,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.builder.ins().call(function, &[]);
                 }
             }
-            Callee::Builtin(
-                BuiltinFunction::StringLength
-                | BuiltinFunction::StringCharacter
-                | BuiltinFunction::ToString,
-            ) => return Err(BackendError::new("a call of a string built-in")),
             Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
         }
         match target {
@@ -1211,6 +1348,15 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             }
         }
         Ok(())
+    }
+
+    /// The address of the referent of the receiver borrow that a built-in member receives
+    /// first.
+    fn receiver(&mut self, arguments: &[Operand], span: Span) -> Result<Value, BackendError> {
+        let receiver = arguments
+            .first()
+            .ok_or_else(|| BackendError::new("a built-in member without a receiver"))?;
+        self.operand(receiver, span)?.scalar()
     }
 
     /// The value passed for `argument`: a scalar, or the address of memory the callee owns for

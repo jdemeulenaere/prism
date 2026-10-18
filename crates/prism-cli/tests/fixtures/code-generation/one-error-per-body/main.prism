@@ -1,5 +1,5 @@
 // expect: ok
 // run: 1
-fun f(): Int { val a = "x"; val b = "y"; return 1 }
-fun g(): Int { val c = "z"; return 2 }
+fun f(): Int { val a: Heap<Int>? = null; val b: Heap<Int>? = null; return 1 }
+fun g(): Int { val c: Heap<Int>? = null; return 2 }
 fun main() {}

@@ -8,16 +8,17 @@
 //! statement or terminator, in block order, that uses an unsupported type or operation. A body
 //! that passes is one [`crate::lower`] can lower.
 //!
-//! Scalars, `Unit`, references, structs, enums and nullables are supported, unless a struct,
-//! enum or nullable holds something that is not: a type is named by the first construct its
-//! fields or payloads need, in declaration order, as a reference is named by its referent.
+//! Scalars, `Unit`, strings, references, structs, enums and nullables are supported, unless a
+//! struct, enum or nullable holds something that is not: a type is named by the first construct
+//! its fields or payloads need, in declaration order, as a reference is named by its referent
+//! (D18 of `runtime-strings-and-drops`).
 
 use crate::error::{CodegenError, CodegenErrorKind};
 use crate::representation::{representation, Representation};
 use cranelift_codegen::ir::types;
 use prism_ast::Span;
 use prism_mir::{
-    Body, BodyOwner, Callee, Constant, MirFile, Operand, Place, Projection, Rvalue, StatementKind,
+    Body, BodyOwner, Callee, Constant, MirFile, Operand, Place, Rvalue, StatementKind,
     TerminatorKind,
 };
 use prism_typed_tree::{Type, TypeTable};
@@ -30,7 +31,6 @@ const MAXIMUM_DEPTH: usize = 256;
 /// A construct the backend does not compile yet, as `E6001` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Construct {
-    Strings,
     HeapValues,
     FunctionValues,
     GenericCalls,
@@ -50,7 +50,6 @@ impl Construct {
     /// How the diagnostic names the construct.
     pub fn description(&self) -> String {
         match self {
-            Construct::Strings => "strings".to_string(),
             Construct::HeapValues => "'Heap' values".to_string(),
             Construct::FunctionValues => "function values and closures".to_string(),
             Construct::GenericCalls => "calls of generic functions".to_string(),
@@ -65,7 +64,7 @@ impl Construct {
     /// The planned change that will support the construct, if one is planned.
     pub fn change(&self) -> Option<&'static str> {
         match self {
-            Construct::Strings | Construct::HeapValues => Some("runtime-strings-and-drops"),
+            Construct::HeapValues => Some("heap-boxes"),
             Construct::FunctionValues => Some("closures"),
             Construct::GenericCalls => Some("monomorphization"),
             Construct::ComposableFunctions => Some("compose-transform"),
@@ -157,8 +156,13 @@ fn classify_at(ty: &Type, types: &TypeTable, depth: usize) -> Option<Construct> 
         return unknown();
     }
     match ty {
-        Type::Int | Type::Float | Type::Bool | Type::Char | Type::Unit | Type::Nothing => None,
-        Type::String => Some(Construct::Strings),
+        Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Char
+        | Type::String
+        | Type::Unit
+        | Type::Nothing => None,
         // A reference and a nullable are named by what they hold.
         Type::Reference { inner, .. } | Type::Nullable(inner) => {
             classify_at(inner, types, depth + 1)
@@ -215,18 +219,10 @@ impl BodyChecker<'_> {
         place.try_ty(self.body, self.types)
     }
 
-    /// A place is supported when its local is and it indexes no string.
+    /// A place is supported when its local is. Its projections are: the MIR has no index
+    /// projection (D5 of `runtime-strings-and-drops`).
     fn place(&self, place: &Place) -> Option<Construct> {
-        if let Some(construct) = classify(self.local_type(place), self.types) {
-            return Some(construct);
-        }
-        place
-            .projections
-            .iter()
-            .find_map(|projection| match projection {
-                Projection::Deref | Projection::Field(_) | Projection::Payload => None,
-                Projection::Index(_) => Some(Construct::Strings),
-            })
+        classify(self.local_type(place), self.types)
     }
 
     fn operand(&self, operand: &Operand) -> Option<Construct> {
@@ -237,9 +233,9 @@ impl BodyChecker<'_> {
                 | Constant::Float(_)
                 | Constant::Bool(_)
                 | Constant::Char(_)
+                | Constant::String(_)
                 | Constant::Unit
                 | Constant::TopLevelValue(_) => None,
-                Constant::String(_) => Some(Construct::Strings),
                 Constant::Null(ty) => classify(ty, self.types),
                 // A variant constructor reaches the backend only as a value; its calls are
                 // aggregates.
@@ -285,7 +281,8 @@ impl BodyChecker<'_> {
         match terminator {
             TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => None,
             TerminatorKind::SwitchInt { value, .. } => self.operand(value),
-            // A supported value owns no storage, so its drop does nothing (D14).
+            // A supported value's drop runs its drop glue, if it has any (D9 of
+            // `runtime-strings-and-drops`).
             TerminatorKind::Drop { place, .. } => self.place(place),
             TerminatorKind::Call {
                 callee,
@@ -374,25 +371,27 @@ mod tests {
 
     #[test]
     fn a_struct_is_rejected_at_its_construction() {
-        let (message, line, column) =
-            single("struct P { val name: String }\nfun main() { val p = P(\"a\"); println(1) }\n");
-        names(&message, "strings");
+        let (message, line, column) = single(
+            "struct P { val next: Heap<Int>? }\nfun main() { val p = P(null); println(1) }\n",
+        );
+        names(&message, "'Heap' values");
         assert_eq!((line, column), (2, 22));
     }
 
     #[test]
     fn every_row_of_the_table() {
         let cases: &[(&str, &str)] = &[
-            ("fun f() { val s = \"x\" }\n", "strings"),
-            ("fun f(s: &String) {}\n", "strings"),
-            ("fun f() { println(\"hi\") }\n", "strings"),
             (
-                "struct P { val name: String }\nfun f(p: &P): Int = 1\n",
-                "strings",
+                "struct P { val next: Heap<Int>? }\nfun f(p: &P): Int = 1\n",
+                "'Heap' values",
             ),
             (
-                "struct P { val n: Int, val name: String?, val h: Heap<Int> }\nfun f(p: &P): Int = 1\n",
-                "strings",
+                "struct P { val n: Int, val name: String?, val h: Heap<Int>, val f: () -> Int }\nfun f(p: &P): Int = 1\n",
+                "'Heap' values",
+            ),
+            (
+                "struct P { val n: Int, val name: String?, val f: () -> Int, val h: Heap<Int> }\nfun f(p: &P): Int = 1\n",
+                "function values and closures",
             ),
             ("fun f(h: Heap<Int>) {}\n", "'Heap' values"),
             ("fun f() { val h: Heap<Int>? = null }\n", "'Heap' values"),
@@ -426,6 +425,22 @@ mod tests {
     }
 
     #[test]
+    fn strings_are_supported() {
+        let source = "struct User { val name: String, val nick: String? }\n\
+             enum Message { Text(String, Int), Empty }\n\
+             val ADMIN: String = \"ro\" + \"ot\"\n\
+             fun greet(name: String, n: Int): String = name\n\
+             fun join(a: &String, b: &String): String = a + b\n\
+             fun main() {\n\
+                 var s = \"a\"; s += \"b\"; println(s); print(s == ADMIN)\n\
+                 val u = User(s.clone(), null); println(u.name.length); println(u.name[0])\n\
+                 val m = Message.Text(1.toString(), 2); println(m == Message.Empty)\n\
+                 println(greet(join(&ADMIN, &u.name), 1))\n\
+             }\n";
+        assert_eq!(errors(source), []);
+    }
+
+    #[test]
     fn aggregates_are_supported() {
         let source = "struct Point : Copy { var x: Int, var y: Int }\n\
              struct Counter { var n: Int }\n\
@@ -452,10 +467,11 @@ mod tests {
 
     #[test]
     fn notes_name_the_change() {
-        let error = check_file(&lower_source("fun f() { val s = \"x\" }\n")).unwrap_err();
+        let error =
+            check_file(&lower_source("fun f() { val h: Heap<Int>? = null }\n")).unwrap_err();
         assert_eq!(
             error[0].notes,
-            ["support for strings is planned in the 'runtime-strings-and-drops' change"]
+            ["support for 'Heap' values is planned in the 'heap-boxes' change"]
         );
     }
 
@@ -463,25 +479,25 @@ mod tests {
     fn one_error_per_body() {
         // The scenario "One error per body" of the `code-generation` spec.
         let errors = errors(
-            "fun f(): Int { val a = \"x\"; val b = \"y\"; return 1 }\n\
-             fun g(): Int { val c = \"z\"; return 2 }\n\
+            "fun f(): Int { val a: Heap<Int>? = null; val b: Heap<Int>? = null; return 1 }\n\
+             fun g(): Int { val c: Heap<Int>? = null; return 2 }\n\
              fun main() {}\n",
         );
         let positions: Vec<(u32, u32)> = errors.iter().map(|e| (e.1, e.2)).collect();
-        assert_eq!(positions, [(1, 24), (2, 24)]);
+        assert_eq!(positions, [(1, 36), (2, 36)]);
     }
 
     #[test]
     fn unsupported_signatures_are_reported_at_the_declaration() {
-        let (message, line, column) = single("fun main() {}\nfun first(s: String): Int = 1\n");
-        names(&message, "strings");
+        let (message, line, column) = single("fun main() {}\nfun first(h: Heap<Int>): Int = 1\n");
+        names(&message, "'Heap' values");
         assert_eq!((line, column), (2, 1));
     }
 
     #[test]
     fn generic_and_closure_bodies_are_not_checked() {
         assert_eq!(
-            errors("fun <T> keep(x: T): T { val s = \"x\"; return x }\n"),
+            errors("fun <T> keep(x: T): T { val h: Heap<Int>? = null; return x }\n"),
             []
         );
     }

@@ -132,13 +132,13 @@ fn dumping_a_file_s_ir() {
 
 #[test]
 fn dumping_a_file_the_backend_rejects() {
-    let directory = single_file("dump_rejected", "fun f(s: String): Int = 1\n");
+    let directory = single_file("dump_rejected", "fun f(h: Heap<Int>): Int = 1\n");
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "");
     assert!(
         stderr(&output).starts_with(
-            "error[E6001]: the Tier 1 backend does not support strings yet\n  --> main.prism:1:1\n"
+            "error[E6001]: the Tier 1 backend does not support 'Heap' values yet\n  --> main.prism:1:1\n"
         ),
         "{}",
         stderr(&output)

@@ -1,0 +1,3 @@
+struct main::User (size 40, align 8)
+  name: String at 0
+  age: Int at 32
