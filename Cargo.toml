@@ -27,3 +27,12 @@ repository = "https://github.com/jdemeulenaere/prism"
 # an unoptimized BLAKE3 would make slow in debug builds.
 [profile.dev.package.blake3]
 opt-level = 3
+
+# `prism` built in debug, as the tests and `cargo run` build it, compiles programs with
+# Cranelift: unoptimized, Cranelift and its register allocator take ten to thirty times longer.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3
