@@ -701,6 +701,37 @@ fn example_elaborated_mir_is_well_formed() {
     );
 }
 
+/// code-generation: "Symbols Derive from Declaration Paths". Every body of the elaborated MIR of
+/// every passing case's entry gets a symbol, and no two bodies of a file share one.
+#[test]
+fn fixture_symbols_are_distinct() {
+    let mut files = 0;
+    for case in load_cases() {
+        if !case.expected.is_empty() {
+            continue;
+        }
+        let entry = entry_of(&case);
+        if !entry.is_file() {
+            continue;
+        }
+        let Ok(dump) = prism_cli::dump_elaborated_mir(&entry) else {
+            continue;
+        };
+        files += 1;
+        let mut seen = BTreeSet::new();
+        for (_, body) in dump.mir.bodies.iter() {
+            let symbol = prism_codegen::symbols::symbol_of(&body.owner, &dump.mir);
+            assert!(
+                seen.insert(symbol.clone()),
+                "{}: two bodies named {}",
+                case.name,
+                symbol
+            );
+        }
+    }
+    assert!(files > 200, "only {} files named", files);
+}
+
 fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = panic.downcast_ref::<String>() {
         message.clone()

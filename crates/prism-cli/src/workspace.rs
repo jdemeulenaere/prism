@@ -501,7 +501,10 @@ fn instance_requests(mir: &MirFile, import_modules: &[String]) -> Vec<InstanceRe
             let shown: Vec<String> = type_arguments.iter().map(ToString::to_string).collect();
             requests.push(InstanceRequest {
                 module: path.module.clone(),
-                receiver: path.receiver.as_ref().map(receiver_constructor),
+                receiver: path
+                    .receiver
+                    .as_ref()
+                    .map(prism_typed_tree::Type::receiver_constructor),
                 name: path.name.clone(),
                 type_arguments: hasher.finish(),
                 display: instance_display(path, &shown),
@@ -531,21 +534,6 @@ fn instance_display(path: &prism_typed_tree::DeclarationPath, shown: &[String]) 
         path.name,
         shown.join(", ")
     )
-}
-
-/// The constructor of an extension's receiver type, as [`prism_abi::receiver_constructor`]
-/// writes it for the same type in an ABI, so a MIR callee finds its ABI symbol.
-fn receiver_constructor(ty: &prism_typed_tree::Type) -> String {
-    use prism_typed_tree::{NominalId, Type};
-    match ty {
-        Type::Struct { id, .. } | Type::Enum { id, .. } if *id == NominalId::builtin_range() => {
-            "Range".to_string()
-        }
-        Type::Struct { id, .. } | Type::Enum { id, .. } => format!("{}.{}", id.module, id.name),
-        Type::Opaque(name) => name.clone(),
-        Type::Unit => "Unit".to_string(),
-        other => other.to_string(),
-    }
 }
 
 /// Looks up, or records, the instance of each of `requests` in `cache`, keyed by the generic's

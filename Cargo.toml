@@ -13,6 +13,7 @@ members = [
     "crates/prism-borrowck",
     "crates/prism-formatter",
     "crates/prism-runtime",
+    "crates/prism-codegen",
 ]
 
 [workspace.package]

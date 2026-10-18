@@ -476,6 +476,23 @@ impl Type {
         }
     }
 
+    /// The constructor of an extension's receiver type, as `prism_abi::receiver_constructor`
+    /// writes it for the same type in an ABI (`lib/team.Team`, `Int`, `Range`), so that a MIR
+    /// callee finds its ABI symbol and the code generator names the extension's symbol.
+    pub fn receiver_constructor(&self) -> String {
+        match self {
+            Type::Struct { id, .. } | Type::Enum { id, .. }
+                if *id == NominalId::builtin_range() =>
+            {
+                "Range".to_string()
+            }
+            Type::Struct { id, .. } | Type::Enum { id, .. } => format!("{}.{}", id.module, id.name),
+            Type::Opaque(name) => name.clone(),
+            Type::Unit => "Unit".to_string(),
+            other => other.to_string(),
+        }
+    }
+
     /// Renders the type with every nominal type qualified by its defining module.
     pub fn qualified(&self) -> String {
         match self {

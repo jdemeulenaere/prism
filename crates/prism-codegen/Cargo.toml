@@ -1,0 +1,25 @@
+[package]
+name = "prism-codegen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-ast = { path = "../prism-ast" }
+prism-typed-tree = { path = "../prism-typed-tree" }
+prism-mir = { path = "../prism-mir" }
+prism-runtime = { path = "../prism-runtime" }
+# Pinned exactly, so that generated code, `prism dump-clif` and the timing baseline only change
+# with a deliberate upgrade (D2 of `codegen-core`).
+cranelift-codegen = "=0.136.2"
+cranelift-frontend = "=0.136.2"
+cranelift-module = "=0.136.2"
+cranelift-jit = "=0.136.2"
+cranelift-native = "=0.136.2"
+
+[dev-dependencies]
+prism-abi = { path = "../prism-abi" }
+prism-parser = { path = "../prism-parser" }
+prism-typechecker = { path = "../prism-typechecker" }
+prism-borrowck = { path = "../prism-borrowck" }
