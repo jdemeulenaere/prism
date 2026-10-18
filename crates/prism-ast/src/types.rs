@@ -20,7 +20,7 @@ pub enum TypeKind {
         is_compose: bool,
         /// The receiver written before the parameter list (`ColumnScope` in
         /// `ColumnScope.() -> Unit`); `params` holds the written parameters only.
-        receiver: Option<FunctionTypeReceiver>,
+        receiver: Option<Box<FunctionTypeReceiver>>,
         params: Vec<Type>,
         /// Whether each parameter is written `escaping`, one flag per parameter, as in
         /// `(escaping () -> Unit) -> Unit`.
@@ -34,7 +34,7 @@ pub enum TypeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionTypeReceiver {
     pub mutable: bool,
-    pub ty: Box<Type>,
+    pub ty: Type,
 }
 
 /// A resolved or parsed type with its source span.

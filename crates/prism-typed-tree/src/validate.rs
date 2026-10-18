@@ -1420,7 +1420,7 @@ fn declared_parameters(function: &FunctionItem) -> Vec<(Option<String>, Type)> {
         };
         (Some("this".to_string()), ty)
     });
-    let context = function.context.as_ref().map(|(_, ty)| {
+    let context = function.context.as_deref().map(|(_, ty)| {
         (
             Some("context".to_string()),
             Type::Reference {

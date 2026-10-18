@@ -56,7 +56,7 @@ impl TypedFile {
                 }
                 Item::Function(f) => {
                     let mut parameters = Vec::new();
-                    if let Some((name, ty)) = &f.context {
+                    if let Some((name, ty)) = f.context.as_deref() {
                         parameters.push(format!("context {}: {}", name, ty));
                     }
                     if let Some((mode, _)) = &f.receiver {

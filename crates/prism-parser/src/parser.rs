@@ -509,7 +509,7 @@ impl Parser {
                 if let Some(context) = &context {
                     Self::reject_context_type_parameters(context, &func.type_parameters)?;
                 }
-                func.context = context;
+                func.context = context.map(Box::new);
                 Ok(Declaration::Function(func))
             }
             TokenKind::Struct => {
@@ -626,11 +626,11 @@ impl Parser {
             } else {
                 Type::generic(first_name, receiver_arguments, receiver_span)
             };
-            receiver = Some(Receiver {
+            receiver = Some(Box::new(Receiver {
                 ty,
                 mode: mode.map_or(ReceiverMode::Shared, |(mode, _)| mode),
                 span: mode.map_or(receiver_span, |(_, span)| span.merge(receiver_span)),
-            });
+            }));
             name
         } else if matches!(
             self.peek_kind(),
@@ -1433,10 +1433,10 @@ impl Parser {
                 }
             }
             self.bump(); // '.'
-            let receiver = FunctionTypeReceiver {
+            let receiver = Box::new(FunctionTypeReceiver {
                 mutable: mutable_receiver,
-                ty: Box::new(base_ty),
-            };
+                ty: base_ty,
+            });
             return self.parse_paren_type(start_span, is_compose, Some(receiver));
         }
         if self.peek_kind() == &TokenKind::QuestionDot && self.peek_ahead(1) == &TokenKind::LParen {
@@ -1471,7 +1471,7 @@ impl Parser {
         &mut self,
         start_span: Span,
         is_compose: bool,
-        receiver: Option<FunctionTypeReceiver>,
+        receiver: Option<Box<FunctionTypeReceiver>>,
     ) -> Result<Type, ParseError> {
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();

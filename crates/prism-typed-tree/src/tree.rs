@@ -64,7 +64,7 @@ pub struct FunctionItem {
     /// The context parameter: its name and type (`scope` and `RowScope` for
     /// `context(scope: RowScope)`), passed as a shared borrow before the receiver (D9 of
     /// `receiver-lambdas`).
-    pub context: Option<(String, Type)>,
+    pub context: Option<Box<(String, Type)>>,
     /// The declared parameters, without the context and the receiver.
     pub parameters: Vec<(String, Type)>,
     /// The declared or inferred return type.
@@ -133,7 +133,7 @@ pub struct DeclarationPath {
     pub name: String,
     /// The context type of an extension with a context parameter; `None` for every other
     /// declaration, a plain function with a context included, which is not overloaded by it.
-    pub context: Option<Type>,
+    pub context: Option<Box<Type>>,
 }
 
 impl DeclarationPath {
@@ -160,7 +160,7 @@ impl DeclarationPath {
     /// The path with the context type `context`, which only an extension's path records.
     pub fn with_context(mut self, context: Option<Type>) -> Self {
         if self.receiver.is_some() {
-            self.context = context;
+            self.context = context.map(Box::new);
         }
         self
     }

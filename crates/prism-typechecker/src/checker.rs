@@ -3342,7 +3342,7 @@ impl TypeChecker {
                     .context
                     .as_ref()
                     .zip(context_ty)
-                    .map(|(c, ty)| (c.name.clone(), ty)),
+                    .map(|(c, ty)| Box::new((c.name.clone(), ty))),
                 parameters,
                 return_type,
                 body,
@@ -7509,6 +7509,8 @@ impl TypeChecker {
     /// The call of the function value `callee_node` (written `callee`), of a type with a
     /// receiver, with `receiver_argument` as its receiver and `args` as its other arguments
     /// (D9 of `receiver-lambdas`): a call of the value whose first argument is the receiver.
+    /// The composable context is checked unless the caller did (`check_compose`).
+    #[allow(clippy::too_many_arguments)]
     fn call_receiver_value(
         &mut self,
         callee: &Expr,

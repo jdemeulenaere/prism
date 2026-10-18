@@ -171,13 +171,13 @@ pub struct LibraryModifier {
 pub struct FunctionDecl {
     /// The context parameter written before the declaration's modifiers
     /// (`context(scope: RowScope) fun Modifier.weight()`), at most one.
-    pub context: Option<ContextParameter>,
+    pub context: Option<Box<ContextParameter>>,
     pub visibility: Visibility,
     /// Native `compose` modifier (`compose fun`) per the first-class compose invariant.
     pub is_compose: bool,
     /// The receiver of an extension function (`fun T.name()`), the only kind of method; `None`
     /// for a plain function.
-    pub receiver: Option<Receiver>,
+    pub receiver: Option<Box<Receiver>>,
     pub name: String,
     pub type_parameters: Vec<TypeParameter>,
     pub params: Vec<Param>,
