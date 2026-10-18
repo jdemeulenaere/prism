@@ -34,6 +34,7 @@ operations:
       - Before marking the change complete, run cargo fmt --all -- --check, cargo clippy --workspace --all-targets, cargo test --workspace, and prism check on every file under examples/ (only files needing an unbuilt subsystem, such as examples/demo/ui, may fail).
       - Keep examples/ formatted - run prism fmt --check examples/ (cargo run -q -p prism-cli -- fmt --check examples/) and, if it lists files, format them with prism fmt examples/ and read the diff before committing.
       - Run the executable examples - prism run --check-allocations examples/run/main.prism (cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism) must exit with status 0, print what its source computes and report no leak or invalid free; prism run on any other file under examples/ must report a diagnostic (E6001 or E6002, or the errors prism check reports) rather than crash.
+      - Compile speed is a primary design criterion (user, 2026-10-19). When a change adds or alters a compiler stage or analysis, add its shapes to crates/prism-cli/tests/compile_timing.rs and run PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture; growth must stay roughly linear, and the design must state the stage's cost.
   archive:
     guidance:
       - Promote key design decisions from design.md into a "## Design Rationale" section of the affected main spec, so agents never need to read the archive.
