@@ -244,9 +244,7 @@ impl TypeChecker {
     fn variant_named(&self, value: &Expr, id: &NominalId) -> Option<usize> {
         let name = match &value.kind {
             ExprKind::Ident(name) => {
-                let shadowed =
-                    self.env.lookup(name).is_some() && !self.env.resolves_at_module_level(name);
-                if shadowed {
+                if self.env.resolves_to_local(name) {
                     return None;
                 }
                 name
@@ -312,9 +310,8 @@ impl TypeChecker {
                 }
             }
             ExprKind::Ident(name) => {
-                let shadowed =
-                    self.env.lookup(name).is_some() && !self.env.resolves_at_module_level(name);
-                if shadowed {
+                // Only a local shadows: a module-level or imported name does not.
+                if self.env.resolves_to_local(name) {
                     return Constructor::Other;
                 }
                 if let Some(id) = part_enum {

@@ -1,0 +1,2 @@
+package shop
+public struct Point : Copy { val x: Int, val y: Int }

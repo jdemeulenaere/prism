@@ -40,6 +40,10 @@ A pattern naming a struct, `Point(p1, ..., pn)` or `Point(x = p1, ...)`, MUST ma
 - **WHEN** with that `Point`, the patterns `Point(val x)`, `Point(x = 1, x = 2)`, `Point(z = 1)` and `Point(x = 1, 2)` are checked in a `when (p)`
 - **THEN** the type checker emits `E4024` for the first (2 fields, 1 pattern), `E4024` for the second (field `x` named twice), `E4006` for the third, and `E4024` for the fourth (a positional pattern after a named one)
 
+#### Scenario: Struct pattern of an imported struct
+- **WHEN** `shop/models` exports `public struct Point : Copy { val x: Int, val y: Int }` and a file importing `/shop/models` declares `fun f(p: Point): Int = when (p) { Point(0, val y) -> y; Point(x = val x) -> x }`
+- **THEN** the file typechecks and the `when` is exhaustive, as for a struct of the same file
+
 #### Scenario: Struct pattern nested in a variant pattern
 - **WHEN** with that `Point`, `enum Event { Click(Point), Key(Char) }` is declared and `fun f(e: Event): Int = when (e) { Event.Click(Point(val x, _)) -> x; Event.Key(_) -> 0 }` is checked
 - **THEN** the file typechecks and the `when` is exhaustive
