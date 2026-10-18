@@ -8,7 +8,11 @@ use cranelift_codegen::settings::{self, Configurable};
 /// The Cranelift settings of every Tier 1 compilation, as `(name, value)` pairs.
 pub fn settings() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("opt_level", "speed"),
+        // Tier 1 is the development tier: Cranelift's optimizer costs more compile time than
+        // it saves run time there, and its egraph pass grows with the depth of the dominator
+        // tree, so a body of many sequential branches compiles in quadratic time with it. Tier 2
+        // optimizes.
+        ("opt_level", "none"),
         // The IR verifier checks every function in debug builds of `prism`, which run the tests;
         // release builds skip it for compile time.
         (
@@ -62,7 +66,7 @@ mod tests {
     fn the_host_isa_has_the_fixed_settings() {
         let isa = isa().expect("the host is supported");
         let flags = isa.flags();
-        assert_eq!(flags.opt_level(), settings::OptLevel::Speed);
+        assert_eq!(flags.opt_level(), settings::OptLevel::None);
         assert!(flags.preserve_frame_pointers());
         assert!(flags.enable_probestack());
         assert_eq!(flags.is_pic(), cfg!(target_arch = "x86_64"));

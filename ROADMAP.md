@@ -228,7 +228,7 @@ Follow-ups of `codegen-core`:
 - [ ] Printing nullables (`null`) and other types with `print`; it accepts `Int`, `Double`, `Bool`, `Char` and `String` today, and strings print since `runtime-strings-and-drops` (D15).
 - [ ] Wrapping arithmetic operations (`wrappingAdd`, or Swift's `&+`), since `Int` overflow traps (D10).
 - [ ] Compiling files in parallel; the per-file code units allow it (non-goal of `codegen-core`).
-- [ ] Revisit `opt_level=speed` against `none` from the timing benchmark's numbers (D2, D22).
+- [x] Revisit `opt_level=speed` against `none` from the timing benchmark's numbers (D2, D22): Tier 1 uses `none` since the compile-speed pass.
 
 Follow-ups of `codegen-aggregates`:
 - [ ] Niche filling beyond null pointers (`Bool?` in one byte, an enum's spare tag values for `Color?`, Rust-style tags in payload niches); no program can observe it (D6, D7).
