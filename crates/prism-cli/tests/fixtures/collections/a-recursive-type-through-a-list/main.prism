@@ -1,0 +1,2 @@
+// expect: ok
+struct Node { val name: String, val children: List<Node> }

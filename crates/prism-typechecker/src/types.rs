@@ -23,7 +23,7 @@ impl TypeRelations for Type {
     /// - `T <= T?` for all `T` (non-null value is assignable to nullable)
     /// - `&mut T <= &T` (mutable borrow can coerce to shared borrow at call sites); references are
     ///   otherwise invariant in their referent
-    /// - `Heap<T>` is invariant in its contents
+    /// - `Heap<T>` is invariant in its contents, and `List<T>` in its elements
     /// - Structs and Enums are nominal (matched by [`NominalId`])
     /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Float`)
     fn is_assignable_to(&self, expected: &Type) -> bool {
@@ -84,6 +84,12 @@ impl TypeRelations for Type {
         // Boxes are invariant (D8 of `heap-boxes`): `Heap<Int>` and `Heap<Int?>` hold contents
         // of different layouts, so a box cannot be read as a box of another type.
         if let (Type::Heap(self_inner), Type::Heap(exp_inner)) = (self, expected) {
+            return same_modulo_errors(self_inner, exp_inner);
+        }
+
+        // Lists are invariant (D2 of `collections`): their elements are stored in place, so a
+        // `List<Int>` cannot be read as a `List<Int?>`.
+        if let (Type::List(self_inner), Type::List(exp_inner)) = (self, expected) {
             return same_modulo_errors(self_inner, exp_inner);
         }
 
@@ -225,6 +231,7 @@ pub fn type_from_abi(ty: &AbiType, parameters: &[TypeParameter]) -> Type {
             inner: Box::new(convert(inner)),
         },
         AbiType::Heap(inner) => Type::Heap(Box::new(convert(inner))),
+        AbiType::List(inner) => Type::List(Box::new(convert(inner))),
         AbiType::Fn {
             compose,
             params,
@@ -263,9 +270,9 @@ fn same_modulo_errors(a: &Type, b: &Type) -> bool {
         return true;
     }
     match (a, b) {
-        (Type::Nullable(a), Type::Nullable(b)) | (Type::Heap(a), Type::Heap(b)) => {
-            same_modulo_errors(a, b)
-        }
+        (Type::Nullable(a), Type::Nullable(b))
+        | (Type::Heap(a), Type::Heap(b))
+        | (Type::List(a), Type::List(b)) => same_modulo_errors(a, b),
         (
             Type::Reference {
                 mutable: a_mutable,

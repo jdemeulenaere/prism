@@ -1,0 +1,7 @@
+// expect: E4018
+struct Todo : Clone { val title: String }
+struct Handle { val id: Int }
+fun f(a: List<Todo>, b: List<Handle>) {
+    val c = a.clone()
+    val d = b.clone()
+}

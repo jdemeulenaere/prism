@@ -1,0 +1,3 @@
+// expect: E4004
+fun take(xs: List<Int?>) {}
+fun f(xs: List<Int>) { take(xs) }

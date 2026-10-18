@@ -1,3 +1,4 @@
 // expect: ok
 enum Chain<T> { Cons(T, Heap<Chain<T>>), Nil }
 struct Tree<T>(val v: T, val kids: Heap<Chain<Tree<T>>>?)
+struct Forest<T>(val v: T, val trees: List<Forest<T>>)

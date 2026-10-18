@@ -41,6 +41,9 @@ const TYPE_ARGUMENTS_HELP: &str =
 /// The name of the built-in box type and of its constructor (D2 of `heap-boxes`).
 const HEAP: &str = "Heap";
 
+/// The name of the built-in list type (D2 of `collections`), reserved like [`HEAP`].
+const LIST: &str = "List";
+
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
 const THIS: &str = "this";
@@ -958,6 +961,12 @@ impl TypeChecker {
                             _ => Type::Error,
                         }
                     }
+                    LIST => {
+                        return match type_args.as_slice() {
+                            [inner] => Type::List(Box::new(self.lower_type(inner))),
+                            _ => Type::Error,
+                        }
+                    }
                     _ => {}
                 }
                 let arguments: Vec<Type> = type_args.iter().map(|a| self.lower_type(a)).collect();
@@ -1020,7 +1029,7 @@ impl TypeChecker {
     /// type the lowering fixes, with `E4010` (D12 of `generics`).
     fn check_type_parameter_names(&mut self, parameters: &[prism_ast::TypeParameter]) {
         const BUILT_IN: &[&str] = &[
-            "Int", "Float", "Double", "Bool", "Char", "String", "Unit", "Nothing", "Heap",
+            "Int", "Float", "Double", "Bool", "Char", "String", "Unit", "Nothing", "Heap", "List",
         ];
         let mut seen = HashSet::new();
         for parameter in parameters {
@@ -1054,7 +1063,7 @@ impl TypeChecker {
                 Some(sym)
             }
             Err(TypeError::UnresolvedSymbol { .. })
-                if output_builtin_named(name).is_some() || name == HEAP =>
+                if output_builtin_named(name).is_some() || name == HEAP || name == LIST =>
             {
                 // An output built-in can only be called (D15 of `codegen-core`).
                 self.errors.push(TypeError::BuiltinFunctionAsValue {
@@ -1105,9 +1114,10 @@ impl TypeChecker {
                 args.iter().for_each(|a| self.record_nominals(a));
             }
             AbiType::Unbound { args, .. } => args.iter().for_each(|a| self.record_nominals(a)),
-            AbiType::Nullable(inner) | AbiType::Heap(inner) | AbiType::Ref { inner, .. } => {
-                self.record_nominals(inner)
-            }
+            AbiType::Nullable(inner)
+            | AbiType::Heap(inner)
+            | AbiType::List(inner)
+            | AbiType::Ref { inner, .. } => self.record_nominals(inner),
             AbiType::Fn { params, ret, .. } => {
                 params.iter().for_each(|p| self.record_nominals(p));
                 self.record_nominals(ret);
@@ -1187,6 +1197,8 @@ impl TypeChecker {
                     Some((format!("type parameter '{}'", name), 0))
                 } else if name == "Heap" {
                     Some(("'Heap'".to_string(), 1))
+                } else if name == LIST {
+                    Some(("'List'".to_string(), 1))
                 } else if is_primitive_name(name) {
                     None
                 } else {
@@ -1805,7 +1817,8 @@ impl TypeChecker {
     /// signature types may name types declared later in the file.
     pub fn register_module_declarations(&mut self, source_file: &SourceFile) {
         // `Heap(...)` always constructs a box, so a top-level declaration named `Heap` could
-        // never be called or named (D2 of `heap-boxes`). An extension is named by its receiver.
+        // never be called or named (D2 of `heap-boxes`), and `List` is the built-in list type
+        // (D2 of `collections`). An extension is named by its receiver.
         for decl in &source_file.declarations {
             let (name, span) = match decl {
                 Declaration::Function(f) if f.receiver.is_none() => (&f.name, f.span),
@@ -1814,7 +1827,7 @@ impl TypeChecker {
                 Declaration::Var(v) => (&v.name, v.span),
                 Declaration::Function(_) => continue,
             };
-            if name == HEAP {
+            if name == HEAP || name == LIST {
                 self.errors.push(TypeError::BuiltinNameDeclared {
                     name: name.clone(),
                     span,
@@ -8009,6 +8022,11 @@ fn invariant_box_help(found: &Type, expected: &Type) -> Option<String> {
             "'Heap' is invariant: build the box as a '{}' of the expected contents, as in 'Heap<{}>(...)'",
             expected, contents
         )),
+        // D2 of `collections`.
+        (Type::List(_), Type::List(element)) => Some(format!(
+            "list types are invariant: build the list as a '{}' of the expected elements, as in 'listOf<{}>(...)'",
+            expected, element
+        )),
         _ => None,
     }
 }
@@ -8264,9 +8282,10 @@ const MAXIMUM_EXPANDED_TYPE_SIZE: usize = 256;
 /// The number of nodes of `ty`.
 fn type_size(ty: &Type) -> usize {
     1 + match ty {
-        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-            type_size(inner)
-        }
+        Type::Reference { inner, .. }
+        | Type::Nullable(inner)
+        | Type::Heap(inner)
+        | Type::List(inner) => type_size(inner),
         Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
             arguments.iter().map(type_size).sum()
         }

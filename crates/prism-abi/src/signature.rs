@@ -469,9 +469,10 @@ fn nominal_types_in<'t>(ty: &'t AbiType, out: &mut Vec<(&'t str, &'t str)>) {
             args.iter().for_each(|arg| nominal_types_in(arg, out));
         }
         AbiType::Unbound { args, .. } => args.iter().for_each(|arg| nominal_types_in(arg, out)),
-        AbiType::Nullable(inner) | AbiType::Heap(inner) | AbiType::Ref { inner, .. } => {
-            nominal_types_in(inner, out)
-        }
+        AbiType::Nullable(inner)
+        | AbiType::Heap(inner)
+        | AbiType::List(inner)
+        | AbiType::Ref { inner, .. } => nominal_types_in(inner, out),
         AbiType::Fn { params, ret, .. } => {
             params.iter().for_each(|param| nominal_types_in(param, out));
             nominal_types_in(ret, out);

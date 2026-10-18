@@ -1283,9 +1283,10 @@ fn collect_foreign_parameters(ty: &Type, declared: &[TypeParameter], out: &mut V
                 out.push(parameter.clone());
             }
         }
-        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-            collect_foreign_parameters(inner, declared, out)
-        }
+        Type::Reference { inner, .. }
+        | Type::Nullable(inner)
+        | Type::Heap(inner)
+        | Type::List(inner) => collect_foreign_parameters(inner, declared, out),
         Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
             for argument in arguments {
                 collect_foreign_parameters(argument, declared, out);
@@ -1333,9 +1334,10 @@ fn declared_parameters(function: &FunctionItem) -> Vec<(Option<String>, Type)> {
 /// Whether a function type in `ty` has a different number of `escaping` flags than parameters.
 fn has_misshapen_escaping_flags(ty: &Type) -> bool {
     match ty {
-        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-            has_misshapen_escaping_flags(inner)
-        }
+        Type::Reference { inner, .. }
+        | Type::Nullable(inner)
+        | Type::Heap(inner)
+        | Type::List(inner) => has_misshapen_escaping_flags(inner),
         Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
             arguments.iter().any(has_misshapen_escaping_flags)
         }
@@ -1356,9 +1358,10 @@ fn has_misshapen_escaping_flags(ty: &Type) -> bool {
 fn contains_error(ty: &Type) -> bool {
     match ty {
         Type::Error => true,
-        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-            contains_error(inner)
-        }
+        Type::Reference { inner, .. }
+        | Type::Nullable(inner)
+        | Type::Heap(inner)
+        | Type::List(inner) => contains_error(inner),
         Type::Fn { params, ret, .. } => params.iter().any(contains_error) || contains_error(ret),
         _ => false,
     }

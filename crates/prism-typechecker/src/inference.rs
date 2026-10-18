@@ -76,9 +76,10 @@ impl Unknowns {
     fn mentions(&self, pattern: &Type, unsolved: impl Fn(&Self, usize) -> bool + Copy) -> bool {
         match pattern {
             Type::Parameter(parameter) => unsolved(self, parameter.index as usize),
-            Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-                self.mentions(inner, unsolved)
-            }
+            Type::Reference { inner, .. }
+            | Type::Nullable(inner)
+            | Type::Heap(inner)
+            | Type::List(inner) => self.mentions(inner, unsolved),
             Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
                 arguments.iter().any(|ty| self.mentions(ty, unsolved))
             }
@@ -126,7 +127,8 @@ impl Unknowns {
                 },
                 Type::Reference { mutable, inner },
             ) if pattern_mutable == mutable => self.match_exact(pattern, inner),
-            (Type::Heap(pattern), Type::Heap(actual)) => self.match_exact(pattern, actual),
+            (Type::Heap(pattern), Type::Heap(actual))
+            | (Type::List(pattern), Type::List(actual)) => self.match_exact(pattern, actual),
             (
                 Type::Struct {
                     id: pattern_id,
@@ -203,7 +205,7 @@ impl Unknowns {
             (Type::Reference { inner: pattern, .. }, found) => {
                 self.match_lower_inside(pattern, found, span)
             }
-            (Type::Heap(pattern), Type::Heap(found)) => {
+            (Type::Heap(pattern), Type::Heap(found)) | (Type::List(pattern), Type::List(found)) => {
                 self.match_lower_inside(pattern, found, span)
             }
             (

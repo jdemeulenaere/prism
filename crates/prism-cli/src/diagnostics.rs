@@ -303,6 +303,14 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::BuiltinFunctionAsValue { name, .. } if name == "Heap" => {
             out.push_str("   = help: 'Heap' is the built-in box constructor and can only be called, as in 'Heap(x)'\n");
         }
+        TypeError::BuiltinFunctionAsValue { name, .. } if name == "List" => {
+            out.push_str(
+                "   = help: 'List' is the built-in list type; use 'listOf(...)' to build a list\n",
+            );
+        }
+        TypeError::BuiltinNameDeclared { name, .. } if name == "List" => {
+            out.push_str("   = help: rename the declaration; 'List' is the built-in list type\n");
+        }
         TypeError::BuiltinNameDeclared { name, .. } => {
             out.push_str(&format!(
                 "   = help: rename the declaration; '{}(...)' always constructs a box\n",
@@ -500,7 +508,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 Type::Parameter(parameter) => {
                     format!("add the bound '<{} : Clone>'", parameter.name)
                 }
-                _ => "only 'Copy' and 'Clone' types, 'String', and nullables and 'Heap' of them can be cloned".to_string(),
+                Type::List(element) => format!(
+                    "a list is 'Clone' exactly when its elements are, and '{}' is not 'Clone'",
+                    element
+                ),
+                _ => "only 'Copy' and 'Clone' types, 'String', and nullables, 'Heap' and 'List' of them can be cloned".to_string(),
             };
             out.push_str(&format!("   = help: {}\n", help));
         }

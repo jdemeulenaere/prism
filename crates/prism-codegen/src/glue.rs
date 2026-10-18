@@ -68,7 +68,7 @@ fn owns_storage_at(ty: &Type, types: &TypeTable, depth: usize) -> bool {
         return false;
     }
     match ty {
-        Type::String | Type::Heap(_) | Type::Fn { .. } => true,
+        Type::String | Type::Heap(_) | Type::List(_) | Type::Fn { .. } => true,
         Type::Nullable(inner) => owns_storage_at(inner, types, depth + 1),
         Type::Struct { id, arguments } => types
             .instantiated_fields(id, arguments)

@@ -83,6 +83,8 @@ pub enum Shape {
     String,
     /// A function value: two pointer-sized words ([`FunctionField`]).
     Function,
+    /// A `List<T>`: the runtime's `PrismList`, three pointer-sized words ([`ListField`]).
+    List,
 }
 
 /// A word of a function value (D2 of `closures`), in layout order.
@@ -118,6 +120,35 @@ impl StringField {
     /// The field's offset in a `String` on a target whose pointers are `pointer`.
     pub fn offset(self, pointer: MachineType) -> u32 {
         self as u32 * pointer.bytes()
+    }
+}
+
+/// A word of a `List<T>` value (D13 of `collections`), in layout order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListField {
+    /// The address of the first element, never null: the element type's alignment when the
+    /// list owns no buffer.
+    Pointer = 0,
+    /// The number of elements.
+    Size = 1,
+    /// The number of elements the buffer holds: 0 when the list owns none, and the largest
+    /// `Int` for zero-sized elements, which never need one.
+    Capacity = 2,
+}
+
+impl ListField {
+    /// The field's offset in a `List<T>` on a target whose pointers are `pointer`.
+    pub fn offset(self, pointer: MachineType) -> u32 {
+        self as u32 * pointer.bytes()
+    }
+
+    /// The field's name in `prism dump-layout`.
+    pub fn name(self) -> &'static str {
+        match self {
+            ListField::Pointer => "pointer",
+            ListField::Size => "size",
+            ListField::Capacity => "capacity",
+        }
     }
 }
 
@@ -232,6 +263,11 @@ impl<'t> LayoutTable<'t> {
                 size: 2 * pointer.bytes(),
                 align: pointer.bytes(),
                 shape: Shape::Function,
+            },
+            Type::List(_) => Layout {
+                size: 3 * pointer.bytes(),
+                align: pointer.bytes(),
+                shape: Shape::List,
             },
             Type::Parameter(parameter) => {
                 return Err(Construct::TypeParameter(parameter.name.clone()))
@@ -516,9 +552,10 @@ fn body_types(body: &Body) -> impl Iterator<Item = Type> + '_ {
     body.locals.iter().map(|(_, local)| local.ty.clone())
 }
 
-/// Records in `held` every struct, enum and nullable type a value of `ty` holds: `ty` itself,
-/// the referent of a reference, and the fields and payloads of structs, enums and nullables,
-/// but not what a `Heap<T>` points at.
+/// Records in `held` every struct, enum, nullable and list type a value of `ty` holds: `ty`
+/// itself, the referent of a reference, and the fields and payloads of structs, enums and
+/// nullables, but not what a `Heap<T>` points at or the elements of a list, which live in their
+/// buffer.
 fn collect_held(ty: &Type, types: &TypeTable, held: &mut BTreeMap<String, Type>, depth: usize) {
     if depth > MAXIMUM_DEPTH {
         return;
@@ -538,11 +575,12 @@ fn collect_held(ty: &Type, types: &TypeTable, held: &mut BTreeMap<String, Type>,
             .into_iter()
             .flat_map(|(_, payloads)| payloads)
             .collect(),
+        Type::List(_) => Vec::new(),
         _ => return,
     };
     if matches!(
         ty,
-        Type::Nullable(_) | Type::Struct { .. } | Type::Enum { .. }
+        Type::Nullable(_) | Type::Struct { .. } | Type::Enum { .. } | Type::List(_)
     ) && held.insert(rendered_name(ty), ty.clone()).is_some()
     {
         return;
@@ -573,6 +611,7 @@ fn write_entry(text: &mut String, layouts: &LayoutTable, ty: &Type) {
     let kind = match ty {
         Type::Struct { .. } => "struct",
         Type::Enum { .. } => "enum",
+        Type::List(_) => "list",
         _ => "nullable",
     };
     let marker = ty
@@ -622,6 +661,18 @@ fn write_entry(text: &mut String, layouts: &LayoutTable, ty: &Type) {
         }
         Shape::NullPointer => writeln!(text, "{} ({}, null pointer)", name, size).unwrap(),
         Shape::Uninhabited => writeln!(text, "{} ({}, uninhabited)", name, size).unwrap(),
+        Shape::List => {
+            writeln!(text, "{} ({})", name, size).unwrap();
+            let pointer = layouts.pointer;
+            for field in [ListField::Pointer, ListField::Size, ListField::Capacity] {
+                let ty = match field {
+                    ListField::Pointer => "pointer",
+                    ListField::Size | ListField::Capacity => "Int",
+                };
+                let offset = field.offset(pointer);
+                writeln!(text, "  {}: {} at {}", field.name(), ty, offset).unwrap();
+            }
+        }
         Shape::Empty | Shape::Scalar(_) | Shape::String | Shape::Function => {
             writeln!(text, "{} ({})", name, size).unwrap()
         }

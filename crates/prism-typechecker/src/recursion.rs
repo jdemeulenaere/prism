@@ -264,7 +264,8 @@ fn type_cycles(source_file: &SourceFile, file: &TypedFile, errors: &[TypeError])
 }
 
 /// Every application of a generic struct or enum in `ty`, outer ones first, looking through
-/// boxes, nullables, references and other generic types' arguments but not into function types,
+/// boxes, lists, nullables, references and other generic types' arguments but not into function
+/// types,
 /// whose values hold none of these inline (D9).
 fn generic_applications(ty: &Type, out: &mut Vec<Type>) {
     match ty {
@@ -276,9 +277,10 @@ fn generic_applications(ty: &Type, out: &mut Vec<Type>) {
                 generic_applications(argument, out);
             }
         }
-        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-            generic_applications(inner, out)
-        }
+        Type::Reference { inner, .. }
+        | Type::Nullable(inner)
+        | Type::Heap(inner)
+        | Type::List(inner) => generic_applications(inner, out),
         _ => {}
     }
 }

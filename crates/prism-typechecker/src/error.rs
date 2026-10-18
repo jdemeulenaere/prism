@@ -497,6 +497,9 @@ impl TypeError {
             TypeError::UnprintableArgument { function, ty, .. } => {
                 format!("'{}' cannot print a value of type '{}'", function, ty)
             }
+            TypeError::BuiltinFunctionAsValue { name, .. } if name == "List" => {
+                "the built-in type 'List' cannot be used as a value or called".to_string()
+            }
             TypeError::BuiltinFunctionAsValue { name, .. } => {
                 format!("built-in function '{}' cannot be used as a value", name)
             }

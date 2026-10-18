@@ -286,6 +286,23 @@ mod tests {
     }
 
     #[test]
+    fn test_lists_are_recorded_structurally_and_hash_their_elements() {
+        // D2 of `collections`: `List` is built in, never bound to a declaration.
+        let ints = extract("public fun f(xs: List<Int>): Int = 1\n");
+        assert_eq!(
+            first_param(&ints),
+            &AbiType::List(Box::new(AbiType::Prim(prism_abi::PrimKind::Int)))
+        );
+        assert_eq!(first_param(&ints).to_string(), "List<Int>");
+        let nullable = extract("public fun f(xs: List<Int?>): Int = 1\n");
+        assert_eq!(first_param(&nullable).to_string(), "List<Int?>");
+        assert_ne!(ints.abi_hash, nullable.abi_hash);
+        // A list is not a box of the same element.
+        let boxed = extract("public fun f(xs: Heap<Int>): Int = 1\n");
+        assert_ne!(ints.abi_hash, boxed.abi_hash);
+    }
+
+    #[test]
     fn test_marking_a_parameter_escaping_changes_the_hashes() {
         let plain = extract("public fun store(f: () -> Unit): Int = 1\n");
         let marked = extract("public fun store(f: escaping () -> Unit): Int = 1\n");

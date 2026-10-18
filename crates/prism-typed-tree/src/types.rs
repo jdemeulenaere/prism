@@ -406,7 +406,9 @@ impl TypeTable {
                     && self.marker_arguments_satisfy(id, arguments, |ty| self.is_copy(ty))
             }
             Type::Parameter(parameter) => parameter.bound == Some(TypeMarker::Copy),
-            Type::String | Type::Heap(_) | Type::Fn { .. } | Type::Opaque(_) => false,
+            Type::String | Type::Heap(_) | Type::List(_) | Type::Fn { .. } | Type::Opaque(_) => {
+                false
+            }
         }
     }
 
@@ -415,7 +417,7 @@ impl TypeTable {
     pub fn is_clone(&self, ty: &Type) -> bool {
         match ty {
             Type::String => true,
-            Type::Nullable(inner) | Type::Heap(inner) => self.is_clone(inner),
+            Type::Nullable(inner) | Type::Heap(inner) | Type::List(inner) => self.is_clone(inner),
             Type::Struct { id, arguments } | Type::Enum { id, arguments } => {
                 self.marker(id).is_some()
                     && self.marker_arguments_satisfy(id, arguments, |ty| self.is_clone(ty))
@@ -450,6 +452,9 @@ pub enum Type {
     Nullable(Box<Type>),
     /// Single-owner heap boxed indirection `Heap<T>` for recursive types.
     Heap(Box<Type>),
+    /// The built-in growable list `List<T>` (D2 of `collections`): a single owner of a buffer of
+    /// elements, and an indirection, like `Heap<T>`.
+    List(Box<Type>),
     /// Nominal struct type, with one argument per type parameter of a generic struct. Its fields
     /// live in the checker's type table.
     Struct { id: NominalId, arguments: Vec<Type> },
@@ -526,6 +531,7 @@ impl Type {
             },
             Type::Nullable(inner) => inner.substitute(arguments).nullable(),
             Type::Heap(inner) => Type::Heap(Box::new(inner.substitute(arguments))),
+            Type::List(inner) => Type::List(Box::new(inner.substitute(arguments))),
             Type::Struct { id, arguments: own } => Type::Struct {
                 id: id.clone(),
                 arguments: own.iter().map(|ty| ty.substitute(arguments)).collect(),
@@ -558,9 +564,10 @@ impl Type {
                     argument.collect_nominal_ids(out);
                 }
             }
-            Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-                inner.collect_nominal_ids(out)
-            }
+            Type::Reference { inner, .. }
+            | Type::Nullable(inner)
+            | Type::Heap(inner)
+            | Type::List(inner) => inner.collect_nominal_ids(out),
             Type::Fn { params, ret, .. } => {
                 for param in params {
                     param.collect_nominal_ids(out);
@@ -575,9 +582,10 @@ impl Type {
     pub fn mentions_parameter(&self) -> bool {
         match self {
             Type::Parameter(_) => true,
-            Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-                inner.mentions_parameter()
-            }
+            Type::Reference { inner, .. }
+            | Type::Nullable(inner)
+            | Type::Heap(inner)
+            | Type::List(inner) => inner.mentions_parameter(),
             Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
                 arguments.iter().any(Type::mentions_parameter)
             }
@@ -593,9 +601,10 @@ impl Type {
     pub fn mentions_parameter_outside_functions(&self) -> bool {
         match self {
             Type::Parameter(_) => true,
-            Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-                inner.mentions_parameter_outside_functions()
-            }
+            Type::Reference { inner, .. }
+            | Type::Nullable(inner)
+            | Type::Heap(inner)
+            | Type::List(inner) => inner.mentions_parameter_outside_functions(),
             Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => arguments
                 .iter()
                 .any(Type::mentions_parameter_outside_functions),
@@ -608,7 +617,9 @@ impl Type {
     pub fn reference_outside_functions(&self) -> Option<&Type> {
         match self {
             Type::Reference { .. } => Some(self),
-            Type::Nullable(inner) | Type::Heap(inner) => inner.reference_outside_functions(),
+            Type::Nullable(inner) | Type::Heap(inner) | Type::List(inner) => {
+                inner.reference_outside_functions()
+            }
             Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
                 arguments.iter().find_map(Type::reference_outside_functions)
             }
@@ -660,7 +671,7 @@ impl Type {
                 },
             ) => inner.converts_in_place(target) && target.converts_in_place(inner),
             (Type::Nullable(inner), Type::Nullable(target)) => inner.converts_in_place(target),
-            (Type::Heap(inner), Type::Heap(target)) => {
+            (Type::Heap(inner), Type::Heap(target)) | (Type::List(inner), Type::List(target)) => {
                 inner.converts_in_place(target) && target.converts_in_place(inner)
             }
             (
@@ -750,6 +761,7 @@ impl Type {
             Type::Struct { id, .. } | Type::Enum { id, .. } => format!("{}.{}", id.module, id.name),
             Type::Opaque(name) => name.clone(),
             Type::Unit => "Unit".to_string(),
+            Type::List(_) => "List".to_string(),
             other => other.to_string(),
         }
     }
@@ -775,6 +787,7 @@ impl Type {
             }
             Type::Nullable(inner) => format!("{}?", inner.qualified()),
             Type::Heap(inner) => format!("Heap<{}>", inner.qualified()),
+            Type::List(inner) => format!("List<{}>", inner.qualified()),
             Type::Fn {
                 is_compose,
                 params,
@@ -816,6 +829,7 @@ impl fmt::Display for Type {
             Type::Nullable(inner) if needs_parentheses(inner) => write!(f, "({})?", inner),
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Heap(inner) => write!(f, "Heap<{}>", inner),
+            Type::List(inner) => write!(f, "List<{}>", inner),
             Type::Struct { id, arguments } | Type::Enum { id, arguments } => write!(
                 f,
                 "{}{}",
@@ -1083,6 +1097,31 @@ mod tests {
         assert!(function.mentions_parameter());
         assert!(!function.mentions_parameter_outside_functions());
         assert!(Type::Heap(Box::new(t)).mentions_parameter_outside_functions());
+    }
+
+    #[test]
+    fn lists_render_substitute_and_follow_their_elements_markers() {
+        let table = TypeTable::with_builtins();
+        let t = parameter(0, "T", None);
+        let list = |element: Type| Type::List(Box::new(element));
+        assert_eq!(list(Type::Int.nullable()).to_string(), "List<Int?>");
+        assert_eq!(list(list(Type::String)).qualified(), "List<List<String>>");
+        assert_eq!(list(t.clone()).receiver_constructor(), "List");
+        assert_eq!(
+            list(t.clone()).substitute(&[Type::String]),
+            list(Type::String)
+        );
+        assert!(list(t.clone()).mentions_parameter_outside_functions());
+        assert!(list(reference(false, Type::Int))
+            .reference_outside_functions()
+            .is_some());
+        // Never `Copy`; `Clone` exactly when the element is.
+        assert!(!table.is_copy(&list(Type::Int)));
+        assert!(table.is_clone(&list(Type::Int)) && table.is_clone(&list(Type::String)));
+        assert!(!table.is_clone(&list(Type::function(false, Vec::new(), Type::Unit))));
+        assert!(!table.is_clone(&list(t)));
+        // Invariant: a list never converts to a list of another element type.
+        assert!(!list(Type::Int).converts_in_place(&list(Type::Int.nullable())));
     }
 
     #[test]

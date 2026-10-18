@@ -126,6 +126,8 @@ pub enum AbiType {
     Ref { mutable: bool, inner: Box<AbiType> },
     /// An owned heap indirection `Heap<T>`.
     Heap(Box<AbiType>),
+    /// The built-in growable list `List<T>` (D2 of `collections`).
+    List(Box<AbiType>),
     /// A function type, possibly composable, with whether each parameter is `escaping`.
     Fn {
         compose: bool,
@@ -168,6 +170,10 @@ impl AbiType {
                 }
                 if name == "Heap" && type_args.len() == 1 {
                     return AbiType::Heap(Box::new(lower(&type_args[0])));
+                }
+                // `List` is a reserved built-in name (D2 of `collections`), never bound.
+                if name == "List" && type_args.len() == 1 {
+                    return AbiType::List(Box::new(lower(&type_args[0])));
                 }
                 let args = type_args.iter().map(lower).collect();
                 match bind(name) {
@@ -267,6 +273,10 @@ impl AbiType {
                 ret.hash_into(hasher);
             }
             AbiType::Range => hasher.write_u8(9),
+            AbiType::List(inner) => {
+                hasher.write_u8(11);
+                inner.hash_into(hasher);
+            }
             // By position only: renaming a type parameter changes nothing an importer can do.
             AbiType::Parameter { index, .. } => {
                 hasher.write_u8(10);
@@ -320,6 +330,7 @@ impl fmt::Display for AbiType {
                 write!(f, "{}{}", if *mutable { "&mut " } else { "&" }, inner)
             }
             AbiType::Heap(inner) => write!(f, "Heap<{}>", inner),
+            AbiType::List(inner) => write!(f, "List<{}>", inner),
             AbiType::Fn {
                 compose,
                 params,

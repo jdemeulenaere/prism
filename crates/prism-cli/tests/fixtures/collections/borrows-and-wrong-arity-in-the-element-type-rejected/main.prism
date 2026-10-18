@@ -1,0 +1,3 @@
+// expect: E4022 E4020
+fun f(a: List<&Int>) {}
+fun g(b: List<Int, Int>) {}

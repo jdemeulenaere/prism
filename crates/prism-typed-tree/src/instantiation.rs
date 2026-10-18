@@ -68,9 +68,10 @@ pub fn mentioned_parameters(ty: &Type) -> BTreeSet<u32> {
             Type::Parameter(parameter) => {
                 out.insert(parameter.index);
             }
-            Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
-                walk(inner, out)
-            }
+            Type::Reference { inner, .. }
+            | Type::Nullable(inner)
+            | Type::Heap(inner)
+            | Type::List(inner) => walk(inner, out),
             Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
                 arguments.iter().for_each(|argument| walk(argument, out))
             }
