@@ -130,6 +130,10 @@ A `when` MUST evaluate its subject once, then test its patterns in order, evalua
 - **WHEN** `fun loud(n: Int): Int { println(n); return n }` is declared and a program runs `when (loud(1)) { loud(1) -> println(7); loud(2) -> println(8); else -> println(9) }`
 - **THEN** it prints `1`, `1` and `7`, and `loud(2)` is never called
 
+#### Scenario: Exhaustive when over a Bool
+- **WHEN** `fun f(b: Bool): Int = when (b) { true -> 1; false -> 0 }` is declared and a program prints `f(true)` and `f(false)`
+- **THEN** it prints `1` and `0`, with no `else` branch
+
 ### Requirement: Logical Operators Short-Circuit
 `&&` MUST evaluate its right operand only when its left operand is `true`, and `||` only when its left operand is `false`.
 

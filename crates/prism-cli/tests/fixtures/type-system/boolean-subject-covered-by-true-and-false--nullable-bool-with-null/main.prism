@@ -1,0 +1,6 @@
+// expect: ok
+fun code(b: Bool?): Int = when (b) {
+    true -> 1
+    false -> 0
+    null -> -1
+}

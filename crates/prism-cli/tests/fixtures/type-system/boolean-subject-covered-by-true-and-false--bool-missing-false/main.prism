@@ -1,0 +1,4 @@
+// expect: E4009
+fun code(b: Bool): Int = when (b) {
+    true -> 1
+}

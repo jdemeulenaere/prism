@@ -208,7 +208,6 @@ Follow-ups of `codegen-core`:
 - [ ] Wrapping arithmetic operations (`wrappingAdd`, or Swift's `&+`), since `Int` overflow traps (D10).
 - [ ] Compiling files in parallel; the per-file code units allow it (non-goal of `codegen-core`).
 - [ ] Revisit `opt_level=speed` against `none` from the timing benchmark's numbers (D2, D22).
-- [ ] Decide whether a `when` over a `Bool` subject with both `true` and `false` branches is exhaustive without `else`, as in Kotlin; it is `E4009` today (found while reviewing `codegen-core`).
 
 ---
 

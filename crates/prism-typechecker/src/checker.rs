@@ -4000,6 +4000,9 @@ impl TypeChecker {
         let mut has_else = false;
         let mut unified_ty: Option<Type> = None;
         let mut matched_variants = HashSet::new();
+        // The literals a `Bool` or `Bool?` subject is matched against, which cover it like the
+        // variants of an enum: `true`, `false` and, for `Bool?`, `null`.
+        let mut matched_literals = HashSet::new();
         let mut tree_branches = Vec::new();
 
         for branch in branches {
@@ -4027,6 +4030,14 @@ impl TypeChecker {
                             });
                             matched_variants.insert(v_name);
                         } else if let Some(s_ty) = &subject_ty {
+                            if let ExprKind::Literal(literal @ (Literal::Bool(_) | Literal::Null)) =
+                                &p_expr.kind
+                            {
+                                matched_literals.insert(match literal {
+                                    Literal::Bool(value) => Some(*value),
+                                    _ => None,
+                                });
+                            }
                             patterns.push(Pattern::Value(self.check_expr(p_expr, s_ty)));
                         } else {
                             patterns
@@ -4104,6 +4115,17 @@ impl TypeChecker {
                     .iter()
                     .all(|(v_name, _)| matched_variants.contains(v_name))
         });
+        // `true` and `false` cover a `Bool`, and with `null` a `Bool?`.
+        let covers_booleans = match &subject_ty {
+            Some(Type::Bool) => [Some(true), Some(false)]
+                .iter()
+                .all(|literal| matched_literals.contains(literal)),
+            Some(Type::Nullable(inner)) if **inner == Type::Bool => [Some(true), Some(false), None]
+                .iter()
+                .all(|literal| matched_literals.contains(literal)),
+            _ => false,
+        };
+        let covers_variants = covers_variants || covers_booleans;
         let build = |checker: &mut Self, branches, ty| {
             let kind = ExpressionKind::When {
                 subject,

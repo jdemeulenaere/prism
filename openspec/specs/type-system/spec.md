@@ -161,6 +161,10 @@ Control flow expressions (`if`/`else`, `when`), blocks, and function return stat
 - **WHEN** a `when` expression is used in value position and fails to cover all possible enum variants or omit an `else` branch
 - **THEN** the type checker rejects the expression with a non-exhaustive pattern match error (`E4009`)
 
+#### Scenario: Boolean subject covered by true and false
+- **WHEN** a `when` over a `Bool` subject (or a `&Bool`) in value position has a branch for the literal `true` and one for `false`, or a `Bool?` subject has branches for `true`, `false` and `null`, each alone or among several patterns of a branch
+- **THEN** it is exhaustive without an `else` branch, as a `when` over an enum naming every variant is, and the typed tree records it as exhaustive; with only one of the literals, or without `null` over a `Bool?`, it still needs `else` (`E4009`)
+
 #### Scenario: Only a variant name covers that variant
 - **WHEN** a `when` over an enum has a pattern naming a payload-free variant (`Color.Red`, or bare `Red` when no local binding shadows it)
 - **THEN** the pattern covers that variant, while a pattern that only evaluates to a variant value, such as `Shape.Circle(1)` or a field `h.Green`, covers nothing, so a variant with a payload is covered only by `else`
@@ -555,9 +559,10 @@ Decisions from `reference-access`:
 - **References are invariant in their referent** (user). `&U` is assignable to `&T` only for the same type, except that `&mut` may weaken to `&` at the outer layer and behind shared borrows; `&mut U` to `&mut T` needs equal types. A reference cannot change the representation of what it points at (`&Int` is not a `&(Int?)`), so covariance would have hidden a converted copy behind a borrow. `Heap<T>` keeps covariance until the `Heap<T>` change decides it.
 - **Value positions copy `Copy` values out of borrows.** The "Operators read through references; value positions do not" rule above now ends at copy-out: where a `T` is expected, a `&T` of a `Copy` type is accepted, and a non-`Copy` one is `E4017` (see `references`).
 
-Decisions from the plain fix to ordering comparisons (2026-10-18, logged in `docs/decisions-for-review.md`):
+Decisions from the `Bool` plain fixes (2026-10-18, logged in `docs/decisions-for-review.md`):
 
 - **Only `Int`, `Float` and `Char` are ordered.** `false < true` is `E4002`, which Kotlin allows; `Bool` has no natural ordering that a program should rely on, and `String` is unordered until comparison becomes a trait (a type parameter's ordering is `E4002` for the same reason). Allowing it later is compatible. An unordered or mixed comparison is reported through `OperatorMismatch`, as compound assignment's operators are, not as a type mismatch between two identical types; the other binary operators still report `TypeMismatch` (ROADMAP).
+- **`true` and `false` cover a `Bool`, and with `null` a `Bool?`.** Only the literals count, as only a variant's name covers a variant; a constant or a condition that happens to be `true` covers nothing. No new typed-tree or MIR concept is needed: the patterns stay value tests and the exhaustive flag makes the fall-through unreachable.
 
 Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
