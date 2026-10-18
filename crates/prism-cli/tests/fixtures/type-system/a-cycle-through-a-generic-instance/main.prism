@@ -1,0 +1,3 @@
+// expect: E4023
+struct Box<T>(val v: T)
+struct A { val b: Box<A> }

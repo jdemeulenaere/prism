@@ -92,6 +92,7 @@ fn erase_declaration(declaration: &mut Declaration) {
         }
         Declaration::Struct(structure) => {
             erase(&mut structure.span);
+            erase(&mut structure.name_span);
             erase_type_parameters(&mut structure.type_parameters);
             for field in &mut structure.fields {
                 erase(&mut field.span);
@@ -100,6 +101,7 @@ fn erase_declaration(declaration: &mut Declaration) {
         }
         Declaration::Enum(enumeration) => {
             erase(&mut enumeration.span);
+            erase(&mut enumeration.name_span);
             erase_type_parameters(&mut enumeration.type_parameters);
             for variant in &mut enumeration.variants {
                 erase(&mut variant.span);

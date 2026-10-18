@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::{Span, TypeMarker};
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4022`).
+/// Semantic and type checking error categories (`E4001` - `E4023`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -203,6 +203,14 @@ pub enum TypeError {
         owner: String,
         span: Span,
     },
+
+    /// E4023: A struct or enum contains itself by value, so its values would have no finite
+    /// size (D20 of `codegen-aggregates`). `path` names the member types leading back to it.
+    InfinitelySizedType {
+        type_name: String,
+        path: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -239,6 +247,7 @@ impl TypeError {
             TypeError::WrongTypeArgumentCount { .. } => "E4020",
             TypeError::UnsatisfiedBound { .. } => "E4021",
             TypeError::BorrowInTypeArgument { .. } => "E4022",
+            TypeError::InfinitelySizedType { .. } => "E4023",
         }
     }
 
@@ -275,6 +284,7 @@ impl TypeError {
             TypeError::WrongTypeArgumentCount { span, .. } => *span,
             TypeError::UnsatisfiedBound { span, .. } => *span,
             TypeError::BorrowInTypeArgument { span, .. } => *span,
+            TypeError::InfinitelySizedType { span, .. } => *span,
         }
     }
 
@@ -459,6 +469,10 @@ impl TypeError {
             } => format!(
                 "type argument '{}' of {} contains a borrow, but type arguments must be borrow-free",
                 argument, owner
+            ),
+            TypeError::InfinitelySizedType { type_name, .. } => format!(
+                "'{}' has an infinite size: it contains itself by value",
+                type_name
             ),
         }
     }

@@ -176,6 +176,8 @@ impl TypeMarker {
 pub struct StructDecl {
     pub visibility: Visibility,
     pub name: String,
+    /// The span of the name, where diagnostics about the declaration as a whole point.
+    pub name_span: Span,
     pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
     pub fields: Vec<StructField>,
@@ -195,6 +197,8 @@ pub struct EnumVariant {
 pub struct EnumDecl {
     pub visibility: Visibility,
     pub name: String,
+    /// The span of the name, where diagnostics about the declaration as a whole point.
+    pub name_span: Span,
     pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
     pub variants: Vec<EnumVariant>,

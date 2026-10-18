@@ -709,7 +709,7 @@ impl Parser {
         start_span: Span,
     ) -> Result<StructDecl, ParseError> {
         self.expect(TokenKind::Struct)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, name_span) = self.expect_ident()?;
         let type_parameters = self.parse_optional_type_parameters()?;
 
         let mut fields = Vec::new();
@@ -802,6 +802,7 @@ impl Parser {
         Ok(StructDecl {
             visibility,
             name,
+            name_span,
             type_parameters,
             marker,
             fields,
@@ -815,7 +816,7 @@ impl Parser {
         start_span: Span,
     ) -> Result<EnumDecl, ParseError> {
         self.expect(TokenKind::Enum)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, name_span) = self.expect_ident()?;
         let type_parameters = self.parse_optional_type_parameters()?;
         let marker = self.parse_optional_marker()?.map(|(parsed, _)| parsed);
 
@@ -860,6 +861,7 @@ impl Parser {
         Ok(EnumDecl {
             visibility,
             name,
+            name_span,
             type_parameters,
             marker,
             variants,

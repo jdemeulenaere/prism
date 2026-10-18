@@ -12,7 +12,7 @@ use crate::types::{
     type_from_abi, type_parameters_from_abi, NominalId, Type, TypeDef, TypeParameter,
     TypeRelations, BUILTIN_MODULE,
 };
-use prism_abi::{AbiType, ExportedSymbol, FileAbi};
+use prism_abi::{AbiType, AbiTypeMembers, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
     BinaryOp, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
@@ -1354,6 +1354,38 @@ impl TypeChecker {
     /// converted as they are.
     pub fn ingest_file_abi(&mut self, abi: &FileAbi) {
         self.direct_imports.insert(abi.module.clone());
+        // The definitions of the types the import's exports reach are recorded for layout only
+        // (D4 of `codegen-aggregates`): no name is defined, so a private type stays unnameable,
+        // and using a member still needs its module imported (`E4014`).
+        for definition in &abi.type_definitions {
+            let id = NominalId::new(definition.module.clone(), definition.name.clone());
+            self.types.insert_marker(
+                id.clone(),
+                definition.marker,
+                definition.marker_parameters.clone(),
+            );
+            let parameters = type_parameters_from_abi(&definition.type_parameters);
+            let convert = |ty: &AbiType| type_from_abi(ty, &parameters);
+            let type_definition = match &definition.members {
+                AbiTypeMembers::Fields(fields) => TypeDef::Struct {
+                    parameters: parameters.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(name, is_var, ty)| (name.clone(), *is_var, convert(ty)))
+                        .collect(),
+                },
+                AbiTypeMembers::Variants(variants) => TypeDef::Enum {
+                    parameters: parameters.clone(),
+                    variants: variants
+                        .iter()
+                        .map(|(name, payloads)| {
+                            (name.clone(), payloads.iter().map(convert).collect())
+                        })
+                        .collect(),
+                },
+            };
+            self.types.insert_definition(id, type_definition);
+        }
         for ty in abi.symbols.iter().flat_map(abi_symbol_types) {
             self.record_nominals(ty);
         }
@@ -1543,6 +1575,103 @@ impl TypeChecker {
                 }
             }
         }
+    }
+
+    /// Reports `E4023` for each struct or enum of the file that contains itself by value (D20 of
+    /// `codegen-aggregates`): through its fields or payloads, nullables and other structs and
+    /// enums with their type arguments substituted, but not through `Heap<T>`, references or
+    /// function types, which hold their values elsewhere.
+    fn check_finite_sizes(&mut self, source_file: &SourceFile) {
+        for decl in &source_file.declarations {
+            let (name, name_span, type_parameters) = match decl {
+                Declaration::Struct(s) => (&s.name, s.name_span, &s.type_parameters),
+                Declaration::Enum(e) => (&e.name, e.name_span, &e.type_parameters),
+                _ => continue,
+            };
+            let id = NominalId::new(self.module_path.clone(), name.clone());
+            let Some(definition) = self.types.definition(&id) else {
+                continue;
+            };
+            let arguments = parameter_types(&type_parameters_of(type_parameters));
+            let declared = match definition {
+                TypeDef::Struct { .. } => Type::Struct {
+                    id: id.clone(),
+                    arguments,
+                },
+                TypeDef::Enum { .. } => Type::Enum {
+                    id: id.clone(),
+                    arguments,
+                },
+            };
+            let mut stack = vec![declared.clone()];
+            let mut path = Vec::new();
+            if self.contains_by_value(&declared, &id, &mut stack, &mut path) {
+                let steps: Vec<String> = path.iter().map(|ty| format!("'{}'", ty)).collect();
+                self.errors.push(TypeError::InfinitelySizedType {
+                    type_name: name.clone(),
+                    path: format!("'{}' contains {}", name, steps.join(", which contains ")),
+                    span: name_span,
+                });
+            }
+        }
+    }
+
+    /// Whether a value of the struct or enum `ty` contains a value of the struct or enum `target`
+    /// by value, leaving in `path` the member types leading to it. `stack` holds the types being
+    /// expanded: a type already on it, other than `target`, is on a cycle `target` is not on, and
+    /// is not expanded again. Neither is a type deeper than [`MAXIMUM_EXPANSION_DEPTH`] or larger
+    /// than [`MAXIMUM_EXPANDED_TYPE_SIZE`], which only a generic type growing its own arguments
+    /// reaches; that type's own declaration reaches itself at once, so it is reported there.
+    fn contains_by_value(
+        &self,
+        ty: &Type,
+        target: &NominalId,
+        stack: &mut Vec<Type>,
+        path: &mut Vec<Type>,
+    ) -> bool {
+        let members: Vec<Type> = match ty {
+            Type::Struct { id, arguments } => self
+                .types
+                .instantiated_fields(id, arguments)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(_, _, ty)| ty)
+                .collect(),
+            Type::Enum { id, arguments } => self
+                .types
+                .instantiated_variants(id, arguments)
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|(_, payloads)| payloads)
+                .collect(),
+            _ => return false,
+        };
+        for member in members {
+            // A nullable holds its payload inline; `Heap<T>`, references and functions do not.
+            let mut held = &member;
+            while let Type::Nullable(inner) = held {
+                held = inner;
+            }
+            let Some(id) = held.nominal_id() else {
+                continue;
+            };
+            path.push(member.clone());
+            if id == target {
+                return true;
+            }
+            let expandable = stack.len() <= MAXIMUM_EXPANSION_DEPTH
+                && type_size(held) <= MAXIMUM_EXPANDED_TYPE_SIZE;
+            if expandable && !stack.contains(held) {
+                stack.push(held.clone());
+                let found = self.contains_by_value(held, target, stack, path);
+                stack.pop();
+                if found {
+                    return true;
+                }
+            }
+            path.pop();
+        }
+        false
     }
 
     /// Pass 1: Registers all top-level symbols (functions, structs, enums, variables) in module scope.
@@ -1877,6 +2006,7 @@ impl TypeChecker {
     pub fn check_module(&mut self, source_file: &SourceFile) -> TypedFile {
         self.register_module_declarations(source_file);
         self.check_marker_declarations(source_file);
+        self.check_finite_sizes(source_file);
 
         // Unannotated private declarations get their type from their body, inferred on demand.
         let mut inferred = HashMap::new();
@@ -6872,6 +7002,30 @@ fn is_primitive_name(name: &str) -> bool {
 }
 
 /// The semantic type parameters of a declaration's written ones, by position.
+/// How many structs and enums deep [`TypeChecker::check_finite_sizes`] expands a type: only a
+/// generic type growing its own arguments (`struct W<T> { val w: W<Pair<T, T>>? }`) gets there.
+const MAXIMUM_EXPANSION_DEPTH: usize = 64;
+
+/// The largest type, in nodes, [`TypeChecker::check_finite_sizes`] expands: a type growing its
+/// own arguments can double at each step, so the depth alone does not bound the work.
+const MAXIMUM_EXPANDED_TYPE_SIZE: usize = 256;
+
+/// The number of nodes of `ty`.
+fn type_size(ty: &Type) -> usize {
+    1 + match ty {
+        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
+            type_size(inner)
+        }
+        Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
+            arguments.iter().map(type_size).sum()
+        }
+        Type::Fn { params, ret, .. } => {
+            params.iter().map(type_size).sum::<usize>() + type_size(ret)
+        }
+        _ => 0,
+    }
+}
+
 fn type_parameters_of(parameters: &[prism_ast::TypeParameter]) -> Vec<TypeParameter> {
     parameters
         .iter()
@@ -7992,6 +8146,7 @@ mod tests {
                 Declaration::Struct(prism_ast::StructDecl {
                     visibility: Visibility::Public,
                     name: "DupPoint".to_string(),
+                    name_span: Span::dummy(),
                     type_parameters: Vec::new(),
                     marker: None,
                     fields: vec![
@@ -8013,6 +8168,7 @@ mod tests {
                 Declaration::Enum(prism_ast::EnumDecl {
                     visibility: Visibility::Public,
                     name: "DupEnum".to_string(),
+                    name_span: Span::dummy(),
                     type_parameters: Vec::new(),
                     marker: None,
                     variants: vec![

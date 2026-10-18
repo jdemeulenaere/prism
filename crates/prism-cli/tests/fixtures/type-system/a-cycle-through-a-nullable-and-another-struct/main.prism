@@ -1,0 +1,3 @@
+// expect: E4023
+struct A { val b: B? }
+struct B { val a: A }

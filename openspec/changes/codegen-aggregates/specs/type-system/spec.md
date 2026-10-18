@@ -23,4 +23,4 @@ A struct or enum MUST NOT contain itself by value: through its fields or payload
 
 #### Scenario: A cycle across modules
 - **WHEN** `a/one.prism` declares `public struct One { val two: Two? }` and imports `/b/two`, which declares `public struct Two { val one: One }` and imports `/a/one`
-- **THEN** `prism check` reports `E4023` at `One` in `a/one.prism` and at `Two` in `b/two.prism`
+- **THEN** checking `a/one.prism` reports `E4023` at `One` and checking `b/two.prism` reports it at `Two`, each file seeing the other's definition through its ABI, and `prism check`, which stops at the first file with errors, reports the first of them

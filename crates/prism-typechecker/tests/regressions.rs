@@ -1073,3 +1073,93 @@ fn range_pattern_without_a_subject_rejected() {
         &["E4002"],
     );
 }
+
+/// D4 of `codegen-aggregates`: the definitions an import's ABI records for its reachable types
+/// reach the importer's type table, for layout only. `app` imports `geo/shapes` alone, whose
+/// `Circle` holds a `geo/core::Vec`: the table knows `Vec`'s fields, while reading one of them or
+/// constructing a `Vec` still reports `E4014`.
+#[test]
+fn reachable_definitions_are_recorded_for_layout_only() {
+    use prism_abi::{no_imports, type_definitions};
+    use prism_typed_tree::NominalId;
+    let core = prism_parser::parse_source("package geo\npublic struct Vec : Copy { val x: Int }\n")
+        .unwrap();
+    let shapes = prism_parser::parse_source(
+        "package geo\nimport /geo/core\n\
+         public struct Circle : Copy { val center: Vec, val r: Int }\n\
+         public fun unit(): Circle = Circle(Vec(3), 1)\n",
+    )
+    .unwrap();
+    let core_exports = declared_types(&core, true);
+    let bind = |name: &str| {
+        core_exports
+            .get(name)
+            .map(|header| (header.clone(), "geo/core".to_string()))
+    };
+    let mut definitions = type_definitions(&core, "geo/core", &no_imports);
+    definitions.extend(type_definitions(&shapes, "geo/shapes", &bind));
+    let lookup = |module: &str, name: &str| {
+        definitions
+            .iter()
+            .find(|d| d.module == module && d.name == name)
+            .cloned()
+    };
+    let abi = FileAbi::extract_with_definitions(&shapes, "geo/shapes", &bind, &lookup).unwrap();
+
+    let check = |app: &str| {
+        let file = prism_parser::parse_source(app).unwrap();
+        let mut checker = TypeChecker::new(Some("app".to_string()), "app/main");
+        checker.ingest_file_abi(&abi);
+        let tree = checker.check_module(&file);
+        (tree, checker.errors)
+    };
+    let (tree, errors) = check("package app\nimport /geo/shapes\nfun f(): Int = unit().r\n");
+    assert!(errors.is_empty(), "{:?}", errors);
+    let vec = NominalId::new("geo/core", "Vec");
+    let fields = tree.types.struct_fields(&vec).expect("Vec is defined");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].0, "x");
+    assert_eq!(tree.types.marker(&vec), Some(prism_ast::TypeMarker::Copy));
+
+    let (_, errors) = check("package app\nimport /geo/shapes\nfun f(): Int = unit().center.x\n");
+    assert_eq!(codes(&errors), ["E4014"], "{:?}", errors);
+    let (_, errors) =
+        check("package app\nimport /geo/shapes\nfun f(): Int { val v = Vec(1); return 1 }\n");
+    assert_eq!(codes(&errors), ["E4014"], "{:?}", errors);
+}
+
+/// type-system: "A cycle across modules". Each file of the cycle reports its own declaration,
+/// seeing the other's through its ABI.
+#[test]
+fn a_cycle_across_modules_is_reported_in_each_file() {
+    let one = prism_parser::parse_source(
+        "package a\nimport /b/two\npublic struct One { val two: Two? }\n",
+    )
+    .unwrap();
+    let two = prism_parser::parse_source(
+        "package b\nimport /a/one\npublic struct Two { val one: One }\n",
+    )
+    .unwrap();
+    let files = [("a/one", &one), ("b/two", &two)];
+    for (index, (module, file)) in files.iter().enumerate() {
+        let (other_module, other) = files[1 - index];
+        let file_exports = declared_types(file, true);
+        let bind_other = |name: &str| {
+            file_exports
+                .get(name)
+                .map(|header| (header.clone(), module.to_string()))
+        };
+        let abi = FileAbi::extract(other, other_module, &bind_other).unwrap();
+        let mut checker =
+            TypeChecker::new(file.package.as_ref().map(|p| p.package_string()), *module);
+        checker.ingest_file_abi(&abi);
+        checker.check_module(file);
+        let expected = if *module == "a/one" { "One" } else { "Two" };
+        assert_eq!(codes(&checker.errors), ["E4023"], "{:?}", checker.errors);
+        assert!(
+            matches!(&checker.errors[0], TypeError::InfinitelySizedType { type_name, .. } if type_name == expected),
+            "{:?}",
+            checker.errors
+        );
+    }
+}

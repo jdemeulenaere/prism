@@ -1,0 +1,5 @@
+// expect: E4023
+// entry: .
+package a
+import /b/two
+public struct One { val two: Two? }

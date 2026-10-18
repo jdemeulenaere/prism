@@ -1,0 +1,5 @@
+// expect: ok
+enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }
+struct Node { val next: Heap<Node>? }
+struct Pair<A, B>(val a: A, val b: B)
+struct Q { val p: Pair<Pair<Int, Int>, Int> }

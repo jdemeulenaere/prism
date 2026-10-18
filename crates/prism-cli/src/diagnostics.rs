@@ -373,6 +373,15 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::BorrowInTypeArgument { .. } => {
             out.push_str("   = help: type parameters stand for owned values; take '&T' in the signature instead, as in 'fun <T> first(a: &T): &T'\n");
         }
+        TypeError::InfinitelySizedType {
+            type_name, path, ..
+        } => {
+            out.push_str(&format!("   = note: {}\n", path));
+            out.push_str(&format!(
+                "   = help: hold the recursive value behind a pointer with a 'Heap<...>' field, as in 'Heap<{}>'\n",
+                type_name
+            ));
+        }
         TypeError::NotAReference { .. } => {
             out.push_str("   = help: '*r = v' writes through a reference 'r'; assign a variable or field directly with 'x = v'\n");
         }
