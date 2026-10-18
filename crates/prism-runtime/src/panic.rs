@@ -33,11 +33,16 @@ pub enum PanicKind {
     OutOfMemory = 6,
     /// `s[i]` outside `0..<s.length`; the detail is `<i> out of range for length <n>`.
     StringIndexOutOfRange = 7,
+    /// An element access, `insert` or `removeAt` of a list with an index out of range; the
+    /// detail is `<i> out of range for size <n>` (D8 of `collections`).
+    ListIndexOutOfRange = 8,
+    /// `removeLast()` of an empty list.
+    EmptyList = 9,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 8] = [
+    pub const ALL: [PanicKind; 10] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
@@ -46,6 +51,8 @@ impl PanicKind {
         PanicKind::StackOverflow,
         PanicKind::OutOfMemory,
         PanicKind::StringIndexOutOfRange,
+        PanicKind::ListIndexOutOfRange,
+        PanicKind::EmptyList,
     ];
 
     /// The kind with code `code`.
@@ -72,6 +79,8 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         PanicKind::StackOverflow => "stack overflow".to_string(),
         PanicKind::OutOfMemory => "out of memory".to_string(),
         PanicKind::StringIndexOutOfRange => format!("string index {}", detail),
+        PanicKind::ListIndexOutOfRange => format!("list index {}", detail),
+        PanicKind::EmptyList => "removeLast() on an empty list".to_string(),
     }
 }
 
@@ -207,6 +216,12 @@ mod tests {
                 "3 out of range for length 3",
                 "string index 3 out of range for length 3",
             ),
+            (
+                PanicKind::ListIndexOutOfRange,
+                "-1 out of range for size 1",
+                "list index -1 out of range for size 1",
+            ),
+            (PanicKind::EmptyList, "", "removeLast() on an empty list"),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());
         for (kind, detail, message) in cases {

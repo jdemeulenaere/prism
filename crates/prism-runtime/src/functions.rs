@@ -2,7 +2,14 @@
 //! symbol, address and signature, from which the code generator declares its imports and the JIT
 //! resolves them.
 
-use crate::allocation::{prism_rt_allocate, prism_rt_free, prism_rt_register_top_level_value};
+use crate::allocation::{
+    prism_rt_allocate, prism_rt_free, prism_rt_reallocate, prism_rt_register_top_level_value,
+};
+use crate::list::{
+    prism_rt_list_close_gap, prism_rt_list_empty, prism_rt_list_free, prism_rt_list_grow,
+    prism_rt_list_index_out_of_range, prism_rt_list_open_gap, prism_rt_list_reverse,
+    prism_rt_list_with_capacity,
+};
 use crate::output::{
     prism_rt_print_bool, prism_rt_print_char, prism_rt_print_double, prism_rt_print_int,
     prism_rt_print_newline,
@@ -66,6 +73,69 @@ use RuntimeType::{Pointer, F64, I32, I64, I8};
 
 /// Every `extern "C"` function of the runtime, once each.
 pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
+    RuntimeFunction {
+        name: "prism_rt_reallocate",
+        address: RuntimeAddress(prism_rt_reallocate as *const u8),
+        parameters: &[Pointer, Pointer, Pointer, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_with_capacity",
+        address: RuntimeAddress(prism_rt_list_with_capacity as *const u8),
+        parameters: &[Pointer, Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_grow",
+        address: RuntimeAddress(prism_rt_list_grow as *const u8),
+        parameters: &[Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_open_gap",
+        address: RuntimeAddress(prism_rt_list_open_gap as *const u8),
+        parameters: &[Pointer, I64, Pointer, Pointer, Pointer, Pointer, I32, I32],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_close_gap",
+        address: RuntimeAddress(prism_rt_list_close_gap as *const u8),
+        parameters: &[Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_reverse",
+        address: RuntimeAddress(prism_rt_list_reverse as *const u8),
+        parameters: &[Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_free",
+        address: RuntimeAddress(prism_rt_list_free as *const u8),
+        parameters: &[Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_index_out_of_range",
+        address: RuntimeAddress(prism_rt_list_index_out_of_range as *const u8),
+        parameters: &[I64, I64, Pointer, Pointer, I32, I32],
+        result: None,
+        never_returns: true,
+    },
+    RuntimeFunction {
+        name: "prism_rt_list_empty",
+        address: RuntimeAddress(prism_rt_list_empty as *const u8),
+        parameters: &[Pointer, Pointer, I32, I32],
+        result: None,
+        never_returns: true,
+    },
     RuntimeFunction {
         name: "prism_rt_print_int",
         address: RuntimeAddress(prism_rt_print_int as *const u8),
@@ -250,6 +320,7 @@ mod tests {
             include_str!("double.rs"),
             include_str!("allocation.rs"),
             include_str!("string.rs"),
+            include_str!("list.rs"),
         ];
         let mut names = HashSet::new();
         for source in sources {

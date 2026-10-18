@@ -226,6 +226,55 @@ pub extern "C" fn prism_rt_allocate(size: usize, alignment: usize) -> *mut u8 {
     pointer
 }
 
+/// Reallocates the `old_size` bytes aligned to `alignment` at `pointer`, which
+/// [`prism_rt_allocate`] or this function gave, to `new_size` bytes, keeping the first
+/// `old_size` bytes, and returns the new address, which may be the old one (D14 of
+/// `collections`). Under the allocation check, the map entry moves to the new address, and a
+/// pointer the map does not hold with that size ends the program with
+/// [`ALLOCATION_CHECK_EXIT_STATUS`] as an invalid free. A failure is "out of memory". Both sizes
+/// must be positive.
+///
+/// # Safety
+///
+/// Outside the allocation check, `pointer` must be a live allocation of `old_size` bytes aligned
+/// to `alignment`.
+#[no_mangle]
+pub unsafe extern "C" fn prism_rt_reallocate(
+    pointer: *mut u8,
+    old_size: usize,
+    new_size: usize,
+    alignment: usize,
+) -> *mut u8 {
+    let (Some(old), Some(_)) = (
+        allocation_layout(old_size, alignment),
+        allocation_layout(new_size, alignment),
+    ) else {
+        panic_without_location(PanicKind::OutOfMemory, "")
+    };
+    if CHECKING.load(Ordering::Relaxed) {
+        let verdict = with_tracking(|tracking| {
+            tracking
+                .allocations
+                .record_free(pointer as usize, old_size, alignment)
+        });
+        if verdict.is_err() {
+            report_check_failure(INVALID_FREE_MESSAGE)
+        }
+    }
+    let moved = std::alloc::realloc(pointer, old, new_size);
+    if moved.is_null() {
+        panic_without_location(PanicKind::OutOfMemory, "")
+    }
+    if CHECKING.load(Ordering::Relaxed) {
+        with_tracking(|tracking| {
+            tracking
+                .allocations
+                .record_allocation(moved as usize, new_size, alignment)
+        });
+    }
+    moved
+}
+
 /// Frees the `size` bytes aligned to `alignment` at `pointer`, which [`prism_rt_allocate`] gave
 /// for that size and alignment. Under the allocation check, a free that matches no live
 /// allocation ends the program with [`ALLOCATION_CHECK_EXIT_STATUS`] instead.
@@ -366,6 +415,30 @@ mod tests {
         );
         // SAFETY: allocated above with this size and alignment.
         unsafe { prism_rt_free(leaked, 5, 1) };
+        start_tracking(false);
+    }
+
+    #[test]
+    fn a_reallocation_moves_the_tracked_allocation() {
+        let _lock = test_lock();
+        start_tracking(true);
+        let pointer = prism_rt_allocate(16, 8);
+        // SAFETY: allocated above, 16 bytes aligned to 8.
+        unsafe {
+            pointer.cast::<u64>().write(7);
+            let grown = prism_rt_reallocate(pointer, 16, 64, 8);
+            assert_eq!(grown.cast::<u64>().read(), 7);
+            assert_eq!(
+                allocation_statistics(),
+                AllocationStatistics {
+                    allocations_made: 2,
+                    live_allocations: 1,
+                    live_bytes: 64
+                }
+            );
+            prism_rt_free(grown, 64, 8);
+        }
+        assert_eq!(finish_tracking(), None);
         start_tracking(false);
     }
 
