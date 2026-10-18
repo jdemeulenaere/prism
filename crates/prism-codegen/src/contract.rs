@@ -25,42 +25,65 @@ use prism_typed_tree::{NominalId, Type, TypeDef, TypeTable};
 use std::collections::HashMap;
 
 /// The fingerprints of the types of one unit, over its type table, memoized.
+///
+/// A fingerprint depends only on the type, never on which types were fingerprinted before it,
+/// so the same type has the same fingerprint in every unit and in every version of a unit.
+/// The two memos therefore hold different things: `fingerprints` the fingerprint of each type
+/// asked for, and `definitions` the hash of each definition, which a fingerprint embeds.
 pub struct TypeFingerprints<'t> {
     types: &'t TypeTable,
-    memo: HashMap<Type, ContentHash>,
+    /// The fingerprint of each type [`TypeFingerprints::fingerprint`] computed.
+    fingerprints: HashMap<Type, ContentHash>,
+    /// The hash of each definition computed so far that does not depend on where it is reached
+    /// from, with the definitions on the cycles it reaches.
+    definitions: HashMap<Frame, DefinitionHash>,
 }
 
-/// A struct or enum on the stack of definitions being hashed.
+/// A struct or enum with its type arguments: an entry of the stack of definitions being
+/// hashed, and the key of a definition's hash.
 type Frame = (NominalId, Vec<Type>);
+
+/// The memoized hash of a definition.
+struct DefinitionHash {
+    hash: ContentHash,
+    /// The definitions on the cycles the definition reaches, itself included when it reaches
+    /// itself. The hash holds where none of them is being hashed: reached from one of them, the
+    /// definition would refer back to it instead of hashing it again.
+    cycles: Vec<Frame>,
+}
 
 impl<'t> TypeFingerprints<'t> {
     pub fn new(types: &'t TypeTable) -> Self {
         Self {
             types,
-            memo: HashMap::new(),
+            fingerprints: HashMap::new(),
+            definitions: HashMap::new(),
         }
     }
 
     /// The fingerprint of `ty`.
     pub fn fingerprint(&mut self, ty: &Type) -> ContentHash {
-        if let Some(hash) = self.memo.get(ty) {
+        if let Some(hash) = self.fingerprints.get(ty) {
             return *hash;
         }
         let mut hasher = DeterministicHasher::new();
         hasher.write_str("type");
         let mut stack: Vec<Frame> = Vec::new();
-        self.hash_type(ty, &mut stack, &mut hasher);
+        let mut cycles: Vec<Frame> = Vec::new();
+        self.hash_type(ty, &mut stack, &mut cycles, &mut hasher);
         let hash = hasher.finish();
-        self.memo.insert(ty.clone(), hash);
+        self.fingerprints.insert(ty.clone(), hash);
         hash
     }
 
     /// Writes `ty` into `hasher`, and returns the lowest position of `stack` it refers back to,
-    /// or `usize::MAX` when it refers to no definition being hashed.
+    /// or `usize::MAX` when it refers to no definition being hashed. Adds to `cycles` the
+    /// definitions on the cycles it reaches.
     fn hash_type(
         &mut self,
         ty: &Type,
         stack: &mut Vec<Frame>,
+        cycles: &mut Vec<Frame>,
         hasher: &mut DeterministicHasher,
     ) -> usize {
         let tag = |hasher: &mut DeterministicHasher, tag: u8| {
@@ -78,19 +101,19 @@ impl<'t> TypeFingerprints<'t> {
             Type::Reference { mutable, inner } => {
                 hasher.write_u8(8);
                 hasher.write_u8(u8::from(*mutable));
-                self.hash_type(inner, stack, hasher)
+                self.hash_type(inner, stack, cycles, hasher)
             }
             Type::Nullable(inner) => {
                 hasher.write_u8(9);
-                self.hash_type(inner, stack, hasher)
+                self.hash_type(inner, stack, cycles, hasher)
             }
             Type::Heap(inner) => {
                 hasher.write_u8(10);
-                self.hash_type(inner, stack, hasher)
+                self.hash_type(inner, stack, cycles, hasher)
             }
             Type::List(inner) => {
                 hasher.write_u8(11);
-                self.hash_type(inner, stack, hasher)
+                self.hash_type(inner, stack, cycles, hasher)
             }
             Type::Fn {
                 is_compose,
@@ -104,13 +127,13 @@ impl<'t> TypeFingerprints<'t> {
                 let mut lowest = usize::MAX;
                 for (param, escaping) in params.iter().zip(escaping) {
                     hasher.write_u8(u8::from(*escaping));
-                    lowest = lowest.min(self.hash_type(param, stack, hasher));
+                    lowest = lowest.min(self.hash_type(param, stack, cycles, hasher));
                 }
-                lowest.min(self.hash_type(ret, stack, hasher))
+                lowest.min(self.hash_type(ret, stack, cycles, hasher))
             }
             Type::Struct { id, arguments } | Type::Enum { id, arguments } => {
                 hasher.write_u8(13);
-                self.hash_nominal(id, arguments, stack, hasher)
+                self.hash_nominal(id, arguments, stack, cycles, hasher)
             }
             Type::Opaque(name) => {
                 hasher.write_u8(14);
@@ -135,6 +158,7 @@ impl<'t> TypeFingerprints<'t> {
         id: &NominalId,
         arguments: &[Type],
         stack: &mut Vec<Frame>,
+        cycles: &mut Vec<Frame>,
         hasher: &mut DeterministicHasher,
     ) -> usize {
         if let Some(position) = stack
@@ -143,19 +167,29 @@ impl<'t> TypeFingerprints<'t> {
         {
             hasher.write_u8(0);
             hasher.write_u64((stack.len() - position) as u64);
+            for frame in &stack[position..] {
+                if !cycles.contains(frame) {
+                    cycles.push(frame.clone());
+                }
+            }
             return position;
         }
-        let ty = Type::Struct {
-            id: id.clone(),
-            arguments: arguments.to_vec(),
-        };
-        if let Some(hash) = self.memo.get(&ty) {
-            hasher.write_u8(1);
-            hasher.write_hash(hash);
-            return usize::MAX;
+        let frame: Frame = (id.clone(), arguments.to_vec());
+        if let Some(memoized) = self.definitions.get(&frame) {
+            if memoized.cycles.iter().all(|member| !stack.contains(member)) {
+                hasher.write_u8(1);
+                hasher.write_hash(&memoized.hash);
+                for member in &memoized.cycles {
+                    if !cycles.contains(member) {
+                        cycles.push(member.clone());
+                    }
+                }
+                return usize::MAX;
+            }
         }
         let own = stack.len();
-        stack.push((id.clone(), arguments.to_vec()));
+        let first_cycle = cycles.len();
+        stack.push(frame.clone());
         let mut inner = DeterministicHasher::new();
         inner.write_str(&id.module);
         inner.write_str(&id.name);
@@ -173,7 +207,7 @@ impl<'t> TypeFingerprints<'t> {
                     inner.write_str(name);
                     inner.write_u8(u8::from(*is_var));
                     let field = field.substitute(arguments);
-                    lowest = lowest.min(self.hash_type(&field, stack, &mut inner));
+                    lowest = lowest.min(self.hash_type(&field, stack, cycles, &mut inner));
                 }
             }
             Some(TypeDef::Enum { variants, .. }) => {
@@ -184,7 +218,7 @@ impl<'t> TypeFingerprints<'t> {
                     inner.write_u64(payloads.len() as u64);
                     for payload in payloads {
                         let payload = payload.substitute(arguments);
-                        lowest = lowest.min(self.hash_type(&payload, stack, &mut inner));
+                        lowest = lowest.min(self.hash_type(&payload, stack, cycles, &mut inner));
                     }
                 }
             }
@@ -192,16 +226,19 @@ impl<'t> TypeFingerprints<'t> {
                 inner.write_u8(0);
                 inner.write_u64(arguments.len() as u64);
                 for argument in arguments {
-                    lowest = lowest.min(self.hash_type(argument, stack, &mut inner));
+                    lowest = lowest.min(self.hash_type(argument, stack, cycles, &mut inner));
                 }
             }
         }
         stack.pop();
         let hash = inner.finish();
         // A definition that refers back only to itself, or to nothing on the stack, hashes the
-        // same wherever it is reached from.
+        // same wherever it is reached from, as long as no definition on its cycles is being
+        // hashed there.
         if lowest >= own {
-            self.memo.insert(ty, hash);
+            let cycles = cycles[first_cycle..].to_vec();
+            self.definitions
+                .insert(frame, DefinitionHash { hash, cycles });
         }
         hasher.write_u8(1);
         hasher.write_hash(&hash);
@@ -360,6 +397,43 @@ mod tests {
         assert_eq!(first, nominal(&file, "Chain", true));
         let other = lower_source("enum Chain { End, Link(Bool, Heap<Chain>) }\n");
         assert_ne!(first, nominal(&other, "Chain", true));
+    }
+
+    /// A fingerprint does not depend on which types were fingerprinted before it: reordering
+    /// declarations must not change a contract.
+    #[test]
+    fn fingerprints_do_not_depend_on_the_order_they_are_computed_in() {
+        let file = lower_source("struct P { val x: Int }\n");
+        let p = Type::plain_struct(NominalId::new(file.module.clone(), "P"));
+        let reference = Type::Reference {
+            mutable: false,
+            inner: Box::new(p.clone()),
+        };
+        let mut first = TypeFingerprints::new(&file.types);
+        let in_order = (first.fingerprint(&p), first.fingerprint(&reference));
+        let mut second = TypeFingerprints::new(&file.types);
+        let reference_first = second.fingerprint(&reference);
+        assert_eq!(in_order, (second.fingerprint(&p), reference_first));
+    }
+
+    #[test]
+    fn mutually_recursive_definitions_do_not_depend_on_the_order() {
+        let file = lower_source("enum A { End, Next(Heap<B>) }\nenum B { Stop, Then(Heap<A>) }\n");
+        let a = Type::plain_enum(NominalId::new(file.module.clone(), "A"));
+        let b = Type::plain_enum(NominalId::new(file.module.clone(), "B"));
+        let boxed_b = Type::Heap(Box::new(b.clone()));
+        let mut first = TypeFingerprints::new(&file.types);
+        let a_first = (
+            first.fingerprint(&a),
+            first.fingerprint(&b),
+            first.fingerprint(&boxed_b),
+        );
+        let mut second = TypeFingerprints::new(&file.types);
+        let boxed_b_second = second.fingerprint(&boxed_b);
+        let b_second = second.fingerprint(&b);
+        let a_second = second.fingerprint(&a);
+        assert_eq!(a_first, (a_second, b_second, boxed_b_second));
+        assert_ne!(a_first.0, a_first.1);
     }
 
     #[test]
