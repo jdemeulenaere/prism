@@ -7,7 +7,7 @@ See `proposal.md` for motivation. This is item 29 of "Then: the road to Mileston
 **Baseline.** This change was proposed while `collections` was being implemented, and `standard-library`, `compose-runtime`, `compose-transform`, `instance-cache` and `hot-reload` were proposed but not implemented. It needs `compose-transform` archived, which brings the rest:
 
 - `compose-runtime`: the `prism-compose` crate with its per-thread state (`thread.rs`), the group and slot arenas, `Handle` (a 32-bit index and a 32-bit generation in a `u64`, retired at the maximum generation), deferred releases at the end of a pass with "`state-handles` attaches cells to slots, and they are released after the slot's value" (its D7), the current scope of the active pass as a Rust API (its D1), `invalidate` in O(1) and doing nothing for removed scopes (its D8, D12), invalidations during a pass going to the next one (its D4), `COMPOSE_FUNCTIONS` and `UnitContext::entry_point`, the composition dump, `FunctionValue` in `prism-runtime/src/function_value.rs`, and the finish report hook `set_finish_report` (its D13).
-- `compose-transform`: `intrinsic struct` and its catalog (its D16), `/prism/compose` in the prelude, `remember` lowered as `changed`/`Remembered`/calculation/`set_slot` (its D12), `Callee::Composer(ComposerOperation)` and `MirPhase::Composed` (its D19), `UnitContext::slot_type(ty)` emitting slot type records with fingerprints, drop and equality glue (its D20), stability by declared markers, so handles are stable parameters (its D7), restart scopes exactly at skippable composables and the root (its D10), `c.recompose()`, `c.setContent`, `c.dump()`, and the composable-context flag also off in default values (its D17).
+- `compose-transform`: `intrinsic struct` and its catalog (its D16), `/prism/compose/runtime` in the prelude, `remember` lowered as `changed`/`Remembered`/calculation/`set_slot` (its D12), `Callee::Composer(ComposerOperation)` and `MirPhase::Composed` (its D19), `UnitContext::slot_type(ty)` emitting slot type records with fingerprints, drop and equality glue (its D20), stability by declared markers, so handles are stable parameters (its D7), restart scopes exactly at skippable composables and the root (its D10), `c.recompose()`, `c.setContent`, `c.dump()`, and the composable-context flag also off in default values (its D17).
 - `standard-library`: the intrinsic catalog (`crates/prism-typechecker/src/intrinsics.rs`, `E4029`), `intrinsic val` extension properties, intrinsic extensions as members (its D7), `Callee::Builtin` calls of intrinsics, and `crates/prism-library` with `MODULES` and `PRELUDE`.
 - `collections`: `List<T>`, its members, elements as places and `for` over a borrowed list, all used by the todo shapes.
 - `escaping-closures` (archived): owned captures, one-word inline environments (a handler capturing one handle allocates nothing), and its D7 constraint: a state's value is written through a call taking the handle by value or by shared borrow, never as a `mut fun` receiver or a field write of the handle, since a handler's owned captures are `val`s.
@@ -28,6 +28,8 @@ What exists today, beyond those packets:
 - The catalog (`intrinsics::CATALOG`) holds functions and properties only, with canonical declaration texts that write `: Unit` and leave defaults out (see `compose-transform`'s baseline update).
 - Runtime entry points are looked up through `prism_codegen::externals::entry_point`, not `UnitContext::entry_point`.
 
+**Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** `compose-transform`'s prelude module is now `/prism/compose/runtime` (`crates/prism-library/prism/compose/runtime.prism`, `package prism.compose`), after Jetpack Compose's `androidx.compose.runtime` (`ui-toolkit` D21), so the state declarations are added there and the ABI writes a handle type as `prism/compose/runtime.MutableState<Int>`; every mention below uses that path. `ui-toolkit` keeps its modifiers plain data, whose handlers live in a table of `prism-ui` (its D23 and D25): no modifier creates state cells or remembers anything, so the ownership rules of D11 and D12 need no case for modifiers.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -46,7 +48,7 @@ What exists today, beyond those packets:
 
 | Concern | `state-handles` (this change) | Elsewhere |
 |---|---|---|
-| Handle types, `mutableStateOf`, `value`, `read`, `update`, `edit` | all of it | declared in `compose-transform`'s `/prism/compose` |
+| Handle types, `mutableStateOf`, `value`, `read`, `update`, `edit` | all of it | declared in `compose-transform`'s `/prism/compose/runtime` |
 | Cells | the arena, flags, readers, owners, release | slots and deferred releases are `compose-runtime`'s |
 | Read tracking | registering the active pass's current scope | the current scope is `compose-runtime`'s |
 | `remember { mutableStateOf(...) }` | the window that attaches cells to the slot | `remember`'s lowering is `compose-transform`'s |
@@ -58,7 +60,7 @@ Rejected: a state-specific "recompose after each handler" call in this change (h
 
 ### D2. The API: Kotlin's names, closures for what Kotlin does with aliasing (autonomous)
 
-`/prism/compose` gains:
+`/prism/compose/runtime` gains:
 
 ```
 public intrinsic struct State<T> : Copy
@@ -271,7 +273,7 @@ Compile-time cost: none beyond one more case where top-level constants are recog
 
 ### D19. The backend
 
-- **Layout and glue.** Handles are one 8-byte word for every `T` (`layout.rs`), with no drop glue, a word copy as clone glue and a word compare as equality glue; `dump-layout` names them `prism/compose::State<...>` and `prism/compose::MutableState<...>`.
+- **Layout and glue.** Handles are one 8-byte word for every `T` (`layout.rs`), with no drop glue, a word copy as clone glue and a word compare as equality glue; `dump-layout` names them `prism/compose/runtime::State<...>` and `prism/compose/runtime::MutableState<...>`.
 - **Operations.** Each `Callee::State` operation is a direct call of its entry point through `UnitContext::entry_point`, with the handle word, the record from `UnitContext::slot_type(T)`, and values moved in or out spilled to a stack slot and passed by address, followed by the failure test of D14. Composer operations of D17 call `prism_compose_begin_remember`, `prism_compose_end_remember` and `prism_compose_side_effect`.
 - **Records.** `glue.rs` gives every cell type an equality glue function when `==` applies (`#equals(String)` over `prism_rt_string_equals`, `#equals(List<T>)` from `collections`, scalars as `compose-transform` D20 already does, function types as its D9).
 - **Top-level initializers.** The accessor of a top-level value brackets its initializer with `prism_compose_begin_program` and `prism_compose_end_program` (D11).
@@ -321,7 +323,7 @@ Behavior is pinned by executable fixtures under `crates/prism-cli/tests/fixtures
 
 ## Migration Plan
 
-No existing program changes meaning: `/prism/compose` gains declarations, which a file's own declarations of the same names shadow (`standard-library` D4). `prism dump-mir --composed` shows the remember window around every `remember` miss, and composed snapshots are re-blessed. Top-level accessors gain two calls, which `dump-clif` snapshots of top-level values show. `examples/demo/ui` stops failing on `mutableStateOf` and fails only on `/prism/ui` names.
+No existing program changes meaning: `/prism/compose/runtime` gains declarations, which a file's own declarations of the same names shadow (`standard-library` D4). `prism dump-mir --composed` shows the remember window around every `remember` miss, and composed snapshots are re-blessed. Top-level accessors gain two calls, which `dump-clif` snapshots of top-level values show. `examples/demo/ui` stops failing on `mutableStateOf` and fails only on names of the toolkit modules (`ui-toolkit` D21).
 
 ## Open Questions
 

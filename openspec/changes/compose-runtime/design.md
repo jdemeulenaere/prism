@@ -24,6 +24,8 @@ What exists today:
 - `prism_runtime::StopHandler` takes `(status, exited)`: `prism_rt_exit` reports `exited`, which a watch session treats as `main` returning.
 - `MODULES` is a list of `(module path, source)` pairs, and every public library function writes its result type (`: Unit` too, `E4011`); `library_tests.rs` requires a `//` comment directly above every declaration line.
 
+**Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** `compose-transform`'s prelude module is now `/prism/compose/runtime`, one of the modules of `prism/compose/` that follow Jetpack Compose's artifacts (`ui-toolkit` D21). `/prism/composer` keeps its path and role: it is no Compose artifact, but the protocol module for fixtures written in lowered form.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -49,7 +51,7 @@ What exists today:
 | Slot types | the `SlotType` record, matching by fingerprint, drop and equality through it | `compose-transform` emits one record per type, from `hot-reload`'s type fingerprints |
 | Change words, skipping decisions | none; `skipping`, `skipToGroupEnd`, `changed` are the primitives | `compose-transform` generates the comparisons and change bits |
 | Restart functions | kept, replaced, called and released | `compose-transform` generates them, passing its force bit itself |
-| `remember`, `key`, `/prism/compose`, the owned `Composition` | none | `compose-transform` |
+| `remember`, `key`, `/prism/compose/runtime`, the owned `Composition` | none | `compose-transform` |
 | Reads, writes, cells | scope handles, `invalidate`, the current scope of the active pass (Rust API) | `state-handles` adds cells, readers and the C entries that read the active scope |
 | Nodes | `Applier` trait, node groups, placement, the built-in node tree | `ui-toolkit` supplies the UI applier, `Node` and the frame loop |
 | Hot reload | fingerprinted slots, kind-checked nodes, a Rust API to invalidate the scopes whose restart function reaches given slots | `compose-hot-reload` calls it at reload points |
@@ -211,14 +213,14 @@ Rejected:
 
 `standard-library` makes externals `private` and library-only, and its executable fixtures cannot add library test modules (its task 7.5), so a Prism program can reach the runtime only through public functions of a bundled module. This change adds `crates/prism-library/prism/composer.prism` (`package prism`, module `/prism/composer`). It holds one `private external fun prism_compose_*` per entry point that hand-written code needs, with the parameters that keep a function value declared `escaping`, and the public wrappers of the spec. Composers, compositions and scopes are plain `Int` words, which is exactly the machine form generated code will pass (D3). A hand-written composable such as `fun Label(k: Int, n: Int)` is therefore what the transform will generate from `compose fun Label(n: Int)`, minus change words, and the fixtures exercise the same entry points the transform will call.
 
-The module is outside the prelude, so its names never reach a program that does not import it. It is not `/prism/compose`: that module is `compose-transform`'s prelude module for application code (`standard-library` D14), and its `Composition` is an owned type, where the protocol's compositions are handles. After the transform, the module stays as the declaration of the externals its generated code calls, and as a hand-testing surface. Whether its wrappers stay public is `compose-transform`'s call. It is safe for any caller, since every handle is validated (D3) and every misuse is a runtime error (D12).
+The module is outside the prelude, so its names never reach a program that does not import it. It is not `/prism/compose/runtime`: that module is `compose-transform`'s prelude module for application code (`standard-library` D14), and its `Composition` is an owned type, where the protocol's compositions are handles. After the transform, the module stays as the declaration of the externals its generated code calls, and as a hand-testing surface. Whether its wrappers stay public is `compose-transform`'s call. It is safe for any caller, since every handle is validated (D3) and every misuse is a runtime error (D12).
 
 Compile-time cost: none for programs that do not import it. An importer parses and checks one small module, cached like any library module.
 
 Rejected:
 - Allowing `// library:` modules in executable fixtures: it needs the fixture library on the `prism` command line, which `standard-library` D13 rejected so that injection never reaches users.
 - Testing only from Rust, as the ROADMAP item first said: the protocol would be pinned by no `.prism` source until the transform exists.
-- Creating `/prism/compose` here: it would mix the low-level protocol with the application API and make `standard-library` D14's prelude module two things.
+- Creating `/prism/compose/runtime` here: it would mix the low-level protocol with the application API and make `standard-library` D14's prelude module two things.
 - Typed wrapper structs (`struct Composer(val id: Int)`): structs are passed by address, which is not the machine form of the transform's composer word.
 
 ### D11. Composition lifecycle entry points; the owned `Composition` is `compose-transform`'s (autonomous)

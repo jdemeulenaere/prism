@@ -81,11 +81,11 @@ Each row MUST be composed in `key(todo.id)`, so that removing or filtering out a
 - **THEN** in the second dump, the rows of `Eggs` and `Bread` and their checkbox, text and button nodes have the numbers they had in the first
 
 ### Requirement: The Toolkit Tour
-`examples/demo/ui/ui.prism` MUST be a runnable app that composes every composable of `/prism/ui` and uses every modifier, shape, arrangement and alignment kind at least once.
+`examples/demo/ui/ui.prism` MUST be a runnable app that composes every composable of `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` and uses every modifier, shape, arrangement and alignment kind at least once.
 
 #### Scenario: Touring the toolkit
 - **WHEN** the session `touring-the-toolkit` runs the tour with `dump` and `dump draw`
-- **THEN** the tree dump holds at least one node of each kind (`column`, `row`, `box`, `text`, `button`, `spacer`, `checkbox`, `textfield`), and the display list holds rectangles, rounded rectangles, borders and text
+- **THEN** the tree dump holds at least one node of each kind (`column`, `row`, `box`, `text`, `spacer`, `textfield`), a `clickable(Button)` and a `toggleable(Checkbox ...)` element, and the display list holds rectangles, rounded rectangles, borders and text
 
 ### Requirement: A Thousand Items Run Cleanly
 `examples/apps/todo/large.prism` MUST compose the todo app's screen over 1,000 sample items in an 800 × 600 window, and free everything when it ends.

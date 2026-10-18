@@ -41,15 +41,15 @@ Without frame statistics, the frame loop MUST do no timing and the `prism` binar
 - **THEN** no allocation happens after the first frame, as with frame statistics off
 
 ### Requirement: Script Targets by Kind
-Wherever an event script accepts a text target, it MUST also accept `<kind> [<n>]`: the n-th node, 1 by default and in tree order, of kind `column`, `row`, `box`, `text`, `button`, `spacer`, `checkbox` or `textfield`. The command MUST act at the centre of that node's bounds, rounded down, hit-testing from there.
+Wherever an event script accepts a text target, it MUST also accept `<kind> [<n>]`: the n-th node, 1 by default and in tree order, of kind `column`, `row`, `box`, `text`, `spacer` or `textfield`, or whose `clickable` or `toggleable` element has the role `button` or `checkbox`. The command MUST act at the centre of that node's bounds, rounded down, hit-testing from there.
 
 #### Scenario: Clicking the second checkbox
 - **WHEN** a headless app of 400 × 300 composes `compose fun Two() { val a = remember { mutableStateOf(false) }; val b = remember { mutableStateOf(false) }; Column { Checkbox(checked = a.value, onCheckedChange = { a.value = it }); Checkbox(checked = b.value, onCheckedChange = { b.value = it }) } }`, and its script is `click checkbox 2` then `dump`
-- **THEN** stdout is the lines `window 400x300`, `  column #1 0,0 20x40`, `    checkbox #2 0,0 20x20` and `    checkbox #3 0,20 20x20 checked`
+- **THEN** stdout is the lines `window 400x300`, `  column #1 0,0 20x40`, `    box #2 0,0 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))` and `    box #3 0,20 20x20 toggleable(Checkbox on) size(20x20) background(#FF6750A4 RoundedCorner(2)) border(2 #FF6750A4 RoundedCorner(2))`
 
 #### Scenario: Focusing a field by its kind
 - **WHEN** the typing app of `ui`'s "Typing into a text field" runs headless with the script `click textfield`, `type "ab"` and `dump`
-- **THEN** the dump holds `textfield #2 0,0 200x36 "ab" focused`
+- **THEN** the dump holds `textfield #2 0,0 200x36 "ab" focused defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)`
 
 ### Requirement: Kind Target Errors
 Another word in a target's place MUST be reported before the program runs as `Error: <script>:<line>: unknown target '<word>'`, with status 1. A kind target that matches fewer than `n` nodes MUST end the program with `event script line <line>: the tree has no <kind> <n>`.

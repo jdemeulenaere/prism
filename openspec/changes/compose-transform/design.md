@@ -23,9 +23,11 @@ What exists today:
 **Baseline update (`standard-library`, applied 2026-10-18).** Names and mechanisms that differ from what this design assumed:
 - The catalog is `intrinsics::CATALOG: &[Intrinsic]`, entries of functions and properties keyed by (module, receiver type constructor, name) with a `BuiltinFunction`, the canonical declaration text (visibility, modifiers, explicit `: Unit`, no defaults) and a `rule_typed` flag; `intrinsics::lookup` finds one. It has no type entries: intrinsic structs need a list of their own.
 - Rule-typed intrinsic calls are dispatched in `checker.rs::infer_call_expr` through `intrinsic_callee`, which resolves the callee name as any name (locals, the file, imports, then the prelude) and matches its `BuiltinFunction`; `remember` with keys gets an arm there. An intrinsic named as a value is `E4013`.
-- Members are `Extension` records with a `builtin` and a `property` flag, in the checker's `members` table and the shared `PreludeScope`, found by `TypeChecker::member`. Adding `/prism/compose` to `PRELUDE` needs no other change; `library_tests.rs` checks that prelude names stay distinct.
+- Members are `Extension` records with a `builtin` and a `property` flag, in the checker's `members` table and the shared `PreludeScope`, found by `TypeChecker::member`. Adding `/prism/compose/runtime` to `PRELUDE` needs no other change; `library_tests.rs` checks that prelude names stay distinct.
 - Runtime entry points are looked up through `prism_codegen::externals::entry_point` (see `compose-runtime`'s baseline update), not `UnitContext::entry_point`.
 - Library units are never reloaded under `--watch` (`standard-library` R3).
+
+**Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** The compose modules follow Jetpack Compose's artifacts, all files of the package directory `prism/compose/` (`ui-toolkit` D21). The runtime module this change creates is therefore `/prism/compose/runtime` (`crates/prism-library/prism/compose/runtime.prism`, `package prism.compose`), still the one compose module in the prelude, and the ABI names its types `prism/compose/runtime.Composition`; every mention below uses that path. It is the library's first module in a subdirectory, so task 2.1 also makes `MODULES`, the embedded file list that `library_tests.rs` compares with `crates/prism-library/prism/` (walked recursively) and the library's sibling imports cover `prism/compose/`. The toolkit modules `/prism/compose/ui`, `foundation`, `layout` and `material3` are `ui-toolkit`'s, outside the prelude. Modifiers are plain data there and never run composition (`ui-toolkit` D25), so this change plans no composed-modifier mechanism.
 
 ## Goals / Non-Goals
 
@@ -50,12 +52,12 @@ What exists today:
 | Calling convention, groups, keys | all of it | `compose-hot-reload` relies on the keys |
 | Skipping and restarting | stability, change words, kept arguments, restart closures | the runtime decides `skipping` and runs restarts |
 | Slot type records and equality glue | emitted per unit | fingerprints from `hot-reload` |
-| `/prism/compose` | `Composition`, `composition`, `setContent`, `recompose`, `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope`, `invalidate` | `state-handles` adds `State<T>`, `MutableState<T>`, `mutableStateOf` |
+| `/prism/compose/runtime` | `Composition`, `composition`, `setContent`, `recompose`, `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope`, `invalidate` | `state-handles` adds `State<T>`, `MutableState<T>`, `mutableStateOf` |
 | Intrinsic structs | the declaration form and its catalog | `state-handles` declares its handle types with it |
 | Reads and writes of state | none | `state-handles`, through the runtime's current scope |
 | Nodes | none | `ui-toolkit`'s `Node` intrinsic composable |
 
-Rejected: leaving `currentRecomposeScope` to `state-handles` (every fixture of restart scopes here would then need state); creating `/prism/compose` with the state types empty (`standard-library` D14 rejects stubs).
+Rejected: leaving `currentRecomposeScope` to `state-handles` (every fixture of restart scopes here would then need state); creating `/prism/compose/runtime` with the state types empty (`standard-library` D14 rejects stubs).
 
 ### D2. A MIR pass after borrow checking, before records and instances (confirms `compose-architecture` D3, revised)
 
@@ -243,7 +245,7 @@ The replaceable path duplicates the body's blocks, which would double a large sk
 
 ### D12. `remember`: an intrinsic composable over the current group's slots; up to three keys (autonomous)
 
-`remember<T : Copy>(calculation: () -> T): T` is a signature-typed intrinsic composable of `/prism/compose`, and with keys a rule-typed one (`standard-library` "Intrinsic Calls Are Typed by Their Signatures"): up to three keys before the calculation, each typed by a fresh type parameter bounded `Copy`, so a non-`Copy` key is `E4021` and a borrowed one `E4022` by the existing checks. The calculation's parameter is not `escaping`, so `remember { 7 }` borrows its captures and allocates nothing (`escaping-closures` D12).
+`remember<T : Copy>(calculation: () -> T): T` is a signature-typed intrinsic composable of `/prism/compose/runtime`, and with keys a rule-typed one (`standard-library` "Intrinsic Calls Are Typed by Their Signatures"): up to three keys before the calculation, each typed by a fresh type parameter bounded `Copy`, so a non-`Copy` key is `E4021` and a borrowed one `E4022` by the existing checks. The calculation's parameter is not `escaping`, so `remember { 7 }` borrows its captures and allocates nothing (`escaping-closures` D12).
 
 It adds no group: its slots are in the current group, after any kept arguments, in source order. It lowers to:
 
@@ -281,7 +283,7 @@ A trailing lambda such as `Column { Text("a") }` is a closure checked against `c
 
 ### D15. Entering composition: an owned `Composition`, root content adapters, and `currentRecomposeScope` (autonomous)
 
-`/prism/compose` (`crates/prism-library/prism/compose.prism`, `package prism`, added to `PRELUDE`) declares, all as intrinsics:
+`/prism/compose/runtime` (`crates/prism-library/prism/compose/runtime.prism`, `package prism.compose`, added to `PRELUDE`) declares, all as intrinsics:
 
 ```
 public intrinsic struct Composition
@@ -308,7 +310,7 @@ Rejected:
 
 ### D16. Intrinsic structs (autonomous; brings forward the intrinsic types that `standard-library` D6 left to `state-handles`)
 
-`intrinsic struct Name<Parameters> : Markers` declares, without fields, a type whose representation, glue and operations the compiler provides. The intrinsic catalog gains types: `prism/compose::Composition` (one word, neither `Copy` nor `Clone`, its drop glue calling `prism_compose_dispose`) and `prism/compose::RecomposeScope` (one word, `Copy`). A library declaration of another name, or with other type parameters or markers, is `E4029`, and a workspace one `E3002`, as for other intrinsics. No program can construct one, read a field or take one apart: their intrinsic functions make and use them. `==` compares the handle word.
+`intrinsic struct Name<Parameters> : Markers` declares, without fields, a type whose representation, glue and operations the compiler provides. The intrinsic catalog gains types: `prism/compose/runtime::Composition` (one word, neither `Copy` nor `Clone`, its drop glue calling `prism_compose_dispose`) and `prism/compose/runtime::RecomposeScope` (one word, `Copy`). A library declaration of another name, or with other type parameters or markers, is `E4029`, and a workspace one `E3002`, as for other intrinsics. No program can construct one, read a field or take one apart: their intrinsic functions make and use them. `==` compares the handle word.
 
 `Composition` must be owned and disposed by its drop (§5 D11), and no Prism declaration can give a type a drop that calls the runtime: user-defined destructors would be a language feature of their own. `state-handles` needs the same form for `State<T>` and `MutableState<T>`, so it is added once, here.
 
@@ -351,7 +353,7 @@ Rejected: making its wrappers private or removing it (its fixtures would go, and
 - **Composer operations** are direct calls of the compose entry points, through `UnitContext::entry_point` (`compose-runtime` D2), with values for slots spilled to a stack slot and passed by address. `Keepable` and `Duplicate` are lowered inline: loads of the descriptor's words and a compare, or a call of the duplicate entry.
 - **Slot type records.** `UnitContext::slot_type(ty) -> DataId` defines `<unit>#slot-type(<type>)` once per type: the type's fingerprint from `TypeFingerprints`, its layout's size and alignment, its drop glue address or null, its equality glue address, and its name, written as glue names it, in the unit's data. Records of one type in two units are different records with the same fingerprint, which the runtime matches by fingerprint (`compose-runtime` D6).
 - **Equality glue for every kept type**, scalars included (`#equals(Int)` compares two loaded words), and for function types (D9). Strings never need it: they are not stable and not `Copy`.
-- **Intrinsic structs** are laid out as one pointer-sized word, `Composition`'s drop glue calls `prism_compose_dispose`, and `dump-layout` names them `prism/compose::Composition` and `prism/compose::RecomposeScope`.
+- **Intrinsic structs** are laid out as one pointer-sized word, `Composition`'s drop glue calls `prism_compose_dispose`, and `dump-layout` names them `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope`.
 - **Descriptors** of four words (D9), with the environment functions defined in the closure's unit.
 - **`E6001`.** `supported.rs` stops reporting composable bodies, and a body that reaches the backend with region markers or in another phase than `Composed` is an internal error.
 
@@ -415,7 +417,7 @@ Behavior is pinned by executable fixtures under `crates/prism-cli/tests/fixtures
 
 ## Migration Plan
 
-No program that runs today changes meaning. Composable programs, which the backend rejected, now run. A composable call in a composable's default value, which `prism check` accepted, is now `E4008`. `prism dump-clif` and `prism dump-mir --instances` print composed code. `prism check --explain-cache` lists `prism/compose.prism`, and its snapshots are re-blessed and read against "Library Modules Compile Like Workspace Files". The `E6001` fixtures that used composables move to unknown types, as the MODIFIED scenarios say.
+No program that runs today changes meaning. Composable programs, which the backend rejected, now run. A composable call in a composable's default value, which `prism check` accepted, is now `E4008`. `prism dump-clif` and `prism dump-mir --instances` print composed code. `prism check --explain-cache` lists `prism/compose/runtime.prism`, and its snapshots are re-blessed and read against "Library Modules Compile Like Workspace Files". The `E6001` fixtures that used composables move to unknown types, as the MODIFIED scenarios say.
 
 ## Open Questions
 

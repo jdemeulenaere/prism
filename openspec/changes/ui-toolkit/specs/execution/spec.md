@@ -6,7 +6,7 @@
 `prism run --headless[=<width>x<height>] [--events <script>] <file.prism>` MUST run the program with no window: `runApp` runs headless, in a window of the given size when one is given and of its own `width` and `height` otherwise. Without `--events`, `runApp` MUST compose and lay out its content and return. The options MUST come before the file, and `--events` without `--headless` MUST be a usage error with status 1.
 
 #### Scenario: A headless run of the given size
-- **WHEN** `prism run --headless=320x200 --events script main.prism` runs on `fun main() { runApp(width = 800, height = 600) { } }` with `import /prism/ui`, and `script` holds `dump`
+- **WHEN** `prism run --headless=320x200 --events script main.prism` runs on `fun main() { runApp(width = 800, height = 600) { } }` with `import /prism/compose/ui`, and `script` holds `dump`
 - **THEN** stdout is `window 320x200` and a newline, and the exit status is 0
 
 #### Scenario: Events without headless mode

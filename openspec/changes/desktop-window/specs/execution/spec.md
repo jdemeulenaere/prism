@@ -6,7 +6,7 @@
 `prism run --screenshot <file.png> <file.prism>`, in a build with the `window` feature, MUST write a PNG image of the app's final frame to `<file.png>` each time `runApp` returns, after the app's last event and before its composition is dropped. The image MUST be the final display list rasterized as a window draws it, at scale 1 in headless runs and at the window's scale factor otherwise, as 8-bit RGBA without premultiplied alpha. The option MUST come before the file.
 
 #### Scenario: A headless screenshot
-- **WHEN** `prism run --headless=40x30 --screenshot shot.png main.prism` runs on `fun main() { runApp { Box(modifier = Modifier.size(10).background(Color.Red)) { } } }` with `import /prism/ui`
+- **WHEN** `prism run --headless=40x30 --screenshot shot.png main.prism` runs on `fun main() { runApp { Box(modifier = Modifier.size(10.dp).background(Color.Red)) { } } }` with `import /prism/compose/ui`, `import /prism/compose/foundation` and `import /prism/compose/layout`
 - **THEN** the exit status is 0, and `shot.png` is a 40 × 30 image whose pixels at columns 0 to 9 and rows 0 to 9 are `#FFFF0000` and whose other pixels are white
 
 ### Requirement: Screenshot Errors

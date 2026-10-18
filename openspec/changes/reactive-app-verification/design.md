@@ -23,6 +23,11 @@ The user was not available, so every decision a reviewer might take differently 
 
 The deltas are ADDED requirements of `execution`, `ui` and `desktop`, and a new `example-apps` capability. If `ui-toolkit`'s and `desktop-window`'s capabilities are archived when this change is applied, as the prerequisites require, task 1.1 checks the ADDED requirements against them for overlaps.
 
+**Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** `ui-toolkit` now follows Jetpack Compose's modules and APIs (its D5 to D7 and D21 to D25), which changes what the apps and scripts below write:
+- The apps import `/prism/compose/ui`, `/prism/compose/layout` and `/prism/compose/material3` (and `/prism/compose/foundation` where they use `background`, `border` or `clickable`) instead of `/prism/ui`, and write sizes as `16.dp`. `Modifier.weight(1.0)` in `TodoRow` and the draft's `Row` resolves because a row's content has the receiver `RowScope`.
+- Material components are built from foundation nodes (`ui-toolkit` D24): a `Button` dumps as a `box` with `clickable(Button)` holding a `row`, and a `Checkbox` as a `box` with `toggleable(Checkbox on)` or `toggleable(Checkbox off)`. Node kinds are `column`, `row`, `box`, `text`, `spacer` and `textfield`; there is no `button` or `checkbox` kind. Kind targets (D5) therefore also accept the roles `button` and `checkbox`, naming the node whose `clickable` or `toggleable` element has that role, so `click button 1` and `click checkbox 2` keep their meaning.
+- `ui-toolkit` D6's `Modifier` is still `Copy` and holds no `String`, so D5's rejection of a test tag stands.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -64,7 +69,7 @@ Rejected: folding the live counts into `compose-runtime` and `ui-toolkit` (they 
 
 - **The todo app is four files** because a real app is, and because it exercises what single-file compilation promises: `model.prism` holds data and plain functions with `package` visibility and explicit types, `screen.prism` the composables, and the entries only `main`. A hot-reload edit of the row layout in `screen.prism` then reaches `main.prism` through `compose-hot-reload` D4's importer rule. `main` is private, so two entries in one package do not clash.
 - **`large.prism`** composes the same `TodoScreen` over 1,000 sample items. It is what the benchmark (D10) and the window checklist (D12) run, so a measurement is always of the shipped screen, never of a copy.
-- **The tour.** `examples/demo/ui/ui.prism` keeps its path and package, since `fixture_tests.rs` and the formatter corpus already scan it, and becomes a runnable screen that shows every `/prism/ui` composable, modifier, colour, shape, arrangement and alignment once. `ui-toolkit` task 12.2 only moved it to the new API.
+- **The tour.** `examples/demo/ui/ui.prism` keeps its path and package, since `fixture_tests.rs` and the formatter corpus already scan it, and becomes a runnable screen that shows every composable, modifier, colour, shape, arrangement and alignment of the toolkit modules once. `ui-toolkit` task 12.2 only moved it to the new API.
 - **`prism check examples/`, `prism fmt --check examples/`** and the example tests of `fixture_tests.rs` cover the new files with no change. Session files (`.events`, `.snap`, `.edits`, `.prism.v<k>`) are not `.prism` sources, so neither the checker nor the formatter reads them.
 
 Compile-time cost: none; the apps are ordinary files. Kotlin-likeness: one directory per app with a `main`, as a Gradle module would have.
@@ -82,11 +87,13 @@ The apps use Compose's idioms where Prism has them, and the idioms the ownership
 ```
 package apps.counter
 
-import /prism/ui
+import /prism/compose/ui
+import /prism/compose/layout
+import /prism/compose/material3
 
 compose fun Counter() {
     val count = remember { mutableStateOf(0) }
-    Column(modifier = Modifier.padding(16), verticalArrangement = Arrangement.spacedBy(8)) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { count.value += 1 }) {
             Text("Count: ${count.value}")
         }
@@ -152,7 +159,7 @@ Rejected:
 
 ### D5. Event scripts target the n-th node of a kind (autonomous; extends `ui-toolkit` D16)
 
-The todo app's checkboxes show no text, and an empty `TextField` shows none either. Scripts could click them by coordinates (`click 10 58`), but every layout edit, a padding or a row height, would then break every session, which is what `ui-toolkit` D16 chose text targets to avoid. So a target may also be `<kind> [<n>]`: the n-th node, 1 by default and in tree order, whose kind is `<kind>`, one of the kinds `dump` prints (`column`, `row`, `box`, `text`, `button`, `spacer`, `checkbox`, `textfield`). It is accepted wherever a text target is: `click checkbox 2`, `press button 1`, `click textfield`. The command acts at the centre of the node's bounds and hit-tests from there, as for text targets.
+The todo app's checkboxes show no text, and an empty `TextField` shows none either. Scripts could click them by coordinates (`click 10 58`), but every layout edit, a padding or a row height, would then break every session, which is what `ui-toolkit` D16 chose text targets to avoid. So a target may also be `<kind> [<n>]`: the n-th node, 1 by default and in tree order, whose kind is `<kind>`, one of the kinds `dump` prints (`column`, `row`, `box`, `text`, `spacer`, `textfield`), or a role, `button` or `checkbox`, naming the node whose `clickable` or `toggleable` element has that role (Baseline update). It is accepted wherever a text target is: `click checkbox 2`, `press button 1`, `click textfield`. The command acts at the centre of the node's bounds and hit-tests from there, as for text targets.
 
 - An unknown kind word is a parse error before the program runs: `Error: <script>:<line>: unknown target '<word>'`, status 1.
 - A kind target that matches fewer than `n` nodes ends the program with `event script line <n>: the tree has no <kind> <k>`, status 101, like a missing text target.

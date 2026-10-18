@@ -14,20 +14,20 @@ An `intrinsic struct` MUST declare a type whose representation, glue and operati
 - **THEN** the type checker rejects each, saying that `Composition` and `RecomposeScope` have no constructor and no fields
 
 ### Requirement: The Compose Module
-`/prism/compose` MUST be a prelude module declaring, all as intrinsics, the structs `Composition` and `RecomposeScope : Copy`, the functions `composition`, `remember`, `key` and `currentRecomposeScope`, the members `setContent`, `recompose` and `dump` of `Composition`, and the member `invalidate` of `RecomposeScope`. `remember`, `key` and `currentRecomposeScope` MUST be composables.
+`/prism/compose/runtime` MUST be a prelude module declaring, all as intrinsics, the structs `Composition` and `RecomposeScope : Copy`, the functions `composition`, `remember`, `key` and `currentRecomposeScope`, the members `setContent`, `recompose` and `dump` of `Composition`, and the member `invalidate` of `RecomposeScope`. `remember`, `key` and `currentRecomposeScope` MUST be composables.
 
 #### Scenario: Signatures of the compose module
-- **WHEN** `prism abi` prints the ABI of `/prism/compose`
+- **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
 - **THEN** it holds `public intrinsic fun composition(content: escaping compose () -> Unit): Composition`, `public intrinsic fun Composition.setContent(content: escaping compose () -> Unit)`, `public intrinsic fun Composition.recompose(): Bool`, `public intrinsic fun Composition.dump(): String`, `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentRecomposeScope(): RecomposeScope` and `public intrinsic fun RecomposeScope.invalidate()`
 
 #### Scenario: Members of a composition
 - **WHEN** a file declares `fun Composition.recompose(): Bool = false`
-- **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose` always takes precedence
+- **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/runtime` always takes precedence
 
 ## MODIFIED Requirements
 
 ### Requirement: The Compiler Ships the Library
-The `prism` executable MUST contain the source of every library module and MUST NOT read library files from disk. The modules MUST be `/prism/core`, `/prism/collections` and `/prism/compose`, the prelude modules, and `/prism/system` and `/prism/composer` (compose, "The Composer Protocol Module"), which are imported explicitly. Each MUST be a file of the package `prism`, or of a package below it, whose module path is `prism/<name>`.
+The `prism` executable MUST contain the source of every library module and MUST NOT read library files from disk. The modules MUST be `/prism/core`, `/prism/collections` and `/prism/compose/runtime`, the prelude modules, and `/prism/system` and `/prism/composer` (compose, "The Composer Protocol Module"), which are imported explicitly. Each MUST be a file of the package `prism`, or of a package below it, whose module path is `prism/<name>`.
 
 #### Scenario: A library module is imported
 - **WHEN** `app/main.prism` declares `import /prism/system` and `fun main() { println(1); exitProcess(3) }`, in a workspace with no `prism` directory
@@ -42,7 +42,7 @@ A library module MUST go through every stage a workspace file does: Phase 1 extr
 
 #### Scenario: Unreached modules are not parsed
 - **WHEN** `prism check --explain-cache main.prism` runs on a file without imports
-- **THEN** its file lines name `prism/core.prism`, `prism/collections.prism`, `prism/compose.prism` and `main.prism`, and no other library module
+- **THEN** its file lines name `prism/core.prism`, `prism/collections.prism`, `prism/compose/runtime.prism` and `main.prism`, and no other library module
 
 ### Requirement: Intrinsic Calls Are Typed by Their Signatures
 A call of an intrinsic MUST be checked as a call of its declared signature, except for those the catalog types by a rule:

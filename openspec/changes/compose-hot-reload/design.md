@@ -26,6 +26,11 @@ The deltas are ADDED requirements of `compose`, `ui` and `hot-reload`, which are
 
 **Baseline update (`standard-library`, applied 2026-10-18).** Library modules are graph nodes of origin `SourceOrigin::Library`, never read through the session's `SourceStore` or watched, and their units are never rebuilt or reloaded, since their keys cannot change during a session (`standard-library` R3). A program that calls `exitProcess` ends its run as `main` returning does: `prism_runtime::StopHandler` takes `(status, exited)`.
 
+**Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** `ui-toolkit` now follows Jetpack Compose's modules and APIs. What this design relies on changes as follows:
+- Handlers given to `clickable`, `toggleable` and text fields live in `prism-ui`'s handler table, named by a `Copy` `HandlerId` in the modifier chain and claimed by the node that uses them (`ui-toolkit` D23); there is no `set_on_click`. The composable that builds the modifier registers a new entry on each of its passes, and a node keeps its entry only while the new one compares equal: same descriptor and equal environments. Code from a new module has new descriptors, so after a reload the author's pass gives the node the new handler, as D9 below requires.
+- Modifiers are plain data and never run composition (`ui-toolkit` D25), so a reload has no modifier groups or slots to reset; this change plans no composed-modifier mechanism.
+- The toolkit's modules are `/prism/compose/ui`, `foundation`, `layout` and `material3`, and the runtime is `/prism/compose/runtime` (`ui-toolkit` D21). Library units are never reloaded (above), so an edit reaches a toolkit composable only through the user code that calls it.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -50,7 +55,7 @@ The deltas are ADDED requirements of `compose`, `ui` and `hot-reload`, which are
 | Policy and wake-up | when `runApp` defers reloads, what wakes it, `after line` steps under reload points | the mechanism is `hot-reload` D4; the window's `wake()` is `desktop-window` D17 |
 | Which scopes recompose | all of it (D3 to D6) | the runtime's invalidation and passes are `compose-runtime`'s |
 | Slot-table state | the rule of D7, and resetting retired scopes' slots (D8) | type checks on every slot read are `compose-runtime` D6 |
-| Handlers | when they are replaced (D9) | replacing on every pass is `ui-toolkit` D10 |
+| Handlers | when they are replaced (D9) | registering on every pass and claiming by nodes is `ui-toolkit` D23 |
 | Scripts | `edit` and `wait reload` (D12) | the script grammar is `ui-toolkit` D16; edit scripts are `hot-reload` D16 |
 | Measuring | the reload benchmark and the pass timing (D13) | `--frame-stats` is `reactive-app-verification`'s |
 
@@ -181,10 +186,10 @@ Compile-time cost: one more hash per restart body. Reload-time cost: one lookup 
 
 ### D9. Handlers in nodes are replaced by the reload's pass, before the next event (autonomous)
 
-A node owns its handler function values (`ui-toolkit` D10), which call their code through their descriptors' slots (`closures` D3):
+A node owns its handler function values through `prism-ui`'s handler table (`ui-toolkit` D10, D23), which call their code through their descriptors' slots (`closures` D3):
 
 - **Captures unchanged:** the closure's slot is repointed (`hot-reload` D5), so the old value runs the new body at the next click, even before any pass.
-- **Captures changed:** the closure's slot splits, and the old value keeps the old code for its old environment. It is replaced when its node's setter runs again. `set_on_click` replaces the handler on every pass of its toolkit composable (`ui-toolkit` D10), and `Button` is never skippable, because its content is a composable lambda. A skippable custom composable that takes a handler compares it by descriptor, and code from a new module has new descriptors, so it reruns too. The closure literal is in an affected body (its own), so its author's scope is invalidated (D4). The reload's pass therefore gives every node a new handler from new code, and it runs before the next event is dispatched (D2). No event reaches an old handler of a changed environment.
+- **Captures changed:** the closure's slot splits, and the old value keeps the old code for its old environment. It is replaced when its author composes again: the author registers a new handler entry on every pass, which no longer compares equal to the node's (`ui-toolkit` D23), and `Button` is never skippable, because its content is a composable lambda. A skippable custom composable that takes a handler compares it by descriptor, and code from a new module has new descriptors, so it reruns too. The closure literal is in an affected body (its own), so its author's scope is invalidated (D4). The reload's pass therefore gives every node a new handler from new code, and it runs before the next event is dispatched (D2). No event reaches an old handler of a changed environment.
 
 A handler made by a plain function is covered by D4's importers rule. One received from an unaffected file is not, which is the limitation D4 states. Handlers kept in state cells or top-level values follow `hot-reload`'s rule: old values call old code until they are replaced. The content closure that a running `runApp` was given is kept by its root for the whole app. An edit of its body reaches it through its slot, but a change of its captures takes effect when `main` runs again.
 

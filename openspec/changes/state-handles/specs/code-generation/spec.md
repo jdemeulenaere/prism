@@ -3,11 +3,11 @@
 ## ADDED Requirements
 
 ### Requirement: State Handles Are One Word
-`State<T>` and `MutableState<T>` MUST be laid out as one 8-byte, 8-aligned word for every `T`, with no drop glue, clone glue that copies the word, and equality glue that compares the words. `prism dump-layout` MUST name them `prism/compose::State<...>` and `prism/compose::MutableState<...>`.
+`State<T>` and `MutableState<T>` MUST be laid out as one 8-byte, 8-aligned word for every `T`, with no drop glue, clone glue that copies the word, and equality glue that compares the words. `prism dump-layout` MUST name them `prism/compose/runtime::State<...>` and `prism/compose/runtime::MutableState<...>`.
 
 #### Scenario: Layout of a state handle
 - **WHEN** `prism dump-layout` runs on a file declaring `struct Todo { val title: String }` and `fun f(s: MutableState<List<Todo>>) { }`
-- **THEN** it prints the layout of `prism/compose::MutableState<List<Todo>>` as size 8 and alignment 8 with no fields
+- **THEN** it prints the layout of `prism/compose/runtime::MutableState<List<Todo>>` as size 8 and alignment 8 with no fields
 
 ### Requirement: State Operations Call the Compose Runtime
 Each state operation MUST be a direct call of a compose runtime entry point with the handle word, the slot type record of the value type, and the value passed by address where it moves. When the entry reports a failure, the generated code MUST raise the error the runtime recorded at the operation's location.

@@ -6,7 +6,7 @@
 
 ## What Changes
 
-- **Handles** (D3, D8, D15). `State<T>` and `MutableState<T>` are intrinsic structs of `/prism/compose`, `Copy` for every `T`, invariant in `T`, one 64-bit word each: a 32-bit cell index and a 32-bit generation. `MutableState<T>` converts to `State<T>` as a subtype step that keeps the word, and members and extensions of `State<T>` are found on a `MutableState<T>`. A handle whose cell was freed is stale: using it ends the program with `panic: stale state handle` and its location.
+- **Handles** (D3, D8, D15). `State<T>` and `MutableState<T>` are intrinsic structs of `/prism/compose/runtime`, `Copy` for every `T`, invariant in `T`, one 64-bit word each: a 32-bit cell index and a 32-bit generation. `MutableState<T>` converts to `State<T>` as a subtype step that keeps the word, and members and extensions of `State<T>` are found on a `MutableState<T>`. A handle whose cell was freed is stale: using it ends the program with `panic: stale state handle` and its location.
 - **The API** (D2, D4, D5, D6), with Kotlin's names. `mutableStateOf(value)` makes a cell. `s.value` reads a copy of a `Copy` value anywhere; `s.value = v` writes any value outside composable contexts, and `s.value += 1` reads and writes a `Copy` one. A non-`Copy` value (`State<List<Todo>>`) is a place that only a composable context can borrow, as `for (todo in todos.value)` does; anywhere else it is read with `todos.read { list -> list.size }`, replaced with `s.update { v -> next(v) }` and changed in place with `todos.edit { list -> list.add(Todo("x")) }`. `value` is declared with a new `intrinsic var` property form, writable on `MutableState<T>` only.
 - **Run-time borrow flags** (D6). While `read`, `update` or `edit` runs, its cell is borrowed shared, moved out or borrowed mutably, and a conflicting access to that cell ends the program with `panic: state accessed while borrowed`.
 - **Read tracking and invalidation** (D9, D10). A read of a state during a pass registers the innermost restart scope as a reader, also through plain functions and content lambdas; a read outside a pass registers nothing. A write invalidates the cell's readers for the next pass, except a `value =` write equal to the current value by `==`, which keeps the old value and invalidates nothing. `update` and `edit` always invalidate. Recomposition stays explicit: `c.recompose()` (and later `runApp`'s frame loop) runs the next pass.
@@ -24,7 +24,7 @@ None. State is part of the `compose` capability that `compose-runtime` creates a
 
 ### Modified Capabilities
 - `compose`: state handles, `mutableStateOf`, reading, writing and borrowing a state's value, `read`, `update` and `edit`, run-time borrow flags, read tracking, invalidation and equal writes, the static and run-time rules of state during composition, cell ownership and release, stale handles, `SideEffect`, cells in dumps, and the costs.
-- `standard-library`: the state declarations of `/prism/compose`, and writable intrinsic properties.
+- `standard-library`: the state declarations of `/prism/compose/runtime`, and writable intrinsic properties.
 - `syntax`: `intrinsic var` property declarations.
 - `formatting`: `prism fmt` prints `intrinsic var` declarations.
 - `type-system`: `MutableState<T>` converts to `State<T>`, and lookups on a `MutableState<T>` receiver fall back to `State<T>`.
@@ -38,7 +38,7 @@ None. State is part of the `compose` capability that `compose-runtime` creates a
 
 - `crates/prism-compose` (from `compose-runtime`): a new `state.rs` (the cell arena, borrow flags, readers, creation owners), additions to `thread.rs`, `slot.rs`, `composition.rs`, `dump.rs`, `entry.rs` and `functions.rs` (the `prism_compose_state_*` entries, `prism_compose_begin_remember`, `prism_compose_end_remember`, `prism_compose_side_effect`, the program-scope entries), and Rust tests and benchmark shapes.
 - `crates/prism-runtime`: four `PanicKind`s and the finish hook ordering.
-- `crates/prism-library/prism/compose.prism` (from `compose-transform`): the state declarations and `SideEffect`.
+- `crates/prism-library/prism/compose/runtime.prism` (from `compose-transform`): the state declarations and `SideEffect`.
 - `crates/prism-parser`, `crates/prism-ast`, `crates/prism-abi`, `crates/prism-formatter`: `intrinsic var`.
 - `crates/prism-typechecker`: the catalog entries, `.value` resolution, the subtype step and lookup fallback, `E4031` to `E4033`, ownership roots for written values.
 - `crates/prism-typed-tree`: `ExpressionKind::StatePlace` and five `BuiltinFunction`s.

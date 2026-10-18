@@ -13,7 +13,7 @@ The window, its event loop, the rasterizer and the bundled font MUST be in a `pr
 - **THEN** `prism-cli` is the only member that names `prism-desktop`, as an optional dependency of its default feature `window`, and no member names `winit`, `softbuffer`, `tiny-skia` or `fontdue` except `prism-desktop`
 
 #### Scenario: A build without the window feature
-- **WHEN** `prism`, built with `cargo build -p prism-cli --no-default-features`, runs `fun main() { runApp { Text("hi") } }` with `import /prism/ui` and without `--headless`
+- **WHEN** `prism`, built with `cargo build -p prism-cli --no-default-features`, runs `fun main() { runApp { Text("hi") } }` with `import /prism/compose/ui` and `import /prism/compose/material3` and without `--headless`
 - **THEN** stderr is exactly `panic: ui misuse: no window system is available; run with --headless` and a newline, and the exit status is 101
 
 ### Requirement: runApp Opens a Window

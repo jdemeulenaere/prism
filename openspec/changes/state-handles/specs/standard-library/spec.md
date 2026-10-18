@@ -3,15 +3,15 @@
 ## ADDED Requirements
 
 ### Requirement: The State Declarations of the Compose Module
-`/prism/compose` MUST declare, as intrinsics, the structs `State<T> : Copy` and `MutableState<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the members `read` of `State<T>` and `update` and `edit` of `MutableState<T>`, and the composable `SideEffect`.
+`/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T> : Copy` and `MutableState<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the members `read` of `State<T>` and `update` and `edit` of `MutableState<T>`, and the composable `SideEffect`.
 
 #### Scenario: Signatures of the state declarations
-- **WHEN** `prism abi` prints the ABI of `/prism/compose`
+- **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
 - **THEN** it holds `public intrinsic struct State<T> : Copy`, `public intrinsic struct MutableState<T> : Copy`, `public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>`, `public intrinsic val <T> State<T>.value: T`, `public intrinsic var <T> MutableState<T>.value: T`, `public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R`, `public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T)`, `public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit)` and `public intrinsic compose fun SideEffect(effect: escaping () -> Unit)`
 
 #### Scenario: State handles need no import
 - **WHEN** a file without imports declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
-- **THEN** it typechecks, and `prism abi` writes the result type of `counter` as `prism/compose.MutableState<Int>`
+- **THEN** it typechecks, and `prism abi` writes the result type of `counter` as `prism/compose/runtime.MutableState<Int>`
 
 ### Requirement: Intrinsic Struct Markers Hold for Every Type Argument
 The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `State<String>` and `MutableState<List<Int>>` are `Copy`.

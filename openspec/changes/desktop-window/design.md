@@ -24,6 +24,8 @@ See `proposal.md` for motivation. This is item 31 of "Then: the road to Mileston
 
 The delta specs add a new capability and an ADDED execution requirement. They modify no requirement of `ui-toolkit`, whose `ui` and `execution` deltas are not in the main specs yet: its rule for a build without a window host stays true for builds without the `window` feature and for library callers.
 
+**Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** `ui-toolkit` now follows Jetpack Compose's modules and APIs: programs import `/prism/compose/ui` (with `runApp`), `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` instead of `/prism/ui`, and sizes are written `10.dp` (`ui-toolkit` D7, D21). A `Dp` is one logical pixel, which this change scales by the window's scale factor as it scaled `Int` sizes. Nothing this change relies on moves: `prism_ui::Host`, `HostEvent`, the display list's four commands and the text metrics interface (`ui-toolkit` D12, D13, D15) are unchanged.
+
 ## Goals / Non-Goals
 
 **Goals:**

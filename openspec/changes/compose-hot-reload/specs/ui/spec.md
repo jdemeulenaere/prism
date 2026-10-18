@@ -35,7 +35,7 @@ After the pass that follows a reload, the frame loop MUST lay out and build the 
 
 #### Scenario: A focused field keeps its focus and text across a reload
 - **WHEN** the typing app, run headless under `--watch`, gets the script `click 100 18`, `type "ab"`, an edit of `Text("Hello ${name.value}")` to `Text("Hi ${name.value}")`, then `type "c"` and `dump`
-- **THEN** the dump holds `textfield #2 0,0 200x36 "abc" focused` and `text #3 0,36 48x20 "Hi abc"`: both nodes kept their numbers, and the field its focus
+- **THEN** the dump holds `textfield #2 0,0 200x36 "abc" focused defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)` and `text #3 0,36 48x20 "Hi abc"`: both nodes kept their numbers, and the field its focus
 
 ### Requirement: A Reload With Errors Keeps the Running UI
 When a reload does not compile, the app MUST keep running its previous code, its composition and its nodes unchanged, and keep handling events, while the session prints the diagnostics and `reload: not applied; the program keeps running its previous code` on stderr.

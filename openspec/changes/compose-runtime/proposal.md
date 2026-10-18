@@ -19,7 +19,7 @@ A `compose fun` parses, type-checks and lowers to MIR today, but nothing can run
 - **The allocation check counts compositions** (D13). Under `--check-allocations`, a composition still live when `main` returns is reported as `allocation check: compositions still live at exit: <n>`, with status 102.
 - **Costs and benchmarks** (D16). Starting and ending groups and reading and writing slots cost O(1) amortized. A pass costs time proportional to the bodies of the scopes it recomposes, plus O(k log k · depth) to order k invalid scopes. Once its buffers have grown, a pass allocates nothing that the runtime itself owns. An allocation-counting test and an ignored timing benchmark, `runtime_timing.rs`, pin both. No compiler stage is added, so compile time does not change.
 - **Not in scope.** All of the following belong to later changes:
-  - the `compose fun` transform: group keys from declaration paths, change words, generated restart functions and slot type records, `remember` and `key`, `/prism/compose` and its owned `Composition` type (`compose-transform`);
+  - the `compose fun` transform: group keys from declaration paths, change words, generated restart functions and slot type records, `remember` and `key`, `/prism/compose/runtime` and its owned `Composition` type (`compose-transform`);
   - state cells, readers, writes during composition and cell ownership (`state-handles`);
   - the UI applier, `Node` and the frame loop (`ui-toolkit`);
   - recomposing reloaded scopes (`compose-hot-reload`);

@@ -53,11 +53,11 @@ Calling `composition`, `setContent` or `recompose` in a composable context MUST 
 - **THEN** the file typechecks
 
 ### Requirement: The Compose Prelude
-The bundled module `/prism/compose` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and a file's own declaration or import of one of those names MUST shadow it.
+The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and a file's own declaration or import of one of those names MUST shadow it.
 
 #### Scenario: Compose primitives need no import
 - **WHEN** a file without imports declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`
-- **THEN** it typechecks, `remember` and `currentRecomposeScope` resolve to `/prism/compose`, and `prism run` exits with status 0
+- **THEN** it typechecks, `remember` and `currentRecomposeScope` resolve to `/prism/compose/runtime`, and `prism run` exits with status 0
 
 #### Scenario: A file's own `key`
 - **WHEN** a file declares `fun key(n: Int): Int = n` and `fun f(): Int = key(3)`

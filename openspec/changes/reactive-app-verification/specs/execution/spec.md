@@ -17,7 +17,7 @@ When a composition is still live as `main` returns under `--check-allocations`, 
 - **THEN** stderr is exactly `allocation check: compositions still live at exit: 1` and a newline, and the exit status is 102
 
 #### Scenario: An app that ends cleanly reports nothing
-- **WHEN** `fun main() { runApp(width = 200, height = 100) { val c = remember { mutableStateOf(0) }; Text("n = ${c.value}") } }` runs with `import /prism/ui` under `prism run --check-allocations --headless`
+- **WHEN** `fun main() { runApp(width = 200, height = 100) { val c = remember { mutableStateOf(0) }; Text("n = ${c.value}") } }` runs with `import /prism/compose/ui` and `import /prism/compose/material3` under `prism run --check-allocations --headless`
 - **THEN** stderr is empty and the exit status is 0
 
 ### Requirement: Frame Statistics Option

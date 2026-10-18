@@ -46,7 +46,7 @@ A closure that captures nothing or owns only `Copy` captures MUST have an enviro
 
 #### Scenario: Layout of a composition
 - **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Screen { val c: Composition, val s: RecomposeScope }` and `fun f(s: Screen) {}`
-- **THEN** it shows `Screen` with size 16 and alignment 8, and `prism/compose::Composition` and `prism/compose::RecomposeScope` with size 8
+- **THEN** it shows `Screen` with size 16 and alignment 8, and `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope` with size 8
 
 ## MODIFIED Requirements
 
