@@ -151,10 +151,61 @@ A file MUST be able to call an imported generic function or extension, and const
 - **WHEN** `lib/box.prism` declares `public struct Box<T> : Copy { val v: T }`, `public fun <T : Copy> twice(x: T): Box<T> = Box(x)` and `public fun <T> Box<T>.get(): &T = &v`, and `app/main.prism` imports `/lib/box` and declares `fun f(): Int { val b = twice(3); val c = b; return b.get() + c.v }` and `fun g(s: String): Box<String> = twice(s)`
 - **THEN** `prism check app/main.prism` accepts `f`, where `Box<Int>` is copied, and emits `E4021` for `g`
 
+### Requirement: Generic Code Runs as Instances
+A call of a generic function, extension or default value with concrete type arguments MUST run the generic's checked body with those arguments substituted for its type parameters, whichever file declares the generic and whichever file calls it. An instance MUST NOT be type-checked or borrow-checked again, and MUST behave as the body would for a non-generic declaration of the substituted types.
+
+#### Scenario: One generic body run at several types
+- **WHEN** `struct Point : Copy { val x: Int }` and `fun <T> pick(a: T, b: T, first: Bool): T = if (first) a else b` are declared and `fun main() { println(pick(1, 2, false)); println(pick("a", "b", true)); println(pick(Point(3), Point(4), true).x) }` runs
+- **THEN** the program prints `2`, `a` and `3`, and `prism run --check-allocations` reports no live allocation
+
+#### Scenario: An imported generic API runs
+- **WHEN** `lib/box.prism` declares `public struct Box<T>(val v: T)`, `public fun <T> boxed(x: T): Box<T> = Box(x)` and `public fun <T> Box<T>.get(): &T = &v`, and `app/main.prism` imports `/lib/box` and declares `fun main() { val b = boxed("hi"); println(b.get()); println(boxed(2).v) }`
+- **THEN** `prism run --check-allocations app/main.prism` prints `hi` and `2` and exits with status 0
+
+### Requirement: Elvis on a Type Parameter Tests for Null
+A `?:` whose left operand's type is a type parameter `T` MUST evaluate its fallback exactly when an instance's argument for `T` is nullable and the left operand is `null`, as it does for a `T?` left operand. In an instance whose argument for `T` is not nullable, the fallback MUST NOT be evaluated.
+
+#### Scenario: Elvis on a nullable instantiation
+- **WHEN** `fun <T> orElse(a: T, c: T): T = a ?: c` is declared and `fun main() { println(orElse<Int?>(null, 3) ?: 0); println(orElse<Int?>(4, 3) ?: 0); println(orElse(1, 2)) }` runs
+- **THEN** the program prints `3`, `4` and `1`
+
+### Requirement: Polymorphic Recursion Is Rejected
+A generic function MUST NOT reach a call of itself, directly or through other generic functions of its file, in which a type argument holds its own type parameter nested in another type, since that needs infinitely many instances. Such a call MUST be `PolymorphicRecursion` (`E4027`), whether or not anything instantiates the function. Wrapping a type parameter in `?` alone does not grow it, since nullable types flatten.
+
+#### Scenario: A function instantiating itself with a growing argument
+- **WHEN** `struct Box<T>(val v: T)` is declared and `fun <T> nest(x: T, n: Int): Int = if (n == 0) 0 else nest(Box(x), n - 1)` is checked
+- **THEN** the type checker emits `E4027` at `nest(Box(x), n - 1)`, saying that `nest` instantiates itself with `Box<T>` for `T`
+
+#### Scenario: Growth through another generic function
+- **WHEN** `struct Box<T>(val v: T)`, `fun <T> ping(x: T, n: Int): Int = if (n == 0) 0 else pong(Box(x), n - 1)` and `fun <T> pong(x: T, n: Int): Int = ping(x, n)` are checked
+- **THEN** the type checker emits `E4027` at `pong(Box(x), n - 1)`, naming the cycle through `ping` and `pong`
+
+#### Scenario: Recursion without growth accepted
+- **WHEN** `fun <T> count(x: &T, n: Int): Int = if (n == 0) 0 else count(x, n - 1)` and `fun <T> deep(x: T?, n: Int): Int = if (n == 0) 0 else deep<T?>(x, n - 1)` are checked
+- **THEN** the file passes `prism check`
+
+### Requirement: Non-Regular Generic Types Are Rejected
+A generic struct or enum MUST NOT reach itself through its fields or payloads, `Heap<T>` included, with a type argument that holds one of its own type parameters nested in another type, since its layout, drop glue and equality would then need infinitely many types. Such a field or payload MUST be `PolymorphicRecursion` (`E4027`) at the declaration. A type that `E4023` already rejects is not reported again.
+
+#### Scenario: A generic type reaching itself through a box with a growing argument
+- **WHEN** `struct Box<T>(val v: T)` and `struct Nest<T>(val v: T, val next: Heap<Nest<Box<T>>>?)` are checked
+- **THEN** the type checker emits `E4027` at the field `next`, saying that `Nest` contains `Nest<Box<T>>`
+
+#### Scenario: A regular recursive generic type accepted
+- **WHEN** `enum List<T> { Cons(T, Heap<List<T>>), Nil }` and `struct Tree<T>(val v: T, val kids: Heap<List<Tree<T>>>?)` are checked
+- **THEN** the file passes `prism check`
+
+### Requirement: Polymorphic Recursion Across Files Is Rejected When Compiled
+A cycle of generic function calls with a growing type argument that passes through generics of several files, which only files importing each other can form, MUST be reported as `PolymorphicRecursionAcrossFiles` (`E6004`) when the program is compiled, naming each generic on the cycle, and the program MUST NOT run. `prism check` does not report it, since it checks each file alone.
+
+#### Scenario: Polymorphic recursion through two files
+- **WHEN** `a/x.prism` imports `/a/y` and declares `public struct Box<T>(val v: T)` and `public fun <T> ping(x: T, n: Int): Int = if (n == 0) 0 else pong(Box(x), n - 1)`, `a/y.prism` imports `/a/x` and declares `public fun <T> pong(x: T, n: Int): Int = ping(x, n)`, and `a/main.prism` imports `/a/x` and declares `fun main() { println(ping(1, 3)) }`
+- **THEN** `prism check a/main.prism` passes, and `prism run a/main.prism` reports `E6004` at `pong(Box(x), n - 1)`, naming `a/x::ping` and `a/y::pong`, runs nothing and exits with status 1
+
 ## Design Rationale
 Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **Checked once, against bounds alone.** A generic body is type- and borrow-checked where it is declared, and a use is checked against the signature alone, so no error ever comes from an instantiation, unlike C++ templates. Type parameters flow unchanged into the typed tree and MIR, so monomorphization only substitutes. Monomorphization itself is a later change (`ROADMAP.md`): it needs a backend, drop glue, the artifact cache and a way to ship generic bodies, and where instances live is open in `docs/architecture.md`.
+- **Checked once, against bounds alone.** A generic body is type- and borrow-checked where it is declared, and a use is checked against the signature alone, so no error ever comes from an instantiation, unlike C++ templates. Type parameters flow unchanged into the typed tree and MIR, so monomorphization only substitutes. `monomorphization` compiles the instances, from the checked body alone (below).
 - **Nullable type parameters flatten.** `T?` with `T = String?` is `String?`, Kotlin's meaning and the existing `T??` rule; monomorphization rewrites the wraps a nullable instantiation makes redundant. An expected `X?` therefore only suggests `T = X` for a declared `T?`, used when no argument bounds `T`. Rejected: Swift's nested optionals, which would surprise Kotlin users writing `State<String?>`.
 - **Only `Copy` and `Clone` bound a type parameter, and only on functions; an unbounded one is move-only.** It can be moved, borrowed, dropped, wrapped and stored, but not copied, cloned (`E4018`), accessed (`E4006`) or compared (`E4002`). `==` stays out because equality is bound to become a trait, and adding a bound later would break every body relying on it. Struct and enum bounds would need a well-formedness check at every annotation, and conditional markers (`ownership`) cover what Milestone 2 needs.
 - **Type arguments are borrow-free.** A type argument, written or inferred, cannot contain a reference outside a function type (`E4022`), and inference takes a borrowed argument's referent for a by-value `T`. With the escape rule of `references` (no capturing closure or function input passed to a generic slot), a value of a type-parameter type carries no loans, so elision on the declared signature is exact and no body needs rechecking per instantiation. This mirrors Swift's escapable-by-default generics. Rejected: elision after substitution (errors depending on callers), checking the body with `T` possibly borrowed (which rejects `fun <T> Team.choose(x: T): T` even for `T = Int`), and forbidding function types as type arguments. An opt-in bound for borrowed instantiations would only accept more programs.
@@ -162,3 +213,11 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 - **Generic types are invariant; `Heap<T>` stays built in.** A value type's layout depends on its arguments, so covariance would hide a representation change behind assignability (the `Heap<Int>` versus `Heap<Int?>` problem of `typed-tree`). `Heap<T>` keeps its own type, auto-deref and projection, joins the arity and borrow-free rules, and is invariant too (`heap-boxes`, D8 in `type-system`).
 - **Extensions are keyed by the receiver's type constructor.** `fun Box<Int>.sum()` and `fun <T> Box<T>.sum()` in one file are `E4010`, so declaration paths stay unique, and a call matches the declared receiver at the first looked-through layer whose constructor has the extension (`E4006` when it does not match). Rejected: Rust-style `impl<T> Box<T>` blocks, which do not fit extension-only methods.
 - **Scopes.** A type parameter resolves before the file's and imports' types, so it may shadow a struct; names fixed by the lowering (`Int`, `String`, `Heap`, ...) and duplicates are `E4010`, and unknown names stay opaque until `E4001` lands.
+
+Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **An instance is the checked body, substituted** (D6). Since a body is checked against bounds alone and type arguments are borrow-free, substitution needs no recheck: an instance is never type- or borrow-checked again, and no error comes from an instantiation. What instances are, where they live and how they are named is in `mir` and `code-generation`.
+- **`?:` on a bare `T` tests for null, as in Kotlin** (D7, BREAKING). The checker treats `T` as non-nullable, so `a ?: c` with `a: T` used to lower to `a` alone. With flattening, `val w: T? = a; w ?: c` already took the fallback for `orElse<Int?>(null, 3)`, so code differing only by an intermediate `T?` binding would have differed in meaning. The left side is wrapped into a `T?` temporary (`mir`), whose wrap an instance with a non-nullable argument always fills and one with a nullable argument flattens away; the typing is unchanged (`T`). `x == null` on a bare `T` stays `E4002`, and `?.` on a `T` gives the same result either way, so `?:` was the one place assuming non-null. Rejected: never taking the fallback (inconsistent with flattening), rejecting `?:` on a bare `T` (a common Kotlin idiom), and making unbounded `T` non-nullable (would break `State<String?>`). No accepted program changed meaning, since no generic call ran before.
+- **Polymorphic recursion is a growing cycle, rejected at the declaration** (D8). The instantiation graph has a node per (generic, type parameter); a call of `g` with `A1..An` inside `f` adds an edge from each of `f`'s parameters occurring in `Aj` to `g`'s `j`th, growing unless `Aj` is the parameter itself or its nullable (flattening keeps `T??` at `T?`). Calls in default values and closures count as the generic's. A strongly connected component holding a growing edge is `E4027`, found by Tarjan's components and then a shortest path back from the growing edge (`prism_typed_tree::instantiation`), linear in the edges, and it is what lets instance collection terminate without a depth limit (Go's "instantiation cycle" check). It runs whether or not anything instantiates the generic, keeping "no error from an instantiation". Messages name each generic once per visit, so a cycle between two parameters of one generic reads as that generic instantiating itself (review). Rejected: a depth limit during instantiation (Rust's `recursion_limit`: late, arbitrary, and only once called); run-time type passing or boxing (Swift, OCaml), which is neither monomorphic nor zero-cost; rejecting every recursion between generics.
+- **Non-regular generic types are rejected by the same graph** (D9). `struct Nest<T>(val next: Heap<Nest<Box<T>>>?)` has a finite layout, so `E4023` accepts it, but its glue would need `Nest<Box<T>>`, `Nest<Box<Box<T>>>` and so on. Every application of a generic struct or enum in a field or payload adds edges, through `Heap`, nullables and other generic types but not function types, whose glue does not depend on them. A cycle is reported at the growing field when it is the file's own, otherwise at the first own field on it, against the full type table, which holds every reachable type of other modules; a cycle through other modules' types alone is theirs to report, and a type `E4023` reported is skipped. Rejected: leaving it to instance collection, which would loop or need a limit in glue generation.
+- **Across files, `E6004` when compiled** (D8). A growing cycle through generics of several files needs an import cycle, and no single file's check sees the other bodies (the single-file compilation units invariant), so `prism run` finds it over every record before collecting instances, and `prism check` does not see it. `instance-cache`, which keeps every file's record, can check import cycles in `prism check` and then decide whether `E6004` stays.

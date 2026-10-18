@@ -7,7 +7,7 @@ The code generation specification defines the Tier 1 backend: how the elaborated
 ## Requirements
 
 ### Requirement: Tier 1 Compiles Elaborated MIR in Memory
-`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, without invoking any external program such as a linker or an assembler. Every body MUST be compiled except generic bodies, which wait for monomorphization, and closure bodies, which wait for closure conversion.
+`prism run` MUST compile the elaborated MIR of every file of the program into native code in the memory of the `prism` process, without invoking any external program such as a linker or an assembler. Every body MUST be compiled except generic bodies, which are compiled only as the instances the program calls, and closure bodies, which wait for closure conversion.
 
 #### Scenario: Running a scalar program
 - **WHEN** `fun square(x: Int): Int = x * x` and `fun main() { println(square(7)) }` are declared in `main.prism` and `prism run main.prism` runs
@@ -16,6 +16,10 @@ The code generation specification defines the Tier 1 backend: how the elaborated
 #### Scenario: An uncalled generic function is not compiled
 - **WHEN** `fun <T> keep(x: T): T = x` and `fun main() { println(1) }` are declared and `prism run main.prism` runs
 - **THEN** it prints `1` and exits with status 0
+
+#### Scenario: A called generic function is compiled per instance
+- **WHEN** `fun <T> keep(x: T): T = x` and `fun main() { println(keep(1)); println(keep(true)) }` are declared and `prism run main.prism` runs
+- **THEN** it prints `1` and `true` and exits with status 0
 
 ### Requirement: One Code Unit per File
 Each file MUST be compiled into its own code unit from its own elaborated MIR alone. A code unit MUST refer to the functions and top-level values of other files only by their symbols, so that its code does not depend on how those files are compiled.
@@ -32,11 +36,15 @@ Every compiled function of a declaration MUST have a symbol derived from its dec
 - **THEN** `prism dump-clif lib/math.prism` prints the functions `lib/math::Int.double`, `lib/math::scale`, `lib/math::scale#default(b)`, `lib/math::BASE#init` and `lib/math::BASE#get`
 
 ### Requirement: Glue Has No Function Table Slot
-Drop, clone and equality glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)`, `<module>#clone(<type>)` or `<module>#equals(<type>)` after that unit's module and the type it handles.
+Drop, clone and equality glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<unit>#drop(<type>)`, `<unit>#clone(<type>)` or `<unit>#equals(<type>)` after that unit's name and the type it handles. A file's unit is named by its module, and an instance's unit by the instance's symbol.
 
 #### Scenario: Glue of one type in two files
 - **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User): Unit {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
 - **THEN** `prism run --check-allocations app/main.prism` exits with status 0, and `prism dump-clif` of each file prints its own drop glue of `lib/user::User`, `lib/user#drop(lib/user::User)` and `app/main#drop(lib/user::User)`
+
+#### Scenario: Glue of an instance
+- **WHEN** `struct User : Clone { val name: String }`, `fun <T> discard(x: T) {}` and `fun <T : Clone> copy(x: &T): T = x.clone()` are declared and `fun main() { discard(User("a")); val u = copy(&User("b")); println(1) }` runs
+- **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0, and `prism dump-clif --instances main.prism` prints `main::discard<main::User>#drop(main::User)` after `main::discard<main::User>`, and `main::copy<main::User>#clone(main::User)` after `main::copy<main::User>`
 
 ### Requirement: Calls Go Through the Function Table
 Every call of a top-level function, extension, default value generator or top-level `val` accessor, in the same file or another, MUST load its target from the callee's slot in a process-wide function table and call it indirectly. A slot MUST keep its address for the life of the process, and a slot whose function is not linked MUST hold a stub that ends the program with a runtime error. No call MUST be inlined.
@@ -145,7 +153,7 @@ Each top-level `val` MUST have storage in its file's code unit and an accessor t
 - **THEN** `prism run app/main.prism` prints `11`
 
 ### Requirement: Cranelift IR Dump
-`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's drop, clone and equality glue in order of their names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
+`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's glue in order of names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs, so it prints no instance. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
 
 #### Scenario: Dumping a file's IR
 - **WHEN** `prism dump-clif main.prism` runs twice on a file that `prism run` accepts
@@ -228,7 +236,7 @@ The built-in `clone()` of a value whose type owns storage MUST run the clone glu
 - **THEN** it prints `7` twice, reports no live allocation and exits with status 0
 
 ### Requirement: Glue Is Local to Its Code Unit
-Each code unit MUST generate the drop, clone and equality glue of the types its bodies drop, clone, or compare through boxes or beyond the inline budget of equality, including types of other modules and the types those reach through boxes, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
+Each code unit, a file's or an instance's, MUST generate the drop, clone and equality glue of the types its bodies drop, clone, or compare through boxes or beyond the inline budget of equality, including types of other modules and the types those reach through boxes, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
 
 #### Scenario: Drop glue in the IR dump
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User { val name: String }` and `fun f(u: User) {}`
@@ -311,8 +319,8 @@ Before generating any code, the backend MUST check every body it compiles and re
 - **THEN** `prism run --check-allocations main.prism` prints `1`, writes nothing to stderr and exits with status 0
 
 #### Scenario: Unsupported constructs in several forms
-- **WHEN** a program's `main` runs `val f = { 1 }`, or `println(id(1))` for `fun <T> id(x: T): T = x`, or the program declares `compose fun Label() {}` or `fun first(g: () -> Int): Int = 1`
-- **THEN** `prism run` reports `E6001` naming closures at `{ 1 }`, calls of generic functions at `id(1)`, composable functions at `Label`, and function values at the declaration of `first`, and runs nothing
+- **WHEN** a program's `main` runs `val f = { 1 }`, or the program declares `compose fun Label() {}` or `fun first(g: () -> Int): Int = 1`
+- **THEN** `prism run` reports `E6001` naming closures at `{ 1 }`, composable functions at `Label`, and function values at the declaration of `first`, and runs nothing
 
 #### Scenario: One error per body
 - **WHEN** `fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }` and `fun g(): Int { val c = { 3 }; return 2 }` are declared with a `main` that calls neither
@@ -345,6 +353,38 @@ The runtime MUST format a template's scalar parts itself, with the text their bu
 - **WHEN** `fun empty(s: &String): String = "$s$s"` is called with a borrowed empty literal
 - **THEN** the result is empty and no allocation is made
 
+### Requirement: Instances Are Code Units of Their Own
+Each instance of a generic body that a program needs MUST be compiled exactly once per program, into a code unit of its own, built from the instance's MIR alone, and MUST have its own slot in the function table. Every call of an instance, from any file or from another instance, MUST go through that slot, so that no other unit's code depends on a generic body.
+
+#### Scenario: Calls of an instance go through its slot
+- **WHEN** `lib/box.prism` declares `public fun <T> keep(x: T): T = x`, and `app/main.prism` imports `/lib/box` and declares `fun main() { println(keep(1)) }`
+- **THEN** `prism dump-clif app/main.prism` shows the call in `main` as a load from the slot `lib/box::keep<Int>#slot` followed by an indirect call, and `prism run app/main.prism` prints `1`
+
+#### Scenario: One instance for every caller
+- **WHEN** in that workspace `app/other.prism` imports `/lib/box` and declares `public fun other(): Int = keep(2)`, and `app/main.prism` also imports `/app/other` and prints `other()`
+- **THEN** `prism dump-clif --instances app/main.prism` prints the function `lib/box::keep<Int>` once, and `prism run app/main.prism` prints `1` and `2`
+
+### Requirement: Instance Code Units Are Dumped on Request
+`prism dump-clif --instances <file.prism>` MUST compile the program whose entry is the file and print, as deterministic text, the Cranelift IR of every instance code unit it needs, in order of the instances' symbols, each function headed by its symbol and followed by the unit's glue. When any file of the program has errors of any stage, it MUST report them, print no IR and exit with a failure status.
+
+#### Scenario: Dumping a program's instances
+- **WHEN** `prism dump-clif --instances main.prism` runs twice on a program that `prism run` accepts and that calls `fun <T> keep(x: T): T = x` as `keep(1)` and `keep("a")`
+- **THEN** it prints the functions `main::keep<Int>` and `main::keep<String>` both times, in that order, and exits with status 0
+
+### Requirement: Instance Symbols Name Their Type Arguments
+An instance's symbol MUST be its generic's symbol followed by its type arguments in angle brackets, separated by `, `, with every struct and enum qualified by its module. An instance of a default value's generator MUST be `<instance symbol>#default(<parameter>)`.
+
+#### Scenario: Symbols of instances
+- **WHEN** `lib/box.prism` declares `public struct Box<T>(val v: T)`, `public fun <T> keep(x: T): T = x`, `public fun <T> Box<T>.get(): &T = &v` and `public fun <T : Copy> pad(x: T, y: T = x): T = y`, `lib/user.prism` declares `public struct User { val name: String }`, and `app/main.prism` imports both and declares `fun main() { val u = keep(User("a")); println(Box(1).get()); println(pad(2)) }`
+- **THEN** `prism dump-clif --instances app/main.prism` prints the functions `lib/box::keep<lib/user::User>`, `lib/box::lib/box.Box.get<Int>`, `lib/box::pad<Int>` and `lib/box::pad<Int>#default(y)`, and `prism run --check-allocations app/main.prism` prints `1` and `2`
+
+### Requirement: The Backend Checks Each Instance
+The backend MUST check each instance it compiles as it checks every other body, and MUST report an unsupported construct of an instance at its location in the generic's source, once however many instances share it.
+
+#### Scenario: An unsupported construct in a generic body
+- **WHEN** `lib/run.prism` declares `public fun <T> later(x: T): Int { val f = { 1 }; return 1 }`, and `app/main.prism` imports `/lib/run` and declares `fun main() { println(later(1)); println(later(true)) }`
+- **THEN** `prism check app/main.prism` passes, and `prism run app/main.prism` reports exactly one `E6001`, at `{ 1 }` in `lib/run.prism`, naming closures, and runs nothing
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -353,7 +393,7 @@ Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while
 - **Cranelift pinned to `=0.136.2`, fixed settings** (D2). The exact pin keeps the generated IR, `prism dump-clif` and the timing baseline stable until a deliberate upgrade. The ISA is the host's with `opt_level=none` (`speed` until the compile-speed pass; see below), the verifier in debug builds only, frame pointers kept, inline stack probes, `use_colocated_libcalls=false`, and `is_pic` on x86-64 only (as `cranelift-jit` requires). Rejected: a version range.
 - **One code unit per file, one JIT module per load** (D3). A unit is lowered from its file's elaborated MIR alone, so its code depends on the file, its direct imports' ABIs (through its own MIR), the compiler and the target, which keeps per-file object code cacheable and hot reload per file. The units of one load share one `JITModule`, finalized together; `hot-reload` will define a changed file's unit into a new module. Rejected: a module per file (separate executable pages and finalizations), one module with direct cross-file calls (ties code to callees' addresses).
 - **Every call goes through the function table** (D4, D26). One pointer-sized slot per function, default generator and `val` accessor, in chunks that never move; code refers to a slot only as the imported data symbol `<symbol>#slot`, resolved by the JIT's symbol lookup, loads it and calls with `call_indirect`, also within a file, and nothing is inlined, so after `hot-reload` repoints a slot every later call, even from a frame of old code, reaches the new code. A slot no load fills holds `prism_rt_unlinked_function`. Runtime functions are called directly; the runtime is never reloaded. The table is owned by the linker and then the `Program`, not a `static`, so a test process can link several programs. Rejected: direct calls within a file, slot addresses as code constants (unrelocatable), a global table.
-- **Readable symbols from declaration paths** (D5): `m::name`, `m::<receiver>.name` with the receiver written as the ABI writes its constructor (`lib/team.Team`), `<function>#default(p)`, `m::name#init`, `#get`, `#storage`, `#state` and `#slot`; `closures` will add `#closure<i>` and `monomorphization` type arguments. Tier 2 will escape them for object files. Rejected: a C++-style mangling now; bare receiver names.
+- **Readable symbols from declaration paths** (D5): `m::name`, `m::<receiver>.name` with the receiver written as the ABI writes its constructor (`lib/team.Team`), `<function>#default(p)`, `m::name#init`, `#get`, `#storage`, `#state` and `#slot`; `monomorphization` added type arguments (below) and `closures` will add `#closure<i>`. Tier 2 will escape them for object files. Rejected: a C++-style mangling now; bare receiver names.
 - **Scalars natively, the host's C convention** (D6). `Int` is `i64`, `Double` `f64`, `Bool` `i8` (0 or 1, zero-extended at calls as Apple's arm64 convention requires), `Char` `i32`, a reference a pointer; `Unit` and `Nothing` have no representation and are left out of signatures. A caller derives the callee's signature from the call's parameter types and destination, so no ABI lookup is needed. Rejected: Cranelift's `tail` convention, `i32` booleans, a materialized `Unit`.
 - **Locals are SSA variables unless borrowed** (D7). A borrowed local lives in a stack slot; every other one is a Cranelift `Variable`, so Cranelift builds SSA (drop flags and block-local temporaries excepted since the compile-speed pass; see below). Storage markers and `Read` generate nothing; `SwitchInt` is `brif` or a `Switch`. Rejected: every local in memory. (`codegen-aggregates` puts every struct, enum and tag-byte nullable in memory, `Range` included, and drops the `Range` special case; see below.)
 - **References to scalars are supported now** (D8), because every top-level `val` read and every default generator already uses them in MIR. References to aggregates, field borrows and `(&T)?` came with `codegen-aggregates`. Rejected: special-casing `const &VAL`.
@@ -364,7 +404,7 @@ Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while
 
 Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **What the backend compiles** (D1, D19). Every non-generic, non-closure body over scalars, `Unit`, structs, enums, nullables, `Range` and references to them, as long as no aggregate holds a `String`, a `Heap<T>` or a function value (`runtime-strings-and-drops` lifted the `String` restriction; see below). Concrete instances of generic types (`Pair<Int, Bool>`) are laid out by substituting their arguments, since the layout code is the same as for any struct; only generic *bodies* wait for `monomorphization`. `classify` looks into fields and payloads and names the first missing construct ("strings", "'Heap' values", "function values and closures"), so a struct is rejected for what it holds; a missing definition is an internal error, since the ABI carries every reachable one (see `compilation-and-abi`).
+- **What the backend compiles** (D1, D19). Every non-generic, non-closure body over scalars, `Unit`, structs, enums, nullables, `Range` and references to them, as long as no aggregate holds a `String`, a `Heap<T>` or a function value (`runtime-strings-and-drops` lifted the `String` restriction; see below). Concrete instances of generic types (`Pair<Int, Bool>`) are laid out by substituting their arguments, since the layout code is the same as for any struct; generic *bodies* are compiled as instances since `monomorphization` (below). `classify` looks into fields and payloads and names the first missing construct ("strings", "'Heap' values", "function values and closures"), so a struct is rejected for what it holds; a missing definition is an internal error, since the ABI carries every reachable one (see `compilation-and-abi`).
 - **Structs inline, fields by decreasing alignment** (D5): equal alignments keep declaration order, so `struct S { val a: Bool, val n: Int, val b: Bool }` takes 16 bytes instead of C's 24, and the order is stable and documented so dumps and tests can pin it. Programs never see it: construction, evaluation and equality follow declaration order. Rejected: C order (padding with no FFI to justify it; a later C-layout attribute can opt in), Rust's unspecified order.
 - **Enums are the smallest tag, then the payloads** (D6): a `u8`, `u16` or `u32` index at offset 0, each variant's payload laid out like a struct starting right after the tag (a `Bool` payload sits at 1), every variant sharing the storage. An enum without variants is uninhabited. Rejected: an `Int`-wide tag, a common payload offset, niche filling, a trailing tag.
 - **Nullables are a tag byte, or the null pointer** (D7): `T?` is a `u8` tag (0 for `null`, matching MIR's `Discriminant`) then `T` at its alignment; `(&T)?`, `(&mut T)?` and `Heap<T>?` are one pointer, null being 0, so every optional borrow MIR produces costs one pointer. Rejected: one representation for all nullables, general niche filling now (a later change can add it with no observable effect).
@@ -387,7 +427,7 @@ Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, 
 - **Clone glue follows drop glue** (D10). `<unit module>#clone(<type>)` takes the destination's and the source's addresses, copies the whole value bitwise (every part that owns nothing, the tag and the padding) and then replaces each owning part of the current variant or payload, in declaration order, by a clone made by its own glue; a `String` is cloned by `prism_rt_string_clone` (a copy when it owns no buffer, a new exactly sized one otherwise). Glue exists only for `Clone` types, runs no user code, and shares no owned memory with the source.
 - **Equality stays inline; strings compare in the runtime** (D11). Without `Heap<T>` no type reaches itself, so inline expansion still terminates; a `String` part calls `prism_rt_string_equals`. `heap-boxes` turned the comparison of boxed aggregates into `#equals` glue functions of the same kind (below).
 - **Strings in the calling convention** (D16). `String` is `Representation::Memory`, so every rule for aggregates applies: a stack slot per local, parameters by the address of caller-owned memory (a literal operand is first built in a slot), results through the caller's result address, a move a 32-byte copy that leaves the source untouched. A top-level `String`'s `#storage` is 32 bytes and its accessor registers it with the runtime once initialized (see `execution`).
-- **What the backend still rejects** (D18). Strings and every type holding them are supported; `classify` names, in field order, function values and closures (`closures`), calls of generic functions (`monomorphization`), composable functions (`compose-transform`) and values of unknown type, and the fixtures that pinned strings as unsupported pinned `Heap<T>` until `heap-boxes` moved them to function values.
+- **What the backend still rejects** (D18). Strings and every type holding them are supported; `classify` names, in field order, function values and closures (`closures`), composable functions (`compose-transform`) and values of unknown type (calls of generic functions too, until `monomorphization` made them run), and the fixtures that pinned strings as unsupported pinned `Heap<T>` until `heap-boxes` moved them to function values.
 
 Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
@@ -409,3 +449,14 @@ Decisions from `string-templates` (planned autonomously on 2026-10-17, refined w
 
 - **One runtime call, one allocation** (D12). `prism_rt_string_template` takes the destination, a table of 32-byte parts (a kind word and three payload words: static text with its byte length and character count, a string's address, or a scalar's value) and the count. It measures every part (digit counting for `Int`, each `Double` formatted once into scratch memory that is not a program allocation), allocates exactly the result's length once through `prism_rt_allocate`, or nothing for an empty result, then writes the parts. Rejected: concatenation, `toString()` first, a growable buffer, and an array of pre-converted strings, which all allocate more.
 - **The part table is a stack slot** (D13). The backend fills one 8-byte-aligned stack slot per template with ordinary stores (text entries from the unit's deduplicated literal data, `Bool` and `Char` zero-extended to a word) and makes one three-argument call, so a long template never makes its function large through many call arguments; only its stores count towards the instruction threshold, linearly. A table in read-only data with only the value entries written at run time is a later optimization, needing data relocations.
+
+Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **One code unit per instance, with its own slot** (D3). Each instance, one generic body (a function, an extension or a default generator) with one list of concrete type arguments, is compiled once per program into a unit holding that body alone, the generic's module, and the record's and the arguments' type definitions, defined into the load's `JITModule` beside the file units. Its function gets a slot named by its symbol, and every call, from a file's unit or another instance's, loads that slot, like every Tier 1 call; instances of a file's own generics are instance units too. So a file's unit never contains generic code and a generic body edit leaves every caller's code byte for byte the same, and `hot-reload` can regenerate a changed generic's instances and repoint their slots, whose symbols do not change with the body. An instance calling a generic of a module the caller does not import is just another unit. Rejected: instances in the instantiating file's unit with local linkage, like glue (the importer's code would depend on the body, against the Phase 3 requirement, and every importer would duplicate and recompile it); instances in the defining file's unit (its code would depend on its importers' type arguments); one instance unit per program (one body edit regenerates it all); sharing instances of equal layout (it couples instances whose drops and glue differ; a later optimization).
+- **Instance symbols name their type arguments** (D4). The generic's symbol, then its arguments in angle brackets separated by `, `, written as glue names types (structs and enums qualified by module): `lib/box::keep<lib/user::User>`, `lib/box::lib/box.Box.get<Int>` (an extension's arguments are its own type parameters', in declaration order), `lib/box::pad<Int>#default(y)`; `closures` will name an instance's closures `<instance symbol>#closure<i>`. The unit is named by the symbol, which prefixes its data and glue (`lib/box::keep<lib/user::User>#drop(lib/user::User)`). Arguments are normalized types, so `keep<Int?>` named twice is one instance. Rejected: a hash of the arguments, as Rust's mangling does (unreadable dumps and stub errors; Tier 2 escapes symbols anyway); numbering instances per program (unstable as a program grows, so `hot-reload` could not match old and new).
+- **Instances are collected over the whole program** (D5). `collect_instances` (`crates/prism-codegen/src/instances.rs`) builds every generic's record (`compilation-and-abi`), rejects cross-file growing cycles (`E6004`, `generics`), and runs a worklist from the calls with type arguments in every compiled body: a request is the body, its arguments and the definitions they mention, taken from the requester's table; a request whose symbol is already built or queued is dropped before its definitions are gathered; each instance's own calls become requests from the instance's table. Built-ins with type arguments (`Heap<T>(...)`, `clone()`) are lowered directly, not instantiated. Units are sorted by symbol, so linking and dumps are deterministic. The work is linear in the program's distinct instances and their sizes, plus a hash lookup per generic call site, and it terminates because no growing cycle exists. Collection is the first step of Phase 3 over a program and reports a backend-stage error, so it lives in `prism-codegen`, while substitution, a MIR-to-MIR function, lives in `prism-mir`. `Program::compile` and `prism run` call it after the per-file checks. Rejected: a `prism-monomorphize` crate for two modules; collection in the CLI driver, duplicated for `Program::compile` and the dumps.
+- **The backend checks every instance** (D10, D17). Some constructs become unsupported only through a type argument, so the `E6001` check runs on each instance unit and reports at the generic's source, once per (file, location, construct) however many instances share it, and errors in generics of several files are reported per file in compile order. A type parameter reaching a compiled body is the construct `TypeParameter` ("values of the uninstantiated type parameter 'T'"), which no program reaches since instances have none and generic bodies are not compiled, so a backend bug gives a diagnostic rather than a crash. "Calls of generic functions" left `E6001`.
+- **Closures inside generic bodies wait for `closures`** (D12). A generic's closure bodies are part of its record but not compiled, and an instance building a closure is `E6001` at the closure in the generic's source, its closure bodies not copied into the unit. `closures` will instantiate them with their parent's arguments, in the parent instance's unit.
+- **An instance reports and stores as its generic's file** (D14). An instance unit's runtime file name is the generic's file, so a runtime error inside it names the generic's file and position whoever called it. Its string literals are data of its own unit, named after the unit; top-level `val`s are reached through their accessors' slots.
+- **`--instances` on `dump-clif`** (D11). `prism dump-clif --instances` compiles the whole program, as `prism run` does, and prints every instance unit's functions and glue in symbol order; plain `prism dump-clif` still compiles the file alone and prints no instance.
+- **Measured cost** (D17). `compile_timing.rs` has an `inst` stage (collection, the `E6004` check and the support check of every instance) and shapes for many call sites of one generic, one generic at 4096 struct types, a chain of 4096 generics reached transitively, generic calls nested 120 deep and 4096 nested generic structs; every stage grows linearly. Code generation per instance is inherent to monomorphization; instance units make it cacheable by `instance-cache`.

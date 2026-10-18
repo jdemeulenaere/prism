@@ -140,7 +140,7 @@ When the initializer of a `val` or `var` is a written borrow of a place rooted a
 - **THEN** the storage of the temporary holding the result of `make` starts before `c` is tested, it is assigned only in the `then` branch, and it is still live when `greet` is called and dropped when the block ends, under a drop flag in the elaborated MIR
 
 ### Requirement: Conditional Operators Become Branches
-`if`, `&&`, `||` and `?:` MUST become branches that evaluate only the operands and branches their values need. `?:` MUST read the tag of its nullable operand and, when it is present, move or copy its payload out. A `?:` whose left operand is not nullable MUST evaluate only that operand, as its value.
+`if`, `&&`, `||` and `?:` MUST become branches that evaluate only the operands and branches their values need. `?:` MUST read the tag of its nullable operand and, when it is present, move or copy its payload out. A `?:` whose left operand is not nullable MUST evaluate only that operand, as its value, unless the operand's type is a type parameter: such an operand MUST be wrapped into a `T?` temporary, whose tag is then read as for a nullable operand.
 
 #### Scenario: Logical and evaluates its right operand only when needed
 - **WHEN** `fun g(): Bool = true` is declared and `fun f(a: Bool): Bool = a && g()` is lowered
@@ -153,6 +153,10 @@ When the initializer of a `val` or `var` is a written borrow of a place rooted a
 #### Scenario: Elvis on a non-nullable left side is the left side
 - **WHEN** `fun g(): Int = 2` is declared and `fun f(a: Int): Int = a ?: g()` and `fun h(s: String): String = s ?: "anon"` are lowered
 - **THEN** `a` is copied and `s` moved into the return place, no discriminant is read, and neither `g` nor the string `"anon"` is evaluated
+
+#### Scenario: Elvis on a type parameter wraps its left side
+- **WHEN** `fun <T> orElse(a: T, c: T): T = a ?: c` is lowered
+- **THEN** `a` is wrapped into a temporary of type `T?` whose discriminant is read; where it is present its payload is moved into the return place, and where it is `null` `c` is
 
 ### Requirement: Safe Navigation Tests Each Payload
 A `?.` chain MUST read the tag of each nullable it looks into, give `null` as soon as one is `null`, dropping the temporaries the chain created so far, and otherwise read the payload where it lives.
@@ -462,6 +466,31 @@ The parts of a template MUST be evaluated left to right: a scalar part that a la
 - **WHEN** `struct Point : Copy { val x: Int }`, `fun Point.toString(): String = "p"` and `fun f(p: Point): String = "at $p"` are lowered
 - **THEN** the MIR of `f` calls `Point.toString` into a temporary, assigns the template over the text `at ` and a borrow of that temporary, and drops the temporary after the template
 
+### Requirement: Instances Are Substituted Bodies
+An instance of a generic body MUST be its elaborated MIR with the instance's type arguments substituted for the body's type parameters in every local, aggregate, constant and call type argument, while each call keeps its callee's declared parameter types. The instance MUST record its type arguments and no type parameter. A drop of a value whose substituted type no longer needs a drop MUST become a jump to its target. The instance MUST be well-formed elaborated MIR.
+
+#### Scenario: Instances of a generic function
+- **WHEN** `fun <T> discard(x: T) {}` is declared and `fun main() { discard(1); discard("a") }` runs through `prism dump-mir --instances main.prism`
+- **THEN** it prints the bodies `main::discard<Int>`, whose argument `_1` is an `Int` and which drops nothing, and `main::discard<String>`, whose argument is a `String` that it drops when it returns
+
+#### Scenario: A call inside an instance names its instance
+- **WHEN** `fun <T> id(x: T): T = x` and `fun <T> twice(x: T): T = id(id(x))` are declared and `fun main() { println(twice(1)) }` runs through `prism dump-mir --instances main.prism`
+- **THEN** the body `main::twice<Int>` calls `main::id<Int>` twice, each call keeping the declared parameter type `T`, and `main::id<Int>` is printed too
+
+### Requirement: Nullable Arguments Flatten Instances
+In an instance where a type parameter `T` has a nullable argument, `T?` is that argument (the `generics` spec), so wrapping a value of type `T` into a `T?` MUST be the value itself, and the payload of a place of type `T?` MUST be the place itself. A tag read from a `T?` MUST read the argument's own tag.
+
+#### Scenario: Wrapping and unwrapping a nullable argument
+- **WHEN** `fun <T> wrap(a: T): T? = a` and `fun <T> first(a: T?, c: T): T = a ?: c` are declared and `fun main() { println(wrap<Int?>(null) ?: 0); println(first<Int?>(null, 5) ?: 0) }` runs through `prism dump-mir --instances main.prism`
+- **THEN** `main::wrap<Int?>` moves `_1` into the return place without a wrap, and `main::first<Int?>` reads the discriminant of its `Int?` temporary and, where it is present, moves the temporary itself into the return place, with no payload projection
+
+### Requirement: Instance MIR Dump
+`prism dump-mir --instances <file.prism>` MUST print, as deterministic text, the elaborated MIR of every instance that the program whose entry is the file needs, in order of their symbols, each headed by the generic's path followed by its type arguments. When any file of the program has errors, it MUST report them, print no MIR and exit with a failure status.
+
+#### Scenario: Dumping the instances of a program
+- **WHEN** `lib/box.prism` declares `public fun <T> keep(x: T): T = x`, and `app/main.prism` imports `/lib/box` and declares `fun main() { println(keep(1)); println(keep(true)) }`
+- **THEN** `prism dump-mir --instances app/main.prism` prints the bodies `fun lib/box::keep<Bool>(_1: Bool): Bool` and then `fun lib/box::keep<Int>(_1: Int): Int`, the same text on every run, and exits with status 0
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -535,3 +564,10 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **One `Rvalue::Template`** (D10), assigned to a `String` place, with constant text parts and operands that are `&String` `Operator` borrows or scalars; `toString()` parts are `Call` terminators before it, into temporaries dropped at the end of the statement. An rvalue, like string `+`, because a template fails only by running out of memory, its operands are uses at one point for the borrow checker, and the text parts are constants of the rvalue. Which scalar parts a later part may write is found in one backward pass over the parts (`later_may_write`), which `ordered_operands` uses for calls, constructions and ranges too, instead of a quadratic scan. Rejected: a `Call` of a variadic built-in, a chain of `+` (an allocation and a copy per step), and `toString()` calls for scalar parts.
+
+Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **Instances are substituted elaborated MIR** (D6, D17). `prism_mir::instantiate` copies a generic body and substitutes its type arguments into every local, aggregate, `null` constant and call type argument, in one pass. A call of a generic keeps its callee's declared parameter types, which mention the callee's own parameters; the backend substitutes the call's type arguments into them. A built-in's or a function value's parameter types (`clone()`'s `&T`) are the caller's own, so they are substituted. The instance records its arguments in `Body::type_arguments` and no type parameter, which the validator checks. A drop whose substituted type no longer needs one becomes a `Goto`; drop flags and their tests stay, correct but redundant, for Tier 2 to remove. Every instance is validated like freshly lowered MIR in debug builds (except one holding a closure, which is rejected before compilation), and none is borrow-checked again (`generics`).
+- **Flattening rewrites two forms** (D6). Where `T`'s argument is `U?`, `T?` is `U?` itself, so a `WrapNullable` of an operand whose polymorphic type is `T` becomes a `Use`, and a `Payload` projection of a place whose polymorphic type is `T?` is removed, the place then being its base. Polymorphic place types come from the polymorphic locals and the record's table (`projection_type`). A `Discriminant` of such a place reads `U?`'s own tag unchanged. No other construct can flatten: a nullable is formed only by `?` around a type, and only a type parameter becomes nullable by substitution.
+- **`?:` on a type parameter goes through a `T?` temporary** (D7 of `generics`), lowered exactly as a nullable left side, so the flattening rewrites give the Kotlin meaning in every instance with no instance-specific lowering.
+- **`--instances` on `dump-mir`** (D11, D17). `prism dump-mir --instances` compiles the whole program, as `prism run` does, since an instance needs other files' records, and prints each instance's bodies in symbol order without the `module` and `phase` lines of a file's dump: every header names its module and arguments already (`fun lib/box::keep<Int>(...)`, an extension as `lib/box::Box<T>.get<Int>`, a default as `default lib/box::pad<Int> y(...)`). The fixture runner compares `instances-mir.snap`, which pins substitution and flattening as `mir.snap` pins lowering. Rejected: printing instances under the plain dumps (they would compile other files), a separate `dump-instances` command, and a `module` line per instance.
