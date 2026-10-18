@@ -319,6 +319,74 @@ impl TypeTable {
             .all(|index| arguments.get(*index as usize).is_none_or(&satisfies))
     }
 
+    /// The table of the structs and enums that `types` mention, with their definitions and
+    /// markers, closed over the field and payload types of those definitions, and the built-in
+    /// `Range` as this table defines it (D2 of `monomorphization`). An id this table knows only
+    /// by its marker keeps only its marker. Linear in the definitions reached.
+    pub fn restricted_to(&self, types: &[Type]) -> TypeTable {
+        let mut ids = Vec::new();
+        for ty in types {
+            ty.collect_nominal_ids(&mut ids);
+        }
+        self.restricted_to_ids(ids)
+    }
+
+    /// [`TypeTable::restricted_to`] the structs and enums `ids`.
+    pub fn restricted_to_ids(&self, ids: Vec<NominalId>) -> TypeTable {
+        let mut restricted = TypeTable::new();
+        let mut pending = ids;
+        pending.push(NominalId::builtin_range());
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(definition) = self.definitions.get(&id) {
+                match definition {
+                    TypeDef::Struct { fields, .. } => {
+                        for (_, _, ty) in fields {
+                            ty.collect_nominal_ids(&mut pending);
+                        }
+                    }
+                    TypeDef::Enum { variants, .. } => {
+                        for (_, payloads) in variants {
+                            for ty in payloads {
+                                ty.collect_nominal_ids(&mut pending);
+                            }
+                        }
+                    }
+                }
+                restricted.insert_definition(id.clone(), definition.clone());
+            }
+            if let Some(marker) = self.markers.get(&id) {
+                restricted.markers.insert(id, marker.clone());
+            }
+        }
+        restricted
+    }
+
+    /// Adds the definitions and markers of `other` that this table does not record. Two tables
+    /// of one program never disagree about a type, since a [`NominalId`] is unique in a program
+    /// and every definition comes from the same declarations (D5 of `monomorphization`).
+    pub fn extend_from(&mut self, other: &TypeTable) {
+        for (id, definition) in &other.definitions {
+            debug_assert!(
+                self.definitions
+                    .get(id)
+                    .is_none_or(|existing| existing == definition),
+                "two definitions of {}::{}",
+                id.module,
+                id.name
+            );
+            self.insert_definition(id.clone(), definition.clone());
+        }
+        for (id, marker) in &other.markers {
+            self.markers
+                .entry(id.clone())
+                .or_insert_with(|| marker.clone());
+        }
+    }
+
     /// Whether values of `ty` are duplicated implicitly by a bitwise copy (the `ownership` spec,
     /// "Built-In Copy Types"). The error type counts as `Copy`, so an earlier error is not
     /// reported again as a move.
@@ -464,6 +532,28 @@ impl Type {
                 ret: Box::new(ret.substitute(arguments)),
             },
             other => other.clone(),
+        }
+    }
+
+    /// Pushes the id of every struct and enum the type mentions, function types included.
+    pub fn collect_nominal_ids(&self, out: &mut Vec<NominalId>) {
+        match self {
+            Type::Struct { id, arguments } | Type::Enum { id, arguments } => {
+                out.push(id.clone());
+                for argument in arguments {
+                    argument.collect_nominal_ids(out);
+                }
+            }
+            Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
+                inner.collect_nominal_ids(out)
+            }
+            Type::Fn { params, ret, .. } => {
+                for param in params {
+                    param.collect_nominal_ids(out);
+                }
+                ret.collect_nominal_ids(out);
+            }
+            _ => {}
         }
     }
 
@@ -683,6 +773,58 @@ mod tests {
         assert!(table.is_copy(&Type::Int.nullable()));
         assert!(!table.is_copy(&Type::String.nullable()));
         assert!(table.is_clone(&Type::String.nullable()));
+    }
+
+    #[test]
+    fn a_restricted_table_holds_what_its_types_reach() {
+        let mut table = TypeTable::with_builtins();
+        let secret = NominalId::new("lib/box", "Secret");
+        let holder = NominalId::new("lib/box", "Holder");
+        let user = NominalId::new("lib/user", "User");
+        let unrelated = NominalId::new("lib/box", "Unrelated");
+        table.insert_definition(
+            secret.clone(),
+            TypeDef::Struct {
+                parameters: Vec::new(),
+                fields: vec![("n".to_string(), false, Type::Int)],
+            },
+        );
+        table.insert_definition(
+            holder.clone(),
+            TypeDef::Struct {
+                parameters: Vec::new(),
+                fields: vec![(
+                    "s".to_string(),
+                    false,
+                    Type::Heap(Box::new(Type::plain_struct(secret.clone()))),
+                )],
+            },
+        );
+        table.insert_definition(
+            unrelated.clone(),
+            TypeDef::Struct {
+                parameters: Vec::new(),
+                fields: Vec::new(),
+            },
+        );
+        // A type of another module known by its marker alone keeps its marker.
+        table.insert_marker(user.clone(), Some(TypeMarker::Clone), Vec::new());
+        table.insert_marker(secret.clone(), Some(TypeMarker::Copy), Vec::new());
+        let restricted = table.restricted_to(&[
+            Type::plain_struct(holder.clone()).nullable(),
+            Type::plain_struct(user.clone()),
+        ]);
+        assert!(restricted.definition(&holder).is_some());
+        assert!(restricted.definition(&secret).is_some());
+        assert_eq!(restricted.marker(&secret), Some(TypeMarker::Copy));
+        assert!(restricted.definition(&user).is_none());
+        assert_eq!(restricted.marker(&user), Some(TypeMarker::Clone));
+        assert!(!restricted.knows(&unrelated));
+        assert!(restricted.definition(&NominalId::builtin_range()).is_some());
+        let mut union = TypeTable::new();
+        union.extend_from(&restricted);
+        union.extend_from(&table.restricted_to(&[Type::plain_struct(unrelated.clone())]));
+        assert!(union.knows(&unrelated) && union.knows(&holder));
     }
 
     #[test]

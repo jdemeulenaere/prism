@@ -434,6 +434,7 @@ impl<'a> Builder<'a> {
             owner: self.owner,
             is_compose: self.is_compose,
             type_parameters: self.type_parameters,
+            type_arguments: Vec::new(),
             locals: self.locals,
             argument_count: self.argument_count,
             capture_count: self.capture_count,

@@ -138,6 +138,11 @@ impl Validator<'_> {
                 ));
             }
         }
+        // An instance replaces its type parameters by its type arguments (D6 of
+        // `monomorphization`), so it mentions none.
+        if !body.type_parameters.is_empty() && !body.type_arguments.is_empty() {
+            self.report("both type parameters and type arguments".to_string());
+        }
         // A body's types mention its own type parameters only (D9 of `generics`).
         for (local, declaration) in body.locals.iter() {
             for parameter in foreign_parameters(&declaration.ty, &body.type_parameters) {

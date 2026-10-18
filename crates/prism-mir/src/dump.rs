@@ -32,11 +32,21 @@ impl MirFile {
     }
 
     /// The name of body `id`: its declaration's path, `<function> <parameter>` for a default
-    /// generator, `<parent>#closure<index>` for a closure.
+    /// generator, `<parent>#closure<index>` for a closure. An instance's path is followed by its
+    /// type arguments (`lib/box::keep<Int>`, `main::pad<Int> y`).
     pub fn body_name(&self, id: BodyId) -> String {
         match &self.bodies[id].owner {
-            BodyOwner::Function(path) | BodyOwner::Value(path) => path.to_string(),
-            BodyOwner::Default { function, name, .. } => format!("{} {}", function, name),
+            BodyOwner::Function(path) | BodyOwner::Value(path) => format!(
+                "{}{}",
+                path,
+                render_type_arguments(&self.bodies[id].type_arguments)
+            ),
+            BodyOwner::Default { function, name, .. } => format!(
+                "{}{} {}",
+                function,
+                render_type_arguments(&self.bodies[id].type_arguments),
+                name
+            ),
             BodyOwner::Closure { parent, index } => {
                 format!("{}#closure{}", self.body_name(*parent), index)
             }
@@ -515,6 +525,7 @@ pub(crate) mod tests {
             owner: BodyOwner::Function(DeclarationPath::new("main", "f")),
             is_compose: false,
             type_parameters: Vec::new(),
+            type_arguments: Vec::new(),
             locals,
             argument_count: 1,
             capture_count: 0,

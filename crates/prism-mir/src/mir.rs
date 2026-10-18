@@ -104,6 +104,10 @@ pub struct Body {
     /// function's default generators and closures, and none for a top-level `val`. A generic
     /// body is lowered once, polymorphically (D9 of `generics`).
     pub type_parameters: Vec<TypeParameter>,
+    /// The type arguments of an instance of a generic body (D6 of `monomorphization`), which
+    /// replace its type parameters: empty for every body lowered from source, and never
+    /// together with type parameters.
+    pub type_arguments: Vec<Type>,
     /// `_0` the return place, then the arguments, then the captures, then bindings and
     /// temporaries in order of creation.
     pub locals: Arena<LocalId, LocalDeclaration>,
