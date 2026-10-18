@@ -28,3 +28,7 @@ A function value MUST convert to another function type only when its parameters 
 #### Scenario: A mutable reference parameter accepts a shared one
 - **WHEN** `fun read(r: &Int): Int = r` is declared, and a body runs `val f: (&Int) -> Int = read; val g: (&mut Int) -> Int = f`
 - **THEN** the file passes `prism check`
+
+#### Scenario: A function value lent to a reference parameter
+- **WHEN** `fun call(f: &(() -> Int)): Int = f()` is declared, and a body runs `val g: () -> Int = { 4 }; call(g); call(&g); call { 5 }`
+- **THEN** the file passes `prism check`: lending a function value converts nothing

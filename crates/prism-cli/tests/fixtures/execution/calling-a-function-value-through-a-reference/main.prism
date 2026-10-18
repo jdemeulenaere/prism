@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+enum Action { Run((Int) -> Int), Stop }
+
+fun act(a: &Action): Int = when (a) {
+    Action.Run(val f) -> f(5)
+    Action.Stop -> 0
+}
+
+fun call(f: &(() -> Int)): Int = f()
+
+fun main() {
+    println(act(Action.Run { n -> n * 3 }))
+    val g: () -> Int = { 4 }
+    println(call(g))
+    println(call { 7 })
+    val h = Heap({ 6 })
+    println(h())
+}

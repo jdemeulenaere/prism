@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Calling a Function Value Runs Its Closure
-Calling a function value MUST run the body of the closure, function or variant constructor it was made from, with the call's arguments, and give that body's result.
+Calling a function value, also through references and boxes, MUST run the body of the closure, function or variant constructor it was made from, with the call's arguments, and give that body's result.
 
 #### Scenario: Calling a closure passed to a function
 - **WHEN** `fun apply(f: (Int, Int) -> Int): Int = f(3, 4)` is declared and `fun main() { println(apply { a, b -> a * b }) }` runs
@@ -16,6 +16,10 @@ Calling a function value MUST run the body of the closure, function or variant c
 #### Scenario: A closure returning a string
 - **WHEN** `fun make(f: () -> String): String = f()` is declared and `fun main() { println(make { "a" + "b" }) }` runs with `--check-allocations`
 - **THEN** it prints `ab`, reports no live allocation and exits with status 0
+
+#### Scenario: Calling a function value through a reference
+- **WHEN** `enum Action { Run((Int) -> Int), Stop }`, `fun act(a: &Action): Int = when (a) { Action.Run(val f) -> f(5); Action.Stop -> 0 }` and `fun call(f: &(() -> Int)): Int = f()` are declared and `fun main() { println(act(Action.Run { n -> n * 3 })); val g: () -> Int = { 4 }; println(call(g)); println(call { 7 }); val h = Heap({ 6 }); println(h()) }` runs with `--check-allocations`
+- **THEN** it prints `15`, `4`, `7` and `6`, reports no live allocation and exits with status 0
 
 ### Requirement: Closures Use the Variables They Capture
 A closure MUST read and write the captured variables themselves, not copies: it MUST see their values when it runs, and its writes MUST be seen by the enclosing body after the closure returns.

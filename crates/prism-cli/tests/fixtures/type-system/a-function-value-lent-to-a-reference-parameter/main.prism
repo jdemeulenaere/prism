@@ -1,0 +1,9 @@
+// expect: ok
+fun call(f: &(() -> Int)): Int = f()
+
+fun f() {
+    val g: () -> Int = { 4 }
+    call(g)
+    call(&g)
+    call { 5 }
+}

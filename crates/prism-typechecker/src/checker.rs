@@ -2633,6 +2633,11 @@ impl TypeChecker {
         // A generic call passed to a borrow infers its type arguments from the referent.
         let referent = referent_of_reference_parameter(param_ty);
         let found = self.with_origin(Origin::Value, |c| {
+            // A closure lent to a borrowed function type takes its parameter types from it.
+            if matches!(expr.kind, ExprKind::Closure { .. }) && matches!(referent, Type::Fn { .. })
+            {
+                return c.with_consuming(true, |c| c.check_expr(expr, &referent));
+            }
             c.with_consuming(!is_place, |c| c.infer_expr_expecting(expr, Some(&referent)))
         });
         self.with_origin(origin, |c| {
@@ -5183,6 +5188,25 @@ impl TypeChecker {
             Type::Struct { id, .. } if is_constructor => {
                 self.construct_struct(id, type_arguments, args, expected, span)
             }
+            // A function value is called in place, so it is reached through its references and
+            // boxes, as a field is.
+            Type::Reference { .. } | Type::Heap(_)
+                if callee_node.is_some()
+                    && matches!(peel_indirection(&callee_ty), Type::Fn { .. }) =>
+            {
+                let reached = self.peel_indirection_nodes(callee_node.expect("checked above"));
+                let reached_ty = self.ty(reached);
+                self.call_with_type(
+                    callee,
+                    Some(reached),
+                    reached_ty,
+                    false,
+                    type_arguments,
+                    args,
+                    expected,
+                    span,
+                )
+            }
             Type::Error => self.error_node(callee_node.into_iter().collect(), span),
             other => {
                 self.errors.push(TypeError::CallSignatureMismatch {
@@ -6777,14 +6801,15 @@ impl TypeChecker {
     ) -> ExpressionId {
         let found = self.ty(found_id);
         let coercion = self.coerce(&found, expected, site);
-        // A function value keeps its representation when converted (D8 of `closures`). A
-        // temporary is converted before it is lent.
+        // A function value keeps its representation when converted (D8 of `closures`). Only a
+        // value used as it is, or a temporary converted before it is lent, converts: a place
+        // is lent unchanged, since references are invariant.
         let converted_to = match coercion {
-            Coercion::NoFit => None,
+            Coercion::Fits(Adjustment::None) => Some(expected.clone()),
             Coercion::Fits(Adjustment::BorrowTemporary) => {
                 Some(temporary_referent(&found, expected))
             }
-            _ => Some(expected.clone()),
+            _ => None,
         };
         if let Some(to) =
             converted_to.filter(|to| !self.converts_function_value(found_id, &found, to))
