@@ -1,0 +1,14 @@
+// expect: ok
+struct Box<T>(val v: T)
+struct User(val name: String)
+fun <T> id(x: T): T = x
+fun <T> remember(calc: () -> T): T = calc()
+fun <R> String.map(f: (Int) -> R): R = f(1)
+fun <T> User.pick(x: T): T = x
+fun f(s: String, u: User?): Int? {
+    val a = id<Int>(1)
+    val b = Box<String?>(null)
+    val c = remember<Int> { 0 }
+    val d = s.map<Box<Int>> { n -> Box(n) }
+    return u?.pick<Int>(1)
+}

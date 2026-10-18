@@ -168,6 +168,25 @@ None of this is hard to revert: it is unimplemented, and the language rules of t
 
 The language rules for type parameters, bounds, type arguments, inference, the borrow-free rule, conditional markers and generic extensions go into a new `generics` spec. The changes to existing rules go into the specs that own them: the grammar into `syntax`, the `Copy`/`Clone` tables into `ownership`, the ABI into `compilation-and-abi`, the escape into `references`, and the representation into `typed-tree` and `mir`. Rejected: putting everything into `type-system`, which is already a long catch-all.
 
+### D17. Implementation refinements of the parser and inference (autonomous)
+
+Found while implementing; each refines D2, D3 or D8 without changing a scenario's outcome:
+
+- **`Copy` and `Clone` cannot name a type parameter** (`E2001`). Otherwise `<T : Copy, Clone>` would read as a second parameter named `Clone`, and the "two bounds" scenario could not be rejected. Rejected: reading a marker name after a bounded parameter as a second bound only, which leaves `<Clone>` legal.
+- **An expected `X?` does not fix a declared `T?` exactly.** `T = X` and `T = X?` both give `X?` (D4), so the expected type only suggests `T = X`, used when no argument bounds `T`. Otherwise `orNull(s, true)` with `s: String?` would fix `T = String` and reject `s` ("Nullable type parameters flatten"). Rejected: matching it exactly, as every other expected position is.
+- **References are stripped only from the argument itself**, not inside it: `id(&a)` gives `T >= Int`, while `apply(s)` with `s: (&Int) -> Unit` gives `T >= &Int`, which is then `E4022` as the "Borrows as type arguments rejected" scenario requires. Rejected: stripping at every depth, which turns that case into an `E4004`.
+- **Every closure literal whose declared function type mentions an unknown without an exact solution is deferred**, not only those whose parameter types do (D8 step 4). A deferred closure is checked against its declared function type, so a closure passed for `compose () -> T` stays composable, which inferring it would lose. Its return type, when unsolved, is inferred from the body as D8 step 6 says.
+- **Conflicting lower bounds are not reported on their own.** The unknown takes the join of the bounds before the breaking one, and fitting the breaking argument reports the `E4004` (`pick(1, "a")` reports it at `"a"`).
+- **Default generators of a generic function are generic too.** They record the function's type parameters, and a call of one passes the call's type arguments, with declared parameter types like any call (D9).
+
+### D18. MIR aggregates carry type arguments (autonomous)
+
+`AggregateKind::Struct` and `AggregateKind::Variant` record the type arguments of the struct or enum they build, taken from the construction's type, so a MIR body stays self-describing for `monomorphization` and the validator checks operands against the substituted field types. Rejected: reading the arguments from the assigned place's type, which hides them from anything that reads the rvalue alone.
+
+### D19. Dump formats (autonomous)
+
+The typed-tree dump prints a generic struct's or enum's type parameters after its path and the parameters conditioning its marker after the marker (`struct main::Box<T> : Copy if T`). Functions print their type parameters after `fun` (`fun <T : Copy> main::wrap`), and calls their type arguments after the callee (`call main::id<Int>`), in both dumps. Only snapshots depend on it.
+
 ## Risks / Trade-offs
 
 - [Changing `Type::Struct(NominalId)` into a variant with arguments touches about 70 matches across seven crates] → The compiler finds every one. Task 2 lands the representation with empty arguments and no behaviour change before anything uses it.
@@ -186,3 +205,10 @@ Prism is unreleased, so there is no migration beyond the repository. `fun id<T>`
 
 - Whether `prism dump-typed-tree` should show the solved type arguments of calls whose arguments were inferred differently from written ones. The proposal prints them the same way. This only affects snapshots.
 - Whether the help of `E4013` for a generic callee should print the full suggested call (`make<...>()`) or only the type parameter's name. It only affects message text.
+
+## Implementation Notes
+
+- **Changed scenario.** "Generic function, struct and enum" read `b.v` of a by-value `b: Box<String>`, which moves a `String` field out of a whole value and is `E4017` under the ownership rules. It now reads `fun g(b: Box<Int>): Int = b.v`, which keeps its intent (fields are substituted) and typechecks.
+- **Moved fixtures.** `ownership/non-copy-built-ins-rejected-in-a-copy-declaration--type-parameter` and `ownership/non-clone-built-ins-rejected-in-a-clone-declaration--type-parameter` are now `ownership/generic-fields-of-a-marked-declaration--copy` and `--clone`, expecting `ok` (D6). No other existing `// expect: ok` case or example became an error.
+- **New `E4010` variant.** Duplicate and built-in-named type parameters are reported as `InvalidTypeParameterName`, with its own message, rather than as a `DuplicateSymbol` whose message ("duplicate symbol declaration") does not fit a built-in name.
+- **Fixture forms beyond the task list.** `syntax/non-associative-comparison--parenthesized-and-equality`, `syntax/comparisons-stay-comparisons--closed-by-greater-equal`, `syntax/comma-separated-comparisons-read-as-type-arguments--type-arguments`, `syntax/type-arguments-on-calls`, `generics/using-an-imported-generic-api--accepted` and `ownership/generic-fields-of-a-marked-declaration--instantiated-field` cover the remaining forms of their scenarios.

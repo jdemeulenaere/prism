@@ -57,11 +57,11 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 11. Remaining fixtures
 
-- [ ] 11.1 Add a fixture for every scenario of the delta specs not yet covered, one case per form, and check `fixture_names_match_spec_scenarios`. Migrate any existing fixture or example written `fun name<T>`. Run the whole suite. For each `// expect: ok` case that a new rule now rejects (a `Heap<&T>` outside a field, a nominal type with missing arguments), either rewrite it to keep its scenario's intent or, when the rejection is the point, move it to the scenario that rejects it, and list each in the implementation notes of `design.md`.
+- [x] 11.1 Add a fixture for every scenario of the delta specs not yet covered, one case per form, and check `fixture_names_match_spec_scenarios`. Migrate any existing fixture or example written `fun name<T>`. Run the whole suite. For each `// expect: ok` case that a new rule now rejects (a `Heap<&T>` outside a field, a nominal type with missing arguments), either rewrite it to keep its scenario's intent or, when the rejection is the point, move it to the scenario that rejects it, and list each in the implementation notes of `design.md`.
 
 ## 12. Final checks
 
-- [ ] 12.1 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (except `examples/demo/ui`), and `openspec validate --all --strict`. Verify all pass.
+- [x] 12.1 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (except `examples/demo/ui`), and `openspec validate --all --strict`. Verify all pass.
 
 ## Workflow follow-up
 

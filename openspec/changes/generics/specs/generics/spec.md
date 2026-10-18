@@ -70,7 +70,7 @@ A call of a generic function, extension, struct constructor or payload variant M
 - **THEN** the type checker emits `E4020` for each, naming the expected and the given number of type arguments
 
 ### Requirement: Type Argument Inference
-Without explicit type arguments, a call MUST infer them from the receiver, the expected type and the arguments. The expected type MUST fix the type parameters of the return type. Arguments MUST give lower bounds, which are joined. Closure arguments MUST be checked last, against the solved types, and their bodies MAY solve return type parameters. An unsolved type parameter MUST be `CannotInferType` (`E4013`), with help to write it.
+Without explicit type arguments, a call MUST infer them from the receiver, the expected type and the arguments. The expected type MUST fix the type parameters of the return type (an expected `X?` fixes a declared `T?` only as a fallback). Arguments MUST give lower bounds, which are joined. Closure arguments MUST be checked last, and their bodies MAY solve return type parameters. An unsolved type parameter MUST be `CannotInferType` (`E4013`).
 
 #### Scenario: Inference from arguments, joins and the expected type
 - **WHEN** `fun <T> pick(a: T, b: T): T = a`, `fun <T> id(x: T): T = x` and `struct Box<T>(val v: T)` are declared and `fun f(): Int? { val n = pick(1, null); return n }` and `fun g(): Box<Int?> { val b: Box<Int?> = Box(null); return b }` are checked

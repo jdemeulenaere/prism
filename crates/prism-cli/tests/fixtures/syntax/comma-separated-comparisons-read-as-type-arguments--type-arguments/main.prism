@@ -1,0 +1,6 @@
+// expect: ok
+struct b(val n: Int)
+struct c(val n: Int)
+fun <X, Y> a(d: Int): Int = d
+fun g(x: Int): Int = x
+fun f(d: Int): Int = g(a < b, c > (d))
