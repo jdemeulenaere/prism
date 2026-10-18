@@ -46,8 +46,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 10. Integration
 
-- [ ] 10.1 Make `examples/run/main.prism` print with a template (a scalar part and a string part), keeping it a valid `prism check` input and the `run_cli_tests.rs` output test passing.
-- [ ] 10.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` with no new warnings, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/` (only `examples/demo/ui` may fail), `prism run --check-allocations` on `examples/run/main.prism`, `prism run` on each other `examples/` file (it runs or reports a diagnostic rather than crashing), and `openspec validate string-templates --strict`. Verify all pass.
+- [x] 10.1 Make `examples/run/main.prism` print with a template (a scalar part and a string part), keeping it a valid `prism check` input and the `run_cli_tests.rs` output test passing.
+- [x] 10.2 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` with no new warnings, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/` (only `examples/demo/ui` may fail), `prism run --check-allocations` on `examples/run/main.prism`, `prism run` on each other `examples/` file (it runs or reports a diagnostic rather than crashing), and `openspec validate string-templates --strict`. Verify all pass.
 
 ## Workflow follow-up
 
