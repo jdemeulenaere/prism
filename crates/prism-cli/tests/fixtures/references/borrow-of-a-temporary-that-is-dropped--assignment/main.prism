@@ -1,0 +1,9 @@
+// expect: E5006
+fun make(): String = "x"
+fun first(a: &String, b: &String): &String = a
+fun greet(s: &String): Int = 1
+fun f(s: String) {
+    var r: &String = &s
+    r = &make()
+    greet(r)
+}

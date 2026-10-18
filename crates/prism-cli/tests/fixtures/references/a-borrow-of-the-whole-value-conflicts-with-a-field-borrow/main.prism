@@ -1,0 +1,10 @@
+// expect: E5003
+struct User { var name: String }
+struct Order { var user: User, var email: String }
+fun touch(a: &mut User, b: &mut String) {}
+fun f() {
+    var p = Order(User("a"), "b")
+    val a = &mut p.user
+    val b = &p
+    touch(a, &mut p.email)
+}

@@ -1,0 +1,8 @@
+// expect: E5006
+fun make(): String = "x"
+fun first(a: &String, b: &String): &String = a
+fun greet(s: &String): Int = 1
+fun g(s: String) {
+    val r = first(&make(), &s)
+    greet(r)
+}

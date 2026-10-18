@@ -1,0 +1,7 @@
+// expect: E5003
+struct User { var name: String }
+fun touch(a: &mut User, b: &mut String) {}
+fun f() {
+    var u = User("a")
+    touch(&mut u, &mut u.name)
+}

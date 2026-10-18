@@ -1,0 +1,9 @@
+// expect: ok
+fun both(a: &String, b: &String): Int = 1
+fun greet(s: &String): Int = 1
+fun f(s: String): Int {
+    val r = &s
+    val t = &s
+    greet(s)
+    return both(r, t) + both(s, s)
+}

@@ -1,0 +1,3 @@
+// expect: E5006
+fun print(n: &Int) {}
+fun f(c: Bool) { var a = 1; var r: &Int = &a; if (c) { val n = 1; r = &n }; print(r) }

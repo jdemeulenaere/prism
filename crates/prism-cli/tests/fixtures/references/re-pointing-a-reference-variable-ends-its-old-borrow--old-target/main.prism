@@ -1,0 +1,10 @@
+// expect: ok
+fun print(n: &Int) {}
+fun f() {
+    var a = 1
+    var b = 2
+    var r: &Int = &a
+    r = &b
+    a = 3
+    print(r)
+}

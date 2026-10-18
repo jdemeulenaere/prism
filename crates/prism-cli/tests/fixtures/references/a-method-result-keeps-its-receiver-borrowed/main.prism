@@ -1,0 +1,10 @@
+// expect: E5004
+struct Team { var lead: String }
+fun Team.captain(): &String = &lead
+fun greet(s: &String): Int = 1
+fun f() {
+    var t = Team("a")
+    val c = t.captain()
+    t.lead = "b"
+    greet(c)
+}

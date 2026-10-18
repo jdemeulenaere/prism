@@ -1,0 +1,9 @@
+// expect: ok
+fun first(a: &String, b: &String): &String = a
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun g(x: String, y: String) {
+    val r = first(&x, &y)
+    greet(r)
+    take(y)
+}

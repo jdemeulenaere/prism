@@ -1,0 +1,10 @@
+// expect: ok
+struct User { var name: String }
+struct Order { var user: User, var email: String }
+fun touch(a: &mut User, b: &mut String) {}
+fun g(o: Order) {
+    var p = o
+    val a = &mut p.user
+    val b = &mut p.email
+    touch(a, b)
+}

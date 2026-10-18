@@ -1,0 +1,4 @@
+// expect: E5007
+struct Button { val onClick: () -> Int }
+fun greet(s: &String): Int = 1
+fun k(p: () -> Int): () -> Int = p

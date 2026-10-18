@@ -1,0 +1,7 @@
+// expect: ok
+fun make(): String = "x"
+fun greet(s: &String): Int = 1
+fun f() {
+    val r = &make()
+    greet(r)
+}

@@ -1,0 +1,3 @@
+// expect: E5004
+fun print(n: &Int) {}
+fun f() { var x = 1; val r = &x; x = 2; print(r) }

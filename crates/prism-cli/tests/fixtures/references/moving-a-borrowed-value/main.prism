@@ -1,0 +1,8 @@
+// expect: E5005
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun f(s: String) {
+    val r = &s
+    take(s)
+    greet(r)
+}

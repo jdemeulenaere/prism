@@ -1,0 +1,9 @@
+// expect: E5003
+fun pick(a: &mut Int): &Int = a
+fun print(n: &Int) {}
+fun f() {
+    var x = 1
+    val r = pick(&mut x)
+    print(x)
+    print(r)
+}

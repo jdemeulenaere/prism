@@ -1,0 +1,10 @@
+// expect: E5004
+struct User { var name: String }
+fun print(n: &Int) {}
+fun greet(s: &String): Int = 1
+fun f() {
+    var u = User("a")
+    val n = &u.name
+    u.name = "b"
+    greet(n)
+}

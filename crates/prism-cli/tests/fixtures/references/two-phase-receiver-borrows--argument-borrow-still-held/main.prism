@@ -1,0 +1,9 @@
+// expect: E5003
+struct Stack { var count: Int }
+mut fun Stack.push(n: Int) {}
+mut fun Stack.pushRef(n: &Int) {}
+fun Stack.size(): Int = count
+fun f() {
+    var w = Stack(0)
+    w.pushRef(&w.count)
+}

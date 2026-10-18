@@ -1,0 +1,9 @@
+// expect: E5003
+fun run(f: () -> Int): Int = f()
+fun print(n: &Int) {}
+fun f() {
+    var x = 1
+    val f = { run { x = 2; 1 } }
+    print(x)
+    run(f)
+}

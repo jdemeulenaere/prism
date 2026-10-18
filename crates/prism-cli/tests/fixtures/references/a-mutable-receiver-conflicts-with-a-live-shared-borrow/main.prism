@@ -1,0 +1,10 @@
+// expect: E5003
+struct Stack { var count: Int }
+mut fun Stack.push(n: Int) {}
+fun print(n: &Int) {}
+fun f() {
+    var v = Stack(0)
+    val c = &v.count
+    v.push(1)
+    print(c)
+}

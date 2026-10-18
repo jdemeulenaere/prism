@@ -1,0 +1,6 @@
+// expect: ok
+struct Button { val onClick: () -> Int }
+fun run(f: () -> Int): Int = f()
+fun f(): () -> Int = { 1 }
+fun g(): Button = Button({ 2 })
+fun h(s: String): Int = run { s.clone(); 3 }

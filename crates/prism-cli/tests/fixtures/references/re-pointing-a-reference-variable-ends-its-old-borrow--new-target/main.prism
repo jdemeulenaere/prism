@@ -1,0 +1,10 @@
+// expect: E5004
+fun print(n: &Int) {}
+fun g() {
+    var a = 1
+    var b = 2
+    var r: &Int = &a
+    r = &b
+    b = 3
+    print(r)
+}

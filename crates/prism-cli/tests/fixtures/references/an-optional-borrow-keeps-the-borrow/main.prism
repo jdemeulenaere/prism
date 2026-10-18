@@ -1,0 +1,9 @@
+// expect: E5004
+struct Profile { var nick: String? }
+fun show(n: (&String)?) {}
+fun f() {
+    var p = Profile(null)
+    val a: (&String)? = &p.nick
+    p.nick = null
+    show(a)
+}

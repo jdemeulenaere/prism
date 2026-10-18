@@ -1,0 +1,8 @@
+// expect: E5004
+fun print(n: &Int) {}
+fun g(c: Bool) {
+    var x = 1
+    val r = &x
+    if (c) x = 2
+    print(r)
+}

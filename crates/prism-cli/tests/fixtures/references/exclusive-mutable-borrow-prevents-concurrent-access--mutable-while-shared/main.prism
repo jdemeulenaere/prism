@@ -1,0 +1,9 @@
+// expect: E5003
+fun print(n: &Int) {}
+fun bump(r: &mut Int) {}
+fun f() {
+    var x = 1
+    val r = &x
+    bump(&mut x)
+    print(r)
+}

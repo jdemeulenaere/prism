@@ -1,0 +1,7 @@
+// expect: ok
+fun make(): String = "x"
+fun greet(s: &String): Int = 1
+fun g(c: Bool, s: String) {
+    val r = if (c) &make() else &s
+    greet(r)
+}

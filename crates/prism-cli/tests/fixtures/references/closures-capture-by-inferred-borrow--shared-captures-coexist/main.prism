@@ -1,0 +1,10 @@
+// expect: ok
+struct User { var name: String }
+fun greet(s: &String): Int = 1
+fun run(f: () -> Int): Int = f()
+fun f() {
+    var u = User("a")
+    val g = { greet(u.name) }
+    greet(u.name)
+    run(g)
+}
