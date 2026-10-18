@@ -15,6 +15,7 @@ use crate::mir::{
 };
 use prism_ast::Span;
 use prism_typed_tree::Type;
+use std::collections::HashMap;
 
 /// A local owned by a scope.
 #[derive(Debug, Clone, Copy)]
@@ -32,6 +33,9 @@ struct ScopedLocal {
 pub(super) struct Scope {
     exit: Span,
     locals: Vec<ScopedLocal>,
+    /// The position of each of `locals` by local, so that a statement with many temporaries
+    /// finds each in constant time.
+    positions: HashMap<LocalId, usize>,
 }
 
 impl Scope {
@@ -40,16 +44,28 @@ impl Scope {
         Self {
             exit,
             locals: Vec::new(),
+            positions: HashMap::new(),
         }
     }
 
     /// Adds a local without storage markers (an argument).
     pub(super) fn add_unmarked(&mut self, local: LocalId) {
-        self.locals.push(ScopedLocal {
+        self.push(ScopedLocal {
             local,
             moved: false,
             marked: false,
         });
+    }
+
+    fn push(&mut self, scoped: ScopedLocal) {
+        self.positions.insert(scoped.local, self.locals.len());
+        self.locals.push(scoped);
+    }
+
+    /// The scope's entry for `local`, if it owns it.
+    fn find_mut(&mut self, local: LocalId) -> Option<&mut ScopedLocal> {
+        let position = *self.positions.get(&local)?;
+        Some(&mut self.locals[position])
     }
 }
 
@@ -141,7 +157,7 @@ impl Builder<'_> {
     /// Adds `local` to the innermost scope and marks it live.
     pub(super) fn schedule(&mut self, local: LocalId, span: Span) {
         let scope = self.scopes.last_mut().expect("a scope is open");
-        scope.locals.push(ScopedLocal {
+        scope.push(ScopedLocal {
             local,
             moved: false,
             marked: true,
@@ -154,7 +170,7 @@ impl Builder<'_> {
     /// `payload-patterns`).
     pub(super) fn schedule_unstarted(&mut self, local: LocalId) {
         let scope = self.scopes.last_mut().expect("a scope is open");
-        scope.locals.push(ScopedLocal {
+        scope.push(ScopedLocal {
             local,
             moved: false,
             marked: true,
@@ -182,10 +198,12 @@ impl Builder<'_> {
     /// Records that `local`, a temporary of the innermost scope, was moved out of as a whole by
     /// the lowering itself, so its scope does not drop it (D6).
     pub(super) fn record_moved(&mut self, local: LocalId) {
-        if let Some(scope) = self.scopes.last_mut() {
-            if let Some(scoped) = scope.locals.iter_mut().find(|s| s.local == local) {
-                scoped.moved = true;
-            }
+        if let Some(scoped) = self
+            .scopes
+            .last_mut()
+            .and_then(|scope| scope.find_mut(local))
+        {
+            scoped.moved = true;
         }
     }
 
@@ -196,7 +214,7 @@ impl Builder<'_> {
             return;
         }
         for scope in self.scopes.iter_mut().rev() {
-            if let Some(scoped) = scope.locals.iter_mut().find(|s| s.local == local) {
+            if let Some(scoped) = scope.find_mut(local) {
                 scoped.moved = true;
                 return;
             }
@@ -209,7 +227,7 @@ impl Builder<'_> {
             && self
                 .scopes
                 .last()
-                .is_some_and(|scope| scope.locals.iter().any(|s| s.local == local))
+                .is_some_and(|scope| scope.positions.contains_key(&local))
     }
 
     /// Records the temporaries `operand` moves out of as a whole.
@@ -248,6 +266,9 @@ impl Builder<'_> {
     /// (D7).
     pub(super) fn move_locals_to_parent(&mut self, index: usize) {
         let locals = std::mem::take(&mut self.scopes[index].locals);
-        self.scopes[index - 1].locals.extend(locals);
+        self.scopes[index].positions.clear();
+        for scoped in locals {
+            self.scopes[index - 1].push(scoped);
+        }
     }
 }
