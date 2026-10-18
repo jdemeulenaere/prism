@@ -102,6 +102,14 @@ A `public` or `package` function without a return type is reported as `E3001` wh
 | `E5008` | `DanglingBorrowReturn` | A body returns a borrow of memory it owns, which ends when it returns: a local, a temporary or a by-value parameter of a function, method, closure or default value, or a temporary of a top-level `val`'s initializer (`val R: &Int = &1`). Borrows of top-level `val`s may be returned under any elision rule. The diagnostic labels the borrow when it is elsewhere and, for a function without a borrowed input, notes elision rule 4. |
 | `E5009` | `UntiedBorrowReturn` | A body returns a borrow derived from an input its elision rule does not tie the result to: a parameter other than the borrowed receiver of a method (rule 2), the result of calling a function-typed parameter whose type has no borrowed input, a capture of a closure whose type takes a borrowed input, or, in a default value, an earlier by-value parameter or one the call borrows mutably (`&mut`, a `mut fun` receiver). The diagnostic labels the parameter or capture and notes the rule. |
 
+### E6xxx: Code generation and the entry point (`crates/prism-codegen`)
+
+| Code | Name | Meaning |
+|---|---|---|
+| `E6001` | `UnsupportedByBackend` | `prism run` or `prism dump-clif` found a construct the Tier 1 backend does not compile yet, in a body it compiles (every body except generic and closure bodies, whether or not `main` reaches it): a struct, enum, nullable, `String`, `Heap<T>` or function value, a drop, a reference to one of these, a `Range` outside a local, a call of a generic function or a composable function. One error per body, at the declaration for an unsupported parameter or return type or a composable body, otherwise at the first statement or terminator using the construct; a note names the change that will support it. `prism check` never reports it. |
+| `E6002` | `MissingMain` | The entry file of `prism run` declares no top-level function `main`. Help shows `fun main() {}`. |
+| `E6003` | `InvalidMain` | The entry file's `main` breaks a rule of the entry point: it has type parameters, a receiver or parameters, returns a type other than `Unit`, is `compose`, or is a top-level `val`. The message names the rule. |
+
 ## Design Rationale
 - **One code per error kind, separate from message text.** Tooling and tests match on codes, so messages can improve without breaking them.
 - **`E4011` instead of reusing `E4004`** (`resolve-nominal-type-annotations`): a missing return type is not a call error, and the type checker also runs without the ABI stage (unit tests, a future LSP), so it needs its own diagnostic rather than relying on `E3001`.

@@ -70,6 +70,9 @@ const UNFIXTURED_CODES: &[(&str, &str)] = &[
         "E2002",
         "needs input nested more than 256 levels deep; see parser_tests.rs",
     ),
+    ("E6001", "fixtures come with the run mode"),
+    ("E6002", "fixtures come with the run mode"),
+    ("E6003", "fixtures come with the run mode"),
 ];
 
 struct Case {
@@ -740,4 +743,54 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     } else {
         "<panic>".to_string()
     }
+}
+
+/// The passing `loops` cases that use a construct the Tier 1 backend rejects, and the construct.
+const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[
+    ("loops/body-may-shadow-the-loop-variable", "strings"),
+    ("loops/break-on-the-right-of-elvis", "nullable values"),
+    (
+        "loops/counting-loop-over-a-half-open-range--borrowed-range",
+        "'Range' values outside local variables",
+    ),
+    (
+        "loops/loop-inside-a-closure",
+        "function values and closures",
+    ),
+];
+
+/// code-generation: "Unsupported Constructs Are Rejected Before Code Generation". Every passing
+/// case of the `loops` spec that uses only scalars passes the backend's support check; the
+/// others are rejected naming the construct they use.
+#[test]
+fn scalar_loop_fixtures_are_supported() {
+    let mut supported = 0;
+    for case in load_cases() {
+        if !case.name.starts_with("loops/") || !case.expected.is_empty() {
+            continue;
+        }
+        let entry = entry_of(&case);
+        let mir = match prism_cli::dump_elaborated_mir(&entry) {
+            Ok(dump) => dump.mir,
+            Err(err) => panic!("{}: no elaborated MIR:\n{}", case.name, err.render()),
+        };
+        let beyond = LOOPS_BEYOND_THE_BACKEND
+            .iter()
+            .find(|(name, _)| *name == case.name);
+        match (prism_codegen::check_file(&mir), beyond) {
+            (Ok(()), None) => supported += 1,
+            (Err(errors), Some((_, construct))) => {
+                let expected = format!("the Tier 1 backend does not support {} yet", construct);
+                assert!(
+                    errors.iter().all(|error| error.message == expected),
+                    "{}: {:?}",
+                    case.name,
+                    errors
+                );
+            }
+            (Ok(()), Some(_)) => panic!("{} is now supported; drop it from the list", case.name),
+            (Err(errors), None) => panic!("{} is rejected: {:?}", case.name, errors),
+        }
+    }
+    assert!(supported >= 9, "only {} loops cases supported", supported);
 }

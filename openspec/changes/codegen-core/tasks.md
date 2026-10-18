@@ -22,9 +22,9 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 4. Support and entry checks (D9, D13)
 
-- [ ] 4.1 Add `supported.rs` with `check_file(&MirFile) -> Result<(), Vec<CodegenError>>` per D9: skip generic and closure bodies, report one `E6001` per other body (unsupported argument or return type, or a composable body, at the body's span; otherwise the first unsupported statement or terminator in block order), naming the construct and the change of D9's table in a note. Verify with unit tests over lowered source for every row of the table and for "One error per body", and that every passing fixture of the `loops` spec that uses only scalars has no error.
-- [ ] 4.2 Add `entry.rs` with `find_main(&MirFile) -> Result<DeclarationPath, CodegenError>` per D13 (`E6002` with help, `E6003` naming the broken rule). Verify with unit tests for each form of "Invalid main" and for "Missing main".
-- [ ] 4.3 Add the `E6xxx` section to the catalog in `openspec/specs/diagnostics/spec.md` with `E6001` `UnsupportedByBackend`, `E6002` `MissingMain` and `E6003` `InvalidMain`. Verify that `fixture_codes_match_the_diagnostics_catalog` still passes once group 7 adds their fixtures (until then, list them in `UNFIXTURED_CODES` with the reason "fixtures come with the run mode").
+- [x] 4.1 Add `supported.rs` with `check_file(&MirFile) -> Result<(), Vec<CodegenError>>` per D9: skip generic and closure bodies, report one `E6001` per other body (unsupported argument or return type, or a composable body, at the body's span; otherwise the first unsupported statement or terminator in block order), naming the construct and the change of D9's table in a note. Verify with unit tests over lowered source for every row of the table and for "One error per body", and that every passing fixture of the `loops` spec that uses only scalars has no error.
+- [x] 4.2 Add `entry.rs` with `find_main(&MirFile) -> Result<DeclarationPath, CodegenError>` per D13 (`E6002` with help, `E6003` naming the broken rule). Verify with unit tests for each form of "Invalid main" and for "Missing main".
+- [x] 4.3 Add the `E6xxx` section to the catalog in `openspec/specs/diagnostics/spec.md` with `E6001` `UnsupportedByBackend`, `E6002` `MissingMain` and `E6003` `InvalidMain`. Verify that `fixture_codes_match_the_diagnostics_catalog` still passes once group 7 adds their fixtures (until then, list them in `UNFIXTURED_CODES` with the reason "fixtures come with the run mode").
 
 ## 5. Lowering bodies to Cranelift (D6 to D11, D18)
 

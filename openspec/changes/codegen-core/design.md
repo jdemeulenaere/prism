@@ -82,7 +82,8 @@ Lowering one body (`lower.rs`, `BodyLowering`) first scans the body for locals t
 | a local or operand of a struct type other than a `Range` local, `Rvalue::Aggregate` of a struct, a `Field` projection off a `Range` local | structs | `codegen-aggregates` |
 | enums, `Discriminant`, variant constants and aggregates | enums | `codegen-aggregates` |
 | nullable types, `null`, `WrapNullable`, `Payload` | nullable values | `codegen-aggregates` |
-| references to unsupported referents, `Subtype` other than `&mut T` to `&T` | references to `<type>` | `codegen-aggregates` |
+| a reference to an unsupported referent | the referent's construct (a `&String` is "strings") | the referent's change |
+| a `Subtype` other than `&mut T` to `&T` between types not otherwise rejected | conversions from `<A>` to `<B>` | `codegen-aggregates` |
 | a `Range` parameter, result, borrow or top-level `val` | `Range` values outside locals | `codegen-aggregates` |
 | `String` values, string constants, `Index`, `print` of a `String` | strings | `runtime-strings-and-drops` |
 | `Heap<T>`, any `Drop` terminator | `Heap` values, drops | `runtime-strings-and-drops` |
@@ -91,7 +92,7 @@ Lowering one body (`lower.rs`, `BodyLowering`) first scans the body for locals t
 | a composable body or call | composable functions | `compose-transform` |
 | opaque types | values of unknown type `<name>` | (a type error once unknown names are rejected) |
 
-The diagnostic says "the Tier 1 backend does not support <construct> yet" with a note naming the change that will. It is checked over every compiled body of every file of the program, not only those reachable from `main`: reachability would need a whole-program call graph for a check that disappears as the backend grows, and it would make a program fail or run depending on which functions an edit calls. Rejected: compiling unsupported bodies into stubs that raise a runtime error (a compile-time fact reported at run time), and a compiler panic or `todo!()`.
+The diagnostic says "the Tier 1 backend does not support <construct> yet" with a note naming the change that will ("support for <construct> is planned in the '<change>' change"). *Implementation note:* a reference is named by its referent rather than as "references to `<type>`", which tells the user what actually needs work. It is checked over every compiled body of every file of the program, not only those reachable from `main`: reachability would need a whole-program call graph for a check that disappears as the backend grows, and it would make a program fail or run depending on which functions an edit calls. Rejected: compiling unsupported bodies into stubs that raise a runtime error (a compile-time fact reported at run time), and a compiler panic or `todo!()`.
 
 ### D10. `Int` overflow traps, in every tier (autonomous)
 
