@@ -32,8 +32,8 @@ use crate::elision::{self, Rule, Signature};
 use crate::location::Location;
 use crate::places;
 use prism_mir::{
-    Body, BorrowOrigin, Callee, LocalId, MirFile, Operand, Place, Projection, Rvalue, Statement,
-    StatementKind, Terminator, TerminatorKind,
+    Body, BorrowOrigin, Callee, Capture, LocalId, MirFile, Operand, Place, Projection, Rvalue,
+    Statement, StatementKind, Terminator, TerminatorKind,
 };
 use prism_typed_tree::{ArenaId, Type};
 
@@ -257,26 +257,32 @@ impl<'a> LoanFlow<'a> {
         state: &Holdings,
         location: Location,
         closure: prism_mir::BodyId,
-        captures: &[Place],
+        captures: &[Capture],
     ) -> Vec<(LocalId, Vec<usize>)> {
-        let loans = self.borrows.loans_at(location);
+        // The loans are those of the borrowed captures, in capture order; an owned capture
+        // carries the items of its operand (D6 of `escaping-closures`).
+        let mut loans = self.borrows.loans_at(location).iter();
         let items: Vec<Vec<usize>> = captures
             .iter()
-            .enumerate()
-            .map(|(index, place)| {
-                let mut items = self.held(state, place.local);
-                if let Some(loan) = loans.get(index) {
-                    items.push(loan.index());
+            .map(|capture| {
+                let mut items = self.capture_items(state, capture);
+                if let Capture::Borrowed(_) = capture {
+                    if let Some(loan) = loans.next() {
+                        items.push(loan.index());
+                    }
                 }
                 items
             })
             .collect();
         let modes = &self.file.bodies[closure].capture_modes;
         let mut writes = Vec::new();
-        for (index, place) in captures.iter().enumerate() {
+        for (index, capture) in captures.iter().enumerate() {
             if modes.get(index) != Some(&prism_mir::CaptureMode::Mutable) {
                 continue;
             }
+            let Capture::Borrowed(place) = capture else {
+                continue;
+            };
             let mut others: Vec<usize> = items
                 .iter()
                 .enumerate()
@@ -293,6 +299,19 @@ impl<'a> LoanFlow<'a> {
             }
         }
         writes
+    }
+
+    /// The items a closure value carries for `capture`: those of the captured place's root
+    /// local, except for an owned value whose type carries no loans, such as an `Int` copied
+    /// through a reference (D6 of `escaping-closures`).
+    pub fn capture_items(&self, state: &Holdings, capture: &Capture) -> Vec<usize> {
+        let Some(place) = capture.place() else {
+            return Vec::new();
+        };
+        if capture.is_owned() && !places::carries_loans(&place.ty(self.body, &self.file.types)) {
+            return Vec::new();
+        }
+        self.held(state, place.local)
     }
 
     /// The items the value of `operand` carries: those of its place's root local.
@@ -317,7 +336,7 @@ impl<'a> LoanFlow<'a> {
             Rvalue::Borrow { place, .. } => self.held(state, place.local),
             Rvalue::Closure { captures, .. } => captures
                 .iter()
-                .flat_map(|place| self.held(state, place.local))
+                .flat_map(|capture| self.capture_items(state, capture))
                 .collect(),
             // A template's result is a new string, holding no borrow of its parts.
             Rvalue::Binary(..)
@@ -510,7 +529,15 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
         Rvalue::Binary(_, left, right) => vec![left, right],
         Rvalue::Aggregate(_, operands) => operands.iter().collect(),
         Rvalue::Template(_) => rvalue.template_operands().collect(),
-        Rvalue::Borrow { .. } | Rvalue::Discriminant(_) | Rvalue::Closure { .. } => Vec::new(),
+        // A closure value moves or copies the captures it owns (D2 of `escaping-closures`).
+        Rvalue::Closure { captures, .. } => captures
+            .iter()
+            .filter_map(|capture| match capture {
+                Capture::Owned(operand) => Some(operand),
+                Capture::Borrowed(_) => None,
+            })
+            .collect(),
+        Rvalue::Borrow { .. } | Rvalue::Discriminant(_) => Vec::new(),
     }
 }
 

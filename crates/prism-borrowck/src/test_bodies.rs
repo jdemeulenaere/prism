@@ -17,6 +17,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         mutable: false,
         name: None,
         binding: None,
+        escaping: false,
         span: Span::dummy(),
     });
     let mut blocks = Arena::new();
@@ -51,6 +52,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         argument_count: 0,
         capture_count: 0,
         capture_modes: Vec::new(),
+        ownership_reason: None,
         blocks,
         span: Span::dummy(),
     }

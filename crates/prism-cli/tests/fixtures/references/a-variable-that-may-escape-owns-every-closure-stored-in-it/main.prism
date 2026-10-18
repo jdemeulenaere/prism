@@ -1,0 +1,12 @@
+// expect: E5001
+fun store(f: escaping () -> Int): Int = 1
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun f(s: String): Int {
+    var h = { greet(s) }
+    h()
+    h = { 0 }
+    store(h)
+    take(s)
+    return 1
+}

@@ -116,6 +116,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
+            call.escaping.clone(),
             call.type_arguments.clone(),
             destination,
             call.is_compose,
@@ -132,6 +133,7 @@ impl Builder<'_> {
         callee: Callee,
         arguments: Vec<Operand>,
         parameters: Vec<Type>,
+        escaping: Vec<bool>,
         type_arguments: Vec<Type>,
         destination: Place,
         is_compose: bool,
@@ -149,6 +151,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
+            escaping,
             type_arguments,
             destination,
             target,
@@ -284,10 +287,12 @@ impl Builder<'_> {
             parameter: index - usize::from(call.has_receiver),
             name: name.unwrap_or_default(),
         };
+        let escaping = vec![false; parameters.len()];
         self.emit_call(
             callee,
             arguments,
             parameters,
+            escaping,
             call.type_arguments.clone(),
             Place::local(result),
             false,

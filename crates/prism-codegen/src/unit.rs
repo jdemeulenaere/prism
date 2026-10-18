@@ -11,7 +11,7 @@
 
 use crate::error::BackendError;
 use crate::glue::{GlueKind, GlueTable};
-use crate::layout::LayoutTable;
+use crate::layout::{EnvironmentKind, LayoutTable};
 use crate::lower::BodyLowering;
 use crate::representation::{
     body_signature, closure_signature, representation, signature, Representation,
@@ -295,6 +295,23 @@ impl<'m, M: Module> UnitContext<'m, M> {
         description.set_align(u64::from(word));
         let slot_global = self.module.declare_data_in_data(slot, &mut description);
         description.write_data_addr(0, slot_global, 0);
+        // The drop entry: the environment's drop function when it is allocated, a direct code
+        // address so that a value keeps the drop of the layout it was built with; null
+        // otherwise (D8 and D9 of `escaping-closures`).
+        let environment = self
+            .layouts
+            .environment_layout(&self.file.bodies[body])
+            .map_err(|construct| {
+                BackendError::new(format!(
+                    "no layout for a closure's environment: {}",
+                    construct.description()
+                ))
+            })?;
+        if environment.kind == EnvironmentKind::Allocated {
+            let drop = self.environment_drop(body)?;
+            let drop = self.module.declare_func_in_data(drop, &mut description);
+            description.write_function_addr(word, drop);
+        }
         self.module.define_data(id, &description)?;
         self.descriptors.insert(body, id);
         Ok(id)

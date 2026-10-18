@@ -59,6 +59,7 @@ pub(crate) fn elaborate_body(
             mutable: false,
             name: None,
             binding: None,
+            escaping: false,
             span: body.locals[*local].span,
         });
     }

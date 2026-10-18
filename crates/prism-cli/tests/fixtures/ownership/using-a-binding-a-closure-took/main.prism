@@ -1,0 +1,9 @@
+// expect: E5001
+struct Button { val onClick: () -> Int }
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun f(s: String): Button {
+    val b = Button({ greet(s) })
+    take(s)
+    return b
+}

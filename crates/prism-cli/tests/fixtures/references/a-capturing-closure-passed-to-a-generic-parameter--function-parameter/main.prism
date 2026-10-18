@@ -1,3 +1,0 @@
-// expect: E5007
-fun <T> keep(x: T): T = x
-fun k(p: () -> Int): Int = keep(p)()

@@ -17,7 +17,7 @@ A closure that owns its captures MUST keep the values it captured when it was bu
 - **WHEN** `fun make(s: String): () -> Int = { s.length }`, `fun twice(g: escaping () -> Int): () -> Int = { g() * 2 }` and `fun main() { val h = twice(make("abc")); println(h()); println(h()) }` run with `--check-allocations`
 - **THEN** it prints `6` twice, reports no live allocation and exits with status 0
 
-#### Scenario: A closure in a default value
+#### Scenario: An owning closure in a default value
 - **WHEN** `fun pick(a: Int, f: () -> Int = { a * 2 }): Int = f()` and `fun main() { println(pick(4)); println(pick(4) { 1 }) }` run with `--check-allocations`
 - **THEN** it prints `8` and then `1`, reports no live allocation and exits with status 0
 

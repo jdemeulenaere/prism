@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+fun <T> remember(calc: () -> T): T = calc()
+fun run(f: () -> Int): Int = f()
+fun take(s: String) {}
+fun greet(s: &String): Int = s.length
+fun f(s: String) {
+    println(run { greet(s) })
+    println(remember { greet(s) })
+    take(s)
+}
+fun main() {
+    f("abc")
+}

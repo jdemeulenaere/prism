@@ -173,6 +173,7 @@ mod tests {
                 mutable: false,
                 name: None,
                 binding: None,
+                escaping: false,
                 span: Span::dummy(),
             });
         }
@@ -185,6 +186,7 @@ mod tests {
             argument_count: 1,
             capture_count: 0,
             capture_modes: Vec::new(),
+            ownership_reason: None,
             blocks: Arena::new(),
             span: Span::dummy(),
         }

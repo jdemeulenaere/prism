@@ -30,7 +30,9 @@
 use crate::equality::{Compared, Comparison};
 use crate::error::BackendError;
 use crate::glue::{allocate_box, free_box, Glue, GlueKind};
-use crate::layout::{FunctionField, Layout, Member, Shape, StringField};
+use crate::layout::{
+    EnvironmentKind, EnvironmentLayout, FunctionField, Layout, Member, Shape, StringField,
+};
 use crate::representation::{
     function_value_signature, is_pointer, representation, signature, Representation,
 };
@@ -46,7 +48,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variab
 use cranelift_module::{DataId, FuncId, Module};
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, BasicBlock, Body, BodyId, BodyOwner, Callee, CaptureMode, Constant, LocalId,
+    AggregateKind, BasicBlock, Body, BodyId, BodyOwner, Callee, Capture, Constant, LocalId,
     LocalKind, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
 };
 use prism_runtime::{
@@ -161,8 +163,12 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     globals: HashMap<DataId, ir::GlobalValue>,
     /// The functions comparisons call: the runtime's string equality and equality glue.
     compared_functions: HashMap<FuncId, ir::FuncRef>,
-    /// A closure body's environment address, which its code receives (D4 of `closures`).
+    /// A closure body's environment address, which its code receives (D4 of `closures`), or
+    /// the address of the slot its inline environment is spilled to on entry (D9 of
+    /// `escaping-closures`).
     environment: Option<Value>,
+    /// A closure body's environment layout: where each capture is (D8 of `escaping-closures`).
+    environment_layout: Option<EnvironmentLayout>,
     /// The environment slot of each closure body this body builds a value of, with captures
     /// (D5 of `closures`).
     environments: HashMap<BodyId, ir::StackSlot>,
@@ -193,6 +199,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             globals: HashMap::new(),
             compared_functions: HashMap::new(),
             environment: None,
+            environment_layout: None,
             environments: HashMap::new(),
         };
         lowering.lower_body()?;
@@ -249,7 +256,25 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             received.insert(LocalId::RETURN, next()?);
         }
         if matches!(self.body.owner, BodyOwner::Closure { .. }) {
-            self.environment = Some(next()?);
+            let word = next()?;
+            let layout = self.environment_layout(self.body)?;
+            // An inline environment arrives as the word itself: it is spilled to a slot, from
+            // which its captures are read as from any owned environment (D9 of
+            // `escaping-closures`).
+            self.environment = Some(if layout.kind == EnvironmentKind::Inline {
+                let pointer = self.pointer();
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    pointer.bytes(),
+                    pointer.bytes().trailing_zeros() as u8,
+                ));
+                let address = self.builder.ins().stack_addr(pointer, slot, 0);
+                self.builder.ins().store(aligned(), word, address, 0);
+                address
+            } else {
+                word
+            });
+            self.environment_layout = Some(layout);
         }
         let mut scalars = Vec::new();
         for local in self.body.arguments() {
@@ -398,16 +423,28 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 Location::Memory(self.builder.ins().stack_addr(pointer, slot, 0))
             }
             Storage::Address(address) => Location::Memory(address),
+            // An owned capture is its environment field; a borrowed one is the place whose
+            // address the field holds (D8 of `escaping-closures`, D5 of `closures`).
             Storage::Capture(index) => {
                 let environment = self
                     .environment
                     .ok_or_else(|| BackendError::new("a capture outside a closure"))?;
-                let offset = (index as u32 * pointer.bytes()) as i32;
-                Location::Memory(
-                    self.builder
-                        .ins()
-                        .load(pointer, aligned(), environment, offset),
-                )
+                let field = self
+                    .environment_layout
+                    .as_ref()
+                    .and_then(|layout| layout.captures.get(index))
+                    .ok_or_else(|| BackendError::new("a capture outside the environment"))?;
+                let (offset, owned) = (field.offset, field.owned);
+                if owned {
+                    Location::Memory(self.add(environment, offset))
+                } else {
+                    Location::Memory(self.builder.ins().load(
+                        pointer,
+                        aligned(),
+                        environment,
+                        offset as i32,
+                    ))
+                }
             }
         };
         for projection in &place.projections {
@@ -773,7 +810,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 Ok(())
             }
             Rvalue::Template(parts) => self.template(place, parts, span),
-            Rvalue::Closure { body, captures } => self.closure(place, *body, captures),
+            Rvalue::Closure { body, captures } => self.closure(place, *body, captures, span),
             Rvalue::Subtype(operand) => match self.operand_type(operand) {
                 // `Nothing?` to any nullable is `null`.
                 Some(Type::Nullable(inner)) if *inner == Type::Nothing => {
@@ -877,60 +914,89 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         Ok(())
     }
 
-    /// Builds the value of the closure `body` in `place` (D5 of `closures`): its descriptor's
-    /// address, and the address of its environment, or null without captures. The environment
-    /// is the stack slot of `body` in this function, written with the address of each captured
-    /// place in capture order. Every run of this rvalue writes the same addresses there, so a
-    /// value built in an earlier iteration of a loop still reads its captures correctly.
+    /// The environment layout of the closure body `body`.
+    fn environment_layout(&self, body: &Body) -> Result<EnvironmentLayout, BackendError> {
+        self.context
+            .layouts
+            .environment_layout(body)
+            .map_err(|construct| {
+                BackendError::new(format!(
+                    "no layout for a closure's environment: {}",
+                    construct.description()
+                ))
+            })
+    }
+
+    /// Builds the value of the closure `body` in `place`: its descriptor's address, and its
+    /// environment word (D8 and D9 of `escaping-closures`, D5 of `closures`). Without captures
+    /// the word is null. With only borrowed captures it is the stack slot of `body` in this
+    /// function, written with the address of each captured place in capture order; every run
+    /// writes the same addresses there, so a value built in an earlier iteration of a loop still
+    /// reads its captures correctly. With owned captures it is a new allocation of the
+    /// environment's layout, or, when that fits in a word and needs no drop, the environment's
+    /// bytes themselves: each owned capture's operand is moved or copied into its field, and
+    /// each borrowed capture's address stored in its own.
     fn closure(
         &mut self,
         place: &Place,
         body: BodyId,
-        captures: &[Place],
+        captures: &[Capture],
+        span: Span,
     ) -> Result<(), BackendError> {
         let pointer = self.pointer();
-        debug_assert!(
-            self.context.file.bodies[body]
-                .capture_modes
-                .iter()
-                .all(|mode| matches!(mode, CaptureMode::Shared | CaptureMode::Mutable)),
-            "a closure that captures by borrow"
-        );
         let descriptor = self.context.descriptor(body)?;
         let descriptor = self.data(descriptor);
-        let environment = if captures.is_empty() {
-            self.builder.ins().iconst(pointer, 0)
-        } else {
-            let slot = match self.environments.get(&body) {
-                Some(slot) => *slot,
-                None => {
-                    let size = u32::try_from(captures.len())
-                        .ok()
-                        .and_then(|count| count.checked_mul(pointer.bytes()))
-                        .ok_or_else(|| BackendError::new("a closure with too many captures"))?;
-                    let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-                        StackSlotKind::ExplicitSlot,
-                        size,
-                        pointer.bytes().trailing_zeros() as u8,
-                    ));
-                    self.environments.insert(body, slot);
-                    slot
-                }
-            };
-            let environment = self.builder.ins().stack_addr(pointer, slot, 0);
-            for (index, capture) in captures.iter().enumerate() {
-                let ty = capture.ty(self.body, self.types());
-                // A capture without a representation (`Unit`) has nothing to point at.
-                let address = match self.representation(&ty) {
-                    Some(Representation::Empty) | None => self.builder.ins().iconst(pointer, 0),
-                    _ => self.address(capture)?,
+        let layout = self.environment_layout(&self.context.file.bodies[body])?;
+        if layout.captures.len() != captures.len() {
+            return Err(BackendError::new(format!(
+                "a closure value with {} captures for an environment of {}",
+                captures.len(),
+                layout.captures.len()
+            )));
+        }
+        let environment = match layout.kind {
+            EnvironmentKind::None => self.builder.ins().iconst(pointer, 0),
+            EnvironmentKind::Frame => {
+                let slot = match self.environments.get(&body) {
+                    Some(slot) => *slot,
+                    None => {
+                        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            layout.size,
+                            layout.align.trailing_zeros() as u8,
+                        ));
+                        self.environments.insert(body, slot);
+                        slot
+                    }
                 };
-                let offset = (index as u32 * pointer.bytes()) as i32;
-                self.builder
-                    .ins()
-                    .store(aligned(), address, environment, offset);
+                let environment = self.builder.ins().stack_addr(pointer, slot, 0);
+                self.fill_environment(environment, &layout, captures, span)?;
+                environment
             }
-            environment
+            EnvironmentKind::Inline => {
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    pointer.bytes(),
+                    pointer.bytes().trailing_zeros() as u8,
+                ));
+                let address = self.builder.ins().stack_addr(pointer, slot, 0);
+                // Unused bytes are zero, so equal captures make equal words.
+                let zero = self.builder.ins().iconst(pointer, 0);
+                self.builder.ins().store(aligned(), zero, address, 0);
+                self.fill_environment(address, &layout, captures, span)?;
+                self.builder.ins().load(pointer, aligned(), address, 0)
+            }
+            EnvironmentKind::Allocated => {
+                let values = self.capture_values(&layout, captures, span)?;
+                let allocation = Layout {
+                    size: layout.size,
+                    align: layout.align,
+                    shape: Shape::Empty,
+                };
+                let environment = allocate_box(self.context, &mut self.builder, &allocation)?;
+                self.write_environment(environment, &layout, values)?;
+                environment
+            }
         };
         let destination = self.address(place)?;
         let descriptor_offset = FunctionField::Descriptor.offset(pointer) as i32;
@@ -942,6 +1008,58 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .ins()
             .store(aligned(), environment, destination, environment_offset);
         Ok(())
+    }
+
+    /// The value of each capture's field: an owned capture's operand, or a borrowed capture's
+    /// address (null for a capture without a representation, which has nothing to point at).
+    fn capture_values(
+        &mut self,
+        layout: &EnvironmentLayout,
+        captures: &[Capture],
+        span: Span,
+    ) -> Result<Vec<Lowered>, BackendError> {
+        let pointer = self.pointer();
+        let mut values = Vec::with_capacity(captures.len());
+        for capture in captures {
+            values.push(match capture {
+                Capture::Owned(operand) => self.operand(operand, span)?,
+                Capture::Borrowed(captured) => {
+                    let ty = captured.ty(self.body, self.types());
+                    Lowered::Scalar(match self.representation(&ty) {
+                        Some(Representation::Empty) | None => self.builder.ins().iconst(pointer, 0),
+                        _ => self.address(captured)?,
+                    })
+                }
+            });
+        }
+        debug_assert_eq!(values.len(), layout.captures.len());
+        Ok(values)
+    }
+
+    /// Writes `values`, one per capture, to their fields of the environment at `environment`.
+    fn write_environment(
+        &mut self,
+        environment: Value,
+        layout: &EnvironmentLayout,
+        values: Vec<Lowered>,
+    ) -> Result<(), BackendError> {
+        for (field, value) in layout.captures.iter().zip(values) {
+            let address = self.add(environment, field.offset);
+            self.write_location(Location::Memory(address), &field.ty, value, false)?;
+        }
+        Ok(())
+    }
+
+    /// Evaluates the captures and writes them to the environment at `environment`.
+    fn fill_environment(
+        &mut self,
+        environment: Value,
+        layout: &EnvironmentLayout,
+        captures: &[Capture],
+        span: Span,
+    ) -> Result<(), BackendError> {
+        let values = self.capture_values(layout, captures, span)?;
+        self.write_environment(environment, layout, values)
     }
 
     /// Writes the value of `operand` to `place`.
@@ -1818,7 +1936,9 @@ fn block_local_temporaries(body: &Body) -> Vec<bool> {
                         Rvalue::Borrow { place, .. } | Rvalue::Discriminant(place) => {
                             used.push(place)
                         }
-                        Rvalue::Closure { captures, .. } => used.extend(captures),
+                        Rvalue::Closure { captures, .. } => {
+                            used.extend(captures.iter().filter_map(Capture::place))
+                        }
                         Rvalue::Template(_) => {
                             used.extend(rvalue.template_operands().filter_map(operand_place))
                         }
@@ -1891,7 +2011,14 @@ fn borrowed_locals(body: &Body) -> HashSet<LocalId> {
             if let StatementKind::Assign(_, rvalue) = &statement.kind {
                 match rvalue.as_ref() {
                     Rvalue::Borrow { place, .. } => take_address(place),
-                    Rvalue::Closure { captures, .. } => captures.iter().for_each(&mut take_address),
+                    // Only a borrowed capture's address is taken; an owned one is read.
+                    Rvalue::Closure { captures, .. } => {
+                        for capture in captures {
+                            if let Capture::Borrowed(place) = capture {
+                                take_address(place);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

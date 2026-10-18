@@ -277,7 +277,15 @@ fn rvalue_events(
             captures,
         } => {
             let modes = &file.bodies[*closure].capture_modes;
-            for (index, place) in captures.iter().enumerate() {
+            for (index, capture) in captures.iter().enumerate() {
+                let place = match capture {
+                    // An owned capture is read, moved or copied, like any operand.
+                    prism_mir::Capture::Owned(operand) => {
+                        operand_events(file, body, operand, events);
+                        continue;
+                    }
+                    prism_mir::Capture::Borrowed(place) => place,
+                };
                 let kind = match modes.get(index) {
                     Some(prism_mir::CaptureMode::Mutable) => AccessKind::MutableBorrow,
                     _ => AccessKind::SharedBorrow,

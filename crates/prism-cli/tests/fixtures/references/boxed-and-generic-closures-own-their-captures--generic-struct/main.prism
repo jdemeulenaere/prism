@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+struct Box<T>(val v: T)
+fun greet(s: &String): Int = s.length
+fun k(s: String): Box<() -> Int> = Box({ greet(s) })
+fun main() {
+    println(k("abcde").v())
+}

@@ -172,6 +172,14 @@ impl Returns<'_> {
         matches!(self.body.owner, BodyOwner::Closure { .. })
     }
 
+    /// Whether `local` is a capture local that the closure owns.
+    fn is_owned_capture(&self, local: LocalId) -> bool {
+        let index = local.index().checked_sub(self.body.argument_count + 1);
+        index.is_some_and(|index| {
+            self.body.capture_modes.get(index) == Some(&prism_mir::CaptureMode::Owned)
+        })
+    }
+
     /// Whether `local` is an argument at a position the result is tied to.
     fn is_tied(&self, local: LocalId) -> bool {
         self.body.locals[local].kind == LocalKind::Argument
@@ -194,6 +202,11 @@ impl Returns<'_> {
                 }
                 if places::extends_through_reference(self.body, &self.file.types, place, &root) {
                     return None;
+                }
+                // A capture the closure owns is memory of its environment, which may be dropped
+                // while the result is live (D10 of `escaping-closures`).
+                if kind == LocalKind::Capture && self.is_owned_capture(place.local) {
+                    return Some(Verdict::Dangling(loan));
                 }
                 if kind == LocalKind::Capture && self.is_closure() {
                     return (self.rule != Rule::FunctionValue).then_some(Verdict::Untied {
@@ -303,6 +316,7 @@ impl Returns<'_> {
         let borrowed = match (&declaration.kind, &declaration.name) {
             (LocalKind::Argument, Some(_)) => Borrowed::Parameter(name.clone().unwrap_or_default()),
             (LocalKind::User, Some(_)) => Borrowed::Local(name.clone().unwrap_or_default()),
+            (LocalKind::Capture, Some(capture)) => Borrowed::OwnedCapture(capture.clone()),
             _ => Borrowed::Temporary,
         };
         let mut related = Vec::new();
@@ -311,7 +325,9 @@ impl Returns<'_> {
                 span: loan.span,
                 message: match &borrowed {
                     Borrowed::Temporary => "a temporary value is borrowed here".to_string(),
-                    Borrowed::Local(name) | Borrowed::Parameter(name) => {
+                    Borrowed::Local(name)
+                    | Borrowed::Parameter(name)
+                    | Borrowed::OwnedCapture(name) => {
                         format!("'{}' is borrowed here", name)
                     }
                 },

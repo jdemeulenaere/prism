@@ -1,0 +1,35 @@
+module main
+fun main::greet(s: &String): Int @2:1
+  local %0 s: &String (parameter)
+  literal 1: Int @2:30
+fun main::f(s: String, n: Int): () -> Int @3:1
+  local %0 s: String (parameter)
+  local %1 n: Int (parameter)
+  local %2 count: Int (var)
+  local %3 h: () -> Int (val)
+  block: () -> Int @3:37
+    let %2 count @4:5
+      literal 0: Int @4:17
+    let %3 h @5:5
+      closure () captures [borrow %2 count, borrow %0 s, borrow %1 n]: () -> Int @5:13
+        block: Int @6:9
+          compound-assign + @6:9
+            target: local %2 count: Int @6:9
+            value: literal 1: Int @6:18
+          tail: binary +: Int @7:9
+            call main::greet: Int @7:9
+              argument s: borrow (argument): &String @7:15
+                local %0 s: String @7:15
+            local %1 n: Int @7:20
+    expression @9:5
+      call value: Int @9:5
+        callee: local %3 h: () -> Int @9:5
+    tail: coerce diverge: () -> Int @10:5
+      return: Nothing @10:5
+        closure () captures [move %0 s, copy %1 n] (owning: returned here @10:12): () -> Int @10:12
+          block: Int @10:14
+            tail: binary +: Int @10:14
+              call main::greet: Int @10:14
+                argument s: borrow (argument): &String @10:20
+                  local %0 s: String @10:20
+              local %1 n: Int @10:25

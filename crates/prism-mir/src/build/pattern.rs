@@ -72,6 +72,7 @@ impl Builder<'_> {
                     mutable: tree_local.mutable,
                     name: Some(tree_local.name.clone()),
                     binding: Some(binding),
+                    escaping: false,
                     span: tree_local.span,
                 });
                 self.schedule_unstarted(id);
@@ -90,6 +91,7 @@ impl Builder<'_> {
                     mutable: false,
                     name: None,
                     binding: None,
+                    escaping: false,
                     span: self.span,
                 });
                 self.schedule_unstarted(id);
@@ -126,6 +128,7 @@ impl Builder<'_> {
                 mutable: false,
                 name: None,
                 binding: None,
+                escaping: false,
                 span: self.span,
             });
             self.schedule_unstarted(id);
@@ -502,6 +505,7 @@ impl Builder<'_> {
                 Callee::Builtin(BuiltinFunction::Unbox),
                 vec![Operand::Move(place, span)],
                 vec![ty.clone()],
+                vec![false],
                 Vec::new(),
                 Place::local(temporary),
                 false,

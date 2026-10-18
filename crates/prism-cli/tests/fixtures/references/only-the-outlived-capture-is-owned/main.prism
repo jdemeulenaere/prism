@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+fun greet(s: &String): Int = s.length
+fun f(): Int {
+    var count = 0
+    var h: () -> Int = { 0 }
+    var i = 0
+    while (i < 3) {
+        val s = "a"
+        h = {
+            count += 1
+            greet(s)
+        }
+        i += 1
+    }
+    h()
+    return count
+}
+fun main() {
+    println(f())
+}

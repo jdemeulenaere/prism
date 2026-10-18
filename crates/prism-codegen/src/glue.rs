@@ -37,6 +37,7 @@
 use crate::equality::Comparison;
 use crate::error::BackendError;
 use crate::layout::{FunctionField, Layout, Member, Shape};
+use crate::symbols::{environment_drop_symbol, symbol_of};
 use crate::unit::{data_global, LoweredFunction, UnitContext};
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, TrapCode,
@@ -44,6 +45,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Linkage, Module};
+use prism_mir::BodyId;
 use prism_runtime::PanicKind;
 use prism_typed_tree::{Type, TypeTable};
 use std::collections::HashMap;
@@ -133,6 +135,9 @@ pub enum Glue {
 pub struct GlueTable {
     declared: HashMap<(GlueKind, Type), FuncId>,
     queued: Vec<(GlueKind, Type, String, FuncId)>,
+    /// The drop function of each closure's allocated environment (D8 of `escaping-closures`).
+    environment_drops: HashMap<BodyId, FuncId>,
+    queued_environment_drops: Vec<(BodyId, String, FuncId)>,
 }
 
 /// The symbol of the glue of `kind` for `ty` in the unit named `module` (a file's module or an
@@ -229,6 +234,23 @@ impl<M: Module> UnitContext<'_, M> {
         Ok(id)
     }
 
+    /// The drop function of the allocated environment of the closure `body`,
+    /// `<closure symbol>#drop-environment`, declared and queued the first time it is asked for
+    /// (D8 of `escaping-closures`): it takes the environment's address, like drop glue.
+    pub fn environment_drop(&mut self, body: BodyId) -> Result<FuncId, BackendError> {
+        if let Some(id) = self.glue.environment_drops.get(&body) {
+            return Ok(*id);
+        }
+        let symbol = environment_drop_symbol(&symbol_of(&self.file.bodies[body], self.file));
+        let signature = self.glue_signature(GlueKind::Drop);
+        let id = self
+            .module
+            .declare_function(&symbol, Linkage::Local, &signature)?;
+        self.glue.environment_drops.insert(body, id);
+        self.glue.queued_environment_drops.push((body, symbol, id));
+        Ok(id)
+    }
+
     /// The signature of glue of `kind`: the value's address for a drop, the destination's and
     /// the source's for a clone, returning nothing; the two values' addresses for equality,
     /// returning a `Bool`.
@@ -271,16 +293,30 @@ impl<M: Module> UnitContext<'_, M> {
         builder_context: &mut FunctionBuilderContext,
     ) -> Result<Vec<LoweredFunction>, BackendError> {
         let mut lowered = Vec::new();
-        while let Some((kind, ty, symbol, id)) = self.glue.queued.pop() {
-            let signature = self.glue_signature(kind);
-            let mut function =
-                Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
-            GlueLowering::lower(self, kind, &ty, &mut function, builder_context)?;
-            lowered.push(LoweredFunction {
-                symbol,
-                id,
-                function,
-            });
+        loop {
+            if let Some((kind, ty, symbol, id)) = self.glue.queued.pop() {
+                let signature = self.glue_signature(kind);
+                let mut function =
+                    Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
+                GlueLowering::lower(self, kind, &ty, &mut function, builder_context)?;
+                lowered.push(LoweredFunction {
+                    symbol,
+                    id,
+                    function,
+                });
+            } else if let Some((body, symbol, id)) = self.glue.queued_environment_drops.pop() {
+                let signature = self.glue_signature(GlueKind::Drop);
+                let mut function =
+                    Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
+                GlueLowering::lower_environment_drop(self, body, &mut function, builder_context)?;
+                lowered.push(LoweredFunction {
+                    symbol,
+                    id,
+                    function,
+                });
+            } else {
+                break;
+            }
         }
         lowered.sort_by(|a, b| a.symbol.cmp(&b.symbol));
         Ok(lowered)
@@ -345,6 +381,59 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         if kind != GlueKind::Equals {
             lowering.builder.ins().return_(&[]);
         }
+        let config = lowering.context.module.target_config();
+        lowering.builder.seal_all_blocks();
+        lowering.builder.finalize(config);
+        Ok(())
+    }
+
+    /// The drop function of the allocated environment of the closure `body`, at the address it
+    /// takes (D8 of `escaping-closures`): each owned capture needing a drop is dropped by its
+    /// glue, in capture order, then the allocation is freed.
+    fn lower_environment_drop(
+        context: &'c mut UnitContext<'m, M>,
+        body: BodyId,
+        function: &'a mut Function,
+        builder_context: &'a mut FunctionBuilderContext,
+    ) -> Result<(), BackendError> {
+        let builder = FunctionBuilder::new(function, builder_context);
+        let mut lowering = GlueLowering { context, builder };
+        let entry = lowering.builder.create_block();
+        lowering
+            .builder
+            .append_block_params_for_function_params(entry);
+        lowering.builder.switch_to_block(entry);
+        let environment = lowering.builder.block_params(entry)[0];
+        lowering.check_stack()?;
+        let file = lowering.context.file;
+        let layout = lowering
+            .context
+            .layouts
+            .environment_layout(&file.bodies[body])
+            .map_err(|construct| {
+                BackendError::new(format!(
+                    "no layout for a closure's environment: {}",
+                    construct.description()
+                ))
+            })?;
+        for field in layout.captures.iter().filter(|field| field.owned) {
+            let address = if field.offset == 0 {
+                environment
+            } else {
+                lowering
+                    .builder
+                    .ins()
+                    .iadd_imm_s(environment, i64::from(field.offset))
+            };
+            lowering.call_glue(GlueKind::Drop, &field.ty, &[address])?;
+        }
+        let allocation = Layout {
+            size: layout.size,
+            align: layout.align,
+            shape: Shape::Empty,
+        };
+        lowering.free(environment, &allocation)?;
+        lowering.builder.ins().return_(&[]);
         let config = lowering.context.module.target_config();
         lowering.builder.seal_all_blocks();
         lowering.builder.finalize(config);

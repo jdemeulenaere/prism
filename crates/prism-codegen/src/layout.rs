@@ -10,13 +10,17 @@
 //! `runtime-strings-and-drops`), and a function value two: its closure's descriptor and its
 //! environment (D2 of `closures`).
 //!
+//! A closure's environment (D8 and D9 of `escaping-closures`) is laid out like a struct whose
+//! fields are its owned captures, by value, and one pointer per borrowed capture
+//! ([`LayoutTable::environment_layout`]).
+//!
 //! Layouts depend only on the type table of the file, which holds the definition of every type
 //! its bodies can hold a value of (D2 and D4), so a file lays out every value from its own
 //! declarations and its direct imports' ABIs.
 
 use crate::supported::Construct;
 use cranelift_codegen::ir::{types, Type as MachineType};
-use prism_mir::{Body, MirFile};
+use prism_mir::{Body, CaptureMode, MirFile};
 use prism_typed_tree::{NominalId, Type, TypeDef, TypeTable};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -261,6 +265,60 @@ impl<'t> LayoutTable<'t> {
         result
     }
 
+    /// The environment of the closure `closure`, a closure body of elaborated MIR: its owned
+    /// captures by value and its borrowed ones as pointers, in capture order, placed like a
+    /// struct's fields, and how the function value holds it (D8 and D9 of `escaping-closures`).
+    pub fn environment_layout(&self, closure: &Body) -> Result<EnvironmentLayout, Construct> {
+        let mut members = Vec::with_capacity(closure.capture_count);
+        let mut owned = Vec::with_capacity(closure.capture_count);
+        let mut needs_drop = false;
+        for index in 0..closure.capture_count {
+            let local = prism_mir::LocalId((closure.argument_count + 1 + index) as u32);
+            let ty = closure.locals[local].ty.clone();
+            let is_owned = closure.capture_modes.get(index) == Some(&CaptureMode::Owned);
+            if is_owned {
+                needs_drop |= crate::glue::owns_storage(&ty, self.types);
+                members.push((String::new(), ty));
+            } else {
+                members.push((
+                    String::new(),
+                    Type::Reference {
+                        mutable: false,
+                        inner: Box::new(Type::Unit),
+                    },
+                ));
+            }
+            owned.push(is_owned);
+        }
+        let (placed, end, align) = self.place(&members, 0)?;
+        let size = round_up(end, align);
+        let word = self.pointer.bytes();
+        let kind = if members.is_empty() {
+            EnvironmentKind::None
+        } else if !owned.contains(&true) {
+            EnvironmentKind::Frame
+        } else if size <= word && align <= word && !needs_drop {
+            EnvironmentKind::Inline
+        } else {
+            EnvironmentKind::Allocated
+        };
+        let captures = placed
+            .into_iter()
+            .zip(owned)
+            .map(|(member, owned)| EnvironmentField {
+                offset: member.offset,
+                owned,
+                ty: member.ty,
+            })
+            .collect();
+        Ok(EnvironmentLayout {
+            kind,
+            size,
+            align,
+            captures,
+        })
+    }
+
     fn struct_layout(&self, fields: &[(String, bool, Type)]) -> Result<Layout, Construct> {
         let members: Vec<(String, Type)> = fields
             .iter()
@@ -345,6 +403,42 @@ impl<'t> LayoutTable<'t> {
             .collect();
         Ok((placed, end, align))
     }
+}
+
+/// How a function value holds its closure's environment (D8 and D9 of `escaping-closures`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentKind {
+    /// No captures: the environment word is null.
+    None,
+    /// Only borrowed captures: pointers in a stack slot of the building function (D5 of
+    /// `closures`).
+    Frame,
+    /// Owned captures fitting in one word, none needing a drop: the environment word holds
+    /// the environment's bytes.
+    Inline,
+    /// One heap allocation of the environment's size, freed by its drop function.
+    Allocated,
+}
+
+/// One capture's place in an environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentField {
+    pub offset: u32,
+    /// Whether the capture is held by value; otherwise the field is the captured place's
+    /// address.
+    pub owned: bool,
+    /// The capture's type when owned, a pointer type otherwise.
+    pub ty: Type,
+}
+
+/// The layout of a closure's environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentLayout {
+    pub kind: EnvironmentKind,
+    pub size: u32,
+    pub align: u32,
+    /// One field per capture, in capture order.
+    pub captures: Vec<EnvironmentField>,
 }
 
 /// The smallest unsigned integer numbering `count` variants: 8, 16 or 32 bits (D6).
@@ -573,6 +667,46 @@ mod tests {
                 .collect(),
             other => panic!("not an enum: {:?}", other),
         }
+    }
+
+    /// Each kind of environment of `environment_layout` (D8 and D9 of `escaping-closures`).
+    #[test]
+    fn environments_by_kind() {
+        let file = crate::test_support::lower_source(
+            "struct Handle : Copy { val id: Int }\n\
+             fun run(f: () -> Int): Int = f()\n\
+             fun store(f: escaping () -> Int): Int = f()\n\
+             fun none(): Int = store { 1 }\n\
+             fun frame(n: Int): Int { var count = n; return run { count += 1; count } }\n\
+             fun inline(h: Handle): Int = store { h.id }\n\
+             fun allocated(s: String, n: Int): Int = store { s.length + n }\n",
+        );
+        let table = LayoutTable::new(&file.types, types::I64);
+        let kind_of = |name: &str| {
+            let closure = file
+                .bodies
+                .iter()
+                .find(|(_, body)| {
+                    matches!(&body.owner, prism_mir::BodyOwner::Closure { parent, .. }
+                        if matches!(&file.bodies[*parent].owner,
+                            prism_mir::BodyOwner::Function(path) if path.name == name))
+                })
+                .map(|(_, body)| body)
+                .unwrap_or_else(|| panic!("no closure in {}", name));
+            table.environment_layout(closure).unwrap()
+        };
+        assert_eq!(kind_of("none").kind, EnvironmentKind::None);
+        let frame = kind_of("frame");
+        assert_eq!((frame.kind, frame.size), (EnvironmentKind::Frame, 8));
+        let inline = kind_of("inline");
+        assert_eq!((inline.kind, inline.size), (EnvironmentKind::Inline, 8));
+        let allocated = kind_of("allocated");
+        assert_eq!(allocated.kind, EnvironmentKind::Allocated);
+        // The string (32 bytes) and the `Int`, by decreasing alignment, in capture order.
+        assert_eq!((allocated.size, allocated.align), (40, 8));
+        let offsets: Vec<u32> = allocated.captures.iter().map(|c| c.offset).collect();
+        assert_eq!(offsets, [0, 32]);
+        assert!(allocated.captures.iter().all(|c| c.owned));
     }
 
     #[test]

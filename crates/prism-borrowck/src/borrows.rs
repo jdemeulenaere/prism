@@ -96,7 +96,10 @@ impl BorrowSet {
                 carrier_index[local.index()] = Some(carriers.len());
                 carriers.push(local);
             }
+            // An `escaping` argument holds no borrow of the caller's (D4 of
+            // `escaping-closures`), so it has no input.
             if matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
+                && !declaration.escaping
                 && places::carries_loans(&declaration.ty)
             {
                 input_index[local.index()] = Some(inputs.len());
@@ -135,8 +138,13 @@ impl BorrowSet {
                         body: closure,
                         captures,
                     } => {
+                        // Only borrowed captures are loans; an owned one is an operand (D2 of
+                        // `escaping-closures`).
                         let modes = &file.bodies[*closure].capture_modes;
                         for (capture, place) in captures.iter().enumerate() {
+                            let prism_mir::Capture::Borrowed(place) = place else {
+                                continue;
+                            };
                             let mutable = modes.get(capture) == Some(&CaptureMode::Mutable);
                             let id = loans.alloc(Loan {
                                 place: place.clone(),

@@ -1000,3 +1000,26 @@ fn a_repointed_closure_slot_is_followed() {
     program.table().set("main::f#closure0", second);
     assert_eq!(f(), 22);
 }
+
+/// Each kind of environment runs and frees what it allocates (D8 and D9 of
+/// `escaping-closures`): none, a frame slot of pointers, an inline word and one allocation.
+#[test]
+fn every_kind_of_environment_runs() {
+    let program = compile(
+        "fun run(f: () -> Int): Int = f()\n\
+         fun store(f: escaping () -> Int): Int = f()\n\
+         fun none(): Int = store { 1 }\n\
+         fun frame(n: Int): Int { var count = n; return run { count += 1; count } }\n\
+         fun inline(n: Int): Int = store { n * 2 }\n\
+         fun allocated(n: Int): Int { val s = n.toString(); return store { s.length + n } }\n",
+    );
+    let none: ToInt = function(&program, "main::none");
+    assert_eq!(checked(|| assert_eq!(none(), 1)), 0);
+    let frame: IntToInt = function(&program, "main::frame");
+    assert_eq!(checked(|| assert_eq!(frame(4), 5)), 0);
+    let inline: IntToInt = function(&program, "main::inline");
+    assert_eq!(checked(|| assert_eq!(inline(21), 42)), 0);
+    let allocated: IntToInt = function(&program, "main::allocated");
+    // The string, then the environment.
+    assert_eq!(checked(|| assert_eq!(allocated(123), 126)), 2);
+}

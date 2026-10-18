@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun greet(s: &String): Int = s.length
+
+fun h(s: String): Int {
+    val b = Heap({ greet(s) })
+    return b()
+}
+fun main() {
+    println(h("ab"))
+}

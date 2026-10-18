@@ -92,6 +92,12 @@ pub fn slot_symbol(symbol: &str) -> String {
     format!("{}#slot", symbol)
 }
 
+/// The drop function of a closure's allocated environment, which its descriptor names (D8 of
+/// `escaping-closures`): `<closure symbol>#drop-environment`.
+pub fn environment_drop_symbol(closure_symbol: &str) -> String {
+    format!("{}#drop-environment", closure_symbol)
+}
+
 /// The symbol of the descriptor of the closure whose code is `closure_symbol` (D3 of
 /// `closures`): static data holding the address of the closure's slot and its environment's
 /// drop entry.

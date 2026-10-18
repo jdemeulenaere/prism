@@ -277,6 +277,8 @@ pub(crate) struct Builder<'a> {
     locals: Arena<LocalId, LocalDeclaration>,
     argument_count: usize,
     capture_count: usize,
+    /// Why a closure body owns some of its captures (D2 of `escaping-closures`).
+    ownership_reason: Option<prism_typed_tree::OwnershipReason>,
     blocks: Vec<BlockData>,
     /// The block being filled, `None` after a diverging expression (D9).
     current: Option<BlockId>,
@@ -317,6 +319,7 @@ impl<'a> Builder<'a> {
             locals: Arena::new(),
             argument_count: 0,
             capture_count: 0,
+            ownership_reason: None,
             blocks: Vec::new(),
             current: None,
             bindings: HashMap::new(),
@@ -347,6 +350,7 @@ impl<'a> Builder<'a> {
             mutable: false,
             name: None,
             binding: None,
+            escaping: false,
             span,
         });
     }
@@ -361,6 +365,7 @@ impl<'a> Builder<'a> {
             local.span,
         );
         self.locals[id].mutable = local.mutable;
+        self.locals[id].escaping = local.escaping;
         self.bindings.insert(binding, Place::local(id));
     }
 
@@ -383,6 +388,7 @@ impl<'a> Builder<'a> {
             mutable: false,
             name,
             binding,
+            escaping: false,
             span,
         });
         self.argument_count += 1;
@@ -439,6 +445,7 @@ impl<'a> Builder<'a> {
             argument_count: self.argument_count,
             capture_count: self.capture_count,
             capture_modes: Vec::new(),
+            ownership_reason: self.ownership_reason,
             blocks,
             span: self.span,
         }

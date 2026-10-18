@@ -1,0 +1,68 @@
+module main
+phase elaborated
+fun main::greet(_1: &String): Int @2:1
+  local _0: Int (return)
+  local _1 s: &String (argument)
+  bb0:
+    _0 = const 1 @2:30
+    return @2:1
+fun main::f(): Int @3:1
+  local _0: Int (return)
+  local _1 count: Int (user, var)
+  local _2 h: () -> Int (user, var)
+  local _3: Bool (temporary)
+  local _4 s: String (user)
+  local _5: () -> Int (temporary)
+  local _6: Int (temporary)
+  bb0:
+    storage_live _1 @4:5
+    _1 = const 0 @4:17
+    storage_live _2 @5:5
+    _2 = closure main::f#closure0 [] @5:24
+    storage_live _3 @6:9
+    _3 = copy _1 == const 0 @6:9
+    switch move _3 [0 -> bb2, otherwise -> bb1] @6:9
+  bb1:
+    storage_dead _3 @6:9
+    storage_live _4 @7:9
+    _4 = const "a" @7:17
+    storage_live _5 @8:13
+    _5 = closure main::f#closure1 [&mut _1, move _4] @8:13
+    drop _2 -> bb3 @8:9
+  bb2:
+    storage_dead _3 @6:9
+    goto -> bb4 @6:5
+  bb3:
+    _2 = move _5 @8:9
+    storage_dead _5 @8:9
+    storage_dead _4 @12:5
+    goto -> bb4 @6:5
+  bb4:
+    storage_live _6 @13:5
+    _6 = call _2() -> bb5 @13:5
+  bb5:
+    storage_dead _6 @13:5
+    _0 = copy _1 @14:12
+    drop _2 -> bb6 @14:5
+  bb6:
+    storage_dead _2 @14:5
+    storage_dead _1 @14:5
+    return @3:1
+closure main::f#closure0(): Int @5:24
+  local _0: Int (return)
+  bb0:
+    _0 = const 0 @5:26
+    return @5:24
+closure main::f#closure1(): Int @8:13
+  local _0: Int (return)
+  local _1 count: Int (capture, var)
+  local _2 s: String (capture)
+  local _3: &String (temporary)
+  bb0:
+    _1 = copy _1 + const 1 @9:13
+    storage_live _3 @10:19
+    _3 = &_2 (argument) @10:19
+    _0 = call main::greet(move _3) -> bb1 @10:13
+  bb1:
+    storage_dead _3 @10:13
+    return @8:13

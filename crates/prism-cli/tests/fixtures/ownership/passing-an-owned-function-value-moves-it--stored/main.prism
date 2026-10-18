@@ -1,0 +1,6 @@
+// expect: E5001
+fun store(f: escaping () -> Int): Int = 1
+fun f(h: escaping () -> Int): Int {
+    store(h)
+    return h()
+}

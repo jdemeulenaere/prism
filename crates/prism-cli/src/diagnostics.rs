@@ -1082,21 +1082,57 @@ error[E5009]: method 'other' cannot return a borrow derived from parameter 'o'
     /// references: "Escaping closure labels".
     #[test]
     fn test_escaping_closure_labels() {
-        let out = render_borrow_errors(
-            "fun greet(s: &String): Int = 1\nfun f(s: String): () -> Int = { greet(s) }\n",
-        );
+        let out = render_borrow_errors("fun f(r: &Int): () -> Int = { r }\n");
         let expected = "\
-error[E5007]: a closure that captures 's' cannot escape
-  --> main.prism:2:31
-    2 | fun f(s: String): () -> Int = { greet(s) }
-      |                               ^^^^^^^^^^^^ returned here
-  --> main.prism:2:39
-    2 | fun f(s: String): () -> Int = { greet(s) }
-      |                                       ^ 's' is captured here
-   = note: a closure borrows what it captures, so it can only be called or passed to functions while that is in scope; escaping closures that capture by move are not designed yet
-   = help: pass 's' to the closure as a parameter instead of capturing it
+error[E5007]: a closure that captures the reference 'r' cannot escape
+  --> main.prism:1:29
+    1 | fun f(r: &Int): () -> Int = { r }
+      |                             ^^^^^ returned here
+  --> main.prism:1:31
+    1 | fun f(r: &Int): () -> Int = { r }
+      |                               ^ 'r' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = help: pass the value 'r' refers to instead of a reference
 ";
         assert_eq!(out, expected);
+    }
+
+    /// references: "Escaping parameter labels" (`escaping-closures`).
+    #[test]
+    fn test_escaping_parameter_labels() {
+        let out = render_borrow_errors("fun k(p: () -> Int): () -> Int = p\n");
+        let expected = "\
+error[E5007]: the parameter 'p' cannot escape
+  --> main.prism:1:34
+    1 | fun k(p: () -> Int): () -> Int = p
+      |                                  ^ returned here
+  --> main.prism:1:7
+    1 | fun k(p: () -> Int): () -> Int = p
+      |       ^^^^^^^^^^^^ 'p' is a parameter here
+   = note: an unmarked function-typed parameter may borrow its caller's variables
+   = help: declare it as 'p: escaping () -> Int' if the function may keep it
+";
+        assert_eq!(out, expected);
+    }
+
+    /// ownership: "Using a binding a closure took" (`escaping-closures`).
+    #[test]
+    fn test_moved_into_closure_labels() {
+        let out = render_borrow_errors(
+            "struct Button { val onClick: () -> Int }\nfun take(s: String) {}\nfun greet(s: &String): Int = 1\nfun f(s: String): Button { val b = Button({ greet(s) }); take(s); return b }\n",
+        );
+        assert!(
+            out.contains("error[E5001]: use of moved value 's'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("^^^^^^^^^^^^ value moved into closure here"),
+            "{out}"
+        );
+        assert!(
+            out.contains("the closure owns its captures because it is stored in a field here"),
+            "{out}"
+        );
     }
 
     /// ownership: "Possibly moved value".

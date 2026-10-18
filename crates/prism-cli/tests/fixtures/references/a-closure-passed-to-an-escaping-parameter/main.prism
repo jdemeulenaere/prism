@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun store(f: escaping () -> Int): Int = f()
+fun greet(s: &String): Int = s.length
+fun f(s: String): Int = store { greet(s) }
+fun main() {
+    println(f("abc"))
+}

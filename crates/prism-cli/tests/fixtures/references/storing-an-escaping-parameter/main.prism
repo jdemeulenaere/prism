@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Button { val label: String, val onClick: () -> Unit }
+fun button(label: String, onClick: escaping () -> Unit): Button = Button(label, onClick)
+fun later(f: escaping () -> Int): () -> Int = f
+fun main() {
+    val b = button("a") { println("clicked") }
+    b.onClick()
+    println(later { 3 }())
+}

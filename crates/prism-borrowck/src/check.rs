@@ -16,8 +16,8 @@ use crate::location::locations;
 use crate::move_paths::{Effect, Event, MoveData, MovePathId};
 use crate::uses::UseKind;
 use prism_ast::{Span, TypeMarker};
-use prism_mir::{Body, MirFile, Place, Projection, StatementKind};
-use prism_typed_tree::{ArenaId, Type, TypeDef};
+use prism_mir::{Body, MirFile, Place, Projection, Rvalue, StatementKind};
+use prism_typed_tree::{ArenaId, OwnershipReason, Type, TypeDef};
 use std::collections::HashSet;
 
 /// The errors of `body` of `file`, whose move data is `data` and initialization analyses `maybe`
@@ -95,6 +95,25 @@ impl Checker<'_> {
         }
     }
 
+    /// For a move made by building a closure that owns the value, the closure's span and the
+    /// reason it owns its captures.
+    fn closure_move(&self, event: Event) -> Option<(Span, Option<OwnershipReason>)> {
+        let location = self.data.event_location(event);
+        let statement = self.body.blocks[location.block]
+            .statements
+            .get(location.statement)?;
+        match &statement.kind {
+            StatementKind::Assign(_, rvalue) => match rvalue.as_ref() {
+                Rvalue::Closure { body, .. } => Some((
+                    statement.span,
+                    self.file.bodies[*body].ownership_reason.clone(),
+                )),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn error(
         &self,
         path: MovePathId,
@@ -141,11 +160,26 @@ impl Checker<'_> {
             };
         }
         let mut in_previous_iteration = false;
+        let mut reasons = Vec::new();
         let mut related: Vec<Label> = moves
             .iter()
             .map(|event| {
                 let previous = !acyclic.contains(self.data.event_index(*event));
                 in_previous_iteration |= previous;
+                // A closure that owns its captures moved the value when it was built: the label
+                // is at the closure, with why it owns them (D15 of `escaping-closures`).
+                if let Some((closure_span, reason)) = self.closure_move(*event) {
+                    reasons.extend(reason);
+                    return Label {
+                        span: closure_span,
+                        message: if previous {
+                            "value moved into closure here, in previous iteration of loop"
+                                .to_string()
+                        } else {
+                            "value moved into closure here".to_string()
+                        },
+                    };
+                }
                 Label {
                     span: self.data.event_span(*event),
                     message: if previous {
@@ -156,6 +190,15 @@ impl Checker<'_> {
                 }
             })
             .collect();
+        for reason in reasons {
+            let label = Label {
+                span: reason.span,
+                message: reason.label(),
+            };
+            if !related.contains(&label) {
+                related.push(label);
+            }
+        }
         sort_labels(&mut related);
         let primary = Label {
             span,

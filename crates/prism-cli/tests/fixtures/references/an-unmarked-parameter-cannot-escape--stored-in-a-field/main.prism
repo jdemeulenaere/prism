@@ -1,0 +1,3 @@
+// expect: E5007
+struct Button { val onClick: () -> Int }
+fun g(p: () -> Int): Button = Button(p)

@@ -1,0 +1,2 @@
+// expect: E5007
+fun m(p: () -> Int): () -> Int = { p() }

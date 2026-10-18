@@ -193,6 +193,62 @@ fn generic_closures(n: usize) -> String {
     source
 }
 
+/// `n` handlers stored in structs, each capturing a string by move, built in one body and
+/// called through a borrow (`escaping-closures`): the capture decision, owned environments
+/// and their drop functions.
+fn escaping_handlers(n: usize) -> String {
+    let mut body = String::from("    var total = 0\n");
+    for i in 0..n {
+        writeln!(body, "    val s{i} = {i}.toString()").unwrap();
+        writeln!(body, "    val b{i} = Button({{ s{i}.length }})").unwrap();
+        writeln!(body, "    total += fire(b{i})").unwrap();
+    }
+    format!(
+        "struct Button {{ val onClick: () -> Int }}\nfun fire(b: &Button): Int = b.onClick()\nfun main() {{\n{body}    println(total)\n}}\n"
+    )
+}
+
+/// `n` functions, each returning a closure that owns a string and copies a handle, passed on
+/// to an `escaping` parameter (`escaping-closures`).
+fn returned_closures(n: usize) -> String {
+    let mut source = String::from(
+        "struct Handle : Copy { val id: Int }\nfun keep(f: escaping () -> Int): () -> Int = f\n",
+    );
+    for i in 0..n {
+        writeln!(
+            source,
+            "fun make{i}(s: String, h: Handle): () -> Int = keep {{ s.length + h.id + {i} }}"
+        )
+        .unwrap();
+    }
+    writeln!(
+        source,
+        "fun main() {{\n    var total = 0\n{}\n    println(total)\n}}",
+        join(n, "\n", |i| format!(
+            "    total += make{i}({i}.toString(), Handle({i}))()"
+        ))
+    )
+    .unwrap();
+    source
+}
+
+/// `n` closures, each stored in a `var` declared outside the block of what it captures, so
+/// each owns that capture and borrows a counter (`escaping-closures`, D1 case 2). Each `var`
+/// is declared in a block of its own: `n` function-typed `var`s live to the end of one body,
+/// each holding a capture loan, are super-linear in the borrow checker's loan flow whether the
+/// closures own anything or not (ROADMAP).
+fn closures_kept_past_blocks(n: usize) -> String {
+    let mut body = String::from("    val c = 1 > 0\n    var count = 0\n    var total = 0\n");
+    for i in 0..n {
+        writeln!(
+            body,
+            "    if (c) {{\n        var h: () -> Int = {{ 0 }}\n        if (c) {{ val s = {i}.toString(); h = {{ count += 1; s.length }} }}\n        total += h()\n    }}"
+        )
+        .unwrap();
+    }
+    format!("fun main() {{\n{body}    println(total + count)\n}}\n")
+}
+
 /// `n` functions, each calling the one before.
 fn many_functions(n: usize) -> String {
     let mut source = String::from("fun f0(x: Int): Int = x\n");
@@ -437,6 +493,14 @@ fn shapes() -> Vec<Shape> {
         shape("many-captures", true, SIZES, many_captures),
         shape("many-adapters", true, SIZES, many_adapters),
         shape("generic-closures", true, SIZES, generic_closures),
+        shape("escaping-handlers", true, SIZES, escaping_handlers),
+        shape("returned-closures", true, SIZES, returned_closures),
+        shape(
+            "closures-kept-past-blocks",
+            true,
+            SIZES,
+            closures_kept_past_blocks,
+        ),
         shape("many-functions", true, SIZES, many_functions),
         shape("public-functions", true, SIZES, public_functions),
         shape("struct-fields", true, SIZES, struct_fields),

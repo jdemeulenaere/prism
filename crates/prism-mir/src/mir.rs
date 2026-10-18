@@ -16,13 +16,15 @@
 //!   twice; only values whose type needs a drop ([`crate::needs_drop`]) are dropped.
 //! - **Phase**. Lowering builds [`MirPhase::Built`] MIR; the borrow checker returns
 //!   [`MirPhase::Elaborated`] MIR, whose drops are refined by moves and may be guarded by drop
-//!   flags ([`LocalKind::DropFlag`]), and whose closure bodies record how they borrow each
-//!   capture ([`Body::capture_modes`]), which only elaborated MIR has.
+//!   flags ([`LocalKind::DropFlag`]), and whose closure bodies record how they take each
+//!   capture ([`Body::capture_modes`]), which only elaborated MIR has. Which captures a closure
+//!   owns is already decided in MIR as lowered: the closure value moves or copies them
+//!   ([`Capture::Owned`], D2 of `escaping-closures`).
 
 use prism_ast::Span;
 use prism_typed_tree::{
-    define_id, Arena, BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, Type,
-    TypeParameter, TypeTable, UnaryOperator,
+    define_id, Arena, BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, OwnershipReason,
+    Type, TypeParameter, TypeTable, UnaryOperator,
 };
 
 define_id!(
@@ -115,10 +117,14 @@ pub struct Body {
     pub argument_count: usize,
     /// The number of capture locals, which follow the arguments. Zero outside closures.
     pub capture_count: usize,
-    /// How the closure borrows each capture local, in capture order: empty in MIR as lowered,
-    /// which leaves the decision to the borrow checker, and one mode per capture local in
-    /// elaborated MIR (D10 of `borrowck-exclusivity`).
+    /// How the closure takes each capture local, in capture order: empty in MIR as lowered,
+    /// which leaves how a borrowed capture is borrowed to the borrow checker, and one mode per
+    /// capture local in elaborated MIR (D10 of `borrowck-exclusivity`): `Owned` for the captures
+    /// the closure value moves or copies, as lowered.
     pub capture_modes: Vec<CaptureMode>,
+    /// For a closure that owns some of its captures, why it does, as the typed tree records it
+    /// (D2 of `escaping-closures`), for diagnostics.
+    pub ownership_reason: Option<OwnershipReason>,
     /// The blocks; `bb0` is the entry.
     pub blocks: Arena<BlockId, BasicBlock>,
     pub span: Span,
@@ -147,8 +153,8 @@ impl Body {
     }
 }
 
-/// How a closure borrows one of its captures, as the borrow checker infers it (D10 of
-/// `borrowck-exclusivity`).
+/// How a closure takes one of its captures: owned, as lowering decided it, or borrowed, as the
+/// borrow checker infers it (D10 of `borrowck-exclusivity`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CaptureMode {
     /// A shared borrow: the closure only reads the binding.
@@ -156,6 +162,9 @@ pub enum CaptureMode {
     /// A mutable borrow: the closure writes the binding, writes through it, borrows it
     /// mutably, or holds a nested closure that captures it mutably.
     Mutable,
+    /// The closure owns the binding's value, moved or copied into it when it was built (D2 of
+    /// `escaping-closures`).
+    Owned,
 }
 
 /// A local of a body.
@@ -169,6 +178,9 @@ pub struct LocalDeclaration {
     pub name: Option<String>,
     /// The typed-tree binding the local stands for, if any.
     pub binding: Option<prism_typed_tree::LocalId>,
+    /// Whether an argument is an `escaping` parameter, which holds no borrow of the caller's
+    /// (D4 of `escaping-closures`). Always false for other locals.
+    pub escaping: bool,
     pub span: Span,
 }
 
@@ -263,6 +275,9 @@ pub enum TerminatorKind {
         /// type parameters. The operand of parameter `i` has the type `parameters[i]` with
         /// `type_arguments` substituted ([`TerminatorKind::parameter_type`]).
         parameters: Vec<Type>,
+        /// Whether each parameter is `escaping`, in the same order: what is passed for it escapes
+        /// (D4 of `escaping-closures`).
+        escaping: Vec<bool>,
         /// The type arguments of a generic callee, in the order of its type parameters; empty
         /// for any other callee. Inside a generic body they may mention the body's own type
         /// parameters (D9 of `generics`).
@@ -417,16 +432,42 @@ pub enum Rvalue {
     WrapNullable(Operand),
     /// Any other subtyping step, to the type of the assigned place (D2).
     Subtype(Operand),
-    /// The value of the closure `body`, capturing the places of the captured bindings, in
-    /// capture order (D13).
+    /// The value of the closure `body`, built from its captures in capture order (D13): the
+    /// place of each binding it borrows, and a move or copy of each one it owns.
     Closure {
         body: BodyId,
-        captures: Vec<Place>,
+        captures: Vec<Capture>,
     },
     /// A string template's `String`, built from its parts in order (D10 of
     /// `string-templates`): constant text, and values, each a `&String` (a shared `Operator`
     /// borrow) or an `Int`, `Double`, `Bool` or `Char`.
     Template(Vec<TemplatePart>),
+}
+
+/// How a closure value takes one captured binding (D2 of `escaping-closures`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Capture {
+    /// The place of a binding the closure borrows, shared or mutably as the borrow checker
+    /// infers.
+    Borrowed(Place),
+    /// A move or a copy of a binding the closure owns.
+    Owned(Operand),
+}
+
+impl Capture {
+    /// The captured binding's place.
+    pub fn place(&self) -> Option<&Place> {
+        match self {
+            Capture::Borrowed(place) => Some(place),
+            Capture::Owned(Operand::Copy(place, _) | Operand::Move(place, _)) => Some(place),
+            Capture::Owned(Operand::Constant(_)) => None,
+        }
+    }
+
+    /// Whether the closure owns the captured value.
+    pub fn is_owned(&self) -> bool {
+        matches!(self, Capture::Owned(_))
+    }
 }
 
 /// A part of an [`Rvalue::Template`].

@@ -5,7 +5,11 @@
 //! borrow, a read, a discriminant, a function-value callee, a closure capture, or a write
 //! through it), and defined, which kills it, by a whole-local assignment, a call destination
 //! or `StorageDead`. Drops are not uses: only closure values among loan carriers are dropped,
-//! and dropping one reads nothing it borrowed. The return place is not used by `Return`, since
+//! and dropping one reads nothing it borrowed. That holds for a closure that owns some captures
+//! and borrows others too (D14 of `escaping-closures`): its environment's drop function drops
+//! the owned captures by structural drop glue, which frees memory and never reads through a
+//! reference or runs user code. User-defined destructors would have to revisit this. The
+//! return place is not used by `Return`, since
 //! what a body returns is checked against the elision rules instead (`returns`); but a closure's
 //! capture locals and the arguments of type `&mut R` (or `(&mut R)?`) whose `R` carries loans
 //! are used at every return, because the caller sees them afterwards.

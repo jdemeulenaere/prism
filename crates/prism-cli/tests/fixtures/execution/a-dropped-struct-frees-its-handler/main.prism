@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+struct Item { val name: String, val onSelect: () -> Int }
+fun item(name: String): Item {
+    val n = name.clone()
+    return Item(name, { n.length })
+}
+fun main() {
+    val a = item("x" + "yz")
+    println(a.onSelect())
+    val b = item("w")
+    println(b.name)
+}

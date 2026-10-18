@@ -1,0 +1,3 @@
+// expect: ok
+fun greet(s: &String): Int = 1
+fun f(s: String, n: Int): () -> Int = { greet(s) + n }

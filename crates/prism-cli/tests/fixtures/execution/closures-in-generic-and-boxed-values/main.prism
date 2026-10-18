@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Box<T>(val v: T)
+fun <T> keep(x: T): T = x
+fun main() {
+    val s = "abc"
+    val b = Box(keep({ s.length }))
+    println(b.v())
+    val t = "de"
+    val h = Heap({ t.length })
+    println(1)
+}

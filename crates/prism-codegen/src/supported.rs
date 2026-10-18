@@ -317,9 +317,10 @@ impl BodyChecker<'_> {
             }),
             // The captured places are the body's own; a composable closure is its own body's
             // error (D10 of `closures`).
-            Rvalue::Closure { captures, .. } => {
-                captures.iter().find_map(|capture| self.place(capture))
-            }
+            Rvalue::Closure { captures, .. } => captures.iter().find_map(|capture| match capture {
+                prism_mir::Capture::Borrowed(place) => self.place(place),
+                prism_mir::Capture::Owned(operand) => self.operand(operand),
+            }),
             Rvalue::Template(_) => rvalue
                 .template_operands()
                 .find_map(|operand| self.operand(operand)),

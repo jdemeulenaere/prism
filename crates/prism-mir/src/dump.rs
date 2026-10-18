@@ -9,8 +9,9 @@
 //! a closure value's captures print with how the closure borrows them: `[&mut _1, &_2]`.
 
 use crate::mir::{
-    AggregateKind, Body, BodyId, BodyOwner, Callee, CaptureMode, Constant, LocalKind, MirFile,
-    MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
+    AggregateKind, Body, BodyId, BodyOwner, Callee, Capture, CaptureMode, Constant, LocalKind,
+    MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart,
+    TerminatorKind,
 };
 use crate::types::projection_type;
 use prism_ast::Span;
@@ -314,8 +315,8 @@ impl Printer<'_> {
             Rvalue::WrapNullable(operand) => format!("wrap {}", self.operand(operand)),
             Rvalue::Subtype(operand) => format!("subtype {}", self.operand(operand)),
             Rvalue::Closure { body, captures } => {
-                // Elaborated MIR prints how the closure borrows each capture (D10 of
-                // `borrowck-exclusivity`).
+                // An owned capture is an operand, `move _1` or `copy _2`; elaborated MIR prints
+                // how the closure borrows each other capture (D10 of `borrowck-exclusivity`).
                 let modes = match self.file.phase {
                     MirPhase::Elaborated => self
                         .file
@@ -328,10 +329,15 @@ impl Printer<'_> {
                 let captures: Vec<String> = captures
                     .iter()
                     .enumerate()
-                    .map(|(index, place)| match modes.get(index) {
-                        Some(CaptureMode::Shared) => format!("&{}", self.place(place)),
-                        Some(CaptureMode::Mutable) => format!("&mut {}", self.place(place)),
-                        None => self.place(place),
+                    .map(|(index, capture)| match (capture, modes.get(index)) {
+                        (Capture::Owned(operand), _) => self.operand(operand),
+                        (Capture::Borrowed(place), Some(CaptureMode::Shared)) => {
+                            format!("&{}", self.place(place))
+                        }
+                        (Capture::Borrowed(place), Some(CaptureMode::Mutable)) => {
+                            format!("&mut {}", self.place(place))
+                        }
+                        (Capture::Borrowed(place), _) => self.place(place),
                     })
                     .collect();
                 format!(
@@ -447,6 +453,7 @@ pub(crate) mod tests {
             mutable: false,
             name: name.map(str::to_string),
             binding: None,
+            escaping: false,
             span: span(1, 1),
         }
     }
@@ -536,6 +543,7 @@ pub(crate) mod tests {
             argument_count: 1,
             capture_count: 0,
             capture_modes: Vec::new(),
+            ownership_reason: None,
             blocks,
             span: span(1, 1),
         };

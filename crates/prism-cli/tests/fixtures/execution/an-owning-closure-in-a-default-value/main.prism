@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun pick(a: Int, f: () -> Int = { a * 2 }): Int = f()
+fun main() {
+    println(pick(4))
+    println(pick(4) { 1 })
+}

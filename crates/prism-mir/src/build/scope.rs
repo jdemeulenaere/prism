@@ -11,7 +11,8 @@
 
 use super::Builder;
 use crate::mir::{
-    LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue, StatementKind, TerminatorKind,
+    Capture, LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue, StatementKind,
+    TerminatorKind,
 };
 use prism_ast::Span;
 use prism_typed_tree::Type;
@@ -189,6 +190,7 @@ impl Builder<'_> {
             mutable: false,
             name: None,
             binding: None,
+            escaping: false,
             span,
         });
         self.schedule(local, span);
@@ -262,7 +264,14 @@ impl Builder<'_> {
                     self.record_operand_moved(operand);
                 }
             }
-            Rvalue::Borrow { .. } | Rvalue::Discriminant(_) | Rvalue::Closure { .. } => {}
+            Rvalue::Closure { captures, .. } => {
+                for capture in captures {
+                    if let Capture::Owned(operand) = capture {
+                        self.record_operand_moved(operand);
+                    }
+                }
+            }
+            Rvalue::Borrow { .. } | Rvalue::Discriminant(_) => {}
         }
     }
 

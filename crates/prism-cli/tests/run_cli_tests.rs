@@ -1205,6 +1205,81 @@ fn a_writing_closure_allocates_nothing() {
     assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
 }
 
+/// code-generation: "An owning closure allocates once" (D8 of `escaping-closures`).
+#[test]
+fn an_owning_closure_allocates_once() {
+    let dump = clif_of(
+        "owning_closure",
+        &[],
+        "fun make(s: String): () -> Int = { s.length }\n\
+         fun main() { val g = make(\"abc\"); println(g() + g()) }\n",
+    );
+    let make = function_ir(&dump, "main::make");
+    assert_eq!(calls_of(make, "prism_rt_allocate").len(), 1, "{}", make);
+    let closure = function_ir(&dump, "main::make#closure0");
+    assert!(
+        calls_of(closure, "prism_rt_allocate").is_empty(),
+        "{}",
+        closure
+    );
+}
+
+/// code-generation: "The environment's drop function in the IR dump" (D8 of
+/// `escaping-closures`).
+#[test]
+fn the_environment_s_drop_function_in_the_ir_dump() {
+    let dump = clif_of(
+        "environment_drop",
+        &[],
+        "fun make(s: String, n: Int): () -> Int = { s.length + n }\n",
+    );
+    let headers = function_headers(&dump);
+    assert!(
+        headers.contains(&"main::make#closure0#drop-environment"),
+        "{:?}",
+        headers
+    );
+    let drop = function_ir(&dump, "main::make#closure0#drop-environment");
+    assert!(calls_directly(drop, "prism_rt_string_drop"), "{}", drop);
+    assert!(calls_directly(drop, "prism_rt_free"), "{}", drop);
+    // The descriptor is data: building the closure names it, and its drop entry is the
+    // function above, which the run's allocation check exercises.
+    let make = function_ir(&dump, "main::make");
+    assert!(
+        make.contains("symbol %\"main::make#closure0#descriptor\""),
+        "{}",
+        make
+    );
+}
+
+/// code-generation: "A handler capturing one handle allocates nothing" (D9 of
+/// `escaping-closures`).
+#[test]
+fn a_handler_capturing_one_handle_allocates_nothing() {
+    let dump = clif_of(
+        "inline_environment",
+        &[],
+        "struct Handle : Copy { val id: Int }\n\
+         struct Button { val onClick: () -> Int }\n\
+         fun button(h: Handle): Button = Button({ h.id * 2 })\n\
+         fun main() { val b = button(Handle(21)); println(b.onClick()) }\n",
+    );
+    assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
+    assert!(!dump.contains("drop-environment"), "{}", dump);
+}
+
+/// code-generation: "An escaping parameter is represented alike" (D3 of `escaping-closures`).
+#[test]
+fn an_escaping_parameter_is_represented_alike() {
+    let dump = clif_of(
+        "escaping_signature",
+        &[],
+        "fun call(f: escaping () -> Int): Int = f()\n",
+    );
+    let line = signature_line(&dump, "main::call");
+    assert!(line.contains("\"main::call\"(i64) -> i64"), "{}", line);
+}
+
 /// code-generation: "Symbols of nested and default closures" (D4 of `closures`).
 #[test]
 fn symbols_of_nested_and_default_closures() {

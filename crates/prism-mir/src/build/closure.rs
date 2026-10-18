@@ -3,18 +3,22 @@
 //! Each closure is a body of its own, lowered from the closure's subtree in its parent's
 //! arenas: its parameters are its arguments, and each binding it captures is a capture local,
 //! which stands for the binding itself and is never marked or dropped. The enclosing body builds
-//! the closure value from the places of the captured bindings, so how each is captured is left
-//! to the borrow checker.
+//! the closure value from a move or copy of each binding the typed tree records as owned and the
+//! place of each other one, whose borrow's kind is left to the borrow checker (D2 of
+//! `escaping-closures`).
 //!
 //! A function name or variant constructor read as a value is an adapter: a closure without
 //! captures that calls the function or builds the variant (D7 of `closures`).
 
 use super::Builder;
 use crate::mir::{
-    AggregateKind, BodyOwner, Callee, LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue,
+    AggregateKind, BodyOwner, Callee, Capture as MirCapture, LocalDeclaration, LocalId, LocalKind,
+    Operand, Place, Rvalue,
 };
 use prism_ast::Span;
-use prism_typed_tree::{DeclarationPath, ExpressionId, ExpressionKind, NominalId, Type};
+use prism_typed_tree::{
+    CaptureMode as TreeCaptureMode, DeclarationPath, ExpressionId, ExpressionKind, NominalId, Type,
+};
 
 impl Builder<'_> {
     pub(super) fn lower_closure(&mut self, destination: Option<&Place>, id: ExpressionId) {
@@ -24,7 +28,7 @@ impl Builder<'_> {
             body,
             is_compose,
             captures,
-            ..
+            ownership_reason,
         } = &expression.kind
         else {
             unreachable!("a closure node");
@@ -51,6 +55,7 @@ impl Builder<'_> {
         );
         closure.is_compose = *is_compose;
         closure.type_parameters = self.type_parameters.clone();
+        closure.ownership_reason = ownership_reason.clone();
         closure.set_return_type(ret.as_ref().clone(), span);
         for &parameter in parameters {
             closure.bind_argument(parameter);
@@ -63,6 +68,7 @@ impl Builder<'_> {
                 mutable: binding.mutable,
                 name: Some(binding.name.clone()),
                 binding: Some(capture.local),
+                escaping: false,
                 span: capture.span,
             });
             closure.capture_count += 1;
@@ -71,14 +77,29 @@ impl Builder<'_> {
         closure.lower_value(*body);
         let lowered = closure.finish();
         self.bodies.fill(closure_id, lowered);
+        // A borrowed capture is its binding's place; an owned one moves or copies it out (D2 of
+        // `escaping-closures`), which the enclosing body then no longer drops.
         let captures = captures
             .iter()
-            .map(|capture| match self.bindings.get(&capture.local) {
-                Some(place) => place.clone(),
-                None => panic!(
-                    "internal error: captured binding {} has no place",
-                    capture.local
-                ),
+            .map(|capture| {
+                let place = match self.bindings.get(&capture.local) {
+                    Some(place) => place.clone(),
+                    None => panic!(
+                        "internal error: captured binding {} has no place",
+                        capture.local
+                    ),
+                };
+                match capture.mode {
+                    TreeCaptureMode::Borrowed => MirCapture::Borrowed(place),
+                    TreeCaptureMode::Copied => {
+                        MirCapture::Owned(Operand::Copy(place, capture.span))
+                    }
+                    TreeCaptureMode::Moved => {
+                        let operand = Operand::Move(place, capture.span);
+                        self.record_operand_moved(&operand);
+                        MirCapture::Owned(operand)
+                    }
+                }
             })
             .collect();
         let destination = self.destination_or_temporary(destination, &ty, span);
@@ -125,7 +146,7 @@ impl Builder<'_> {
             params: declared_parameters,
             ret: declared_result,
             is_compose: declared_compose,
-            ..
+            escaping: declared_escaping,
         } = &expression.ty
         else {
             panic!("internal error: a function value of type {}", expression.ty);
@@ -149,7 +170,7 @@ impl Builder<'_> {
             params: parameters,
             ret: result,
             is_compose,
-            ..
+            escaping: value_escaping,
         } = value_type
         else {
             panic!("internal error: an adapter of type {}", value_type);
@@ -175,7 +196,12 @@ impl Builder<'_> {
         closure.set_return_type(result.as_ref().clone(), span);
         let arguments: Vec<LocalId> = parameters
             .iter()
-            .map(|parameter| closure.add_argument(parameter.clone(), None, None, span))
+            .zip(value_escaping)
+            .map(|(parameter, &escaping)| {
+                let argument = closure.add_argument(parameter.clone(), None, None, span);
+                closure.locals[argument].escaping = escaping;
+                argument
+            })
             .collect();
         closure.push_scope(span);
         let operands: Vec<Operand> = arguments
@@ -201,6 +227,7 @@ impl Builder<'_> {
                 Callee::Function(path),
                 operands,
                 declared_parameters.clone(),
+                declared_escaping.clone(),
                 Vec::new(),
                 value.clone(),
                 *declared_compose,

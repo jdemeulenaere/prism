@@ -54,12 +54,9 @@ pub enum BorrowErrorKind {
     /// `E5006`: a local (`name`) or a temporary (`None`) is dropped or ends while a borrow of it
     /// is live.
     DroppedWhileBorrowed { name: Option<String> },
-    /// `E5007`: a function value that may be a closure capturing `capture`, or the
-    /// function-typed parameter `parameter`, escapes.
-    EscapingClosure {
-        capture: Option<String>,
-        parameter: Option<String>,
-    },
+    /// `E5007`: a function value that may hold a borrow escapes; `holder` says what holds it
+    /// (D6 of `escaping-closures`).
+    EscapingClosure { holder: EscapingHolder },
     /// `E5008`: a body returns a borrow of memory it owns, under the elision rule `rule` of its
     /// signature (D5 and D6 of `borrowck-elision`).
     DanglingBorrowReturn { borrowed: Borrowed, rule: Rule },
@@ -71,6 +68,26 @@ pub enum BorrowErrorKind {
     },
 }
 
+/// What makes an escaping function value hold a borrow (D6 of `escaping-closures`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EscapingHolder {
+    /// The value is the unmarked function-typed parameter itself.
+    Parameter(Option<String>),
+    /// A closure that owns the unmarked function-typed parameter.
+    ClosureOwningParameter(Option<String>),
+    /// A closure that owns a reference, or a value holding a borrow, named `name`.
+    ClosureOwningReference(Option<String>),
+    /// A closure that borrows `capture`.
+    ClosureBorrowing(Option<String>),
+    /// A closure that owns `holder`, a function value that borrows `capture`.
+    ClosureOwningBorrower {
+        holder: Option<String>,
+        capture: Option<String>,
+    },
+    /// A function value holding a borrow of `borrowed`.
+    Borrow(Option<String>),
+}
+
 /// What a dangling returned borrow borrows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Borrowed {
@@ -78,6 +95,8 @@ pub enum Borrowed {
     Local(String),
     /// A by-value parameter, which ends when the body returns.
     Parameter(String),
+    /// A capture the closure owns, which its environment holds (D10 of `escaping-closures`).
+    OwnedCapture(String),
     /// A temporary value.
     Temporary,
 }
@@ -165,16 +184,32 @@ impl BorrowError {
             BorrowErrorKind::DroppedWhileBorrowed { name: None } => {
                 return "temporary value dropped while borrowed".to_string()
             }
-            BorrowErrorKind::EscapingClosure {
-                parameter: Some(parameter),
-                ..
-            } => return format!("function-typed parameter '{}' cannot escape", parameter),
-            BorrowErrorKind::EscapingClosure {
-                capture: Some(capture),
-                ..
-            } => return format!("a closure that captures '{}' cannot escape", capture),
-            BorrowErrorKind::EscapingClosure { .. } => {
-                return "a closure that captures variables cannot escape".to_string()
+            BorrowErrorKind::EscapingClosure { holder } => {
+                return match holder {
+                    EscapingHolder::Parameter(name) => {
+                        format!("the parameter {} cannot escape", quoted(name))
+                    }
+                    EscapingHolder::ClosureOwningParameter(name) => format!(
+                        "a closure that captures the parameter {} cannot escape",
+                        quoted(name)
+                    ),
+                    EscapingHolder::ClosureOwningReference(name) => format!(
+                        "a closure that captures the reference {} cannot escape",
+                        quoted(name)
+                    ),
+                    EscapingHolder::ClosureBorrowing(name) => {
+                        format!("a closure that captures {} cannot escape", quoted(name))
+                    }
+                    EscapingHolder::ClosureOwningBorrower { holder, capture } => format!(
+                        "a closure that captures {}, which borrows {}, cannot escape",
+                        quoted(holder),
+                        quoted(capture)
+                    ),
+                    EscapingHolder::Borrow(name) => format!(
+                        "a function value that holds a borrow of {} cannot escape",
+                        quoted(name)
+                    ),
+                }
             }
             BorrowErrorKind::DanglingBorrowReturn { borrowed, .. } => {
                 return match borrowed {
@@ -182,6 +217,10 @@ impl BorrowError {
                     Borrowed::Parameter(name) => {
                         format!("cannot return a borrow of parameter '{}'", name)
                     }
+                    Borrowed::OwnedCapture(name) => format!(
+                        "cannot return a borrow of captured '{}', which the closure owns",
+                        name
+                    ),
                     Borrowed::Temporary => {
                         "cannot return a borrow of a temporary value".to_string()
                     }

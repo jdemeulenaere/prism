@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun call(f: escaping () -> Int): Int = f()
+fun main() {
+    val n = 5
+    println(call { n })
+}

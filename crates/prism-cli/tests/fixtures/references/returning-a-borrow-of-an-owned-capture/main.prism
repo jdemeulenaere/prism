@@ -1,0 +1,2 @@
+// expect: E5008
+fun f(s: String): () -> &String = { &s }

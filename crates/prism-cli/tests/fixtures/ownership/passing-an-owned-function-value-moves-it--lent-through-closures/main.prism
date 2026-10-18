@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun run(f: () -> Int): Int = f()
+fun k(h: escaping () -> Int): Int {
+    val a = run { h() }
+    return a + run { h() }
+}
+fun main() {
+    println(k { 4 })
+}

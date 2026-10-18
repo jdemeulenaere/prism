@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Button { val onClick: () -> Int }
+fun greet(s: &String): Int = s.length
+fun g(s: String): Button = Button({ greet(s) })
+fun main() {
+    val b = g("abcd")
+    println(b.onClick())
+}

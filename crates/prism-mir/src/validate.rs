@@ -2,9 +2,9 @@
 //! fixture and example.
 
 use crate::mir::{
-    AggregateKind, BasicBlock, BlockId, Body, BodyId, BodyOwner, Callee, Constant, LocalId,
-    LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart,
-    TerminatorKind,
+    AggregateKind, BasicBlock, BlockId, Body, BodyId, BodyOwner, Callee, Capture, CaptureMode,
+    Constant, LocalId, LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue,
+    StatementKind, TemplatePart, TerminatorKind,
 };
 use crate::types::{needs_drop, projection_type};
 use prism_typed_tree::{
@@ -151,6 +151,21 @@ impl Validator<'_> {
                     local.0, parameter
                 ));
             }
+            // Only an argument of function type is `escaping` (D4 of `escaping-closures`).
+            if declaration.escaping
+                && (declaration.kind != LocalKind::Argument
+                    || !(declaration.ty.is_function_value() || declaration.ty == Type::Error))
+            {
+                self.report(format!(
+                    "_{} is escaping but is not an argument of function type",
+                    local.0
+                ));
+            }
+        }
+        // Only a closure that owns a capture records why it does.
+        let owns = body.capture_modes.contains(&CaptureMode::Owned);
+        if self.file.phase == MirPhase::Elaborated && owns && body.ownership_reason.is_none() {
+            self.report("a closure owning captures records no reason".to_string());
         }
         if body.locals.len() <= body.argument_count + body.capture_count {
             self.report("fewer locals than arguments and captures".to_string());
@@ -284,8 +299,8 @@ impl Validator<'_> {
                 {
                     self.report(format!("{} moves out of a variant's payload", at));
                 }
-                // A closure borrows its captures, so it cannot move out of one (D11 of
-                // `borrowck-exclusivity`).
+                // A closure never gives away a capture, whether it borrows or owns it (D11 of
+                // `borrowck-exclusivity`, D15 of `escaping-closures`).
                 if self
                     .body
                     .locals
@@ -434,17 +449,34 @@ impl Validator<'_> {
                 callee,
                 arguments,
                 parameters,
+                escaping,
                 type_arguments,
                 destination,
                 target,
                 ..
             } => {
+                if escaping.len() != parameters.len() {
+                    self.report(format!(
+                        "{} has {} escaping flags for {} parameters",
+                        at,
+                        escaping.len(),
+                        parameters.len()
+                    ));
+                }
                 if let Callee::Value(place, _) = callee {
                     let callee_ty = self.place_type(place, &at);
                     match callee_ty {
                         Some(Type::Fn { params, .. }) if &params != parameters => {
                             self.report(format!(
                                 "{} calls a function value of other parameters",
+                                at
+                            ));
+                        }
+                        Some(Type::Fn {
+                            escaping: flags, ..
+                        }) if &flags != escaping => {
+                            self.report(format!(
+                                "{} calls a function value with other escaping flags",
                                 at
                             ));
                         }
@@ -762,11 +794,46 @@ impl Validator<'_> {
                 }
             }
             Rvalue::Closure { body, captures } => {
-                for capture in captures {
-                    self.place_type(capture, at);
-                }
+                let found: Vec<Option<Type>> = captures
+                    .iter()
+                    .map(|capture| match capture {
+                        Capture::Borrowed(place) => self.place_type(place, at),
+                        Capture::Owned(operand) => self.operand_type(operand, at),
+                    })
+                    .collect();
                 match self.file.bodies.get(*body) {
                     Some(closure) if matches!(closure.owner, BodyOwner::Closure { .. }) => {
+                        // Each capture has its capture local's type, and in elaborated MIR the
+                        // closure records `Owned` exactly for the captures it moves or copies.
+                        for (index, (capture, found)) in captures.iter().zip(&found).enumerate() {
+                            let local = LocalId((closure.argument_count + 1 + index) as u32);
+                            if let (Some(found), Some(declared)) =
+                                (found, closure.locals.get(local))
+                            {
+                                if found != &declared.ty {
+                                    self.report(format!(
+                                        "{} captures a {} for the capture local _{} of type {}",
+                                        at, found, local.0, declared.ty
+                                    ));
+                                }
+                            }
+                            if self.file.phase == MirPhase::Elaborated {
+                                let owned =
+                                    closure.capture_modes.get(index) == Some(&CaptureMode::Owned);
+                                if owned != capture.is_owned() {
+                                    self.report(format!(
+                                        "{} capture {} is {} but its mode says otherwise",
+                                        at,
+                                        index,
+                                        if capture.is_owned() {
+                                            "owned"
+                                        } else {
+                                            "borrowed"
+                                        }
+                                    ));
+                                }
+                            }
+                        }
                         if closure.capture_count != captures.len() {
                             let message = format!(
                                 "{} captures {} places for a closure with {} captures",
@@ -961,7 +1028,10 @@ fn used_by_rvalue(rvalue: &Rvalue, used: &mut Vec<LocalId>) {
         }
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
-                used_by_place(capture, used);
+                match capture {
+                    Capture::Borrowed(place) => used_by_place(place, used),
+                    Capture::Owned(operand) => used_by_operand(operand, used),
+                }
             }
         }
         Rvalue::Template(_) => {
@@ -1128,6 +1198,7 @@ mod tests {
             callee: Callee::Function(prism_typed_tree::DeclarationPath::new("main", "g")),
             arguments: vec![Operand::Constant(Constant::Int(1))],
             parameters: vec![Type::String],
+            escaping: vec![false],
             type_arguments: Vec::new(),
             destination: Place::local(LocalId(2)),
             target: None,
@@ -1153,6 +1224,7 @@ mod tests {
             callee: Callee::Function(prism_typed_tree::DeclarationPath::new("main", "g")),
             arguments: vec![Operand::Constant(Constant::Int(1))],
             parameters: vec![parameter_t()],
+            escaping: vec![false],
             type_arguments: vec![Type::String],
             destination: Place::local(LocalId(2)),
             target: Some(BlockId(1)),
@@ -1174,6 +1246,7 @@ mod tests {
                 callee: Callee::Builtin(builtin),
                 arguments: vec![argument],
                 parameters: vec![parameter],
+                escaping: vec![false],
                 type_arguments,
                 destination: Place::local(LocalId(2)),
                 target: Some(BlockId(1)),

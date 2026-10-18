@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+struct Button { val onClick: () -> Int }
+fun fire(b: &Button): Int = b.onClick() + b.onClick()
+fun twice(h: escaping () -> Int): Int {
+    val a = h()
+    return a + h()
+}
+fun main() {
+    val n = 4
+    println(fire(Button({ n })))
+    println(twice { n + 1 })
+}

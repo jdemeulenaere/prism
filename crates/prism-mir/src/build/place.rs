@@ -722,6 +722,7 @@ impl Builder<'_> {
             mutable: local.mutable,
             name: Some(local.name.clone()),
             binding: Some(binding),
+            escaping: false,
             span: local.span,
         });
         self.schedule(id, span);

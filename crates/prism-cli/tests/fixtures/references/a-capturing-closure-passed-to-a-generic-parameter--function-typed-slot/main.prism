@@ -1,4 +1,0 @@
-// expect: ok
-fun <T> remember(calc: () -> T): T = calc()
-fun greet(s: &String): Int = 1
-fun h(s: String): Int = remember { greet(s) }

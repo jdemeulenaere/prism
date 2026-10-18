@@ -1,0 +1,11 @@
+// expect: ok
+fun greet(s: &String): Int = 1
+fun f(s: String, n: Int): () -> Int {
+    var count = 0
+    val h = {
+        count += 1
+        greet(s) + n
+    }
+    h()
+    return { greet(s) + n }
+}

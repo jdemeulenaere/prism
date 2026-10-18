@@ -1,0 +1,32 @@
+module main
+fun main::greet(_1: &String): Int @2:1
+  local _0: Int (return)
+  local _1 s: &String (argument)
+  bb0:
+    _0 = const 1 @2:30
+    return @2:1
+fun main::f(_1: String, _2: Int): () -> Int @3:1
+  local _0: () -> Int (return)
+  local _1 s: String (argument)
+  local _2 n: Int (argument)
+  bb0:
+    _0 = closure main::f#closure0 [move _1, copy _2] @3:39
+    drop _1 -> bb1 @3:1
+  bb1:
+    return @3:1
+closure main::f#closure0(): Int @3:39
+  local _0: Int (return)
+  local _1 s: String (capture)
+  local _2 n: Int (capture)
+  local _3: Int (temporary)
+  local _4: &String (temporary)
+  bb0:
+    storage_live _3 @3:41
+    storage_live _4 @3:47
+    _4 = &_1 (argument) @3:47
+    _3 = call main::greet(move _4) -> bb1 @3:41
+  bb1:
+    _0 = move _3 + copy _2 @3:41
+    storage_dead _4 @3:41
+    storage_dead _3 @3:41
+    return @3:39

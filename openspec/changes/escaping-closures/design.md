@@ -35,7 +35,7 @@ What exists, or will once `closures` lands:
 **Non-Goals:**
 - Lending function values to unmarked parameters instead of moving them (Open Questions).
 - Mutable environments (Rust's `FnMut`), `FnOnce`-like closures that consume their captures, cloneable or `Copy` function values (D7, D11).
-- Escaping closures that hold borrows tied by elision (`fun f(r: &Int): () -> Int = { *r }`), which stay `E5007` (D6).
+- Escaping closures that hold borrows tied by elision (`fun f(r: &Int): () -> Int = { r }`), which stay `E5007` (D6).
 - Inline environments for borrowing closures (`closures` D5 keeps them in the frame).
 - Composable closures, which stay `E6001` until `compose-transform`. The compose plan (`docs/architecture.md` §5, D10) keeps content lambdas lent and makes only root content (`runApp`, `composition`) `escaping compose () -> Unit`, which D3 supports.
 
@@ -111,7 +111,7 @@ The error labels the capture and the reason the closure owns it (D15). The type 
 
 ### D6. An escaping value holds no borrow: `E5007` narrows (autonomous, confirms `closures` D14)
 
-At each escape position the escape check (`escapes.rs`) rejects a value whose type contains a function type when it may hold a borrow: a loan of any kind, or the input of an argument or capture whose type can carry loans other than an `escaping` function parameter. In practice that is a closure that owns a reference (`fun f(r: &Int): () -> Int = { *r }`), a borrowing closure or an unmarked function-typed parameter by value, or such a parameter passed on itself (`fun k(p: () -> Int): () -> Int = p`). The loan flow gives a closure value the items of its owned captures' operands, as it already does for borrowed ones. Closures without captures and closures owning only values that hold no borrow pass, which covers the `E5007` cases of today that were only conservative: closures written through references into the body's own storage, stored in local structs, used as default values, boxed and passed to generic parameters.
+At each escape position the escape check (`escapes.rs`) rejects a value whose type contains a function type when it may hold a borrow: a loan of any kind, or the input of an argument or capture whose type can carry loans other than an `escaping` function parameter. In practice that is a closure that owns a reference (`fun f(r: &Int): () -> Int = { r }`), a borrowing closure or an unmarked function-typed parameter by value, or such a parameter passed on itself (`fun k(p: () -> Int): () -> Int = p`). The loan flow gives a closure value the items of its owned captures' operands, as it already does for borrowed ones. Closures without captures and closures owning only values that hold no borrow pass, which covers the `E5007` cases of today that were only conservative: closures written through references into the body's own storage, stored in local structs, used as default values, boxed and passed to generic parameters.
 
 The escape check stays the safety net for every escape position: a capturing closure that reaches one by a way D1 does not follow still borrows, and is rejected here rather than accepted unsoundly.
 
@@ -180,6 +180,23 @@ A closure built in a default value's generator and returned as the default escap
 ### D18. No new capability (autonomous)
 
 Capture inference, `escaping` and `E5007` extend `references`; moves and `E4028` extend `ownership`; the typed-tree record of capture modes extends `typed-tree`; the syntax, typing, ABI and formatting of `escaping` extend `syntax`, `type-system`, `compilation-and-abi` and `formatting`; the MIR form extends `mir`; environments extend `code-generation`; runtime meaning extends `execution`. Rejected: a `closures` capability, whose rules would be split from the borrow-checking, backend and typing rules they belong with.
+
+### D19. The capture pass walks the finished typed tree (autonomous, implementation)
+
+D2 records the flow graph "while checking", carrying an owning flag with the expected type. The implementation (`crates/prism-typechecker/src/captures.rs`) records it in one walk of each body's finished typed tree instead, after the body is checked and only when it has a closure: the typed tree already records every call's declared parameter types and, with this change, its `escaping` flags (`Call::escaping`), every construction, return, assignment and binding, and every block, branch and loop. The cost is the same order, one visit per node and an edge per initializer, assignment and capture, plus a sort of the roots, and the decision stays in one module rather than being threaded through every checking path. Declaring blocks are numbered by one walk that records each scope's entry and exit, so "this block encloses that one" is two comparisons, and the outermost place a closure may be stored in is the smallest interval containing its bindings' scopes, joined over the strongly connected components of the source edges by an iterative Tarjan search. Rejected: threading the flag through `check_expr` and every argument, construction and assignment path (no cheaper, and much more invasive).
+
+### D20. Help for captures a closure cannot take (autonomous)
+
+`E4028`'s help follows D15: "copy it into a 'val' before the closure and capture that instead: 'val m = n'" for a `var`, and "clone it into a 'val' ... 'val m = s.clone()'" for a capture of the enclosing closure. A default value cannot declare a `val`, so for an earlier parameter read in a default value the help is "give 'a' to the closure when it is called, as a parameter, instead of capturing it". Rejected: one clone help for all three (it cannot be written in a default value).
+
+## Implementation Notes
+
+- **Spec reconciliation during implementation.** The scenarios "An escaping closure capturing a reference", "Escaping through an escaping parameter" and "Escaping closure labels" read a reference with a prefix `*` (`{ *r }`), which `syntax` rejects (reads through references are implicit); they now read `{ r }` and `{ r + 1 }`. The execution scenario "A closure in a default value" shared its name with a scenario of `closures`; it is now "An owning closure in a default value".
+- **ABI parameters.** An exported function's parameters became `AbiParameter { name, ty, escaping, default }` records instead of tuples, which also keeps `ExportedSymbol` under Clippy's large-variant limit; every parameter and every function type's parameter hashes its flag (Migration Plan).
+- **What an owned capture carries in the loan flow.** A closure value carries its owned captures' items, except for a capture whose type carries no loans: a default value's closure copying `a: Int` through its generator's `&Int` input holds nothing (`LoanFlow::capture_items`).
+- **`E5007` wording.** The escape check names what holds the borrow (`EscapingHolder`): "the parameter 'p' cannot escape", "a closure that captures the parameter 'p' cannot escape", "a closure that captures the reference 'r' cannot escape", "a closure that captures 'h', which borrows 's', cannot escape", "a closure that captures 's' cannot escape" (a borrowing closure that reaches an escape some way D1 does not follow) and "a function value that holds a borrow of 'x' cannot escape". The parameter help reads "declare it as 'p: escaping () -> Int' if the function may keep it".
+- **Inline environments.** The building function writes the captures into a zeroed one-word stack slot and loads the word, so equal captures give equal words (which the planned handler comparison needs); the closure's code spills the word to a slot on entry and reads its owned captures at their offsets there.
+- **Compile time.** Measured as in "Risks / Trade-offs"; `compile_timing.rs` gains `escaping-handlers`, `returned-closures` and `closures-kept-past-blocks`, all within the linear-growth check. One shape is not: `n` function-typed `var`s that stay in scope to the end of a body, each holding a capture loan, take about cubic time in the borrow checker's loan flow, with or without owned captures, so it is a pre-existing cost of `closures`; it is added to its ROADMAP item and the timing shape keeps each `var` in a block of its own.
 
 ## Risks / Trade-offs
 

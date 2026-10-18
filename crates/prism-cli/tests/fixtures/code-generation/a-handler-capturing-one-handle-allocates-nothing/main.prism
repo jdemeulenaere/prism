@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Handle : Copy { val id: Int }
+struct Button { val onClick: () -> Int }
+fun button(h: Handle): Button = Button({ h.id * 2 })
+fun main() {
+    val b = button(Handle(21))
+    println(b.onClick())
+}

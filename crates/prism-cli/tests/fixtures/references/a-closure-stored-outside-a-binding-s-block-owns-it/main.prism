@@ -1,0 +1,13 @@
+// expect: E5001
+fun take(s: String) {}
+fun greet(s: &String): Int = 1
+fun f(c: Bool): Int {
+    var h: () -> Int = { 0 }
+    if (c) {
+        val s = "a"
+        h = { greet(s) }
+        h()
+        take(s)
+    }
+    return 1
+}

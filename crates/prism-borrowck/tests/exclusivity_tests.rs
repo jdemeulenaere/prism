@@ -190,38 +190,39 @@ fn borrows_that_do_not_conflict() {
     );
 }
 
+/// references: "Escaping closures own their captures", "Escaping Function Values Hold No
+/// Borrows" and "Escaping Parameters Keep Function Values" (`escaping-closures`).
 #[test]
-fn capturing_closures_do_not_escape() {
+fn escaping_closures_own_their_captures_and_hold_no_borrows() {
+    accept("fun f(s: String): () -> Int = { greet(s) }\n");
+    accept("fun g(s: String): Button = Button({ greet(s) })\n");
+    accept("fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }\n");
+    accept("fun m(a: Int, p: () -> Int = { a }): Int = p()\n");
     assert_eq!(
-        check("fun f(s: String): () -> Int = { greet(s) }\n"),
+        check("fun f(r: &Int): () -> Int = { r }\n"),
         "\
-E5007 a closure that captures 's' cannot escape @14:31 returned here
-  related @14:39 's' is captured here
-  note: a closure borrows what it captures, so it can only be called or passed to functions while that is in scope; escaping closures that capture by move are not designed yet
-  help: pass 's' to the closure as a parameter instead of capturing it"
+E5007 a closure that captures the reference 'r' cannot escape @14:29 returned here
+  related @14:31 'r' is captured here
+  note: a closure that escapes owns what it captures, and a reference cannot be owned
+  help: pass the value 'r' refers to instead of a reference"
     );
-    let stored = check("fun g(s: String): Button = Button({ greet(s) })\n");
+    let stored = check("fun g(r: &Int): Button = Button({ r + 1 })\n");
     assert!(
         stored.starts_with(
-            "E5007 a closure that captures 's' cannot escape @14:35 stored in a field here"
+            "E5007 a closure that captures the reference 'r' cannot escape @14:33 stored in a field here"
         ),
         "{}",
         stored
     );
-    let written = check("fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }\n");
-    assert!(written.starts_with("E5007 a closure that captures 's' cannot escape @14:52 written through a reference here"), "{}", written);
-    // The capture of `s` that escapes is not also reported as dropped while borrowed.
-    assert_eq!(written.matches("E50").count(), 1, "{}", written);
     let parameter = check("fun k(p: () -> Int): () -> Int = p\n");
     assert_eq!(
         parameter,
         "\
-E5007 function-typed parameter 'p' cannot escape @14:34 returned here
+E5007 the parameter 'p' cannot escape @14:34 returned here
   related @14:7 'p' is a parameter here
-  note: a function-typed parameter may be a closure that borrows the caller's variables"
+  note: an unmarked function-typed parameter may borrow its caller's variables
+  help: declare it as 'p: escaping () -> Int' if the function may keep it"
     );
-    let default = check("fun m(a: Int, p: () -> Int = { a }): Int = p()\n");
-    assert!(default.starts_with("E5007 a closure that captures 'a' cannot escape @14:30 returned as a default value here"), "{}", default);
 }
 
 #[test]

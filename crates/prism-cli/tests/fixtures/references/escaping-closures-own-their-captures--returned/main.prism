@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun greet(s: &String): Int = s.length
+fun f(s: String): () -> Int = { greet(s) }
+fun main() {
+    val g = f("abc")
+    println(g())
+}

@@ -1,0 +1,6 @@
+// expect: E5001
+fun run(f: () -> Int): Int = f()
+fun g(h: escaping () -> Int): Int {
+    run(h)
+    return run(h)
+}

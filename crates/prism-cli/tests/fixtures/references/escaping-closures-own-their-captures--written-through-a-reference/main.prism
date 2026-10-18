@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun greet(s: &String): Int = s.length
+fun h(slot: &mut (() -> Int), s: String) {
+    *slot = { greet(s) }
+}
+fun main() {
+    var k: () -> Int = { 0 }
+    h(&mut k, "ab")
+    println(k())
+}

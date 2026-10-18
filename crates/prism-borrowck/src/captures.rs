@@ -6,13 +6,15 @@
 //! borrows a place rooted at it mutably (written, as an argument or as a receiver), or builds a
 //! nested closure that captures a place rooted at it mutably; otherwise it is shared. Closures
 //! are visited innermost first, so a nested closure's mode is known when its parent is decided.
-//! A closure cannot move a capture (D11), so no capture is taken by value.
+//! A capture that the closure value moves or copies, as the type checker decided (D2 of
+//! `escaping-closures`), is `Owned`: it is a `val`, which the body never writes.
 
 use prism_ast::Span;
 use prism_mir::{
     BodyId, BodyOwner, CaptureMode, LocalId, MirFile, Rvalue, StatementKind, TerminatorKind,
 };
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// The inferred capture modes of the closure bodies of a file.
 #[derive(Debug, Clone, Default)]
@@ -54,12 +56,19 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
         .map(|(id, _)| id)
         .collect();
     closures.reverse();
+    let owned = owned_captures(file);
     for id in closures {
         let body = &file.bodies[id];
         let first_uses = first_mutable_uses(file, &result, id);
         let mut modes = Vec::with_capacity(body.capture_count);
         let mut deciding_uses = Vec::with_capacity(body.capture_count);
         for (index, first_use) in first_uses.into_iter().enumerate() {
+            if owned.contains(&(id, index)) {
+                modes.push(CaptureMode::Owned);
+                let capture = LocalId((body.argument_count + 1 + index) as u32);
+                deciding_uses.push(body.locals[capture].span);
+                continue;
+            }
             match first_use {
                 Some(span) => {
                     modes.push(CaptureMode::Mutable);
@@ -77,6 +86,31 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
         result.deciding_uses.insert(id, deciding_uses);
     }
     result
+}
+
+/// The captures, by closure body and index, that the closure values of `file` move or copy.
+fn owned_captures(file: &MirFile) -> HashSet<(BodyId, usize)> {
+    let mut owned = HashSet::new();
+    for (_, body) in file.bodies.iter() {
+        for (_, block) in body.blocks.iter() {
+            for statement in &block.statements {
+                if let StatementKind::Assign(_, rvalue) = &statement.kind {
+                    if let Rvalue::Closure {
+                        body: closure,
+                        captures,
+                    } = rvalue.as_ref()
+                    {
+                        for (index, capture) in captures.iter().enumerate() {
+                            if capture.is_owned() {
+                                owned.insert((*closure, index));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    owned
 }
 
 /// For each capture of the closure `id`, in capture order, the span of its first use in source
@@ -113,9 +147,11 @@ fn first_mutable_uses(file: &MirFile, known: &CaptureModes, id: BodyId) -> Vec<O
                     body: nested,
                     captures,
                 } => {
-                    for (index, place) in captures.iter().enumerate() {
+                    for (index, capture) in captures.iter().enumerate() {
                         if known.mode(*nested, index) == CaptureMode::Mutable {
-                            record(place.local, statement.span);
+                            if let Some(place) = capture.place() {
+                                record(place.local, statement.span);
+                            }
                         }
                     }
                 }

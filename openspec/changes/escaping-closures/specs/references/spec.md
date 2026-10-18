@@ -70,7 +70,7 @@ A parameter declared `escaping` MUST hold a function value that holds no borrow:
 A value whose type contains a function type MUST NOT escape when it may hold a borrow: a closure owning a reference, a borrowing closure or an unmarked function-typed parameter, or such a parameter itself. The borrow checker MUST reject it with `EscapingClosure` (`E5007`). A closure without captures, or owning only values that hold no borrow, MAY escape.
 
 #### Scenario: An escaping closure capturing a reference
-- **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(r: &Int): () -> Int = { *r }` and `fun g(r: &Int): Button = Button({ *r + 1 })` are checked
+- **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(r: &Int): () -> Int = { r }` and `fun g(r: &Int): Button = Button({ r + 1 })` are checked
 - **THEN** the borrow checker emits `E5007` for each, saying that a closure that captures the reference `r` cannot escape
 
 #### Scenario: A closure without captures may escape
@@ -78,7 +78,7 @@ A value whose type contains a function type MUST NOT escape when it may hold a b
 - **THEN** the file passes `prism check`
 
 #### Scenario: Escaping through an escaping parameter
-- **WHEN** `fun store(f: escaping () -> Int): Int = 1` is declared, and `fun f(r: &Int): Int = store { *r }` and `fun g(p: () -> Int): Int = store(p)` are checked
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1` is declared, and `fun f(r: &Int): Int = store { r }` and `fun g(p: () -> Int): Int = store(p)` are checked
 - **THEN** the borrow checker emits `E5007` at the closure in `f`, labelled "passed to an escaping parameter here", and at `p` in `g`
 
 ### Requirement: A Closure Returns No Borrow of What It Owns
@@ -143,7 +143,7 @@ An `E5006` diagnostic MUST point at the borrow, with related locations where the
 - **THEN** it reports `error[E5006]: 'v' does not live long enough` at `&v` labelled "borrowed value does not live long enough", with a related location at the parameter `v` labelled "'v' is dropped when the function returns, while still borrowed" and one at the parameter `slot` labelled "borrow later used by the caller through 'slot'"
 
 #### Scenario: Escaping closure labels
-- **WHEN** `prism check` runs on `fun f(r: &Int): () -> Int = { *r }`
+- **WHEN** `prism check` runs on `fun f(r: &Int): () -> Int = { r }`
 - **THEN** it reports `error[E5007]: a closure that captures the reference 'r' cannot escape` at the closure labelled "returned here", with a related location at `r` inside the closure labelled "'r' is captured here", a note that an escaping closure owns what it captures and a reference cannot be owned, and help suggesting to pass the value `r` refers to instead
 
 #### Scenario: Escaping parameter labels

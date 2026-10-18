@@ -51,7 +51,9 @@ mod returns;
 mod test_bodies;
 pub mod uses;
 
-pub use error::{AccessKind, BorrowError, BorrowErrorKind, Borrowed, Label, UntiedReason};
+pub use error::{
+    AccessKind, BorrowError, BorrowErrorKind, Borrowed, EscapingHolder, Label, UntiedReason,
+};
 pub use location::Location;
 
 use analyses::{MaybeInitialized, ReachingUninitializations};

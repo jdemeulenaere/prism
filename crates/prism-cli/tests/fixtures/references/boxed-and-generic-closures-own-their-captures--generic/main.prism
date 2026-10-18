@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun <T> keep(x: T): T = x
+fun greet(s: &String): Int = s.length
+fun f(s: String): Int {
+    val g = keep({ greet(s) })
+    return g()
+}
+fun main() {
+    println(f("abc"))
+}

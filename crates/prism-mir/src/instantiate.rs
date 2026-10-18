@@ -16,7 +16,7 @@
 //! body.
 
 use crate::mir::{
-    AggregateKind, BasicBlock, Body, Callee, Constant, Operand, Place, Projection, Rvalue,
+    AggregateKind, BasicBlock, Body, Callee, Capture, Constant, Operand, Place, Projection, Rvalue,
     Statement, StatementKind, TemplatePart, Terminator, TerminatorKind,
 };
 use crate::types::{needs_drop, projection_type};
@@ -180,7 +180,13 @@ impl Instance<'_> {
             Rvalue::Subtype(operand) => Rvalue::Subtype(self.operand(operand)),
             Rvalue::Closure { body, captures } => Rvalue::Closure {
                 body: *body,
-                captures: captures.iter().map(|place| self.place(place)).collect(),
+                captures: captures
+                    .iter()
+                    .map(|capture| match capture {
+                        Capture::Borrowed(place) => Capture::Borrowed(self.place(place)),
+                        Capture::Owned(operand) => Capture::Owned(self.operand(operand)),
+                    })
+                    .collect(),
             },
             Rvalue::Template(parts) => Rvalue::Template(
                 parts
@@ -222,11 +228,13 @@ impl Instance<'_> {
                 callee,
                 arguments,
                 parameters,
+                escaping,
                 type_arguments,
                 destination,
                 target,
                 is_compose,
             } => TerminatorKind::Call {
+                escaping: escaping.clone(),
                 callee: match callee {
                     Callee::Value(place, span) => Callee::Value(self.place(place), *span),
                     other => other.clone(),

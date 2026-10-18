@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun make(s: String, n: Int): () -> Int = { s.length + n }
+fun main() {
+    val g = make("a" + "bc", 1)
+    println(g())
+}

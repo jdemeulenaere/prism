@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Button { val onClick: () -> Int }
+fun f(n: Int): Button {
+    val b = Button({ n + 1 })
+    val m = n * 2
+    println(m)
+    return b
+}
+fun main() {
+    println(f(3).onClick())
+}

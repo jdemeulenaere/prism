@@ -6,8 +6,8 @@
 
 use prism_ast::Span;
 use prism_mir::{
-    Callee, LocalId, Operand, Place, Projection, Rvalue, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    Callee, Capture, LocalId, Operand, Place, Projection, Rvalue, Statement, StatementKind,
+    Terminator, TerminatorKind,
 };
 
 /// How a use reads its place, which words the diagnostic of a use after move.
@@ -145,9 +145,21 @@ fn rvalue_effects(rvalue: &Rvalue, span: Span, effects: &mut Vec<PlaceEffect>) {
                 operand_effects(operand, effects);
             }
         }
+        // An owned capture is a use and, for a move, a move of its operand, at the capture's
+        // span (D2 of `escaping-closures`); a borrowed one is a use where the closure is built.
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
-                use_place(capture, UseKind::Captured, span, effects);
+                match capture {
+                    Capture::Borrowed(place) => use_place(place, UseKind::Captured, span, effects),
+                    Capture::Owned(Operand::Copy(place, at)) => {
+                        use_place(place, UseKind::Captured, *at, effects)
+                    }
+                    Capture::Owned(Operand::Move(place, at)) => {
+                        use_place(place, UseKind::Captured, *at, effects);
+                        effects.push(PlaceEffect::Move(place.clone(), *at));
+                    }
+                    Capture::Owned(Operand::Constant(_)) => {}
+                }
             }
         }
     }
