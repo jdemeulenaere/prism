@@ -11,22 +11,25 @@
 //! removes what the local held (re-pointing) and kills every loan of a place through a
 //! dereference of it; a write through a dereference gives the written value's loans to the
 //! reference and to the root locals of the loans it holds. A call's result, when its type
-//! contains a reference, holds the loans of the call's input borrows, of a function-value
-//! callee, but not the shared borrows a default value's generator takes of earlier by-value
-//! arguments; and what a call may write through (what a `&mut R` argument, a function-typed
+//! contains a reference, holds the items of the operands its elision rule ties it to
+//! ([`crate::elision`]): the receiver of a method with a borrowed receiver, every input borrow
+//! of another function, every input-borrow argument of a function value or, when its type has
+//! none, the function value's items, and a default value's slot and shared reference earlier
+//! arguments, without the generator's own borrows of their temporaries; and what a call may write through (what a `&mut R` argument, a function-typed
 //! argument or a function-value callee points at) receives the loans of the call's other
 //! operands. An argument through which loans can be written holds its own input at entry, so
 //! that a write through a copy of it reaches it. A move of a whole local, and the start and end of its storage,
 //! empty it. A local never holds a loan of a place rooted at itself, since a reference cannot
 //! point into itself.
 
-use crate::borrows::{BorrowSet, Item};
+use crate::borrows::{BorrowSet, Item, LoanKind};
 use crate::dataflow::{Analysis, BitSet};
+use crate::elision::{self, Rule, Signature};
 use crate::location::Location;
 use crate::places;
 use prism_mir::{
-    Body, Callee, LocalId, MirFile, Operand, Place, Projection, Rvalue, Statement, StatementKind,
-    Terminator, TerminatorKind,
+    Body, BorrowOrigin, Callee, LocalId, MirFile, Operand, Place, Projection, Rvalue, Statement,
+    StatementKind, Terminator, TerminatorKind,
 };
 use prism_typed_tree::{ArenaId, Type};
 
@@ -234,9 +237,11 @@ impl<'a> LoanFlow<'a> {
         }
     }
 
-    /// The items of the call's input borrows (D9): the arguments whose parameter type contains
-    /// a reference, except the shared borrows of by-value earlier arguments a default value's
-    /// generator takes; and a function-value callee's items.
+    /// The items a call's result holds when its type contains a reference (D2 of
+    /// `borrowck-elision`): those of the operands its elision rule ties it to
+    /// ([`elision::tied_inputs`]), and, for a function value whose type has no input borrow,
+    /// the function value's own items. A default value's result does not hold the generator's
+    /// shared borrows of the argument temporaries, only what they borrow (D10).
     pub fn call_items(
         &self,
         state: &BitSet,
@@ -244,27 +249,24 @@ impl<'a> LoanFlow<'a> {
         arguments: &[Operand],
         parameters: &[Type],
     ) -> Vec<usize> {
+        let (rule, tied) = elision::tied_inputs(Signature::of_callee(callee), parameters);
         let mut items = Vec::new();
-        for (argument, parameter) in arguments.iter().zip(parameters) {
-            if !places::is_input_borrow(parameter) {
-                continue;
+        for position in tied {
+            if let Some(argument) = arguments.get(position) {
+                items.extend(self.operand_items(state, argument));
             }
-            if let (
-                Callee::Default { .. },
-                Type::Reference {
-                    mutable: false,
-                    inner,
-                },
-            ) = (callee, parameter)
-            {
-                if !places::carries_loans(inner) {
-                    continue;
-                }
-            }
-            items.extend(self.operand_items(state, argument));
         }
-        if let Callee::Value(place, _) = callee {
+        if let (Rule::FunctionValue, Callee::Value(place, _)) = (rule, callee) {
             items.extend(self.held(state, place.local));
+        }
+        if rule == Rule::Default {
+            items.retain(|item| match self.borrows.item(*item) {
+                Item::Loan(loan) => {
+                    let loan = &self.borrows.loans[loan];
+                    loan.mutable || loan.kind != LoanKind::Borrow(BorrowOrigin::Default)
+                }
+                Item::Input(_) => true,
+            });
         }
         items.sort_unstable();
         items.dedup();
@@ -633,6 +635,53 @@ fun print(n: Int) {}
             ),
             vec!["t"]
         );
+    }
+
+    #[test]
+    fn a_method_result_holds_its_receiver_only() {
+        let source = "\
+struct Team { var lead: String }
+fun Team.captain(o: &String): &String = &lead
+fun greet(s: &String): Int = 1
+fun f() { var t = Team(\"a\"); var s = \"x\"; val c = t.captain(&s); s = \"y\"; greet(c) }
+";
+        assert_eq!(held_before(source, "c", "s = \"y\""), vec!["t"]);
+    }
+
+    #[test]
+    fn a_function_value_result_follows_its_type() {
+        // With an input borrow, the argument's loan only; without, the function value's items.
+        let source = "\
+fun print(n: &Int) {}
+fun f(g: (&Int) -> &Int, h: () -> &Int) { val a = 1; val r = g(&a); val q = h(); print(r) }
+";
+        assert_eq!(held_before(source, "r", "print(r)"), vec!["a"]);
+        assert_eq!(held_before(source, "q", "print(r)"), vec!["input h"]);
+        let source = "\
+fun print(n: &Int) {}
+fun f() { var t = 1; val g = { &t }; val r = g(); print(r) }
+";
+        assert_eq!(held_before(source, "r", "print(r)"), vec!["t"]);
+    }
+
+    #[test]
+    fn a_default_result_holds_what_its_shared_arguments_borrow() {
+        let source = "\
+struct User { var name: String }
+fun User.hi(n: &String = name): &String = n
+fun greet(s: &String): Int = 1
+fun f(): Int { var u = User(\"a\"); val h = u.hi(); return greet(h) }
+";
+        assert_eq!(held_before(source, "h", "return greet"), vec!["u"]);
+        // A function's result holds the default's slot and what `u` borrows, not the
+        // generator's borrow of the argument temporary holding `&u`.
+        let source = "\
+struct User { var name: String }
+fun hello(u: &User, n: &String = u.name): &String = n
+fun greet(s: &String): Int = 1
+fun f(): Int { var u = User(\"a\"); val h = hello(&u); return greet(h) }
+";
+        assert_eq!(held_before(source, "h", "return greet"), vec!["mut _", "u"]);
     }
 
     #[test]

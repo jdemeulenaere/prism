@@ -1,0 +1,10 @@
+// expect: E5004
+struct User { var name: String }
+fun User.hi(n: &String = name): &String = n
+fun greet(s: &String): Int = 1
+fun g(): Int {
+    var u = User("a")
+    val h = u.hi()
+    u.name = "b"
+    return greet(h)
+}

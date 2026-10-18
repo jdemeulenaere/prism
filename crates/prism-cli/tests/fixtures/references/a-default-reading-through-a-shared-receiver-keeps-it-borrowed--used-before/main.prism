@@ -1,0 +1,9 @@
+// expect: ok
+struct User { var name: String }
+fun User.hi(n: &String = name): &String = n
+fun greet(s: &String): Int = 1
+fun f(): Int {
+    var u = User("a")
+    val h = u.hi()
+    return greet(h)
+}

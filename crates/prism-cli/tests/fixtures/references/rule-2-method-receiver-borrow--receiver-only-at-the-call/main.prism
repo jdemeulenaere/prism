@@ -1,0 +1,11 @@
+// expect: ok
+struct Team { var lead: String }
+fun greet(s: &String): Int = 1
+fun Team.captain(o: &String): &String = &lead
+fun f(t: Team, s: String): Int {
+    var u = t
+    var x = s
+    val c = u.captain(&x)
+    x = "y"
+    return greet(c)
+}

@@ -32,6 +32,7 @@ mod conflicts;
 pub mod dataflow;
 pub mod dominators;
 mod elaborate;
+pub mod elision;
 mod error;
 mod escapes;
 pub mod liveness;

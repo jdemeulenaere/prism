@@ -1,10 +1,13 @@
 //! The loans of a body (D2 and D3 of `borrowck-exclusivity`): one per borrow its MIR makes,
-//! written or implied, and one per capture of each closure value it builds, plus the function
-//! inputs that stand for the loans of closures, and the referents of `&mut R` arguments, passed
-//! in from outside.
+//! written or implied, and one per capture of each closure value it builds, plus the inputs
+//! that stand for what the caller passed to each loan-carrying argument or capture (D4 of
+//! `borrowck-elision`).
 //!
 //! The analyses track loans per loan-carrying local ([`places::carries_loans`]): the items a
-//! local may hold are the loans, numbered first, then the function inputs.
+//! local may hold are the loans, numbered first, then the inputs. An input serves each role by
+//! its local's type: a function input for an escaping closure (a type containing a function
+//! type), a referent input for writes through a `&mut R` argument whose `R` carries loans, and
+//! the origin of a returned borrow for any argument or capture.
 
 use crate::location::Location;
 use crate::places;
@@ -42,24 +45,25 @@ pub struct Loan {
     pub kind: LoanKind,
 }
 
-/// An item a loan-carrying local may hold: a loan, or a function input.
+/// An item a loan-carrying local may hold: a loan, or an input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Item {
     Loan(LoanId),
-    /// The input held at entry by the argument or capture local: a function input, for a
-    /// local whose type contains a function type, or the caller's referent, for an argument
-    /// through which loans can be written (`&mut R` whose `R` carries loans).
+    /// The input held at entry by the loan-carrying argument or capture local: whatever the
+    /// caller passed, so a function input for a local whose type contains a function type, the
+    /// caller's referent for an argument through which loans can be written (`&mut R` whose
+    /// `R` carries loans), and what a returned borrow derived from the argument borrows.
     Input(LocalId),
 }
 
-/// The loans, function inputs and loan-carrying locals of one body.
+/// The loans, inputs and loan-carrying locals of one body.
 #[derive(Debug, Clone)]
 pub struct BorrowSet {
     pub loans: Arena<LoanId, Loan>,
-    /// The argument and capture locals whose type contains a function type, each holding its
-    /// own function input at entry (D3), and the arguments through which loans can be written
-    /// ([`places::writes_loans_through`]), each holding its own input so that a write through
-    /// any copy of it reaches the argument, which the caller sees afterwards.
+    /// The argument and capture locals whose type carries loans, each holding its own input at
+    /// entry (D4 of `borrowck-elision`): so an escaping function-typed parameter is caught, a
+    /// write through any copy of a `&mut R` argument reaches the argument, which the caller
+    /// sees afterwards, and a returned borrow names the input it derives from.
     pub inputs: Vec<LocalId>,
     /// The locals whose type carries loans, in local order.
     pub carriers: Vec<LocalId>,
@@ -81,12 +85,9 @@ impl BorrowSet {
                 carrier_index[local.index()] = Some(carriers.len());
                 carriers.push(local);
             }
-            let function_input =
-                matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
-                    && places::contains_function(&declaration.ty);
-            let referent_input = declaration.kind == LocalKind::Argument
-                && places::writes_loans_through(&declaration.ty);
-            if function_input || referent_input {
+            if matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
+                && places::carries_loans(&declaration.ty)
+            {
                 inputs.push(local);
             }
         }
@@ -154,7 +155,7 @@ impl BorrowSet {
         self.carrier_index.get(local.index()).copied().flatten()
     }
 
-    /// The number of items a local may hold: the loans, then the function inputs.
+    /// The number of items a local may hold: the loans, then the inputs.
     pub fn item_count(&self) -> usize {
         self.loans.len() + self.inputs.len()
     }
@@ -169,7 +170,7 @@ impl BorrowSet {
                         .inputs
                         .iter()
                         .position(|input| *input == local)
-                        .expect("a function input of the body")
+                        .expect("an input of the body")
             }
         }
     }
@@ -280,5 +281,11 @@ fun run(f: () -> Int): Int = f()
         assert_eq!(set.item_count(), 2);
         assert_eq!(set.item(1), Item::Input(LocalId(1)));
         assert_eq!(set.item_index(Item::Input(LocalId(1))), 1);
+    }
+
+    #[test]
+    fn every_loan_carrying_argument_holds_an_input() {
+        let (_, set) = loans("fun f(a: &Int, s: &mut &Int, g: () -> Int, n: Int) {}\n");
+        assert_eq!(set.inputs, vec![LocalId(1), LocalId(2), LocalId(3)]);
     }
 }

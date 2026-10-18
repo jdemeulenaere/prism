@@ -1,0 +1,11 @@
+// expect: ok
+struct Team { var lead: String }
+mut fun Team.leader(o: &String): &mut String = &mut lead
+fun greet(s: &String): Int = 1
+fun f() {
+    var t = Team("a")
+    var s = "x"
+    val l = t.leader(&s)
+    s = "y"
+    greet(l)
+}
