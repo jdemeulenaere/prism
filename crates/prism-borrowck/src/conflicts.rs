@@ -20,7 +20,9 @@
 //! assigned place's old value: the assignment is checked as the write. Each access reports the
 //! earliest conflicting loan by creation, and a dropped value is reported once per loan, and
 //! not at all for the capture loan of a closure that escapes, which the escape check reports;
-//! other accesses that conflict with a loan reported as dropped are not reported.
+//! other accesses that conflict with a loan reported as dropped are not reported. Of the accesses
+//! at one span that conflict with one loan, only the last is reported (the borrow after the tag
+//! read of an optional reborrow).
 
 use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::captures::CaptureModes;
@@ -311,6 +313,14 @@ pub(crate) fn check_conflicts(
                 continue;
             }
             let error = checker.error(location, index, &events, place, *kind, *span, loan);
+            // An access that conflicts with the loan an earlier one at the same span conflicts
+            // with is the same mistake, seen more precisely: the borrow after the tag read of an
+            // optional reborrow (`both(m, m)` for `m: (&mut T)?`).
+            errors.retain(
+                |(earlier, _, reported): &(LoanId, AccessKind, BorrowError)| {
+                    *earlier != loan || reported.primary.span != *span
+                },
+            );
             errors.push((loan, *kind, error));
         }
     }

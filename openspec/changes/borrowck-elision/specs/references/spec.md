@@ -45,7 +45,7 @@ A body MUST return only borrows of top-level `val`s, which are valid everywhere,
 - **THEN** the borrow checker accepts `REF` and emits `E5008` at `&1` and at `&make()`, borrows of temporaries that end with the initializer
 
 ### Requirement: Function Types Elide by the Same Rules
-A function type (`(&User) -> &String`) MUST elide by rules 1, 3 and 4, so calling a function value MUST tie its result to every input-borrow argument and to the function value's own borrows. A closure MUST return only borrows of top-level `val`s or derived from its reference parameters or its captures; a borrow of its own local or temporary is `E5008`. A borrow obtained by calling a function-typed parameter, which is not an input borrow, MUST NOT be returned (`E5009`).
+A function type MUST elide by rules 1, 3 and 4: a call of a function value MUST tie its result to every input-borrow argument, or, when its type has no input borrow, to the function value's own borrows. So a closure MUST return only borrows of top-level `val`s or derived from its reference parameters (`E5009` otherwise), or, when its type has no input borrow, also of what it captures; a borrow of its own local or temporary is `E5008`.
 
 #### Scenario: A closure returning a borrow
 - **WHEN** `fun app(g: (&Int) -> &Int): Int = 1` is declared and `fun f(): Int = app { k -> k }` and `fun h(): Int = app { k -> val m = 2; &m }` are checked
@@ -55,9 +55,13 @@ A function type (`(&User) -> &String`) MUST elide by rules 1, 3 and 4, so callin
 - **WHEN** `fun greet(s: &String): Int = 1` is declared, and `fun f(s: String): Int { var t = s; val g = { &t }; val r = g(); t = "b"; return greet(r) }` and `fun h(s: String): Int { var t = s; val g = { &t }; val r = g(); greet(r); t = "b"; return 1 }` are checked
 - **THEN** the borrow checker accepts both closures, emits `E5004` at `t` in `t = "b"` of `f`, because `r` keeps the closure's borrow of `t`, and accepts `h`
 
+#### Scenario: A closure taking a borrowed parameter cannot return its captures
+- **WHEN** `fun app(g: (&Int) -> &Int): Int = 1` is declared and `fun f(): Int { val n = 1; return app { k -> &n } }` is checked
+- **THEN** the borrow checker emits `E5009` at `&n` in the closure, naming the captured `n`, because the result of a closure of type `(&Int) -> &Int` is tied to its parameter `k` only
+
 #### Scenario: Returning a borrow obtained from a function-typed parameter
 - **WHEN** `fun call(h: () -> &Int): &Int = h()` and `fun apply(g: (&Int) -> &Int, v: &Int): &Int = g(v)` are checked
-- **THEN** the borrow checker emits `E5009` for each, naming the function-typed parameter `h` and `g`, since a caller does not keep what the closure passed for it borrows
+- **THEN** the borrow checker emits `E5009` for `call`, naming the function-typed parameter `h`, since a caller does not keep what the closure passed for it borrows, and accepts `apply`, since the result of `g(v)` is tied to `v` by `g`'s type (elision rule 1) and `v` is `apply`'s single input borrow
 
 ### Requirement: Default Values Borrow Only Through Shared References
 A reference-typed parameter's default MUST return only a borrow of the temporary in the caller's slot, of a top-level `val`, or derived from what an earlier shared reference parameter (`&T`, `(&T)?`) or a `fun` receiver refers to. A default borrowing an earlier by-value parameter, or deriving a borrow from an earlier `&mut` or function-typed parameter or a `mut fun` receiver, which the call passes beside it, MUST be rejected at its declaration with `E5009`.
@@ -114,7 +118,7 @@ A place of type `&mut T` passed as an argument where `&mut T` or `&T` is expecte
 - **THEN** the type checker emits `E4003`, because `&mut r` borrows the `val` binding `r` itself
 
 ### Requirement: Calls Returning References Keep Their Inputs Borrowed
-The result of a call whose type contains a reference outside a function type MUST hold the borrows passed to the inputs its elision rule ties it to (see "Returned Borrows Follow the Elision Rules"), each in its own mode, so a `&mut` argument it is tied to MUST stay frozen while the result is live: for a method with a borrowed receiver, the receiver's borrows only; for any other function, the borrows of every input borrow (its parameters whose type contains a reference, other than function types). The result of calling a function value MUST hold the borrows of every input-borrow argument and of the function value. The result of a default value MUST hold the borrows of its slot and what the earlier shared reference arguments, and a `fun` receiver, borrow, and nothing else: not the default's own borrows of the earlier arguments.
+The result of a call whose type contains a reference outside a function type MUST hold the borrows passed to the inputs its elision rule ties it to (see "The Elision Rules Tie a Returned Borrow to Inputs"), each in its own mode, so a `&mut` argument it is tied to MUST stay frozen while the result is live: for a method with a borrowed receiver, the receiver's borrows only; for any other function, the borrows of every input borrow (its parameters whose type contains a reference, other than function types). The result of calling a function value MUST hold the borrows of every input-borrow argument or, when its type has no input borrow, those of the function value (see "Function Types Elide by the Same Rules"). The result of a default value MUST hold the borrows of its slot and what the earlier shared reference arguments, and a `fun` receiver, borrow, and nothing else: not the default's own borrows of the earlier arguments.
 
 #### Scenario: A returned borrow keeps every input borrowed
 - **WHEN** `fun first(a: &String, b: &String): &String = a`, `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared, and `fun f(x: String, y: String) { val r = first(&x, &y); take(y); greet(r) }` and `fun g(x: String, y: String) { val r = first(&x, &y); greet(r); take(y) }` are checked

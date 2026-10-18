@@ -1,0 +1,61 @@
+module main
+fun main::edit(_1: (&mut User)?): Unit @3:1
+  local _0: Unit (return)
+  local _1 n: (&mut User)? (argument)
+  bb0:
+    _0 = const () @3:27
+    return @3:1
+fun main::f(_1: (&mut User)?): Unit @4:1
+  local _0: Unit (return)
+  local _1 m: (&mut User)? (argument)
+  local _2: (&mut User)? (temporary)
+  local _3: Int (temporary)
+  local _4: &mut User (temporary)
+  local _5: Unit (temporary)
+  local _6: (&mut User)? (temporary)
+  local _7: Int (temporary)
+  local _8: &mut User (temporary)
+  local _9: Unit (temporary)
+  bb0:
+    storage_live _2 @4:31
+    storage_live _3 @4:31
+    _3 = discriminant _1 @4:31
+    switch move _3 [0 -> bb2, otherwise -> bb1] @4:31
+  bb1:
+    storage_live _4 @4:31
+    _4 = &mut (*(_1 as payload)) (argument) @4:31
+    _2 = wrap move _4 @4:31
+    storage_dead _4 @4:31
+    goto -> bb3 @4:31
+  bb2:
+    _2 = const null @4:31
+    goto -> bb3 @4:31
+  bb3:
+    storage_live _5 @4:26
+    _5 = call main::edit(move _2) -> bb4 @4:26
+  bb4:
+    storage_dead _5 @4:26
+    storage_dead _3 @4:26
+    storage_dead _2 @4:26
+    storage_live _6 @4:40
+    storage_live _7 @4:40
+    _7 = discriminant _1 @4:40
+    switch move _7 [0 -> bb6, otherwise -> bb5] @4:40
+  bb5:
+    storage_live _8 @4:40
+    _8 = &mut (*(_1 as payload)) (argument) @4:40
+    _6 = wrap move _8 @4:40
+    storage_dead _8 @4:40
+    goto -> bb7 @4:40
+  bb6:
+    _6 = const null @4:40
+    goto -> bb7 @4:40
+  bb7:
+    storage_live _9 @4:35
+    _9 = call main::edit(move _6) -> bb8 @4:35
+  bb8:
+    storage_dead _9 @4:35
+    storage_dead _7 @4:35
+    storage_dead _6 @4:35
+    _0 = const () @4:24
+    return @4:1

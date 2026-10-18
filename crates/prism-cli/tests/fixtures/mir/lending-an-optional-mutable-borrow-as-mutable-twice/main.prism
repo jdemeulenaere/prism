@@ -1,0 +1,4 @@
+// expect: ok
+struct User { var name: String }
+fun edit(n: (&mut User)?) {}
+fun f(m: (&mut User)?) { edit(m); edit(m) }

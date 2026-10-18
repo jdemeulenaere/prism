@@ -2,8 +2,8 @@
 //!
 //! An operator over a type that is not `Copy` (`==`, `!=`, string concatenation) reads shared
 //! borrows of its operands (`Operator` origin), nullable ones as optional borrows `(&T)?`, so no
-//! operand is moved or copied; a comparison with `null` reads the tag. A `(&mut T)?` place lent as a `(&T)?` is
-//! reborrowed through a tag test.
+//! operand is moved or copied; a comparison with `null` reads the tag. A `(&mut T)?` place lent as a `(&T)?` or as a
+//! `(&mut T)?` is reborrowed through a tag test.
 
 use super::Builder;
 use crate::mir::{BorrowOrigin, Constant, Operand, Place, Projection, Rvalue};
@@ -28,8 +28,12 @@ impl ComparisonSubject {
 }
 
 fn shared(ty: Type) -> Type {
+    reference(ty, false)
+}
+
+fn reference(ty: Type, mutable: bool) -> Type {
     Type::Reference {
-        mutable: false,
+        mutable,
         inner: Box::new(ty),
     }
 }
@@ -129,6 +133,7 @@ impl Builder<'_> {
                     &Place::local(view),
                     place,
                     false,
+                    false,
                     BorrowOrigin::Operator,
                     span,
                 );
@@ -148,14 +153,15 @@ impl Builder<'_> {
         }
     }
 
-    /// `destination = place == null ? null : wrap &(payload)`, where the payload is
-    /// dereferenced first with `through_reference`: an optional shared borrow of the contents of
-    /// the nullable `place`, which is neither moved nor copied.
+    /// `destination = place == null ? null : wrap &(payload)` (`&mut` with `mutable`), where
+    /// the payload is dereferenced first with `through_reference`: an optional borrow of the
+    /// contents of the nullable `place`, which is neither moved nor copied.
     fn optional_borrow(
         &mut self,
         destination: &Place,
         place: Place,
         through_reference: bool,
+        mutable: bool,
         origin: BorrowOrigin,
         span: Span,
     ) {
@@ -170,9 +176,9 @@ impl Builder<'_> {
             payload = Self::deref(payload);
         }
         let referent = self.place_type(&payload);
-        let borrow = self.new_temporary(shared(referent), span);
+        let borrow = self.new_temporary(reference(referent, mutable), span);
         let rvalue = Rvalue::Borrow {
-            mutable: false,
+            mutable,
             origin,
             place: payload,
         };
@@ -212,7 +218,26 @@ impl Builder<'_> {
         }
         let place = self.place(value);
         let destination = self.destination_or_temporary(destination, ty, span);
-        self.optional_borrow(&destination, place, true, BorrowOrigin::Argument, span);
+        self.optional_borrow(
+            &destination,
+            place,
+            true,
+            false,
+            BorrowOrigin::Argument,
+            span,
+        );
+    }
+
+    /// The `(&mut T)?` place `place` lent as a `(&mut T)?`: its tag is read, and `null` or a
+    /// mutable argument borrow of the dereferenced payload, wrapped, is written to
+    /// `destination`; the place is not moved (D13 of `borrowck-elision`).
+    pub(super) fn lower_optional_reborrow(
+        &mut self,
+        destination: &Place,
+        place: Place,
+        span: Span,
+    ) {
+        self.optional_borrow(destination, place, true, true, BorrowOrigin::Argument, span);
     }
 
     /// The subject of a `when` compared by its value patterns: for a type that is not `Copy`,
@@ -232,6 +257,7 @@ impl Builder<'_> {
                     self.optional_borrow(
                         &Place::local(view),
                         place.clone(),
+                        false,
                         false,
                         BorrowOrigin::Operator,
                         span,

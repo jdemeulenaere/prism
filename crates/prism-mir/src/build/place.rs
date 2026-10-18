@@ -290,6 +290,19 @@ impl Builder<'_> {
                 kind: CoercionKind::Subtype,
             } if self.is_null_literal(*value) => Operand::Constant(Constant::Null(ty)),
             kind if kind.is_place() && !matches!(kind, ExpressionKind::Error { .. }) => {
+                let is_optional_mutable_reference = matches!(
+                    &ty,
+                    Type::Nullable(inner)
+                        if matches!(inner.as_ref(), Type::Reference { mutable: true, .. })
+                );
+                if is_optional_mutable_reference {
+                    // A `(&mut T)?` lent as a `(&mut T)?` is reborrowed, not moved (D13 of
+                    // `borrowck-elision`).
+                    let place = self.place(id);
+                    let local = self.new_temporary(ty, span);
+                    self.lower_optional_reborrow(&Place::local(local), place, span);
+                    return Operand::Move(Place::local(local), span);
+                }
                 if !self.is_copy(&ty) {
                     panic!(
                         "internal error: a {} place read in place is used as a value",

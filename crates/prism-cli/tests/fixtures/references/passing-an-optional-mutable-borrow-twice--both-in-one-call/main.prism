@@ -1,0 +1,6 @@
+// expect: E5003
+struct User { var name: String }
+fun both(a: (&mut User)?, b: (&mut User)?) {}
+fun h(m: (&mut User)?) {
+    both(m, m)
+}
