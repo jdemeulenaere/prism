@@ -139,6 +139,10 @@ Recomposing a scope MUST call its restart function, or the root content for the 
 - **WHEN** a Rust test's restart function starts a group with another key than its scope's group
 - **THEN** the old group is removed at the end of the pass, and the new group takes its place among its siblings
 
+#### Scenario: A scope below a skipped scope recomposes alone
+- **WHEN** `fun Child(k: Int, root: Int, name: String) { startRestartGroup(k, 2); val n = rememberInt(k, 0) { println("computed"); 5 }; println("child $name $n"); if (changedInt(k, 0, 1)) { invalidate(currentScope(k)); invalidate(root) }; endRestartGroup(k) { c -> Child(c, root, name.clone()) } }` and `fun Parent(k: Int, root: Int) { startRestartGroup(k, 1); if (skipping(k)) { skipToGroupEnd(k) } else { println("parent"); Child(k, root, "a" + "b") }; endRestartGroup(k) { c -> Parent(c, root) } }` are declared, and `main` starts a composition of `{ k -> println("root"); Parent(k, currentScope(k)) }`, prints `recomposeComposition(c)` and the dump, and disposes it, with `--check-allocations`
+- **THEN** stdout is `root`, `parent`, `computed`, `child ab 5`, `root`, `child ab 5` and `true`, then the dump: the second pass skips `Parent`, and recomposing the child alone reuses its group, its slots and its restart function's string, which is freed once
+
 ### Requirement: The Current Scope
 The current scope of a composer MUST be the innermost restart group open in it, or the composition's root scope when none is open. A scope MUST be named by a 64-bit generational handle.
 
@@ -170,6 +174,10 @@ A pass MUST recompose its invalid scopes in tree order as of the pass's start, p
 #### Scenario: A scope removed by its parent is not recomposed
 - **WHEN** `fun Child(k: Int) { startRestartGroup(k, 2); val first = changedInt(k, 0, 1); println("child"); if (first) { invalidate(currentScope(k)) }; endRestartGroup(k) { c -> Child(c) } }` and `fun Screen(k: Int, show: Bool) { println("screen $show"); if (show) { Child(k) } }` are declared, and a composition of `{ k -> Screen(k, true) }` gets the content `{ k -> Screen(k, false) }` and is then recomposed
 - **THEN** stdout is `screen true`, `child` and `screen false`, and the recomposition returns `false`
+
+#### Scenario: A scope inside a removed group is not recomposed
+- **WHEN** the scenario above's `Screen` wraps `Child(k)` in `startGroup(k, 9)` and a node group, and the same `main` runs and then prints the dump
+- **THEN** stdout is `screen true`, `child`, `screen false` and `false`, then a dump holding only `root` and `nodes`: removing the outer group removes the scope below it from the pass
 
 ### Requirement: Node Groups Own Nodes Through an Applier
 A composition MUST have an applier, which creates, places, removes and releases the nodes of its node groups. A node group MUST create its node, of the kind it is started with, through the applier the first time it is composed, and reuse that node while it is matched. A matched node group started with another kind MUST create a new node, and the old one MUST be released at the end of the pass.
@@ -210,6 +218,10 @@ Every entry point MUST validate the handles it is given in constant time. A comp
 - **WHEN** `fun main() { val c = startComposition { k -> }; disposeComposition(c); disposeComposition(c) }` runs
 - **THEN** the program ends with `panic: composition misuse: stale composition handle` and status 101
 
+#### Scenario: A composition used after it is disposed
+- **WHEN** `fun main() { val c = startComposition { k -> }; disposeComposition(c); recomposeComposition(c) }` runs, or the last call is `setCompositionContent(c) { k -> }`, `invalidate(rootScope(c))` or `print(dumpComposition(c))`
+- **THEN** each form ends with `panic: composition misuse: stale composition handle` and status 101
+
 ### Requirement: Composition Misuse Is a Runtime Error
 Misusing the composition protocol MUST end the program with the runtime error `composition misuse: <detail>`, which writes no location (execution, "Runtime Errors End the Program"). The details are `composer used outside its pass` and `stale composition handle` ("Handles Are Validated"), `composition operation during a pass` ("One Pass at a Time"), those of "Groups Are Balanced" and "Slots Belong to an Open Group", and `no slot to read`, for a read that must find a slot and finds none.
 
@@ -224,6 +236,10 @@ A slot operation MUST read or write the slots of the innermost group open in the
 - **WHEN** a Rust test's restart function asks whether a word slot is at the cursor before it starts its group, and its scope is recomposed
 - **THEN** the operation fails with the misuse `slot outside a group`
 
+#### Scenario: A remembered value read before a restart function's group
+- **WHEN** `fun Label(k: Int) { startRestartGroup(k, 1); if (changedInt(k, 0, 1)) { invalidate(currentScope(k)) }; endRestartGroup(k) { c -> val n = rememberInt(c, 0) { 1 }; Label(c) } }` is declared, and `fun main() { val c = startComposition { k -> Label(k) }; recomposeComposition(c) }` runs
+- **THEN** the program ends with `panic: composition misuse: slot outside a group` and status 101
+
 ### Requirement: Groups Are Balanced
 Ending a group when none is open in the current scope MUST be the misuse `end of a group that was not started`. `endGroup` closing a restart group, or `endRestartGroup` closing a group of another kind, MUST be the misuse `group ended with the wrong kind`. A content or restart function returning while a group it started is open MUST be the misuse `group left open`.
 
@@ -235,12 +251,20 @@ Ending a group when none is open in the current scope MUST be the misuse `end of
 - **WHEN** `fun main() { val c = startComposition { k -> startGroup(k, 1) } }` runs
 - **THEN** the program ends with `panic: composition misuse: group left open` and status 101
 
+#### Scenario: A group ended with the wrong kind
+- **WHEN** `fun main() { val c = startComposition { k -> startRestartGroup(k, 1); endGroup(k) } }` runs, or its content is `{ k -> startGroup(k, 1); endRestartGroup(k) { c -> } }`
+- **THEN** each form ends with `panic: composition misuse: group ended with the wrong kind` and status 101
+
 ### Requirement: One Pass at a Time
 A thread MUST run at most one pass at a time. Starting, recomposing, setting the content of or disposing any composition while a pass runs on the thread MUST end the program with `composition misuse: composition operation during a pass`.
 
 #### Scenario: A composition operation during a pass
 - **WHEN** `fun main() { val c = startComposition { k -> }; setCompositionContent(c) { k -> println(recomposeComposition(c)) } }` runs
 - **THEN** the program ends with `panic: composition misuse: composition operation during a pass` and status 101
+
+#### Scenario: Starting or disposing a composition during a pass
+- **WHEN** a composition's new content, set by `setCompositionContent`, starts another composition, or disposes its own composition
+- **THEN** each form ends with `panic: composition misuse: composition operation during a pass` and status 101
 
 ### Requirement: Dumping a Composition
 Dumping a composition MUST give its group tree as text, one line per group and per slot, each indented by two spaces per level of depth, starting with the line `root`. A group's line MUST be `restart <key>`, `replaceable <key>`, `movable <key> (<data key>)` or `node <key> #<node> kind <kind>`, followed by ` invalid` for an invalid restart scope. A group's slots MUST follow its line, one level deeper and before its children: `word <tag> = <value>` or `slot <type name>`.

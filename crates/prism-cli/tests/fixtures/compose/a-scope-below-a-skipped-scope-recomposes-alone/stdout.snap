@@ -1,0 +1,13 @@
+root
+parent
+computed
+child ab 5
+root
+child ab 5
+true
+root
+  restart 1
+    restart 2
+      word 0 = 5
+      word 0 = 1
+nodes

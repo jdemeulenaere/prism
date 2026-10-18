@@ -1211,3 +1211,399 @@ fn a_slot_outside_a_group_is_a_misuse() {
     assert_eq!(result.get(), Some(SLOT_OUTSIDE_GROUP));
     Composition::dispose(c).unwrap();
 }
+
+// A model-checked random test of whole trees: node groups nested in replaceable, movable and
+// restart groups, edited at the front, middle and end, moved by keys, wrapped and unwrapped,
+// with subtrees that hold scopes leaving while those scopes are invalid. After every pass the
+// node tree must be the model's, every node group must hold exactly one live typed value, and
+// after disposal every value, restart function and node must be released once.
+
+thread_local! {
+    static LIVE_VALUES: Cell<i64> = const { Cell::new(0) };
+}
+
+/// A slot value that counts how many are live, so a double release or a leak shows.
+#[derive(PartialEq)]
+struct Counted;
+
+impl Counted {
+    fn new() -> Counted {
+        LIVE_VALUES.with(|live| live.set(live.get() + 1));
+        Counted
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        LIVE_VALUES.with(|live| live.set(live.get() - 1));
+    }
+}
+
+fn live_values() -> i64 {
+    LIVE_VALUES.with(|live| live.get())
+}
+
+#[derive(Clone, Debug)]
+enum Element {
+    Node {
+        key: i64,
+        kind: i64,
+        children: Vec<Element>,
+    },
+    Movable {
+        data: i64,
+        children: Vec<Element>,
+    },
+    Replaceable {
+        key: i64,
+        children: Vec<Element>,
+    },
+    /// A restart scope whose body is `Model::bodies[id]`.
+    Scope(u32),
+}
+
+#[derive(Default)]
+struct Model {
+    /// The body of each scope; 0 is the root content's.
+    bodies: std::collections::HashMap<u32, Vec<Element>>,
+    next_scope: u32,
+    /// The handle of each scope as of the last time its group was composed.
+    handles: std::collections::HashMap<u32, Handle>,
+    /// The scopes whose bodies ran in the last pass.
+    rendered: Vec<u32>,
+}
+
+struct Context {
+    model: RefCell<Model>,
+    counted: &'static crate::SlotType,
+}
+
+type Shared2 = Rc<Context>;
+
+/// How deep random elements nest, and how many children each has at most, plus one.
+const MAX_DEPTH: u32 = 3;
+const MAX_CHILDREN: u64 = 4;
+
+fn random_element(random: &mut Random, model: &mut Model, depth: u32) -> Element {
+    let children = |random: &mut Random, model: &mut Model| -> Vec<Element> {
+        if depth >= MAX_DEPTH {
+            return Vec::new();
+        }
+        (0..random.below(MAX_CHILDREN))
+            .map(|_| random_element(random, model, depth + 1))
+            .collect()
+    };
+    match random.below(if depth >= MAX_DEPTH { 2 } else { 5 }) {
+        0 | 1 => Element::Node {
+            key: random.below(3) as i64,
+            kind: random.below(4) as i64,
+            children: children(random, model),
+        },
+        2 => Element::Movable {
+            data: random.below(6) as i64,
+            children: children(random, model),
+        },
+        3 => Element::Replaceable {
+            key: random.below(2) as i64,
+            children: children(random, model),
+        },
+        _ => {
+            model.next_scope += 1;
+            let id = model.next_scope;
+            let body = children(random, model);
+            model.bodies.insert(id, body);
+            Element::Scope(id)
+        }
+    }
+}
+
+/// The children lists of `elements` and every element below them, outside scope bodies.
+fn lists(elements: &mut Vec<Element>, out: &mut Vec<*mut Vec<Element>>) {
+    out.push(elements as *mut _);
+    for element in elements.iter_mut() {
+        match element {
+            Element::Node { children, .. }
+            | Element::Movable { children, .. }
+            | Element::Replaceable { children, .. } => lists(children, out),
+            Element::Scope(_) => {}
+        }
+    }
+}
+
+/// The scopes reachable from the root.
+fn reachable_scopes(model: &Model) -> Vec<u32> {
+    fn walk(model: &Model, elements: &[Element], out: &mut Vec<u32>) {
+        for element in elements {
+            match element {
+                Element::Node { children, .. }
+                | Element::Movable { children, .. }
+                | Element::Replaceable { children, .. } => walk(model, children, out),
+                Element::Scope(id) => {
+                    out.push(*id);
+                    walk(model, &model.bodies[id], out);
+                }
+            }
+        }
+    }
+    let mut out = vec![0];
+    walk(model, &model.bodies[&0], &mut out);
+    out
+}
+
+/// One random edit of one list of a reachable body; gives the scope whose body changed.
+fn edit(random: &mut Random, model: &mut Model) -> u32 {
+    let scopes = reachable_scopes(model);
+    let scope = scopes[random.below(scopes.len() as u64) as usize];
+    let mut body = model.bodies.remove(&scope).unwrap();
+    let mut targets = Vec::new();
+    lists(&mut body, &mut targets);
+    let target = targets[random.below(targets.len() as u64) as usize];
+    // SAFETY: the pointers name distinct lists inside `body`, which is not touched otherwise
+    // while `list` is used.
+    let list = unsafe { &mut *target };
+    let length = list.len() as u64;
+    let position = match random.below(3) {
+        0 => 0,
+        1 => length / 2,
+        _ => length,
+    } as usize;
+    match random.below(6) {
+        // Insert at the front, the middle or the end.
+        0 => {
+            let element = random_element(random, model, 1);
+            list.insert(position, element);
+        }
+        // Remove at the front, the middle or the end, with whatever is below.
+        1 if length > 0 => {
+            list.remove(position.min(list.len() - 1));
+        }
+        // Move one element elsewhere, as a keyed move.
+        2 if length > 1 => {
+            let from = random.below(length) as usize;
+            let element = list.remove(from);
+            let to = random.below(length) as usize;
+            list.insert(to, element);
+        }
+        // Wrap an element in a new group, or unwrap one.
+        3 if length > 0 => {
+            let at = random.below(length) as usize;
+            let element = list.remove(at);
+            let replacement = match element {
+                Element::Movable { children, .. } | Element::Replaceable { children, .. }
+                    if random.below(2) == 0 =>
+                {
+                    children
+                }
+                other => vec![Element::Replaceable {
+                    key: random.below(2) as i64,
+                    children: vec![other],
+                }],
+            };
+            for (offset, element) in replacement.into_iter().enumerate() {
+                list.insert(at + offset, element);
+            }
+        }
+        // Change a node's kind.
+        4 if length > 0 => {
+            if let Element::Node { kind, .. } = &mut list[random.below(length) as usize] {
+                *kind = (*kind + 1) % 4;
+            }
+        }
+        // Reverse the list.
+        _ => list.reverse(),
+    }
+    model.bodies.insert(scope, body);
+    scope
+}
+
+fn render(k: Composer, context: &Shared2, elements: &[Element]) {
+    for element in elements {
+        match element {
+            Element::Node {
+                key,
+                kind,
+                children,
+            } => {
+                k.start_node_group(*key, *kind).unwrap();
+                if unsafe { k.slot(context.counted).unwrap() }.is_null() {
+                    set(k, context.counted, Counted::new());
+                }
+                render(k, context, children);
+                k.end_group().unwrap();
+            }
+            Element::Movable { data, children } => {
+                k.start_group(GroupKind::Movable, 1, *data).unwrap();
+                render(k, context, children);
+                k.end_group().unwrap();
+            }
+            Element::Replaceable { key, children } => {
+                k.start_group(GroupKind::Replaceable, 10 + key, 0).unwrap();
+                render(k, context, children);
+                k.end_group().unwrap();
+            }
+            Element::Scope(id) => render_scope(k, context, *id),
+        }
+    }
+}
+
+fn render_scope(k: Composer, context: &Shared2, id: u32) {
+    k.start_group(GroupKind::Restart, 1000 + id as i64, 0)
+        .unwrap();
+    let handle = k.current_scope().unwrap();
+    context.model.borrow_mut().handles.insert(id, handle);
+    if k.skipping().unwrap() {
+        k.skip_to_group_end().unwrap();
+    } else {
+        context.model.borrow_mut().rendered.push(id);
+        let body = context.model.borrow().bodies[&id].clone();
+        render(k, context, &body);
+    }
+    let context = context.clone();
+    k.end_restart_group(content(move |c| render_scope(c, &context, id)))
+        .unwrap();
+}
+
+/// The node tree the model describes: each node's kind and children.
+#[derive(Debug, PartialEq)]
+struct Expected(i64, Vec<Expected>);
+
+fn expected(model: &Model, elements: &[Element], out: &mut Vec<Expected>) {
+    for element in elements {
+        match element {
+            Element::Node { kind, children, .. } => {
+                let mut below = Vec::new();
+                expected(model, children, &mut below);
+                out.push(Expected(*kind, below));
+            }
+            Element::Movable { children, .. } | Element::Replaceable { children, .. } => {
+                expected(model, children, out)
+            }
+            Element::Scope(id) => expected(model, &model.bodies[id], out),
+        }
+    }
+}
+
+fn actual(tree: &NodeTree, node: NodeHandle) -> Vec<Expected> {
+    tree.children(node)
+        .into_iter()
+        .map(|child| Expected(tree.kind(child).unwrap(), actual(tree, child)))
+        .collect()
+}
+
+fn count_nodes(nodes: &[Expected]) -> usize {
+    nodes.iter().map(|node| 1 + count_nodes(&node.1)).sum()
+}
+
+/// compose: "Nodes Follow Their Groups" and "Removals Are Deferred to the End of the Pass",
+/// over random whole-tree edits checked against a model.
+#[test]
+fn random_tree_edits_match_the_model() {
+    for seed in 1..300u64 {
+        let mut random = Random(seed.wrapping_mul(0x2545_F491_4F6C_DD1D) | 1);
+        let mut model = Model::default();
+        let root: Vec<Element> = (0..random.below(MAX_CHILDREN + 1))
+            .map(|_| random_element(&mut random, &mut model, 0))
+            .collect();
+        model.bodies.insert(0, root);
+        let context: Shared2 = Rc::new(Context {
+            model: RefCell::new(model),
+            counted: slot_type::<Counted>("Counted"),
+        });
+        let tree = Rc::new(RefCell::new(NodeTree::new()));
+        let root_context = context.clone();
+        let c = Composition::start(
+            Box::new(Shared(tree.clone())),
+            content(move |k| {
+                let body = root_context.model.borrow().bodies[&0].clone();
+                render(k, &root_context, &body);
+            }),
+        )
+        .unwrap();
+        let check = |step: usize| {
+            let model = context.model.borrow();
+            let mut want = Vec::new();
+            expected(&model, &model.bodies[&0], &mut want);
+            let tree = tree.borrow();
+            check_nodes(c, &tree);
+            let got = actual(&tree, tree.root());
+            assert_eq!(got, want, "seed {} step {}", seed, step);
+            assert_eq!(
+                tree.len(),
+                count_nodes(&want),
+                "seed {} step {}",
+                seed,
+                step
+            );
+            assert_eq!(
+                live_values(),
+                count_nodes(&want) as i64,
+                "one value per node group: seed {} step {}",
+                seed,
+                step
+            );
+            // No scope outside the tree ran, and none ran twice.
+            let reachable = reachable_scopes(&model);
+            let mut rendered = model.rendered.clone();
+            assert!(
+                rendered.iter().all(|id| reachable.contains(id)),
+                "a removed scope was recomposed: seed {} step {}",
+                seed,
+                step
+            );
+            rendered.sort_unstable();
+            let count = rendered.len();
+            rendered.dedup();
+            assert_eq!(rendered.len(), count, "a scope ran twice in one pass");
+        };
+        check(0);
+        for step in 1..40 {
+            // A few edits, each invalidating the scope whose body it changed, plus scopes
+            // invalidated for nothing, which recompose to the same tree.
+            let mut invalid = Vec::new();
+            for _ in 0..=random.below(3) {
+                let scope = edit(&mut random, &mut context.model.borrow_mut());
+                invalid.push(scope);
+            }
+            let reachable = reachable_scopes(&context.model.borrow());
+            for scope in reachable {
+                if random.below(4) == 0 {
+                    invalid.push(scope);
+                }
+            }
+            context.model.borrow_mut().rendered.clear();
+            for scope in invalid {
+                let handle = if scope == 0 {
+                    Some(Composition::root_scope(c).unwrap())
+                } else {
+                    context.model.borrow().handles.get(&scope).copied()
+                };
+                if let Some(handle) = handle {
+                    invalidate(handle);
+                }
+            }
+            if random.below(10) == 0 {
+                // New content, equal to the old, replaces the root's restart function.
+                let root_context = context.clone();
+                Composition::set_content(
+                    c,
+                    content(move |k| {
+                        let body = root_context.model.borrow().bodies[&0].clone();
+                        render(k, &root_context, &body);
+                    }),
+                )
+                .unwrap();
+            } else {
+                Composition::recompose(c).unwrap();
+            }
+            check(step);
+        }
+        Composition::dispose(c).unwrap();
+        assert!(tree.borrow().is_empty(), "every node is released");
+        assert_eq!(live_values(), 0, "every value is released once");
+        assert_eq!(
+            Rc::strong_count(&context),
+            1,
+            "every restart function is released"
+        );
+    }
+}

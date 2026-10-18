@@ -261,10 +261,10 @@ fn order_scopes(state: &mut State, composition: Handle) -> bool {
 fn open_scope(state: &mut State, index: usize) -> Option<FunctionValue> {
     let pass = state.active.unwrap();
     let scope = state.order[index].group;
-    let group = state.groups.get_mut(scope)?;
-    if group.removed || !group.invalid {
+    if !state.groups.get(scope)?.invalid || inside_removed_group(state, scope) {
         return None;
     }
+    let group = state.groups.get_mut(scope)?;
     let function = borrowed(group.restart.as_ref()?);
     let mut frame = Frame {
         group: scope,
@@ -299,6 +299,10 @@ fn open_scope(state: &mut State, index: usize) -> Option<FunctionValue> {
             frame.node_parent = Some(applier.root());
         }
         Some(parent) => {
+            // A parent that skipped in this pass kept the scope's group and marked it visited
+            // without composing it. The window must still match it, or a different first start
+            // removes it, so it starts this frame unvisited.
+            group.visited = 0;
             let position = group.index_in_parent;
             frame.window_old_last = group.last_node;
             frame.kind = FrameKind::Window;
@@ -323,6 +327,23 @@ fn open_scope(state: &mut State, index: usize) -> Option<FunctionValue> {
     }
     state.frames.push(frame);
     Some(function)
+}
+
+/// Whether `group` or one of its ancestors was removed in this pass. Only the top group of a
+/// removed subtree is marked until the subtree is released, so a scope below it is found by
+/// walking up: O(depth), as computing the scope's path for the ordering is.
+fn inside_removed_group(state: &State, group: Handle) -> bool {
+    let mut current = Some(group);
+    while let Some(handle) = current {
+        let Some(record) = state.groups.get(handle) else {
+            return true;
+        };
+        if record.removed {
+            return true;
+        }
+        current = record.parent;
+    }
+    false
 }
 
 /// Ends the active pass: the scopes invalidated during it go to their compositions' queues.
