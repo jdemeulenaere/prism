@@ -18,15 +18,15 @@ A closure that owns a capture (see `references`) MUST copy a `Copy` binding and 
 - **THEN** the borrow checker emits `E5001` at `h` in `h()` of `f` and at the second `h` of `g`, and accepts `k`, whose closures borrow `h`
 
 ### Requirement: Captures by Value Are Values the Closure Can Take
-A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected with `CannotCaptureByValue` (`E5010`), labelling the capture and why the closure owns it, with help suggesting to copy or clone it into a `val` first.
+A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected by the type checker with `CannotCaptureByValue` (`E4028`), labelling the capture and why the closure owns it, with help suggesting to copy or clone it into a `val` first.
 
 #### Scenario: Capturing a var by value
 - **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(): Button { var n = 1; val b = Button({ n }); n = 2; return b }` is checked
-- **THEN** the borrow checker emits `E5010` at `n` in the closure, saying that the variable `n` cannot be captured by value, with a related location at the closure's use as a field and help suggesting `val m = n` before the closure
+- **THEN** the type checker emits `E4028` at `n` in the closure, saying that the variable `n` cannot be captured by value, with a related location at the closure's use as a field and help suggesting `val m = n` before the closure
 
 #### Scenario: Capturing what the closure cannot take
 - **WHEN** `fun store(f: escaping () -> Int): Int = 1`, `fun run(f: () -> Int): Int = f()` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int = run { store { greet(s) } }`, `fun g(a: String, p: () -> Int = { greet(a) }): Int = p()` and `fun h(n: Int): Int = run { store { n } }` are checked
-- **THEN** the borrow checker emits `E5010` at `s` in `f`, noting that `s` is captured by the enclosing closure, and at `a` in `g`, noting that a default value only borrows earlier parameters, each with help suggesting to clone it into a `val` first, and accepts `h`, whose `n` is copied
+- **THEN** the type checker emits `E4028` at `s` in `f`, noting that `s` is captured by the enclosing closure, and at `a` in `g`, noting that a default value only borrows earlier parameters, each with help suggesting to clone it into a `val` first, and accepts `h`, whose `n` is copied
 
 #### Scenario: A borrowed var capture is unaffected
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun f(): Int { var n = 1; run { n += 1; n }; return n }` is checked

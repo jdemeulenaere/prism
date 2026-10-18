@@ -25,8 +25,15 @@ A closure whose value may escape MUST own every binding it captures. A value esc
 - **WHEN** `fun <T> remember(calc: () -> T): T = calc()`, `fun run(f: () -> Int): Int = f()`, `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String) { run { greet(s) }; remember { greet(s) }; take(s) }` is checked
 - **THEN** the file passes `prism check`, because neither closure escapes, so both borrow `s`
 
+### Requirement: Capture Modes Are Decided From the Source
+The type checker MUST decide which captures a closure owns from the source, flow-insensitively, in time linear in the body: a closure stored in a local binding MUST own its captures when that binding, or a binding it flows into, is used at an escaping position anywhere in its body, whichever closure it holds there. The typed tree MUST record each capture's mode.
+
+#### Scenario: A variable that may escape owns every closure stored in it
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1`, `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String): Int { var h = { greet(s) }; h(); h = { 0 }; store(h); take(s); return 1 }` is checked
+- **THEN** the borrow checker emits `E5001` at `s` in `take(s)`, with a related location at the closure `{ greet(s) }` labelled "value moved into closure here" and one at `h` in `store(h)` labelled "the closure owns its captures because it is passed to an escaping parameter here"
+
 ### Requirement: Closures That Outlive a Captured Binding Own It
-A closure whose value may still be used after the scope of a binding it captures ends MUST own that binding, and MUST keep borrowing its other captures unless its value escapes. A closure MUST NOT own a capture for any other reason, so a conflicting use of a borrowed capture stays a borrow error.
+A closure stored, directly or through other bindings, in a binding declared outside the block that declares one of its captures MUST own that capture, and MUST keep borrowing its other captures unless its value escapes. The type checker MUST decide this from the blocks the bindings are declared in, whether or not the closure is used after the captured binding's block ends. A closure MUST NOT own a capture for any other reason, so a conflicting use of a borrowed capture stays a borrow error.
 
 #### Scenario: A closure kept past a block
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(c: Bool): Int { var h: () -> Int = { 0 }; if (c) { val s = "a"; h = { greet(s) } }; return h() }` is checked
@@ -35,6 +42,10 @@ A closure whose value may still be used after the scope of a binding it captures
 #### Scenario: Only the outlived capture is owned
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(): Int { var count = 0; var h: () -> Int = { 0 }; var i = 0; while (i < 3) { val s = "a"; h = { count += 1; greet(s) }; i += 1 }; h(); return count }` is checked
 - **THEN** the file passes `prism check`: the closure owns `s`, which ends with each iteration, and borrows `count` mutably
+
+#### Scenario: A closure stored outside a binding's block owns it
+- **WHEN** `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(c: Bool): Int { var h: () -> Int = { 0 }; if (c) { val s = "a"; h = { greet(s) }; h(); take(s) }; return 1 }` is checked
+- **THEN** the borrow checker emits `E5001` at `s` in `take(s)`, with a related location at the closure labelled "value moved into closure here" and one at the assignment to `h` labelled "the closure is stored here, in a variable that outlives 's'"
 
 #### Scenario: A conflict does not make a closure own its capture
 - **WHEN** `fun take(s: String) {}`, `fun greet(s: &String): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(s: String) { val g = { greet(s) }; take(s); run(g) }` is checked

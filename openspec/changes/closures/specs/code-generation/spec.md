@@ -95,7 +95,7 @@ The closures lowered inside a generic body MUST be compiled as part of each inst
 ### Requirement: Constructs the Backend Lacks Are Rejected Before Code Generation
 Before generating any code, the backend MUST check every body it compiles, each instance included, and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order; for an instance, at that location in the generic's source, once however many instances share it. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
 
-#### Scenario: A struct holding a composable closure is rejected
+#### Scenario: A struct is rejected
 - **WHEN** `compose fun Label() {}`, `struct P { val content: compose () -> Unit }` and `fun main() { val p = P({ Label() }); println(1) }` are declared
 - **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `{ Label() }`, naming composable functions, with a note naming the `compose-transform` change, prints nothing to stdout and exits with status 1
 

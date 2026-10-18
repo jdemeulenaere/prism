@@ -3,16 +3,16 @@
 ## ADDED Requirements
 
 ### Requirement: Owned Captures Are Operands of the Closure Value
-In elaborated MIR, a closure value MUST be built from a move of each non-`Copy` capture it owns, a copy of each `Copy` capture it owns, and a borrow of each capture it borrows, in capture order. The enclosing body MUST NOT drop a binding a closure moved, and `prism dump-mir --elaborated` MUST print owned captures as operands (`[move _1, copy _2, &_3]`).
+A closure value MUST be built from a move of each non-`Copy` capture it owns and a copy of each `Copy` capture it owns, as the typed tree records them, already in MIR as lowered, and, in elaborated MIR, a borrow of each capture it borrows, in capture order. The enclosing body MUST NOT drop a binding a closure moved, and `prism dump-mir` MUST print owned captures as operands (`[move _1, copy _2, _3]` as lowered, `[move _1, copy _2, &_3]` elaborated).
 
 #### Scenario: Owned captures in elaborated MIR
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String, n: Int): () -> Int = { greet(s) + n }` passes the borrow checker
-- **THEN** the elaborated MIR of `f` builds the closure value from a move of `s` and a copy of `n` and has no drop of `s`, while the MIR as lowered builds it from the places `s` and `n` and records no mode
+- **THEN** the MIR of `f`, as lowered and elaborated, builds the closure value from a move of `s` and a copy of `n`, and the elaborated MIR has no drop of `s`
 
 ## MODIFIED Requirements
 
 ### Requirement: Closures Are Separate Bodies
-Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from the places of those bindings, in capture order. How each binding is captured MUST NOT be decided by the MIR as lowered: the borrow checker infers it, and the elaborated MIR MUST record exactly one mode per capture local, shared, mutable or owned (see `references`), and MIR as lowered none.
+Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from those bindings, in capture order: from a move or copy of each one the typed tree records as owned, and from the place of each other one. How a borrowed binding is borrowed MUST NOT be decided by the MIR as lowered: the borrow checker infers it, and the elaborated MIR MUST record exactly one mode per capture local, shared, mutable or owned (see `references`), and MIR as lowered none.
 
 #### Scenario: Captured bindings
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int, b: Int): Int = run { b + a + b }` is lowered
