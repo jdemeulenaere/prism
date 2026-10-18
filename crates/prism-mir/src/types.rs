@@ -51,7 +51,8 @@ pub fn projection_type(base: &Type, projection: Projection, types: &TypeTable) -
             .and_then(|fields| fields.get(index))
             .map(|(_, _, ty)| ty.substitute(arguments)),
         (Projection::Payload, Type::Nullable(inner)) => Some(inner.as_ref().clone()),
-        (Projection::Index(_), Type::String) => Some(Type::Char),
+        // An index applies to no type yet: a string's character is computed by the built-in
+        // `get`, not stored (D5 of `runtime-strings-and-drops`). Collections will index places.
         _ => None,
     }
 }
@@ -203,10 +204,11 @@ mod tests {
             name.project(Projection::Payload).ty(&body, &types),
             Type::String
         );
+        // A string's character is not a place.
         let character = name
             .project(Projection::Payload)
             .project(Projection::Index(LocalId(0)));
-        assert_eq!(character.ty(&body, &types), Type::Char);
+        assert_eq!(character.try_ty(&body, &types), None);
         assert_eq!(
             referent.project(Projection::Field(2)).try_ty(&body, &types),
             None

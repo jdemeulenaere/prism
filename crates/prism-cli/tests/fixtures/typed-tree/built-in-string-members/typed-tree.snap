@@ -1,0 +1,20 @@
+module main
+fun main::f(s: &String, n: Int): Char @2:1
+  local %0 s: &String (parameter)
+  local %1 n: Int (parameter)
+  call builtin get: Char @2:35
+    receiver: borrow (receiver): &String @2:35
+      deref: String @2:35
+        local %0 s: &String @2:35
+    argument 1: binary +: Int @2:37
+      local %1 n: Int @2:37
+      call builtin length: Int @2:41
+        receiver: borrow (receiver): &String @2:41
+          deref: String @2:41
+            local %0 s: &String @2:41
+fun main::g(n: &Int): String @3:1
+  local %0 n: &Int (parameter)
+  call builtin toString: String @3:26
+    receiver: copy: Int @3:26
+      deref: Int @3:26
+        local %0 n: &Int @3:26

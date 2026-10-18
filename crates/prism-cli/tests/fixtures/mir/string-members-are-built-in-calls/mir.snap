@@ -1,0 +1,39 @@
+module main
+fun main::f(_1: String, _2: Int): Char @2:1
+  local _0: Char (return)
+  local _1 s: String (argument)
+  local _2 i: Int (argument)
+  local _3: Int (temporary)
+  local _4: &String (temporary)
+  bb0:
+    storage_live _3 @2:36
+    _3 = copy _2 @2:36
+    storage_live _4 @2:34
+    _4 = &_1 (receiver) @2:34
+    _0 = call builtin get(move _4, move _3) -> bb1 @2:34
+  bb1:
+    storage_dead _4 @2:34
+    storage_dead _3 @2:34
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1
+fun main::g(_1: &String): String @3:1
+  local _0: String (return)
+  local _1 s: &String (argument)
+  local _2: Int (temporary)
+  local _3: &String (temporary)
+  local _4: Int (temporary)
+  bb0:
+    storage_live _2 @3:29
+    storage_live _3 @3:29
+    _3 = &(*_1) (receiver) @3:29
+    _2 = call builtin length(move _3) -> bb1 @3:29
+  bb1:
+    storage_live _4 @3:29
+    _4 = copy _2 @3:29
+    _0 = call builtin toString(move _4) -> bb2 @3:29
+  bb2:
+    storage_dead _4 @3:29
+    storage_dead _3 @3:29
+    storage_dead _2 @3:29
+    return @3:1

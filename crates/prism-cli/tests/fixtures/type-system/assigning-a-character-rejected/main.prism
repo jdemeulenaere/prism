@@ -1,0 +1,2 @@
+// expect: E4003
+fun f() { var s = "ab"; s[0] = 'c' }

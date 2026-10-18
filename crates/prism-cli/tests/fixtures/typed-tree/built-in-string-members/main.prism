@@ -1,0 +1,3 @@
+// expect: ok
+fun f(s: &String, n: Int): Char = s[n + s.length]
+fun g(n: &Int): String = n.toString()

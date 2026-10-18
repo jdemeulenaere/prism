@@ -1,0 +1,2 @@
+// expect: ok
+fun f(a: String, b: &String, c: String?): Int = a.length + b.length + (c?.length ?: 0)

@@ -20,7 +20,7 @@ use prism_mir::{
     Body, BodyOwner, Callee, Constant, MirFile, Operand, Place, Projection, Rvalue, StatementKind,
     TerminatorKind,
 };
-use prism_typed_tree::{BuiltinFunction, Type, TypeTable};
+use prism_typed_tree::{Type, TypeTable};
 
 /// How deep [`classify`] looks into nested structs and enums. Infinitely sized types are
 /// rejected by the type checker (`E4023`) and `Heap<T>` ends the walk, so only a broken type
@@ -304,11 +304,7 @@ impl BodyChecker<'_> {
                 }
                 match callee {
                     Callee::Value(..) => return Some(Construct::FunctionValues),
-                    Callee::Builtin(BuiltinFunction::Clone)
-                    | Callee::Builtin(BuiltinFunction::Print)
-                    | Callee::Builtin(BuiltinFunction::PrintLine)
-                    | Callee::Function(_)
-                    | Callee::Default { .. } => {}
+                    Callee::Builtin(_) | Callee::Function(_) | Callee::Default { .. } => {}
                 }
                 arguments
                     .iter()

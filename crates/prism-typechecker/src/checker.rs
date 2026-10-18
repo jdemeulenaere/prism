@@ -1962,8 +1962,9 @@ impl TypeChecker {
     /// Registers the extension function `f` in the file's extension table (D7 of
     /// `extension-methods`). Its receiver type follows the rules of annotations. Two extensions
     /// with the same receiver and name, an extension named like a field of its receiver struct,
-    /// and an extension named `clone` on a `Clone` type are rejected with `E4010`: the last two
-    /// could never be called, because members take precedence.
+    /// an extension named `clone` on a `Clone` type, and one named like a built-in member
+    /// (`toString` on `Int`, `Double`, `Bool` or `Char`, `length` on `String`) are rejected with
+    /// `E4010`: all but the first could never be called, because members take precedence.
     fn register_extension_decl(&mut self, f: &FunctionDecl) {
         let receiver = f.receiver.as_ref().expect("an extension has a receiver");
         let receiver_ty = self.with_type_parameters(type_parameters_of(&f.type_parameters), |c| {
@@ -1981,6 +1982,8 @@ impl TypeChecker {
                 .is_some_and(|fields| fields.iter().any(|(name, _, _)| name == &f.name)),
             _ => false,
         };
+        let builtin_clash = (f.name == TO_STRING && has_builtin_to_string(&receiver_ty))
+            || (f.name == STRING_LENGTH && receiver_ty == Type::String);
         if self.own_extensions.contains_key(&key) {
             // Extensions are keyed by the receiver's type constructor (D10 of `generics`), so
             // `Box<Int>.size` and `Box<T>.size` are one name.
@@ -2007,6 +2010,14 @@ impl TypeChecker {
                 message: format!(
                     "extension '{}.clone' can never be called: '{}' is 'Clone', and the built-in 'clone()' always takes precedence",
                     receiver_ty, receiver_ty
+                ),
+                span: f.span,
+            });
+        } else if builtin_clash {
+            self.errors.push(TypeError::UncallableExtension {
+                message: format!(
+                    "extension '{}.{}' can never be called: the built-in member '{}' of '{}' always takes precedence",
+                    receiver_ty, f.name, f.name, receiver_ty
                 ),
                 span: f.span,
             });
@@ -2514,9 +2525,10 @@ impl TypeChecker {
     }
 
     /// Whether `expr` is a place, which a borrow refers to where it lives: a variable (local,
-    /// parameter or top-level `val`), a `.` field access from any root, or an index. Anything else
-    /// (a literal, call, safe navigation, branch, block or `?:`) is a temporary (D2 of
-    /// `reference-access`).
+    /// parameter or top-level `val`) or a `.` field access from any root. Anything else (a
+    /// literal, call, safe navigation, branch, block, `?:` or a string's character `s[i]`, which
+    /// is computed) is a temporary (D2 of `reference-access`, D5 of
+    /// `runtime-strings-and-drops`).
     fn is_place(&self, expr: &Expr) -> bool {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.is_place(&field);
@@ -2534,7 +2546,6 @@ impl TypeChecker {
                 is_safe_nav: false,
                 ..
             } => self.type_name_symbol(target).is_none(),
-            ExprKind::Index { .. } => true,
             _ => false,
         }
     }
@@ -3027,17 +3038,23 @@ impl TypeChecker {
 
             ExprKind::Index { target, index } => {
                 let index_id = self.check_expr(index, &Type::Int);
-                let target_id = self.infer_expr(target);
+                // A string's character is computed, not stored: `s[i]` is a call of the
+                // built-in `get` with a shared receiver borrow of the string, read in place
+                // when it is a place and consumed into a temporary otherwise, as the receiver of
+                // `clone()` is (D5 of `runtime-strings-and-drops`).
+                let target_id = if self.is_place(target) {
+                    self.infer_place(target).0
+                } else {
+                    self.with_consuming(true, |c| c.infer_expr(target))
+                };
                 let base = self.peel_indirection_nodes(target_id);
                 match self.ty(base) {
-                    Type::String => {
-                        let base = self.as_place(base);
-                        let kind = ExpressionKind::Index {
-                            base,
-                            index: index_id,
-                        };
-                        self.add(kind, Type::Char, expr.span)
-                    }
+                    Type::String => self.builtin_member_call(
+                        BuiltinFunction::StringCharacter,
+                        base,
+                        vec![index_id],
+                        expr.span,
+                    ),
                     Type::Error => self.error_node(vec![index_id, base], expr.span),
                     other => {
                         self.errors.push(TypeError::TypeMismatch {
@@ -3607,6 +3624,20 @@ impl TypeChecker {
             ) => {
                 let (node, referent, _) = self.write_through(reference, span);
                 (node, referent, true)
+            }
+            (ExprKind::Index { .. }, _) => {
+                let node = self.with_origin(Origin::Value, |c| c.infer_expr(target));
+                if self.ty(node) != Type::Error {
+                    self.errors.push(TypeError::ImmutabilityViolation {
+                        message: format!("cannot assign to '{}'", target),
+                        span,
+                        help: Some(
+                            "the characters of a string cannot be assigned: strings are immutable"
+                                .to_string(),
+                        ),
+                    });
+                }
+                (self.wrap_error(node), Type::Error, false)
             }
             _ => {
                 self.errors.push(TypeError::ImmutabilityViolation {
@@ -5326,9 +5357,13 @@ impl TypeChecker {
             );
         }
 
-        // 2. The built-in `clone()` of a `Clone` type.
+        // 2. The built-in `clone()` of a `Clone` type, and `toString()` of a scalar.
         if member == "clone" && self.is_clone(&clone_target(&receiver_ty, is_safe_nav).0) {
             return self.infer_clone_call(receiver, is_safe_nav, args, span);
+        }
+        if member == TO_STRING && has_builtin_to_string(&clone_target(&receiver_ty, is_safe_nav).0)
+        {
+            return self.infer_to_string_call(receiver, is_safe_nav, type_arguments, args, span);
         }
 
         // 3. An extension on the receiver's type, behind any `&`, `&mut` and `Heap<T>`.
@@ -6343,7 +6378,8 @@ impl TypeChecker {
     }
 
     /// Whether the struct behind `ty` (looking through borrows, `Heap<T>` and `?`) declares a
-    /// field named `name`.
+    /// field named `name`. The built-in `length` of a `String` counts as a field (D6 of
+    /// `runtime-strings-and-drops`).
     fn has_field(&self, ty: &Type, name: &str) -> bool {
         let mut ty = ty;
         loop {
@@ -6356,6 +6392,7 @@ impl TypeChecker {
                         .struct_fields(id)
                         .is_some_and(|fields| fields.iter().any(|(f, _, _)| f == name))
                 }
+                Type::String => return name == STRING_LENGTH,
                 _ => return false,
             }
         }
@@ -6413,6 +6450,89 @@ impl TypeChecker {
             is_compose: false,
         };
         let call = self.add(ExpressionKind::Call(call), cloned, span);
+        if nullable {
+            self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
+        } else {
+            call
+        }
+    }
+
+    /// A call of the built-in string member `builtin` (`length` or `get`) on the string `base`,
+    /// with a shared receiver borrow of it and then `arguments` (D5 and D6 of
+    /// `runtime-strings-and-drops`). A string that is not a place is borrowed in a temporary.
+    fn builtin_member_call(
+        &mut self,
+        builtin: BuiltinFunction,
+        base: ExpressionId,
+        arguments: Vec<ExpressionId>,
+        span: Span,
+    ) -> ExpressionId {
+        let result = match builtin {
+            BuiltinFunction::StringCharacter => Type::Char,
+            _ => Type::Int,
+        };
+        let borrow = self.borrow(false, BorrowOrigin::Receiver, base);
+        let mut parameters = vec![(Some(THIS.to_string()), self.ty(borrow))];
+        let mut written = vec![Argument::Written(borrow)];
+        for argument in arguments {
+            parameters.push((None, self.ty(argument)));
+            written.push(Argument::Written(argument));
+        }
+        let call = Call {
+            callee: Callee::Builtin(builtin),
+            evaluation_order: (0..written.len()).collect(),
+            arguments: written,
+            parameters,
+            type_arguments: Vec::new(),
+            has_receiver: true,
+            is_compose: false,
+        };
+        self.add(ExpressionKind::Call(call), result, span)
+    }
+
+    /// Types a call of the built-in `toString()` of an `Int`, `Double`, `Bool` or `Char`,
+    /// `receiver.toString()` or `receiver?.toString()` (D6 of `runtime-strings-and-drops`): the
+    /// receiver is copied out of its references, and the result is a new `String`. It takes no
+    /// arguments (`E4004`).
+    fn infer_to_string_call(
+        &mut self,
+        receiver: ExpressionId,
+        is_safe_nav: bool,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        span: Span,
+    ) -> ExpressionId {
+        self.reject_type_arguments("'toString'", type_arguments);
+        if !args.is_empty() {
+            let mut children = vec![receiver];
+            for arg in args {
+                children.push(self.infer_expr(&arg.value));
+            }
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!("'toString()' takes no arguments, found {}", args.len()),
+                span,
+            });
+            return self.error_node(children, span);
+        }
+        let nullable = clone_target(&self.ty(receiver), is_safe_nav).1;
+        let (joined, base) = if nullable {
+            self.open_chain(receiver)
+        } else {
+            (None, receiver)
+        };
+        let place = self.peel_reference_nodes(base);
+        let copy = self.copy(place);
+        let copy_ty = self.ty(copy);
+        let call = Call {
+            callee: Callee::Builtin(BuiltinFunction::ToString),
+            arguments: vec![Argument::Written(copy)],
+            parameters: vec![(Some(THIS.to_string()), copy_ty)],
+            type_arguments: Vec::new(),
+            evaluation_order: vec![0],
+            has_receiver: true,
+            is_compose: false,
+        };
+        let call = self.add(ExpressionKind::Call(call), Type::String, span);
         if nullable {
             self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
         } else {
@@ -6509,6 +6629,9 @@ impl TypeChecker {
                     name: member.to_string(),
                 };
                 self.add(kind, field_ty, span)
+            }
+            Type::String => {
+                self.builtin_member_call(BuiltinFunction::StringLength, base, Vec::new(), span)
             }
             _ => {
                 let variant = self.variant_node(&reached, member, reached.clone(), span);
@@ -6699,6 +6822,8 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
+            // The built-in `length`, which cannot be assigned: strings are immutable.
+            Type::String if member == STRING_LENGTH => (wrap(Type::Int), Some(false)),
             other => {
                 let help = matches!(other, Type::Parameter(_)).then(|| {
                     format!(
@@ -6969,6 +7094,17 @@ fn clone_target(receiver_ty: &Type, is_safe_nav: bool) -> (Type, bool) {
         Type::Nullable(inner) if is_safe_nav => (peel_references(inner).clone(), true),
         other => (other.clone(), false),
     }
+}
+
+/// The name of the built-in `length` member of `String` (D6 of `runtime-strings-and-drops`).
+const STRING_LENGTH: &str = "length";
+
+/// The name of the built-in `toString()` of the scalar types.
+const TO_STRING: &str = "toString";
+
+/// Whether values of `ty` have the built-in `toString()`: `Int`, `Double`, `Bool` and `Char`.
+fn has_builtin_to_string(ty: &Type) -> bool {
+    matches!(ty, Type::Int | Type::Float | Type::Bool | Type::Char)
 }
 
 /// The binding `expr` names: a variable for an identifier, the receiver for `this`.

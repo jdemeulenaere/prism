@@ -849,6 +849,15 @@ mod tests {
             Place::local(LocalId(2)).project(Projection::Index(LocalId(2))),
         ));
         assert_reports(&file, "indexes by _2 of type String");
+        // No type has an index projection: a string's character is computed.
+        let mut file = small_file();
+        let index = body(&mut file)
+            .locals
+            .alloc(local(Type::Int, LocalKind::Temporary, None));
+        body(&mut file).blocks[BlockId(0)].statements[2] = statement(StatementKind::Read(
+            Place::local(LocalId(2)).project(Projection::Index(index)),
+        ));
+        assert_reports(&file, "projects Index(LocalId(3)) out of a String");
     }
 
     #[test]

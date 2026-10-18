@@ -238,7 +238,10 @@ pub enum ExpressionKind {
     },
     /// The referent of `pointer`, a `&T`, `&mut T` or `Heap<T>`.
     Deref { pointer: ExpressionId },
-    /// The element `index` of the place `base` (a character of a `String`).
+    /// The element `index` of the place `base`. Reserved for collections whose elements are
+    /// stored (`List<T>`): a character of a `String` is computed, not stored, so `s[i]` is a call
+    /// of [`BuiltinFunction::StringCharacter`] and the type checker produces no index node today
+    /// (D5 of `runtime-strings-and-drops`).
     Index {
         base: ExpressionId,
         index: ExpressionId,
@@ -515,6 +518,15 @@ pub enum BuiltinFunction {
     Print,
     /// `println(x)` or `println()`: writes the text of its argument, if any, then a newline.
     PrintLine,
+    /// `s.length` of a `String`, called with a shared receiver borrow: its number of characters
+    /// (D6 of `runtime-strings-and-drops`).
+    StringLength,
+    /// `s[i]` of a `String`, called with a shared receiver borrow and the `Int` index: the
+    /// character at character index `i` (D5).
+    StringCharacter,
+    /// `x.toString()` of an `Int`, `Double`, `Bool` or `Char`, called with the receiver copied
+    /// out of any reference: the text `print(x)` writes (D6).
+    ToString,
 }
 
 impl BuiltinFunction {
@@ -524,12 +536,17 @@ impl BuiltinFunction {
             BuiltinFunction::Clone => "clone",
             BuiltinFunction::Print => "print",
             BuiltinFunction::PrintLine => "println",
+            BuiltinFunction::StringLength => "length",
+            // The name Kotlin gives the `[]` operator.
+            BuiltinFunction::StringCharacter => "get",
+            BuiltinFunction::ToString => "toString",
         }
     }
 
-    /// Whether the built-in's first argument is a receiver: only `clone`'s is.
+    /// Whether the built-in's first argument is a receiver: that of every built-in member
+    /// (`clone`, `length`, `get` and `toString`), not the argument of `print` and `println`.
     pub fn has_receiver(self) -> bool {
-        matches!(self, BuiltinFunction::Clone)
+        !matches!(self, BuiltinFunction::Print | BuiltinFunction::PrintLine)
     }
 }
 

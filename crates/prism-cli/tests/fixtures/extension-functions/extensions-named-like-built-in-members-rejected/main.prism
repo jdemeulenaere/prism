@@ -1,0 +1,4 @@
+// expect: E4010
+fun Int.toString(): String = "x"
+fun Char.toString(): String = "c"
+fun String.length(): Int = 0

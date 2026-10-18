@@ -344,7 +344,9 @@ pub enum Projection {
     Field(usize),
     /// The payload of a nullable that is not `null`.
     Payload,
-    /// The character of a `String` at the index held in the local.
+    /// The element at the index held in the local. Reserved for collections whose elements are
+    /// stored (`List<T>`): no MIR has one today, since a string's character is computed by the
+    /// built-in `get`, and the validator rejects it (D5 of `runtime-strings-and-drops`).
     Index(LocalId),
 }
 
@@ -473,8 +475,9 @@ pub enum Callee {
 
 impl Callee {
     /// Whether the call's first operand is a receiver: exactly for a call of an extension,
-    /// whose declaration path names its receiver type, and of the built-in `clone`, which
-    /// takes a shared receiver borrow (D3 of `borrowck-elision`). The argument of `print` and
+    /// whose declaration path names its receiver type, and of the built-in members: `clone`,
+    /// `length` and `get` (a string's character), which take a shared receiver borrow (D3 of
+    /// `borrowck-elision`), and `toString`, which takes the receiver copied out. The argument of `print` and
     /// `println` is not a receiver. A function value is never an extension, since an extension
     /// cannot be named as a value.
     pub fn has_receiver(&self) -> bool {

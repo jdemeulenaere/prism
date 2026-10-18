@@ -1,0 +1,3 @@
+// expect: ok
+fun show(c: &Char): Int = 1
+fun f() { var s = "ab"; val r = &s[0]; s = "cd"; println(show(s[1])); println(r) }

@@ -1194,6 +1194,11 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.builder.ins().call(function, &[]);
                 }
             }
+            Callee::Builtin(
+                BuiltinFunction::StringLength
+                | BuiltinFunction::StringCharacter
+                | BuiltinFunction::ToString,
+            ) => return Err(BackendError::new("a call of a string built-in")),
             Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
         }
         match target {

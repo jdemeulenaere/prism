@@ -1,0 +1,6 @@
+// expect: E4006
+struct Point : Copy { val x: Int, val y: Int }
+enum Color { Red }
+fun Point.toString(): String = x.toString() + "," + y.toString()
+fun f(p: Point): String = p.toString()
+fun g(c: Color): String = c.toString()

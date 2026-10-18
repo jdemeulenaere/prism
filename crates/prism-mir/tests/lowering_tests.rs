@@ -98,11 +98,13 @@ fn borrowed_temporary_of_a_val_lives_with_its_binding() {
 
 #[test]
 fn discarded_places_are_read_and_unit_bodies_return_unit() {
+    // A string's character is computed by the built-in `get`, not a place, so it is a call
+    // whose result is discarded.
     let actual = mir("fun f(s: String, i: Int) { s; s[i] }\n");
     for line in [
         "read _1 @1:28",
         "_3 = copy _2",
-        "read _1[_3]",
+        "_5 = call builtin get(move _4, move _3)",
         "_0 = const ()",
     ] {
         assert!(actual.contains(line), "missing {:?} in\n{}", line, actual);

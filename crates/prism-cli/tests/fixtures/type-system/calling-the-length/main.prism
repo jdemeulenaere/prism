@@ -1,0 +1,2 @@
+// expect: E4004
+fun f(s: String): Int = s.length()
