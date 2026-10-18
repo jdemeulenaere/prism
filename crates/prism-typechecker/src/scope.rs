@@ -224,8 +224,8 @@ impl Symbol {
         match &self.kind {
             SymbolKind::Variable { ty, .. } => ty.clone(),
             SymbolKind::Function { fn_type, .. } => fn_type.clone(),
-            SymbolKind::Struct { id, .. } => Type::Struct(id.clone()),
-            SymbolKind::Enum { id, .. } => Type::Enum(id.clone()),
+            SymbolKind::Struct { id, .. } => Type::plain_struct(id.clone()),
+            SymbolKind::Enum { id, .. } => Type::plain_enum(id.clone()),
         }
     }
 }

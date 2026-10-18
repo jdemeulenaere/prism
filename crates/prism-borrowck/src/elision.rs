@@ -149,7 +149,7 @@ mod tests {
     }
 
     fn team() -> Type {
-        Type::Struct(NominalId::new("main", "Team"))
+        Type::plain_struct(NominalId::new("main", "Team"))
     }
 
     fn method() -> Signature {
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn a_consuming_method_follows_rules_1_3_and_4() {
         // `consuming fun Team.pick(o: &User)`.
-        let user = Type::Struct(NominalId::new("main", "User"));
+        let user = Type::plain_struct(NominalId::new("main", "User"));
         assert_eq!(
             tied_inputs(method(), &[team(), shared(user)]),
             (Rule::Single, vec![1])
@@ -229,7 +229,7 @@ mod tests {
     fn a_default_is_tied_to_its_slot_and_shared_reference_arguments() {
         // `(&String, &&User, &&mut User, &mut String?)`: a by-value argument, a shared and a
         // mutable reference argument, and the slot.
-        let user = Type::Struct(NominalId::new("main", "User"));
+        let user = Type::plain_struct(NominalId::new("main", "User"));
         let parameters = [
             shared(Type::String),
             shared(shared(user.clone())),

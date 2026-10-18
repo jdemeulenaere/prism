@@ -12,7 +12,7 @@ use crate::tree::{
     Argument, Body, BorrowOrigin, Callee, CoercionKind, ConstructKind, ExpressionKind, Item,
     LocalKind, Pattern, SafeNavigationOrigin, StatementKind, TypedFile,
 };
-use crate::types::{NominalId, Type, TypeDef, BUILTIN_MODULE};
+use crate::types::{NominalId, Type, TypeDef, TypeParameter, BUILTIN_MODULE};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
 use std::fmt::Write;
 
@@ -126,12 +126,17 @@ impl TypedFile {
             }
             let marker = marker_suffix(self.types.marker(id));
             match self.types.definition(id) {
-                Some(TypeDef::Struct { fields }) => {
-                    writeln!(out, "import struct {}{}", nominal(id), marker).unwrap();
+                Some(TypeDef::Struct { parameters, fields }) => {
+                    let parameters = TypeParameter::render_list(parameters);
+                    writeln!(out, "import struct {}{}{}", nominal(id), parameters, marker).unwrap();
                     dump_fields(out, fields);
                 }
-                Some(TypeDef::Enum { variants }) => {
-                    writeln!(out, "import enum {}{}", nominal(id), marker).unwrap();
+                Some(TypeDef::Enum {
+                    parameters,
+                    variants,
+                }) => {
+                    let parameters = TypeParameter::render_list(parameters);
+                    writeln!(out, "import enum {}{}{}", nominal(id), parameters, marker).unwrap();
                     dump_variants(out, variants);
                 }
                 None => writeln!(out, "import type {}{}", nominal(id), marker).unwrap(),
@@ -678,22 +683,26 @@ fun main::f(a: Int): Int @1:1
         file.types.insert_definition(
             user.clone(),
             TypeDef::Struct {
+                parameters: Vec::new(),
                 fields: vec![("name".to_string(), false, Type::String)],
             },
         );
-        file.types.insert_marker(user, Some(TypeMarker::Clone));
+        file.types
+            .insert_marker(user, Some(TypeMarker::Clone), Vec::new());
         file.types.insert_definition(
             color.clone(),
             TypeDef::Enum {
+                parameters: Vec::new(),
                 variants: vec![
                     ("Red".to_string(), vec![]),
                     ("Rgb".to_string(), vec![Type::Int]),
                 ],
             },
         );
-        file.types.insert_marker(color, None);
-        file.types.insert_marker(money, Some(TypeMarker::Copy));
-        file.types.insert_marker(own, None);
+        file.types.insert_marker(color, None, Vec::new());
+        file.types
+            .insert_marker(money, Some(TypeMarker::Copy), Vec::new());
+        file.types.insert_marker(own, None, Vec::new());
         let dump = file.dump();
         let header = "\
 module main

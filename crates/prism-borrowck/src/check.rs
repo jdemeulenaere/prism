@@ -188,18 +188,18 @@ impl Checker<'_> {
         let types = &self.file.types;
         let id = match ty {
             Type::Nullable(inner) => match inner.as_ref() {
-                Type::Struct(id) | Type::Enum(id) => id,
+                Type::Struct { id, .. } | Type::Enum { id, .. } => id,
                 _ => return None,
             },
-            Type::Struct(id) | Type::Enum(id) => id,
+            Type::Struct { id, .. } | Type::Enum { id, .. } => id,
             _ => return None,
         };
         if types.marker(id) == Some(TypeMarker::Copy) {
             return None;
         }
         let members: Vec<&Type> = match types.definition(id)? {
-            TypeDef::Struct { fields } => fields.iter().map(|(_, _, ty)| ty).collect(),
-            TypeDef::Enum { variants } => variants
+            TypeDef::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
+            TypeDef::Enum { variants, .. } => variants
                 .iter()
                 .flat_map(|(_, payloads)| payloads.iter())
                 .collect(),
@@ -229,7 +229,7 @@ impl Checker<'_> {
         });
         let mut ty = declaration.ty.clone();
         for projection in &place.projections {
-            if let (Projection::Field(index), Type::Struct(id)) = (projection, &ty) {
+            if let (Projection::Field(index), Type::Struct { id, .. }) = (projection, &ty) {
                 if let Some((field, _, _)) = self
                     .file
                     .types

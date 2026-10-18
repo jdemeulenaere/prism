@@ -253,7 +253,7 @@ impl Validator<'_> {
                 self.expression(*range);
                 self.expect_type(
                     *range,
-                    &Type::Struct(NominalId::builtin_range()),
+                    &Type::plain_struct(NominalId::builtin_range()),
                     "loop range",
                 );
                 self.loops.push(id);
@@ -289,7 +289,7 @@ impl Validator<'_> {
             ExpressionKind::Field { base, index, name } => {
                 self.expression(*base);
                 self.expect_place(*base, "field base");
-                if let Some(Type::Struct(struct_id)) = self.type_of(*base).cloned() {
+                if let Some(Type::Struct { id: struct_id, .. }) = self.type_of(*base).cloned() {
                     if let Some(item) = self.structs.get(&struct_id) {
                         match item.fields.get(*index) {
                             Some((field_name, _, field_ty)) if field_name == name => {
@@ -587,7 +587,7 @@ impl Validator<'_> {
                         match pattern {
                             Pattern::Variant { enum_id, .. } => {
                                 if self.error_free
-                                    && subject_ty != Some(Type::Enum(enum_id.clone()))
+                                    && subject_ty != Some(Type::plain_enum(enum_id.clone()))
                                 {
                                     let message = format!(
                                         "when {} matches a variant of {}",

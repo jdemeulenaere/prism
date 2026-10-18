@@ -319,14 +319,14 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         TypeError::NotCloneable { ty, .. } => {
             let help = match ty {
-                Type::Struct(id) | Type::Enum(id) => {
+                Type::Struct { id, .. } | Type::Enum { id, .. } => {
                     format!("add ': Clone' to the declaration of '{}'", id.name)
                 }
                 Type::Fn { .. } => {
                     "function values cannot be cloned, because a closure holds borrows of what it captures".to_string()
                 }
-                Type::TypeParam(_) => {
-                    "type parameters cannot be cloned until 'Clone' bounds exist".to_string()
+                Type::Parameter(parameter) => {
+                    format!("add the bound '<{} : Clone>'", parameter.name)
                 }
                 _ => "only 'Copy' and 'Clone' types, 'String', and nullables and 'Heap' of them can be cloned".to_string(),
             };

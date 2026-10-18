@@ -9,6 +9,7 @@ use prism_typed_tree::{NominalId, Type, TypeDef, TypeTable};
 /// reads (D4). The type system does not expose `endInclusive`.
 pub fn mir_range_definition() -> TypeDef {
     TypeDef::Struct {
+        parameters: Vec::new(),
         fields: vec![
             ("start".to_string(), false, Type::Int),
             ("end".to_string(), false, Type::Int),
@@ -44,7 +45,7 @@ pub fn projection_type(base: &Type, projection: Projection, types: &TypeTable) -
         (Projection::Deref, Type::Reference { inner, .. } | Type::Heap(inner)) => {
             Some(inner.as_ref().clone())
         }
-        (Projection::Field(index), Type::Struct(id)) => types
+        (Projection::Field(index), Type::Struct { id, .. }) => types
             .struct_fields(id)
             .and_then(|fields| fields.get(index))
             .map(|(_, _, ty)| ty.clone()),
@@ -138,21 +139,23 @@ mod tests {
         types.insert_definition(
             user.clone(),
             TypeDef::Struct {
+                parameters: Vec::new(),
                 fields: vec![
                     ("id".to_string(), false, Type::Int),
                     ("name".to_string(), true, Type::String.nullable()),
                 ],
             },
         );
-        types.insert_marker(user, None);
+        types.insert_marker(user, None, Vec::new());
         let point = NominalId::new("main", "Point");
         types.insert_definition(
             point.clone(),
             TypeDef::Struct {
+                parameters: Vec::new(),
                 fields: vec![("x".to_string(), false, Type::Int)],
             },
         );
-        types.insert_marker(point, Some(TypeMarker::Copy));
+        types.insert_marker(point, Some(TypeMarker::Copy), Vec::new());
         types
     }
 
@@ -183,7 +186,7 @@ mod tests {
     #[test]
     fn place_types_follow_projections() {
         let types = table();
-        let user = Type::Struct(NominalId::new("main", "User"));
+        let user = Type::plain_struct(NominalId::new("main", "User"));
         let body = body_with_local(reference(false, reference(true, user.clone())));
         let base = Place::local(LocalId(1));
         assert_eq!(
@@ -215,7 +218,7 @@ mod tests {
     #[test]
     fn range_has_its_mir_fields() {
         let types = table();
-        let body = body_with_local(Type::Struct(NominalId::builtin_range()));
+        let body = body_with_local(Type::plain_struct(NominalId::builtin_range()));
         let end_inclusive =
             Place::local(LocalId(1)).project(Projection::Field(RANGE_END_INCLUSIVE));
         assert_eq!(end_inclusive.ty(&body, &types), Type::Bool);
@@ -227,8 +230,8 @@ mod tests {
     #[test]
     fn values_needing_a_drop() {
         let types = table();
-        let user = Type::Struct(NominalId::new("main", "User"));
-        let point = Type::Struct(NominalId::new("main", "Point"));
+        let user = Type::plain_struct(NominalId::new("main", "User"));
+        let point = Type::plain_struct(NominalId::new("main", "Point"));
         for ty in [
             Type::String,
             Type::String.nullable(),
@@ -250,7 +253,7 @@ mod tests {
             Type::Nothing,
             point.clone(),
             point.nullable(),
-            Type::Struct(NominalId::builtin_range()),
+            Type::plain_struct(NominalId::builtin_range()),
             reference(false, user.clone()),
             reference(true, user.clone()),
             reference(true, user).nullable(),

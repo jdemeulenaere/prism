@@ -507,7 +507,7 @@ impl Validator<'_> {
             }
             Rvalue::Discriminant(place) => {
                 if let Some(subject) = self.place_type(place, at) {
-                    if !matches!(subject, Type::Enum(_) | Type::Nullable(_)) {
+                    if !matches!(subject, Type::Enum { .. } | Type::Nullable(_)) {
                         self.report(format!("{} reads the discriminant of a {}", at, subject));
                     }
                 }
@@ -516,13 +516,13 @@ impl Validator<'_> {
             Rvalue::Aggregate(kind, operands) => {
                 let (found, fields) = match kind {
                     AggregateKind::Struct(id) => (
-                        Type::Struct(id.clone()),
+                        Type::plain_struct(id.clone()),
                         self.types
                             .struct_fields(id)
                             .map(|f| f.iter().map(|(_, _, ty)| ty.clone()).collect::<Vec<_>>()),
                     ),
                     AggregateKind::Variant { enum_id, index } => (
-                        Type::Enum(enum_id.clone()),
+                        Type::plain_enum(enum_id.clone()),
                         self.types
                             .enum_variants(enum_id)
                             .and_then(|variants| variants.get(*index))

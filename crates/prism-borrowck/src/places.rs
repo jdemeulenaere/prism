@@ -136,7 +136,7 @@ pub fn place_name(body: &Body, types: &TypeTable, place: &Place) -> Option<Strin
     let mut name = declaration.name.clone()?;
     let mut ty = declaration.ty.clone();
     for projection in &place.projections {
-        if let (Projection::Field(index), Type::Struct(id)) = (projection, &ty) {
+        if let (Projection::Field(index), Type::Struct { id, .. }) = (projection, &ty) {
             if let Some((field, _, _)) = types.struct_fields(id).and_then(|f| f.get(*index)) {
                 name = format!("{}.{}", name, field);
             }

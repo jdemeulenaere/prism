@@ -204,11 +204,11 @@ pub fn type_from_abi(ty: &AbiType) -> Type {
         } => {
             let id = NominalId::new(module.clone(), name.clone());
             match kind {
-                NominalKind::Struct => Type::Struct(id),
-                NominalKind::Enum => Type::Enum(id),
+                NominalKind::Struct => Type::plain_struct(id),
+                NominalKind::Enum => Type::plain_enum(id),
             }
         }
-        AbiType::Range => Type::Struct(NominalId::builtin_range()),
+        AbiType::Range => Type::plain_struct(NominalId::builtin_range()),
         AbiType::Unbound { name, .. } => Type::Opaque(name.clone()),
         AbiType::Nullable(inner) => Type::Nullable(Box::new(type_from_abi(inner))),
         AbiType::Ref { mutable, inner } => Type::Reference {
@@ -283,9 +283,9 @@ mod tests {
 
     #[test]
     fn test_nominal_identity_equality() {
-        let a_user = Type::Struct(NominalId::new("a/lib", "User"));
-        let b_user = Type::Struct(NominalId::new("b/lib", "User"));
-        let a_enum = Type::Enum(NominalId::new("a/lib", "User"));
+        let a_user = Type::plain_struct(NominalId::new("a/lib", "User"));
+        let b_user = Type::plain_struct(NominalId::new("b/lib", "User"));
+        let a_enum = Type::plain_enum(NominalId::new("a/lib", "User"));
         assert!(a_user.is_assignable_to(&a_user.clone()));
         assert!(!a_user.is_assignable_to(&b_user));
         assert!(!a_user.is_assignable_to(&a_enum));

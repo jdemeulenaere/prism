@@ -134,7 +134,7 @@ impl Printer<'_> {
                 Projection::Deref => format!("(*{})", text),
                 Projection::Field(index) => {
                     let name = match &ty {
-                        Some(Type::Struct(id)) => self
+                        Some(Type::Struct { id, .. }) => self
                             .types
                             .struct_fields(id)
                             .and_then(|fields| fields.get(*index))
@@ -358,10 +358,11 @@ pub(crate) mod tests {
         types.insert_definition(
             NominalId::new("main", "User"),
             TypeDef::Struct {
+                parameters: Vec::new(),
                 fields: vec![("name".to_string(), false, Type::String)],
             },
         );
-        types.insert_marker(NominalId::new("main", "User"), None);
+        types.insert_marker(NominalId::new("main", "User"), None, Vec::new());
         types
     }
 
@@ -372,7 +373,7 @@ pub(crate) mod tests {
     /// bb1: storage_dead _2; return
     /// ```
     pub(crate) fn small_file() -> MirFile {
-        let user = Type::Struct(NominalId::new("main", "User"));
+        let user = Type::plain_struct(NominalId::new("main", "User"));
         let mut locals = Arena::new();
         locals.alloc(local(Type::String, LocalKind::Return, None));
         locals.alloc(local(
