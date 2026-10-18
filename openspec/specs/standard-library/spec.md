@@ -6,11 +6,15 @@ The standard library is the Prism source the compiler ships under the reserved r
 ## Requirements
 
 ### Requirement: The Compiler Ships the Library
-The `prism` executable MUST contain the source of every library module and MUST NOT read library files from disk. The modules MUST be `/prism/core` and `/prism/collections`, the prelude modules, and `/prism/system`. Each MUST be a file of the package `prism`, or of a package below it, whose module path is `prism/<name>`.
+The `prism` executable MUST contain the source of every library module and MUST NOT read library files from disk. The modules MUST be `/prism/core` and `/prism/collections`, the prelude modules, and `/prism/system` and `/prism/composer` (compose, "The Composer Protocol Module"), which are imported explicitly. Each MUST be a file of the package `prism`, or of a package below it, whose module path is `prism/<name>`.
 
 #### Scenario: A library module is imported
 - **WHEN** `app/main.prism` declares `import /prism/system` and `fun main() { println(1); exitProcess(3) }`, in a workspace with no `prism` directory
 - **THEN** `prism run app/main.prism` prints `1` and exits with status 3
+
+#### Scenario: The composer module is not in the prelude
+- **WHEN** `prism check --explain-cache main.prism` runs on a file without imports, and again after the file declares `import /prism/composer`
+- **THEN** the first explanation names no `prism/composer.prism`, and the second names it
 
 ### Requirement: Library Modules Compile Like Workspace Files
 A library module MUST go through every stage a workspace file does: Phase 1 extracts its ABI, Phase 2 checks its bodies, its generics are instantiated per program, and its code is a unit of its own, cached like a workspace file's. A program MUST parse only the library modules it reaches: the prelude modules and those imported, directly or transitively.
@@ -167,3 +171,4 @@ Decisions from `standard-library` (planned autonomously on 2026-10-18, implement
 - **How the library is tested** (D13). `library_tests.rs` checks and compiles every module, formats it, compares the prelude modules' names and the module list. Fixtures add test modules with a `// library:` header (`Library::with_modules`), never reachable from the command line, so library diagnostics have real-source cases.
 - **Compose modules come with their changes** (D14). `/prism/compose` (with its prelude entry) and `/prism/ui` are created by `compose-transform`, `state-handles` and `ui-toolkit`, which fill them; empty stubs would specify nothing.
 - **Reports and watch sessions** (D15, R3). `prism check`'s report lists workspace files only, and `--explain-cache` lists library files first. Diagnostics take sources from the graph's nodes, never from disk, which library modules and watch overlays need. Library nodes come from the library, never from a watch session's store, so they are never watched, re-parsed or reloaded.
+- **`/prism/composer` is a protocol module outside the prelude** (`compose-runtime`, D10). It declares the compose runtime's entry points as private externals with public wrappers over `Int` words, the machine form generated composables pass, so fixtures can write composables in lowered form. Its names never reach a program that does not import it, and it is parsed only when imported. It is not `/prism/compose/runtime`, `compose-transform`'s prelude module for applications.

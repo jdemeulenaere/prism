@@ -114,11 +114,15 @@ Output MUST appear in the order the program writes it. It MUST be written to std
 - **THEN** it prints `-1.5`, `true`, `false` and `true`
 
 ### Requirement: Runtime Errors End the Program
-A runtime error MUST flush the program's output, write `panic: <message>` and then `  at <path>:<line>:<column>` to stderr, where the path is the file's path relative to the workspace root and the position is that of the failing operation, and exit with status 101. "out of memory", and "stack overflow" raised inside glue, MUST write no location line. No further code of the program MUST run, and no drop MUST run.
+A runtime error MUST flush the program's output, write `panic: <message>` and then `  at <path>:<line>:<column>` to stderr, where the path is the file's path relative to the workspace root and the position is that of the failing operation, and exit with status 101. No further code of the program MUST run, and no drop MUST run. "out of memory", "stack overflow" raised inside glue, and composition misuse (compose) MUST write no location line.
 
 #### Scenario: Runtime error location
 - **WHEN** `app/main.prism` declares `fun zero(): Int = 0` on line 2 and `fun main() { val a = 1; println(a / zero()) }` on line 3, with `a / zero()` starting at column 33
 - **THEN** stderr is exactly `panic: division by zero` and `  at app/main.prism:3:33`, each followed by a newline
+
+#### Scenario: A composition misuse has no location
+- **WHEN** `import /prism/composer` and `fun main() { val c = startComposition { k -> endGroup(k) } }` run
+- **THEN** stderr is exactly `panic: composition misuse: end of a group that was not started` and a newline, with no location line
 
 ### Requirement: A Runtime Error Under Watch Ends Only the Run
 Under `prism run --watch`, a runtime error MUST be reported as "Runtime Errors End the Program" states, and MUST end the program's run instead of the process: no further code of the run and no drop runs, and the watch session continues (`hot-reload`).
@@ -384,6 +388,17 @@ Under `--check-allocations`, a free of memory that is not a live allocation, or 
 #### Scenario: A double free is reported
 - **WHEN** a program run with `--check-allocations` frees the same allocation twice
 - **THEN** stderr holds `allocation check: freed memory that is not allocated` and the exit status is 102
+
+### Requirement: Undisposed Compositions Are Reported
+Under `--check-allocations`, when `main` returns, compositions of the program thread that were started and not disposed (compose, "Disposing a Composition Releases Everything") MUST be reported, after the output is flushed and before any report of live allocations, as `allocation check: compositions still live at exit: <n>` on stderr, and the program MUST exit with status 102. Without the option they MUST NOT be counted.
+
+#### Scenario: A composition that is never disposed
+- **WHEN** `import /prism/composer` and `fun main() { val c = startComposition { k -> println("ok") } }` run with `--check-allocations`
+- **THEN** stdout holds `ok`, stderr is exactly `allocation check: compositions still live at exit: 1` and a newline, and the exit status is 102
+
+#### Scenario: An undisposed composition and what it holds
+- **WHEN** `fun Greeting(k: Int, name: String) { startRestartGroup(k, 3); println("hello " + name); endRestartGroup(k) { c -> Greeting(c, name.clone()) } }` is declared, and `fun main() { val c = startComposition { k -> Greeting(k, "a" + "b") } }` runs with `--check-allocations` and `import /prism/composer`
+- **THEN** stdout is `hello ab`, stderr is the line `allocation check: compositions still live at exit: 1` followed by the line of live allocations, which counts the restart function's environment and its string, and the exit status is 102
 
 ### Requirement: Running Out of Memory Is a Runtime Error
 An allocation the system cannot satisfy, or a string whose length would not fit in memory, MUST raise the runtime error "out of memory", which ends the program as any runtime error does but reports no location.
@@ -928,3 +943,8 @@ Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and
 
 - **A runtime error under `--watch` stops the run, not the process** (D13). The error is reported as for `prism run`; then `panic.rs::stop` clears the stack limit, tells the session and parks the program thread forever, so no further code and no drop runs, as this spec requires, and the session waits for the next change, which runs `main` in a fresh program. A parked thread holds no runtime lock and keeps 8 MiB of reserved address space. Rejected: exiting the session (one bad edit would end it); unwinding (Prism has none).
 - **Cache options under `--watch`** (D19). `--no-cache` keeps the whole session out of the build cache, with keys computed for the process alone; `--explain-cache` explains the first load only, since the `reload: applied` line already names what each reload defines.
+
+Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-18 and 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **Composition misuse has no location** (D12). It is one runtime error kind, `composition misuse: <detail>`, raised by an entry point of the compose runtime, which has no caller location; passing one would cost a word per call for an error the generated code never produces.
+- **Undisposed compositions fail the allocation check** (D13). A composition whose restart functions have inline environments holds no allocation of the program, so the leak report alone would miss it. `prism-runtime` calls a finish report, which `Program::run` installs from `prism-compose`, before its leak line; either line makes the status 102.

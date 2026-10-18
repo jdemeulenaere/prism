@@ -290,6 +290,8 @@ The leaf pass grows x1.00 and the first composition per group x1.06 from 1,000 t
 
 Startup after the change (task 9.2, `cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture`, the same machine): `prism run` of `examples/run/main.prism` reaches `main` in a median of 8.8 ms cold (p90 8.9 ms) and 6.3 ms warm (p90 8.5 ms), under the 15 ms target. Registering the compose table adds 23 symbols to the JIT's table, and the finish report is one function pointer stored per run.
 
+Re-measured at archive time on an idle machine (2026-10-19, release build, two runs of the benchmark): 8.8 ms cold (p90 8.8 to 9.0 ms) and 1.74 to 1.79 ms warm (p90 1.9 to 2.0 ms), against about 7.8 ms and 1.5 ms before this change; a one-line program reaches `main` in 2.07 ms cold and 0.70 ms warm (1.8 ms and 0.73 ms before). The 6.3 ms warm median above came from a busy machine: a first run of the benchmark during another build gave 13.1 ms cold and 8.0 ms warm, with the stages' sum unchanged. Nothing of the compose runtime runs for a program that does not use it: its per-thread state is a `const` thread local touched only by an entry point, or by the finish report under `--check-allocations`, and the 23 symbols are inserted into the JIT's hash map once per run, so no fix was needed.
+
 Compile-time cost of the whole change: none. No stage, analysis or pass is added. The backend's entry-point lookup covers one more table, and `/prism/composer` is parsed only when imported.
 
 ### D17. A new `compose` capability, and how the change is tested
