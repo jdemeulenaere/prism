@@ -97,6 +97,58 @@ fn squeezed(source: &str) -> Option<String> {
     Some(out)
 }
 
+/// `source` with a line comment at the end of every line that ends after a token, which keeps
+/// the parse since the newline after it is kept.
+fn with_trailing_comments(source: &str) -> Option<String> {
+    let tokens = prism_lexer::Lexer::new(source).tokenize_all();
+    let mut out = String::new();
+    let mut copied = 0;
+    for (index, pair) in tokens.windows(2).enumerate() {
+        if matches!(pair[0].kind, prism_lexer::TokenKind::Error(_)) {
+            return None;
+        }
+        if pair[1].is_preceded_by_newline || pair[1].kind == prism_lexer::TokenKind::Eof {
+            out.push_str(&source[copied..pair[0].span.end]);
+            out.push_str(&format!(" // trailing {}", index));
+            copied = pair[0].span.end;
+        }
+    }
+    out.push_str(&source[copied..]);
+    Some(out)
+}
+
+/// `source` with every identifier made 24 characters longer, which forces the width-aware
+/// breaks everywhere.
+fn with_long_names(source: &str) -> Option<String> {
+    let tokens = prism_lexer::Lexer::new(source).tokenize_all();
+    let mut out = String::new();
+    let mut copied = 0;
+    for token in &tokens {
+        match &token.kind {
+            prism_lexer::TokenKind::Error(_) => return None,
+            prism_lexer::TokenKind::Ident(_) => {
+                out.push_str(&source[copied..token.span.end]);
+                out.push_str("_abcdefghijklmnopqrstuvw");
+                copied = token.span.end;
+            }
+            _ => {}
+        }
+    }
+    out.push_str(&source[copied..]);
+    prism_parser::parse_source(&out).ok()?;
+    Some(out)
+}
+
+#[test]
+fn trailing_comments_on_every_line_keep_their_order_and_the_meaning() {
+    check_variants(with_trailing_comments);
+}
+
+#[test]
+fn long_names_break_without_changing_the_meaning() {
+    check_variants(with_long_names);
+}
+
 #[test]
 fn comments_anywhere_keep_their_order_and_the_meaning() {
     check_variants(with_comments_everywhere);
