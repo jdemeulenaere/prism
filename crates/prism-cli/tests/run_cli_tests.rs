@@ -132,13 +132,13 @@ fn dumping_a_file_s_ir() {
 
 #[test]
 fn dumping_a_file_the_backend_rejects() {
-    let directory = single_file("dump_rejected", "fun f(h: Heap<Int>): Int = 1\n");
+    let directory = single_file("dump_rejected", "fun f(g: () -> Int): Int = 1\n");
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "");
     assert!(
         stderr(&output).starts_with(
-            "error[E6001]: the Tier 1 backend does not support 'Heap' values yet\n  --> main.prism:1:1\n"
+            "error[E6001]: the Tier 1 backend does not support function values and closures yet\n  --> main.prism:1:1\n"
         ),
         "{}",
         stderr(&output)
@@ -576,5 +576,152 @@ fn the_allocation_check_combines_with_the_other_options() {
     );
     let output = prism(&["run", "main.prism", "--check-allocations"], &directory);
     assert_eq!(output.status.code(), Some(1), "an option after the file");
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// The name the IR `ir` gives the function it imports as `symbol`, if it imports it.
+fn imported_name<'a>(ir: &'a str, symbol: &str) -> Option<&'a str> {
+    let import = format!(" = %\"{}\" ", symbol);
+    ir.lines()
+        .find_map(|line| Some(line.trim().split_once(&import)?.0))
+}
+
+/// The lines of the IR `ir` that call the function it imports as `symbol`.
+fn calls_of<'a>(ir: &'a str, symbol: &str) -> Vec<&'a str> {
+    let Some(name) = imported_name(ir, symbol) else {
+        return Vec::new();
+    };
+    let call = format!("call {}(", name);
+    ir.lines().filter(|line| line.contains(&call)).collect()
+}
+
+/// code-generation: "Constructing a box allocates its contents' size".
+#[test]
+fn constructing_a_box_allocates_its_contents_size() {
+    let directory = single_file(
+        "box_allocation",
+        "struct Point : Copy { val x: Int, val y: Int }\nfun f(p: Point): Heap<Point> = Heap(p)\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let ir = function_ir(&dump, "main::f");
+    let calls = calls_of(ir, "prism_rt_allocate");
+    assert_eq!(calls.len(), 1, "{}", ir);
+    // The size, then the alignment, as the constants Cranelift annotates the call with.
+    let (_, constants) = calls[0].split_once(';').expect("annotated constants");
+    let values: Vec<&str> = constants
+        .split(',')
+        .map(|constant| constant.trim().rsplit(' ').next().unwrap_or(""))
+        .collect();
+    assert_eq!(values, ["16", "8"], "{}", calls[0]);
+    // The point is written into the allocation after the call.
+    let after = &ir[ir.find(calls[0]).unwrap()..];
+    assert!(after.contains("store notrap aligned"), "{}", ir);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Box glue in the IR dump".
+#[test]
+fn box_glue_in_the_ir_dump() {
+    let directory = single_file(
+        "box_glue",
+        "enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }\nfun f(e: Expr) {}\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    assert_eq!(
+        function_headers(&dump),
+        [
+            "main::f",
+            "main#drop(Heap<main::Expr>)",
+            "main#drop(main::Expr)"
+        ]
+    );
+    let enum_glue = function_ir(&dump, "main#drop(main::Expr)");
+    assert!(
+        calls_directly(enum_glue, "main#drop(Heap<main::Expr>)"),
+        "{}",
+        enum_glue
+    );
+    let box_glue = function_ir(&dump, "main#drop(Heap<main::Expr>)");
+    let contents = calls_of(box_glue, "main#drop(main::Expr)");
+    let frees = calls_of(box_glue, "prism_rt_free");
+    assert_eq!((contents.len(), frees.len()), (1, 1), "{}", box_glue);
+    assert!(
+        box_glue.find(contents[0]) < box_glue.find(frees[0]),
+        "the contents are dropped before the allocation is freed:\n{}",
+        box_glue
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Box clone glue in the IR dump".
+#[test]
+fn box_clone_glue_in_the_ir_dump() {
+    let directory = single_file(
+        "box_clone_glue",
+        "fun f(h: &Heap<Int>): Heap<Int> = h.clone()\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    assert!(
+        calls_directly(function_ir(&dump, "main::f"), "main#clone(Heap<Int>)"),
+        "{}",
+        dump
+    );
+    let glue = function_ir(&dump, "main#clone(Heap<Int>)");
+    assert!(calls_directly(glue, "prism_rt_allocate"), "{}", glue);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Equality glue in the IR dump".
+#[test]
+fn equality_glue_in_the_ir_dump() {
+    let directory = single_file(
+        "equality_glue",
+        "enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }\nfun same(a: &Expr, b: &Expr): Bool = a == b\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let glue = function_ir(&dump, "main#equals(main::Expr)");
+    assert!(calls_directly(glue, "main#equals(main::Expr)"), "{}", glue);
+    let same = function_ir(&dump, "main::same");
+    assert!(calls_directly(same, "main#equals(main::Expr)"), "{}", same);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "Glue of an imported recursive type".
+#[test]
+fn glue_of_an_imported_recursive_type() {
+    let directory = temporary_directory("glue_imported_recursive");
+    write(
+        &directory.join("lib/tree.prism"),
+        "package lib\npublic enum Tree { Leaf, Node(Heap<Tree>, Int, Heap<Tree>) }\npublic fun leaf(): Tree = Tree.Leaf\n",
+    );
+    write(
+        &directory.join("app/main.prism"),
+        "package app\nimport /lib/tree\nfun main() { val t = Tree.Node(Heap(leaf()), 1, Heap(leaf())); println(t == t) }\n",
+    );
+    let run = prism(
+        &["run", "--check-allocations", "app/main.prism"],
+        &directory,
+    );
+    assert_eq!(run.status.code(), Some(0), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "true\n");
+    let dump = prism(&["dump-clif", "app/main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let headers = function_headers(&dump);
+    for glue in [
+        "app/main#drop(lib/tree::Tree)",
+        "app/main#drop(Heap<lib/tree::Tree>)",
+        "app/main#equals(lib/tree::Tree)",
+    ] {
+        assert!(headers.contains(&glue), "no {} in {:?}", glue, headers);
+    }
     fs::remove_dir_all(&directory).ok();
 }

@@ -1,5 +1,5 @@
 // expect: ok
-// run: 1
+// run: 0
 struct Node { val next: Heap<Int>? }
 fun size(n: &Node): Int = 1
-fun main() { println(1) }
+fun main() { println(size(Node(Heap(1)))) }

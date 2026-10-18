@@ -8,7 +8,7 @@
 //! statement or terminator, in block order, that uses an unsupported type or operation. A body
 //! that passes is one [`crate::lower`] can lower.
 //!
-//! Scalars, `Unit`, strings, references, structs, enums and nullables are supported, unless a
+//! Scalars, `Unit`, strings, boxes, references, structs, enums and nullables are supported, unless a
 //! struct, enum or nullable holds something that is not: a type is named by the first construct
 //! its fields or payloads need, in declaration order, as a reference is named by its referent
 //! (D18 of `runtime-strings-and-drops`).
@@ -22,16 +22,16 @@ use prism_mir::{
     TerminatorKind,
 };
 use prism_typed_tree::{Type, TypeTable};
+use std::collections::HashSet;
 
 /// How deep [`classify`] looks into nested structs and enums. Infinitely sized types are
-/// rejected by the type checker (`E4023`) and `Heap<T>` ends the walk, so only a broken type
-/// table reaches it.
+/// rejected by the type checker (`E4023`), and a box's contents are looked into once per type,
+/// so only a broken type table reaches it.
 const MAXIMUM_DEPTH: usize = 256;
 
 /// A construct the backend does not compile yet, as `E6001` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Construct {
-    HeapValues,
     FunctionValues,
     GenericCalls,
     ComposableFunctions,
@@ -50,7 +50,6 @@ impl Construct {
     /// How the diagnostic names the construct.
     pub fn description(&self) -> String {
         match self {
-            Construct::HeapValues => "'Heap' values".to_string(),
             Construct::FunctionValues => "function values and closures".to_string(),
             Construct::GenericCalls => "calls of generic functions".to_string(),
             Construct::ComposableFunctions => "composable functions".to_string(),
@@ -64,7 +63,6 @@ impl Construct {
     /// The planned change that will support the construct, if one is planned.
     pub fn change(&self) -> Option<&'static str> {
         match self {
-            Construct::HeapValues => Some("heap-boxes"),
             Construct::FunctionValues => Some("closures"),
             Construct::GenericCalls => Some("monomorphization"),
             Construct::ComposableFunctions => Some("compose-transform"),
@@ -147,10 +145,17 @@ pub fn first_unsupported(body: &Body, types: &TypeTable) -> Option<(Construct, S
 /// nullable, the first one its fields or payloads need, in declaration order (D14 and D19 of
 /// `codegen-aggregates`).
 pub fn classify(ty: &Type, types: &TypeTable) -> Option<Construct> {
-    classify_at(ty, types, 0)
+    classify_at(ty, types, &mut HashSet::new(), 0)
 }
 
-fn classify_at(ty: &Type, types: &TypeTable, depth: usize) -> Option<Construct> {
+/// [`classify`] of `ty`, where `boxed` holds the contents of the boxes already looked into: a
+/// type reaching itself through a box needs nothing more the second time (D17 of `heap-boxes`).
+fn classify_at(
+    ty: &Type,
+    types: &TypeTable,
+    boxed: &mut HashSet<Type>,
+    depth: usize,
+) -> Option<Construct> {
     let unknown = || Some(Construct::UnknownType(ty.to_string()));
     if depth > MAXIMUM_DEPTH {
         return unknown();
@@ -165,20 +170,27 @@ fn classify_at(ty: &Type, types: &TypeTable, depth: usize) -> Option<Construct> 
         | Type::Nothing => None,
         // A reference and a nullable are named by what they hold.
         Type::Reference { inner, .. } | Type::Nullable(inner) => {
-            classify_at(inner, types, depth + 1)
+            classify_at(inner, types, boxed, depth + 1)
         }
-        Type::Heap(_) => Some(Construct::HeapValues),
+        // A box is named by its contents (D3 of `heap-boxes`).
+        Type::Heap(inner) => {
+            if boxed.insert(inner.as_ref().clone()) {
+                classify_at(inner, types, boxed, depth + 1)
+            } else {
+                None
+            }
+        }
         Type::Struct { id, arguments } => match types.instantiated_fields(id, arguments) {
             Some(fields) => fields
                 .iter()
-                .find_map(|(_, _, field)| classify_at(field, types, depth + 1)),
+                .find_map(|(_, _, field)| classify_at(field, types, boxed, depth + 1)),
             None => unknown(),
         },
         Type::Enum { id, arguments } => match types.instantiated_variants(id, arguments) {
             Some(variants) => variants
                 .iter()
                 .flat_map(|(_, payloads)| payloads)
-                .find_map(|payload| classify_at(payload, types, depth + 1)),
+                .find_map(|payload| classify_at(payload, types, boxed, depth + 1)),
             None => unknown(),
         },
         Type::Fn { .. } => Some(Construct::FunctionValues),
@@ -303,7 +315,8 @@ impl BodyChecker<'_> {
                 if *is_compose {
                     return Some(Construct::ComposableFunctions);
                 }
-                if !type_arguments.is_empty() {
+                // A built-in's type argument, the contents of `Heap(...)`, is no generic call.
+                if !type_arguments.is_empty() && !matches!(callee, Callee::Builtin(_)) {
                     return Some(Construct::GenericCalls);
                 }
                 match callee {
@@ -313,7 +326,11 @@ impl BodyChecker<'_> {
                 arguments
                     .iter()
                     .find_map(|argument| self.operand(argument))
-                    .or_else(|| parameters.iter().find_map(|ty| classify(ty, self.types)))
+                    .or_else(|| {
+                        parameters
+                            .iter()
+                            .find_map(|ty| classify(&ty.substitute(type_arguments), self.types))
+                    })
                     .or_else(|| self.place(destination))
                     .or_else(|| {
                         self.place_type(destination)
@@ -379,32 +396,27 @@ mod tests {
     #[test]
     fn a_struct_is_rejected_at_its_construction() {
         let (message, line, column) = single(
-            "struct P { val next: Heap<Int>? }\nfun main() { val p = P(null); println(1) }\n",
+            "struct P { val run: () -> Int }\nfun one(): Int = 1\nfun main() { val p = P(one); println(1) }\n",
         );
-        names(&message, "'Heap' values");
-        assert_eq!((line, column), (2, 22));
+        names(&message, "function values and closures");
+        assert_eq!(line, 3);
+        let _ = column;
     }
 
     #[test]
     fn every_row_of_the_table() {
         let cases: &[(&str, &str)] = &[
             (
-                "struct P { val next: Heap<Int>? }\nfun f(p: &P): Int = 1\n",
-                "'Heap' values",
-            ),
-            (
                 "struct P { val n: Int, val name: String?, val h: Heap<Int>, val f: () -> Int }\nfun f(p: &P): Int = 1\n",
-                "'Heap' values",
-            ),
-            (
-                "struct P { val n: Int, val name: String?, val f: () -> Int, val h: Heap<Int> }\nfun f(p: &P): Int = 1\n",
                 "function values and closures",
             ),
-            ("fun f(h: Heap<Int>) {}\n", "'Heap' values"),
-            ("fun f() { val h: Heap<Int>? = null }\n", "'Heap' values"),
             (
-                "enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }\nfun f() { val e = Expr.Literal(1) }\n",
-                "'Heap' values",
+                "struct P { val n: Int, val h: Heap<() -> Int>? }\nfun f(p: &P): Int = 1\n",
+                "function values and closures",
+            ),
+            (
+                "enum Job { Run(Heap<Job>, () -> Int), Idle }\nfun f() { val j = Job.Idle }\n",
+                "function values and closures",
             ),
             (
                 "fun f() { val g = { 1 } }\n",
@@ -474,11 +486,10 @@ mod tests {
 
     #[test]
     fn notes_name_the_change() {
-        let error =
-            check_file(&lower_source("fun f() { val h: Heap<Int>? = null }\n")).unwrap_err();
+        let error = check_file(&lower_source("fun f() { val g = { 1 } }\n")).unwrap_err();
         assert_eq!(
             error[0].notes,
-            ["support for 'Heap' values is planned in the 'heap-boxes' change"]
+            ["support for function values and closures is planned in the 'closures' change"]
         );
     }
 
@@ -486,26 +497,40 @@ mod tests {
     fn one_error_per_body() {
         // The scenario "One error per body" of the `code-generation` spec.
         let errors = errors(
-            "fun f(): Int { val a: Heap<Int>? = null; val b: Heap<Int>? = null; return 1 }\n\
-             fun g(): Int { val c: Heap<Int>? = null; return 2 }\n\
+            "fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }\n\
+             fun g(): Int { val c = { 3 }; return 2 }\n\
              fun main() {}\n",
         );
         let positions: Vec<(u32, u32)> = errors.iter().map(|e| (e.1, e.2)).collect();
-        assert_eq!(positions, [(1, 36), (2, 36)]);
+        assert_eq!(positions, [(1, 24), (2, 24)]);
     }
 
     #[test]
     fn unsupported_signatures_are_reported_at_the_declaration() {
-        let (message, line, column) = single("fun main() {}\nfun first(h: Heap<Int>): Int = 1\n");
-        names(&message, "'Heap' values");
+        let (message, line, column) = single("fun main() {}\nfun first(g: () -> Int): Int = 1\n");
+        names(&message, "function values and closures");
         assert_eq!((line, column), (2, 1));
     }
 
     #[test]
     fn generic_and_closure_bodies_are_not_checked() {
         assert_eq!(
-            errors("fun <T> keep(x: T): T { val h: Heap<Int>? = null; return x }\n"),
+            errors("fun <T> keep(x: T): T { val g = { 1 }; return x }\n"),
             []
         );
+    }
+
+    #[test]
+    fn boxes_are_supported() {
+        let source = "enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }\n\
+             struct Node { val value: Int, val next: Heap<Node>? }\n\
+             fun f(h: Heap<Int>): Int = h.unbox()\n\
+             fun main() {\n\
+                 val e = Expr.Add(Heap(Expr.Lit(1)), Heap(Expr.Lit(2)))\n\
+                 val n = Node(1, Heap(Node(2, null)))\n\
+                 val h: Heap<Int>? = null\n\
+                 println(f(Heap(3)))\n\
+             }\n";
+        assert_eq!(errors(source), []);
     }
 }

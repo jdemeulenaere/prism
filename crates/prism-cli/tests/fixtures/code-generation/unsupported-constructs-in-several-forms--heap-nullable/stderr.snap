@@ -1,5 +1,0 @@
-error[E6001]: the Tier 1 backend does not support 'Heap' values yet
-  --> main.prism:3:34
-    3 | fun main() { val h: Heap<Int>? = null }
-      |                                  ^
-   = note: support for 'Heap' values is planned in the 'heap-boxes' change

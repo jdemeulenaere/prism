@@ -132,6 +132,21 @@ pub fn panic_without_location(kind: PanicKind, detail: &str) -> ! {
     report(&format!("panic: {}\n", panic_message(kind, detail)))
 }
 
+/// Reports the runtime error of code `kind` without a location line and ends the process.
+/// Called by generated code that has no location to report: drop, clone and equality glue,
+/// which raise "stack overflow" when they recurse deeper than the stack allows (D14 of
+/// `heap-boxes`).
+#[no_mangle]
+pub extern "C" fn prism_rt_panic_without_location(kind: u32) -> ! {
+    match PanicKind::from_code(kind) {
+        Some(kind) => panic_without_location(kind, ""),
+        None => report(&format!(
+            "panic: internal error: unknown runtime error {}\n",
+            kind
+        )),
+    }
+}
+
 /// What a slot of the function table holds until a function fills it. In a program that
 /// checked, no call reaches it; it ends the program with a runtime error rather than jumping to
 /// an invalid address. It is called with whatever arguments the call site passes, which it

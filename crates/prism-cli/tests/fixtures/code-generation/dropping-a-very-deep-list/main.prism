@@ -1,0 +1,13 @@
+// expect: ok
+// run: 101
+struct Node { val next: Heap<Node>? }
+
+fun main() {
+    var list: Heap<Node>? = null
+    var i = 0
+    while (i < 1000000) {
+        list = Heap(Node(list))
+        i += 1
+    }
+    println(i)
+}

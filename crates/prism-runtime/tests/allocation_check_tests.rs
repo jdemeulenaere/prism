@@ -88,3 +88,27 @@ fn a_leak_ends_the_run_with_status_102() {
     );
     assert_eq!(status, Some(ALLOCATION_CHECK_EXIT_STATUS));
 }
+
+#[test]
+fn a_runtime_error_without_a_location_writes_no_location_line() {
+    // "stack overflow" raised inside glue, which has no location (D14 of `heap-boxes`): the
+    // output printed before is flushed, then exactly the message, with status 101.
+    if is_child("a_runtime_error_without_a_location_writes_no_location_line") {
+        prism_runtime::start(Vec::new(), false);
+        prism_rt_print_int(3);
+        prism_rt_print_newline();
+        prism_runtime::prism_rt_panic_without_location(
+            prism_runtime::PanicKind::StackOverflow as u32,
+        );
+    }
+    let (stdout, stderr, status) =
+        run_child("a_runtime_error_without_a_location_writes_no_location_line");
+    assert!(stdout.contains("3\n"), "stdout: {}", stdout);
+    assert!(
+        stderr.ends_with("panic: stack overflow\n"),
+        "stderr: {}",
+        stderr
+    );
+    assert!(!stderr.contains("  at "), "stderr: {}", stderr);
+    assert_eq!(status, Some(prism_runtime::PANIC_EXIT_STATUS));
+}

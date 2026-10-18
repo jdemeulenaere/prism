@@ -18,8 +18,9 @@
 //! of any other value does nothing (D14 of `codegen-aggregates`), and its clone is a copy. Strings
 //! are built inline from literals and otherwise by the runtime's string functions (D7).
 
+use crate::equality::{Compared, Comparison};
 use crate::error::BackendError;
-use crate::glue::{Glue, GlueKind};
+use crate::glue::{allocate_box, free_box, Glue, GlueKind};
 use crate::layout::{Layout, Member, Shape, StringField};
 use crate::representation::{is_pointer, representation, signature, Representation};
 use crate::symbols::{accessor_symbol, callee_symbol};
@@ -70,6 +71,15 @@ enum Lowered {
 }
 
 impl Lowered {
+    /// The value as [`crate::equality`] compares it.
+    fn compared(self) -> Compared {
+        match self {
+            Lowered::Empty => Compared::Empty,
+            Lowered::Scalar(value) => Compared::Scalar(value),
+            Lowered::Memory(address) => Compared::Memory(address),
+        }
+    }
+
     fn scalar(self) -> Result<Value, BackendError> {
         match self {
             Lowered::Scalar(value) => Ok(value),
@@ -118,6 +128,8 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     glue: HashMap<Glue, ir::FuncRef>,
     /// The global value of each data object the function addresses.
     globals: HashMap<DataId, ir::GlobalValue>,
+    /// The functions comparisons call: the runtime's string equality and equality glue.
+    compared_functions: HashMap<FuncId, ir::FuncRef>,
 }
 
 impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
@@ -139,6 +151,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             runtime: HashMap::new(),
             glue: HashMap::new(),
             globals: HashMap::new(),
+            compared_functions: HashMap::new(),
         };
         lowering.lower_body()?;
         let config = lowering.context.module.target_config();
@@ -824,199 +837,20 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
 
     // Equality.
 
-    /// `left == right` over values of `ty`, as a `Bool` (D13): structs field by field, enums by
-    /// tag and then the current variant's payloads, nullables by presence and then payload,
-    /// references by what they refer to, each scalar as its type compares.
+    /// `left == right` over values of `ty`, as a `Bool`, expanded inline up to the boxes whose
+    /// contents compare in equality glue ([`crate::equality`]).
     fn equality(
         &mut self,
         ty: &Type,
         left: Lowered,
         right: Lowered,
     ) -> Result<Value, BackendError> {
-        let result = self.builder.declare_var(types::I8);
-        let unequal = self.builder.create_block();
-        let done = self.builder.create_block();
-        self.compare(ty, left, right, unequal)?;
-        let one = self.builder.ins().iconst(types::I8, 1);
-        self.builder.def_var(result, one);
-        self.builder.ins().jump(done, &[]);
-        self.builder.switch_to_block(unequal);
-        let zero = self.builder.ins().iconst(types::I8, 0);
-        self.builder.def_var(result, zero);
-        self.builder.ins().jump(done, &[]);
-        self.builder.switch_to_block(done);
-        Ok(self.builder.use_var(result))
-    }
-
-    /// Continues in a new block when `condition` holds, and jumps to `otherwise` when not.
-    fn continue_if(&mut self, condition: Value, otherwise: Block) {
-        let next = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(condition, next, &[], otherwise, &[]);
-        self.builder.switch_to_block(next);
-    }
-
-    /// The value of `member` of the value in memory at `address`.
-    fn member(&mut self, address: Value, member: &Member) -> Result<Lowered, BackendError> {
-        let member_address = self.add(address, member.offset);
-        self.read_location(Location::Memory(member_address), &member.ty)
-    }
-
-    /// Emits the comparison of `left` and `right`, of type `ty`, jumping to `unequal` as soon as
-    /// they differ and falling through when they are equal.
-    fn compare(
-        &mut self,
-        ty: &Type,
-        left: Lowered,
-        right: Lowered,
-        unequal: Block,
-    ) -> Result<(), BackendError> {
-        let memory = |value: Lowered| match value {
-            Lowered::Memory(address) => Ok(address),
-            other => Err(BackendError::new(format!(
-                "expected a value in memory, found {:?}",
-                other
-            ))),
+        let mut comparison = Comparison {
+            builder: &mut self.builder,
+            context: &mut *self.context,
+            functions: &mut self.compared_functions,
         };
-        match ty {
-            Type::Unit | Type::Nothing => {}
-            Type::Int | Type::Bool | Type::Char => {
-                let equal = self
-                    .builder
-                    .ins()
-                    .icmp(IntCC::Equal, left.scalar()?, right.scalar()?);
-                self.continue_if(equal, unequal);
-            }
-            Type::Float => {
-                let equal =
-                    self.builder
-                        .ins()
-                        .fcmp(FloatCC::Equal, left.scalar()?, right.scalar()?);
-                self.continue_if(equal, unequal);
-            }
-            // Strings compare their text, in the runtime (D11 of `runtime-strings-and-drops`).
-            Type::String => {
-                let function = self.runtime_function("prism_rt_string_equals")?;
-                let call = self
-                    .builder
-                    .ins()
-                    .call(function, &[memory(left)?, memory(right)?]);
-                let equal = self.builder.inst_results(call)[0];
-                self.continue_if(equal, unequal);
-            }
-            // References compare what they refer to, never their addresses.
-            Type::Reference { inner, .. } | Type::Heap(inner) => {
-                let left = self.read_location(Location::Memory(left.scalar()?), inner)?;
-                let right = self.read_location(Location::Memory(right.scalar()?), inner)?;
-                self.compare(inner, left, right, unequal)?;
-            }
-            Type::Nullable(inner) if is_pointer(inner) => {
-                let (left, right) = (left.scalar()?, right.scalar()?);
-                let left_present = self.builder.ins().icmp_imm_s(IntCC::NotEqual, left, 0);
-                let right_present = self.builder.ins().icmp_imm_s(IntCC::NotEqual, right, 0);
-                let same = self
-                    .builder
-                    .ins()
-                    .icmp(IntCC::Equal, left_present, right_present);
-                self.continue_if(same, unequal);
-                self.compare_if_present(left_present, |lowering| {
-                    lowering.compare(
-                        inner,
-                        Lowered::Scalar(left),
-                        Lowered::Scalar(right),
-                        unequal,
-                    )
-                })?;
-            }
-            Type::Nullable(inner) => {
-                let (left, right) = (memory(left)?, memory(right)?);
-                let layout = self.layout(ty)?;
-                let Shape::Nullable { payload } = layout.shape.clone() else {
-                    return Err(BackendError::new(format!("a comparison of {}", ty)));
-                };
-                let left_tag = self.builder.ins().load(types::I8, aligned(), left, 0);
-                let right_tag = self.builder.ins().load(types::I8, aligned(), right, 0);
-                let same = self.builder.ins().icmp(IntCC::Equal, left_tag, right_tag);
-                self.continue_if(same, unequal);
-                self.compare_if_present(left_tag, |lowering| {
-                    let left = lowering.member(left, &payload)?;
-                    let right = lowering.member(right, &payload)?;
-                    lowering.compare(inner, left, right, unequal)
-                })?;
-            }
-            Type::Struct { .. } => {
-                let (left, right) = (memory(left)?, memory(right)?);
-                let layout = self.layout(ty)?;
-                let Shape::Struct { fields } = &layout.shape else {
-                    return Err(BackendError::new(format!("a comparison of {}", ty)));
-                };
-                for field in fields {
-                    let left = self.member(left, field)?;
-                    let right = self.member(right, field)?;
-                    self.compare(&field.ty, left, right, unequal)?;
-                }
-            }
-            Type::Enum { .. } => {
-                let (left, right) = (memory(left)?, memory(right)?);
-                let layout = self.layout(ty)?;
-                let (tag, variants) = match &layout.shape {
-                    Shape::Enum { tag, variants } => (*tag, variants),
-                    // No value of an enum without variants exists.
-                    Shape::Uninhabited => return Ok(()),
-                    _ => return Err(BackendError::new(format!("a comparison of {}", ty))),
-                };
-                let left_tag = self.builder.ins().load(tag, aligned(), left, 0);
-                let right_tag = self.builder.ins().load(tag, aligned(), right, 0);
-                let same = self.builder.ins().icmp(IntCC::Equal, left_tag, right_tag);
-                self.continue_if(same, unequal);
-                if variants.iter().all(|variant| variant.payloads.is_empty()) {
-                    return Ok(());
-                }
-                // The tags are equal: compare the payloads of the current variant.
-                let equal = self.builder.create_block();
-                let mut switch = Switch::new();
-                let mut cases = Vec::new();
-                for (index, variant) in variants.iter().enumerate() {
-                    if variant.payloads.is_empty() {
-                        continue;
-                    }
-                    let case = self.builder.create_block();
-                    switch.set_entry(index as u128, case);
-                    cases.push((case, variant.payloads.clone()));
-                }
-                switch.emit(&mut self.builder, left_tag, equal);
-                for (case, payloads) in cases {
-                    self.builder.switch_to_block(case);
-                    for payload in &payloads {
-                        let left = self.member(left, payload)?;
-                        let right = self.member(right, payload)?;
-                        self.compare(&payload.ty, left, right, unequal)?;
-                    }
-                    self.builder.ins().jump(equal, &[]);
-                }
-                self.builder.switch_to_block(equal);
-            }
-            other => return Err(BackendError::new(format!("a comparison of {}", other))),
-        }
-        Ok(())
-    }
-
-    /// Runs `compare_payloads` only when `present` is not zero, continuing in one block either
-    /// way: two `null`s are equal.
-    fn compare_if_present(
-        &mut self,
-        present: Value,
-        compare_payloads: impl FnOnce(&mut Self) -> Result<(), BackendError>,
-    ) -> Result<(), BackendError> {
-        let payloads = self.builder.create_block();
-        let after = self.builder.create_block();
-        self.builder.ins().brif(present, payloads, &[], after, &[]);
-        self.builder.switch_to_block(payloads);
-        compare_payloads(self)?;
-        self.builder.ins().jump(after, &[]);
-        self.builder.switch_to_block(after);
-        Ok(())
+        comparison.equality(ty, left.compared(), right.compared())
     }
 
     fn binary(
@@ -1320,10 +1154,21 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Callee::Builtin(BuiltinFunction::Clone)
                 if self.context.glue(GlueKind::Clone, &result_type)?.is_some() =>
             {
-                // A value that owns storage is cloned by its glue, into the destination.
+                // A value that owns storage is cloned by its glue, into the destination, or into
+                // memory copied to it when it is a variable (a box).
                 let receiver = self.receiver(arguments, span)?;
-                let destination = self.address(destination)?;
-                self.call_glue(GlueKind::Clone, &result_type, &[destination, receiver])?;
+                match self.location(destination)? {
+                    Location::Memory(address) => {
+                        self.call_glue(GlueKind::Clone, &result_type, &[address, receiver])?;
+                    }
+                    _ => {
+                        let temporary = self.temporary(&result_type)?;
+                        self.call_glue(GlueKind::Clone, &result_type, &[temporary, receiver])?;
+                        let clone =
+                            self.read_location(Location::Memory(temporary), &result_type)?;
+                        self.write_place(destination, clone, false)?;
+                    }
+                }
             }
             Callee::Builtin(BuiltinFunction::Clone) => {
                 // The clone of a value that owns nothing is a copy of the receiver's referent
@@ -1408,8 +1253,34 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.builder.ins().call(function, &[]);
                 }
             }
-            Callee::Builtin(BuiltinFunction::HeapAllocate | BuiltinFunction::Unbox) => {
-                return Err(BackendError::new("a box built-in"))
+            // The argument is evaluated, then the box allocated and the value moved into it
+            // (D3 of `heap-boxes`).
+            Callee::Builtin(BuiltinFunction::HeapAllocate) => {
+                let Type::Heap(contents) = &result_type else {
+                    return Err(BackendError::new(format!(
+                        "Heap(...) of type {}",
+                        result_type
+                    )));
+                };
+                let argument = arguments
+                    .first()
+                    .ok_or_else(|| BackendError::new("Heap(...) without an argument"))?;
+                let value = self.operand(argument, span)?;
+                let layout = self.layout(contents)?;
+                let address = allocate_box(self.context, &mut self.builder, &layout)?;
+                self.write_location(Location::Memory(address), contents, value, false)?;
+                self.write_place(destination, Lowered::Scalar(address), false)?;
+            }
+            // The contents move out, and their allocation is freed without dropping them.
+            Callee::Builtin(BuiltinFunction::Unbox) => {
+                let boxed = arguments
+                    .first()
+                    .ok_or_else(|| BackendError::new("unbox without a receiver"))?;
+                let address = self.operand(boxed, span)?.scalar()?;
+                let contents = self.read_location(Location::Memory(address), &result_type)?;
+                self.write_place(destination, contents, false)?;
+                let layout = self.layout(&result_type)?;
+                free_box(self.context, &mut self.builder, address, &layout)?;
             }
             Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
         }
@@ -1524,7 +1395,16 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             TerminatorKind::Drop { place, target } => {
                 let ty = place.ty(self.body, self.types());
                 if self.context.glue(GlueKind::Drop, &ty)?.is_some() {
-                    let address = self.address(place)?;
+                    // Glue takes the value's address: a box in a variable is spilled first.
+                    let address = match self.location(place)? {
+                        Location::Memory(address) => address,
+                        location => {
+                            let value = self.read_location(location, &ty)?;
+                            let temporary = self.temporary(&ty)?;
+                            self.write_location(Location::Memory(temporary), &ty, value, false)?;
+                            temporary
+                        }
+                    };
                     self.call_glue(GlueKind::Drop, &ty, &[address])?;
                 }
                 self.builder.ins().jump(self.blocks[target.0 as usize], &[]);

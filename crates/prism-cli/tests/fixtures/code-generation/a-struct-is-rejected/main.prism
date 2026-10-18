@@ -1,4 +1,5 @@
 // expect: ok
 // run: 1
-struct P { val next: Heap<Int>? }
-fun main() { val p = P(null); println(1) }
+struct P { val run: () -> Int }
+fun one(): Int = 1
+fun main() { val p = P(one); println(1) }

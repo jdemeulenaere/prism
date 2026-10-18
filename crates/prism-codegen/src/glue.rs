@@ -1,34 +1,44 @@
-//! Drop and clone glue (D9 and D10 of `runtime-strings-and-drops`).
+//! Drop, clone and equality glue (D9 and D10 of `runtime-strings-and-drops`, D12 to D14 of
+//! `heap-boxes`).
 //!
 //! What dropping or cloning a value does depends only on its type. A type that owns no storage
 //! (no `String`, `Heap<T>` or function value in it, through any field, payload or nullable) has
 //! no glue: its drop runs no code and its clone is a bitwise copy. A `String` is dropped and
-//! cloned by the runtime (`prism_rt_string_drop`, `prism_rt_string_clone`). Every other struct,
-//! enum and nullable that owns storage gets generated glue functions:
+//! cloned by the runtime (`prism_rt_string_drop`, `prism_rt_string_clone`). Every box, and every
+//! other struct, enum and nullable that owns storage, gets generated glue functions:
 //!
 //! - `<unit module>#drop(<type>)`, taking the value's address, which drops a struct's owning
 //!   fields in declaration order, an enum's owning payloads of its current variant in order, or
-//!   a nullable's payload when it is present;
+//!   a nullable's payload when it is present; a box's drop glue drops its contents and then frees
+//!   their allocation;
 //! - `<unit module>#clone(<type>)`, taking the destination's and the source's addresses, which
 //!   copies the value bitwise and then replaces each owning part, in the same order, by a clone
-//!   of the source's.
+//!   of the source's; a box's clone glue allocates a new box and clones the contents into it.
+//!
+//! Comparing the contents of two boxes of a struct, an enum or a nullable of one calls the
+//! equality glue of the contents' type, `<unit module>#equals(<type>)`, which takes the two
+//! values' addresses and returns a `Bool` ([`crate::equality`]).
 //!
 //! Each part is handled by calling its own glue, so glue is a set of small functions, one per
-//! type. Each code unit generates the glue of the types its bodies drop and clone, and of the
-//! parts those reach, as functions local to the unit and called directly, never through the
-//! function table: a unit's code depends only on its own MIR, and instances of generic types get
-//! glue where they are used. Glue is queued when first asked for and lowered after the unit's
-//! bodies. It runs no user code and does not check the stack, since nothing recursive can be
-//! dropped or cloned yet (`heap-boxes` must add the check).
+//! type, recursive for a type that reaches itself through boxes. Each code unit generates the
+//! glue of the types its bodies drop, clone and compare through boxes, and of the parts those
+//! reach, as functions local to the unit and called directly, never through the function table:
+//! a unit's code depends only on its own MIR, and instances of generic types get glue where they
+//! are used. Glue is queued when first asked for and lowered after the unit's bodies. It runs no
+//! user code. It checks the stack on entry, as bodies do, raising "stack overflow" without a
+//! location when a structure is deeper than the stack allows.
 
+use crate::equality::{Compared, Comparison};
 use crate::error::BackendError;
 use crate::layout::{Layout, Member, Shape};
-use crate::unit::{LoweredFunction, UnitContext};
+use crate::unit::{data_global, LoweredFunction, UnitContext};
 use cranelift_codegen::ir::{
-    self, types, AbiParam, Function, InstBuilder, MemFlagsData, UserFuncName, Value,
+    self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, TrapCode,
+    UserFuncName, Value,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Linkage, Module};
+use prism_runtime::PanicKind;
 use prism_typed_tree::{Type, TypeTable};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -76,11 +86,12 @@ fn owns_storage_at(ty: &Type, types: &TypeTable, depth: usize) -> bool {
     }
 }
 
-/// What glue does: drop a value, or clone one.
+/// What glue does: drop a value, clone one, or compare two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GlueKind {
     Drop,
     Clone,
+    Equals,
 }
 
 impl GlueKind {
@@ -88,6 +99,7 @@ impl GlueKind {
         match self {
             GlueKind::Drop => "drop",
             GlueKind::Clone => "clone",
+            GlueKind::Equals => "equals",
         }
     }
 
@@ -96,6 +108,7 @@ impl GlueKind {
         match self {
             GlueKind::Drop => "prism_rt_string_drop",
             GlueKind::Clone => "prism_rt_string_clone",
+            GlueKind::Equals => "prism_rt_string_equals",
         }
     }
 }
@@ -116,8 +129,8 @@ pub struct GlueTable {
     queued: Vec<(GlueKind, Type, String, FuncId)>,
 }
 
-/// The symbol of the glue of `kind` for `ty` in the unit of `module`: `<module>#drop(<type>)`
-/// or `<module>#clone(<type>)`, the type written with every struct and enum qualified by its
+/// The symbol of the glue of `kind` for `ty` in the unit of `module`: `<module>#drop(<type>)`,
+/// `<module>#clone(<type>)` or `<module>#equals(<type>)`, the type written with every struct and enum qualified by its
 /// module, so that two types never share a name.
 pub fn glue_symbol(module: &str, kind: GlueKind, ty: &Type) -> String {
     format!("{}#{}({})", module, kind.name(), qualified_name(ty))
@@ -159,9 +172,20 @@ impl<M: Module> UnitContext<'_, M> {
         if *ty == Type::String {
             return Ok(Some(Glue::Runtime(kind.string_function())));
         }
+        Ok(Some(Glue::Generated(self.generated_glue(kind, ty)?)))
+    }
+
+    /// The equality glue of `ty`, a struct, an enum or a nullable of one, declared and queued
+    /// the first time it is asked for (D13 of `heap-boxes`).
+    pub fn equality_glue(&mut self, ty: &Type) -> Result<FuncId, BackendError> {
+        self.generated_glue(GlueKind::Equals, ty)
+    }
+
+    /// The generated glue function of `kind` for `ty`, declared and queued once.
+    fn generated_glue(&mut self, kind: GlueKind, ty: &Type) -> Result<FuncId, BackendError> {
         let key = (kind, ty.clone());
         if let Some(id) = self.glue.declared.get(&key) {
-            return Ok(Some(Glue::Generated(*id)));
+            return Ok(*id);
         }
         let symbol = glue_symbol(&self.file.module, kind, ty);
         let signature = self.glue_signature(kind);
@@ -170,19 +194,23 @@ impl<M: Module> UnitContext<'_, M> {
             .declare_function(&symbol, Linkage::Local, &signature)?;
         self.glue.declared.insert(key, id);
         self.glue.queued.push((kind, ty.clone(), symbol, id));
-        Ok(Some(Glue::Generated(id)))
+        Ok(id)
     }
 
     /// The signature of glue of `kind`: the value's address for a drop, the destination's and
-    /// the source's for a clone; nothing returned.
+    /// the source's for a clone, returning nothing; the two values' addresses for equality,
+    /// returning a `Bool`.
     fn glue_signature(&self, kind: GlueKind) -> ir::Signature {
         let mut signature = ir::Signature::new(self.call_conv);
         let parameters = match kind {
             GlueKind::Drop => 1,
-            GlueKind::Clone => 2,
+            GlueKind::Clone | GlueKind::Equals => 2,
         };
         for _ in 0..parameters {
             signature.params.push(AbiParam::new(self.pointer));
+        }
+        if kind == GlueKind::Equals {
+            signature.returns.push(AbiParam::new(types::I8));
         }
         signature
     }
@@ -249,17 +277,36 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             .append_block_params_for_function_params(entry);
         lowering.builder.switch_to_block(entry);
         let parameters = lowering.builder.block_params(entry).to_vec();
+        lowering.check_stack()?;
         let layout = lowering.layout(ty)?;
-        match kind {
-            GlueKind::Drop => lowering.drop_parts(ty, &layout, parameters[0])?,
-            GlueKind::Clone => {
+        match (kind, ty) {
+            (GlueKind::Drop, Type::Heap(contents)) => lowering.drop_box(contents, parameters[0])?,
+            (GlueKind::Clone, Type::Heap(contents)) => {
+                lowering.clone_box(contents, parameters[0], parameters[1])?
+            }
+            (GlueKind::Drop, _) => lowering.drop_parts(ty, &layout, parameters[0])?,
+            (GlueKind::Clone, _) => {
                 let (destination, source) = (parameters[0], parameters[1]);
                 // Every byte first, then each owning part replaced by a clone of its own.
                 lowering.copy(destination, source, &layout);
                 lowering.clone_parts(ty, &layout, destination, source)?;
             }
+            (GlueKind::Equals, _) => {
+                let mut functions = HashMap::new();
+                let mut comparison = Comparison {
+                    builder: &mut lowering.builder,
+                    context: &mut *lowering.context,
+                    functions: &mut functions,
+                };
+                let left = Compared::Memory(parameters[0]);
+                let right = Compared::Memory(parameters[1]);
+                let equal = comparison.equality(ty, left, right)?;
+                lowering.builder.ins().return_(&[equal]);
+            }
         }
-        lowering.builder.ins().return_(&[]);
+        if kind != GlueKind::Equals {
+            lowering.builder.ins().return_(&[]);
+        }
         let config = lowering.context.module.target_config();
         lowering.builder.seal_all_blocks();
         lowering.builder.finalize(config);
@@ -270,6 +317,93 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         self.context.layouts.layout(ty).map_err(|construct| {
             BackendError::new(format!("no layout for {}: {}", ty, construct.description()))
         })
+    }
+
+    /// Raises "stack overflow", without a location, when the stack pointer is below the
+    /// runtime's stack limit, as a body does on entry (D14 of `heap-boxes`).
+    fn check_stack(&mut self) -> Result<(), BackendError> {
+        let pointer = self.context.pointer;
+        let limit = self.context.stack_limit()?;
+        let global = data_global(self.builder.func, limit);
+        let limit_address = self.builder.ins().symbol_value(pointer, global);
+        let limit = self
+            .builder
+            .ins()
+            .load(pointer, MemFlagsData::trusted(), limit_address, 0);
+        let stack_pointer = self.builder.ins().get_stack_pointer(pointer);
+        let overflow = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedLessThan, stack_pointer, limit);
+        let failure = self.builder.create_block();
+        let success = self.builder.create_block();
+        self.builder.set_cold_block(failure);
+        self.builder
+            .ins()
+            .brif(overflow, failure, &[], success, &[]);
+        self.builder.switch_to_block(failure);
+        let id = self
+            .context
+            .runtime_function("prism_rt_panic_without_location")?;
+        let function = self
+            .context
+            .module
+            .declare_func_in_func(id, self.builder.func);
+        let kind = self
+            .builder
+            .ins()
+            .iconst(types::I32, i64::from(PanicKind::StackOverflow as u32));
+        self.builder.ins().call(function, &[kind]);
+        self.builder.ins().trap(UNREACHABLE);
+        self.builder.switch_to_block(success);
+        Ok(())
+    }
+
+    /// The address of a new allocation for the contents of a box, of `layout`: the runtime's,
+    /// or the alignment itself, a non-null aligned address, for a zero-sized value, which
+    /// allocates nothing (D3 of `heap-boxes`).
+    fn allocate(&mut self, layout: &Layout) -> Result<Value, BackendError> {
+        allocate_box(self.context, &mut self.builder, layout)
+    }
+
+    /// Frees the allocation of the contents of a box, of `layout`, at `address`.
+    fn free(&mut self, address: Value, layout: &Layout) -> Result<(), BackendError> {
+        free_box(self.context, &mut self.builder, address, layout)
+    }
+
+    /// The drop glue of a `Heap<contents>` at `address`: the contents are dropped, then their
+    /// allocation is freed (D12 of `heap-boxes`).
+    fn drop_box(&mut self, contents: &Type, address: Value) -> Result<(), BackendError> {
+        let pointer = self.context.pointer;
+        let boxed = self
+            .builder
+            .ins()
+            .load(pointer, MemFlagsData::trusted(), address, 0);
+        self.call_glue(GlueKind::Drop, contents, &[boxed])?;
+        let layout = self.layout(contents)?;
+        self.free(boxed, &layout)
+    }
+
+    /// The clone glue of a `Heap<contents>`: a new allocation holding a clone of the source's
+    /// contents, by their clone glue or bitwise, written to the destination.
+    fn clone_box(
+        &mut self,
+        contents: &Type,
+        destination: Value,
+        source: Value,
+    ) -> Result<(), BackendError> {
+        let pointer = self.context.pointer;
+        let flags = MemFlagsData::trusted();
+        let original = self.builder.ins().load(pointer, flags, source, 0);
+        let layout = self.layout(contents)?;
+        let copy = self.allocate(&layout)?;
+        if owns_storage(contents, &self.context.file.types) {
+            self.call_glue(GlueKind::Clone, contents, &[copy, original])?;
+        } else if layout.size > 0 {
+            self.copy(copy, original, &layout);
+        }
+        self.builder.ins().store(flags, copy, destination, 0);
+        Ok(())
     }
 
     fn add(&mut self, address: Value, offset: u32) -> Value {
@@ -328,6 +462,15 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             Shape::Nullable { payload } => {
                 Parts::ByTag(types::I8, vec![(1, vec![payload.clone()])])
             }
+            // A nullable box is its pointer, present when it is not 0.
+            Shape::NullPointer => match ty {
+                Type::Nullable(inner) => Parts::IfNotNull(Member {
+                    name: String::new(),
+                    ty: inner.as_ref().clone(),
+                    offset: 0,
+                }),
+                _ => return Err(BackendError::new(format!("glue for {}", ty))),
+            },
             other => {
                 return Err(BackendError::new(format!(
                     "glue for {} of shape {:?}",
@@ -357,6 +500,20 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
                 for member in owning(self, members) {
                     each(self, &member)?;
                 }
+            }
+            Parts::IfNotNull(member) => {
+                let pointer = self.context.pointer;
+                let value = self
+                    .builder
+                    .ins()
+                    .load(pointer, MemFlagsData::trusted(), address, 0);
+                let present = self.builder.create_block();
+                let done = self.builder.create_block();
+                self.builder.ins().brif(value, present, &[], done, &[]);
+                self.builder.switch_to_block(present);
+                each(self, &member)?;
+                self.builder.ins().jump(done, &[]);
+                self.builder.switch_to_block(done);
             }
             Parts::ByTag(tag_type, cases) => {
                 let cases: Vec<(u128, Vec<Member>)> = cases
@@ -417,10 +574,59 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
     }
 }
 
-/// The members a glue function handles: always, or by the value of a tag at offset 0.
+/// The members a glue function handles: always, by the value of a tag at offset 0, or the
+/// payload of a nullable pointer when it is not 0.
 enum Parts {
     Always(Vec<Member>),
     ByTag(ir::Type, Vec<(u128, Vec<Member>)>),
+    IfNotNull(Member),
+}
+
+/// The trap that ends a block after a call that never returns; it is never reached.
+const UNREACHABLE: TrapCode = match TrapCode::user(1) {
+    Some(code) => code,
+    None => panic!("1 is a user trap code"),
+};
+
+/// The address of a new allocation for the contents of a box, of `layout`, in the function
+/// `builder` builds: a call of the runtime's allocator, which reports "out of memory" itself, or
+/// for a zero-sized value the alignment itself, which is non-null, aligned and never read or
+/// written (D3 of `heap-boxes`).
+pub(crate) fn allocate_box<M: Module>(
+    context: &mut UnitContext<'_, M>,
+    builder: &mut FunctionBuilder<'_>,
+    layout: &Layout,
+) -> Result<Value, BackendError> {
+    let pointer = context.pointer;
+    let align = builder.ins().iconst(pointer, i64::from(layout.align));
+    if layout.size == 0 {
+        return Ok(align);
+    }
+    let size = builder.ins().iconst(pointer, i64::from(layout.size));
+    let id = context.runtime_function("prism_rt_allocate")?;
+    let function = context.module.declare_func_in_func(id, builder.func);
+    let call = builder.ins().call(function, &[size, align]);
+    Ok(builder.inst_results(call)[0])
+}
+
+/// Frees the allocation at `address` of the contents of a box, of `layout`, unless the value is
+/// zero-sized, which allocated nothing.
+pub(crate) fn free_box<M: Module>(
+    context: &mut UnitContext<'_, M>,
+    builder: &mut FunctionBuilder<'_>,
+    address: Value,
+    layout: &Layout,
+) -> Result<(), BackendError> {
+    if layout.size == 0 {
+        return Ok(());
+    }
+    let pointer = context.pointer;
+    let size = builder.ins().iconst(pointer, i64::from(layout.size));
+    let align = builder.ins().iconst(pointer, i64::from(layout.align));
+    let id = context.runtime_function("prism_rt_free")?;
+    let function = context.module.declare_func_in_func(id, builder.func);
+    builder.ins().call(function, &[address, size, align]);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -484,6 +690,15 @@ mod tests {
         assert_eq!(
             glue_symbol("main", GlueKind::Drop, &Type::String.nullable()),
             "main#drop(String?)"
+        );
+        let expr = Type::plain_enum(NominalId::new("main", "Expr"));
+        assert_eq!(
+            glue_symbol("main", GlueKind::Drop, &Type::Heap(Box::new(expr.clone()))),
+            "main#drop(Heap<main::Expr>)"
+        );
+        assert_eq!(
+            glue_symbol("main", GlueKind::Equals, &expr),
+            "main#equals(main::Expr)"
         );
     }
 }

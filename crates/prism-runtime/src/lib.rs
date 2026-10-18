@@ -44,7 +44,7 @@ pub use output::{
 };
 pub use panic::{
     panic_message, panic_without_location, prism_rt_double_remainder, prism_rt_panic,
-    prism_rt_unlinked_function, PanicKind, PANIC_EXIT_STATUS,
+    prism_rt_panic_without_location, prism_rt_unlinked_function, PanicKind, PANIC_EXIT_STATUS,
 };
 pub use stack::{
     clear_stack_limit, set_stack_limit, STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,

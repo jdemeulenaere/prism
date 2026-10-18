@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn a_file_the_backend_rejects_has_no_dump() {
-        match dump_file(&lower_source("fun f(h: Heap<Int>): Int = 1\n")) {
+        match dump_file(&lower_source("fun f(g: () -> Int): Int = 1\n")) {
             Err(DumpError::Unsupported(errors)) => assert_eq!(errors[0].code(), "E6001"),
             other => panic!("expected E6001, got {:?}", other.map(|_| ())),
         }

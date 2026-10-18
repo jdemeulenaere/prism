@@ -1,4 +1,0 @@
-// expect: ok
-// run: 1
-enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }
-fun main() { val e = Expr.Literal(1) }

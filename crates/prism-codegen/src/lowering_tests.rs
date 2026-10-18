@@ -717,3 +717,92 @@ fn payloads_are_read_at_their_variant_offsets() {
     let sum: IntToInt = function(&program, "main::sum");
     assert_eq!(sum(4), 405);
 }
+
+// Boxes (D3 and D12 to D14 of `heap-boxes`).
+
+const BOXES: &str = "struct User : Clone { val name: String }\n\
+     struct Point : Copy { val x: Int, val y: Int }\n\
+     struct Marker : Copy {}\n\
+     struct D(val d: Double)\n\
+     enum W { Of(Heap<D>) }\n\
+     enum Expr : Clone { Lit(Int), Add(Heap<Expr>, Heap<Expr>), Name(String) }\n\
+     struct Node : Clone { val value: Int, val next: Heap<Node>? }\n\
+     enum Tree : Clone { Leaf, Branch(Heap<Tree>, Int, Heap<Tree>) }\n\
+     fun text(n: Int): String = n.toString() + \"!\"\n\
+     fun scalar(n: Int): Int { val h = Heap(n); var g = Heap(n); *g += 1; return h + g.unbox() }\n\
+     fun point(): Int { val h = Heap(Point(1, 2)); val p = h.unbox(); return p.x + p.y }\n\
+     fun string(): Int { var h = Heap(text(12)); val n = h.length; *h = text(1); return n + h.length }\n\
+     fun unboxed(): Int { val s = Heap(text(12)).unbox(); return s.length }\n\
+     fun user(): Int { val h = Heap(User(text(5))); val c = h.clone(); val u = h.unbox(); return u.name.length + c.name.length }\n\
+     fun marker(): Int { val h = Heap(Marker()); val g = h.clone(); val m = g.unbox(); return 1 }\n\
+     fun eval(e: &Expr): Int = when (e) { Expr.Lit(val n) -> n; Expr.Add(val l, val r) -> eval(l) + eval(r); Expr.Name(val s) -> s.length }\n\
+     fun expr(): Int {\n\
+         val e = Expr.Add(Heap(Expr.Lit(1)), Heap(Expr.Add(Heap(Expr.Name(text(1))), Heap(Expr.Lit(3)))))\n\
+         val c = e.clone()\n\
+         return eval(&e) * 10 + eval(&c)\n\
+     }\n\
+     fun Node.total(): Int = value + (next?.total() ?: 0)\n\
+     fun list(n: Int): Int {\n\
+         var l: Heap<Node>? = null\n\
+         var i = 1\n\
+         while (i <= n) { l = Heap(Node(i, l)); i += 1 }\n\
+         val c = l.clone()\n\
+         l = null\n\
+         return c?.total() ?: 0\n\
+     }\n\
+     fun Tree.size(): Int = when (this) { Tree.Leaf -> 0; Tree.Branch(val l, _, val r) -> 1 + l.size() + r.size() }\n\
+     fun tree(depth: Int): Tree = if (depth == 0) Tree.Leaf else Tree.Branch(Heap(tree(depth - 1)), depth, Heap(tree(depth - 1)))\n\
+     fun trees(): Int { val t = tree(4); val c = t.clone(); return t.size() + c.size() }\n\
+     fun equal(): Bool { val a = tree(3); val b = tree(3); val c = tree(2); return a == b && a != c && a.clone() == a }\n\
+     fun exprs(): Bool { val a = Expr.Add(Heap(Expr.Lit(1)), Heap(Expr.Name(text(1)))); val b = Expr.Add(Heap(Expr.Lit(1)), Heap(Expr.Name(text(2)))); return a == a.clone() && a != b }\n\
+     fun nan(): Bool { val x = 0.0 / 0.0; return W.Of(Heap(D(x))) != W.Of(Heap(D(x))) }\n";
+
+#[test]
+fn boxes_hold_and_give_back_their_contents() {
+    let program = compile(BOXES);
+    let scalar: IntToInt = function(&program, "main::scalar");
+    let point: ToInt = function(&program, "main::point");
+    let string: ToInt = function(&program, "main::string");
+    let unboxed: ToInt = function(&program, "main::unboxed");
+    let user: ToInt = function(&program, "main::user");
+    let made = checked(|| {
+        assert_eq!(scalar(20), 41);
+        assert_eq!(point(), 3);
+        assert_eq!(string(), 5);
+        assert_eq!(unboxed(), 3);
+        assert_eq!(user(), 4);
+    });
+    assert!(made > 10, "{}", made);
+}
+
+#[test]
+fn a_box_of_a_zero_sized_value_allocates_nothing() {
+    // The scenario "A box of a zero-sized value allocates nothing" of the `code-generation`
+    // spec.
+    let program = compile(BOXES);
+    let marker: ToInt = function(&program, "main::marker");
+    let made = checked(|| assert_eq!(marker(), 1));
+    assert_eq!(made, 0);
+}
+
+#[test]
+fn recursive_values_are_dropped_and_cloned_once() {
+    let program = compile(BOXES);
+    let expr: ToInt = function(&program, "main::expr");
+    let list: IntToInt = function(&program, "main::list");
+    let trees: ToInt = function(&program, "main::trees");
+    checked(|| {
+        assert_eq!(expr(), 66);
+        assert_eq!(list(100), 5050);
+        assert_eq!(trees(), 30);
+    });
+}
+
+#[test]
+fn boxes_compare_their_contents() {
+    let program = compile(BOXES);
+    for name in ["equal", "exprs", "nan"] {
+        let test: ToBool = function(&program, &format!("main::{}", name));
+        checked(|| assert_eq!(test(), 1, "{}", name));
+    }
+}

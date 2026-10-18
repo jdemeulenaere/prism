@@ -4,6 +4,7 @@
 
 pub mod dump;
 pub mod entry;
+mod equality;
 pub mod error;
 pub mod glue;
 pub mod isa;

@@ -7,7 +7,10 @@ use crate::output::{
     prism_rt_print_bool, prism_rt_print_char, prism_rt_print_double, prism_rt_print_int,
     prism_rt_print_newline,
 };
-use crate::panic::{prism_rt_double_remainder, prism_rt_panic, prism_rt_unlinked_function};
+use crate::panic::{
+    prism_rt_double_remainder, prism_rt_panic, prism_rt_panic_without_location,
+    prism_rt_unlinked_function,
+};
 use crate::string::{
     prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
     prism_rt_int_to_string, prism_rt_print_string, prism_rt_string_character,
@@ -109,6 +112,13 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
         name: "prism_rt_panic",
         address: RuntimeAddress(prism_rt_panic as *const u8),
         parameters: &[I32, Pointer, Pointer, Pointer, Pointer, I32, I32],
+        result: None,
+        never_returns: true,
+    },
+    RuntimeFunction {
+        name: "prism_rt_panic_without_location",
+        address: RuntimeAddress(prism_rt_panic_without_location as *const u8),
+        parameters: &[I32],
         result: None,
         never_returns: true,
     },

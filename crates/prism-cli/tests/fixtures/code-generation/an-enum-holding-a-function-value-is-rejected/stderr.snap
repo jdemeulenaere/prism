@@ -1,0 +1,5 @@
+error[E6001]: the Tier 1 backend does not support function values and closures yet
+  --> main.prism:4:22
+    4 | fun main() { val j = Job.Idle }
+      |                      ^
+   = note: support for function values and closures is planned in the 'closures' change
