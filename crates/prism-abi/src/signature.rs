@@ -1,8 +1,8 @@
 //! Surface ABI signature extraction and hashing engine.
 
 use crate::abi_type::{
-    hash_marker, hash_marker_parameters, hash_type_parameters, receiver_constructor, AbiType,
-    AbiTypeParameter, NameBinder, NominalHeader, NominalKind,
+    hash_marker, hash_marker_parameters, hash_type_parameters, AbiType, AbiTypeParameter,
+    NameBinder, NominalHeader, NominalKind,
 };
 use crate::error::AbiError;
 use crate::hasher::{ContentHash, DeterministicHasher};
@@ -39,8 +39,6 @@ pub enum ExportedSymbol {
         type_parameters: Vec<AbiTypeParameter>,
         params: Vec<AbiParameter>,
         return_type: AbiType,
-        /// The Monomorphization Hash of a generic function's body, `None` for a non-generic one.
-        generic_body_hash: Option<ContentHash>,
     },
     Struct {
         visibility: Visibility,
@@ -69,10 +67,9 @@ pub enum ExportedSymbol {
 }
 
 impl ExportedSymbol {
-    /// Feeds what the symbol shows importers into `hasher`: everything the ABI records about it
-    /// but a generic function's Monomorphization Hash. The file's interface hash is this stream
-    /// for every symbol in order.
-    fn hash_interface_into(&self, hasher: &mut DeterministicHasher) {
+    /// Feeds what the symbol shows importers into `hasher`: everything the ABI records about it.
+    /// No body is part of it, a generic one's included (D3 of `instance-cache`).
+    fn hash_into(&self, hasher: &mut DeterministicHasher) {
         match self {
             ExportedSymbol::Function {
                 visibility,
@@ -82,7 +79,6 @@ impl ExportedSymbol {
                 type_parameters,
                 params,
                 return_type,
-                generic_body_hash: _,
             } => {
                 hasher.write_str("fun");
                 hasher.write_str(visibility.as_str());
@@ -171,26 +167,6 @@ impl ExportedSymbol {
                 hasher.write_str(name);
                 ty.hash_into(hasher);
             }
-        }
-    }
-
-    /// The hash of [`ExportedSymbol::hash_interface_into`]'s stream for this symbol alone: a
-    /// generic function's signature, which with its Monomorphization Hash keys its instances
-    /// (D9 of `abi-cache`).
-    pub fn interface_hash(&self) -> ContentHash {
-        let mut hasher = DeterministicHasher::new();
-        self.hash_interface_into(&mut hasher);
-        hasher.finish()
-    }
-
-    /// The Monomorphization Hash of a generic function or extension, `None` for any other
-    /// symbol.
-    pub fn generic_body_hash(&self) -> Option<ContentHash> {
-        match self {
-            ExportedSymbol::Function {
-                generic_body_hash, ..
-            } => *generic_body_hash,
-            _ => None,
         }
     }
 
@@ -573,12 +549,9 @@ pub struct FileAbi {
     /// The definitions of the structs and enums reachable from the symbols, other than the
     /// file's own exported ones, sorted by module and name (D2 of `codegen-aggregates`).
     pub type_definitions: Vec<AbiTypeDefinition>,
-    /// The deterministic hash of the whole exported ABI: the interface hash and the
-    /// Monomorphization Hashes of the exported generic bodies.
+    /// The deterministic hash of the exported ABI: its signatures and reachable type
+    /// definitions, never a body (D3 of `instance-cache`). What an importer's Phase 2 depends on.
     pub abi_hash: ContentHash,
-    /// The deterministic hash of the exported ABI without the Monomorphization Hashes: what an
-    /// importer's Phase 2 depends on (D2 of `abi-cache`).
-    pub interface_hash: ContentHash,
 }
 
 impl FileAbi {
@@ -681,18 +654,6 @@ impl FileAbi {
                         })
                         .collect();
 
-                    // For generic functions and extensions, compute monomorphization hash of the body (`compilation-and-abi` spec)
-                    // Hashing MUST be span-free to prevent comments/whitespace from altering ABI (hermetic builds invariant)
-                    let generic_body_hash = if !f.type_parameters.is_empty() {
-                        let mut h = DeterministicHasher::new();
-                        if let Some(body) = &f.body {
-                            hash_body_span_free(body, &mut h);
-                        }
-                        Some(h.finish())
-                    } else {
-                        None
-                    };
-
                     let receiver = f.receiver.as_ref().map(|r| AbiReceiver {
                         mode: r.mode,
                         ty: lower(&r.ty),
@@ -706,7 +667,6 @@ impl FileAbi {
                         type_parameters: abi_type_parameters(&f.type_parameters),
                         params,
                         return_type,
-                        generic_body_hash,
                     });
                 }
 
@@ -761,8 +721,7 @@ impl FileAbi {
         symbols.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
         let type_definitions = reachable_definitions(module, &symbols, definition);
-        let (interface_hash, abi_hash) =
-            Self::calculate_hashes(&package, module, &symbols, &type_definitions);
+        let abi_hash = Self::calculate_hash(&package, module, &symbols, &type_definitions);
 
         Ok(FileAbi {
             package,
@@ -770,20 +729,17 @@ impl FileAbi {
             symbols,
             type_definitions,
             abi_hash,
-            interface_hash,
         })
     }
 
-    /// The interface hash and the ABI hash of `symbols` and `definitions`. The interface hash
-    /// covers every symbol without its Monomorphization Hash, then every reachable type
-    /// definition; the ABI hash covers the interface hash, then each symbol's Monomorphization
-    /// Hash or its absence, in symbol order.
-    fn calculate_hashes(
+    /// The ABI hash of `symbols` and `definitions`: every symbol in order, then every reachable
+    /// type definition.
+    fn calculate_hash(
         package: &Option<String>,
         module: &str,
         symbols: &[ExportedSymbol],
         definitions: &[AbiTypeDefinition],
-    ) -> (ContentHash, ContentHash) {
+    ) -> ContentHash {
         let mut hasher = DeterministicHasher::new();
 
         if let Some(pkg) = package {
@@ -796,90 +752,19 @@ impl FileAbi {
         hasher.write_u64(symbols.len() as u64);
 
         for sym in symbols {
-            sym.hash_interface_into(&mut hasher);
+            sym.hash_into(&mut hasher);
         }
 
         hasher.write_u64(definitions.len() as u64);
         for definition in definitions {
             definition.hash_into(&mut hasher);
         }
-
-        let interface_hash = hasher.finish();
-
-        let mut hasher = DeterministicHasher::new();
-        hasher.write_str("abi");
-        hasher.write_hash(&interface_hash);
-        for sym in symbols {
-            match sym {
-                ExportedSymbol::Function {
-                    generic_body_hash: Some(body_hash),
-                    ..
-                } => {
-                    hasher.write_u8(1);
-                    hasher.write_hash(body_hash);
-                }
-                _ => hasher.write_u8(0),
-            }
-        }
-        (interface_hash, hasher.finish())
+        hasher.finish()
     }
 
     /// Formats the ABI hash as 64 hexadecimal digits.
     pub fn abi_hash_hex(&self) -> String {
         self.abi_hash.to_hex()
-    }
-
-    /// Formats the interface hash as 64 hexadecimal digits.
-    pub fn interface_hash_hex(&self) -> String {
-        self.interface_hash.to_hex()
-    }
-
-    /// The exported generic function or extension `name`, whose receiver's constructor is
-    /// `receiver` ([`receiver_constructor`]) or which has no receiver. `None` when the file
-    /// exports no such generic.
-    pub fn generic_function_of(
-        &self,
-        name: &str,
-        receiver: Option<&str>,
-    ) -> Option<&ExportedSymbol> {
-        self.symbols.iter().find(|symbol| match symbol {
-            ExportedSymbol::Function {
-                name: symbol_name,
-                receiver: symbol_receiver,
-                generic_body_hash: Some(_),
-                ..
-            } => {
-                symbol_name == name
-                    && symbol_receiver
-                        .as_ref()
-                        .map(|r| receiver_constructor(&r.ty))
-                        .as_deref()
-                        == receiver
-            }
-            _ => false,
-        })
-    }
-
-    /// The Monomorphization Hash of the exported generic function or extension `name`, whose
-    /// receiver's constructor is `receiver` ([`receiver_constructor`]) or which has no receiver.
-    /// `None` when the file exports no such generic.
-    pub fn generic_body_hash_of(&self, name: &str, receiver: Option<&str>) -> Option<ContentHash> {
-        self.generic_function_of(name, receiver)?
-            .generic_body_hash()
-    }
-}
-
-/// Hashes a function body without inspecting `Span` coordinates.
-fn hash_body_span_free(body: &FunctionBody, hasher: &mut DeterministicHasher) {
-    match body {
-        FunctionBody::Expr(e) => {
-            hasher.write_u8(1);
-            hash_expr_span_free(e, hasher);
-        }
-        FunctionBody::Block(b) => {
-            hasher.write_u8(2);
-            hash_block_span_free(b, hasher);
-        }
     }
 }
 

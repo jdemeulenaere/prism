@@ -307,12 +307,10 @@ mod tests {
         let plain = extract("public fun store(f: () -> Unit): Int = 1\n");
         let marked = extract("public fun store(f: escaping () -> Unit): Int = 1\n");
         assert_ne!(plain.abi_hash, marked.abi_hash);
-        assert_ne!(plain.interface_hash, marked.interface_hash);
         // Inside a function type too.
         let plain = extract("public fun store(r: (() -> Unit) -> Unit): Int = 1\n");
         let marked = extract("public fun store(r: (escaping () -> Unit) -> Unit): Int = 1\n");
         assert_ne!(plain.abi_hash, marked.abi_hash);
-        assert_ne!(plain.interface_hash, marked.interface_hash);
     }
 
     #[test]

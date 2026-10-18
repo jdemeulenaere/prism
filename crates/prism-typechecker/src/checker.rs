@@ -9438,7 +9438,6 @@ mod tests {
                         },
                     ],
                     return_type: AbiType::Prim(PrimKind::Int),
-                    generic_body_hash: None,
                 },
                 ExportedSymbol::Function {
                     visibility: Visibility::Package,
@@ -9448,11 +9447,9 @@ mod tests {
                     type_parameters: Vec::new(),
                     params: Vec::new(),
                     return_type: AbiType::Prim(PrimKind::Int),
-                    generic_body_hash: None,
                 },
             ],
             abi_hash: prism_abi::ContentHash([1; 32]),
-            interface_hash: prism_abi::ContentHash([2; 32]),
         };
 
         // Case 1: Ingested from external package 'app.ui'

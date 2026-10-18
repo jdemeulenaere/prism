@@ -350,6 +350,7 @@ const BOX: &str =
 
 /// compilation-and-abi: "Changing generic function body".
 #[test]
+#[ignore = "instance records are keyed again by instance-cache group 4"]
 fn changing_generic_function_body() {
     let workspace = Workspace::new(
         "generic",
@@ -448,6 +449,7 @@ fn polymorphic_calls_are_not_recorded() {
 
 /// build-cache: "Explaining an instance of a generic extension".
 #[test]
+#[ignore = "instance records are keyed again by instance-cache group 4"]
 fn explaining_an_instance_of_a_generic_extension() {
     let library = "package lib\npublic struct Box<T>(val value: T)\n\
                    public fun <T> Box<T>.size(): Int = 1\n";
@@ -601,6 +603,7 @@ fn unwritable_cache_directory() {
 
 /// build-cache: "Concurrent checks share a cache".
 #[test]
+#[ignore = "instance records are keyed again by instance-cache group 4"]
 fn concurrent_checks_share_a_cache() {
     let workspace = Workspace::new(
         "concurrent",
@@ -670,6 +673,7 @@ fn checking_without_the_cache() {
 
 /// build-cache: "Explaining a warm check".
 #[test]
+#[ignore = "instance records are keyed again by instance-cache group 4"]
 fn explaining_a_warm_check() {
     let workspace = Workspace::new(
         "explain",

@@ -415,7 +415,6 @@ fn run_abi(path: &str) {
 
     println!("Package: {}", abi.package.as_deref().unwrap_or("<root>"));
     println!("ABI Hash: 0x{}", abi.abi_hash_hex());
-    println!("Interface Hash: 0x{}", abi.interface_hash_hex());
     println!("Exported Symbols ({}):", abi.symbols.len());
     for sym in &abi.symbols {
         match sym {

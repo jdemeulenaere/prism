@@ -1052,10 +1052,19 @@ fn hashes_printed_in_full() {
     let source = "public fun f(x: Int): Int = x\n";
     let abi = run_on_source("hashes_in_full_abi", &["abi"], source);
     assert!(abi.status.success());
-    assert!(has_full_hash(
-        &String::from_utf8_lossy(&abi.stdout),
-        "ABI Hash: 0x"
-    ));
+    let stdout = String::from_utf8_lossy(&abi.stdout);
+    assert!(has_full_hash(&stdout, "ABI Hash: 0x"));
+    // `prism abi` prints no other hash (D3 of `instance-cache`).
+    let hashes = stdout.lines().filter(|line| line.contains("0x")).count();
+    assert_eq!(hashes, 1, "{}", stdout);
+    let generic = run_on_source(
+        "hashes_in_full_generic",
+        &["abi"],
+        "public fun <T> keep(x: T): T = x\n",
+    );
+    let stdout = String::from_utf8_lossy(&generic.stdout);
+    assert!(!stdout.contains("Interface Hash"), "{}", stdout);
+    assert_eq!(stdout.lines().filter(|line| line.contains("0x")).count(), 1);
 
     let check = run_on_source("hashes_in_full_check", &["check", "--no-cache"], source);
     assert!(check.status.success());
@@ -1063,24 +1072,6 @@ fn hashes_printed_in_full() {
         &String::from_utf8_lossy(&check.stdout),
         "ABI: 0x"
     ));
-}
-
-/// compilation-and-abi: "Interface hash printed by `prism abi`".
-#[test]
-fn interface_hash_printed_by_prism_abi() {
-    let output = run_on_source(
-        "interface_hash",
-        &["abi"],
-        "public fun <T> keep(x: T): T = x\n",
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-    let abi_line = lines.iter().position(|l| l.starts_with("ABI Hash: 0x"));
-    let interface_line = lines
-        .iter()
-        .position(|l| l.starts_with("Interface Hash: 0x"));
-    assert_eq!(interface_line, abi_line.map(|i| i + 1), "{}", stdout);
-    assert!(has_full_hash(&stdout, "Interface Hash: 0x"), "{}", stdout);
 }
 
 /// "Relative entry path resolved before root discovery" (`package-resolution`): the entry is
@@ -1170,7 +1161,7 @@ fn a_private_field_type_is_recorded_by_prism_abi() {
         .expect("failed to execute prism CLI");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{}", stdout);
-    let tail: Vec<&str> = stdout.lines().skip(3).collect();
+    let tail: Vec<&str> = stdout.lines().skip(2).collect();
     assert_eq!(
         tail,
         [

@@ -340,117 +340,30 @@ fn reordering_private_declarations_among_exports_leaves_the_hash() {
     );
 }
 
-// --- Generic bodies
+// --- Generic bodies (D3 of `instance-cache`: no body is part of the ABI)
 
+/// compilation-and-abi: "Modifying a generic function body keeps the ABI hash".
 #[test]
-fn changing_a_generic_function_body_changes_the_monomorphization_and_abi_hashes() {
-    let before = extract("public fun <T> id(x: T): T {\n    return x\n}\n");
-    let after = extract("public fun <T> id(x: T): T {\n    val y = x\n    return y\n}\n");
-
-    let hash_of = |abi: &FileAbi| match &abi.symbols[0] {
-        ExportedSymbol::Function {
-            generic_body_hash, ..
-        } => *generic_body_hash,
-        other => panic!("expected a function, got {:?}", other),
-    };
-    let (b, a) = (hash_of(&before), hash_of(&after));
-    assert!(b.is_some() && a.is_some(), "generic bodies record a hash");
-    assert_ne!(b, a);
-    assert_ne!(before.abi_hash, after.abi_hash);
-}
-
-#[test]
-fn changing_a_template_in_a_generic_body_changes_its_hash() {
-    let hash = |source: &str| extract(source).generic_body_hash_of("show", None);
-    let base = hash("public fun <T> show(x: T, n: Int): String = \"n = $n\"\n");
-    for edited in [
-        "public fun <T> show(x: T, n: Int): String = \"m = $n\"\n",
-        "public fun <T> show(x: T, n: Int): String = \"n = ${n + 1}\"\n",
-        "public fun <T> show(x: T, n: Int): String = \"n = $n$n\"\n",
-    ] {
-        assert!(base.is_some());
-        assert_ne!(base, hash(edited), "{}", edited);
-    }
-    // `$n` and `${n}` are the same tree, so the same body.
-    assert_eq!(
-        base,
-        hash("public fun <T> show(x: T, n: Int): String = \"n = ${n}\"\n")
-    );
-}
-
-// --- Interface hash
-
-#[test]
-fn changing_a_generic_body_keeps_the_interface_hash() {
-    let before = extract("public fun <T> keep(x: T): T = x\n");
-    let after = extract("public fun <T> keep(x: T): T {\n    val y = x\n    return y\n}\n");
-    assert_ne!(before.abi_hash, after.abi_hash);
-    assert_eq!(before.interface_hash, after.interface_hash);
-    assert_ne!(
-        before.generic_body_hash_of("keep", None),
-        after.generic_body_hash_of("keep", None)
-    );
-}
-
-#[test]
-fn changing_a_signature_changes_the_interface_hash() {
-    let pairs = [
-        (
-            "public fun shout(s: &String): String = s.clone()\n",
-            "public fun shout(s: &Int): String = \"\"\n",
-        ),
-        (
-            "public struct User { val name: String }\n",
-            "public struct User { val name: String, val age: Int }\n",
-        ),
-    ];
-    for (before, after) in pairs {
-        let (before, after) = (extract(before), extract(after));
-        assert_ne!(before.interface_hash, after.interface_hash);
-        assert_ne!(before.abi_hash, after.abi_hash);
-    }
-}
-
-#[test]
-fn the_interface_hash_ignores_only_generic_bodies() {
-    // Without generic bodies the interface and ABI hashes still differ (the ABI hash is
-    // derived from the interface hash), but both change together.
-    let plain = extract("public fun f(x: Int): Int = x\n");
-    assert_ne!(plain.abi_hash, plain.interface_hash);
-    assert_eq!(plain.generic_body_hash_of("f", None), None);
-}
-
-#[test]
-fn generic_body_hashes_are_found_by_receiver_constructor() {
-    let abi = extract(&format!(
-        "{}public fun <T> Box<T>.get(): &T = &v\npublic fun <T> get(b: &Box<T>): &T = &b.v\n",
-        BOX
-    ));
-    let extension = abi.generic_body_hash_of("get", Some("test/file.Box"));
-    let plain = abi.generic_body_hash_of("get", None);
-    assert!(extension.is_some() && plain.is_some());
-    assert_ne!(extension, plain);
-    assert_eq!(abi.generic_body_hash_of("get", Some("other.Box")), None);
-}
-
-#[test]
-fn a_non_generic_function_records_no_monomorphization_hash() {
-    let abi = extract("public fun f(x: Int): Int = x\n");
-    assert!(matches!(
-        &abi.symbols[0],
-        ExportedSymbol::Function {
-            generic_body_hash: None,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn generic_body_hash_ignores_comments_blank_lines_and_indentation() {
+fn modifying_a_generic_function_body_keeps_the_abi_hash() {
     assert_hash_equal(
-        "public fun <T> id(x: T): T {\n    return x\n}\n",
-        "\n\n// leading comment\npublic fun <T> id(x: T): T {\n\n        /* inner */\n        return    x\n\n}\n",
-        "comments, blank lines and whitespace in a generic body",
+        "public fun <T> keep(x: T): T = x\n",
+        "public fun <T> keep(x: T): T {\n    val y = x\n    return y\n}\n",
+        "a generic function body",
+    );
+    assert_hash_equal(
+        "public fun <T> show(x: T, n: Int): String = \"n = $n\"\n",
+        "public fun <T> show(x: T, n: Int): String = \"m = ${n + 1}\"\n",
+        "a template in a generic body",
+    );
+}
+
+/// compilation-and-abi: "Modifying public function signature", for a generic.
+#[test]
+fn changing_a_generic_signature_changes_the_abi_hash() {
+    assert_hash_differs(
+        "public fun <T> drop(x: T): Int = 1\n",
+        "public fun <T> drop(x: &T): Int = 1\n",
+        "a generic parameter becoming a borrow",
     );
 }
 
@@ -915,45 +828,31 @@ fn marker_parameters_recorded() {
     );
 }
 
-// --- Monomorphization Hash for generic extensions
+// --- Generic extensions (D3 of `instance-cache`)
 
 const BOX: &str = "public struct Box<T>(val v: T)\n";
 
-/// The Monomorphization Hash of the only exported function of `abi`.
-fn generic_body_hash_of(abi: &FileAbi) -> Option<ContentHash> {
-    abi.symbols
-        .iter()
-        .find_map(|s| match s {
-            ExportedSymbol::Function {
-                generic_body_hash, ..
-            } => Some(*generic_body_hash),
-            _ => None,
-        })
-        .expect("a function is exported")
-}
-
+/// compilation-and-abi: "Changing a generic extension body", the ABI half.
 #[test]
 fn changing_a_generic_extension_body() {
-    let before = extract(&format!("{}public fun <T> Box<T>.get(): &T = &v\n", BOX));
-    let after = extract(&format!(
-        "{}public fun <T> Box<T>.get(): &T {{\n    val r = &v\n    return r\n}}\n",
-        BOX
-    ));
-    let (b, a) = (generic_body_hash_of(&before), generic_body_hash_of(&after));
-    assert!(
-        b.is_some() && a.is_some(),
-        "generic extensions record a hash"
+    assert_hash_equal(
+        &format!("{}public fun <T> Box<T>.get(): &T = &v\n", BOX),
+        &format!(
+            "{}public fun <T> Box<T>.get(): &T {{\n    val r = &v\n    return r\n}}\n",
+            BOX
+        ),
+        "a generic extension body",
     );
-    assert_ne!(b, a);
-    assert_ne!(before.abi_hash, after.abi_hash);
 }
 
+/// compilation-and-abi: "Changing a non-generic extension of a generic type".
 #[test]
 fn changing_a_non_generic_extension_of_a_generic_type() {
-    let before = extract(&format!("{}public fun Box<Int>.sum(): Int = v\n", BOX));
-    let after = extract(&format!("{}public fun Box<Int>.sum(): Int = v + 1\n", BOX));
-    assert_eq!(generic_body_hash_of(&before), None);
-    assert_eq!(before.abi_hash, after.abi_hash);
+    assert_hash_equal(
+        &format!("{}public fun Box<Int>.sum(): Int = v\n", BOX),
+        &format!("{}public fun Box<Int>.sum(): Int = v + 1\n", BOX),
+        "a non-generic extension body",
+    );
 }
 
 // --- Definitions of reachable types (D2 and D3 of `codegen-aggregates`)
@@ -1041,20 +940,16 @@ fn changing_a_reachable_type_changes_the_hashes() {
         "package geo\npublic struct Vec : Copy { val x: Int, val y: Int }\n",
         GEO_SHAPES,
     );
-    assert_ne!(core.interface_hash, core2.interface_hash);
     assert_ne!(core.abi_hash, core2.abi_hash);
-    assert_ne!(shapes.interface_hash, shapes2.interface_hash);
     assert_ne!(shapes.abi_hash, shapes2.abi_hash);
 
     // The private Secret gains a field: the hashes of lib/a change.
     let lib = extract_lib(LIB_A);
     let secret = extract_lib(&LIB_A.replace("val k: Int", "val k: Int, val j: Int"));
-    assert_ne!(lib.interface_hash, secret.interface_hash);
     assert_ne!(lib.abi_hash, secret.abi_hash);
 
     // The private Helper, which no export reaches, changes: no hash changes.
     let helper = extract_lib(&LIB_A.replace("val h: Int", "val h: Int, var g: Bool"));
-    assert_eq!(lib.interface_hash, helper.interface_hash);
     assert_eq!(lib.abi_hash, helper.abi_hash);
 }
 
