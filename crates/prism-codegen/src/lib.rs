@@ -27,7 +27,10 @@ mod test_support;
 pub use dump::{dump_file, dump_instances, DumpError, InstanceDumpError};
 pub use entry::find_main;
 pub use error::{BackendError, CodegenError, CodegenErrorKind};
-pub use instances::{check_instances, collect_instances, InstanceError, InstanceUnit};
+pub use instances::{
+    build_instance_unit, check_instances, collect_instances, plan_instances, InstanceError,
+    InstanceUnit, PlannedInstance,
+};
 pub use layout::{dump_layouts, Layout, LayoutTable};
 pub use link::{FunctionTable, Linker};
 pub use program::Program;

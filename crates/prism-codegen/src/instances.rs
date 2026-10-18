@@ -1,23 +1,31 @@
-//! Instance collection over a whole program (D5, D8 and D10 of `monomorphization`).
+//! Instance planning and building over a whole program (D5, D8 and D10 of `monomorphization`,
+//! D7 and D13 of `instance-cache`).
 //!
-//! [`collect_instances`] builds the generic record of every generic function and extension of
-//! the program's files, rejects polymorphic recursion through generics of several files
-//! (`E6004`), and then runs a worklist from the calls with type arguments in every compiled body:
-//! each request names an instance by its symbol, and an instance not yet built is substituted
-//! from its generic's record ([`prism_mir::GenericRecord::instantiate`]) into a unit of its own,
-//! with the closures lowered inside it (D11 of `closures`), whose calls with type arguments
-//! become requests in turn. The work is linear in the program's distinct
-//! instances and their sizes, plus a hash lookup per call site of a generic: a request for a
-//! symbol already built is dropped before its type definitions are gathered. The absence of a
-//! growing cycle bounds the depth of every type argument, so the worklist ends.
+//! [`plan_instances`] lists the instances a program needs from its files' summaries alone
+//! ([`FileSummary`]), without any MIR: it rejects polymorphic recursion through generics of
+//! several files (`E6004`) over every generic's calls, then runs a worklist from every file's
+//! roots, in which an instance's requests are its generic's calls with its type arguments
+//! substituted. Each request names an instance by its symbol, and a symbol already planned is
+//! dropped before anything else is computed, so planning is linear in the program's distinct
+//! instances and their generic calls, plus a hash lookup per call. The absence of a growing
+//! cycle bounds the depth of every type argument, so the worklist ends.
+//!
+//! [`build_instance_unit`] then substitutes one planned instance from its generic's record
+//! ([`prism_mir::GenericRecord::instantiate`]) into a unit of its own, with the closures
+//! lowered inside it (D11 of `closures`), over the record's type table and the program's
+//! definitions of its type arguments. [`collect_instances`] is both steps over elaborated
+//! files, for the dumps and [`crate::Program::compile`].
 
 use crate::error::{CodegenError, CodegenErrorKind};
-use crate::supported::{check_file, is_compiled};
+use crate::supported::check_file;
 use crate::symbols::callee_symbol;
 use prism_ast::Span;
-use prism_mir::{Body, Callee, GenericRecord, MirFile, MirPhase, TerminatorKind};
+use prism_mir::{
+    Callee, DefaultParameter, FileSummary, GenericRecord, GenericSummary, InstanceRequest, MirFile,
+    MirPhase,
+};
 use prism_typed_tree::instantiation::{cycle_generics, edges_of, generic_name, growing_cycles};
-use prism_typed_tree::{Arena, Type, TypeTable};
+use prism_typed_tree::{Arena, DeclarationPath, Type, TypeTable};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// The code unit of one instance: the generic's module, the instance body followed by its
@@ -37,160 +45,189 @@ pub struct InstanceError {
     pub error: CodegenError,
 }
 
-/// One instance asked for: the generic's name, the call naming it (its function or one of its
-/// defaults), the type arguments and the definitions of the types they mention.
-struct Request {
-    symbol: String,
-    generic: String,
-    callee: Callee,
-    type_arguments: Vec<Type>,
-    types: TypeTable,
+/// One instance a program needs, planned from summaries (D7 of `instance-cache`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedInstance {
+    /// The instance's symbol, which names its unit and its slot.
+    pub symbol: String,
+    /// The generic function or extension.
+    pub path: DeclarationPath,
+    /// For an instance of a default value's generator, the parameter it generates.
+    pub default: Option<DefaultParameter>,
+    /// The concrete type arguments, one per type parameter of the generic.
+    pub type_arguments: Vec<Type>,
+    /// The generic's Monomorphization Hash.
+    pub record_hash: [u8; 32],
+}
+
+impl PlannedInstance {
+    /// The call that names the instance.
+    pub fn callee(&self) -> Callee {
+        match &self.default {
+            None => Callee::Function(self.path.clone()),
+            Some(default) => Callee::Default {
+                function: self.path.clone(),
+                parameter: default.parameter,
+                name: default.name.clone(),
+            },
+        }
+    }
+}
+
+/// The instances the program of `summaries`, one per file, needs, sorted by symbol, or the
+/// `E6004` errors of its cross-file polymorphic recursions. Reads no MIR.
+pub fn plan_instances(
+    summaries: &[&FileSummary],
+) -> Result<Vec<PlannedInstance>, Vec<InstanceError>> {
+    let mut generics: HashMap<String, &GenericSummary> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for summary in summaries {
+        for generic in &summary.generics {
+            let name = generic_name(&generic.path);
+            order.push(name.clone());
+            generics.insert(name, generic);
+        }
+    }
+    check_cross_file_recursion(&generics, &order)?;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<PlannedInstance> = VecDeque::new();
+    let mut request = |request: &InstanceRequest,
+                       arguments: Option<&[Type]>,
+                       queue: &mut VecDeque<PlannedInstance>| {
+        let Some(generic) = generics.get(&generic_name(&request.callee)) else {
+            return;
+        };
+        let type_arguments: Vec<Type> = match arguments {
+            Some(arguments) => request
+                .type_arguments
+                .iter()
+                .map(|ty| ty.substitute(arguments))
+                .collect(),
+            None => request.type_arguments.clone(),
+        };
+        let Some(symbol) = callee_symbol(&request.callee(), &type_arguments) else {
+            return;
+        };
+        if !seen.insert(symbol.clone()) {
+            return;
+        }
+        queue.push_back(PlannedInstance {
+            symbol,
+            path: request.callee.clone(),
+            default: request.default.clone(),
+            type_arguments,
+            record_hash: generic.record_hash,
+        });
+    };
+    for summary in summaries {
+        for root in &summary.roots {
+            request(root, None, &mut queue);
+        }
+    }
+    let mut planned = Vec::new();
+    while let Some(instance) = queue.pop_front() {
+        let generic = generics[&generic_name(&instance.path)];
+        if let Some(calls) = generic.calls_of(instance.default.as_ref()) {
+            for call in calls {
+                request(call, Some(&instance.type_arguments), &mut queue);
+            }
+        }
+        planned.push(instance);
+    }
+    planned.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    Ok(planned)
+}
+
+/// The unit of the instance `planned` of the generic whose record is `record`, over the
+/// record's own table and `types`, which defines every struct and enum the type arguments
+/// reach: the program's definitions (D13 of `instance-cache`). `None` when the record has no
+/// such body.
+pub fn build_instance_unit(
+    record: &GenericRecord,
+    planned: &PlannedInstance,
+    types: &TypeTable,
+) -> Option<InstanceUnit> {
+    let mut table = record.types.clone();
+    table.extend_from(&types.restricted_to(&planned.type_arguments));
+    let instances = record.instantiate(&planned.callee(), &planned.type_arguments, &table)?;
+    let mut bodies = Arena::new();
+    for instance in instances {
+        bodies.alloc(instance);
+    }
+    let file = MirFile {
+        module: record.path.module.clone(),
+        phase: MirPhase::Elaborated,
+        types: table,
+        bodies,
+    };
+    #[cfg(debug_assertions)]
+    {
+        let violations = file.validate();
+        assert!(
+            violations.is_empty(),
+            "instance {} is ill-formed:\n{}\n{}",
+            planned.symbol,
+            violations.join("\n"),
+            file.dump()
+        );
+    }
+    Some(InstanceUnit {
+        symbol: planned.symbol.clone(),
+        file,
+    })
 }
 
 /// The instance units the program of `files`, each elaborated, needs, sorted by symbol, or the
-/// `E6004` errors of its cross-file polymorphic recursions.
+/// `E6004` errors of its cross-file polymorphic recursions: [`plan_instances`] over the files'
+/// summaries, then [`build_instance_unit`] for every planned instance over the union of the
+/// files' type tables.
 pub fn collect_instances(files: &[&MirFile]) -> Result<Vec<InstanceUnit>, Vec<InstanceError>> {
     let mut records: HashMap<String, GenericRecord> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
+    let mut summaries = Vec::new();
+    let mut types = TypeTable::new();
     for file in files {
-        for record in GenericRecord::of_file(file) {
-            let name = generic_name(&record.path);
-            order.push(name.clone());
-            records.insert(name, record);
+        let file_records = GenericRecord::of_file(file);
+        // No record is stored or keyed, so no hash is needed.
+        let hashes = vec![[0; 32]; file_records.len()];
+        summaries.push(FileSummary::of(file, &file_records, &hashes, None));
+        for record in file_records {
+            records.insert(generic_name(&record.path), record);
         }
+        types.extend_from(&file.types);
     }
-    check_cross_file_recursion(&records, &order)?;
-
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut queue: VecDeque<Request> = VecDeque::new();
-    for file in files {
-        for (_, body) in file.bodies.iter() {
-            if is_compiled(body) {
-                request_calls(body, &file.types, &records, &mut seen, &mut queue);
-            }
-        }
-    }
-    let mut units = Vec::new();
-    while let Some(request) = queue.pop_front() {
-        let record = &records[&request.generic];
-        let mut types = record.types.clone();
-        types.extend_from(&request.types);
-        let Some(instances) = record.instantiate(&request.callee, &request.type_arguments, &types)
-        else {
-            continue;
-        };
-        let mut bodies = Arena::new();
-        for instance in instances {
-            request_calls(&instance, &types, &records, &mut seen, &mut queue);
-            bodies.alloc(instance);
-        }
-        let file = MirFile {
-            module: record.path.module.clone(),
-            phase: MirPhase::Elaborated,
-            types,
-            bodies,
-        };
-        #[cfg(debug_assertions)]
-        {
-            let violations = file.validate();
-            assert!(
-                violations.is_empty(),
-                "instance {} is ill-formed:\n{}\n{}",
-                request.symbol,
-                violations.join("\n"),
-                file.dump()
-            );
-        }
-        units.push(InstanceUnit {
-            symbol: request.symbol,
-            file,
-        });
-    }
-    units.sort_by(|a, b| a.symbol.cmp(&b.symbol));
-    Ok(units)
+    let planned = plan_instances(&summaries.iter().collect::<Vec<_>>())?;
+    Ok(planned
+        .iter()
+        .filter_map(|instance| {
+            build_instance_unit(&records[&generic_name(&instance.path)], instance, &types)
+        })
+        .collect())
 }
 
-/// Queues an instance for each call with type arguments in `body` whose symbol is new, its type
-/// arguments' definitions taken from `types`.
-fn request_calls(
-    body: &Body,
-    types: &TypeTable,
-    records: &HashMap<String, GenericRecord>,
-    seen: &mut HashSet<String>,
-    queue: &mut VecDeque<Request>,
-) {
-    for (_, block) in body.blocks.iter() {
-        let TerminatorKind::Call {
-            callee,
-            type_arguments,
-            ..
-        } = &block.terminator.kind
-        else {
-            continue;
-        };
-        if type_arguments.is_empty() {
-            continue;
-        }
-        let path = match callee {
-            Callee::Function(path) | Callee::Default { function: path, .. } => path,
-            // A built-in's type argument (`Heap<T>(...)`) is lowered directly.
-            Callee::Builtin(_) | Callee::Value(..) => continue,
-        };
-        let generic = generic_name(path);
-        if !records.contains_key(&generic) {
-            continue;
-        }
-        let Some(symbol) = callee_symbol(callee, type_arguments) else {
-            continue;
-        };
-        if !seen.insert(symbol.clone()) {
-            continue;
-        }
-        queue.push_back(Request {
-            symbol,
-            generic,
-            callee: callee.clone(),
-            type_arguments: type_arguments.clone(),
-            types: types.restricted_to(type_arguments),
-        });
-    }
-}
-
-/// Reports `E6004` for each growing cycle of the calls between the records' generics (D8): one
-/// that passes through several files, since the type checker rejects those within one file
-/// (`E4027`).
+/// Reports `E6004` for each growing cycle of the calls between the generics of `generics` (D8
+/// of `monomorphization`): one that passes through several files, since the type checker
+/// rejects those within one file (`E4027`).
 fn check_cross_file_recursion(
-    records: &HashMap<String, GenericRecord>,
+    generics: &HashMap<String, &GenericSummary>,
     order: &[String],
 ) -> Result<(), Vec<InstanceError>> {
     let mut sites: Vec<(String, Span)> = Vec::new();
     let mut edges = Vec::new();
     for name in order {
-        let record = &records[name];
-        for body in std::iter::once(&record.function)
-            .chain(&record.defaults)
-            .chain(&record.closures)
-        {
-            for (_, block) in body.blocks.iter() {
-                let TerminatorKind::Call {
-                    callee,
-                    type_arguments,
-                    ..
-                } = &block.terminator.kind
-                else {
-                    continue;
-                };
-                let (Callee::Function(path) | Callee::Default { function: path, .. }) = callee
-                else {
-                    continue;
-                };
-                let callee = generic_name(path);
-                if type_arguments.is_empty() || !records.contains_key(&callee) {
-                    continue;
-                }
-                sites.push((record.path.module.clone(), block.terminator.span));
-                edges.extend(edges_of(name, &callee, type_arguments, sites.len() - 1));
+        let generic = generics[name];
+        for call in generic.all_calls() {
+            let callee = generic_name(&call.callee);
+            if !generics.contains_key(&callee) {
+                continue;
             }
+            sites.push((generic.path.module.clone(), call.span));
+            edges.extend(edges_of(
+                name,
+                &callee,
+                &call.type_arguments,
+                sites.len() - 1,
+            ));
         }
     }
     let errors: Vec<InstanceError> = growing_cycles(&edges)
@@ -198,8 +235,7 @@ fn check_cross_file_recursion(
         .map(|cycle| {
             let growing = &cycle[0];
             let names = cycle_generics(&cycle);
-            let parameter = records[&growing.to.generic]
-                .function
+            let parameter = generics[&growing.to.generic]
                 .type_parameters
                 .get(growing.to.parameter as usize)
                 .map_or_else(|| "?".to_string(), |parameter| parameter.name.clone());

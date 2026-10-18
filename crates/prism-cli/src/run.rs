@@ -75,7 +75,7 @@ fn elaborate_program(entry: &Path) -> Result<(PathBuf, Vec<(PathBuf, MirFile)>),
     validate_entry_file(entry)?;
     let graph = DependencyGraph::from_entry(entry)?;
     assert_workspace_boundary(&graph)?;
-    let abis = extract_abis(&graph)?;
+    let (abis, _) = extract_abis(&graph)?;
     let entry_path = entry_in_graph(&graph, entry)?;
     let mut files: Vec<(PathBuf, MirFile)> = Vec::new();
     for cluster in graph.topological_order() {

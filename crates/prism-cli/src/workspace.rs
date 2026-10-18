@@ -2,13 +2,12 @@
 
 #![allow(clippy::result_large_err)]
 
-use crate::cache::{BuildCache, InstanceRequest};
+use crate::cache::{BuildCache, EntryKind};
 use crate::diagnostics;
-use prism_abi::{
-    declared_types, type_definitions, AbiError, AbiTypeDefinition, ContentHash,
-    DeterministicHasher, FileAbi, NominalHeader,
-};
-use prism_mir::MirFile;
+use crate::plan::{instance_code_key, planned_display, DefinitionsHasher, ProgramDefinitions};
+use prism_abi::{declared_types, type_definitions, AbiError, ContentHash, FileAbi, NominalHeader};
+use prism_codegen::{InstanceError, PlannedInstance};
+use prism_mir::{FileSummary, GenericRecord, MirFile};
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
 use prism_typechecker::TypedFile;
@@ -25,8 +24,6 @@ pub struct CheckedFile {
     pub abi_hash: String,
     /// Whether Phase 2 ran for the file or its cached verdict was reused.
     pub cache: CacheOutcome,
-    /// The instances of imported generics the file requests, in order (D9 of `abi-cache`).
-    pub instances: Vec<InstanceOutcome>,
 }
 
 /// Whether a file's Phase 2 ran or was skipped thanks to the build cache.
@@ -36,14 +33,19 @@ pub enum CacheOutcome {
     Checked,
     /// A cached verdict for exactly these inputs was reused.
     Reused,
+    /// Under `prism run`: the cached verdict was reused, but the file's code was generated
+    /// (D9 of `instance-cache`).
+    Compiled,
 }
 
-/// An instance a file requests, and whether its record already existed.
+/// An instance of the program, and whether the cache holds its code (D10 of
+/// `instance-cache`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceOutcome {
     /// The instance as shown to the user (`lib/box::keep<Int>`).
     pub instance: String,
-    /// Whether the instance was already recorded; otherwise it must be instantiated.
+    /// Whether the cache holds the instance's code: under `prism run` it was loaded, under
+    /// `prism check` the next run will load it. Otherwise it is (or will be) instantiated.
     pub reused: bool,
 }
 
@@ -52,6 +54,9 @@ pub struct InstanceOutcome {
 pub struct CheckOptions {
     /// The build cache to read and write, or `None` to check every file (D10 of `abi-cache`).
     pub cache: Option<BuildCache>,
+    /// Whether to look up which instances the cache holds code for (`--explain-cache`), which
+    /// costs one lookup per instance.
+    pub explain_cache: bool,
 }
 
 /// The result of running `prism check` on a workspace or entry file.
@@ -60,6 +65,8 @@ pub struct CheckReport {
     pub workspace_root: PathBuf,
     pub total_files: usize,
     pub checked_files: Vec<CheckedFile>,
+    /// The program's instances, in symbol order (D7 and D10 of `instance-cache`).
+    pub instances: Vec<InstanceOutcome>,
 }
 
 /// Errors encountered while driving workspace analysis.
@@ -384,45 +391,37 @@ pub(crate) fn module_path(node: &SourceNode) -> String {
 /// Validates AST, extracts ABI across all files in Phase 1, and runs Phase 2 in topological SCC
 /// order: typechecking each file, lowering each file that typechecks to MIR and borrow-checking
 /// that MIR, stopping at the first file with type or borrow errors. With a build cache, a file
-/// whose inputs have a cached verdict skips Phase 2 (`abi-cache`).
+/// whose inputs have a cached verdict skips Phase 2 (`abi-cache`), and its summary is read from
+/// its check entry. The program's instances are then planned from every file's summary, which
+/// reports cross-file polymorphic recursion (`E6004`, D7 of `instance-cache`).
 fn validate_and_extract_abi(
     graph: &DependencyGraph,
     options: &CheckOptions,
 ) -> Result<CheckReport, WorkspaceError> {
-    let abis = extract_abis(graph)?;
+    let (abis, definitions) = extract_abis(graph)?;
     let cache = options.cache.as_ref();
 
     // Phase 2: Typecheck function bodies and expressions in topological SCC order
     let mut checked_files = Vec::new();
+    let mut summaries: Vec<FileSummary> = Vec::new();
 
     for cluster in graph.topological_order() {
         for file_path in &cluster.files {
             let node = graph.get_node(file_path).expect("node must exist in graph");
-            let imports: Vec<&FileAbi> = node
-                .direct_imports
-                .iter()
-                .filter_map(|dep| abis.get(dep))
-                .collect();
-            // The verdict depends on the imports' ABI hashes, which cover no body (D3 of
-            // `instance-cache`).
-            let key = cache.map(|cache| {
-                let import_hashes: Vec<ContentHash> =
-                    imports.iter().map(|abi| abi.abi_hash).collect();
-                cache.check_key(&module_path(node), &node.source, &import_hashes)
-            });
+            let key = cache.map(|cache| file_check_key(cache, graph, &abis, file_path));
             let cached = cache.zip(key.as_ref()).and_then(|(c, k)| c.read_check(k));
 
-            let (outcome, requests) = match cached {
-                Some(requests) => (CacheOutcome::Reused, requests),
+            let (outcome, summary) = match cached {
+                Some(summary) => (CacheOutcome::Reused, summary),
                 None => {
-                    let requests = check_phase_two(graph, &abis, file_path)?;
+                    let file = elaborate_and_summarize(graph, &abis, file_path)?;
                     if let Some((cache, key)) = cache.zip(key.as_ref()) {
-                        cache.write_check(key, &requests);
+                        file.record(cache, key);
                     }
-                    (CacheOutcome::Checked, requests)
+                    (CacheOutcome::Checked, file.summary)
                 }
             };
-            let instances = instance_outcomes(cache, &imports, &requests);
+            summaries.push(summary);
 
             let abi = abis.get(file_path).expect("abi must exist");
             let package_str = if node.package.is_empty() {
@@ -437,41 +436,96 @@ fn validate_and_extract_abi(
                 exported_symbols: abi.symbols.len(),
                 abi_hash: abi.abi_hash_hex(),
                 cache: outcome,
-                instances,
             });
         }
     }
+
+    let planned = prism_codegen::plan_instances(&summaries.iter().collect::<Vec<_>>())
+        .map_err(|errors| instance_errors(graph, errors))?;
+    let instances = instance_outcomes(
+        cache.filter(|_| options.explain_cache),
+        &definitions,
+        &planned,
+    )?;
 
     Ok(CheckReport {
         workspace_root: graph.workspace_root.clone(),
         total_files: checked_files.len(),
         checked_files,
+        instances,
     })
 }
 
-/// Phase 2 of the file at `file_path`: type checking, MIR lowering and borrow checking. Returns
-/// the instances its elaborated MIR requests, or its type or borrow errors.
-fn check_phase_two(
+/// The key of the check entry of the file at `file_path`: its module path, its source and its
+/// direct imports' ABI hashes, which cover no body (D3 of `instance-cache`).
+pub(crate) fn file_check_key(
+    cache: &BuildCache,
     graph: &DependencyGraph,
     abis: &HashMap<PathBuf, FileAbi>,
     file_path: &Path,
-) -> Result<Vec<InstanceRequest>, WorkspaceError> {
-    let elaborated = elaborate_file(graph, abis, file_path)?;
+) -> ContentHash {
     let node = graph.get_node(file_path).expect("node must exist in graph");
-    let import_modules: Vec<String> = node
+    let import_hashes: Vec<ContentHash> = node
         .direct_imports
         .iter()
-        .filter_map(|dep| graph.get_node(dep))
-        .map(module_path)
+        .filter_map(|dep| abis.get(dep))
+        .map(|abi| abi.abi_hash)
         .collect();
-    Ok(instance_requests(&elaborated, &import_modules))
+    cache.check_key(&module_path(node), &node.source, &import_hashes)
+}
+
+/// A file that passed Phase 2: its elaborated MIR, its generic records with their encodings,
+/// and its summary.
+#[allow(dead_code)] // The MIR and records are compiled by `prism run` (group 6).
+pub(crate) struct ElaboratedFile {
+    pub mir: MirFile,
+    pub records: Vec<GenericRecord>,
+    /// The encoding of each record, whose hash is its Monomorphization Hash.
+    pub encodings: Vec<Vec<u8>>,
+    pub summary: FileSummary,
+}
+
+impl ElaboratedFile {
+    /// Writes the file's record entries, then its check entry `key` with its summary (D14 of
+    /// `instance-cache`: each entry is true whatever another file of the run does).
+    pub fn record(&self, cache: &BuildCache, key: &ContentHash) {
+        for (generic, encoding) in self.summary.generics.iter().zip(&self.encodings) {
+            cache.write_record(&ContentHash(generic.record_hash), encoding);
+        }
+        cache.write_check(key, &self.summary);
+    }
+}
+
+/// Phase 2 of the file at `file_path` ([`elaborate_file`]), then its generic records, their
+/// Monomorphization Hashes and its summary, with the `main` the backend accepts. Returns its
+/// type or borrow errors instead when it has any.
+pub(crate) fn elaborate_and_summarize(
+    graph: &DependencyGraph,
+    abis: &HashMap<PathBuf, FileAbi>,
+    file_path: &Path,
+) -> Result<ElaboratedFile, WorkspaceError> {
+    let mir = elaborate_file(graph, abis, file_path)?;
+    let records = GenericRecord::of_file(&mir);
+    let encodings: Vec<Vec<u8>> = records.iter().map(GenericRecord::encode).collect();
+    let hashes: Vec<[u8; 32]> = encodings
+        .iter()
+        .map(|encoding| ContentHash::of(encoding).0)
+        .collect();
+    let entry_point = prism_codegen::find_main(&mir).ok();
+    let summary = FileSummary::of(&mir, &records, &hashes, entry_point);
+    Ok(ElaboratedFile {
+        mir,
+        records,
+        encodings,
+        summary,
+    })
 }
 
 /// The elaborated MIR of the file at `file_path` of `graph`: Phase 2 type-checks it against the
 /// ABIs of its direct imports, lowers it to MIR from its typed tree alone (D1 of
 /// `mir-lowering`) and borrow-checks that MIR alone, never another file's (D1 of
-/// `borrowck-moves`). Returns its type or borrow errors instead when it has any. The instance
-/// requests of `prism check` and the backend of `prism run` consume it.
+/// `borrowck-moves`). Returns its type or borrow errors instead when it has any. The summaries
+/// of `prism check` and the backend of `prism run` consume it.
 pub(crate) fn elaborate_file(
     graph: &DependencyGraph,
     abis: &HashMap<PathBuf, FileAbi>,
@@ -497,94 +551,115 @@ pub(crate) fn elaborate_file(
     })
 }
 
-/// The instances `mir` requests: its calls to generics of the modules `import_modules` (its
-/// direct imports) with type arguments that mention no type parameter, deduplicated and sorted
-/// (D9 of `abi-cache`). Polymorphic calls are instantiated with their caller, and calls to the
-/// file's own generics are re-checked with the file.
-fn instance_requests(mir: &MirFile, import_modules: &[String]) -> Vec<InstanceRequest> {
-    let mut requests = Vec::new();
-    for (_, body) in mir.bodies.iter() {
-        for (_, block) in body.blocks.iter() {
-            let prism_mir::TerminatorKind::Call {
-                callee: prism_mir::Callee::Function(path),
-                type_arguments,
-                ..
-            } = &block.terminator.kind
-            else {
-                continue;
-            };
-            if type_arguments.is_empty()
-                || path.module == mir.module
-                || !import_modules.contains(&path.module)
-                || type_arguments
-                    .iter()
-                    .any(prism_typed_tree::Type::mentions_parameter)
-            {
-                continue;
+/// The errors of a program's instances, each in the file of its generic's module, grouped by
+/// file in the order the program's files are checked.
+pub(crate) fn instance_errors(
+    graph: &DependencyGraph,
+    errors: Vec<InstanceError>,
+) -> WorkspaceError {
+    let mut grouped: Vec<WorkspaceError> = Vec::new();
+    for cluster in graph.topological_order() {
+        for path in &cluster.files {
+            let node = graph.get_node(path).expect("node must exist in graph");
+            let module = module_path(node);
+            let in_file: Vec<prism_codegen::CodegenError> = errors
+                .iter()
+                .filter(|error| error.module == module)
+                .map(|error| error.error.clone())
+                .collect();
+            if !in_file.is_empty() {
+                grouped.push(WorkspaceError::Codegen {
+                    path: path.clone(),
+                    source: fs::read_to_string(path).unwrap_or_default(),
+                    errors: in_file,
+                });
             }
-            let mut hasher = DeterministicHasher::new();
-            hasher.write_u64(type_arguments.len() as u64);
-            for argument in type_arguments {
-                hasher.write_str(&argument.qualified());
-            }
-            let shown: Vec<String> = type_arguments.iter().map(ToString::to_string).collect();
-            requests.push(InstanceRequest {
-                module: path.module.clone(),
-                receiver: path
-                    .receiver
-                    .as_ref()
-                    .map(prism_typed_tree::Type::receiver_constructor),
-                name: path.name.clone(),
-                type_arguments: hasher.finish(),
-                display: instance_display(path, &shown),
-            });
         }
     }
-    requests.sort();
-    requests.dedup();
-    requests
+    if grouped.len() == 1 {
+        grouped.remove(0)
+    } else {
+        WorkspaceError::Several(grouped)
+    }
 }
 
-/// How the instance of the generic `path` with the type arguments `shown` is shown to the user:
-/// `lib/box::keep<Int>`, or `lib/box::Box.get<Int>` for an extension. The receiver is shown by
-/// its type's name alone: its type arguments name the extension's own type parameters, which no
-/// interface hash covers, so showing them would let a reused entry show a stale name.
-fn instance_display(path: &prism_typed_tree::DeclarationPath, shown: &[String]) -> String {
-    use prism_typed_tree::Type;
-    let receiver = match &path.receiver {
-        Some(Type::Struct { id, .. } | Type::Enum { id, .. }) => format!("{}.", id.name),
-        Some(other) => format!("{}.", other),
-        None => String::new(),
-    };
-    format!(
-        "{}::{}{}<{}>",
-        path.module,
-        receiver,
-        path.name,
-        shown.join(", ")
-    )
-}
-
-/// The instance of each of `requests`, each one to instantiate: no body hash is left in the ABI
-/// to key a record by, until generic records are keyed by their own hash (`instance-cache`).
+/// The instances `planned`, each with whether `cache` holds its code: one lookup of a code
+/// entry's header per instance, done only when `cache` is given (`--explain-cache`).
 fn instance_outcomes(
-    _cache: Option<&BuildCache>,
-    _imports: &[&FileAbi],
-    requests: &[InstanceRequest],
-) -> Vec<InstanceOutcome> {
-    requests
+    cache: Option<&BuildCache>,
+    definitions: &ProgramDefinitions,
+    planned: &[PlannedInstance],
+) -> Result<Vec<InstanceOutcome>, WorkspaceError> {
+    let target = match cache {
+        Some(_) => Some(prism_codegen::isa::target_identity().map_err(WorkspaceError::Backend)?),
+        None => None,
+    };
+    let mut hasher = DefinitionsHasher::new(definitions);
+    Ok(planned
         .iter()
-        .map(|request| InstanceOutcome {
-            instance: request.display.clone(),
-            reused: false,
+        .map(|instance| InstanceOutcome {
+            instance: planned_display(instance),
+            reused: cache.zip(target.as_deref()).is_some_and(|(cache, target)| {
+                let key = instance_code_key(cache, instance, &mut hasher, target);
+                cache.has_code(EntryKind::Instance, &key)
+            }),
         })
-        .collect()
+        .collect())
+}
+
+/// The text `--explain-cache` prints (the `build-cache` spec): `Cache: <directory>` or
+/// `Cache: off`, then each file in check order as `checked`, `reused` or `compiled` under its
+/// path relative to `workspace_root` with `/` separators, then the program's instances once,
+/// in symbol order, as `instantiate <instance>` or `reused instance <instance>` (D10 of
+/// `instance-cache`).
+pub fn explain_cache(
+    directory: Option<&Path>,
+    workspace_root: &Path,
+    files: &[(&Path, CacheOutcome)],
+    instances: &[InstanceOutcome],
+) -> String {
+    let mut text = match directory {
+        Some(directory) => format!("Cache: {}\n", directory.display()),
+        None => "Cache: off\n".to_string(),
+    };
+    let root = match workspace_root.as_os_str().is_empty() {
+        true => Path::new("."),
+        false => workspace_root,
+    };
+    let root = root.canonicalize().ok();
+    for (path, outcome) in files {
+        let canonical = path.canonicalize().ok();
+        let relative = root
+            .as_ref()
+            .zip(canonical.as_ref())
+            .and_then(|(root, path)| path.strip_prefix(root).ok())
+            .unwrap_or(path);
+        let shown: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let outcome = match outcome {
+            CacheOutcome::Checked => "checked",
+            CacheOutcome::Reused => "reused",
+            CacheOutcome::Compiled => "compiled",
+        };
+        text.push_str(&format!("  {} {}\n", outcome, shown.join("/")));
+    }
+    for instance in instances {
+        let outcome = if instance.reused {
+            "reused instance"
+        } else {
+            "instantiate"
+        };
+        text.push_str(&format!("  {} {}\n", outcome, instance.instance));
+    }
+    text
 }
 
 /// Phase 1: extracts the ABI of every file of `graph` from its AST alone. No body is read.
 pub(crate) fn extract_abis(
     graph: &DependencyGraph,
-) -> Result<HashMap<PathBuf, FileAbi>, WorkspaceError> {
+) -> Result<(HashMap<PathBuf, FileAbi>, ProgramDefinitions), WorkspaceError> {
     // Phase 1a: the structs and enums each file exports, with their kinds and markers, read from
     // its AST alone.
     let exported_types: HashMap<&Path, HashMap<&str, NominalHeader>> = graph
@@ -608,7 +683,7 @@ pub(crate) fn extract_abis(
 
     // Phase 1a, continued: the definition of every struct and enum of every file, private ones
     // included, bound as Phase 1b binds signature types (D3 of `codegen-aggregates`).
-    let mut definitions: HashMap<(String, String), AbiTypeDefinition> = HashMap::new();
+    let mut definitions: ProgramDefinitions = HashMap::new();
     for node in graph.nodes.values() {
         let bind = |name: &str| bind_import(node, name);
         for definition in type_definitions(&node.source_file, &module_path(node), &bind) {
@@ -645,7 +720,7 @@ pub(crate) fn extract_abis(
         })?;
         abis.insert(file_path.clone(), abi);
     }
-    Ok(abis)
+    Ok((abis, definitions))
 }
 
 /// Phase 2 of one file: checks the file at `file_path` of `graph` against the ABIs of its direct
@@ -708,7 +783,7 @@ fn typecheck_entry(entry: &Path) -> Result<(TypedFile, Option<WorkspaceError>), 
     validate_entry_file(entry)?;
     let graph = DependencyGraph::from_entry(entry)?;
     assert_workspace_boundary(&graph)?;
-    let abis = extract_abis(&graph)?;
+    let (abis, _) = extract_abis(&graph)?;
     let canonical_entry = entry.canonicalize().map_err(|e| WorkspaceError::Io {
         path: entry.to_path_buf(),
         message: e.to_string(),
@@ -989,8 +1064,52 @@ mod tests {
         fs::remove_dir_all(&temp).ok();
     }
 
+    /// D13 of `instance-cache`: the program-wide table built from Phase 1a definitions agrees
+    /// with every elaborated file's table on every type both hold.
     #[test]
-    #[ignore = "instance records are keyed again by instance-cache group 4"]
+    fn the_program_table_agrees_with_every_file_table() {
+        let temp = create_temp_dir("program_table");
+        fs::create_dir_all(temp.join("lib")).unwrap();
+        fs::create_dir_all(temp.join("app")).unwrap();
+        fs::write(
+            temp.join("lib/shapes.prism"),
+            "package lib\nstruct Secret : Copy { val k: Int }\n\
+             public struct Pair<A, B>(val a: A, val b: B)\n\
+             public enum Shape<T> : Clone { Dot, Point(T, Int) }\n\
+             public struct Holder : Copy { val s: Secret, val n: Int }\n\
+             public fun holder(): Holder = Holder(Secret(1), 2)\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.join("app/main.prism"),
+            "package app\nimport /lib/shapes\nstruct Thing(val p: Pair<Int, String>, val c: Chain)\n\
+             enum Chain { End, Link(Int, Heap<Chain>) }\n\
+             fun main() { val s: Shape<Int> = Shape.Dot; println(holder().n) }\n",
+        )
+        .unwrap();
+        let graph = DependencyGraph::from_entry(&temp.join("app/main.prism")).unwrap();
+        let (abis, definitions) = extract_abis(&graph).unwrap();
+        let program = crate::plan::program_types(&definitions);
+        let mut compared = 0;
+        for path in graph.nodes.keys() {
+            let mir = elaborate_file(&graph, &abis, path).unwrap();
+            for id in mir.types.ids() {
+                if let (Some(file), Some(whole)) =
+                    (mir.types.definition(id), program.definition(id))
+                {
+                    assert_eq!(file, whole, "{}::{}", id.module, id.name);
+                    compared += 1;
+                }
+                if let Some(marker) = mir.types.marker_entry(id) {
+                    assert_eq!(program.marker_entry(id), Some(marker), "{}", id.name);
+                }
+            }
+        }
+        assert!(compared >= 6, "{}", compared);
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
     fn test_cached_report_matches_uncached_report() {
         let temp = create_temp_dir("cached_report");
         let lib = temp.join("lib");
@@ -1012,6 +1131,7 @@ mod tests {
                 temp.join(".cache"),
                 crate::cache::identity_of("test", &ContentHash([5; 32])),
             )),
+            explain_cache: true,
         };
 
         let uncached = check_path(&temp).unwrap();
@@ -1021,15 +1141,18 @@ mod tests {
         for file in &uncached.checked_files {
             assert_eq!(file.cache, CacheOutcome::Checked);
         }
-        assert_eq!(uncached.checked_files[1].instances.len(), 1);
-        assert!(!uncached.checked_files[1].instances[0].reused);
+        assert_eq!(
+            uncached.instances,
+            [InstanceOutcome {
+                instance: "lib/box::keep<Int>".to_string(),
+                reused: false,
+            }]
+        );
 
+        // No run generated the instance's code, so it stays one to instantiate.
         let mut expected = uncached.clone();
         for file in &mut expected.checked_files {
             file.cache = CacheOutcome::Reused;
-            for instance in &mut file.instances {
-                instance.reused = true;
-            }
         }
         assert_eq!(warm, expected);
 

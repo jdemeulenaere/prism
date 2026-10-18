@@ -353,6 +353,23 @@ impl AbiTypeDefinition {
         }
     }
 
+    /// The structural hash of the definition alone, as the ABI hash covers it: what an
+    /// instance key covers for each type its type arguments reach (D6 of `instance-cache`).
+    pub fn hash(&self) -> ContentHash {
+        let mut hasher = DeterministicHasher::new();
+        self.hash_into(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The defining module and name of every struct and enum its fields or payloads mention.
+    pub fn referenced_types(&self) -> Vec<(&str, &str)> {
+        let mut out = Vec::new();
+        for ty in self.member_types() {
+            nominal_types_in(ty, &mut out);
+        }
+        out
+    }
+
     fn hash_into(&self, hasher: &mut DeterministicHasher) {
         hasher.write_str("definition");
         hasher.write_str(&self.module);

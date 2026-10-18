@@ -1,10 +1,12 @@
 //! Scenarios of the build cache and of compilation avoidance (the `build-cache` spec, and
-//! "Compilation Avoidance via Interface Hashes" and "Instantiation Records for Generic Body
-//! Changes" of `compilation-and-abi`), run against the `prism` binary.
+//! "Compilation Avoidance via ABI Hashes", "Instances Are Planned per Program", "Instances Are
+//! Keyed by Their Record and Type Arguments" and "Code Generation Avoidance" of
+//! `compilation-and-abi`), run against the `prism` binary.
 //!
 //! Each test builds a workspace and a cache in temporary directories, runs `prism check
-//! --explain-cache` with `PRISM_CACHE` set, edits files between runs and compares the
-//! explanation lines (D11 of `abi-cache`). Tests are named after the scenarios they protect.
+//! --explain-cache` or `prism run --explain-cache` with `PRISM_CACHE` set, edits files between
+//! runs and compares the explanation lines (D11 of `abi-cache`, D10 of `instance-cache`). Tests
+//! are named after the scenarios they protect.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -86,7 +88,7 @@ impl Workspace {
     fn entries(&self) -> BTreeSet<PathBuf> {
         let mut paths = BTreeSet::new();
         if self.cache.is_dir() {
-            collect(&self.cache.join("v1"), &mut paths);
+            collect(&self.cache.join("v2"), &mut paths);
         }
         paths.into_iter().filter(|p| p.is_file()).collect()
     }
@@ -143,11 +145,6 @@ fn report(output: &Output) -> String {
 
 fn lines(expected: &[&str]) -> Vec<String> {
     expected.iter().map(|line| line.to_string()).collect()
-}
-
-fn sorted(mut lines: Vec<String>) -> Vec<String> {
-    lines.sort();
-    lines
 }
 
 const TEXT: &str = "package lib\npublic fun shout(s: &String): String = s.clone()\n";
@@ -343,113 +340,115 @@ fn cached_and_uncached_checks_agree() {
     assert_eq!(uncached.status.code(), cached.status.code());
 }
 
-// --- Instantiation records
+// --- Instances planned per program (D7 and D10 of `instance-cache`)
 
 const BOX: &str =
     "package lib\npublic fun <T> keep(x: T): T = x\npublic fun <T> drop(x: T): Int = 1\n";
 
-/// compilation-and-abi: "Changing generic function body".
+/// compilation-and-abi: "Polymorphic calls are instantiated with their caller".
 #[test]
-#[ignore = "instance records are keyed again by instance-cache group 4"]
-fn changing_generic_function_body() {
-    let workspace = Workspace::new(
-        "generic",
-        &[
-            ("lib/box.prism", BOX),
-            (
-                "app/a.prism",
-                "package app\nimport /lib/box\nfun f(): Int = keep(1)\n",
-            ),
-            (
-                "app/b.prism",
-                "package app\nimport /lib/box\nfun g(): Int = drop(\"s\")\n",
-            ),
-        ],
-    );
-    assert_eq!(
-        sorted(workspace.explain(".")),
-        sorted(lines(&[
-            "checked lib/box.prism",
-            "checked app/a.prism",
-            "instantiate lib/box::keep<Int> for app/a.prism",
-            "checked app/b.prism",
-            "instantiate lib/box::drop<String> for app/b.prism",
-        ]))
-    );
-    workspace.write(
-        "lib/box.prism",
-        &BOX.replace("): T = x", "): T {\n    val y = x\n    return y\n}"),
-    );
-    assert_eq!(
-        sorted(workspace.explain(".")),
-        sorted(lines(&[
-            "checked lib/box.prism",
-            "reused app/a.prism",
-            "instantiate lib/box::keep<Int> for app/a.prism",
-            "reused app/b.prism",
-            "reused instance lib/box::drop<String> for app/b.prism",
-        ]))
-    );
-}
-
-/// compilation-and-abi: "Changing a generic signature instantiates again".
-#[test]
-fn changing_a_generic_signature_instantiates_again() {
-    let workspace = Workspace::new(
-        "generic_signature",
-        &[
-            ("lib/box.prism", BOX),
-            (
-                "app/a.prism",
-                "package app\nimport /lib/box\nfun f(): Int = drop(1)\n",
-            ),
-        ],
-    );
-    assert_eq!(
-        workspace.explain("app/a.prism"),
-        lines(&[
-            "checked lib/box.prism",
-            "checked app/a.prism",
-            "instantiate lib/box::drop<Int> for app/a.prism",
-        ])
-    );
-    workspace.write("lib/box.prism", &BOX.replace("drop(x: T)", "drop(x: &T)"));
-    workspace.write(
-        "app/a.prism",
-        "package app\nimport /lib/box\nfun f(): Int = drop(&1)\n",
-    );
-    assert_eq!(
-        workspace.explain("app/a.prism"),
-        lines(&[
-            "checked lib/box.prism",
-            "checked app/a.prism",
-            "instantiate lib/box::drop<Int> for app/a.prism",
-        ])
-    );
-}
-
-/// compilation-and-abi: "Polymorphic calls are not recorded".
-#[test]
-fn polymorphic_calls_are_not_recorded() {
+fn polymorphic_calls_are_instantiated_with_their_caller() {
     let workspace = Workspace::new(
         "polymorphic",
         &[
             ("lib/box.prism", BOX),
             (
                 "app/a.prism",
-                "package app\nimport /lib/box\nfun <T> wrap(x: T): T = keep(x)\n",
+                "package app\nimport /lib/box\npublic fun <T> wrap(x: T): T = keep(x)\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport a\nfun main() { println(wrap(1)) }\n",
             ),
         ],
     );
     assert_eq!(
-        workspace.explain("app/a.prism"),
-        lines(&["checked lib/box.prism", "checked app/a.prism"])
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked lib/box.prism",
+            "checked app/a.prism",
+            "checked app/main.prism",
+            "instantiate app/a::wrap<Int>",
+            "instantiate lib/box::keep<Int>",
+        ])
     );
+}
+
+/// compilation-and-abi: "Transitive instances through a module the caller does not import".
+#[test]
+fn transitive_instances_through_a_module_the_caller_does_not_import() {
+    let workspace = Workspace::new(
+        "transitive",
+        &[
+            (
+                "lib/util.prism",
+                "package lib\npublic struct Pair<A, B>(val a: A, val b: B)\n\
+                 public fun <T : Copy> twin(x: T): Pair<T, T> = Pair(x, x)\n",
+            ),
+            (
+                "lib/box.prism",
+                "package lib\nimport /lib/util\n\
+                 public fun <T : Copy> first(x: T): T = twin(x).a\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/box\nfun main() { println(first(7)) }\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked lib/util.prism",
+            "checked lib/box.prism",
+            "checked app/main.prism",
+            "instantiate lib/box::first<Int>",
+            "instantiate lib/util::twin<Int>",
+        ])
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "reused lib/util.prism",
+            "reused lib/box.prism",
+            "reused app/main.prism",
+            "instantiate lib/box::first<Int>",
+            "instantiate lib/util::twin<Int>",
+        ])
+    );
+}
+
+/// build-cache: "Two callers of one instance".
+#[test]
+fn two_callers_of_one_instance() {
+    let workspace = Workspace::new(
+        "two_callers",
+        &[
+            ("lib/box.prism", BOX),
+            (
+                "app/a.prism",
+                "package app\nimport /lib/box\npublic fun a(): Int = keep(1)\n",
+            ),
+            (
+                "app/b.prism",
+                "package app\nimport /lib/box\npublic fun b(): Int = keep(1)\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport a\nimport b\nfun main() { println(a() + b()) }\n",
+            ),
+        ],
+    );
+    let explanation = workspace.explain("app/main.prism");
+    assert_eq!(explanation.len(), 5, "{:?}", explanation);
+    assert_eq!(explanation[4], "instantiate lib/box::keep<Int>");
+    assert!(explanation[..4]
+        .iter()
+        .all(|line| line.starts_with("checked ")));
 }
 
 /// build-cache: "Explaining an instance of a generic extension".
 #[test]
-#[ignore = "instance records are keyed again by instance-cache group 4"]
 fn explaining_an_instance_of_a_generic_extension() {
     let library = "package lib\npublic struct Box<T>(val value: T)\n\
                    public fun <T> Box<T>.size(): Int = 1\n";
@@ -468,7 +467,7 @@ fn explaining_an_instance_of_a_generic_extension() {
         lines(&[
             "checked lib/box.prism",
             "checked app/main.prism",
-            "instantiate lib/box::Box.size<Int> for app/main.prism",
+            "instantiate lib/box::Box.size<Int>",
         ])
     );
     workspace.write(
@@ -480,8 +479,35 @@ fn explaining_an_instance_of_a_generic_extension() {
         lines(&[
             "checked lib/box.prism",
             "reused app/main.prism",
-            "reused instance lib/box::Box.size<Int> for app/main.prism",
+            "instantiate lib/box::Box.size<Int>",
         ])
+    );
+}
+
+const PING: &str = "package a\nimport /a/y\n\
+     public struct Box<T>(val v: T)\n\
+     public fun <T> ping(x: T, n: Int): Int = if (n == 0) 0 else pong(Box(x), n - 1)\n";
+const PONG: &str = "package a\nimport /a/x\npublic fun <T> pong(x: T, n: Int): Int = ping(x, n)\n";
+
+/// generics: "Polymorphic recursion found from reused verdicts".
+#[test]
+fn polymorphic_recursion_found_from_reused_verdicts() {
+    let workspace = Workspace::new("recursion", &[("a/x.prism", PING), ("a/y.prism", PONG)]);
+    let first = workspace.run(&["check", "a/x.prism"]);
+    let entries = workspace.entries();
+    let second = workspace.run(&["check", "a/x.prism"]);
+    for output in [&first, &second] {
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[E6004]"), "{}", stderr);
+        assert!(stderr.contains("'a/x::ping'") && stderr.contains("'a/y::pong'"));
+    }
+    assert_eq!(first.stderr, second.stderr);
+    assert!(!entries.is_empty(), "each file alone passes Phase 2");
+    assert_eq!(
+        workspace.entries(),
+        entries,
+        "the second check writes no entry"
     );
 }
 
@@ -603,7 +629,6 @@ fn unwritable_cache_directory() {
 
 /// build-cache: "Concurrent checks share a cache".
 #[test]
-#[ignore = "instance records are keyed again by instance-cache group 4"]
 fn concurrent_checks_share_a_cache() {
     let workspace = Workspace::new(
         "concurrent",
@@ -642,7 +667,7 @@ fn concurrent_checks_share_a_cache() {
             "reused lib/box.prism",
             "reused lib/text.prism",
             "reused app/main.prism",
-            "reused instance lib/box::keep<String> for app/main.prism",
+            "instantiate lib/box::keep<String>",
         ])
     );
 }
@@ -669,38 +694,6 @@ fn checking_without_the_cache() {
         );
     }
     assert_eq!(workspace.entries(), entries);
-}
-
-/// build-cache: "Explaining a warm check".
-#[test]
-#[ignore = "instance records are keyed again by instance-cache group 4"]
-fn explaining_a_warm_check() {
-    let workspace = Workspace::new(
-        "explain",
-        &[
-            ("lib/box.prism", BOX),
-            (
-                "app/main.prism",
-                "package app\nimport /lib/box\nfun f(): Int = keep(1)\n",
-            ),
-        ],
-    );
-    assert_eq!(
-        workspace.explain("app/main.prism"),
-        lines(&[
-            "checked lib/box.prism",
-            "checked app/main.prism",
-            "instantiate lib/box::keep<Int> for app/main.prism",
-        ])
-    );
-    assert_eq!(
-        workspace.explain("app/main.prism"),
-        lines(&[
-            "reused lib/box.prism",
-            "reused app/main.prism",
-            "reused instance lib/box::keep<Int> for app/main.prism",
-        ])
-    );
 }
 
 // --- Reachable type definitions (D2 of `codegen-aggregates`)

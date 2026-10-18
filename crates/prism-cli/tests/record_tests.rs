@@ -251,3 +251,86 @@ fn a_non_generic_extension_of_a_generic_type_has_no_hash() {
     assert!(before.is_empty(), "{:?}", before);
     assert_eq!(abi_before, abi_after);
 }
+
+// --- compilation-and-abi: "Instances Are Planned per Program" (D7 of `instance-cache`)
+
+/// The symbols of the instances `files` need, found as `monomorphization`'s worklist found them:
+/// by instantiating each needed body and reading the calls of the instance.
+fn instantiated_symbols(files: &[prism_mir::MirFile]) -> std::collections::BTreeSet<String> {
+    use prism_codegen::symbols::callee_symbol;
+    use prism_mir::{Body, TerminatorKind};
+    use prism_typed_tree::instantiation::generic_name;
+    use std::collections::{BTreeSet, HashMap, VecDeque};
+    let mut records: HashMap<String, GenericRecord> = HashMap::new();
+    let mut types = prism_typed_tree::TypeTable::new();
+    for file in files {
+        for record in GenericRecord::of_file(file) {
+            records.insert(generic_name(&record.path), record);
+        }
+        types.extend_from(&file.types);
+    }
+    let mut seen = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    let request = |body: &Body, queue: &mut VecDeque<_>, seen: &mut BTreeSet<String>| {
+        for (_, block) in body.blocks.iter() {
+            let TerminatorKind::Call {
+                callee,
+                type_arguments,
+                ..
+            } = &block.terminator.kind
+            else {
+                continue;
+            };
+            let (prism_mir::Callee::Function(path)
+            | prism_mir::Callee::Default { function: path, .. }) = callee
+            else {
+                continue;
+            };
+            if type_arguments.is_empty() || !records.contains_key(&generic_name(path)) {
+                continue;
+            }
+            let symbol = callee_symbol(callee, type_arguments).unwrap();
+            if seen.insert(symbol) {
+                queue.push_back((generic_name(path), callee.clone(), type_arguments.clone()));
+            }
+        }
+    };
+    for file in files {
+        for (_, body) in file.bodies.iter() {
+            if body.type_parameters.is_empty() {
+                request(body, &mut queue, &mut seen);
+            }
+        }
+    }
+    while let Some((generic, callee, arguments)) = queue.pop_front() {
+        let Some(bodies) = records[&generic].instantiate(&callee, &arguments, &types) else {
+            continue;
+        };
+        for body in &bodies {
+            request(body, &mut queue, &mut seen);
+        }
+    }
+    seen
+}
+
+#[test]
+fn planning_finds_the_instances_instantiation_finds() {
+    let mut programs = 0;
+    for entry in passing_entries() {
+        let Ok(files) = prism_cli::program_mir(&entry) else {
+            continue;
+        };
+        let expected = instantiated_symbols(&files);
+        let mirs: Vec<&prism_mir::MirFile> = files.iter().collect();
+        let Ok(units) = prism_codegen::collect_instances(&mirs) else {
+            continue;
+        };
+        let planned: std::collections::BTreeSet<String> =
+            units.into_iter().map(|unit| unit.symbol).collect();
+        assert_eq!(planned, expected, "{}", entry.display());
+        if !expected.is_empty() {
+            programs += 1;
+        }
+    }
+    assert!(programs > 50, "only {} programs with instances", programs);
+}

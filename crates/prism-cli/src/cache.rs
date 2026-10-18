@@ -1,22 +1,28 @@
-//! The build cache (the `build-cache` spec; D3 to D8 of `abi-cache`).
+//! The build cache (the `build-cache` spec; D3 to D8 of `abi-cache`, D5, D8 and D11 of
+//! `instance-cache`).
 //!
-//! A per-user, content-addressed store of small text entries. A check entry records that a file
-//! passes Phase 2 against its direct imports' interfaces, with the instances it requests; an
-//! instance record stands in for an instantiated generic until code generation (D9). Entries
-//! live under `<directory>/v<format>/<first two hex digits of the key>/<key>`, are written
-//! atomically, end with a checksum, and any problem reading or writing one is a miss: the cache
-//! never fails a check.
+//! A per-user, content-addressed store of entries of four kinds. A **check** entry records that
+//! a file passes Phase 2 against its direct imports' ABI hashes, with the file's summary
+//! ([`FileSummary`]). A **record** entry holds a generic record, addressed by its
+//! Monomorphization Hash. A **unit** entry holds the compiled code of a file's unit and an
+//! **instance** entry that of an instance, both as relocatable artifacts keyed by everything
+//! their code depends on and the target. Entries live under
+//! `<directory>/v<format>/<first two hex digits of the key>/<key>`, are written atomically,
+//! carry a text header and a checksum around a binary body, and any problem reading or writing
+//! one is a miss: the cache never fails a check or a run.
 
 use prism_abi::{ContentHash, DeterministicHasher};
+use prism_mir::{FileSummary, GenericRecord};
 use std::cell::Cell;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 /// The version of the entry format and key derivation. A new version uses a new `v<N>`
 /// directory, so compilers of different versions never read each other's entries.
-pub const FORMAT_VERSION: u64 = 1;
+pub const FORMAT_VERSION: u64 = 2;
 
 /// The environment variable naming the cache directory, or `off` to disable the cache.
 pub const CACHE_VARIABLE: &str = "PRISM_CACHE";
@@ -29,71 +35,16 @@ const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by the Prism compiler (prism).\n\
 # For information about cache directory tags see https://bford.info/cachedir/\n";
 
-/// A request, found in a file's MIR, to instantiate a generic function or extension of a direct
-/// import with concrete type arguments (D9).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct InstanceRequest {
-    /// The generic's module path.
-    pub module: String,
-    /// The constructor of an extension's receiver type (`lib/box.Box`), `None` for a function.
-    pub receiver: Option<String>,
-    /// The generic's name.
-    pub name: String,
-    /// A hash of the type arguments, each with its nominal types qualified by module.
-    pub type_arguments: ContentHash,
-    /// How the instance is shown to the user (`lib/box::keep<Int>`).
-    pub display: String,
-}
-
-impl InstanceRequest {
-    fn fields_are_writable(&self) -> bool {
-        [
-            self.module.as_str(),
-            self.receiver.as_deref().unwrap_or_default(),
-            self.name.as_str(),
-            self.display.as_str(),
-        ]
-        .iter()
-        .all(|field| !field.contains(['\t', '\n', '\r']))
-    }
-
-    fn to_line(&self) -> String {
-        format!(
-            "instance\t{}\t{}\t{}\t{}\t{}",
-            self.module,
-            self.receiver.as_deref().unwrap_or_default(),
-            self.name,
-            self.type_arguments.to_hex(),
-            self.display
-        )
-    }
-
-    fn from_line(line: &str) -> Option<Self> {
-        let mut fields = line.strip_prefix("instance\t")?.split('\t');
-        let module = fields.next()?.to_string();
-        let receiver = Some(fields.next()?)
-            .filter(|r| !r.is_empty())
-            .map(str::to_string);
-        let name = fields.next()?.to_string();
-        let type_arguments = ContentHash::from_hex(fields.next()?)?;
-        let display = fields.next()?.to_string();
-        if fields.next().is_some() || module.is_empty() || name.is_empty() {
-            return None;
-        }
-        Some(Self {
-            module,
-            receiver,
-            name,
-            type_arguments,
-            display,
-        })
-    }
-}
-
-/// The kinds of entries the cache holds.
+/// The kinds of entries the cache holds (D11 of `instance-cache`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EntryKind {
+pub enum EntryKind {
+    /// A file's verdict and summary.
     Check,
+    /// A generic record, by its Monomorphization Hash.
+    Record,
+    /// The compiled code of a file's unit.
+    Unit,
+    /// The compiled code of an instance's unit.
     Instance,
 }
 
@@ -101,6 +52,8 @@ impl EntryKind {
     fn as_str(self) -> &'static str {
         match self {
             EntryKind::Check => "check",
+            EntryKind::Record => "record",
+            EntryKind::Unit => "unit",
             EntryKind::Instance => "instance",
         }
     }
@@ -112,6 +65,8 @@ pub struct BuildCache {
     directory: PathBuf,
     compiler: ContentHash,
     tagged: Cell<bool>,
+    /// The number of entries this cache wrote, for `--explain-cache` tests and benchmarks.
+    writes: Cell<u64>,
 }
 
 impl BuildCache {
@@ -122,6 +77,7 @@ impl BuildCache {
             directory: directory.into(),
             compiler,
             tagged: Cell::new(false),
+            writes: Cell::new(0),
         }
     }
 
@@ -139,48 +95,62 @@ impl BuildCache {
         &self.directory
     }
 
+    /// The number of entries written through this handle.
+    pub fn writes(&self) -> u64 {
+        self.writes.get()
+    }
+
     /// The key of a file's check entry: the format version, the compiler, the file's module
-    /// path and exact source text, and its direct imports' interface hashes in import order
-    /// (D5).
+    /// path and exact source text, and its direct imports' ABI hashes in import order (D5 of
+    /// `abi-cache`, D3 of `instance-cache`).
     pub fn check_key(
         &self,
         module: &str,
         source: &str,
-        import_interfaces: &[ContentHash],
+        import_hashes: &[ContentHash],
     ) -> ContentHash {
         let mut hasher = self.key_hasher(EntryKind::Check);
         hasher.write_str(module);
         hasher.write_hash(&ContentHash::of(source.as_bytes()));
-        hasher.write_u64(import_interfaces.len() as u64);
-        for interface in import_interfaces {
-            hasher.write_hash(interface);
+        hasher.write_u64(import_hashes.len() as u64);
+        for hash in import_hashes {
+            hasher.write_hash(hash);
         }
         hasher.finish()
     }
 
-    /// The key of the instance record of `request`, whose generic has the signature hash
-    /// `signature_hash` ([`prism_abi::ExportedSymbol::interface_hash`]) and the Monomorphization
-    /// Hash `body_hash` (D9): an instance depends on the generic's signature as much as on its
-    /// body.
+    /// The key of the record entry of the generic record whose Monomorphization Hash is
+    /// `record_hash` (D5 of `instance-cache`).
+    pub fn record_key(&self, record_hash: &ContentHash) -> ContentHash {
+        let mut hasher = self.key_hasher(EntryKind::Record);
+        hasher.write_hash(record_hash);
+        hasher.finish()
+    }
+
+    /// The key of the code of a file's unit: its check key, which covers everything a file's
+    /// code depends on, and the target identity (D8 of `instance-cache`).
+    pub fn unit_key(&self, check_key: &ContentHash, target: &str) -> ContentHash {
+        let mut hasher = self.key_hasher(EntryKind::Unit);
+        hasher.write_str(target);
+        hasher.write_hash(check_key);
+        hasher.finish()
+    }
+
+    /// The key of the code of the instance `symbol`: its generic's Monomorphization Hash, the
+    /// hash of the definitions its type arguments reach, and the target identity (D6 and D8 of
+    /// `instance-cache`).
     pub fn instance_key(
         &self,
-        request: &InstanceRequest,
-        signature_hash: &ContentHash,
-        body_hash: &ContentHash,
+        symbol: &str,
+        record_hash: &ContentHash,
+        definitions_hash: &ContentHash,
+        target: &str,
     ) -> ContentHash {
         let mut hasher = self.key_hasher(EntryKind::Instance);
-        hasher.write_str(&request.module);
-        match &request.receiver {
-            Some(receiver) => {
-                hasher.write_u8(1);
-                hasher.write_str(receiver);
-            }
-            None => hasher.write_u8(0),
-        }
-        hasher.write_str(&request.name);
-        hasher.write_hash(signature_hash);
-        hasher.write_hash(body_hash);
-        hasher.write_hash(&request.type_arguments);
+        hasher.write_str(target);
+        hasher.write_str(symbol);
+        hasher.write_hash(record_hash);
+        hasher.write_hash(definitions_hash);
         hasher.finish()
     }
 
@@ -193,33 +163,47 @@ impl BuildCache {
         hasher
     }
 
-    /// The instance requests of the check entry `key`, or `None` on a miss.
-    pub fn read_check(&self, key: &ContentHash) -> Option<Vec<InstanceRequest>> {
-        let body = self.read_entry(EntryKind::Check, key)?;
-        body.iter()
-            .map(|line| InstanceRequest::from_line(line))
-            .collect()
+    /// The summary in the check entry `key`, or `None` on a miss.
+    pub fn read_check(&self, key: &ContentHash) -> Option<FileSummary> {
+        FileSummary::decode(&self.read_entry(EntryKind::Check, key)?)
     }
 
-    /// Records the check entry `key` with its instance requests. Does nothing when a field
-    /// cannot be written or the cache cannot be written to.
-    pub fn write_check(&self, key: &ContentHash, requests: &[InstanceRequest]) {
-        if !requests.iter().all(InstanceRequest::fields_are_writable) {
-            return;
+    /// Records the check entry `key` with the file's summary.
+    pub fn write_check(&self, key: &ContentHash, summary: &FileSummary) {
+        self.write_entry(EntryKind::Check, key, &summary.encode());
+    }
+
+    /// The generic record whose Monomorphization Hash is `record_hash`, or `None` on a miss or
+    /// when the entry holds another record.
+    pub fn read_record(&self, record_hash: &ContentHash) -> Option<GenericRecord> {
+        let bytes = self.read_entry(EntryKind::Record, &self.record_key(record_hash))?;
+        if ContentHash::of(&bytes) != *record_hash {
+            return None;
         }
-        let lines: Vec<String> = requests.iter().map(InstanceRequest::to_line).collect();
-        self.write_entry(EntryKind::Check, key, &lines);
+        GenericRecord::decode(&bytes)
     }
 
-    /// Whether the instance record `key` exists and is valid.
-    pub fn has_instance(&self, key: &ContentHash) -> bool {
-        self.read_entry(EntryKind::Instance, key)
-            .is_some_and(|body| body.is_empty())
+    /// Records `encoding`, the encoding of the record whose Monomorphization Hash is
+    /// `record_hash`.
+    pub fn write_record(&self, record_hash: &ContentHash, encoding: &[u8]) {
+        self.write_entry(EntryKind::Record, &self.record_key(record_hash), encoding);
     }
 
-    /// Records the instance record `key`.
-    pub fn record_instance(&self, key: &ContentHash) {
-        self.write_entry(EntryKind::Instance, key, &[]);
+    /// The bytes of the code entry `key` of `kind` ([`EntryKind::Unit`] or
+    /// [`EntryKind::Instance`]), or `None` on a miss.
+    pub fn read_code(&self, kind: EntryKind, key: &ContentHash) -> Option<Vec<u8>> {
+        self.read_entry(kind, key)
+    }
+
+    /// Records the code entry `key` of `kind` holding `artifact`'s bytes.
+    pub fn write_code(&self, kind: EntryKind, key: &ContentHash, artifact: &[u8]) {
+        self.write_entry(kind, key, artifact);
+    }
+
+    /// Whether the code entry `key` of `kind` exists with a valid header and the length its
+    /// header announces, read without its body.
+    pub fn has_code(&self, kind: EntryKind, key: &ContentHash) -> bool {
+        self.has_entry(kind, key)
     }
 
     /// The path of the entry `key`.
@@ -231,17 +215,41 @@ impl BuildCache {
             .join(hex)
     }
 
-    /// The body lines of the entry `key` of `kind`, or `None` when it is missing, unreadable or
-    /// invalid (D7).
-    fn read_entry(&self, kind: EntryKind, key: &ContentHash) -> Option<Vec<String>> {
+    /// The body of the entry `key` of `kind`, or `None` when it is missing, unreadable or
+    /// invalid (D7 of `abi-cache`).
+    fn read_entry(&self, kind: EntryKind, key: &ContentHash) -> Option<Vec<u8>> {
         let bytes = fs::read(self.entry_path(key)).ok()?;
-        let text = String::from_utf8(bytes).ok()?;
-        parse_entry(&text, kind, key)
+        parse_entry(&bytes, kind, key).map(<[u8]>::to_vec)
+    }
+
+    /// Whether the entry `key` of `kind` has a valid header and the size it announces.
+    fn has_entry(&self, kind: EntryKind, key: &ContentHash) -> bool {
+        let Ok(mut file) = fs::File::open(self.entry_path(key)) else {
+            return false;
+        };
+        let Ok(metadata) = file.metadata() else {
+            return false;
+        };
+        let mut start = vec![0u8; 512];
+        let mut read = 0;
+        while read < start.len() {
+            match file.read(&mut start[read..]) {
+                Ok(0) => break,
+                Ok(count) => read += count,
+                Err(_) => return false,
+            }
+        }
+        start.truncate(read);
+        let Some((header_length, body_length)) = parse_header(&start, kind, key) else {
+            return false;
+        };
+        metadata.len() == (header_length + body_length + CHECKSUM_LINE_LENGTH) as u64
     }
 
     /// Writes the entry `key` of `kind` to a temporary file in its directory and renames it into
-    /// place (D8). Every failure is ignored: the entry is then simply not recorded (D7).
-    fn write_entry(&self, kind: EntryKind, key: &ContentHash, body: &[String]) {
+    /// place (D8 of `abi-cache`). Every failure is ignored: the entry is then simply not
+    /// recorded (D7).
+    fn write_entry(&self, kind: EntryKind, key: &ContentHash, body: &[u8]) {
         let path = self.entry_path(key);
         let Some(parent) = path.parent() else {
             return;
@@ -256,54 +264,76 @@ impl BuildCache {
             }
             self.tagged.set(true);
         }
-        write_atomically(&path, render_entry(kind, key, body).as_bytes());
+        if write_atomically(&path, &render_entry(kind, key, body)) {
+            self.writes.set(self.writes.get() + 1);
+        }
     }
 }
 
-/// The text of an entry: a header naming the format version, kind and key, the body lines, and
-/// a checksum of everything before it (D6).
-fn render_entry(kind: EntryKind, key: &ContentHash, body: &[String]) -> String {
-    let mut text = format!(
-        "{} {}\nkind {}\nkey {}\n",
+/// The length of the line `\nchecksum <64 hex digits>\n` that ends every entry.
+const CHECKSUM_LINE_LENGTH: usize = "\nchecksum \n".len() + 64;
+
+/// The bytes of an entry: a text header naming the format version, kind, key and the body's
+/// length, the body, and a line with a checksum of everything before it (D11 of
+/// `instance-cache`).
+fn render_entry(kind: EntryKind, key: &ContentHash, body: &[u8]) -> Vec<u8> {
+    let mut bytes = format!(
+        "{} {}\nkind {}\nkey {}\nlength {}\n",
+        MAGIC,
+        FORMAT_VERSION,
+        kind.as_str(),
+        key.to_hex(),
+        body.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(body);
+    let checksum = ContentHash::of(&bytes);
+    bytes.extend_from_slice(format!("\nchecksum {}\n", checksum.to_hex()).as_bytes());
+    bytes
+}
+
+/// The length of the header at the start of `bytes` and the body length it announces, if it is
+/// the header of an entry of `kind` for `key`.
+fn parse_header(bytes: &[u8], kind: EntryKind, key: &ContentHash) -> Option<(usize, usize)> {
+    let expected = format!(
+        "{} {}\nkind {}\nkey {}\nlength ",
         MAGIC,
         FORMAT_VERSION,
         kind.as_str(),
         key.to_hex()
     );
-    for line in body {
-        text.push_str(line);
-        text.push('\n');
+    let rest = bytes.strip_prefix(expected.as_bytes())?;
+    let digits = rest.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    if digits == 0 || digits > 19 || rest.get(digits) != Some(&b'\n') {
+        return None;
     }
-    let checksum = ContentHash::of(text.as_bytes());
-    text.push_str(&format!("checksum {}\n", checksum.to_hex()));
-    text
+    let length: usize = std::str::from_utf8(&rest[..digits]).ok()?.parse().ok()?;
+    Some((expected.len() + digits + 1, length))
 }
 
-/// The body lines of `text` if it is a valid entry of `kind` for `key`.
-fn parse_entry(text: &str, kind: EntryKind, key: &ContentHash) -> Option<Vec<String>> {
-    let content = text.strip_suffix('\n')?;
-    let checksum_start = content.rfind('\n')? + 1;
-    let checksum = ContentHash::from_hex(content[checksum_start..].strip_prefix("checksum ")?)?;
-    let checked = &text[..checksum_start];
-    if ContentHash::of(checked.as_bytes()) != checksum {
+/// The body of `bytes` if they are a valid entry of `kind` for `key`.
+fn parse_entry<'a>(bytes: &'a [u8], kind: EntryKind, key: &ContentHash) -> Option<&'a [u8]> {
+    let (header_length, body_length) = parse_header(bytes, kind, key)?;
+    let checked_length = header_length.checked_add(body_length)?;
+    if bytes.len() != checked_length.checked_add(CHECKSUM_LINE_LENGTH)? {
         return None;
     }
-    let mut lines = checked.lines();
-    if lines.next()? != format!("{} {}", MAGIC, FORMAT_VERSION)
-        || lines.next()? != format!("kind {}", kind.as_str())
-        || lines.next()? != format!("key {}", key.to_hex())
-    {
+    let (checked, line) = bytes.split_at(checked_length);
+    let hex = line.strip_prefix(b"\nchecksum ")?.strip_suffix(b"\n")?;
+    let checksum = ContentHash::from_hex(std::str::from_utf8(hex).ok()?)?;
+    if ContentHash::of(checked) != checksum {
         return None;
     }
-    Some(lines.map(str::to_string).collect())
+    Some(&checked[header_length..])
 }
 
 /// Writes `bytes` to `path` through a temporary file in the same directory and a rename, so
-/// that readers see no file or a complete one. Failures are ignored.
-fn write_atomically(path: &Path, bytes: &[u8]) {
+/// that readers see no file or a complete one. Returns whether the entry was written; failures
+/// are otherwise ignored.
+fn write_atomically(path: &Path, bytes: &[u8]) -> bool {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return;
+        return false;
     };
     let temporary = path.with_file_name(format!(
         "{}.tmp-{}-{}",
@@ -313,11 +343,13 @@ fn write_atomically(path: &Path, bytes: &[u8]) {
     ));
     if fs::write(&temporary, bytes).is_err() {
         fs::remove_file(&temporary).ok();
-        return;
+        return false;
     }
     if fs::rename(&temporary, path).is_err() {
         fs::remove_file(&temporary).ok();
+        return false;
     }
+    true
 }
 
 /// The cache directory selected by the environment `variable` on the operating system `os`
@@ -367,6 +399,8 @@ pub fn identity_of(version: &str, executable: &ContentHash) -> ContentHash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prism_mir::InstanceRequest;
+    use prism_typed_tree::{DeclarationPath, Type};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temporary_cache(name: &str) -> (PathBuf, BuildCache) {
@@ -379,13 +413,16 @@ mod tests {
         (directory, cache)
     }
 
-    fn request(name: &str) -> InstanceRequest {
-        InstanceRequest {
-            module: "lib/box".to_string(),
-            receiver: None,
-            name: name.to_string(),
-            type_arguments: ContentHash::of(b"Int"),
-            display: format!("lib/box::{}<Int>", name),
+    fn summary() -> FileSummary {
+        FileSummary {
+            entry_point: Some(DeclarationPath::new("app/main", "main")),
+            roots: vec![InstanceRequest {
+                callee: DeclarationPath::new("lib/box", "keep"),
+                default: None,
+                type_arguments: vec![Type::Int],
+                span: prism_ast::Span::new(1, 2, 3, 4),
+            }],
+            generics: Vec::new(),
         }
     }
 
@@ -394,35 +431,67 @@ mod tests {
         let (directory, cache) = temporary_cache("round_trip");
         let key = cache.check_key("app/main", "fun main() {}\n", &[ContentHash([1; 32])]);
         assert_eq!(cache.read_check(&key), None);
-        let mut extension = request("get");
-        extension.receiver = Some("lib/box.Box".to_string());
-        let requests = vec![request("keep"), extension];
-        cache.write_check(&key, &requests);
-        assert_eq!(cache.read_check(&key), Some(requests));
+        cache.write_check(&key, &summary());
+        assert_eq!(cache.read_check(&key), Some(summary()));
+        assert_eq!(cache.writes(), 1);
         assert!(directory.join("CACHEDIR.TAG").is_file());
         assert!(cache
             .entry_path(&key)
             .starts_with(directory.join(format!("v{}", FORMAT_VERSION))));
+        // The header stays readable text.
+        let text = fs::read(cache.entry_path(&key)).unwrap();
+        assert!(text.starts_with(b"prism-cache 2\nkind check\nkey "));
         fs::remove_dir_all(&directory).ok();
     }
 
     #[test]
-    fn instance_records_round_trip() {
-        let (directory, cache) = temporary_cache("instances");
-        let signature = ContentHash([2; 32]);
-        let key = cache.instance_key(&request("keep"), &signature, &ContentHash([3; 32]));
-        assert!(!cache.has_instance(&key));
-        cache.record_instance(&key);
-        assert!(cache.has_instance(&key));
-        let other = cache.instance_key(&request("keep"), &signature, &ContentHash([4; 32]));
-        assert_ne!(key, other, "the body hash is part of the key");
-        assert!(!cache.has_instance(&other));
-        let other = cache.instance_key(
-            &request("keep"),
-            &ContentHash([5; 32]),
-            &ContentHash([3; 32]),
-        );
-        assert_ne!(key, other, "the signature hash is part of the key");
+    fn every_kind_round_trips() {
+        let (directory, cache) = temporary_cache("kinds");
+        let record_bytes = b"not a record".to_vec();
+        let record_hash = ContentHash::of(&record_bytes);
+        cache.write_record(&record_hash, &record_bytes);
+        // The bytes are no record, so they decode to nothing, but the entry is valid.
+        assert_eq!(cache.read_record(&record_hash), None);
+        assert!(cache.has_entry(EntryKind::Record, &cache.record_key(&record_hash)));
+        for kind in [EntryKind::Unit, EntryKind::Instance] {
+            let key = ContentHash::of(kind.as_str().as_bytes());
+            assert!(!cache.has_code(kind, &key));
+            assert_eq!(cache.read_code(kind, &key), None);
+            cache.write_code(kind, &key, &[0, 1, 2, 255, b'\n']);
+            assert!(cache.has_code(kind, &key));
+            assert_eq!(cache.read_code(kind, &key), Some(vec![0, 1, 2, 255, b'\n']));
+            let other = if kind == EntryKind::Unit {
+                EntryKind::Instance
+            } else {
+                EntryKind::Unit
+            };
+            assert!(!cache.has_code(other, &key));
+            assert_eq!(cache.read_code(other, &key), None);
+        }
+        // An empty body is valid.
+        let key = ContentHash([3; 32]);
+        cache.write_code(EntryKind::Unit, &key, &[]);
+        assert_eq!(cache.read_code(EntryKind::Unit, &key), Some(Vec::new()));
+        fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_record_entry_holds_the_record_of_its_hash() {
+        let (directory, cache) = temporary_cache("records");
+        let source = "fun <T> keep(x: T): T = x\n";
+        let file = prism_parser::parse_source(source).unwrap();
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main");
+        let tree = checker.check_module(&file);
+        let record = GenericRecord::of_file(&prism_mir::lower_file(&tree)).remove(0);
+        let bytes = record.encode();
+        let hash = ContentHash::of(&bytes);
+        assert_eq!(cache.read_record(&hash), None);
+        cache.write_record(&hash, &bytes);
+        assert_eq!(cache.read_record(&hash), Some(record));
+        // Bytes of another record under this hash are a miss.
+        let other = ContentHash([1; 32]);
+        cache.write_record(&other, &bytes);
+        assert_eq!(cache.read_record(&other), None);
         fs::remove_dir_all(&directory).ok();
     }
 
@@ -430,34 +499,74 @@ mod tests {
     fn invalid_entries_are_misses() {
         let (directory, cache) = temporary_cache("invalid");
         let key = cache.check_key("app/main", "", &[]);
-        cache.write_check(&key, &[request("keep")]);
+        cache.write_check(&key, &summary());
         let path = cache.entry_path(&key);
-        let valid = fs::read_to_string(&path).unwrap();
+        let valid = fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&valid).to_string();
 
-        let truncated = valid[..valid.len() - 10].to_string();
-        let flipped = valid.replacen("keep", "kept", 1);
-        let other_version = valid.replacen("prism-cache 1", "prism-cache 2", 1);
-        let instance_kind = render_entry(EntryKind::Instance, &key, &[]);
-        let other_key = render_entry(EntryKind::Check, &ContentHash([9; 32]), &[]);
-        let bad_line = render_entry(EntryKind::Check, &key, &["instance\tx".to_string()]);
+        let truncated = valid[..valid.len() - 10].to_vec();
+        let body_start = text.find("length ").unwrap()
+            + text[text.find("length ").unwrap()..].find('\n').unwrap()
+            + 1;
+        let mut flipped = valid.clone();
+        flipped[body_start + 2] ^= 0x40;
+        let other_version = text
+            .replacen("prism-cache 2", "prism-cache 1", 1)
+            .into_bytes();
+        let other_length = {
+            let length = valid.len() - body_start - CHECKSUM_LINE_LENGTH;
+            text.replacen(
+                &format!("length {}", length),
+                &format!("length {}", length + 1),
+                1,
+            )
+            .into_bytes()
+        };
+        let record_kind = render_entry(EntryKind::Record, &key, &summary().encode());
+        let other_key = render_entry(EntryKind::Check, &ContentHash([9; 32]), &summary().encode());
+        let undecodable = render_entry(EntryKind::Check, &key, &[7, 7, 7]);
         for corrupt in [
-            "garbage".to_string(),
-            String::new(),
+            b"garbage".to_vec(),
+            Vec::new(),
             truncated,
             flipped,
             other_version,
-            instance_kind,
+            other_length,
+            record_kind,
             other_key,
-            bad_line,
+            undecodable,
+            vec![0xFF, 0xFE],
         ] {
             fs::write(&path, &corrupt).unwrap();
-            assert_eq!(cache.read_check(&key), None, "{:?}", corrupt);
+            assert_eq!(
+                cache.read_check(&key),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(&corrupt)
+            );
         }
-        fs::write(&path, [0xFF, 0xFE]).unwrap();
-        assert_eq!(cache.read_check(&key), None);
 
-        cache.write_check(&key, &[request("keep")]);
-        assert_eq!(cache.read_check(&key), Some(vec![request("keep")]));
+        cache.write_check(&key, &summary());
+        assert_eq!(cache.read_check(&key), Some(summary()));
+        fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_truncated_code_entry_has_no_code() {
+        let (directory, cache) = temporary_cache("truncated_code");
+        let key = ContentHash([4; 32]);
+        cache.write_code(EntryKind::Instance, &key, &[1; 1000]);
+        let path = cache.entry_path(&key);
+        let valid = fs::read(&path).unwrap();
+        fs::write(&path, &valid[..valid.len() - 1]).unwrap();
+        assert!(!cache.has_code(EntryKind::Instance, &key));
+        assert_eq!(cache.read_code(EntryKind::Instance, &key), None);
+        // A flipped body byte keeps the length, so only reading the body finds it.
+        let mut flipped = valid.clone();
+        flipped[200] ^= 1;
+        fs::write(&path, &flipped).unwrap();
+        assert!(cache.has_code(EntryKind::Instance, &key));
+        assert_eq!(cache.read_code(EntryKind::Instance, &key), None);
         fs::remove_dir_all(&directory).ok();
     }
 
@@ -467,22 +576,14 @@ mod tests {
         fs::write(&directory, "a regular file").unwrap();
         let cache = BuildCache::open(&directory, ContentHash([1; 32]));
         let key = cache.check_key("app/main", "", &[]);
-        cache.write_check(&key, &[]);
-        cache.record_instance(&key);
+        cache.write_check(&key, &summary());
+        cache.write_code(EntryKind::Unit, &key, &[1]);
+        cache.write_record(&key, &[1]);
         assert_eq!(cache.read_check(&key), None);
-        assert!(!cache.has_instance(&key));
+        assert!(!cache.has_code(EntryKind::Unit, &key));
+        assert_eq!(cache.read_record(&key), None);
+        assert_eq!(cache.writes(), 0);
         fs::remove_file(&directory).ok();
-    }
-
-    #[test]
-    fn unwritable_fields_are_not_cached() {
-        let (directory, cache) = temporary_cache("fields");
-        let key = cache.check_key("app/main", "", &[]);
-        let mut bad = request("keep");
-        bad.display = "a\tb".to_string();
-        cache.write_check(&key, &[bad]);
-        assert_eq!(cache.read_check(&key), None);
-        fs::remove_dir_all(&directory).ok();
     }
 
     /// build-cache: "A different compiler re-checks everything".
@@ -490,7 +591,7 @@ mod tests {
     fn a_different_compiler_re_checks_everything() {
         let (directory, cache) = temporary_cache("compilers");
         let key = cache.check_key("app/main", "fun main() {}\n", &[]);
-        cache.write_check(&key, &[]);
+        cache.write_check(&key, &summary());
         for other_compiler in [
             identity_of("0.0.0", &ContentHash([8; 32])),
             identity_of("0.0.1", &ContentHash([7; 32])),
@@ -499,6 +600,12 @@ mod tests {
             let other_key = other.check_key("app/main", "fun main() {}\n", &[]);
             assert_ne!(key, other_key);
             assert_eq!(other.read_check(&other_key), None);
+            assert_ne!(cache.unit_key(&key, "t"), other.unit_key(&key, "t"));
+            assert_ne!(
+                cache.instance_key("s", &key, &key, "t"),
+                other.instance_key("s", &key, &key, "t")
+            );
+            assert_ne!(cache.record_key(&key), other.record_key(&key));
         }
         fs::remove_dir_all(&directory).ok();
     }
@@ -524,6 +631,27 @@ mod tests {
         ] {
             assert_ne!(base, other);
         }
+
+        let unit = cache.unit_key(&base, "aarch64 flags");
+        assert_eq!(unit, cache.unit_key(&base, "aarch64 flags"));
+        // build-cache: "Another target generates code again".
+        assert_ne!(unit, cache.unit_key(&base, "aarch64 other flags"));
+        assert_ne!(unit, cache.unit_key(&ContentHash([5; 32]), "aarch64 flags"));
+        assert_ne!(unit, base);
+
+        let (record, definitions) = (ContentHash([2; 32]), ContentHash([3; 32]));
+        let instance = cache.instance_key("lib/box::keep<Int>", &record, &definitions, "t");
+        for other in [
+            cache.instance_key("lib/box::keep<Bool>", &record, &definitions, "t"),
+            cache.instance_key("lib/box::keep<Int>", &definitions, &definitions, "t"),
+            cache.instance_key("lib/box::keep<Int>", &record, &record, "t"),
+            cache.instance_key("lib/box::keep<Int>", &record, &definitions, "u"),
+        ] {
+            assert_ne!(instance, other);
+        }
+        assert_ne!(cache.record_key(&record), cache.record_key(&definitions));
+        // The kind is part of every key.
+        assert_ne!(cache.record_key(&base), cache.unit_key(&base, ""));
     }
 
     /// build-cache: "Default cache location".

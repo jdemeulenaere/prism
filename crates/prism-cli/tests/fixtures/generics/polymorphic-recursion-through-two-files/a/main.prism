@@ -1,4 +1,4 @@
-// expect: ok
+// expect: E6004
 // entry: a/main.prism
 // run: 1
 package a

@@ -108,7 +108,12 @@ fn hash(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn summarize(file: &MirFile) -> FileSummary {
-    FileSummary::of(file, &GenericRecord::of_file(file), hash, None)
+    let records = GenericRecord::of_file(file);
+    let hashes: Vec<[u8; 32]> = records
+        .iter()
+        .map(|record| hash(&record.encode()))
+        .collect();
+    FileSummary::of(file, &records, &hashes, None)
 }
 
 fn shown(requests: &[InstanceRequest]) -> Vec<String> {
@@ -188,7 +193,10 @@ fn a_default_generators_call_counts_for_its_generic() {
         ["main::pad#default(y)<Bool>", "main::pad<Bool>"]
     );
     let pad = &summary.generics[1];
-    assert_eq!(shown(&pad.calls), ["main::keep<Int>"]);
+    assert!(pad.calls.is_empty());
+    assert_eq!(pad.defaults.len(), 1);
+    assert_eq!(pad.defaults[0].parameter, 1);
+    assert_eq!(shown(&pad.defaults[0].calls), ["main::keep<Int>"]);
 }
 
 #[test]

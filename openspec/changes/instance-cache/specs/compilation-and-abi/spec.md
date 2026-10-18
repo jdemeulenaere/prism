@@ -146,7 +146,7 @@ Each generic function and extension of a file that passes Phase 2, private ones 
 `prism check` and `prism run` MUST find every instance a program needs: the calls with concrete type arguments in its non-generic bodies and, transitively, the generic calls inside each needed instance, across files and through modules a caller does not import. They MUST find them from each file's summary alone, without reading or rebuilding any file's MIR.
 
 #### Scenario: Transitive instances through a module the caller does not import
-- **WHEN** `lib/util.prism` declares `public struct Pair<A, B>(val a: A, val b: B)` and `public fun <T> twin(x: T): Pair<T, T> = Pair(x, x)`, `lib/box.prism` imports `/lib/util` and declares `public fun <T : Copy> first(x: T): T = twin(x).a`, `app/main.prism` imports only `/lib/box` and declares `fun main() { println(first(7)) }`, and `prism check --explain-cache app/main.prism` runs twice
+- **WHEN** `lib/util.prism` declares `public struct Pair<A, B>(val a: A, val b: B)` and `public fun <T : Copy> twin(x: T): Pair<T, T> = Pair(x, x)`, `lib/box.prism` imports `/lib/util` and declares `public fun <T : Copy> first(x: T): T = twin(x).a`, `app/main.prism` imports only `/lib/box` and declares `fun main() { println(first(7)) }`, and `prism check --explain-cache app/main.prism` runs twice
 - **THEN** both runs list `  instantiate lib/box::first<Int>` and `  instantiate lib/util::twin<Int>`, the second reusing every file
 
 #### Scenario: Polymorphic calls are instantiated with their caller

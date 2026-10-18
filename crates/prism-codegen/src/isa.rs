@@ -85,6 +85,35 @@ pub fn is_large(function: &cranelift_codegen::ir::Function) -> bool {
     instructions > LARGE_FUNCTION_INSTRUCTIONS
 }
 
+/// The identity of the target the Tier 1 backend generates code for, which keys every cached
+/// code entry (D8 of `instance-cache`): the target triple, then every shared and ISA-specific
+/// setting of [`isa`] and of [`large_function_isa`], the CPU features the host detection
+/// enabled included, so that code built for another CPU or with other settings is never
+/// reused. Computed once per process.
+pub fn target_identity() -> Result<String, BackendError> {
+    static IDENTITY: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            let normal = isa().map_err(|error| error.to_string())?;
+            let large = large_function_isa().map_err(|error| error.to_string())?;
+            Ok(identity_of(&[&*normal, &*large]))
+        })
+        .clone()
+        .map_err(BackendError::new)
+}
+
+/// The identity of the target of `isas`: each one's triple and settings, in order.
+fn identity_of(isas: &[&dyn cranelift_codegen::isa::TargetIsa]) -> String {
+    let mut identity = String::new();
+    for isa in isas {
+        identity.push_str(&format!("triple {}\n{}", isa.triple(), isa.flags()));
+        for value in isa.isa_flags() {
+            identity.push_str(&format!("{}\n", value));
+        }
+    }
+    identity
+}
+
 /// The host ISA with [`settings`], then `overrides`.
 fn isa_with(overrides: &[(&'static str, &'static str)]) -> Result<OwnedTargetIsa, BackendError> {
     let mut flags = settings::builder();
@@ -103,6 +132,24 @@ fn isa_with(overrides: &[(&'static str, &'static str)]) -> Result<OwnedTargetIsa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_target_identity_covers_every_setting() {
+        let identity = target_identity().expect("the host is supported");
+        assert_eq!(identity, target_identity().unwrap());
+        assert!(identity.contains("opt_level"), "{}", identity);
+        assert!(identity.contains("regalloc_algorithm"), "{}", identity);
+        assert!(identity.contains("triple "), "{}", identity);
+        let normal = isa().unwrap();
+        let large = large_function_isa().unwrap();
+        assert_eq!(identity, identity_of(&[&*normal, &*large]));
+        // build-cache: "Another target generates code again": any other setting is another
+        // identity.
+        let other = isa_with(&[("preserve_frame_pointers", "false")]).unwrap();
+        assert_ne!(identity, identity_of(&[&*other, &*large]));
+        let other = isa_with(&[("opt_level", "speed")]).unwrap();
+        assert_ne!(identity, identity_of(&[&*normal, &*other]));
+    }
 
     #[test]
     fn the_host_isa_has_the_fixed_settings() {

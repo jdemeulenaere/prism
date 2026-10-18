@@ -2,6 +2,7 @@
 
 pub mod cache;
 pub mod diagnostics;
+pub mod plan;
 pub mod run;
 pub mod workspace;
 
@@ -13,6 +14,7 @@ pub use run::{
 };
 pub use workspace::{
     check_directory, check_directory_with, check_file, check_file_with, check_path,
-    check_path_with, dump_elaborated_mir, dump_mir, dump_typed_tree, CacheOutcome, CheckOptions,
-    CheckReport, CheckedFile, InstanceOutcome, MirDump, TypedTreeDump, WorkspaceError,
+    check_path_with, dump_elaborated_mir, dump_mir, dump_typed_tree, explain_cache, CacheOutcome,
+    CheckOptions, CheckReport, CheckedFile, InstanceOutcome, MirDump, TypedTreeDump,
+    WorkspaceError,
 };

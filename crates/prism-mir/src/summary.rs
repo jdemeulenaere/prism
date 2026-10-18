@@ -11,11 +11,11 @@
 //! is one pass over the file's calls, and is small: a few dozen bytes per call.
 
 use crate::codec::{Codec, Decoder, Encoder};
-use crate::mir::{Body, Callee, MirFile, TerminatorKind};
+use crate::mir::{Body, BodyId, BodyOwner, Callee, MirFile, TerminatorKind};
 use crate::record::GenericRecord;
 use prism_ast::Span;
 use prism_typed_tree::{DeclarationPath, Type, TypeParameter};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// What planning needs from one file.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -55,8 +55,42 @@ pub struct GenericSummary {
     pub type_parameters: Vec<TypeParameter>,
     /// Its Monomorphization Hash: the hash of its record's encoding (D2).
     pub record_hash: [u8; 32],
-    /// The calls with type arguments of its body, defaults and closures, in body order.
+    /// The calls with type arguments of its body and of the closures lowered inside it, in
+    /// body order: what an instance of the function requests.
     pub calls: Vec<InstanceRequest>,
+    /// Its default value generators, in parameter order, each with its own calls.
+    pub defaults: Vec<DefaultSummary>,
+}
+
+/// One default value generator of a generic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultSummary {
+    /// The declared parameter it generates, counted without the receiver.
+    pub parameter: usize,
+    /// The calls with type arguments of its body and of the closures lowered inside it.
+    pub calls: Vec<InstanceRequest>,
+}
+
+impl GenericSummary {
+    /// What an instance of the function (`None`) or of the generator of `default` requests,
+    /// before substitution; `None` for a default the generic does not have.
+    pub fn calls_of(&self, default: Option<&DefaultParameter>) -> Option<&[InstanceRequest]> {
+        match default {
+            None => Some(&self.calls),
+            Some(default) => self
+                .defaults
+                .iter()
+                .find(|summary| summary.parameter == default.parameter)
+                .map(|summary| &summary.calls[..]),
+        }
+    }
+
+    /// Every call of the generic's bodies, its defaults' included.
+    pub fn all_calls(&self) -> impl Iterator<Item = &InstanceRequest> {
+        self.calls
+            .iter()
+            .chain(self.defaults.iter().flat_map(|default| &default.calls))
+    }
 }
 
 impl InstanceRequest {
@@ -119,12 +153,13 @@ impl InstanceRequest {
 }
 
 impl FileSummary {
-    /// The summary of `file`, whose generic records are `records` ([`GenericRecord::of_file`]),
-    /// each hashed with `hash` over its encoding, and whose accepted `main` is `entry_point`.
+    /// The summary of `file`, whose generic records are `records` ([`GenericRecord::of_file`])
+    /// with the Monomorphization Hashes `record_hashes`, in the same order, and whose accepted
+    /// `main` is `entry_point`.
     pub fn of(
         file: &MirFile,
         records: &[GenericRecord],
-        hash: impl Fn(&[u8]) -> [u8; 32],
+        record_hashes: &[[u8; 32]],
         entry_point: Option<DeclarationPath>,
     ) -> FileSummary {
         let mut roots = Vec::new();
@@ -148,16 +183,8 @@ impl FileSummary {
         }
         let generics = records
             .iter()
-            .map(|record| GenericSummary {
-                path: record.path.clone(),
-                type_parameters: record.function.type_parameters.clone(),
-                record_hash: hash(&record.encode()),
-                calls: std::iter::once(&record.function)
-                    .chain(&record.defaults)
-                    .chain(&record.closures)
-                    .flat_map(InstanceRequest::of_body)
-                    .collect(),
-            })
+            .zip(record_hashes)
+            .map(|(record, hash)| generic_summary(record, *hash))
             .collect();
         FileSummary {
             entry_point,
@@ -174,6 +201,65 @@ impl FileSummary {
     /// The summary `bytes` encode, or `None` when they are malformed.
     pub fn decode(bytes: &[u8]) -> Option<FileSummary> {
         crate::codec::decode(bytes)
+    }
+}
+
+/// The summary of `record`, whose Monomorphization Hash is `record_hash`: each closure's calls
+/// count for the function or the default its outermost parent is.
+fn generic_summary(record: &GenericRecord, record_hash: [u8; 32]) -> GenericSummary {
+    // The body each body of the record belongs to: `None` for the function, `Some(i)` for the
+    // `i`-th default. Closures follow their parents in body order.
+    let mut roots: HashMap<BodyId, Option<usize>> = HashMap::new();
+    roots.insert(record.function_id, None);
+    for (index, id) in record.default_ids.iter().enumerate() {
+        roots.insert(*id, Some(index));
+    }
+    let mut calls: Vec<InstanceRequest> = InstanceRequest::of_body(&record.function).collect();
+    let mut defaults: Vec<DefaultSummary> = record
+        .defaults
+        .iter()
+        .map(|body| DefaultSummary {
+            parameter: match &body.owner {
+                BodyOwner::Default { parameter, .. } => *parameter,
+                _ => 0,
+            },
+            calls: InstanceRequest::of_body(body).collect(),
+        })
+        .collect();
+    for (closure, id) in record.closures.iter().zip(&record.closure_ids) {
+        let BodyOwner::Closure { parent, .. } = closure.owner else {
+            continue;
+        };
+        let Some(root) = roots.get(&parent).copied() else {
+            continue;
+        };
+        roots.insert(*id, root);
+        let target = match root {
+            None => &mut calls,
+            Some(index) => &mut defaults[index].calls,
+        };
+        target.extend(InstanceRequest::of_body(closure));
+    }
+    GenericSummary {
+        path: record.path.clone(),
+        type_parameters: record.function.type_parameters.clone(),
+        record_hash,
+        calls,
+        defaults,
+    }
+}
+
+impl Codec for DefaultSummary {
+    fn encode(&self, encoder: &mut Encoder) {
+        let DefaultSummary { parameter, calls } = self;
+        parameter.encode(encoder);
+        calls.encode(encoder);
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(DefaultSummary {
+            parameter: decoder.decode()?,
+            calls: decoder.decode()?,
+        })
     }
 }
 
@@ -222,11 +308,13 @@ impl Codec for GenericSummary {
             type_parameters,
             record_hash,
             calls,
+            defaults,
         } = self;
         path.encode(encoder);
         type_parameters.encode(encoder);
         record_hash.encode(encoder);
         calls.encode(encoder);
+        defaults.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(GenericSummary {
@@ -234,6 +322,7 @@ impl Codec for GenericSummary {
             type_parameters: decoder.decode()?,
             record_hash: decoder.decode()?,
             calls: decoder.decode()?,
+            defaults: decoder.decode()?,
         })
     }
 }
