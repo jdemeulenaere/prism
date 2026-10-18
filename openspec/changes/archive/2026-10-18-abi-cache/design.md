@@ -119,6 +119,15 @@ Rejected: caching inside `check_path` by default, which would make every test de
 
 The explanation says what happened, not why: a content-addressed store keeps no history, so it cannot tell which input of a missed key changed. A "why" would need a per-module index of the last key's inputs, which is a debugging aid to add if it is ever missed.
 
+### D12. Review: what keys an instance, and how it is shown (autonomous)
+
+A review before archiving tried the invalidation cases one by one in a temporary workspace (a transitively imported type losing `Copy`, visibility changes, an ambiguous import added and removed, a module moved to another package, concurrent checks, a failing file checked twice). Check entries held up. Two instance problems did not, and were fixed with regression tests:
+
+- **An instance depends on the generic's signature.** The instance key covered the Monomorphization Hash, which covers the body alone, so `fun <T> drop(x: T)` becoming `fun <T> drop(x: &T)` with the same body reused `drop<Int>`. The key now also covers the generic's signature hash, its own part of the interface hash stream (D9). Rejected: the import's whole interface hash, which would instantiate every generic of a module again whenever any of its signatures changes.
+- **An instance is shown by its identity.** The display of an extension's instance named its receiver with the extension's own type parameters (`lib/box::Box<T>.size<Int>`). Their names are not hashed, so after renaming `T` to `U` a reused importer kept showing `Box<T>` while an uncached check showed `Box<U>`. The receiver is now shown by its type's name (`lib/box::Box.size<Int>`). Rejected: substituting the type arguments into the receiver (`Box<Int>.size`), which shows the same information less directly for extensions whose type parameters do not all appear in the receiver.
+
+Found and left for `monomorphization`: an instance's code will also depend on the layout and markers of its type arguments (`keep<Thing>` changes when `Thing` gains a field), which the type-arguments hash, built from qualified names, does not cover. No instance exists yet, and what an instance key must cover is that change's decision.
+
 ## Risks / Trade-offs
 
 - [A warm run still parses every file and extracts every ABI, so the system-invariants scenario "Identical inputs produce cache hit" holds for Phase 2 only] → Phase 2 is most of the work today. Skipping parsing needs the `.abi` and import-list entries of D4, listed as a follow-up.

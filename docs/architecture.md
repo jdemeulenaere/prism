@@ -11,7 +11,7 @@ This document holds the **planned** design of Prism subsystems that are **not im
 
 ## 1. Compilation Pipeline & Compilation Avoidance
 
-Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)), and then for borrow conflicts and escaping closures on the elaborated MIR (`borrowck-exclusivity`, [`references`](../openspec/specs/references/spec.md)). Generic declarations are checked once, against their bounds, into polymorphic typed trees and MIR, with their signatures and marker parameters in the ABI ([`generics`](../openspec/specs/generics/spec.md)); instantiating them is planned for `monomorphization`. The callee's side of returned borrows is planned in section 3. Everything below is planned.
+Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, deterministic 256-bit BLAKE3 ABI and interface hashes, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)), and then for borrow conflicts and escaping closures on the elaborated MIR (`borrowck-exclusivity`, [`references`](../openspec/specs/references/spec.md)). Generic declarations are checked once, against their bounds, into polymorphic typed trees and MIR, with their signatures and marker parameters in the ABI ([`generics`](../openspec/specs/generics/spec.md)); instantiating them is planned for `monomorphization`. `prism check` avoids work through a per-user build cache ([`build-cache`](../openspec/specs/build-cache/spec.md), `abi-cache`): a file's Phase 2 is skipped when the cache holds a passing verdict for its content, module path and direct imports' interface hashes, and instance records stand in for the instances a generic body change invalidates. Object-code entries, keyed like check entries plus the target triple, come with `codegen-core`. The callee's side of returned borrows is planned in section 3. Everything below is planned.
 
 ### Requirement: Single File as Compilation Unit
 Every `.prism` source file MUST be compiled into native machine code independently, with interface boundaries defined strictly by exported declarations.
@@ -27,33 +27,15 @@ After Phase 1 completes, function bodies MUST be lowered and compiled in paralle
 - **WHEN** Phase 1 completes
 - **THEN** function bodies are typechecked and compiled in parallel against the imported ABI interface hashes
 
-### Requirement: Compilation Avoidance via ABI Hashes
-The compiler MUST cache compilation artifacts and recompile a file only when its own content or the ABI hash of a direct import changes.
-
-#### Scenario: Modifying non-generic function body
-- **WHEN** a developer modifies the internal implementation of a public function without changing its signature
-- **THEN** zero downstream files that import it are recompiled
-
-#### Scenario: Modifying public function signature
-- **WHEN** a developer changes the parameter types or return type of a public function
-- **THEN** direct downstream importers are recompiled
-
-#### Scenario: Modifying private helper function
-- **WHEN** a private helper function is added, removed, or modified in a source file
-- **THEN** downstream files remain cached
-
 ### Requirement: Re-monomorphization on Generic Body Change
-Downstream call sites that instantiate an exported generic function MUST be re-monomorphized when its Monomorphization Hash changes, and only those call sites.
+The instances of an exported generic function MUST be generated again when what they depend on changes, and only those instances: no importer's own artifact is rebuilt for a generic body change. `prism check` already records, per instance, the generic's signature and Monomorphization Hash and its type arguments, and reports which instances it would generate again (the instance records of [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)); `monomorphization` fills those records with code.
 
 #### Scenario: Changing generic function body
 - **WHEN** the body of an exported generic function changes
-- **THEN** re-monomorphization is triggered only in downstream call sites that instantiate that generic
-
-### Open decision: ABI hash algorithm
-The original design called for a BLAKE3 cryptographic hash of exported declarations. `crates/prism-abi` currently uses a deterministic 128-bit FNV-1a hash. Decide which algorithm is authoritative before building the `.abi` cache.
+- **THEN** only its instances are generated again, and the object code of the files that call it is reused
 
 ### Open decision: where generic instances live (`monomorphization`)
-`generics` checks each generic declaration once into elaborated polymorphic MIR, but ships no generic body to importers (D15 of [`openspec/changes/archive/2026-10-18-generics/design.md`](../openspec/changes/archive/2026-10-18-generics/design.md)). The recommended direction: the exporter ships each generic function's elaborated polymorphic MIR, which is self-describing because calls record callee paths, declared parameter types and type arguments. Instances live in separate instance artifacts keyed by the generic's path, the type arguments and the generic's MIR hash, rather than in the importer's artifact. That keeps a file's artifact a function of its content and its direct imports' ABI hashes even when an instance calls generics of modules the importer does not import, and with import cycles, and regenerates only the instances whose generic body changed. It may make the Phase 1 body hash in the ABI hash unnecessary. Still to decide: whether exported generic bodies may reference private declarations (Rust ships what they reach; Swift's `@inlinable` allows only exported ones), how polymorphic recursion is rejected, and the MIR rewrites for `T?` instantiated with a nullable `T`, which flattens.
+`generics` checks each generic declaration once into elaborated polymorphic MIR, but ships no generic body to importers (D15 of [`openspec/changes/archive/2026-10-18-generics/design.md`](../openspec/changes/archive/2026-10-18-generics/design.md)). The recommended direction: the exporter ships each generic function's elaborated polymorphic MIR, which is self-describing because calls record callee paths, declared parameter types and type arguments. Instances live in separate instance artifacts keyed by the generic's path, the type arguments and the generic's MIR hash, rather than in the importer's artifact. That keeps a file's artifact a function of its content and its direct imports' ABI hashes even when an instance calls generics of modules the importer does not import, and with import cycles, and regenerates only the instances whose generic body changed. It may make the Phase 1 body hash in the ABI hash unnecessary. The instance records of `abi-cache` are keyed by the generic's identity, signature hash and Monomorphization Hash and its module-qualified type arguments; an instance's code also depends on the layouts and markers of its type arguments and on the private helpers its body calls, which that key does not cover yet. Still to decide: whether exported generic bodies may reference private declarations (Rust ships what they reach; Swift's `@inlinable` allows only exported ones), how polymorphic recursion is rejected, and the MIR rewrites for `T?` instantiated with a nullable `T`, which flattens.
 
 ---
 

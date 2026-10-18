@@ -1,7 +1,7 @@
 # Prism Compilation Pipeline & ABI Extraction
 
 ## Purpose
-The compilation and ABI specification defines Phase 1 of the two-phase pipeline as implemented in `crates/prism-abi`: extracting each file's exported declaration surface and computing a deterministic ABI hash that ignores private symbols and non-generic function bodies. Code generation, the `.abi` cache, compilation avoidance and the execution tiers are planned and described in [`docs/architecture.md`](../../../docs/architecture.md).
+The compilation and ABI specification defines the two-phase pipeline as implemented: Phase 1 (`crates/prism-abi`) extracts each file's exported declaration surface and computes deterministic ABI and interface hashes that ignore private symbols and non-generic function bodies, Phase 2 checks each file against its direct imports' ABIs, and `prism check` skips Phase 2 for files whose inputs the build cache (the `build-cache` spec) already checked. Code generation, instantiation, cached `.abi` entries and the execution tiers are planned and described in [`docs/architecture.md`](../../../docs/architecture.md).
 
 ## Requirements
 
@@ -21,7 +21,7 @@ The compiler MUST extract each source file's exported ABI surface (`public` and 
 - **THEN** ABI extraction fails with a missing explicit return type error naming the function and its visibility
 
 ### Requirement: Deterministic ABI Hash
-The compiler MUST compute a deterministic 128-bit hash of each file's exported ABI that covers exported signatures, enum variant shapes and default parameter values, and excludes private symbols, non-generic function bodies and source positions.
+The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exported ABI that covers exported signatures, enum variant shapes and default parameter values, and excludes private symbols, non-generic function bodies and source positions.
 
 #### Scenario: Modifying non-generic function body
 - **WHEN** a developer modifies the internal implementation of a public function without changing its signature
@@ -47,6 +47,10 @@ The compiler MUST compute a deterministic 128-bit hash of each file's exported A
 - **WHEN** exported declarations are reordered within a file without other changes
 - **THEN** the exported ABI hash remains unchanged
 
+#### Scenario: Hashes printed in full
+- **WHEN** a developer runs `prism abi` on a source file, or `prism check` on a workspace
+- **THEN** each ABI hash is printed as `0x` followed by 64 lowercase hexadecimal digits
+
 ### Requirement: Monomorphization Hash for Generics
 Exported generic functions, including generic extension functions, MUST record a Monomorphization Hash of their body in their ABI signature, computed independently of source positions, comments and whitespace.
 
@@ -65,6 +69,21 @@ Exported generic functions, including generic extension functions, MUST record a
 #### Scenario: Changing a non-generic extension of a generic type
 - **WHEN** the body of the exported extension `public fun Box<Int>.sum(): Int` changes
 - **THEN** it records no Monomorphization Hash and the file's ABI hash is unchanged
+
+### Requirement: Interface Hash
+The compiler MUST compute, for each file, an interface hash: a deterministic 256-bit BLAKE3 hash of its exported ABI with the Monomorphization Hashes of its generic bodies left out. It MUST cover everything else the ABI hash covers, and the ABI hash MUST be a function of the interface hash and the Monomorphization Hashes.
+
+#### Scenario: Changing a generic body keeps the interface hash
+- **WHEN** the body of the exported generic function `public fun <T> keep(x: T): T` changes
+- **THEN** the file's ABI hash changes and its interface hash is unchanged
+
+#### Scenario: Changing a signature changes the interface hash
+- **WHEN** a parameter type of an exported function changes, or an exported struct gains a field
+- **THEN** the file's interface hash and its ABI hash both change
+
+#### Scenario: Interface hash printed by `prism abi`
+- **WHEN** a developer runs `prism abi` on a source file
+- **THEN** it prints the file's interface hash after its ABI hash, in the same format
 
 ### Requirement: Structured ABI Types
 Phase 1 MUST record every type in an exported signature (parameter, return, struct field, enum payload, exported variable) as a structured type tree, never as source text that must be re-parsed. The ABI hash MUST cover that structure. An importer MUST obtain exactly the type the exporter declared, including nested function, nullable and reference types.
@@ -204,12 +223,54 @@ Each exported generic struct or enum, and each reference to a nominal type in an
 - **WHEN** `lib/state.prism` exports `public struct Handle<T> : Copy { val id: Int }` and `public struct Box<T> : Copy { val v: T }`, `app/api.prism` imports it and exports `public fun handle(): Handle<String>` and `public fun box(): Box<String>`, and `app/main.prism` imports only `/app/api` and declares `fun f(): Int { val h = handle(); val g = h; val k = h; val b = box(); val c = b; val d = b; return 1 }`
 - **THEN** the ABI of `lib/state` records `Handle` with no marker parameter and `Box` with type parameter 0, the ABI of `app/api` records both return types with the same marker parameters, and `prism check app/main.prism` emits `E5001` at the second use of `b` only, because `Handle<String>` is `Copy` and `Box<String>` is not
 
+### Requirement: Compilation Avoidance via Interface Hashes
+`prism check` MUST skip Phase 2 (type checking, MIR lowering and borrow checking) for a file whose content, module path and direct imports' interface hashes are those of an earlier successful check by the same compiler, recorded in the build cache (the `build-cache` spec). It MUST run Phase 2 for every other file. The report and the exit status MUST be the same either way.
+
+#### Scenario: Modifying non-generic function body
+- **WHEN** `lib/text.prism` exports `public fun shout(s: &String): String`, `app/main.prism` imports `/lib/text`, both have been checked, and the body of `shout` changes
+- **THEN** the next `prism check` re-checks `lib/text` only, and reuses `app/main`: zero downstream files that import it are recompiled
+
+#### Scenario: Modifying public function signature
+- **WHEN** in that workspace `shout` gains a parameter with a default value, `n: Int = 1`, and `app/main`, whose exported signatures do not mention `lib/text`, is itself imported by `app/cli`
+- **THEN** the next `prism check` re-checks `lib/text` and its direct importer `app/main`, and reuses `app/cli`, whose direct import's interface hash is unchanged
+
+#### Scenario: An incompatible signature change is reported in the importer
+- **WHEN** in that workspace the parameter of `shout` becomes `s: Int`, and nothing else changes
+- **THEN** the next `prism check` re-checks `app/main` and reports its `E4004`, although `app/main` itself was not edited
+
+#### Scenario: Modifying private helper function
+- **WHEN** a private helper function of `lib/text.prism` is added, removed or modified
+- **THEN** the next `prism check` re-checks `lib/text` only, and downstream files remain cached
+
+#### Scenario: A failing file is checked again
+- **WHEN** a file has type or borrow errors, and `prism check` runs again with no edit
+- **THEN** the file is checked again and reports the same diagnostics, because a file with errors is never recorded
+
+#### Scenario: Cached and uncached checks agree
+- **WHEN** a workspace is checked once with the cache disabled and once from a warm cache
+- **THEN** both runs print the same report and exit with the same status
+
+### Requirement: Instantiation Records for Generic Body Changes
+When a file that passes Phase 2 calls an exported generic function or extension of a direct import with type arguments that mention no type parameter of the caller, `prism check` MUST record an instance for that generic, its signature, its Monomorphization Hash and those type arguments. An instance already recorded MUST be reported as reused, any other as one to instantiate.
+
+#### Scenario: Changing generic function body
+- **WHEN** `lib/box.prism` exports `public fun <T> keep(x: T): T` and `public fun <T> drop(x: T): Int`, `app/a.prism` calls `keep(1)`, `app/b.prism` calls `drop("s")`, the workspace has been checked, and the body of `keep` changes
+- **THEN** the next `prism check` re-checks `lib/box` only, reports that `app/a` must instantiate `lib/box::keep<Int>` again, and reports the instance `lib/box::drop<String>` of `app/b` as reused: re-monomorphization is triggered only in downstream files that instantiate that generic
+
+#### Scenario: Changing a generic signature instantiates again
+- **WHEN** `app/a.prism` calls `drop(1)` of that `lib/box`, the workspace has been checked, then the parameter of `drop` becomes `x: &T` with its body unchanged and the call becomes `drop(&1)`
+- **THEN** the next `prism check` re-checks `lib/box` and `app/a`, and reports that `app/a` must instantiate `lib/box::drop<Int>` again, since an instance depends on the generic's signature as well as on its body
+
+#### Scenario: Polymorphic calls are not recorded
+- **WHEN** `app/a.prism` declares `fun <T> wrap(x: T): T = keep(x)`, calling the imported generic `keep` with its own type parameter
+- **THEN** no instance is recorded for that call, since its type arguments are known only when `wrap` is instantiated
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
 - **The hash ignores spans and formatting.** Source positions, comments and whitespace are excluded, including from a generic function's body hash, so reformatting never invalidates downstream files.
 - **Block-bodied exports default to `Unit` here.** ABI extraction only rejects expression-bodied exports without a return type. The type checker rejects both forms (`E4011`). Whether to tighten the ABI rule or relax the specs is an open item in `ROADMAP.md` (`resolve-nominal-type-annotations`).
-- **The hash algorithm is not final.** The code uses a 128-bit FNV-1a hash. The original design called for BLAKE3, and the choice must be made before the `.abi` cache exists (`docs/architecture.md` section 1).
+- **The hash algorithm is BLAKE3 at 256 bits** (`abi-cache`, D1). See the `abi-cache` decisions below.
 - **Markers on declarations and on every reference** (`value-semantics`, decided by the user). Each exported struct and enum records its marker (`Copy`, `Clone` or none), and so does each nominal reference in an exported signature, so an importer knows how values of a type may be duplicated without importing its module. Phase 1a reads markers from the AST alone, so no body is read and import cycles still work. Changing a type's marker therefore changes the ABI hash of every file whose exported signatures mention it, which is correct, because what importers may do with those values changes. Requiring the import (`E4014`) whenever Copy-ness is needed was rejected because an import would change whether unrelated code compiles, and treating an unknown marker as "none" because it gives false errors.
 - **The built-in `Range` has its own ABI node** (`value-semantics`). It was recorded as an unbound name and came back to importers as an opaque type, which would have made an imported `Range` field move-only. A user-declared or imported `Range` still binds first.
 - **An extension is a function record with a receiver** (`extension-methods`). `ExportedSymbol::Function` carries an optional receiver mode and type, the type bound like any signature type, and the hash covers a presence byte, the mode and the type. The sort key adds the receiver's module-qualified type text after the name, so `describe`, `User.describe` and `Team.describe` hash the same in any order. Struct and enum records never depend on extensions, so an extension in another file never changes the receiver type's file hash. Rejected: a separate `Extension` symbol kind, which would duplicate the parameter and generic-body handling, and attaching extensions to their receiver's record, which would make every extension change the receiver's ABI. Elision rule 2 needs nothing more, since it reads the receiver mode.
@@ -221,3 +282,10 @@ Decisions from `generics` (planned autonomously on 2026-10-17, refined while imp
 
 - **Type parameters are positional in the ABI.** Each exported generic symbol records its type parameters with their bounds, and a type parameter in a signature is `AbiType::Parameter { index }`, lowered before binding names to the file's or imports' types, so `T` never binds to a `struct T`. The hash covers the count, the bounds, the positions and the marker parameters, but not the names: type arguments are positional, so a rename changes nothing an importer can do (a generic body's Monomorphization Hash still changes, since its tokens do). Rejected: hashing names, and binding parameters by name in the importer.
 - **Marker parameters travel with every nominal reference.** `NominalHeader` and `AbiType::Nominal` record which parameters condition the type's marker, computed by one function over the AST that the type checker also uses, so an importer decides whether `Box<String>` is `Copy` without importing `Box`'s module and the two cannot drift.
+
+Decisions from `abi-cache` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
+
+- **BLAKE3, 256 bits, everywhere** (D1). The ABI, interface and Monomorphization Hashes and every cache key are full 256-bit BLAKE3 hashes, printed as 64 hex digits. `DeterministicHasher` kept its stream of tags, lengths and `0xFF`-terminated strings, so every equality the specs state survived the switch. Once the ABI hash keys a cache, a collision silently reuses a verdict computed against another interface, and FNV-1a has no collision resistance at all. BLAKE3 is cryptographic, faster than byte-wise FNV-1a on all but tiny inputs, and what the original design named. Rejected: FNV-1a; SHA-256 (slower, nothing gained); BLAKE3 truncated to 128 bits.
+- **An interface hash keys an importer's Phase 2** (D2). It is the ABI hash's walk with the Monomorphization Hashes left out, and the ABI hash is `H(interface hash, each symbol's body hash or its absence)`, so it changes exactly when it used to. Phase 2 reads signatures only, never a generic body, so a verdict holds for every body with the same interface and a generic body edit re-checks no importer; the deterministic hermetic builds invariant holds because the verdict depends on less than the import ABI hashes, never more. Rejected: keying by ABI hashes (re-checks every importer on a generic body edit). Deferred: per-symbol fingerprints, re-checking an importer only when a symbol it uses changes, as Kotlin's and Zig's incremental compilers do.
+- **The check key** (D5). It covers the cache format version, the compiler's identity (the `build-cache` spec), the file's module path, its exact source text as the resolver parsed it, and its direct imports' interface hashes in import order. The package follows from the module path, and nothing in Phase 2 depends on the target, so the target triple joins keys with the first object-code entry. Phase 1 still runs for every file, since the resolver parses every file to build the import graph.
+- **Instance records stand in for re-monomorphization** (D9, D12). After a file passes, its MIR is scanned for calls to generics of its direct imports whose type arguments mention no type parameter; each becomes an instance request stored in the check entry, so a reused file keeps its requests. An instance is keyed by the generic's identity, its signature hash (its own part of the interface hash stream), its Monomorphization Hash and a hash of its module-qualified type arguments. After a generic body changes, importers are reused and exactly the requests naming that generic miss, which is "re-monomorphization only where a generic body changed" at the granularity code generation needs. The signature joined the key in review: the body hash alone reused `drop<Int>` after `drop(x: T)` became `drop(x: &T)`. Polymorphic calls are instantiated with their caller, calls to the file's own generics are re-checked with the file, and default value generators are already part of the interface hash, so none is recorded. `monomorphization` fills these records with code and decides what their key must also cover (the Monomorphization Hash ignores the private helpers a body calls, and the type-arguments hash ignores the layout and markers of the types it names). Rejected: recording nothing until `monomorphization` (the scenario would stay untested); storing the body hash seen at check time in the check entry (its value would depend on history, not on its key).
