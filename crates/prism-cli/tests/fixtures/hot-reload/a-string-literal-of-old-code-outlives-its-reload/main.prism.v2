@@ -1,0 +1,2 @@
+fun greeting(): String = "bye"
+fun main() { val g = greeting(); println(g); println(g); println(greeting()) }

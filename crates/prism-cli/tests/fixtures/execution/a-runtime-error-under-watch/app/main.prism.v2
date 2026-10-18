@@ -1,0 +1,3 @@
+package app
+fun zero(): Int = 1
+fun main() { val a = 1; println(a / zero()) }

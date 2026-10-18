@@ -1,0 +1,3 @@
+package app
+import /lib/math
+fun main() { println(twice(10)); println(twice(10)) }

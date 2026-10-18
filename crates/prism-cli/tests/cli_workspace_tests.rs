@@ -1202,3 +1202,26 @@ fn test_cli_binary_function_value_conversion_help() {
         "{stderr}"
     );
 }
+
+/// The replacement files of edit scripts (`main.prism.v2`, D16 of `hot-reload`) are no sources:
+/// checking a directory that holds them reads only its `.prism` files.
+#[test]
+fn replacement_files_of_edit_scripts_are_not_sources() {
+    let temp = create_temp_dir("replacement_files");
+    fs::write(temp.join("main.prism"), "fun main() { println(1) }\n").unwrap();
+    fs::write(temp.join("main.prism.v2"), "this is not Prism (\n").unwrap();
+    for target in [temp.clone(), temp.join("main.prism")] {
+        let output = prism()
+            .arg("check")
+            .arg(&target)
+            .output()
+            .expect("failed to execute prism CLI");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Total units: 1"));
+    }
+    fs::remove_dir_all(&temp).ok();
+}

@@ -1,0 +1,7 @@
+package app
+fun zero(): Int = 0
+fun main() { val a = 1; println(a / zero()) }
+// expect: ok
+// run: 0
+// watch: edits
+// entry: app/main.prism

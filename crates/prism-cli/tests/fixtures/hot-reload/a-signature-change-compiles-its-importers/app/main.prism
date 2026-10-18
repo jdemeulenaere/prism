@@ -1,0 +1,8 @@
+package app
+import /lib/math
+import /lib/text
+fun main() { println(twice(1)); println(greet()) }
+// expect: ok
+// run: 0
+// watch: edits
+// entry: app/main.prism

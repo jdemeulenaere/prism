@@ -1,0 +1,2 @@
+after line 1: edit lib/math.prism lib/math.prism.v2
+after line 1: edit app/main.prism app/main.prism.v2

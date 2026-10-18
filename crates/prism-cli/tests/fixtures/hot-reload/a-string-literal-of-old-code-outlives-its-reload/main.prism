@@ -1,0 +1,5 @@
+fun greeting(): String = "hello"
+fun main() { val g = greeting(); println(g); println(g); println(greeting()) }
+// expect: ok
+// run: 0
+// watch: edits

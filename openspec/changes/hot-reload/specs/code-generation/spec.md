@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Stack Checks Are Reload Points
-The stack check on entry to every compiled body, and on entry to glue, MUST call the runtime's `prism_rt_stack_check_failed` on its cold path before raising "stack overflow". When the limit held the reload interrupt, that call MUST restore the limit, apply the pending reload and return 0, and the function MUST continue. Otherwise it returns 1 and "stack overflow" is raised as before. The call MUST receive the stack pointer the check compared. The fast path MUST stay one load, one comparison and one branch.
+The stack check on entry to every compiled body and to glue MUST, on its cold path, call the runtime's `prism_rt_stack_check_failed` with the stack pointer it compared. When the limit held the reload interrupt, that call MUST restore the limit, apply the pending reload and return 0, and the function MUST continue; otherwise it returns 1 and "stack overflow" is raised. The fast path MUST stay one load, one comparison and one branch.
 
 #### Scenario: The cold path of a stack check
 - **WHEN** `prism dump-clif main.prism` runs on `fun helper(): Int = 1` and `fun main() { println(helper()) }`

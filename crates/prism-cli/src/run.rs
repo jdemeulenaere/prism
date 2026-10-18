@@ -221,7 +221,6 @@ pub(crate) struct Build {
     pub main: DeclarationPath,
     pub plan: BuildPlan,
     /// What to keep of every file if the build is applied.
-    #[allow(dead_code)] // Read by the watch session (task 4.1 of `hot-reload`).
     pub kept: KeptFiles,
     /// The units to define, file units in check order, then instance units in symbol order.
     pub units: Vec<BuiltUnit>,
@@ -764,21 +763,7 @@ pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceErro
         );
     }
     if options.timings {
-        let milliseconds = |duration: Duration| duration.as_secs_f64() * 1000.0;
-        let timings = compiled.timings;
-        eprintln!(
-            "timing: front end {:.3} ms",
-            milliseconds(timings.front_end)
-        );
-        eprintln!(
-            "timing: code generation {:.3} ms",
-            milliseconds(timings.code_generation)
-        );
-        eprintln!("timing: linking {:.3} ms", milliseconds(timings.linking));
-        eprintln!(
-            "timing: total to main {:.3} ms",
-            milliseconds(options.started.elapsed())
-        );
+        print_load_timings(compiled.timings, options);
     }
     compiled
         .program
@@ -788,6 +773,24 @@ pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceErro
             options.check_allocations,
         )
         .map_err(WorkspaceError::Backend)
+}
+
+/// Prints the time of each stage of a load and the total time to `main` (`--timings`).
+pub(crate) fn print_load_timings(timings: Timings, options: &RunOptions) {
+    let milliseconds = |duration: Duration| duration.as_secs_f64() * 1000.0;
+    eprintln!(
+        "timing: front end {:.3} ms",
+        milliseconds(timings.front_end)
+    );
+    eprintln!(
+        "timing: code generation {:.3} ms",
+        milliseconds(timings.code_generation)
+    );
+    eprintln!("timing: linking {:.3} ms", milliseconds(timings.linking));
+    eprintln!(
+        "timing: total to main {:.3} ms",
+        milliseconds(options.started.elapsed())
+    );
 }
 
 /// The Cranelift IR of the entry file `entry`, compiled alone against the ABIs of its direct
@@ -827,7 +830,10 @@ pub fn dump_layout(entry: &Path) -> Result<String, WorkspaceError> {
 }
 
 /// The path under which `graph` knows the entry file `entry`.
-fn entry_in_graph(graph: &DependencyGraph, entry: &Path) -> Result<PathBuf, WorkspaceError> {
+pub(crate) fn entry_in_graph(
+    graph: &DependencyGraph,
+    entry: &Path,
+) -> Result<PathBuf, WorkspaceError> {
     // The graph adds its entry under its absolute path, so this finds it without canonicalizing
     // every file's path.
     let absolute = prism_resolver::absolute_path(entry);

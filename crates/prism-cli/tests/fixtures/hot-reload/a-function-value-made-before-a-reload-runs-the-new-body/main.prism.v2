@@ -1,0 +1,1 @@
+fun main() { val f: (Int) -> Int = { n -> n + 2 }; println(f(1)); println(f(1)) }

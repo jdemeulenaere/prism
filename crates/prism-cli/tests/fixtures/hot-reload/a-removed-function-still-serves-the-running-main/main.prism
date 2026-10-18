@@ -1,0 +1,5 @@
+fun old(): Int = 1
+fun main() { println(old()); println(old()) }
+// expect: ok
+// run: 0
+// watch: edits

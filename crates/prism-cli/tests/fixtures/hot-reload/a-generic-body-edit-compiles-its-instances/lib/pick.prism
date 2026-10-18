@@ -1,0 +1,2 @@
+package lib
+public fun <T : Copy> pick(a: T, b: T): T = a

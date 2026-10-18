@@ -1438,3 +1438,226 @@ fn a_closure_in_an_instance() {
         .position(|h| *h == "main::count<Int>#closure0");
     assert!(instance.is_some() && closure > instance, "{:?}", headers);
 }
+
+// --- `prism run --watch` (the `hot-reload` spec)
+
+/// execution: "Edits without watching".
+#[test]
+fn edits_without_watching() {
+    let directory = single_file("edits_without_watching", "fun main() { println(1) }\n");
+    write(
+        &directory.join("edits"),
+        "after exit: edit main.prism main.prism\n",
+    );
+    let output = prism(&["run", "--edits", "edits", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "", "nothing runs");
+    assert!(
+        stderr(&output).contains("usage: prism run"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// hot-reload: "Timing a reload". The times differ from run to run, so the lines are checked by
+/// their shape.
+#[test]
+fn timing_a_reload() {
+    let directory = single_file(
+        "timing_a_reload",
+        "fun step(i: Int): Int = i\nfun main() { println(step(1)); println(step(2)) }\n",
+    );
+    write(
+        &directory.join("main.prism.v2"),
+        "fun step(i: Int): Int = i * 10\nfun main() { println(step(1)); println(step(2)) }\n",
+    );
+    write(
+        &directory.join("edits"),
+        "after line 1: edit main.prism main.prism.v2\n",
+    );
+    let output = prism(
+        &[
+            "run",
+            "--watch",
+            "--timings",
+            "--edits",
+            "edits",
+            "main.prism",
+        ],
+        &directory,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "1\n20\n");
+    let stderr = stderr(&output);
+    let reloads: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("timing: reload "))
+        .collect();
+    assert_eq!(reloads.len(), 1, "{}", stderr);
+    let stages = [
+        "detect",
+        "front end",
+        "code generation",
+        "linking",
+        "applied after",
+    ];
+    let rest = reloads[0].strip_prefix("timing: reload ").unwrap();
+    let (total, stages_text) = rest.split_once(" ms (").expect("a total and its stages");
+    assert!(total.parse::<f64>().unwrap() >= 0.0);
+    let stages_text = stages_text.strip_suffix(')').expect("closed stages");
+    let parsed: Vec<(&str, f64)> = stages_text
+        .split(", ")
+        .map(|stage| {
+            let (name, value) = stage
+                .strip_suffix(" ms")
+                .and_then(|stage| stage.rsplit_once(' '))
+                .unwrap_or_else(|| panic!("unexpected stage {:?}", stage));
+            (name, value.parse::<f64>().unwrap())
+        })
+        .collect();
+    let names: Vec<&str> = parsed.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names, stages, "{}", reloads[0]);
+    assert!(parsed.iter().all(|(_, value)| *value >= 0.0));
+    assert!(
+        stderr.lines().any(|line| line == "timing: live modules 2"),
+        "{}",
+        stderr
+    );
+}
+
+/// A `prism run --watch` session on a workspace, with its stderr read line by line.
+struct WatchedProgram {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+    seen: Vec<String>,
+}
+
+impl WatchedProgram {
+    fn start(directory: &Path, entry: &str) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_prism"))
+            .env(
+                "PRISM_CACHE",
+                std::env::temp_dir().join("prism_run_cli_build_cache"),
+            )
+            .args(["run", "--watch", entry])
+            .current_dir(directory)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to run prism");
+        let (sender, lines) = std::sync::mpsc::channel();
+        let stderr = child.stderr.take().unwrap();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stderr).lines() {
+                let Ok(line) = line else { return };
+                if sender.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        Self {
+            child,
+            lines,
+            seen: Vec::new(),
+        }
+    }
+
+    /// Waits up to 20 seconds for a stderr line satisfying `wanted`.
+    fn wait_for(&mut self, wanted: impl Fn(&str) -> bool) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.lines.recv_timeout(left) {
+                Ok(line) => {
+                    self.seen.push(line.clone());
+                    if wanted(&line) {
+                        return line;
+                    }
+                }
+                Err(_) => panic!("timed out; stderr so far: {:#?}", self.seen),
+            }
+        }
+    }
+
+    /// Collects the stderr lines written within `duration`.
+    fn drain_for(&mut self, duration: std::time::Duration) {
+        let deadline = std::time::Instant::now() + duration;
+        while let Ok(line) = self
+            .lines
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
+            self.seen.push(line);
+        }
+    }
+
+    /// Ends the session and gives its stdout.
+    fn stop(mut self) -> (String, Vec<String>) {
+        let _ = self.child.kill();
+        let output = self.child.wait_with_output().unwrap();
+        (stdout(&output), self.seen)
+    }
+}
+
+/// A program whose `main` loops calling `value` until it returns something else than 1.
+const LOOPING: &str =
+    "fun value(): Int = 1\nfun main() { var n = 0; while (value() == 1) { n += 1 }; println(value()) }\n";
+
+/// hot-reload: "Saving an edited body while the program runs".
+#[test]
+fn saving_an_edited_body_while_the_program_runs() {
+    let directory = single_file("watch_saving", LOOPING);
+    let mut session = WatchedProgram::start(&directory, "main.prism");
+    // The program runs once its first load is done; give the watcher time to register too.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    write(
+        &directory.join("main.prism"),
+        &LOOPING.replace("Int = 1\n", "Int = 2\n"),
+    );
+    session.wait_for(|line| line == "reload: applied main.prism");
+    session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
+    let (stdout, _) = session.stop();
+    assert_eq!(stdout, "2\n");
+}
+
+/// hot-reload: "Saving without changes does nothing": writing the same content reloads
+/// nothing, and a real edit afterwards reloads once.
+#[test]
+fn saving_without_changes_does_nothing() {
+    let directory = single_file("watch_unchanged", LOOPING);
+    let mut session = WatchedProgram::start(&directory, "main.prism");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    write(&directory.join("main.prism"), LOOPING);
+    session.drain_for(std::time::Duration::from_millis(500));
+    write(
+        &directory.join("main.prism"),
+        &LOOPING.replace("Int = 1\n", "Int = 2\n"),
+    );
+    session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
+    let (_, seen) = session.stop();
+    let reloads = seen
+        .iter()
+        .filter(|line| line.starts_with("reload:"))
+        .count();
+    assert_eq!(reloads, 1, "{:#?}", seen);
+}
+
+/// hot-reload: "An atomic save is seen": an editor writes a temporary file and renames it over
+/// the original.
+#[test]
+fn an_atomic_save_is_seen() {
+    let directory = single_file("watch_atomic", LOOPING);
+    let mut session = WatchedProgram::start(&directory, "main.prism");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let temporary = directory.join("main.prism.tmp");
+    write(&temporary, &LOOPING.replace("Int = 1\n", "Int = 2\n"));
+    fs::rename(&temporary, directory.join("main.prism")).unwrap();
+    session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
+    let (stdout, seen) = session.stop();
+    assert_eq!(stdout, "2\n");
+    let reloads = seen
+        .iter()
+        .filter(|line| line.starts_with("reload: applied"))
+        .count();
+    assert_eq!(reloads, 1, "{:#?}", seen);
+}

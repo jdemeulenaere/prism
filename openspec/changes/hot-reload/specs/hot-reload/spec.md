@@ -14,7 +14,7 @@ Defines `prism run --watch`: a watch session that keeps a program running while 
 - **THEN** the program prints `2` without being restarted, and stderr holds `reload: applied main.prism` and then `watch: main returned with status 0; waiting for changes`
 
 ### Requirement: Session Status Lines
-The program's output MUST go to stdout, and the session's status lines to stderr, each starting with `reload:` or `watch:`. An applied reload MUST print `reload: applied <files>`. `<files>` lists the files whose code was compiled, relative to the workspace root, in topological order, separated by `, `. When instances were compiled, the list MUST be followed by ` (<n> instance)` or ` (<n> instances)`.
+The program's output MUST go to stdout, and the session's status lines to stderr, each starting with `reload:` or `watch:`. An applied reload MUST print `reload: applied <files>`. `<files>` lists the files whose code units the reload defines, compiled or loaded from the build cache, relative to the workspace root, in topological order, separated by `, `. When the reload defines instance units, the list MUST be followed by ` (<n> instance)` or ` (<n> instances)`.
 
 #### Scenario: A body edit compiles one file
 - **WHEN** `lib/math.prism` declares `public fun twice(n: Int): Int = n * 2`, `app/main.prism` imports `/lib/math` and declares `fun main() { println(twice(1)); println(twice(1)) }`, and the edit script `after line 1: edit lib/math.prism lib/math.prism.v2` replaces the body with `n * 3`
@@ -118,7 +118,7 @@ When a reload's files report errors, the session MUST print the diagnostics as `
 
 #### Scenario: A type error keeps the previous code
 - **WHEN** `fun step(i: Int): Int = i` and `fun main() { println(step(1)); println(step(2)) }` run under `after line 1: edit main.prism main.prism.v2`, where `step`'s body becomes `true`
-- **THEN** stdout holds `1` and `2`, stderr holds an `E4002` diagnostic and `reload: not applied; the program keeps running its previous code`, and the session exits with status 0
+- **THEN** stdout holds `1` and `2`, stderr holds an `E4005` diagnostic and `reload: not applied; the program keeps running its previous code`, and the session exits with status 0
 
 ### Requirement: A Program That Does Not Compile at Start Waits
 When the program does not compile as the session starts, the session MUST print its diagnostics and `watch: waiting for changes`, and wait for a change instead of exiting.

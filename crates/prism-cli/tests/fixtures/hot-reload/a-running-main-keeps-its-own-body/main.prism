@@ -1,0 +1,4 @@
+fun main() { println(1); println(2) }
+// expect: ok
+// run: 0
+// watch: edits

@@ -1,0 +1,4 @@
+fun main() { val zero = 0; println(1 / zero) }
+// expect: ok
+// run: 0
+// watch: edits

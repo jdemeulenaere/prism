@@ -1,0 +1,3 @@
+struct P { val x: Double }
+fun show(p: &P) { println(p.x + 0.5) }
+fun main() { val p = P(1.0); show(p); show(p) }

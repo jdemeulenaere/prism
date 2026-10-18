@@ -1,0 +1,2 @@
+package lib
+public fun twice(n: Int): Int = n * 2

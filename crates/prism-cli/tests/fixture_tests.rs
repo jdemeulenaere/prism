@@ -81,6 +81,17 @@
 //! `runtime-strings-and-drops`), each one also asserts that no allocation outlives its owner and
 //! none is freed twice: a leak or an invalid free changes its status to `102`.
 //!
+//! ## Watch cases
+//!
+//! An executable case whose header also has a `// watch: <script>` line runs under a watch
+//! session driven by the edit script `<script>`, relative to the case directory (D16 of
+//! `hot-reload`): the runner spawns `prism run --check-allocations --watch --edits <script>
+//! <entry>` and compares the session's exit status with `// run:` and its stdout and stderr with
+//! the snapshots, as for any executable case, cold and warm. The script's replacement files end
+//! in `.prism.v<k>`, which neither `prism check` nor the runner reads as sources. Every case of
+//! the `hot-reload` spec is a watch case, except the scenarios whose WHEN is a Rust test or a
+//! real file save (`UNSCRIPTED_HOT_RELOAD_SCENARIOS`), which have Rust tests instead.
+//!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
 //! catalog in `openspec/specs/diagnostics/spec.md`: every expected code must be a live catalog
@@ -110,7 +121,21 @@ struct Case {
     pinned_current: bool,
     /// The exit status `prism run` must give, for an executable case.
     run_status: Option<i32>,
+    /// The edit script of a watch case, relative to the case directory.
+    watch_script: Option<String>,
 }
+
+/// The scenarios of the `hot-reload` spec whose WHEN is a Rust test or a save on disk, tested in
+/// `run_cli_tests.rs`, `crates/prism-codegen/tests/reload_tests.rs` and `watch.rs` rather than by
+/// watch cases.
+const UNSCRIPTED_HOT_RELOAD_SCENARIOS: &[&str] = &[
+    "saving-an-edited-body-while-the-program-runs",
+    "two-saves-before-the-program-calls-anything",
+    "an-atomic-save-is-seen",
+    "saving-without-changes-does-nothing",
+    "a-deferred-reload-is-applied-at-the-reload-point",
+    "timing-a-reload",
+];
 
 fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -179,7 +204,11 @@ fn load_cases() -> Vec<Case> {
             let mut expected = BTreeSet::new();
             let mut pinned_current = false;
             let mut run_status = None;
+            let mut watch_script = None;
             for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("// watch:") {
+                    watch_script = Some(rest.trim().to_string());
+                }
                 if let Some(rest) = line.strip_prefix("// run:") {
                     let status = rest
                         .trim()
@@ -206,6 +235,21 @@ fn load_cases() -> Vec<Case> {
                 "{}: every case of the execution spec needs a `// run:` line",
                 name
             );
+            assert!(
+                watch_script.is_none() || run_status.is_some(),
+                "{}: a `// watch:` case needs a `// run:` line for its status",
+                name
+            );
+            if let Some(case) = name.strip_prefix("hot-reload/") {
+                assert!(
+                    watch_script.is_some()
+                        || UNSCRIPTED_HOT_RELOAD_SCENARIOS
+                            .iter()
+                            .any(|scenario| case.starts_with(scenario)),
+                    "{}: every case of the hot-reload spec needs a `// watch:` line",
+                    name
+                );
+            }
             cases.push(Case {
                 dir,
                 name,
@@ -213,6 +257,7 @@ fn load_cases() -> Vec<Case> {
                 expected,
                 pinned_current,
                 run_status,
+                watch_script,
             });
         }
     }
@@ -295,9 +340,12 @@ fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
     ));
     let _ = fs::remove_dir_all(&cache);
     let run = || {
-        std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
-            .arg("run")
-            .arg("--check-allocations")
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_prism"));
+        command.arg("run").arg("--check-allocations");
+        if let Some(script) = &case.watch_script {
+            command.arg("--watch").arg("--edits").arg(script);
+        }
+        command
             .arg(relative)
             .current_dir(&case.dir)
             .env("PRISM_CACHE", &cache)

@@ -24,6 +24,10 @@ prism-typed-tree = { path = "../prism-typed-tree" }
 prism-formatter = { path = "../prism-formatter" }
 prism-codegen = { path = "../prism-codegen" }
 prism-runtime = { path = "../prism-runtime" }
+# File-system events for `prism run --watch` (D15 of `hot-reload`): FSEvents on macOS, inotify on
+# Linux, ReadDirectoryChangesW on Windows, with a polling fallback. Pinned exactly; 8.2.0 was
+# released on 2025-08-03 under CC0-1.0.
+notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 prism-mir = { path = "../prism-mir" }

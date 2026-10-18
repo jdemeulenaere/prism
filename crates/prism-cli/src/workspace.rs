@@ -354,6 +354,11 @@ pub(crate) fn assert_workspace_boundary(graph: &DependencyGraph) -> Result<(), W
         })?;
 
     for path in graph.nodes.keys() {
+        // A file that exists only in a watch session's overlay was resolved from root-relative
+        // segments without `..`, so it is inside the root (D16 of `hot-reload`).
+        if !path.exists() {
+            continue;
+        }
         let canon_path = path.canonicalize().map_err(|e| WorkspaceError::Io {
             path: path.clone(),
             message: e.to_string(),

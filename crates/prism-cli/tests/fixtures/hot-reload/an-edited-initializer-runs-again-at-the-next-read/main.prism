@@ -1,0 +1,7 @@
+fun noisy(): Int { println(0); return 5 }
+val V: Int = noisy()
+fun helper(): Int = 1
+fun main() { println(V); println(V + helper()) }
+// expect: ok
+// run: 0
+// watch: edits

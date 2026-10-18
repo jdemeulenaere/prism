@@ -33,8 +33,8 @@ COMMANDS:
                            --elaborated, borrow-check it and print its elaborated MIR; with
                            --instances, compile the program the file is the entry of and
                            print the MIR of every instance of a generic it needs
-    run [--timings] [--check-allocations] [--no-cache] [--explain-cache] <file.prism>
-        [-- <argument>...]
+    run [--timings] [--check-allocations] [--no-cache] [--explain-cache]
+        [--watch [--edits <script>]] <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
                            'fun main()', exiting with the program's status (101 after a
                            runtime error, 1 when it does not compile), loading from the build
@@ -43,7 +43,10 @@ COMMANDS:
                            every allocation and, when main returns, reports those still live
                            and any invalid free, exiting with 102; --no-cache ignores the
                            cache; --explain-cache lists on stderr what was checked, compiled or
-                           loaded; the arguments after '--' are the program's
+                           loaded; --watch keeps the program running and reloads its code
+                           when its files change, running main again after it returns, and
+                           --edits drives those reloads from an edit script instead of file
+                           events; the arguments after '--' are the program's
     dump-clif [--instances] <file.prism>
                            Print the Cranelift IR the backend generates for a source file;
                            with --instances, compile the program the file is the entry of
@@ -178,14 +181,15 @@ fn main() {
     }
 }
 
-/// `prism run [--timings] [--check-allocations] <file.prism> [-- <argument>...]` (D14 of
-/// `codegen-core`, D13 of `runtime-strings-and-drops`): options before the file, and everything
-/// after `--` for the program. The build cache the environment selects is used unless
-/// `--no-cache` (D9 of `instance-cache`).
+/// `prism run [--timings] [--check-allocations] [--watch [--edits <script>]] <file.prism>
+/// [-- <argument>...]` (D14 of `codegen-core`, D13 of `runtime-strings-and-drops`): options
+/// before the file, and everything after `--` for the program. The build cache the environment
+/// selects is used unless `--no-cache` (D9 of `instance-cache`). `--watch` runs a watch session
+/// (`hot-reload`), which `--edits` drives from a script.
 fn run_program(args: &[String], started: std::time::Instant) {
     let usage = || -> ! {
         eprintln!(
-            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] <file.prism> [-- <argument>...]"
+            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] [--watch [--edits <script>]] <file.prism> [-- <argument>...]"
         );
         process::exit(1);
     };
@@ -193,10 +197,17 @@ fn run_program(args: &[String], started: std::time::Instant) {
     let mut check_allocations = false;
     let mut no_cache = false;
     let mut explain_cache = false;
+    let mut watch = false;
+    let mut edits: Option<String> = None;
     let mut rest = args.iter();
     let file = loop {
         match rest.next().map(String::as_str) {
             Some("--timings") => timings = true,
+            Some("--watch") => watch = true,
+            Some("--edits") => match rest.next() {
+                Some(script) => edits = Some(script.clone()),
+                None => usage(),
+            },
             Some("--check-allocations") => check_allocations = true,
             Some("--no-cache") => no_cache = true,
             Some("--explain-cache") => explain_cache = true,
@@ -210,6 +221,10 @@ fn run_program(args: &[String], started: std::time::Instant) {
         Some("--") => rest.cloned().collect(),
         Some(_) => usage(),
     };
+    // `--edits` drives a watch session's reloads; without `--watch` there is none.
+    if edits.is_some() && !watch {
+        usage();
+    }
     let options = prism_cli::RunOptions {
         timings,
         check_allocations,
@@ -222,6 +237,14 @@ fn run_program(args: &[String], started: std::time::Instant) {
         },
         explain_cache,
     };
+    if watch {
+        let status = prism_cli::run_watch(
+            std::path::Path::new(file),
+            options,
+            edits.as_deref().map(std::path::Path::new),
+        );
+        process::exit(status);
+    }
     match prism_cli::run_file(std::path::Path::new(file), &options) {
         Ok(status) => process::exit(status),
         Err(err) => {

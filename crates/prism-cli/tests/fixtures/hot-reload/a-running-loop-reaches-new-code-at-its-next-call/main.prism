@@ -1,0 +1,5 @@
+fun step(i: Int): Int = i
+fun main() { var i = 0; while (i < 4) { println(step(i)); i += 1 } }
+// expect: ok
+// run: 0
+// watch: edits

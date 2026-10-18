@@ -1,0 +1,7 @@
+package app
+import /lib/pick
+fun main() { println(pick(1, 2)); println(pick(1, 2)) }
+// expect: ok
+// run: 0
+// watch: edits
+// entry: app/main.prism

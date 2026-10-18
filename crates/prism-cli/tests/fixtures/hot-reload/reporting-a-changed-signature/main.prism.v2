@@ -1,0 +1,2 @@
+fun step(i: Int, k: Int): Int = i * k
+fun main() { var i = 0; while (i < 3) { println(step(i, 10)); i += 1 } }

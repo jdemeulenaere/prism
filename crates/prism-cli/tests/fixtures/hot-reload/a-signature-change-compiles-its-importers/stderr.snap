@@ -1,0 +1,3 @@
+reload: applied lib/math.prism, app/main.prism
+reload: the signature of lib/math::twice changed; code already running keeps calling its previous version
+watch: main returned with status 0; waiting for changes

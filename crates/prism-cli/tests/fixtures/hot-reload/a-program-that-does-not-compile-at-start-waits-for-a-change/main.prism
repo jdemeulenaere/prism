@@ -1,0 +1,4 @@
+fun main() { val x: Int = true }
+// expect: E4002
+// run: 0
+// watch: edits
