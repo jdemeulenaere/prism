@@ -195,10 +195,14 @@ A `when` in value position MUST be exhaustive: every value of its subject's type
 - **THEN** the file typechecks
 
 ### Requirement: Nullable Subjects Match Patterns of Their Payload
-For a subject of type `T?`, `null` MUST match `null`, and a constructor pattern or literal of `T` MUST match a non-null subject whose payload matches it, so `null` together with patterns covering `T` covers `T?`. A binding at the top binds the whole `T?`.
+For a subject of type `T?`, `null` MUST match `null`, and a constructor pattern, a variant name or a literal of `T` MUST match a non-null subject whose payload matches it, so `null` together with patterns covering `T` covers `T?`. A binding at the top binds the whole `T?`.
 
 #### Scenario: Nullable enum subject
 - **WHEN** `enum Shape { Circle(Double), Square(Double) }` is declared and `fun f(s: Shape?): Double = when (s) { null -> 0.0; Shape.Circle(val r) -> r; Shape.Square(val d) -> d }` is checked
+- **THEN** the file typechecks and is exhaustive
+
+#### Scenario: Variant names over a nullable enum
+- **WHEN** `enum Color { Red, Green }` is declared and `fun f(c: Color?): Int = when (c) { null -> 0; Red -> 1; Color.Green -> 2 }` is checked
 - **THEN** the file typechecks and is exhaustive
 
 #### Scenario: Nullable payload

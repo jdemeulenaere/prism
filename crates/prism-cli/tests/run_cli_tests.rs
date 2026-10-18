@@ -320,7 +320,7 @@ fn the_reference_program_runs() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n-3\ntrue\nfalse\n-2\n0\n15 primes up to 50\n18\n"
+        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n-3\ntrue\nfalse\n-2\n0\nquadrant 4\n-24\n15 primes up to 50\n18\n"
     );
     assert_eq!(stderr(&output), "");
 }

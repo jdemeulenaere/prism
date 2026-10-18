@@ -31,3 +31,11 @@ public fun placeOf(p: Point): Place {
 
 // The x coordinate of `p` divided by its y coordinate, or null on the x axis.
 public fun slope(p: Point): Int? = if (p.y == 0) null else p.x / p.y
+
+// A description of `place`, matching its payload.
+public fun describe(place: Place): String = when (place) {
+    Place.Origin -> "origin"
+    Place.Axis(true) -> "x axis"
+    Place.Axis(false) -> "y axis"
+    Place.Quadrant(val n) -> "quadrant " + n.toString()
+}

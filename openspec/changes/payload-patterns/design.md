@@ -178,6 +178,18 @@ Destructuring in `for` loops (with `collections`' iteration) and closure paramet
 
 The `type-system` fixtures of "Only a variant name covers that variant" keep their names. Their expectations change only where a payload variant named alone or a constructor pattern now covers a variant. The `E4009` fixtures gain the witness in their expected messages. Typed-tree and MIR snapshots of `when` change shape (sub-patterns are printed, variant patterns list their empty sub-patterns), and are regenerated and read. Parser tests of `WhenPattern::Expr` move to the new pattern type.
 
+### D22. Variant names match through a nullable subject (autonomous, at implementation)
+
+A constructor pattern of `T` matches a non-null `T?` (the `patterns` delta, "Nullable Subjects Match Patterns of Their Payload"), and so does a variant written without parentheses: over `c: Color?`, `Red` is the typed-tree pattern `NonNull(Variant Red)`, so `null`, `Red` and `Green` cover `Color?` without `else`. Before this change `Red` against a `Color?` was a value compared with `==`, which covered nothing; the run-time meaning is the same. Rejected: keeping bare names as values there, which would make `Color.Red(..)`-style constructor patterns and payload-free variant names cover nullables differently.
+
+### D23. Pattern errors do not also report `E4009` (autonomous, at implementation)
+
+A `when` whose patterns reported an error is not also reported as non-exhaustive: the pattern that failed to check covers nothing reliably, so the witness would be noise (`Box.Of(n) -> n` with `n` unresolved reports `E4001` only). Rejected: reporting both, which the fixture convention (an exact set of codes) would pin.
+
+### D24. Guard mutation and the take-apart help (autonomous, at implementation)
+
+In a guard, passing a mutable-borrow binding to a `&mut` parameter (a reborrow) mutates through it, so it is `E4003` like an assignment, `&mut` or `mut fun` receiver. The `E5001` help after a take-apart ("match on its borrow instead, as in `when (&m)` or `val (...) = &m`") is given whenever the move was a `Destructure` of the used local, for a `when` subject and a destructured value alike, which needs no record of where the `Destructure` came from. Rejected: a flag on `Destructure` to give the help for `when` subjects only.
+
 ## Risks / Trade-offs
 
 - [`when (m)` with a by-value binding moves `m`, surprising Kotlin users who only wanted to read] → it is a compile error at the later use, labelled at the binding with help suggesting `when (&m)` (D16), and the common places to match (methods with `fun` receivers, `&T` parameters) borrow. If it proves noisy, a borrow-by-default for place subjects can be revisited together with a move operator.
