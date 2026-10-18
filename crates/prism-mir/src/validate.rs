@@ -87,6 +87,22 @@ impl Validator<'_> {
         if self.violations.is_empty() {
             self.storage();
         }
+        self.regions();
+    }
+
+    /// Region markers occur only in composable bodies and are well nested along every path
+    /// (D6 of `compose-transform`).
+    fn regions(&mut self) {
+        if !crate::regions::has_markers(self.body) {
+            return;
+        }
+        if !self.body.is_compose {
+            self.report("a region marker outside a composable body".to_string());
+            return;
+        }
+        if let Err(message) = crate::regions::open_regions(self.body) {
+            self.report(message);
+        }
     }
 
     fn locals(&mut self, id: BodyId) {
@@ -442,6 +458,11 @@ impl Validator<'_> {
                     variant,
                     parts,
                 } => self.destructure(*source, *variant, parts, &at),
+                StatementKind::GroupStart(group) | StatementKind::GroupEnd(group) => {
+                    if !self.body.groups.contains(*group) {
+                        self.report(format!("{} marks g{}, which is not a region", at, group.0));
+                    }
+                }
             }
         }
         let at = format!("bb{}[terminator]", block.0);
@@ -681,7 +702,10 @@ impl Validator<'_> {
                     used.push(*source);
                     used.extend(parts.iter().map(|(_, target)| *target));
                 }
-                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+                StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::GroupStart(_)
+                | StatementKind::GroupEnd(_) => {}
             }
             self.check_no_drop_flag(&used, &at);
         }
@@ -1000,6 +1024,7 @@ impl Validator<'_> {
                         used.push(*source);
                         used.extend(parts.iter().map(|(_, target)| *target));
                     }
+                    StatementKind::GroupStart(_) | StatementKind::GroupEnd(_) => {}
                 }
                 self.check_live(&used, &must, &at);
             }
@@ -1544,5 +1569,53 @@ mod tests {
             "{}",
             file.dump()
         );
+    }
+
+    /// Adds the region `if 0 then` to the small file's body, started at the top of bb0, and
+    /// ended in bb1 when `end` holds.
+    fn with_region(file: &mut MirFile, end: bool) {
+        let body = body(file);
+        let group = body.groups.alloc(GroupRegion {
+            parent: None,
+            step: GroupStep::If {
+                ordinal: 0,
+                branch: 0,
+            },
+            span: prism_ast::Span::default(),
+        });
+        body.blocks[BlockId(0)]
+            .statements
+            .insert(0, statement(StatementKind::GroupStart(group)));
+        if end {
+            body.blocks[BlockId(1)]
+                .statements
+                .push(statement(StatementKind::GroupEnd(group)));
+        }
+    }
+
+    #[test]
+    fn well_nested_regions_have_no_violation_and_print() {
+        let mut file = small_file();
+        body(&mut file).is_compose = true;
+        with_region(&mut file, true);
+        assert_eq!(violations(&file), "");
+        let dump = file.dump();
+        assert!(dump.contains("group_start g0 /* if 0 then */"), "{}", dump);
+        assert!(dump.contains("group_end g0"), "{}", dump);
+    }
+
+    #[test]
+    fn an_unclosed_region_is_reported() {
+        let mut file = small_file();
+        body(&mut file).is_compose = true;
+        with_region(&mut file, false);
+        assert_reports(&file, "returns while g0 is open");
+    }
+
+    #[test]
+    fn a_region_in_a_plain_body_is_reported() {
+        let mut file = small_file();
+        with_region(&mut file, true);
+        assert_reports(&file, "a region marker outside a composable body");
     }
 }

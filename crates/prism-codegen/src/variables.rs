@@ -69,7 +69,10 @@ pub(crate) fn shared_variables(
                         note(*target, true);
                     }
                 }
-                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+                StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::GroupStart(_)
+                | StatementKind::GroupEnd(_) => {}
             }
         }
         match &data.terminator.kind {

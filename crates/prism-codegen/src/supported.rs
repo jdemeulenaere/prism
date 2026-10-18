@@ -309,7 +309,10 @@ impl BodyChecker<'_> {
                         .find_map(|(_, target)| self.place(&Place::local(*target)))
                 })
             }
-            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => None,
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::GroupStart(_)
+            | StatementKind::GroupEnd(_) => None,
         }
     }
 

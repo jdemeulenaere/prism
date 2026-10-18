@@ -356,6 +356,7 @@ id_codec!(
     LocalId,
     BodyId,
     crate::mir::BlockId,
+    crate::mir::GroupId,
     prism_typed_tree::LocalId
 );
 
@@ -1289,6 +1290,14 @@ impl Codec for StatementKind {
                 variant.encode(encoder);
                 parts.encode(encoder);
             }
+            StatementKind::GroupStart(group) => {
+                encoder.u8(5);
+                group.encode(encoder);
+            }
+            StatementKind::GroupEnd(group) => {
+                encoder.u8(6);
+                group.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1302,7 +1311,107 @@ impl Codec for StatementKind {
                 variant: decoder.decode()?,
                 parts: decoder.decode()?,
             },
+            5 => StatementKind::GroupStart(decoder.decode()?),
+            6 => StatementKind::GroupEnd(decoder.decode()?),
             _ => return None,
+        })
+    }
+}
+
+impl Codec for crate::mir::GroupStep {
+    fn encode(&self, encoder: &mut Encoder) {
+        use crate::mir::GroupStep;
+        let (tag, ordinal, branch) = match *self {
+            GroupStep::If { ordinal, branch } => (0, ordinal, branch),
+            GroupStep::When { ordinal, branch } => (1, ordinal, branch),
+            GroupStep::And { ordinal } => (2, ordinal, 0),
+            GroupStep::Or { ordinal } => (3, ordinal, 0),
+            GroupStep::Elvis { ordinal } => (4, ordinal, 0),
+            GroupStep::SafeCall { ordinal } => (5, ordinal, 0),
+            GroupStep::Loop { ordinal } => (6, ordinal, 0),
+        };
+        encoder.u8(tag);
+        encoder.u32(ordinal);
+        encoder.u32(branch);
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        use crate::mir::GroupStep;
+        let tag = decoder.u8()?;
+        let ordinal = decoder.u32()?;
+        let branch = decoder.u32()?;
+        Some(match tag {
+            0 => GroupStep::If { ordinal, branch },
+            1 => GroupStep::When { ordinal, branch },
+            2 => GroupStep::And { ordinal },
+            3 => GroupStep::Or { ordinal },
+            4 => GroupStep::Elvis { ordinal },
+            5 => GroupStep::SafeCall { ordinal },
+            6 => GroupStep::Loop { ordinal },
+            _ => return None,
+        })
+    }
+}
+
+impl Codec for crate::mir::GroupRegion {
+    fn encode(&self, encoder: &mut Encoder) {
+        let crate::mir::GroupRegion { parent, step, span } = self;
+        parent.encode(encoder);
+        step.encode(encoder);
+        span.encode(encoder);
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(crate::mir::GroupRegion {
+            parent: decoder.decode()?,
+            step: decoder.decode()?,
+            span: decoder.decode()?,
+        })
+    }
+}
+
+impl Codec for crate::mir::ClosureStep {
+    fn encode(&self, encoder: &mut Encoder) {
+        match self {
+            crate::mir::ClosureStep::Argument {
+                callee,
+                ordinal,
+                parameter,
+            } => {
+                encoder.u8(0);
+                callee.encode(encoder);
+                ordinal.encode(encoder);
+                parameter.encode(encoder);
+            }
+            crate::mir::ClosureStep::Value { ordinal } => {
+                encoder.u8(1);
+                ordinal.encode(encoder);
+            }
+        }
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(match decoder.u8()? {
+            0 => crate::mir::ClosureStep::Argument {
+                callee: decoder.decode()?,
+                ordinal: decoder.decode()?,
+                parameter: decoder.decode()?,
+            },
+            1 => crate::mir::ClosureStep::Value {
+                ordinal: decoder.decode()?,
+            },
+            _ => return None,
+        })
+    }
+}
+
+impl Codec for crate::mir::ClosureOrigin {
+    fn encode(&self, encoder: &mut Encoder) {
+        let crate::mir::ClosureOrigin { region, step } = self;
+        region.encode(encoder);
+        step.encode(encoder);
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(crate::mir::ClosureOrigin {
+            region: decoder.decode()?,
+            step: decoder.decode()?,
         })
     }
 }
@@ -1488,6 +1597,8 @@ impl Codec for Body {
             capture_modes,
             ownership_reason,
             blocks,
+            groups,
+            origin,
             span,
         } = self;
         owner.encode(encoder);
@@ -1500,6 +1611,8 @@ impl Codec for Body {
         capture_modes.encode(encoder);
         ownership_reason.encode(encoder);
         blocks.encode(encoder);
+        groups.encode(encoder);
+        origin.encode(encoder);
         span.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1514,6 +1627,8 @@ impl Codec for Body {
             capture_modes: decoder.decode()?,
             ownership_reason: decoder.decode()?,
             blocks: decoder.decode()?,
+            groups: decoder.decode()?,
+            origin: decoder.decode()?,
             span: decoder.decode()?,
         })
     }

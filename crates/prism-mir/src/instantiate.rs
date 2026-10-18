@@ -208,7 +208,9 @@ impl Instance<'_> {
             StatementKind::Read(place) => StatementKind::Read(self.place(place)),
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
-            | StatementKind::Destructure { .. } => statement.clone(),
+            | StatementKind::Destructure { .. }
+            | StatementKind::GroupStart(_)
+            | StatementKind::GroupEnd(_) => statement.clone(),
         }
     }
 

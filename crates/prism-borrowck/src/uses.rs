@@ -58,6 +58,8 @@ pub fn statement_effects(statement: &Statement) -> Vec<PlaceEffect> {
                 effects.push(PlaceEffect::Init(*target));
             }
         }
+        // Region markers read, write, move and drop nothing (D6 of `compose-transform`).
+        StatementKind::GroupStart(_) | StatementKind::GroupEnd(_) => {}
     }
     effects
 }

@@ -635,7 +635,7 @@ impl Analysis for LoanFlow<'_> {
             StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
                 self.clear(state, *local)
             }
-            StatementKind::Read(_) => {}
+            StatementKind::Read(_) | StatementKind::GroupStart(_) | StatementKind::GroupEnd(_) => {}
             // The parts carry the source's loans, fitted to their types; the source moved (D16
             // of `payload-patterns`).
             StatementKind::Destructure { source, parts, .. } => {

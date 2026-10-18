@@ -190,6 +190,8 @@ mod tests {
             capture_modes: Vec::new(),
             ownership_reason: None,
             blocks: Arena::new(),
+            groups: Arena::new(),
+            origin: None,
             span: Span::dummy(),
         }
     }

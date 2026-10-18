@@ -96,6 +96,14 @@ impl Builder<'_> {
                 panic!("internal error: call evaluates an omitted argument");
             };
             let borrowed_by_default = last_default.is_some_and(|last| last > index);
+            // A composable closure written as an argument is keyed by its call (D5 of
+            // `compose-transform`).
+            let callee_name = match &call.callee {
+                TreeCallee::Function(path) | TreeCallee::External(path) => path.to_string(),
+                TreeCallee::Builtin(builtin) => builtin.name().to_string(),
+                TreeCallee::Value(_) => "<value>".to_string(),
+            };
+            self.record_closure_argument(value, &callee_name, index);
             operands[index] = Some(self.argument(value, borrowed_by_default));
         }
         if let Some(pending) = pending {

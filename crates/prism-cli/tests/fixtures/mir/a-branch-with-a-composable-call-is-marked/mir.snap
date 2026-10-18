@@ -1,0 +1,41 @@
+module main
+compose fun main::A(): Unit @2:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @2:17
+    return @2:1
+fun main::log(): Unit @4:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @4:11
+    return @4:1
+compose fun main::V(_1: Bool): Unit @6:1
+  local _0: Unit (return)
+  local _1 on: Bool (argument)
+  local _2: Unit (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    switch copy _1 [0 -> bb2, otherwise -> bb1] @7:9
+  bb1:
+    group_start g0 /* if 0 then */ @7:13
+    storage_live _2 @7:15
+    _2 = call compose main::A() -> bb3 @7:15
+  bb2:
+    goto -> bb4 @7:5
+  bb3:
+    storage_dead _2 @7:15
+    group_end g0 @7:13
+    goto -> bb4 @7:5
+  bb4:
+    switch copy _1 [0 -> bb6, otherwise -> bb5] @8:9
+  bb5:
+    storage_live _3 @8:15
+    _3 = call main::log() -> bb7 @8:15
+  bb6:
+    goto -> bb8 @8:5
+  bb7:
+    storage_dead _3 @8:15
+    goto -> bb8 @8:5
+  bb8:
+    _0 = const () @6:25
+    return @6:1

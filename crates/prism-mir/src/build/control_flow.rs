@@ -4,11 +4,12 @@
 //! result lives in a scope of its own that the branch dissolves, marking the result dead at the
 //! start of each successor. Blocks are created on demand, so every block is reachable.
 
+use super::groups::RegionKind;
 use super::pattern::BranchLocals;
 use super::{Builder, ChainContext, LoopContext};
 use crate::mir::{
-    BlockId, BorrowOrigin, Callee, Constant, LocalId, Operand, Place, Projection, Rvalue,
-    StatementKind, TerminatorKind,
+    BlockId, BorrowOrigin, Callee, Constant, GroupStep, LocalId, Operand, Place, Projection,
+    Rvalue, StatementKind, TerminatorKind,
 };
 use crate::types::RANGE_END_INCLUSIVE;
 use prism_ast::Span;
@@ -83,9 +84,24 @@ impl Builder<'_> {
         destination: Option<&Place>,
         branch: ExpressionId,
     ) -> Option<BlockId> {
+        self.lower_branch_in(block, destination, branch, None)
+    }
+
+    /// Lowers `branch` in its own temporary scope, which holds the region of `step` when it
+    /// has one (D6 of `compose-transform`), returning the block it falls through to.
+    fn lower_branch_in(
+        &mut self,
+        block: BlockId,
+        destination: Option<&Place>,
+        branch: ExpressionId,
+        step: Option<GroupStep>,
+    ) -> Option<BlockId> {
         self.current = Some(block);
         let span = self.expression(branch).span;
         self.push_scope(span);
+        if let Some(step) = step {
+            self.open_region(step, span);
+        }
         self.expression_into(destination, branch);
         self.pop_scope();
         self.current
@@ -102,15 +118,31 @@ impl Builder<'_> {
         let Some((on_true, on_false)) = self.branch_on_expression(condition) else {
             return;
         };
+        // Each branch containing a composable call is a region (D5 of `compose-transform`).
+        let then_composes = self.composes(then_branch);
+        let else_composes = else_branch.is_some_and(|branch| self.composes(branch));
+        let ordinal = (then_composes || else_composes).then(|| self.region_ordinal(RegionKind::If));
+        let step = |composes: bool, branch: u32| {
+            ordinal
+                .filter(|_| composes)
+                .map(|ordinal| GroupStep::If { ordinal, branch })
+        };
         // Without `else`, the branch's value is discarded and the `if` gives `Unit`.
         let branch_destination = if else_branch.is_some() {
             destination
         } else {
             None
         };
-        let then_end = self.lower_branch(on_true, branch_destination, then_branch);
+        let then_end = self.lower_branch_in(
+            on_true,
+            branch_destination,
+            then_branch,
+            step(then_composes, 0),
+        );
         let else_end = match else_branch {
-            Some(else_branch) => self.lower_branch(on_false, destination, else_branch),
+            Some(else_branch) => {
+                self.lower_branch_in(on_false, destination, else_branch, step(else_composes, 1))
+            }
             None => Some(on_false),
         };
         self.join(&[then_end, else_end], span);
@@ -149,7 +181,15 @@ impl Builder<'_> {
             span,
         );
         let short_end = self.current;
-        let right_end = self.lower_branch(evaluate, Some(&destination), right);
+        let step = self.composes(right).then(|| match operator {
+            LogicalOperator::And => GroupStep::And {
+                ordinal: self.region_ordinal(RegionKind::And),
+            },
+            LogicalOperator::Or => GroupStep::Or {
+                ordinal: self.region_ordinal(RegionKind::Or),
+            },
+        });
+        let right_end = self.lower_branch_in(evaluate, Some(&destination), right, step);
         self.join(&[short_end, right_end], span);
     }
 
@@ -201,7 +241,10 @@ impl Builder<'_> {
         };
         self.assign(destination.clone(), Rvalue::Use(operand), span);
         let present_end = self.current;
-        let fallback_end = self.lower_branch(absent, Some(&destination), fallback);
+        let step = self.composes(fallback).then(|| GroupStep::Elvis {
+            ordinal: self.region_ordinal(RegionKind::Elvis),
+        });
+        let fallback_end = self.lower_branch_in(absent, Some(&destination), fallback, step);
         self.join(&[present_end, fallback_end], span);
     }
 
@@ -234,6 +277,11 @@ impl Builder<'_> {
         span: Span,
     ) {
         self.push_scope(span);
+        // A chain containing a composable call is a region, ended on its `null` exits too.
+        if self.composes(chain) {
+            let ordinal = self.region_ordinal(RegionKind::SafeCall);
+            self.open_region(GroupStep::SafeCall { ordinal }, span);
+        }
         self.chains.push(ChainContext {
             scope: self.scope_depth() - 1,
             tested: false,
@@ -338,6 +386,14 @@ impl Builder<'_> {
         if self.current.is_none() {
             return;
         }
+        // Each branch body containing a composable call is a region (D5 of
+        // `compose-transform`); guards and conditions stay in the enclosing group.
+        let composes = branches.iter().any(|branch| self.composes(branch.body));
+        let ordinal = composes.then(|| self.region_ordinal(RegionKind::When));
+        let saved_when = std::mem::replace(
+            &mut self.when_region,
+            ordinal.map(|o| (o, branches.as_ptr())),
+        );
         let patterns = || branches.iter().flat_map(|b| b.patterns.iter());
         let switchable = |p: &Pattern| match p {
             Pattern::Else => true,
@@ -382,6 +438,7 @@ impl Builder<'_> {
                 span,
             )
         };
+        self.when_region = saved_when;
         self.join(&ends, span);
         if *ty == Type::Unit {
             if let Some(destination) = destination {
@@ -398,7 +455,19 @@ impl Builder<'_> {
         destination: Option<&Place>,
         branch: &WhenBranch,
     ) -> Option<BlockId> {
-        let end = self.lower_branch(block, destination, branch.body);
+        // The region of a composable branch: the `when`'s ordinal and the branch's position.
+        let step = self.when_region.and_then(|(ordinal, first)| {
+            if !self.composes(branch.body) {
+                return None;
+            }
+            let position = (branch as *const WhenBranch as usize - first as usize)
+                / std::mem::size_of::<WhenBranch>();
+            Some(GroupStep::When {
+                ordinal,
+                branch: position as u32,
+            })
+        });
+        let end = self.lower_branch_in(block, destination, branch.body, step);
         self.current = end;
         self.pop_scope();
         self.current

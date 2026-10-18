@@ -111,7 +111,10 @@ pub(crate) fn location_events(
                     kind: AccessKind::StorageDead,
                     span,
                 }),
-                StatementKind::StorageLive(_) => {}
+                // Region markers access nothing (D6 of `compose-transform`).
+                StatementKind::StorageLive(_)
+                | StatementKind::GroupStart(_)
+                | StatementKind::GroupEnd(_) => {}
             }
         }
         None => {

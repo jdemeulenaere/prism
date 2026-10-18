@@ -685,11 +685,13 @@ impl Builder<'_> {
             }
             TreeStatementKind::While { condition, body } => {
                 self.push_scope(span);
+                self.open_loop_region(id, span);
                 self.lower_while(id, *condition, *body, span);
                 self.pop_scope();
             }
             TreeStatementKind::DoWhile { body, condition } => {
                 self.push_scope(span);
+                self.open_loop_region(id, span);
                 self.lower_do_while(id, *body, *condition, span);
                 self.pop_scope();
             }
@@ -700,6 +702,7 @@ impl Builder<'_> {
                 body,
             } => {
                 self.push_scope(span);
+                self.open_loop_region(id, span);
                 match iteration {
                     ForIteration::Range => self.lower_for(id, *variable, *iterable, *body, span),
                     ForIteration::List { mutable } => {
@@ -711,6 +714,15 @@ impl Builder<'_> {
             TreeStatementKind::Destructure { pattern, value } => {
                 self.lower_destructure(pattern, *value, span)
             }
+        }
+    }
+
+    /// Makes the loop statement `id`, whose scope was just opened, a region around all its
+    /// iterations when it contains a composable call (D5 of `compose-transform`).
+    fn open_loop_region(&mut self, id: StatementId, span: Span) {
+        if self.statement_composes(id) {
+            let ordinal = self.region_ordinal(super::groups::RegionKind::Loop);
+            self.open_region(crate::mir::GroupStep::Loop { ordinal }, span);
         }
     }
 

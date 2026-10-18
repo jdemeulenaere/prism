@@ -83,16 +83,28 @@ impl MirFile {
                 };
                 // A generic body shows its type parameters, as its function declares them.
                 let type_parameters = render_type_parameters(&body.type_parameters);
+                // A composable closure says where it is written (D5 of `compose-transform`).
+                let origin = match &body.origin {
+                    Some(origin) => format!(
+                        " /* {}{} */",
+                        origin
+                            .region
+                            .map_or_else(String::new, |region| format!("in g{}, ", region.0)),
+                        origin.step.describe()
+                    ),
+                    None => String::new(),
+                };
                 writeln!(
                     out,
-                    "{}{} {}{}({}): {} {}",
+                    "{}{} {}{}({}): {} {}{}",
                     compose,
                     keyword,
                     type_parameters,
                     self.body_name(id),
                     arguments.join(", "),
                     body.return_type(),
-                    at
+                    at,
+                    origin
                 )
                 .unwrap();
             }
@@ -138,6 +150,14 @@ impl MirFile {
                         variant,
                         parts,
                     } => printer.destructure(*source, *variant, parts),
+                    StatementKind::GroupStart(group) => format!(
+                        "group_start g{} /* {} */",
+                        group.0,
+                        body.groups
+                            .get(*group)
+                            .map_or_else(|| "?".to_string(), |region| region.step.describe())
+                    ),
+                    StatementKind::GroupEnd(group) => format!("group_end g{}", group.0),
                 };
                 writeln!(out, "    {} {}", text, position(statement.span)).unwrap();
             }
@@ -546,6 +566,8 @@ pub(crate) mod tests {
             capture_modes: Vec::new(),
             ownership_reason: None,
             blocks,
+            groups: Arena::new(),
+            origin: None,
             span: span(1, 1),
         };
         let mut bodies = Arena::new();

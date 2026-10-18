@@ -44,6 +44,8 @@ impl Builder<'_> {
             parent: self.id,
             index,
         };
+        let origin = is_compose.then(|| self.closure_origin(id));
+        let marks = self.regions.marks.clone();
         let mut closure = Builder::new(
             self.file,
             self.types,
@@ -54,6 +56,8 @@ impl Builder<'_> {
             span,
         );
         closure.is_compose = *is_compose;
+        closure.start_regions(marks);
+        closure.origin = origin;
         closure.type_parameters = self.type_parameters.clone();
         closure.ownership_reason = ownership_reason.clone();
         closure.set_return_type(ret.as_ref().clone(), span);
@@ -191,6 +195,7 @@ impl Builder<'_> {
             parent: self.id,
             index,
         };
+        let origin = is_compose.then(|| self.closure_origin(reference));
         let mut closure = Builder::new(
             self.file,
             self.types,
@@ -201,6 +206,7 @@ impl Builder<'_> {
             span,
         );
         closure.is_compose = *is_compose;
+        closure.origin = origin;
         closure.type_parameters = self.type_parameters.clone();
         closure.set_return_type(result.as_ref().clone(), span);
         let arguments: Vec<LocalId> = parameters

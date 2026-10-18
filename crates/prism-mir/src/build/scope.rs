@@ -34,6 +34,9 @@ struct ScopedLocal {
 pub(super) struct Scope {
     exit: Span,
     locals: Vec<ScopedLocal>,
+    /// The region of a composable body this scope holds, which ends wherever the scope is left
+    /// (D6 of `compose-transform`).
+    pub(super) region: Option<crate::mir::GroupId>,
     /// The position of each of `locals` by local, so that a statement with many temporaries
     /// finds each in constant time.
     positions: HashMap<LocalId, usize>,
@@ -45,6 +48,7 @@ impl Scope {
         Self {
             exit,
             locals: Vec::new(),
+            region: None,
             positions: HashMap::new(),
         }
     }
@@ -86,13 +90,19 @@ impl Builder<'_> {
     pub(super) fn pop_scope(&mut self) {
         let index = self.scopes.len() - 1;
         self.exit_scope(index, None);
-        self.scopes.pop();
+        if let Some(scope) = self.scopes.pop() {
+            if scope.region.is_some() {
+                self.regions.open.pop();
+            }
+        }
     }
 
     /// Removes the innermost scope without emitting anything: its locals are ended by the caller
     /// on each path that leaves it.
     pub(super) fn discard_scope(&mut self) {
-        self.scopes.pop();
+        if let Some(scope) = self.scopes.pop() {
+            assert!(scope.region.is_none(), "a region's scope is popped");
+        }
     }
 
     /// The number of open scopes.
@@ -125,6 +135,10 @@ impl Builder<'_> {
             if scoped.marked {
                 self.push_statement(StatementKind::StorageDead(scoped.local), span);
             }
+        }
+        // A region ends after what was created in it is dropped.
+        if let Some(group) = self.scopes[index].region {
+            self.push_statement(StatementKind::GroupEnd(group), span);
         }
     }
 

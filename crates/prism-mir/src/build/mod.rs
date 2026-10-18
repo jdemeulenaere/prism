@@ -14,14 +14,15 @@ mod call;
 mod closure;
 mod comparison;
 mod control_flow;
+mod groups;
 mod pattern;
 mod place;
 mod scope;
 
 use crate::mir::{
-    BasicBlock, BlockId, Body, BodyId, BodyOwner, ExternalDeclaration, LocalDeclaration, LocalId,
-    LocalKind, MirFile, MirPhase, Place, Projection, Rvalue, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    BasicBlock, BlockId, Body, BodyId, BodyOwner, ClosureOrigin, ExternalDeclaration, GroupId,
+    GroupRegion, LocalDeclaration, LocalId, LocalKind, MirFile, MirPhase, Place, Projection,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use crate::types::mir_type_table;
 use prism_ast::Span;
@@ -116,6 +117,7 @@ fn lower_function(
         let owner = BodyOwner::Function(function.path.clone());
         let mut builder = Builder::new(file, types, bodies, tree, id, owner, function.span);
         builder.is_compose = function.is_compose;
+        builder.start_regions(None);
         builder.type_parameters = function.type_parameters.clone();
         builder.set_return_type(function.return_type.clone(), function.span);
         for &parameter in &tree.parameters {
@@ -321,6 +323,15 @@ pub(crate) struct Builder<'a> {
     closure_count: usize,
     /// The type parameters of the body's function.
     type_parameters: Vec<prism_typed_tree::TypeParameter>,
+    /// The regions of a composable body (D6 of `compose-transform`).
+    groups: Arena<GroupId, GroupRegion>,
+    /// Where a composable closure is written in its parent.
+    origin: Option<ClosureOrigin>,
+    /// The marks, open regions and ordinals of a composable body's regions.
+    regions: groups::RegionState,
+    /// While a `when` with composable branches is lowered: its ordinal, and its first branch,
+    /// from which a branch's position is found.
+    when_region: Option<(u32, *const prism_typed_tree::WhenBranch)>,
 }
 
 impl<'a> Builder<'a> {
@@ -357,12 +368,25 @@ impl<'a> Builder<'a> {
             return_block: None,
             closure_count: 0,
             type_parameters: Vec::new(),
+            groups: Arena::new(),
+            origin: None,
+            regions: groups::RegionState::default(),
+            when_region: None,
         };
         builder.current = Some(builder.new_block());
         // The arguments' scope: arguments are dropped when the body returns, after its locals,
         // and are never marked.
         builder.scopes.push(Scope::new(span));
         builder
+    }
+
+    /// Starts tracking the regions of a composable body, whose typed body's marks are
+    /// `marks` when its parent's builder already has them (a closure's), or computed here.
+    /// Does nothing for a body that is not composable.
+    fn start_regions(&mut self, marks: Option<groups::SharedMarks>) {
+        if self.is_compose {
+            self.regions.marks = Some(marks.unwrap_or_default());
+        }
     }
 
     /// Declares the return place `_0`, which must be the first local.
@@ -474,6 +498,8 @@ impl<'a> Builder<'a> {
             capture_modes: Vec::new(),
             ownership_reason: self.ownership_reason,
             blocks,
+            groups: self.groups,
+            origin: self.origin,
             span: self.span,
         }
     }

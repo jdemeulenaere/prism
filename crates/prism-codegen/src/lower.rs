@@ -431,6 +431,12 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_)
                 | StatementKind::Read(_) => {}
+                // Composed MIR has no region marker (D19 of `compose-transform`).
+                StatementKind::GroupStart(_) | StatementKind::GroupEnd(_) => {
+                    return Err(BackendError::new(
+                        "a region marker reached the backend: the body was not composed",
+                    ))
+                }
                 // Each listed part is moved into its target: a move is a byte copy, and the
                 // source is never read again (D17 of `payload-patterns`).
                 StatementKind::Destructure {
@@ -2417,7 +2423,10 @@ fn block_local_temporaries(body: &Body) -> Vec<bool> {
                         mention(&mut seen, *target, block, true);
                     }
                 }
-                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+                StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::GroupStart(_)
+                | StatementKind::GroupEnd(_) => {}
             }
         }
         match &data.terminator.kind {

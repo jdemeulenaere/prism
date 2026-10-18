@@ -1,0 +1,9 @@
+// expect: ok
+compose fun A() {}
+
+compose fun F(n: Int) {
+    while (true) {
+        A()
+        if (n > 0) { return }
+    }
+}

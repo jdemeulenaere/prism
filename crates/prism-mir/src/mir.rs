@@ -39,6 +39,11 @@ define_id!(
     /// A body of a file.
     BodyId
 );
+define_id!(
+    /// A region of a composable body that runs in a group of its own (D6 of
+    /// `compose-transform`).
+    GroupId
+);
 
 impl LocalId {
     /// The return place `_0`.
@@ -147,7 +152,107 @@ pub struct Body {
     pub ownership_reason: Option<OwnershipReason>,
     /// The blocks; `bb0` is the entry.
     pub blocks: Arena<BlockId, BasicBlock>,
+    /// The regions of a composable body that contain composable calls, each run in a group of
+    /// its own, which [`StatementKind::GroupStart`] and [`StatementKind::GroupEnd`] mark (D6 of
+    /// `compose-transform`). Empty for every other body, and in composed MIR.
+    pub groups: Arena<GroupId, GroupRegion>,
+    /// For a composable closure, where it is written in its parent: the region and the step
+    /// its group's key is derived from (D5 of `compose-transform`). `None` for every other
+    /// body.
+    pub origin: Option<ClosureOrigin>,
     pub span: Span,
+}
+
+/// A region of a composable body that runs in a replaceable group of its own: a branch, a
+/// conditional operand, the part of a safe call after its test, or a loop around all its
+/// iterations, containing a composable call (D5 and D6 of `compose-transform`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupRegion {
+    /// The region it is written in, `None` for the body's own group.
+    pub parent: Option<GroupId>,
+    /// The construct that makes it a region, with its ordinal among the sibling constructs of
+    /// that kind.
+    pub step: GroupStep,
+    pub span: Span,
+}
+
+/// The construct of a region, with its ordinal among the regions of constructs of the same
+/// kind in its parent region, in source order. A group's key hashes its parent's key and its
+/// step, never a source position (D5 of `compose-transform`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GroupStep {
+    /// Branch `branch` of an `if`: 0 for `then`, 1 for `else`.
+    If { ordinal: u32, branch: u32 },
+    /// Branch `branch` of a `when`, in branch order.
+    When { ordinal: u32, branch: u32 },
+    /// The right operand of `&&`.
+    And { ordinal: u32 },
+    /// The right operand of `||`.
+    Or { ordinal: u32 },
+    /// The fallback of `?:`.
+    Elvis { ordinal: u32 },
+    /// A `?.` chain.
+    SafeCall { ordinal: u32 },
+    /// A loop, around all its iterations.
+    Loop { ordinal: u32 },
+}
+
+impl GroupStep {
+    /// The step as the dump prints it: `if 0 then`, `when 1 branch 2`, `loop 0`.
+    pub fn describe(&self) -> String {
+        match self {
+            GroupStep::If { ordinal, branch } => {
+                format!(
+                    "if {} {}",
+                    ordinal,
+                    if *branch == 0 { "then" } else { "else" }
+                )
+            }
+            GroupStep::When { ordinal, branch } => format!("when {} branch {}", ordinal, branch),
+            GroupStep::And { ordinal } => format!("and {}", ordinal),
+            GroupStep::Or { ordinal } => format!("or {}", ordinal),
+            GroupStep::Elvis { ordinal } => format!("elvis {}", ordinal),
+            GroupStep::SafeCall { ordinal } => format!("safe call {}", ordinal),
+            GroupStep::Loop { ordinal } => format!("loop {}", ordinal),
+        }
+    }
+}
+
+/// Where a composable closure is written in its parent body (D5 of `compose-transform`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClosureOrigin {
+    /// The parent's region it is written in, `None` at the parent's top level.
+    pub region: Option<GroupId>,
+    pub step: ClosureStep,
+}
+
+/// How a composable closure is reached from its region.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ClosureStep {
+    /// Written as argument `parameter` of a call of `callee` (its declaration path, the
+    /// built-in's name, or `<value>` for a function value), the `ordinal`-th such argument of
+    /// that callee and parameter in the region.
+    Argument {
+        callee: String,
+        ordinal: u32,
+        parameter: u32,
+    },
+    /// Any other composable closure, the `ordinal`-th such one of the region.
+    Value { ordinal: u32 },
+}
+
+impl ClosureStep {
+    /// The step as the dump prints it.
+    pub fn describe(&self) -> String {
+        match self {
+            ClosureStep::Argument {
+                callee,
+                ordinal,
+                parameter,
+            } => format!("argument {} of {} call {}", parameter, callee, ordinal),
+            ClosureStep::Value { ordinal } => format!("value {}", ordinal),
+        }
+    }
 }
 
 impl Body {
@@ -258,6 +363,12 @@ pub enum StatementKind {
         variant: Option<usize>,
         parts: Vec<(usize, LocalId)>,
     },
+    /// The region `GroupId` of a composable body starts (D6 of `compose-transform`). It reads,
+    /// writes, moves and drops nothing.
+    GroupStart(GroupId),
+    /// The region `GroupId` ends, on a path that leaves it: falling through, or by `return`,
+    /// `break` or `continue`.
+    GroupEnd(GroupId),
 }
 
 impl StatementKind {

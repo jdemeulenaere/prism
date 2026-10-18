@@ -1,0 +1,9 @@
+// expect: ok
+compose fun A() {}
+
+fun log() {}
+
+compose fun V(on: Bool) {
+    if (on) { A() }
+    if (on) { log() }
+}
