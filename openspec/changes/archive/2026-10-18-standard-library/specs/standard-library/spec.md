@@ -38,7 +38,7 @@ The public declarations of the prelude modules MUST be in scope in every workspa
 An extension of a prelude module that is not a member ("Intrinsic Extensions Are Members") MUST be considered only after the file's own extensions and those of its explicit imports, so either shadows it without `E4012`.
 
 #### Scenario: An import shadows a prelude extension
-- **WHEN** `lib/util.prism` exports `public fun <T> List<T>.forEach(action: (&T) -> Unit) {}`, and a file that imports `/lib/util` calls `listOf(1).forEach { n -> println(n) }`
+- **WHEN** `lib/util.prism` exports `public fun <T> List<T>.forEach(action: (&T) -> Unit): Unit {}`, and a file that imports `/lib/util` calls `listOf(1).forEach { n -> println(n) }`
 - **THEN** the file typechecks, and the call resolves to `lib/util`'s extension, with no `E4012`
 
 ### Requirement: Library Files Import What They Use

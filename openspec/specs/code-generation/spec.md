@@ -55,7 +55,7 @@ Drop, clone, equality and index-of glue MUST have no slot in the function table:
 - **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0, and `prism dump-clif --instances main.prism` prints `main::discard<main::User>#drop(main::User)` after `main::discard<main::User>`, and `main::copy<main::User>#clone(main::User)` after `main::copy<main::User>`
 
 ### Requirement: Calls Go Through the Function Table
-Every call of a top-level function, extension, default value generator or top-level `val` accessor, in the same file or another, MUST load its target from the callee's slot in the program's function table and call it indirectly. A slot MUST keep its address for the life of the program, and a slot whose function is not linked MUST hold a stub that ends the program with a runtime error. No call MUST be inlined.
+Every call of a top-level function, extension, default value generator or top-level `val` accessor, in the same file or another, other than a call of an external function ("External Functions Are Called by Symbol"), MUST load its target from the callee's slot in the program's function table and call it indirectly. A slot MUST keep its address for the life of the program, and a slot whose function is not linked MUST hold a stub that ends the program with a runtime error. No call MUST be inlined.
 
 #### Scenario: Calls within and across files are indirect
 - **WHEN** `app/main.prism` imports `/lib/math`, which declares `public fun twice(n: Int): Int = n * 2`, and declares `fun helper(): Int = 1` and `fun main() { println(twice(helper())) }`
@@ -554,6 +554,24 @@ The backend MUST compile each file's and each instance's code unit into an artif
 - **WHEN** `prism dump-clif app/main.prism` runs before and after `prism run app/main.prism` fills the cache
 - **THEN** it prints the same text both times
 
+### Requirement: External Functions Are Called by Symbol
+A call of an `external fun` MUST be a direct call of the imported symbol named like the function, with the platform's C calling convention and the machine signature the same Prism signature has: scalar parameters by value, every other parameter as an address, a result held in memory through an address passed first, and no result for `Unit` and `Nothing`. An external MUST have no function-table slot and no code of its own. A hot reload never changes what it calls.
+
+#### Scenario: A direct call of an external
+- **WHEN** the unit of `/prism/system` is compiled for a program that calls `exitProcess(1)`
+- **THEN** `exitProcess`'s code calls `prism_rt_exit` directly, passing `status` as a 64-bit integer, and the program's function table has no slot named `prism/system::prism_rt_exit`
+
+### Requirement: Externals Match the Runtime
+The backend MUST find each external it calls among the runtime's entry points by symbol, and MUST compare the machine signature it derives with the one that entry records: the parameter types, the result type, and whether the function never returns. A missing symbol or any difference MUST be reported as `E6005` (`ExternalMismatch`) at the external's declaration, naming the symbol and both signatures. `prism check` never reports it.
+
+#### Scenario: An external with the wrong signature
+- **WHEN** a library test module declares `external fun prism_rt_print_int(value: Double)` and a program calls it
+- **THEN** compiling the program reports `E6005`, saying that the runtime's `prism_rt_print_int` takes `i64` where the declaration passes `f64`
+
+#### Scenario: An unknown external symbol
+- **WHEN** a library test module declares `external fun prism_rt_missing(): Int` and a program calls it
+- **THEN** compiling the program reports `E6005`, saying that the runtime has no entry point `prism_rt_missing`
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -667,3 +685,7 @@ Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and
 - **Type fingerprints are structural** (D6). A 256-bit BLAKE3 hash over scalars by tag, references, nullables, boxes, lists and function types by their contents, and structs and enums by qualified name, marker and fields or variants with type arguments substituted, a cycle through a box or list hashed as a back-reference. A fingerprint depends on the type alone: definitions are memoized apart from fingerprints, and a definition's memo is reused only where none of the definitions on its cycles is being hashed. Hashing the computed layout was rejected, since `Int` and `Double` fields share one.
 - **Top-level storage belongs to the program** (D8). A value table beside the function table holds each value's storage and state byte, keyed by its symbol, type fingerprint and initializer hash; units import `#storage` and `#state` as data. An unchanged key keeps an initialized value across a reload, a changed one gets zeroed storage initialized at its next read, and replaced storage stays valid for old code and borrows. Rejected: keeping storage in units (two paths for one data object).
 - **Old modules stay mapped** (D10, D11). Frames, descriptors, drop entries, slots and string literals of old code refer into old modules, and proving that none does needs a scan of stacks and heaps, against the zero-cost memory safety invariant; modules are freed with their program. A removed declaration's slot keeps its last code.
+
+Decisions from `standard-library` (2026-10-18):
+
+- **Externals are direct calls checked against the runtime's table** (D5, R9 of `standard-library`). An `external fun` is declared as an import of its symbol and called directly with the target's C calling convention: the runtime is never reloaded, so it needs no slot. Its machine signature is the one `lower.rs::signature` gives the same Prism signature, so one convention serves Prism and runtime calls. MIR records the externals a file declares (`MirFile::externals`), and the support check compares each with the runtime entry `prism_codegen::externals::entry_point` finds, so an external is checked at its declaration (`E6005`) even when nothing calls it, and `prism run` runs every unit's support check before compiling any, so a rejected program writes no code to the cache. Checking at `prism check` was rejected: it needs layouts, which only the backend computes.

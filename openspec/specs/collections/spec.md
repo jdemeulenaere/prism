@@ -47,13 +47,6 @@ A call `listOf(e1, ..., en)` with zero or more positional arguments MUST be type
 - **WHEN** `fun f() { val a = listOf(1, "a") }` and `fun g() { val b = listOf() }` are checked
 - **THEN** the type checker emits `E4004` at `"a"` and `E4013` for `b`, naming the type parameter `T` and suggesting `listOf<...>()` or a type annotation
 
-### Requirement: listOf Is Found Last
-`listOf` MUST be called only (`E4001` when named without a call), and a local, parameter, top-level declaration or import named `listOf` MUST shadow it, as declarations shadow the output built-ins.
-
-#### Scenario: A declaration shadows listOf
-- **WHEN** `fun listOf(n: Int): Int = n` is declared and `fun f(): Int = listOf(3)` is checked
-- **THEN** the file typechecks successfully, and the call is a call of `main::listOf`
-
 ### Requirement: List Markers
 `List<T>` MUST never be `Copy`, and MUST be `Clone` exactly when `T` is `Clone`, as a generic struct declared `: Clone` with one field of type `T` is. The built-in `clone()` of a `List<T>` MUST give a list of clones of its elements, and calling it when `T` is not `Clone` MUST be rejected with `E4018`. A `: Copy` struct or enum with a list member MUST be rejected with `E4016`, and a `: Clone` one whose list's element type is not `Clone` likewise.
 
@@ -66,7 +59,7 @@ A call `listOf(e1, ..., en)` with zero or more positional arguments MUST be type
 - **THEN** the type checker emits `E4016` for `A` and accepts `B`
 
 ### Requirement: List Members Are Typed as Extensions
-A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have built-in member functions, each typed as an extension on `List<T>` with a receiver mode and a signature, so that receivers, arguments (`E4004`) and safe calls (`xs?.add(1)`) are checked as for an extension. The reading members are `fun isEmpty(): Bool`, `fun isNotEmpty(): Bool`, `fun contains(element: &T): Bool` and `fun indexOf(element: &T): Int`.
+The members of a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST be the public intrinsic extensions on `List<T>` of `/prism/collections` (`public intrinsic val <T> List<T>.size: Int`), each typed by its declared receiver mode and signature, so receivers, arguments (`E4004`) and safe calls (`xs?.add(1)`) are checked as for an extension. The reading members are `isEmpty(): Bool`, `isNotEmpty(): Bool`, `contains(element: &T): Bool` and `indexOf(element: &T): Int`.
 
 #### Scenario: Wrong element types rejected
 - **WHEN** `fun f() { var xs = listOf(1); xs.add("a"); xs.insert("b", 1) }` is checked
@@ -103,11 +96,11 @@ A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have the bu
 - **THEN** the type checker emits `E4004`, saying that `Int` cannot be called
 
 ### Requirement: List Members Take Precedence Over Extensions
-A call `xs.name(...)` or read `xs.name` on a `List<T>` MUST use the built-in member of that name when there is one, after the built-in `clone()` and before any extension. An extension on `List` named like a built-in member (`size`, `indices`, `isEmpty`, `isNotEmpty`, `contains`, `indexOf`, `add`, `insert`, `removeAt`, `removeLast`, `reverse`, `clear`, or `clone` when its element type is `Clone`) could never be called, so it MUST be rejected with `E4010`.
+A call `xs.name(...)` or read `xs.name` on a `List<T>` MUST use its member of that name (`standard-library`, "Intrinsic Extensions Are Members"), after the built-in `clone()` and before any extension. A workspace extension on `List` named like a member (`size`, `indices`, `isEmpty`, `isNotEmpty`, `contains`, `indexOf`, `add`, `insert`, `removeAt`, `removeLast`, `reverse`, `clear`, or `clone` for a `Clone` element type) could never be called and MUST be rejected with `E4010`.
 
 #### Scenario: Extensions named like built-in members rejected
 - **WHEN** a file declares `fun <T> List<T>.add(element: T) {}` and `fun List<Int>.size(): Int = 0`
-- **THEN** the type checker emits `E4010` for each, saying that the built-in member always takes precedence
+- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/collections` always takes precedence
 
 ### Requirement: Extensions on Lists
 Extensions with other names MUST be declarable on `List<T>`, generic or for one element type, keyed by the `List` type constructor like the extensions of a generic struct, and called through any `&`, `&mut` and `Heap<T>` layers. In their bodies, a bare name that is no local or parameter MUST resolve to the built-in member of that name on `this`, read (`size`) or called (`add(x)`), as a receiver's fields and extensions do.
@@ -249,21 +242,78 @@ A value given to `listOf`, `add` or `insert`, or assigned to an element, MUST be
 - **WHEN** `fun f(xs: &mut List<() -> Unit>, r: &Int) { xs.add { println(r) } }` is checked
 - **THEN** the borrow checker emits `E5007`, because the closure holds the borrow `r`
 
+### Requirement: Higher-Order Helpers
+`/prism/collections` MUST declare public extensions on `List<T>` written in Prism over the members, found as prelude extensions (`standard-library`, "Prelude Extensions Are Found After Imported Ones"). Their function arguments MUST NOT be composable contexts and MUST NOT escape. Each MUST borrow its list, except `filter`, which consumes it.
+
+#### Scenario: Helpers over a list of structs
+- **WHEN** `struct Todo { val title: String, var done: Bool }` is declared and `fun f(todos: &List<Todo>): String = todos.joinToString { t -> t.title.clone() }` and `fun g(todos: &List<Todo>): Int = todos.count { t -> t.done }` are checked
+- **THEN** the file typechecks, and each helper borrows the list
+
+### Requirement: Visiting Helpers
+`forEach` and `forEachIndexed` MUST call their action on each element in order, with its index for `forEachIndexed`:
+
+| Helper | Signature |
+|---|---|
+| `forEach` | `fun <T> List<T>.forEach(action: (&T) -> Unit)` |
+| `forEachIndexed` | `fun <T> List<T>.forEachIndexed(action: (Int, &T) -> Unit)` |
+
+#### Scenario: Visiting with indices
+- **WHEN** `fun main() { val xs = listOf(3, 1, 4, 1, 5); xs.forEachIndexed { i, x -> print(i * x) }; println() }` runs
+- **THEN** it prints `018320` and a newline
+
+### Requirement: Testing Helpers
+`any`, `all` and `none` (`fun <T> List<T>.any(predicate: (&T) -> Bool): Bool`) MUST say whether some, every or no element satisfies `predicate`, calling it in order and stopping at the first element that decides. `count` MUST give the number of satisfying elements, and `indexOfFirst` the index of the first one, or `-1`; both take a `predicate: (&T) -> Bool` and return `Int`.
+
+#### Scenario: any stops early
+- **WHEN** `fun main() { val xs = listOf(1, 5, 9); println(xs.any { x -> print(x); x > 4 }) }` runs
+- **THEN** it prints `15true`
+
+#### Scenario: Counting and finding
+- **WHEN** `fun main() { val xs = listOf(3, 1, 4, 1, 5); println(xs.count { x -> x == 1 }); println(xs.indexOfFirst { x -> x == 1 }); println(xs.all { x -> x > 0 }); println(xs.none { x -> x > 5 }) }` runs
+- **THEN** it prints `2`, `1`, `true` and `true`, each on its own line
+
+### Requirement: Mapping and Folding Helpers
+These helpers MUST visit the elements in order:
+
+| Helper | Signature |
+|---|---|
+| `map` | `fun <T, R> List<T>.map(transform: (&T) -> R): List<R>` |
+| `fold` | `fun <T, R> List<T>.fold(initial: R, operation: (R, &T) -> R): R` |
+| `sumOf` | `fun <T> List<T>.sumOf(selector: (&T) -> Int): Int` |
+| `joinToString` | `fun <T> List<T>.joinToString(separator: &String = ", ", transform: (&T) -> String): String` |
+
+`sumOf` overflowing an `Int` MUST be a runtime error.
+
+#### Scenario: Running the mapping helpers
+- **WHEN** `fun main() { val xs = listOf(3, 1, 4, 1, 5); println(xs.map { x -> x * 10 }.joinToString(separator = "-") { x -> x.toString() }); println(xs.fold(0) { a, x -> a * 10 + x }); println(xs.sumOf { x -> x }) }` runs with `--check-allocations`
+- **THEN** it prints `30-10-40-10-50`, `31415` and `14`, each on its own line, and frees every allocation
+
+### Requirement: Filtering Consumes the List
+`consuming fun <T> List<T>.filter(predicate: (&T) -> Bool): List<T>` MUST give the elements that satisfy `predicate`, in order, moved out of the consumed list without being cloned, and MUST drop the others.
+
+#### Scenario: filter consumes its list
+- **WHEN** `fun f(): List<String> { val names = listOf("a", "bb", "c"); val short = names.filter { n -> n.length == 1 }; println(names.size); return short }` is checked
+- **THEN** the borrow checker emits `E5001` at `names.size`, since `filter` consumed `names`
+
+#### Scenario: Filtering strings frees the rest
+- **WHEN** `fun main() { val names = listOf("a" + "", "bb" + "", "c" + ""); val short = names.filter { n -> n.length == 1 }; println(short.joinToString { n -> n.clone() }) }` runs with `--check-allocations`
+- **THEN** it prints `a, c`, and every string, kept or dropped, is freed exactly once
+
 ## Design Rationale
 Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **A built-in type now, shaped for the bundled library** (D1). A list needs raw, uninitialized, growable memory and element moves by address, which Prism cannot express without an unsafe layer, so its storage operations are lowered by the compiler wherever its declaration lives; and `state-handles`, the todo app and the compose runtime need it before `standard-library`. Its members are extension records with receiver modes and generic signatures, the data `intrinsic` declarations in a bundled file would produce, so `standard-library` can move them into source unchanged. Rejected: waiting for `standard-library`; a library type over an unsafe layer; a fixed-capacity array first.
+- **A built-in type now, shaped for the bundled library** (D1). A list needs raw, uninitialized, growable memory and element moves by address, which Prism cannot express without an unsafe layer, so its storage operations are lowered by the compiler wherever its declaration lives; and `state-handles`, the todo app and the compose runtime need it before `standard-library`. Its members are extension records with receiver modes and generic signatures, the data `intrinsic` declarations in a bundled file would produce, and `standard-library` moved them into `/prism/collections` as `intrinsic` declarations unchanged. Rejected: waiting for `standard-library`; a library type over an unsafe layer; a fixed-capacity array first.
 - **`Type::List`, a structural built-in with a reserved name** (D2). Like `Heap<T>`, so every exhaustive match over types must decide what a list is, where a nominal built-in struct (as `Range` is) would enter every struct path as a fieldless struct with unforced special cases. `List` is reserved (`E4010` for a declaration or type parameter, `E4001` as a value, keeping `List(size) { init }` addable); a shadowable name would let `List<Int>` mean different things in different files. Extensions on lists share `ReceiverKey::List`. A list is an indirection for `E4023`, but `E4027` looks through it as through `Heap`. Rejected: a nominal struct, a shadowable name, `Vec`/`ArrayList`.
 - **One list type; mutability comes from the place** (D3). With single ownership and exclusive `&mut`, `&List<T>` already is the read-only view, so Kotlin's `List`/`MutableList` split, which exists because its lists are shared references, would double the API for nothing. The cost is `var xs = listOf<Int>()` where Kotlin writes `val xs = mutableListOf<Int>()`; `E4003` on a `val` list says how to change it.
-- **`listOf` is the one variadic built-in** (D4), typed at each call as a generic function of exactly `n` parameters of `T`, so explicit arguments, expected types, joins, `E4004` and `E4013` come from generic call checking unchanged, linear in `n`. It is found last, like `print`, so a declaration shadows it, and becomes an ordinary bundled function once `vararg` exists. A trailing lambda is an ordinary argument, bound like any call's to the last parameter, so it is the last element (`listOf { 1 }` holds one function value, D22): rejecting it would special-case one built-in. Rejected: `mutableListOf`, constructors, `emptyList()`, adding `vararg` here.
+- **`listOf` is the one variadic built-in** (D4), typed at each call as a generic function of exactly `n` parameters of `T`, so explicit arguments, expected types, joins, `E4004` and `E4013` come from generic call checking unchanged, linear in `n`. It is a rule-typed intrinsic of the prelude module `/prism/collections` (`standard-library`), so a declaration shadows it, and becomes an ordinary library function once `vararg` exists. A trailing lambda is an ordinary argument, bound like any call's to the last parameter, so it is the last element (`listOf { 1 }` holds one function value, D22): rejecting it would special-case one built-in. Rejected: `mutableListOf`, constructors, `emptyList()`, adding `vararg` here.
 - **Kotlin's member names, with Prism's ownership** (D5). `insert(index, element)` replaces Kotlin's `add(index, element)`, since Prism has no overloading; `contains`/`indexOf` borrow their argument; `add` returns `Unit`; `removeLast` and `reverse` are the building blocks of an O(n) consuming `filter` in Prism. There is no `get`/`set`: indexing is the way. Deferred: `remove(element)` (ambiguous beside `removeAt` on an `Int` list), `first()`, `last()`, `getOrNull`.
-- **Members are built-in extension records that win over extensions** (D6), consulted after fields, `clone()` and `toString()` and before user extensions, then run through the ordinary extension path (receiver modes, layers, safe calls, generic inference, receivers borrowed after arguments). A same-named extension on `List` could never be called, so it is `E4010`. In an extension on a list, a bare `add(x)` is `this.add(x)`, as a receiver's extensions are (found at review). Rejected: a special case per member; members as imported extensions a file could shadow (for `standard-library` to decide).
+- **Members are built-in extension records that win over extensions** (D6), consulted after fields, `clone()` and `toString()` and before user extensions, then run through the ordinary extension path (receiver modes, layers, safe calls, generic inference, receivers borrowed after arguments). A same-named extension on `List` could never be called, so it is `E4010`. In an extension on a list, a bare `add(x)` is `this.add(x)`, as a receiver's extensions are (found at review). Rejected: a special case per member; members as imported extensions a file could shadow. Since `standard-library` the records come from the `intrinsic` declarations of `/prism/collections`, and `E4010` names that module.
 - **Elements are places** (D7): `xs[i]` is the index place the typed tree reserved, so copy-out, `E4017` (with `clone()` and `removeAt` help), in-place borrows, assignments dropping the old element, compound assignments and writes through field and receiver paths need no new rule. Rejected: Kotlin's `get`/`set` operator calls, under which `xs[i].done = true` would write a temporary.
 - **Bounds are checked at every access** (D8), as an unsigned compare, after the access's operands are evaluated and before the list changes; a failure is a located runtime error (status 101), as string indexing is. Rejected: unchecked indexing (against the zero-cost memory safety invariant), a location-free error.
 - **`for (x in list)` borrows the list and binds `&T`** (D9), shared unless the iterable's type is `&mut`, so the variable's type never depends on `T` and nothing is copied; operators, conditions and value positions read through references, so `for (n in numbers) total += n` reads as in Kotlin, and iterator invalidation is the existing `E5003`. Rejected: copying `Copy` elements, consuming iteration by default (Rust's `for x in v`), iterating a snapshot (needs shared ownership).
 - **No iteration protocol yet** (D10). `Range` and `List` are the two built-in iterables, lowered through one loop shape. Kotlin's `iterator()` protocol needs an iterator holding a borrow (struct fields of reference type, i.e. lifetimes) and a lending `next()`; internal iteration cannot carry `break`, `continue` or `return`; a cursor convention would be replaced once traits define the protocol properly.
 - **Element borrows use the existing rules** (D11). An index projection is owned by its list, as a box's contents are, and two indices of one list always overlap: the borrow checker never compares indices, so it does not depend on constant folding. Swapping or borrowing two elements waits for a `swap(i, j)` member.
 - **Equality where the element type has it** (D12): `==`, `contains` and `indexOf` follow the rule for `==` on a type parameter (`E4002` when the element type mentions one), so no bound is invented before traits.
-- **Higher-order helpers belong to the bundled library** (D17). `forEach`, `map`, `filter`, `any`, `joinToString` and their relatives are a few lines of Prism over these members, so they are generic code in `standard-library` rather than MIR expansions to delete later; `filter` consumes its list instead of cloning what it keeps. A closure passed to `forEach` is not a composable context, so composables are emitted from `for` loops.
+- **Higher-order helpers belong to the bundled library** (D17). `forEach`, `map`, `filter`, `any`, `joinToString` and their relatives are a few lines of Prism over these members, so they are generic Prism code in `/prism/collections` (`standard-library`) rather than MIR expansions; `filter` consumes its list instead of cloning what it keeps. A closure passed to `forEach` is not a composable context, so composables are emitted from `for` loops.
 - **A `collections` capability, plus stage deltas** (D18). The language rules live here; runtime meaning in `execution`, representation in `code-generation`, tree and MIR shapes in `typed-tree` and `mir`, and the diagnostics catalog rows were widened directly.
 - **Compile-time cost** (audited 2026-10-19). `listOf` is one generic call, linear in its arguments; members are one table lookup; elements, loops and borrows reuse places, the loop lowering and the conflict test, and add no analysis. Code is per list type and unit, not per site.

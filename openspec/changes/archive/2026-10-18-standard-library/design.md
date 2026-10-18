@@ -303,3 +303,12 @@ Fixtures pinning those codes are updated with the scenarios. `--explain-cache` a
 ## Open Questions
 
 None blocking. The follow-ups in the proposal's "Not in scope" go to `ROADMAP.md` at archive.
+
+## Review (2026-10-18)
+
+Probed with scratch programs over every library module, the reserved package, prelude shadowing, the library-only forms, printing, the helpers across files, the cache and watch sessions. Fixed in "Fix library diagnostics and the watch exit in standard-library":
+
+- A syntax error in a library module showed no source line: `ResolveError::Parse` carried only the path, which the renderer read from disk, where a module path names nothing. The error now carries the parsed text, which also makes a watch session show the overlay it parsed.
+- `exitProcess` under `--watch` had no scenario; "Exiting under a watch session" and its watch fixture pin it.
+
+Two scenario texts said `public fun <T> List<T>.forEach(...) {}` and `add(element: T)` where the code requires and renders `: Unit`; they were corrected before the sync. To pass strict validation, the long requirement texts the deltas left were tightened at the sync, and type-system's "Output Built-In Arguments" was split, with "Printed Arguments Are Read in Place" holding how an argument is passed. Left as follow-ups in `ROADMAP.md`: the overflow inside `sumOf` is located at the assignment rather than at its `+` (MIR gives an operator assigned straight to a local the target's span), and a closure returning a borrow to an inferred by-value type parameter (`listOf(1).map { it }`) is `E4004` rather than copied out.

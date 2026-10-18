@@ -37,7 +37,7 @@ A method MUST be declared as an extension function `fun T.name(...)` on a struct
 - **THEN** the type checker emits `E4006`, with help suggesting the call `u.greet()`
 
 ### Requirement: Extension Calls Resolve Through the File and Its Imports
-A call `value.name(...)` MUST resolve to an extension named `name` whose receiver type is the value's type after `&`, `&mut` and `Heap<T>` layers are looked through, declared in the file or exported by a direct import. A file's own matching extension MUST shadow imported ones. Several imported matches MUST be rejected at use with `E4012` naming their modules, and no match with `E4006`. Calling an imported extension MUST NOT require importing its receiver type's module.
+A call `value.name(...)` MUST resolve to an extension `name` on the value's type after `&`, `&mut` and `Heap<T>` layers, declared in the file, exported by a direct import or, in a workspace file, by a prelude module (`standard-library`). The file's own match MUST shadow imported ones, which shadow a prelude one. Several imported matches MUST be `E4012` at use, naming their modules, and none `E4006`. Calling an imported extension MUST NOT need an import of its receiver type's module.
 
 #### Scenario: Extension declared in another package
 - **WHEN** `models` exports `public struct User { val name: String }`, package `ui` imports `/models` and declares `public fun User.shout(): String`, and `app` imports `/models` and `/ui` and calls `u.shout()` for `u: User`
@@ -67,8 +67,12 @@ A call `value.name(...)` MUST resolve to an extension named `name` whose receive
 - **WHEN** `struct User { val name: String }` is declared and `fun f(u: User) { u.fly() }` is checked
 - **THEN** the type checker emits `E4006` naming `fly` and `User`
 
+#### Scenario: Prelude extensions need no import
+- **WHEN** a file without imports declares `fun f(xs: &List<Int>): Bool = xs.any { x -> x > 2 }`
+- **THEN** the file typechecks, the call resolving to the extension `any` of `/prism/collections`
+
 ### Requirement: Members Take Precedence Over Extensions
-A call `value.name(...)` MUST invoke, whatever extensions are visible, a field `name` of the receiver's struct, else the built-in `clone()` on a `Clone` receiver, `unbox()` on a receiver that is a `Heap<T>` after its references, or `toString()` on an `Int`, `Double`, `Bool` or `Char`; a `String`'s built-in `length` counts as a field. An extension MUST be considered only when no such member exists.
+A call `value.name(...)` MUST invoke a field `name` of the receiver's struct, else the built-in `clone()` of a `Clone` receiver or `unbox()` of a `Heap<T>` behind its references, else an intrinsic extension `name` on the receiver's type (`standard-library`, "Intrinsic Extensions Are Members"), such as a scalar's `toString()` or a `List<T>` member, whatever extensions are visible. An intrinsic property (`length`, `size`, `indices`) counts as a field. Only then MUST an extension be considered.
 
 #### Scenario: A field wins over an extension
 - **WHEN** a file declares `struct Button { val onClick: () -> String }` and `fun Button.onClick(): Int = 1`, and `fun f(b: Button) { val s: String = b.onClick() }`
@@ -76,7 +80,7 @@ A call `value.name(...)` MUST invoke, whatever extensions are visible, a field `
 
 #### Scenario: A built-in toString wins over an extension
 - **WHEN** a file declares `fun Int.toString(): String = "x"` and `fun f(n: Int): String = n.toString()`
-- **THEN** the type checker emits `E4010` for the extension and nothing for `f`, whose call is the built-in `toString()`
+- **THEN** the type checker emits `E4010` for the extension and nothing for `f`, whose call is the intrinsic `toString()` of `/prism/core`
 
 #### Scenario: The built-in unbox wins over an extension on the contents
 - **WHEN** a file declares `struct Gift { val n: Int }`, `fun Gift.unbox(): Int = n`, `fun f(h: Heap<Gift>): Gift = h.unbox()` and `fun g(h: Heap<Gift>): Int { val r: &Gift = &h; return r.unbox() }`
@@ -162,7 +166,7 @@ The receiver type of an extension MUST follow the rules of type annotations (`E4
 Decisions from `extension-methods` (the core agreed with the user in the borrow-checker roadmap exploration, 2026-10-17; the rest decided while proposing the change and logged in `docs/decisions-for-review.md`):
 
 - **Extensions are the only methods, declarable in any file** (user). One mechanism instead of Kotlin's member-versus-extension precedence; built-in and user types gain methods the same way; and a struct's ABI stays its layout and markers, so adding a method in another file never changes the struct's ABI hash. Dispatch is static, from the receiver's static type. Rejected: member functions in struct bodies, which put methods into the struct's ABI, and Go's rule that methods live in the type's package, which mainly protects trait coherence and can be added for conformances when traits exist. Costs: no encapsulation boundary until field visibility exists, and trait conformances will need their own block.
-- **Members first, then the file's own extensions, then imports** (user for shadowing and `E4012`). A field wins over an extension, as a field named `clone` does over the built-in, and the built-in `clone()` of a `Clone` type wins over an extension (members before extensions, as in Kotlin). Extensions live in their own table keyed by receiver type and name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist, extensions on different receivers never collide, and ambiguity is per receiver type and name.
+- **Members first, then the file's own extensions, then imports** (user for shadowing and `E4012`). A field wins over an extension, as a field named `clone` does over the built-in, and the built-in `clone()` of a `Clone` type wins over an extension (members before extensions, as in Kotlin). Extensions live in their own table keyed by receiver type and name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist, extensions on different receivers never collide, and ambiguity is per receiver type and name. Since `standard-library`, a workspace file's lookup ends with the prelude's extensions, after its own and its imports', so either shadows a library helper without `E4012`.
 - **Implicit `this`: locals, then receiver fields, then receiver extensions, then the module** (user for fields; extensions autonomous). A bare name is rewritten to the explicit `this.name` before it is checked, so reads, writes, borrows, moves, method calls and their diagnostics all go through the ordinary member rules. Calling a sibling extension without `this.` follows Kotlin and Swift. Rejected: fields only, and module declarations before receiver members, which would make a field unreachable by its bare name whenever a top-level declaration shares it.
 - **Uncallable extensions are rejected with `E4010`.** An extension named like a field of its receiver, or named `clone` on a `Clone` type, could never be called. Rejecting it at the declaration was preferred to accepting it silently (Kotlin warns, and Prism has no warnings channel): a struct that gains a field would otherwise silently redirect every call to the field. Reusing `E4010` follows Swift, which reports such a clash as an invalid redeclaration.
 - **`?.` calls give `R?`, and `?.` chains of fields over a place are optional places for receivers.** `t?.lead?.greet()` borrows `lead` where it lives rather than moving it into a temporary, which would reject the most common Kotlin method-call idiom. This is safe for receivers because the call borrows the payload `&User`, never a `User?`. Nullable receiver types (`fun String?.orEmpty()`) were deferred, since they need a rule for which of `T` and `T?` a call picks.
@@ -173,4 +177,4 @@ Decisions from `extension-methods` (the core agreed with the user in the borrow-
 
 Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **Built-in members win over extensions** (D6). `length` counts as a field of `String` and `toString()` is a member of `Int`, `Double`, `Bool` and `Char`, so, like `clone()` on a `Clone` type, they win over extensions, and an extension named `length` on `String` or `toString` on those four types could never be called and is `E4010`. On every other type `toString` is an ordinary extension name.
+- **Built-in members win over extensions** (D6). `length` counts as a field of `String` and `toString()` is a member of `Int`, `Double`, `Bool` and `Char`, so, like `clone()` on a `Clone` type, they win over extensions, and an extension named `length` on `String` or `toString` on those four types could never be called and is `E4010`. On every other type `toString` is an ordinary extension name. Since `standard-library` these members, and the list members, are the `intrinsic` extensions of `/prism/core` and `/prism/collections`, read from their declarations rather than a hand-written list.

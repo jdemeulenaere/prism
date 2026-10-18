@@ -7,7 +7,7 @@ Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from
 
 #### Scenario: The ABI of a library module
 - **WHEN** the ABI of `/prism/collections` is extracted
-- **THEN** it holds `public intrinsic mut fun <T> List<T>.add(element: T)`, `public intrinsic val <T> List<T>.size: Int` and the ordinary `public fun <T, R> List<T>.map(transform: (&T) -> R): List<R>`, and changing an entry from intrinsic to ordinary changes the module's ABI hash
+- **THEN** it holds `public intrinsic mut fun <T> List<T>.add(element: T): Unit`, `public intrinsic val <T> List<T>.size: Int` and the ordinary `public fun <T, R> List<T>.map(transform: (&T) -> R): List<R>`, and changing an entry from intrinsic to ordinary changes the module's ABI hash
 
 ### Requirement: Prelude Modules Are Inputs of Every Workspace File
 Phase 2 of a workspace file MUST see the ABIs of the prelude modules as well as those of its direct imports, after them, and nothing else of the library. Instance planning MUST treat a call of a prelude generic as a call of a direct import's generic. Phase 2 of a library file MUST see only the ABIs of its direct imports.

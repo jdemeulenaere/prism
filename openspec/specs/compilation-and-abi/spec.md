@@ -369,6 +369,20 @@ Each instance MUST be keyed by its symbol, its generic's Monomorphization Hash a
 - **WHEN** `lib/text.prism` exports `public fun shout(s: &String): String`, `app/main.prism` imports `/lib/text` and prints `shout("a")`, the program has been run, and the body of `shout` changes
 - **THEN** the next `prism run --explain-cache app/main.prism` prints `  checked lib/text.prism` and `  reused app/main.prism`, and its output follows the new body
 
+### Requirement: Library Declarations in the ABI
+Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from its syntax tree alone. An exported function's entry MUST record whether it is ordinary, intrinsic or external, and an exported intrinsic extension property MUST be an entry with its type parameters, receiver type, name and type. Both MUST be covered by the ABI hash and shown by `prism abi` with their modifiers (`public intrinsic val <T> List<T>.size: Int`).
+
+#### Scenario: The ABI of a library module
+- **WHEN** the ABI of `/prism/collections` is extracted
+- **THEN** it holds `public intrinsic mut fun <T> List<T>.add(element: T): Unit`, `public intrinsic val <T> List<T>.size: Int` and the ordinary `public fun <T, R> List<T>.map(transform: (&T) -> R): List<R>`, and changing an entry from intrinsic to ordinary changes the module's ABI hash
+
+### Requirement: Prelude Modules Are Inputs of Every Workspace File
+Phase 2 of a workspace file MUST see the ABIs of the prelude modules as well as those of its direct imports, after them, and nothing else of the library. Instance planning MUST treat a call of a prelude generic as a call of a direct import's generic. Phase 2 of a library file MUST see only the ABIs of its direct imports.
+
+#### Scenario: Instances of prelude generics
+- **WHEN** `fun main() { println(listOf(1, 2).map { x -> x + 1 }.size) }` is run, in a file without imports
+- **THEN** the program's instances include `prism/collections::List.map<Int, Int>`, compiled into its own unit, and the program prints `2`
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.

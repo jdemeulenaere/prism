@@ -29,7 +29,7 @@ The cache MUST live in the directory named by the `PRISM_CACHE` environment vari
 - **THEN** the second check reuses every file and the second run loads every unit and instance from the cache, because no cache key contains an absolute path
 
 ### Requirement: Cache Keys Cover Exactly the Compilation Inputs
-The key of a file's check entry MUST be a BLAKE3 hash of the cache format version, the compiler's identity, the file's module path, its exact source text, and the ABI hashes of its direct imports in import order. The compiler's identity MUST cover the compiler version and the content of the compiler executable. No other input MUST affect a check key.
+The key of a file's check entry MUST be a BLAKE3 hash of the cache format version, the compiler's identity, the file's module path, its exact source text, and the ABI hashes of its direct imports in import order, then, for a workspace file, those of the prelude modules in prelude order. A library module MUST be keyed by the same inputs. The compiler's identity MUST cover the compiler version and the content of the compiler executable. No other input MUST affect a check key.
 
 #### Scenario: Unchanged workspace reuses every file
 - **WHEN** `prism check` runs twice on an unchanged workspace with the same compiler
@@ -42,6 +42,10 @@ The key of a file's check entry MUST be a BLAKE3 hash of the cache format versio
 #### Scenario: A different compiler re-checks everything
 - **WHEN** a workspace checked by one compiler executable is checked by a different one, of the same version or not
 - **THEN** no entry of the first is reused
+
+#### Scenario: Library entries are shared between workspaces
+- **WHEN** two workspaces that both use the prelude are checked one after the other with the same compiler and cache
+- **THEN** the second check reuses the entries of `prism/core.prism` and `prism/collections.prism` that the first wrote
 
 ### Requirement: The Executable's Hash Is Recorded by Its Metadata
 The compiler MAY read the hash of its executable's content from an entry under the cache's `executables` directory, keyed by the executable's path, size, modification and status-change times and file identity. It MUST write such an entry only for an executable whose metadata did not change while it was hashed and that is at least two seconds old, and MUST NOT count these entries among the entries a check or run writes.
@@ -95,11 +99,11 @@ Each entry MUST be written to a temporary file in its final directory and then r
 - **THEN** every file is checked and compiled again, every instance is instantiated again, and no entry is written
 
 ### Requirement: Explaining Cache Use
-`prism check --explain-cache` MUST print, after a successful check's report, a line `Cache: <directory>` (or `Cache: off`), then for each file in check order `  checked <path>` or `  reused <path>`, with the path relative to the workspace root and `/` separators, then the program's instances as "Instances Explained Once per Program" states.
+`prism check --explain-cache` MUST print, after a successful check's report, a line `Cache: <directory>` (or `Cache: off`), then for each file in check order, library modules first, `  checked <path>` or `  reused <path>`, with the path relative to the workspace root and `/` separators, or for a library module its module path and `.prism` (`prism/core.prism`), then the program's instances as "Instances Explained Once per Program" states.
 
 #### Scenario: Explaining a warm check
 - **WHEN** `app/main.prism` imports `/lib/box`, which exports `public fun <T> keep(x: T): T`, `app/main` calls `keep(1)`, and `prism check --explain-cache app/main.prism` runs, then `prism run app/main.prism`, then `prism check --explain-cache app/main.prism` again with no edit
-- **THEN** the first check prints `  checked lib/box.prism`, `  checked app/main.prism` and `  instantiate lib/box::keep<Int>`, and the second prints `  reused lib/box.prism`, `  reused app/main.prism` and `  reused instance lib/box::keep<Int>`
+- **THEN** the first check prints `  checked prism/core.prism` and `  checked prism/collections.prism` (or `reused`, when another workspace already checked them), `  checked lib/box.prism`, `  checked app/main.prism` and `  instantiate lib/box::keep<Int>`, and the second prints `  reused lib/box.prism`, `  reused app/main.prism` and `  reused instance lib/box::keep<Int>`
 
 ### Requirement: Instances Shown by Their Identity
 `--explain-cache` MUST show an instance as the generic's module, `::`, for an extension the name of its receiver type without type arguments and `.`, the generic's name, and its type arguments in angle brackets. What it shows for an instance requested by a reused file MUST be what checking that file again would show.
@@ -144,6 +148,13 @@ After the file lines, `--explain-cache` MUST list each instance the program need
 - **WHEN** `app/a.prism` and `app/b.prism` both import `/lib/box` and call `keep(1)`, `app/main.prism` imports both, and `prism check --explain-cache app/main.prism` runs
 - **THEN** it prints `  instantiate lib/box::keep<Int>` once, after every file line
 
+### Requirement: Reports List Workspace Files
+The report of `prism check` MUST count and list only workspace files. Library modules MUST appear only in the lines of `--explain-cache`.
+
+#### Scenario: A check report without library lines
+- **WHEN** `prism check main.prism` runs on a file without imports
+- **THEN** the report says `Total units: 1` and lists `main.prism` alone
+
 ## Design Rationale
 
 Decisions from `abi-cache` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -168,3 +179,7 @@ Decisions from `instance-cache` (planned autonomously on 2026-10-17, implemented
 - **Format 2: a text header, a binary body and a checksum** (D11). `prism-cache 2`, `kind`, `key` and `length` lines, then the body, then `checksum <hex>`; the kinds are `check`, `record`, `unit` and `instance`, and a body that does not decode is a miss like a bad checksum. Headers stay readable with `head`. Rejected: text bodies (a text codec for MIR and machine code); a store per kind.
 - **Entries are written as soon as their unit passes** (D14). Every entry is a function of its key, a fact independent of whether another file of the run fails, so a run that fails later leaves only true entries; code entries are written only after `check_file` or `check_instances` accepts the unit, so a cached artifact never hides an `E6001`.
 - **The executable's hash is recorded under its file metadata** (D16, from the review). Reading and hashing the whole executable was most of a warm run of a small program (3.7 of 4.1 ms in a release build). An `executable` entry under `<cache>/executables/` records it, keyed by the executable's path, size, modification time and, on Unix, its status-change time, device and inode, which a rebuild or replacement changes and a user cannot set back; it is written only when the metadata did not change while hashing and the file is at least two seconds old, as Git treats racily clean files. These entries live apart from `v2/`, because whether one is written depends on the file's age, so what a check or run writes among check, record and code entries stays a function of its inputs. Rejected: path, size and modification time alone (`ccache`'s default, which `cp -p` reproduces); a build-time identity (misses dependency changes, or is platform-specific).
+
+Decisions from `standard-library` (2026-10-18):
+
+- **Library modules are keyed like workspace files** (R2, D3 of `standard-library`). A library module's check entry is keyed by its module path, source text, imports' ABI hashes and the compiler identity, so its entries are shared by every workspace checked with one compiler and cache, and an injected test module never collides with the bundled one. A workspace file's key appends the prelude modules' ABI hashes after its explicit imports', since its Phase 2 sees them. The identity already covers the executable that embeds the library, which is redundant and cheap. `--explain-cache` lists library modules first, by module path, while the report counts workspace files only, so `Total units` keeps meaning the user's program.

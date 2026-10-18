@@ -106,7 +106,7 @@ The compiler MUST tokenize source text into a stream of typed tokens with accura
 - **THEN** the lexer emits an `Error` token for it, as for any other unexpected character
 
 #### Scenario: Declaration and argument spans
-- **WHEN** a function has no body (`fun a(): Int` followed by blank lines), a call has a named argument (`n = 1`) or a trailing lambda, or a closure body holds a single `val`
+- **WHEN** an intrinsic function has no body (`intrinsic fun a(): Int` followed by blank lines), a call has a named argument (`n = 1`) or a trailing lambda, or a closure body holds a single `val`
 - **THEN** the function's span ends at its signature, a named argument's span covers `n = 1`, a trailing lambda argument's span covers only the lambda, and a closure body block spans from `->` to `}` so it never shares a span with its statement
 
 #### Scenario: Nested block comments ignored
@@ -290,7 +290,7 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 - **THEN** the declaration parses
 
 ### Requirement: Contextual Keyword Identifier Permissibility
-Modifiers such as `compose`, `consuming` and `escaping` MUST function contextually, permitting their use as regular identifiers in member access and parameter declarations. `consuming` is a modifier only directly before `fun` at the start of a declaration. `escaping` is a modifier only at the start of a parameter's type and directly before `(` or `compose`; elsewhere it is a name, also a type name.
+`compose`, `consuming`, `escaping`, `external` and `intrinsic` MUST be contextual modifiers, usable as identifiers in member access and parameter declarations. `consuming` is one only directly before `fun` at a declaration's start; `external` and `intrinsic` only at a top-level declaration's start, where "Library Declaration Modifiers" places them; `escaping` only at a parameter type's start, before `(` or `compose`. Elsewhere each is a name, `escaping` also a type name.
 
 #### Scenario: Member access on compose identifier
 - **WHEN** code accesses a property or method named compose (`pipeline.compose(step)`)
@@ -307,6 +307,10 @@ Modifiers such as `compose`, `consuming` and `escaping` MUST function contextual
 #### Scenario: escaping as an identifier
 - **WHEN** parsing `fun escaping(escaping: Int): Int = escaping`, `fun f(x: escaping, y: escaping?) {}`, `fun g() { val escaping = 1; h(escaping = escaping) }` and `x.escaping()`
 - **THEN** each `escaping` parses as a function, parameter, variable, argument, member or type name, not as a modifier
+
+#### Scenario: external and intrinsic as identifiers
+- **WHEN** parsing `fun external(intrinsic: Int): Int = intrinsic`, `fun f() { val external = 1; g(intrinsic = external) }` and `x.intrinsic()`
+- **THEN** each `external` and `intrinsic` parses as a function, parameter, variable, argument or member name, not as a modifier
 
 ### Requirement: Braces Are Closures in Expression Position
 A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST declare no parameters, and the syntax tree MUST record whether a closure has a header, so that the empty header `{ -> body }` stays distinct from no header. Every closure body MUST be a block.
@@ -599,7 +603,7 @@ A function declaration MAY name a receiver type before its name, `fun T.name(...
 - **THEN** the parser reports `E2001`, since type names are not qualified
 
 ### Requirement: Receiver Mode Modifiers
-`mut` or `consuming` MAY appear directly before `fun` in a declaration that has a receiver, after any visibility and `compose` modifiers, to declare the receiver mode. On a declaration without a receiver, before a visibility or `compose` modifier, or twice, they MUST be rejected with `E2001`.
+`mut` or `consuming` MAY appear directly before `fun` in a declaration that has a receiver, after any visibility, `external`, `intrinsic` and `compose` modifiers, to declare the receiver mode. On a declaration without a receiver, before a visibility, `external`, `intrinsic` or `compose` modifier, or twice, they MUST be rejected with `E2001`.
 
 #### Scenario: Mutating and consuming extensions
 - **WHEN** parsing `mut fun User.rename(n: String) { name = n }`, `public consuming fun User.toAccount(): Account = Account(this)` and `package compose mut fun Counter.Increment(): Unit { }`
@@ -731,6 +735,39 @@ A parameter of a function declaration, or a parameter in a function type's param
 #### Scenario: A header-less closure has no parameters in the syntax tree
 - **WHEN** parsing `xs.forEach { println(it) }`
 - **THEN** the closure has no header and no parameters, and `it` in its body is an identifier expression
+
+### Requirement: Library Declaration Modifiers
+A top-level `fun` MAY carry `external` or `intrinsic`, and an extension property `intrinsic`. The modifier order MUST be visibility, then `external` or `intrinsic`, then `compose`, then the receiver mode. Such a declaration MUST have no body (`=` or a block), and one with both modifiers, or either twice, MUST be rejected with `E2001`. Which files may use them is the rule of `standard-library`.
+
+#### Scenario: Library declarations parse
+- **WHEN** parsing `private external fun prism_rt_exit(status: Int): Nothing`, `public intrinsic fun <T> print(value: &T)`, `public intrinsic mut fun <T> List<T>.add(element: T)` and `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`
+- **THEN** each parses as a body-less function declaration with its modifier, visibility and receiver mode
+
+#### Scenario: A library declaration with a body rejected
+- **WHEN** parsing `external fun f(): Int = 1` or `intrinsic fun g() { }`
+- **THEN** the parser reports `E2001`, saying that an external or intrinsic declaration has no body
+
+#### Scenario: Library modifiers in the wrong order rejected
+- **WHEN** parsing `compose intrinsic fun A() { }`, `intrinsic public fun b(): Int`, `external intrinsic fun c(): Int` or `mut external fun Int.d()`
+- **THEN** the parser reports `E2001`
+
+### Requirement: Function Bodies Are Required
+A `fun` declaration without `external` or `intrinsic` MUST have a body, an `=` expression or a block. Without one the parser MUST report `E2001`, saying that a function needs a body.
+
+#### Scenario: A function without a body rejected
+- **WHEN** parsing `fun a(): Int` followed by a newline and `fun b() {}`
+- **THEN** the parser reports `E2001` at the end of `a`'s signature
+
+### Requirement: Intrinsic Extension Properties
+`intrinsic val`, optionally after a visibility modifier, MUST declare an extension property: an optional type parameter list, a receiver type, `.`, the property name, `:` and its type (`public intrinsic val <T> List<T>.size: Int`), with no initializer. A `val` declaration with a receiver and without `intrinsic`, and an intrinsic property with an initializer, MUST be rejected with `E2001`.
+
+#### Scenario: Intrinsic properties parse
+- **WHEN** parsing `public intrinsic val String.length: Int` and `public intrinsic val <T> List<T>.indices: Range`
+- **THEN** each parses as an extension property with its receiver type, name and type
+
+#### Scenario: Extension properties outside the library form rejected
+- **WHEN** parsing `val String.twice: Int = 2` or `intrinsic val String.a: Int = 1`
+- **THEN** the parser reports `E2001`
 
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:

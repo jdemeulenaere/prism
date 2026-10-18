@@ -542,31 +542,27 @@ A compound assignment whose target is a binding of reference type MUST be reject
 - **WHEN** `fun f(r: &mut Int) { r += 1 }` and `fun g(a: Int) { var x = 1; var r: &mut Int = &mut x; r += a }` are checked
 - **THEN** the type checker emits `E4003` for `f` and `E4002` for `g`, with help suggesting `*r += 1` and `*r += a`
 
-### Requirement: Output Built-Ins Are Found Last
-A call whose callee is the bare name `print` or `println` MUST call the output built-in of that name only when no local, parameter, top-level declaration or import of that name is in scope; otherwise the name resolves as usual. The built-ins MUST only be called: naming one without a call MUST be rejected with `E4001`.
-
-#### Scenario: A declaration shadows the built-in
-- **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { print(1); println(2) }` is checked
-- **THEN** the file typechecks, `print(1)` calls `main::print` and `println(2)` calls the output built-in
-
-#### Scenario: A built-in is not a value
-- **WHEN** `fun f() { val p = println }` is checked
-- **THEN** the type checker emits `E4001` for `println`
-
 ### Requirement: Output Built-In Arguments
-`print` MUST take exactly one argument and `println` zero or one, given positionally, of type `Int`, `Double`, `Bool`, `Char` or `String`, or a reference or `Heap<T>` of one, at any depth. A `Copy` argument MUST be passed by value, copied out of references and boxes, and a `String` MUST be borrowed implicitly, as an argument of a `&String` parameter is, without being moved. Any other count, a named argument or another type MUST be rejected with `E4004`. A call MUST have type `Unit`.
+`print` and `println` (`/prism/core`) MUST take one positional argument, `println` also none, with a text form by the rule of template parts ("Built-In Text Forms of Template Parts", "Other Template Parts Call toString"). An argument without one (a nullable, `Unit`, a function value, a type parameter, or a struct or enum without a usable `toString()`) MUST be `E4026`, with a template part's help. Another count or a named argument MUST be `E4004`. A call MUST have type `Unit`.
+
+#### Scenario: Printing an unsupported value
+- **WHEN** `struct P { val x: Int }` is declared without a `toString()` and `fun f(n: Int?) { println(P(1)); println(n); println({ 1 }) }` is checked
+- **THEN** the type checker emits `E4026` for each of the three arguments, the first with help suggesting `fun P.toString(): String` and the second with help suggesting `?:`
+
+#### Scenario: Wrong argument count or form
+- **WHEN** `fun f() { print(); println(1, 2); println(value = 1) }` is checked
+- **THEN** the type checker emits `E4004` for each of the three calls
+
+### Requirement: Printed Arguments Are Read in Place
+The argument of `print` or `println` MUST be read in place through its `&`, `&mut` and `Heap<T>` layers, never moved. A `Copy` scalar (`Int`, `Double`, `Bool`, `Char`) MUST be passed by value, copied out, and a `String` borrowed implicitly, as for a `&String` parameter. Any other type MUST be printed through the `toString()` that `x.toString()` resolves, called with a shared borrow of the argument, its result printed and then dropped.
 
 #### Scenario: Printing scalars and strings
 - **WHEN** `fun f(r: &Int, s: String) { print(1); println(2.5); println(true); println('c'); println(r); println(s); println(s); println() }` is checked
 - **THEN** the file typechecks, and `s` is not moved by either call
 
-#### Scenario: Printing an unsupported value
-- **WHEN** `struct P { val x: Int }` is declared and `fun f(n: Int?) { println(P(1)); println(n); println({ 1 }) }` is checked
-- **THEN** the type checker emits `E4004` for each of the three arguments, with help listing the printable types
-
-#### Scenario: Wrong argument count or form
-- **WHEN** `fun f() { print(); println(1, 2); println(value = 1) }` is checked
-- **THEN** the type checker emits `E4004` for each of the three calls
+#### Scenario: Printing a value through its toString
+- **WHEN** `struct P { val x: Int }` and `fun P.toString(): String = "P(" + x.toString() + ")"` are declared, and `fun f(p: P) { println(p); println(p) }` is checked
+- **THEN** the file typechecks, each call borrows `p` for its `toString()` call, and `p` is not moved
 
 #### Scenario: Printing boxed values
 - **WHEN** `fun f(h: Heap<Int>, s: Heap<String>) { println(h); println(s); println(s) }` is checked
@@ -884,7 +880,7 @@ Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refine
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **`print` and `println` are compiler built-ins, found last** (D15). Prism has no overloading, traits or prelude through which a library function could accept several types, so the type checker resolves a bare `print` or `println` callee as the built-in only when no local, top-level declaration or import of that name exists, like the built-in `Range` type; fixtures declaring their own `fun print(n: &Int)` keep their meaning. A `Copy` argument is copied out of references, a `String` borrowed like a `&String` argument, anything else is `E4004` with help listing the printable types, and a built-in named without a call is `E4001`. `String` arguments typecheck now and wait for `runtime-strings-and-drops` in the backend (they run since that change). Rejected: a Prism-written prelude (needs overloading or traits), string templates (need strings).
+- **`print` and `println` are compiler built-ins, found last** (D15). Prism has no overloading, traits or prelude through which a library function could accept several types, so the type checker resolves a bare `print` or `println` callee as the built-in only when no local, top-level declaration or import of that name exists, like the built-in `Range` type; fixtures declaring their own `fun print(n: &Int)` keep their meaning. A `Copy` argument is copied out of references, a `String` borrowed like a `&String` argument, anything else is `E4004` with help listing the printable types, and a built-in named without a call is `E4001`. `String` arguments typecheck now and wait for `runtime-strings-and-drops` in the backend (they run since that change). Rejected: a Prism-written prelude (needs overloading or traits), string templates (need strings). Since `standard-library`, `print` and `println` are rule-typed intrinsics of the prelude module `/prism/core`, shadowed by the prelude's rule, named without a call `E4013`, and accept any argument with a text form (`E4026` otherwise).
 
 Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -893,7 +889,7 @@ Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined
 Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **A string's character is a value, not a place** (D5). A `Char` decoded from UTF-8 has no address, so `s[i]` on a `String` is a call of the built-in `StringCharacter` with a shared receiver borrow and the index, like `clone()`, and `is_place` is false for an index expression. `&s[i]` borrows a temporary (see `references`), and `s[i] = c` is `E4003` with help saying that strings are immutable. Rejected: keeping a place that cannot be borrowed (a special case in every analysis), or copying the character out in the MIR builder (the borrow checker would still see a borrow of `s`).
-- **Built-in `length` and `toString()`** (D6). `s.length` is a built-in member read without parentheses, through `&`, `&mut`, `Heap<T>` and `?.`, counting as a field of `String` for member precedence (`s.length()` is `E4004`); `x.toString()` is a built-in member function of `Int`, `Double`, `Bool` and `Char`, through references and `?.`, giving the text `print(x)` writes, and wins over extensions. On every other type `toString` is an ordinary name, so `fun Point.toString(): String` is how a struct will display in templates. Rejected: `String.toString()` (a clone under another name), a generated `toString()` for every type (no text form committed for aggregates), a library `fun Int.toString()` (no prelude), `length()` or `size`.
+- **Built-in `length` and `toString()`** (D6). `s.length` is a built-in member read without parentheses, through `&`, `&mut`, `Heap<T>` and `?.`, counting as a field of `String` for member precedence (`s.length()` is `E4004`); `x.toString()` is a built-in member function of `Int`, `Double`, `Bool` and `Char`, through references and `?.`, giving the text `print(x)` writes, and wins over extensions. On every other type `toString` is an ordinary name, so `fun Point.toString(): String` is how a struct will display in templates. Rejected: `String.toString()` (a clone under another name), a generated `toString()` for every type (no text form committed for aggregates), a library `fun Int.toString()` (no prelude), `length()` or `size`. Since `standard-library` both are intrinsic declarations of `/prism/core` (`public intrinsic val String.length: Int`, `public intrinsic fun Int.toString(): String`), members by its rule for intrinsic extensions.
 - **The receiver of `s[i]` and `s.length` is borrowed after the other arguments** (D22). Both are calls of built-ins with a receiver borrow, so the index of `s[i]` is evaluated before `s` is borrowed, as for every receiver; the order is observable only through an index that reassigns the string (`s[{ s = "cd"; 0 }]` reads the new `s`, where Kotlin reads the old one). Rejected: a special evaluation order for the built-in members alone.
 - **`s.length = n` is `E4003`** (D22): `length` counts as an immutable field, so assigning it reports "cannot assign to immutable 'val' struct field 'length'". Rejected: `E4006`, a string-specific message.
 
