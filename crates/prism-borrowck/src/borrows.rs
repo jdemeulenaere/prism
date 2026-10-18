@@ -1,6 +1,7 @@
 //! The loans of a body (D2 and D3 of `borrowck-exclusivity`): one per borrow its MIR makes,
 //! written or implied, and one per capture of each closure value it builds, plus the function
-//! inputs that stand for the loans of closures passed in from outside.
+//! inputs that stand for the loans of closures, and the referents of `&mut R` arguments, passed
+//! in from outside.
 //!
 //! The analyses track loans per loan-carrying local ([`places::carries_loans`]): the items a
 //! local may hold are the loans, numbered first, then the function inputs.
@@ -45,7 +46,9 @@ pub struct Loan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Item {
     Loan(LoanId),
-    /// The function input held at entry by the argument or capture local.
+    /// The input held at entry by the argument or capture local: a function input, for a
+    /// local whose type contains a function type, or the caller's referent, for an argument
+    /// through which loans can be written (`&mut R` whose `R` carries loans).
     Input(LocalId),
 }
 
@@ -54,7 +57,9 @@ pub enum Item {
 pub struct BorrowSet {
     pub loans: Arena<LoanId, Loan>,
     /// The argument and capture locals whose type contains a function type, each holding its
-    /// own function input at entry (D3).
+    /// own function input at entry (D3), and the arguments through which loans can be written
+    /// ([`places::writes_loans_through`]), each holding its own input so that a write through
+    /// any copy of it reaches the argument, which the caller sees afterwards.
     pub inputs: Vec<LocalId>,
     /// The locals whose type carries loans, in local order.
     pub carriers: Vec<LocalId>,
@@ -76,9 +81,12 @@ impl BorrowSet {
                 carrier_index[local.index()] = Some(carriers.len());
                 carriers.push(local);
             }
-            if matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
-                && places::contains_function(&declaration.ty)
-            {
+            let function_input =
+                matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
+                    && places::contains_function(&declaration.ty);
+            let referent_input = declaration.kind == LocalKind::Argument
+                && places::writes_loans_through(&declaration.ty);
+            if function_input || referent_input {
                 inputs.push(local);
             }
         }

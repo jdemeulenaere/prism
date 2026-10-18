@@ -1,0 +1,13 @@
+// expect: E5006
+fun print(n: &Int) {}
+fun run(f: () -> Int): Int = f()
+fun f(c: Bool) {
+    var b = 2
+    var r: &Int = &b
+    val rr = &mut r
+    if (c) {
+        val a = 1
+        run { *rr = &a; 1 }
+    }
+    print(r)
+}

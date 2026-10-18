@@ -51,7 +51,7 @@ A borrow MUST be live from where it is created until the last use of every refer
 - **THEN** the borrow checker emits `E5004` at `x` in `x = 2`, whose borrow is later used by `print(r)` in a later iteration of the loop
 
 ### Requirement: References Carry Their Borrows
-A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, reborrowed, or borrowed through for one of its referent's fields MUST keep the borrows it holds live for as long as the new reference is live. A value written through a reference MUST become held by what the reference points at. Re-pointing a `var` reference MUST end the borrows it held, from that point on.
+A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, reborrowed, or borrowed through for one of its referent's fields MUST keep the borrows it holds live for as long as the new reference is live. A value written through a reference MUST become held by what the reference points at. A call MUST be assumed to write the borrows of its other arguments through each `&mut R` argument (or `(&mut R)?` one) whose `R` holds borrows, through each function-typed argument and through a called function value, and a closure through each variable it captures mutably, so what these point at MUST hold those borrows afterwards, however the reference reached them. Re-pointing a `var` reference MUST end the borrows it held, from that point on.
 
 #### Scenario: A copied reference keeps the borrow
 - **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var x = 1; val r = &x; val r2 = r; x = 2; print(r2) }` is checked
@@ -72,6 +72,14 @@ A reference copied into another local, wrapped as a `(&T)?`, borrowed itself, re
 #### Scenario: Writing a borrow through a reference
 - **WHEN** `fun print(n: &Int) {}` is declared and `fun f() { var a = 1; var b = 2; var r: &Int = &b; val rr = &mut r; *rr = &a; a = 3; print(r) }` is checked
 - **THEN** the borrow checker emits `E5004` at `a` in `a = 3`, because `r` now refers to `a`
+
+#### Scenario: Writing a borrow through a closure
+- **WHEN** `fun print(n: &Int) {}`, `fun run(f: () -> Int): Int = f()` and `fun apply(g: (&Int) -> Int, v: &Int): Int = g(v)` are declared, and `fun f(c: Bool) { var b = 2; var r: &Int = &b; val rr = &mut r; if (c) { val a = 1; run { *rr = &a; 1 } }; print(r) }` and `fun g(c: Bool) { var b = 2; var r: &Int = &b; if (c) { val a = 1; apply({ v -> r = v; 1 }, &a) }; print(r) }` are checked
+- **THEN** the borrow checker emits `E5006` for `a` in `f`, because the closure may write a borrow of `a` into `r` through `rr`, and in `g`, because `apply` may pass `&a` to the closure that writes `r`
+
+#### Scenario: Writing a borrow through a mutable reference argument
+- **WHEN** `fun print(n: &Int) {}`, `fun h(s: &mut &Int, v: &Int) {}` and `fun set(s: (&mut &Int)?, v: &Int) {}` are declared, and `fun g(s: &mut &Int) { val n = 1; val t = s; h(t, &n) }` and `fun f(c: Bool) { var b = 2; var r: &Int = &b; if (c) { val a = 1; set(&mut r, &a) }; print(r) }` are checked
+- **THEN** the borrow checker emits `E5006` for `n` in `g`, because `h` may write `&n` into the caller's reference that `s` points at, and for `a` in `f`, because `set` may write `&a` into `r`
 
 #### Scenario: An optional borrow keeps the borrow
 - **WHEN** `struct Profile { var nick: String? }` and `fun show(n: (&String)?) {}` are declared and a body runs `var p = Profile(null); val a: (&String)? = &p.nick; p.nick = null; show(a)`

@@ -7,8 +7,8 @@
 //! or `StorageDead`. Drops are not uses: only closure values among loan carriers are dropped,
 //! and dropping one reads nothing it borrowed. The return place is not used by `Return`, since
 //! what a body returns is the callee's side of elision (`borrowck-elision`); but a closure's
-//! capture locals and the arguments of type `&mut R` whose `R` carries loans are used at every
-//! return, because the caller sees them afterwards.
+//! capture locals and the arguments of type `&mut R` (or `(&mut R)?`) whose `R` carries loans
+//! are used at every return, because the caller sees them afterwards.
 
 use crate::borrows::BorrowSet;
 use crate::dataflow::{Analysis, BitSet, Direction};
@@ -18,7 +18,8 @@ use crate::uses::{statement_effects, terminator_effects, PlaceEffect};
 use prism_mir::{Body, LocalId, LocalKind, Statement, Terminator, TerminatorKind};
 
 /// The locals every `Return` of `body` uses: its loan-carrying capture locals and its
-/// arguments of type `&mut R` whose `R` carries loans, which the caller sees afterwards.
+/// arguments of type `&mut R` (or `(&mut R)?`) whose `R` carries loans, which the caller sees
+/// afterwards.
 pub fn returned_locals(body: &Body, borrows: &BorrowSet) -> Vec<LocalId> {
     body.locals
         .iter()
@@ -26,13 +27,7 @@ pub fn returned_locals(body: &Body, borrows: &BorrowSet) -> Vec<LocalId> {
             borrows.carrier(*local).is_some()
                 && match declaration.kind {
                     LocalKind::Capture => true,
-                    LocalKind::Argument => match &declaration.ty {
-                        prism_typed_tree::Type::Reference {
-                            mutable: true,
-                            inner,
-                        } => places::carries_loans(inner),
-                        _ => false,
-                    },
+                    LocalKind::Argument => places::writes_loans_through(&declaration.ty),
                     _ => false,
                 }
         })

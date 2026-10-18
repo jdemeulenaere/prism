@@ -148,7 +148,7 @@ impl Escapes<'_> {
     fn error(&self, items: &[Item], position: &str, span: Span) -> Option<BorrowError> {
         let escaping = items.iter().copied().find(|item| match item {
             Item::Loan(loan) => matches!(self.borrows.loans[*loan].kind, LoanKind::Capture { .. }),
-            Item::Input(_) => true,
+            Item::Input(local) => places::contains_function(&self.body.locals[*local].ty),
         })?;
         let primary = Label {
             span,

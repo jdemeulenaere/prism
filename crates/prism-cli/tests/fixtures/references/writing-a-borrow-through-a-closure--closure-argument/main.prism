@@ -1,0 +1,12 @@
+// expect: E5006
+fun print(n: &Int) {}
+fun apply(g: (&Int) -> Int, v: &Int): Int = g(v)
+fun g(c: Bool) {
+    var b = 2
+    var r: &Int = &b
+    if (c) {
+        val a = 1
+        apply({ v -> r = v; 1 }, &a)
+    }
+    print(r)
+}

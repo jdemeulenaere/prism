@@ -1,0 +1,12 @@
+// expect: E5006
+fun print(n: &Int) {}
+fun set(s: (&mut &Int)?, v: &Int) {}
+fun f(c: Bool) {
+    var b = 2
+    var r: &Int = &b
+    if (c) {
+        val a = 1
+        set(&mut r, &a)
+    }
+    print(r)
+}

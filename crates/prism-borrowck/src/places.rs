@@ -26,6 +26,19 @@ pub fn contains_function(ty: &Type) -> bool {
     }
 }
 
+/// Whether a value of type `ty` lets whoever holds it write loans into what it points at: a
+/// `&mut R` whose `R` carries loans (`&mut &Int`), or a nullable of one.
+pub fn writes_loans_through(ty: &Type) -> bool {
+    match ty {
+        Type::Reference {
+            mutable: true,
+            inner,
+        } => carries_loans(inner),
+        Type::Nullable(inner) => writes_loans_through(inner),
+        _ => false,
+    }
+}
+
 /// Whether a parameter of type `parameter` is an input borrow (D9): its type contains a
 /// reference outside a function type (`&T`, `&mut T`, `(&T)?`).
 pub fn is_input_borrow(parameter: &Type) -> bool {

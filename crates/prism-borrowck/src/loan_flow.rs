@@ -6,14 +6,17 @@
 //! field through a reference and a borrow of a reference keep the source's loans); a copy, a
 //! move, a wrap or a subtyping conversion passes on the loans of its operand's root local; a
 //! closure value holds its captures' loans and the loans of the captured locals, and a variable
-//! it captures mutably receives every loan the closure holds. A whole-local assignment first
+//! it captures mutably, and what that variable points at, receive the loans of its other
+//! captures. A whole-local assignment first
 //! removes what the local held (re-pointing) and kills every loan of a place through a
 //! dereference of it; a write through a dereference gives the written value's loans to the
 //! reference and to the root locals of the loans it holds. A call's result, when its type
 //! contains a reference, holds the loans of the call's input borrows, of a function-value
 //! callee, but not the shared borrows a default value's generator takes of earlier by-value
-//! arguments; and the locals a call may write through a `&mut` argument or a closure receive
-//! the input borrows' loans. A move of a whole local, and the start and end of its storage,
+//! arguments; and what a call may write through (what a `&mut R` argument, a function-typed
+//! argument or a function-value callee points at) receives the loans of the call's other
+//! operands. An argument through which loans can be written holds its own input at entry, so
+//! that a write through a copy of it reaches it. A move of a whole local, and the start and end of its storage,
 //! empty it. A local never holds a loan of a place rooted at itself, since a reference cannot
 //! point into itself.
 
@@ -111,6 +114,51 @@ impl<'a> LoanFlow<'a> {
         }
     }
 
+    /// What building the closure `closure` from `captures` at `location` may later write
+    /// (D4): calling it may write, into each variable it captures mutably and into what that
+    /// variable points at, the items of its other captures.
+    fn closure_writes(
+        &self,
+        state: &BitSet,
+        location: Location,
+        closure: prism_mir::BodyId,
+        captures: &[Place],
+    ) -> Vec<(LocalId, Vec<usize>)> {
+        let loans = self.borrows.loans_at(location);
+        let items: Vec<Vec<usize>> = captures
+            .iter()
+            .enumerate()
+            .map(|(index, place)| {
+                let mut items = self.held(state, place.local);
+                if let Some(loan) = loans.get(index) {
+                    items.push(loan.index());
+                }
+                items
+            })
+            .collect();
+        let modes = &self.file.bodies[closure].capture_modes;
+        let mut writes = Vec::new();
+        for (index, place) in captures.iter().enumerate() {
+            if modes.get(index) != Some(&prism_mir::CaptureMode::Mutable) {
+                continue;
+            }
+            let mut others: Vec<usize> = items
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .flat_map(|(_, items)| items.iter().copied())
+                .collect();
+            others.sort_unstable();
+            others.dedup();
+            let mut receivers = vec![place.local];
+            receivers.extend(self.referents(&self.held(state, place.local), true));
+            for receiver in receivers {
+                writes.push((receiver, others.clone()));
+            }
+        }
+        writes
+    }
+
     /// The items the value of `operand` carries: those of its place's root local.
     fn operand_items(&self, state: &BitSet, operand: &Operand) -> Vec<usize> {
         match operand.place() {
@@ -177,11 +225,7 @@ impl<'a> LoanFlow<'a> {
             }
             // `*r = v`: what `r` points at now holds `v`'s loans.
             let mut receivers = vec![root];
-            for item in self.held(state, root) {
-                if let Item::Loan(loan) = self.borrows.item(item) {
-                    receivers.push(self.borrows.loans[loan].place.local);
-                }
-            }
+            receivers.extend(self.referents(&self.held(state, root), false));
             for receiver in receivers {
                 self.give(state, receiver, items);
             }
@@ -227,42 +271,70 @@ impl<'a> LoanFlow<'a> {
         items
     }
 
-    /// The loan-carrying locals a call may write: the roots of the mutable loans held by a
-    /// `&mut R` argument whose `R` carries loans, or by a function-value callee.
+    /// The loan-carrying locals that a value holding `items` points at, which a write through
+    /// it may give loans to: the root locals of its loans (only of its mutable ones when
+    /// `mutable_only`), and the arguments whose referent input it holds.
+    fn referents(&self, items: &[usize], mutable_only: bool) -> Vec<LocalId> {
+        let mut referents: Vec<LocalId> = items
+            .iter()
+            .filter_map(|item| match self.borrows.item(*item) {
+                Item::Loan(loan) => {
+                    let loan = &self.borrows.loans[loan];
+                    (loan.mutable || !mutable_only).then_some(loan.place.local)
+                }
+                Item::Input(local) => {
+                    places::writes_loans_through(&self.body.locals[local].ty).then_some(local)
+                }
+            })
+            .filter(|local| self.borrows.carrier(*local).is_some())
+            .collect();
+        referents.sort();
+        referents.dedup();
+        referents
+    }
+
+    /// What a call may write (D4): for each of its operands through which it can write loans
+    /// (a `&mut R` argument whose `R` carries loans, a function-typed argument, which the callee
+    /// may call, and a function-value callee), the locals it points at, each receiving the
+    /// items of the call's other loan-carrying operands. A written value cannot be a borrow of
+    /// the slot it is written to, whose type differs, so an operand's own items never need to
+    /// reach what it points at.
     fn call_writes(
         &self,
         state: &BitSet,
         callee: &Callee,
         arguments: &[Operand],
         parameters: &[Type],
-    ) -> Vec<LocalId> {
-        let mut held = Vec::new();
+    ) -> Vec<(LocalId, Vec<usize>)> {
+        // Each loan-carrying operand's items, and whether the call may write through it.
+        let mut sources: Vec<(Vec<usize>, bool)> = Vec::new();
         for (argument, parameter) in arguments.iter().zip(parameters) {
-            if let Type::Reference {
-                mutable: true,
-                inner,
-            } = parameter
-            {
-                if places::carries_loans(inner) {
-                    held.extend(self.operand_items(state, argument));
-                }
+            if places::carries_loans(parameter) {
+                let writes =
+                    places::writes_loans_through(parameter) || places::contains_function(parameter);
+                sources.push((self.operand_items(state, argument), writes));
             }
         }
         if let Callee::Value(place, _) = callee {
-            held.extend(self.held(state, place.local));
+            sources.push((self.held(state, place.local), true));
         }
-        let mut writes: Vec<LocalId> = held
-            .into_iter()
-            .filter_map(|item| match self.borrows.item(item) {
-                Item::Loan(loan) if self.borrows.loans[loan].mutable => {
-                    Some(self.borrows.loans[loan].place.local)
-                }
-                _ => None,
-            })
-            .filter(|local| self.borrows.carrier(*local).is_some())
-            .collect();
-        writes.sort();
-        writes.dedup();
+        let mut writes = Vec::new();
+        for (index, (items, through)) in sources.iter().enumerate() {
+            if !through {
+                continue;
+            }
+            let mut others: Vec<usize> = sources
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .flat_map(|(_, (items, _))| items.iter().copied())
+                .collect();
+            others.sort_unstable();
+            others.dedup();
+            for referent in self.referents(items, true) {
+                writes.push((referent, others.clone()));
+            }
+        }
         writes
     }
 }
@@ -296,23 +368,19 @@ impl Analysis for LoanFlow<'_> {
         match &statement.kind {
             StatementKind::Assign(destination, rvalue) => {
                 let items = self.rvalue_items(state, rvalue, location);
+                let writes = match rvalue.as_ref() {
+                    Rvalue::Closure {
+                        body: closure,
+                        captures,
+                    } => self.closure_writes(state, location, *closure, captures),
+                    _ => Vec::new(),
+                };
                 for local in self.moved_locals(rvalue_operands(rvalue).into_iter()) {
                     self.clear(state, local);
                 }
                 self.write(state, destination, &items);
-                if let Rvalue::Closure {
-                    body: closure,
-                    captures,
-                } = rvalue.as_ref()
-                {
-                    // Calling the closure may write any loan it holds into a variable it
-                    // captures mutably.
-                    let modes = &self.file.bodies[*closure].capture_modes;
-                    for (index, place) in captures.iter().enumerate() {
-                        if modes.get(index) == Some(&prism_mir::CaptureMode::Mutable) {
-                            self.give(state, place.local, &items);
-                        }
-                    }
+                for (local, items) in writes {
+                    self.give(state, local, &items);
                 }
             }
             StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
@@ -332,8 +400,8 @@ impl Analysis for LoanFlow<'_> {
         } = &terminator.kind
         {
             let items = self.call_items(state, callee, arguments, parameters);
-            for local in self.call_writes(state, callee, arguments, parameters) {
-                self.give(state, local, &items);
+            for (local, written) in self.call_writes(state, callee, arguments, parameters) {
+                self.give(state, local, &written);
             }
             for local in self.moved_locals(arguments.iter()) {
                 self.clear(state, local);
@@ -495,6 +563,36 @@ fun run(f: () -> Int): Int = f()
             ),
             vec!["a", "b"]
         );
+    }
+
+    #[test]
+    fn a_closure_writes_its_other_captures_through_a_captured_reference() {
+        // What `rr` points at receives the loan of `a`, but not the loan of `rr` itself.
+        assert_eq!(
+            held(
+                "fun f() { var a = 1; var b = 2; var r: &Int = &b; val rr = &mut r; run { *rr = &a; 1 }; print(r) }\n",
+                "r",
+                "print(r)"
+            ),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn a_call_writes_its_other_arguments_through_a_mutable_reference() {
+        let source = "\
+fun print(n: &Int) {}
+fun set(s: &mut &Int, v: &Int) {}
+fun f() { var a = 1; var b = 2; var r: &Int = &b; val rr = &mut r; set(rr, &a); print(r) }
+";
+        assert_eq!(held_before(source, "r", "print(r)"), vec!["a", "b"]);
+        // A moved argument still reaches the caller's referent through its input.
+        let source = "\
+fun h(s: &mut &Int, v: &Int) {}
+fun f(s: &mut &Int) { val n = 1; val t = s; h(t, &n); print(n) }
+fun print(n: Int) {}
+";
+        assert_eq!(held_before(source, "s", "print(n)"), vec!["n"]);
     }
 
     #[test]

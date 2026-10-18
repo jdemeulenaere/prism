@@ -1,0 +1,7 @@
+// expect: E5006
+fun h(s: &mut &Int, v: &Int) {}
+fun g(s: &mut &Int) {
+    val n = 1
+    val t = s
+    h(t, &n)
+}
