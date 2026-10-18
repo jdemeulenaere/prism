@@ -79,6 +79,8 @@ pub struct BorrowSet {
     by_location: HashMap<Location, Vec<LoanId>>,
     /// The loans of places rooted at each local, in order.
     by_root: Vec<Vec<LoanId>>,
+    /// The mutable ones among them.
+    mutable_by_root: Vec<Vec<LoanId>>,
 }
 
 impl BorrowSet {
@@ -155,8 +157,12 @@ impl BorrowSet {
             }
         }
         let mut by_root = vec![Vec::new(); body.locals.len()];
+        let mut mutable_by_root = vec![Vec::new(); body.locals.len()];
         for (id, loan) in loans.iter() {
             by_root[loan.place.local.index()].push(id);
+            if loan.mutable {
+                mutable_by_root[loan.place.local.index()].push(id);
+            }
         }
         Self {
             loans,
@@ -166,6 +172,7 @@ impl BorrowSet {
             input_index,
             by_location,
             by_root,
+            mutable_by_root,
         }
     }
 
@@ -201,6 +208,11 @@ impl BorrowSet {
     /// The loans of places rooted at `local`, in order.
     pub fn loans_of(&self, local: LocalId) -> &[LoanId] {
         &self.by_root[local.index()]
+    }
+
+    /// The mutable loans of places rooted at `local`, in order.
+    pub fn mutable_loans_of(&self, local: LocalId) -> &[LoanId] {
+        &self.mutable_by_root[local.index()]
     }
 
     /// The loans the statement at `location` makes, in order.

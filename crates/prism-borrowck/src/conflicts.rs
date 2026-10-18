@@ -332,8 +332,15 @@ pub(crate) fn check_conflicts(
                 in_scope_after_event(&events[index + 1..], local)
                     .unwrap_or_else(|| liveness.analysis.is_live(live_after, local))
             };
-            let Some(loan) = borrows
-                .loans_of(place.local)
+            // A read or a shared borrow conflicts with mutable loans only, so the many shared
+            // loans of a value lent to many parameters are not even looked at.
+            let candidates = match kind {
+                AccessKind::Read | AccessKind::SharedBorrow => {
+                    borrows.mutable_loans_of(place.local)
+                }
+                _ => borrows.loans_of(place.local),
+            };
+            let Some(loan) = candidates
                 .iter()
                 .copied()
                 .filter(|loan| checker.conflicts(place, *kind, *loan))
