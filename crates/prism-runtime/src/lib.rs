@@ -27,6 +27,7 @@ mod functions;
 mod output;
 mod panic;
 mod stack;
+mod string;
 
 pub use allocation::{
     allocation_layout, allocation_statistics, prism_rt_allocate, prism_rt_free,
@@ -47,4 +48,10 @@ pub use panic::{
 };
 pub use stack::{
     clear_stack_limit, set_stack_limit, STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,
+};
+pub use string::{
+    prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
+    prism_rt_int_to_string, prism_rt_print_string, prism_rt_string_character,
+    prism_rt_string_clone, prism_rt_string_concatenate, prism_rt_string_drop,
+    prism_rt_string_equals, PrismString,
 };

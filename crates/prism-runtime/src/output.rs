@@ -95,6 +95,12 @@ pub(crate) fn append(text: &[u8]) {
     });
 }
 
+/// Takes the buffered output without writing it, for tests of what a function prints.
+#[cfg(test)]
+pub(crate) fn take_output() -> Vec<u8> {
+    with_state(|state| std::mem::take(&mut state.output))
+}
+
 /// The text of an `Int`: decimal, with a leading `-` when negative.
 pub fn format_int(value: i64) -> String {
     value.to_string()

@@ -80,7 +80,7 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
 /// # Safety
 ///
 /// `pointer` must point at `length` readable bytes, or `length` must be zero.
-unsafe fn text<'a>(pointer: *const u8, length: usize) -> std::borrow::Cow<'a, str> {
+pub(crate) unsafe fn text<'a>(pointer: *const u8, length: usize) -> std::borrow::Cow<'a, str> {
     if length == 0 || pointer.is_null() {
         return std::borrow::Cow::Borrowed("");
     }
@@ -111,6 +111,12 @@ pub unsafe extern "C" fn prism_rt_panic(
         None => format!("internal error: unknown runtime error {}", kind),
     };
     report_at(&message, &file, line, column)
+}
+
+/// Reports the runtime error `kind` with `detail` at `file:line:column` and ends the process:
+/// what runtime functions that receive their caller's location raise.
+pub(crate) fn panic_at(kind: PanicKind, detail: &str, file: &str, line: u32, column: u32) -> ! {
+    report_at(&panic_message(kind, detail), file, line, column)
 }
 
 fn report_at(message: &str, file: &str, line: u32, column: u32) -> ! {

@@ -8,6 +8,12 @@ use crate::output::{
     prism_rt_print_newline,
 };
 use crate::panic::{prism_rt_double_remainder, prism_rt_panic, prism_rt_unlinked_function};
+use crate::string::{
+    prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
+    prism_rt_int_to_string, prism_rt_print_string, prism_rt_string_character,
+    prism_rt_string_clone, prism_rt_string_concatenate, prism_rt_string_drop,
+    prism_rt_string_equals,
+};
 
 /// The type of a runtime function's parameter or result, as the code generator maps it to a
 /// machine type.
@@ -107,6 +113,76 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: true,
     },
     RuntimeFunction {
+        name: "prism_rt_string_concatenate",
+        address: RuntimeAddress(prism_rt_string_concatenate as *const u8),
+        parameters: &[Pointer, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_string_equals",
+        address: RuntimeAddress(prism_rt_string_equals as *const u8),
+        parameters: &[Pointer, Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_string_character",
+        address: RuntimeAddress(prism_rt_string_character as *const u8),
+        parameters: &[Pointer, I64, Pointer, Pointer, I32, I32],
+        result: Some(I32),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_string_clone",
+        address: RuntimeAddress(prism_rt_string_clone as *const u8),
+        parameters: &[Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_string_drop",
+        address: RuntimeAddress(prism_rt_string_drop as *const u8),
+        parameters: &[Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_print_string",
+        address: RuntimeAddress(prism_rt_print_string as *const u8),
+        parameters: &[Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_int_to_string",
+        address: RuntimeAddress(prism_rt_int_to_string as *const u8),
+        parameters: &[Pointer, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_double_to_string",
+        address: RuntimeAddress(prism_rt_double_to_string as *const u8),
+        parameters: &[Pointer, F64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_bool_to_string",
+        address: RuntimeAddress(prism_rt_bool_to_string as *const u8),
+        parameters: &[Pointer, I8],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_rt_char_to_string",
+        address: RuntimeAddress(prism_rt_char_to_string as *const u8),
+        parameters: &[Pointer, I32],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_rt_allocate",
         address: RuntimeAddress(prism_rt_allocate as *const u8),
         parameters: &[Pointer, Pointer],
@@ -156,6 +232,7 @@ mod tests {
             include_str!("panic.rs"),
             include_str!("double.rs"),
             include_str!("allocation.rs"),
+            include_str!("string.rs"),
         ];
         let mut names = HashSet::new();
         for source in sources {
