@@ -52,8 +52,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 ## 9. Documents and integration
 
 - [x] 9.1 In `openspec/specs/diagnostics/spec.md`, add the `E4028` row (`CannotCaptureByValue`, reported by the type checker: a closure that owns a capture captures a `var`, or a non-`Copy` value its builder does not own: a capture of the enclosing closure or an earlier parameter read in a default value) and reword the `E5007` row to escaping values that may hold a borrow (a closure owning a reference, a borrowing closure or an unmarked function-typed parameter, or such a parameter itself), with a rationale line pointing at D5 and D6.
-- [ ] 9.2 Make `examples/run/main.prism` build a struct holding an owning handler, call it twice through a borrow and return a closure from a function, with its expected output updated.
-- [ ] 9.3 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism`, and `openspec validate escaping-closures --strict`. Verify all pass.
+- [x] 9.2 Make `examples/run/main.prism` build a struct holding an owning handler, call it twice through a borrow and return a closure from a function, with its expected output updated.
+- [x] 9.3 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism`, and `openspec validate escaping-closures --strict`. Verify all pass.
 
 ## Archive notes
 

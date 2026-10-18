@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+// A closure built in a generic body owns a value of a type parameter; each instance lays out
+// its own environment.
+fun <T> later(x: T, f: escaping (&T) -> Int): () -> Int = { f(x) }
+
+fun main() {
+    val a = later("abcd") { s -> s.length }
+    println(a())
+    val b = later(21) { n -> n * 2 }
+    println(b())
+}

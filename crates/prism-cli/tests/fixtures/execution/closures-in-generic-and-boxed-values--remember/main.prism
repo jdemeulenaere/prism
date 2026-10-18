@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+// A generic function keeping a closure that owns its captures, as a slot table keeps a
+// remembered calculation, and one that only runs it, which borrows.
+fun <T> rememberLater(calc: escaping () -> T): () -> T = calc
+fun <T> remember(calc: () -> T): T = calc()
+
+fun main() {
+    val s = "abc"
+    val later = rememberLater { s.length * 2 }
+    println(later())
+    println(later())
+    val t = "de"
+    println(remember { t.length })
+    println(t)
+}

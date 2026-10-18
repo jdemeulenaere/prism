@@ -1,0 +1,12 @@
+package lib
+
+public struct Button {
+    val label: String
+    val onClick: () -> Unit
+}
+
+public fun button(label: String, onClick: escaping () -> Unit): Button = Button(label, onClick)
+
+public fun click(b: &Button): Unit {
+    b.onClick()
+}

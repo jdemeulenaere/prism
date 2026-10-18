@@ -1,0 +1,27 @@
+// expect: ok
+// run: 0
+// A registry of the last two handlers registered, held in a struct without a list: each
+// registration takes the registry apart, drops the oldest handler and owns the new one.
+struct Registry {
+    val older: () -> Int
+    val newer: () -> Int
+}
+
+fun empty(): Registry = Registry({ 0 }, { 0 })
+
+fun register(r: Registry, handler: escaping () -> Int): Registry {
+    val (older, newer) = r
+    return Registry(newer, handler)
+}
+
+fun fire(r: &Registry): Int = r.older() + r.newer()
+
+fun main() {
+    val name = "x" + "yz"
+    val greeting = "hello"
+    val first = register(empty()) { name.length }
+    val second = register(first) { greeting.length * 10 }
+    println(fire(second))
+    val third = register(second) { 100 }
+    println(fire(third))
+}
