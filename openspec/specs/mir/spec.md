@@ -322,6 +322,25 @@ The MIR of a file without type errors MUST satisfy its structural invariants: ev
 - **WHEN** `fun take(s: String) {}` is declared and `prism dump-mir --elaborated main.prism` runs on a file holding `fun f(s: String) { take(s) }`, and then on one holding `fun g(s: String) { take(s); take(s) }`
 - **THEN** the first prints the elaborated MIR, marked as elaborated, and exits with status 0; the second reports `E5001`, prints no MIR and exits with a failure status, while `prism dump-mir main.prism` still prints its MIR as lowered
 
+### Requirement: Generic Bodies Are Lowered Once
+A generic declaration's body, and its default values and closures, MUST be lowered once, recording the declaration's type parameters, with locals typed by them. A call of a generic callee MUST record its type arguments and the callee's declared parameter types. A value of a type parameter that is not `Copy` MUST be dropped like any value that needs a drop, and one bounded by `Copy` MUST NOT be dropped.
+
+#### Scenario: Dropping a type-parameter value
+- **WHEN** `fun <T> discard(x: T) {}` and `fun <T : Copy> keep(x: T): Int = 1` are lowered
+- **THEN** the body of `discard` records the type parameter `T` and drops its argument when it returns, and the body of `keep` has no drop
+
+#### Scenario: A call with type arguments
+- **WHEN** `fun <T> id(x: T): T = x` is declared and `fun f(s: String): String = id(s)` is lowered
+- **THEN** the MIR of `f` calls `main::id` with the type argument `String`, the declared parameter type `T` and a move of `s`, and `prism dump-mir` prints the callee as `main::id<String>`
+
+#### Scenario: A default value of a generic function
+- **WHEN** `fun <T : Copy> f(x: T, y: T = x): T = y` is declared and `fun g(): Int = f(1)` is lowered
+- **THEN** the generator of `y` records the type parameter `T : Copy`, and the MIR of `g` calls it with the type argument `Int`, which `prism dump-mir` prints as `default main::f<Int> y`
+
+#### Scenario: Elaborated drops of a generic body
+- **WHEN** `fun <T> pass(x: T): T = x` and `fun <T> pick(a: T, b: T, c: Bool): T = if (c) a else b` are lowered and elaborated
+- **THEN** `pass` drops nothing, since `x` is moved into the return place, and `pick` drops the argument it did not return, under a drop flag or on each branch
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -364,3 +383,6 @@ Decisions from `borrowck-elision`:
 - **The receiver of a call comes from its callee's path.** A declaration path names an extension's receiver type, and an extension cannot be named as a value, so a call's first operand is a receiver exactly when its callee is an extension's path (or the built-in `clone`), and a body's first argument exactly when it is an extension's body; the borrow checker's rule 2 reads that. Rejected: a receiver flag on calls, which duplicates the path and needs a validator rule; the first parameter's type (a `&T` first parameter is not necessarily a receiver).
 - **A `(&mut T)?` lent as a `(&mut T)?` is reborrowed** (orchestrator). Like the `(&T)?` case, the lowering tests the tag and passes `null` or a wrapped mutable reborrow of the payload's referent, so the binding stays usable, as a `&mut` binding passed as an argument does, and passing it twice to one call is a conflict. Rejected: moving it (unusable after one call); a typed-tree coercion for one case.
 
+Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Generic bodies are lowered once, and drops of type parameters stay in.** A body records its owner's type parameters, its default generators and closures included, and a value of a non-`Copy` type parameter "maybe needs drop": it is elaborated as usual and monomorphization resolves it to the instance's drop glue or removes it. A `T : Copy` value is never dropped. Calls, default generator calls and aggregates (`struct m::Box<T>(...)`, `variant m::Opt.Some<T>(...)`) record their type arguments, so a body stays self-describing and the validator checks operands against substituted types. Rejected: reading aggregate arguments from the assigned place's type, which hides them from anything reading the rvalue alone.

@@ -48,7 +48,7 @@ The compiler MUST compute a deterministic 128-bit hash of each file's exported A
 - **THEN** the exported ABI hash remains unchanged
 
 ### Requirement: Monomorphization Hash for Generics
-Exported generic functions MUST record a Monomorphization Hash of their body in their ABI signature, computed independently of source positions, comments and whitespace.
+Exported generic functions, including generic extension functions, MUST record a Monomorphization Hash of their body in their ABI signature, computed independently of source positions, comments and whitespace.
 
 #### Scenario: Changing generic function body
 - **WHEN** the body of an exported generic function changes
@@ -57,6 +57,14 @@ Exported generic functions MUST record a Monomorphization Hash of their body in 
 #### Scenario: Generic body hash ignores formatting
 - **WHEN** comments or blank lines are added to an exported generic function without changing its code
 - **THEN** its Monomorphization Hash and the file's ABI hash remain unchanged
+
+#### Scenario: Changing a generic extension body
+- **WHEN** the body of the exported extension `public fun <T> Box<T>.get(): &T` changes
+- **THEN** its Monomorphization Hash and the file's ABI hash change
+
+#### Scenario: Changing a non-generic extension of a generic type
+- **WHEN** the body of the exported extension `public fun Box<Int>.sum(): Int` changes
+- **THEN** it records no Monomorphization Hash and the file's ABI hash is unchanged
 
 ### Requirement: Structured ABI Types
 Phase 1 MUST record every type in an exported signature (parameter, return, struct field, enum payload, exported variable) as a structured type tree, never as source text that must be re-parsed. The ABI hash MUST cover that structure. An importer MUST obtain exactly the type the exporter declared, including nested function, nullable and reference types.
@@ -174,6 +182,28 @@ Phase 2 MUST borrow-check the MIR of every file that typechecks from that MIR al
 - **WHEN** `lib/text.prism` declares `public fun shout(s: String): String { val t = s; return s }`, which uses `s` after moving it, and `app/main.prism` imports `/lib/text` and declares `fun f(s: String): String = shout(s)`
 - **THEN** `prism dump-mir --elaborated app/main.prism` prints the elaborated MIR of `app/main`, while `prism check app/main.prism` reports the `E5001` in `lib/text`
 
+### Requirement: Generic Signatures in the ABI
+Phase 1 MUST record each exported function's, extension's, struct's and enum's type parameters, in order, with their bounds. A type parameter in a signature, field or payload type MUST be recorded as a reference to its position, never bound to a struct or enum of the same name. The ABI hash MUST cover the number of type parameters, their bounds and these references, and MUST NOT depend on type parameter names.
+
+#### Scenario: Type parameters recorded by position
+- **WHEN** `lib/box.prism` declares `public struct T { val n: Int }`, `public struct Box<T>(val v: T)` and `public fun <A, B : Copy> pair(a: A, b: B): Box<A>`
+- **THEN** the ABI records `Box` with one type parameter whose field `v` is type parameter 0, not the struct `T`, and `pair` with type parameters `A` (unbounded) and `B` (bounded by `Copy`), parameters of type parameter 0 and 1, and the return type `Box` from module `lib/box` applied to type parameter 0
+
+#### Scenario: Changing a bound changes the ABI hash
+- **WHEN** `public fun <T> keep(x: T): Int` becomes `public fun <T : Copy> keep(x: T): Int`, or `public struct Box<T>(val v: T)` gains a second type parameter
+- **THEN** the exported ABI hash changes
+
+#### Scenario: Renaming a type parameter of a struct
+- **WHEN** `public struct Box<T>(val v: T)` becomes `public struct Box<U>(val v: U)`
+- **THEN** the exported ABI hash is unchanged
+
+### Requirement: Marker Parameters in the ABI
+Each exported generic struct or enum, and each reference to a nominal type in an exported signature, MUST record which of the type's parameters condition its marker (those occurring in its field or payload types), read from the defining file's declarations alone and covered by the ABI hash, so an importer knows whether an instantiation is `Copy` or `Clone` without importing the type's module.
+
+#### Scenario: Marker parameters recorded
+- **WHEN** `lib/state.prism` exports `public struct Handle<T> : Copy { val id: Int }` and `public struct Box<T> : Copy { val v: T }`, `app/api.prism` imports it and exports `public fun handle(): Handle<String>` and `public fun box(): Box<String>`, and `app/main.prism` imports only `/app/api` and declares `fun f(): Int { val h = handle(); val g = h; val k = h; val b = box(); val c = b; val d = b; return 1 }`
+- **THEN** the ABI of `lib/state` records `Handle` with no marker parameter and `Box` with type parameter 0, the ABI of `app/api` records both return types with the same marker parameters, and `prism check app/main.prism` emits `E5001` at the second use of `b` only, because `Handle<String>` is `Copy` and `Box<String>` is not
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
@@ -186,3 +216,8 @@ Phase 2 MUST borrow-check the MIR of every file that typechecks from that MIR al
 - **Phase 2 turns each file into a typed tree from its AST and its direct imports' ABIs** (`typed-tree`). The typed tree is the first stage of the semantic pipeline (then MIR, then borrow checking), and it reads no other file's bodies or tree, so editing a dependency's body never changes a file's tree. `prism check` still checks files in dependency order and stops at the first file with errors, while `prism dump-typed-tree` checks only its entry, which is what the scenario with an erroneous dependency shows.
 - **Phase 2 lowers each file that typechecks to MIR from its typed tree alone** (`mir-lowering`). The tree carries the file's type table, and calls name imported callees and default generators by declaration path, so lowering reads no other file and a dependency's bodies cannot change a file's MIR. `prism check` lowers every file that typechecks right after checking it and discards the MIR, so lowering is exercised by every checked program and the borrow checker only has to be added to the pipeline; `prism dump-mir`, like `prism dump-typed-tree`, checks only its entry. What the MIR holds is its own capability (`mir`), which the borrow checker, drop elaboration, closure conversion and the backend will extend; the pipeline step is recorded here, next to the typed tree's.
 - **Phase 2 borrow-checks each file's MIR from the MIR alone** (`borrowck-moves`, user for the crate). The type table travels in the MIR and every operand already says whether it moves, so the checker (`prism-borrowck`) reads no other file's bodies, MIR or ABI, which keeps the single-file compilation units and deterministic hermetic builds invariants; returned-borrow checks will read callee signatures from each call's parameter types. `prism check` checks and elaborates every file it lowers and stops at the first file with borrow errors, as for type errors; plain `prism dump-mir` prints the MIR as lowered whatever its borrow errors, which is what debugging the checker needs, and `--elaborated` prints the result. One entry point returns the elaborated MIR or the errors, so the move data and dataflow are computed once; the checker lives outside `prism-mir`, which would otherwise grow every borrow analysis.
+
+Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Type parameters are positional in the ABI.** Each exported generic symbol records its type parameters with their bounds, and a type parameter in a signature is `AbiType::Parameter { index }`, lowered before binding names to the file's or imports' types, so `T` never binds to a `struct T`. The hash covers the count, the bounds, the positions and the marker parameters, but not the names: type arguments are positional, so a rename changes nothing an importer can do (a generic body's Monomorphization Hash still changes, since its tokens do). Rejected: hashing names, and binding parameters by name in the importer.
+- **Marker parameters travel with every nominal reference.** `NominalHeader` and `AbiType::Nominal` record which parameters condition the type's marker, computed by one function over the AST that the type checker also uses, so an importer decides whether `Box<String>` is `Copy` without importing `Box`'s module and the two cannot drift.

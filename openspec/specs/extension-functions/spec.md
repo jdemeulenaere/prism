@@ -106,7 +106,7 @@ Inside an extension body, `this` MUST be the receiver, a `val` binding of type `
 - **THEN** the type checker emits `E4001`, saying that `this` is only available in an extension function
 
 ### Requirement: Extension Declarations Are Checked
-Two extensions in one file with the same receiver type and name MUST be rejected with `E4010`, as MUST an extension named like a field of its receiver struct and an extension named `clone` on a `Clone` type, which could never be called. Extensions on different receivers, and an extension and a top-level function, MAY share a name. The receiver type MUST follow the rules of type annotations (`E4007`, `E4012`, `E4014`).
+Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`) and name MUST be rejected with `E4010`, as MUST an extension named like a field of its receiver struct and an extension named `clone` on a `Clone` type, which could never be called. Extensions on different receivers, and an extension and a top-level function, MAY share a name. The receiver type MUST follow the rules of type annotations (`E4007`, `E4012`, `E4014`).
 
 #### Scenario: Duplicate extension rejected
 - **WHEN** a file declares `fun User.greet(): String = "a"` and `fun User.greet(x: Int): String = "b"`

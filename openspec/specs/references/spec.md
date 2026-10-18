@@ -472,7 +472,7 @@ A closure MUST borrow each variable it captures: mutably when its body assigns t
 - **THEN** the borrow checker emits `E5003` at `x` in `print(x)`, because the outer closure borrows `x` mutably for the inner one
 
 ### Requirement: Capturing Closures Do Not Escape
-A function value that may be a closure with captures, or a function-typed parameter, MUST NOT escape: being returned from a function, closure or default value, initializing a top-level `val`, being stored in a struct field or enum payload, being written through a reference, or being assigned to a captured variable MUST be rejected by the borrow checker with `EscapingClosure` (`E5007`). A closure without captures MAY escape, and passing any closure to a call is not an escape.
+A function value that may be a closure with captures, or a function-typed parameter, MUST NOT escape: being returned from a function, closure or default value, initializing a top-level `val`, being stored in a struct field or enum payload, being written through a reference, or being assigned to a captured variable MUST be rejected by the borrow checker with `EscapingClosure` (`E5007`). A closure without captures MAY escape. Passing any closure to a function-typed parameter is not one.
 
 #### Scenario: Capturing closures do not escape
 - **WHEN** `struct Button { val onClick: () -> Int }` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): () -> Int = { greet(s) }`, `fun g(s: String): Button = Button({ greet(s) })`, `fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }`, `fun k(p: () -> Int): () -> Int = p` and `fun m(a: Int, p: () -> Int = { a }): Int = p()` are checked
@@ -481,6 +481,13 @@ A function value that may be a closure with captures, or a function-typed parame
 #### Scenario: A closure without captures may escape
 - **WHEN** `struct Button { val onClick: () -> Int }` and `fun run(f: () -> Int): Int = f()` are declared, and `fun f(): () -> Int = { 1 }`, `fun g(): Button = Button({ 2 })` and `fun h(s: String): Int = run { s.clone(); 3 }` are checked
 - **THEN** the file passes `prism check`
+
+### Requirement: Capturing Closures Are Not Passed to Generic Parameters
+A function value that may be a closure with captures, or a function-typed parameter, MUST NOT be passed where the callee's declared parameter type has a type parameter outside a function type, since the generic body may keep it: the borrow checker MUST reject it with `E5007`, labelling it as passed to a generic parameter. Passing it to a parameter of function type, such as `() -> T`, MUST be allowed.
+
+#### Scenario: A capturing closure passed to a generic parameter
+- **WHEN** `fun <T> keep(x: T): T = x`, `fun <T> remember(calc: () -> T): T = calc()` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int { val g = keep({ greet(s) }); return g() }`, `fun k(p: () -> Int): Int = keep(p)()`, `fun h(s: String): Int = remember { greet(s) }` and `fun n(): Int = keep({ 1 })()` are checked
+- **THEN** the borrow checker emits `E5007` for `f`, labelling the closure "passed to a generic parameter here", and for `k`, and accepts `h`, whose closure is passed to a function-typed parameter, and `n`, whose closure captures nothing
 
 ### Requirement: Borrow Conflict Diagnostics Show the Borrow and Its Later Use
 A diagnostic of `E5003`, `E5004` or `E5005` MUST point at the conflicting access and name the place, and MUST list as related locations where the conflicting borrow was created and where it is used later, with ", in later iteration of loop" when that use is reached only through a loop's back edge. A borrow made by a closure MUST also label the use inside the closure that decided how it is captured.
@@ -566,3 +573,7 @@ Decisions from `borrowck-elision` (the four rules agreed with the user in the bo
 - **Bodies may store input borrows through inputs; by-value parameters end at each return.** Callers already assume a call writes its other operands' borrows through each `&mut R` argument and a closure into what it captures mutably, so `*slot = v` for `v: &Int` is sound. Each `Return` ends every argument that needs no drop, so storing a borrow of one there is `E5006`. Rejected: forbidding such stores; a separate code.
 - **A value holds a borrow of a reference itself only when its type can refer to one** (review). A value whose type has no `&&T`, `&(&T)?` or function type points past a borrowed reference to what it refers to, whose borrows the reference's root holds, so a `&Int` read through a `&&Int`, a closure's result read through a captured reference, and a copy written through a `&mut &Int` do not keep the reference itself borrowed. Without this, `{ lead(t) }()` and `*slot = v` in a closure were false `E5008` and `E5006` errors. Rejected: tracking which reference depth each loan reaches, which the type already bounds.
 - **Parameters that end are labelled at their declaration.** An `E5006` for an ending argument labels the parameter ("'v' is dropped when the function returns, while still borrowed"; closure parameters have their own spans), and a later use by the caller through a `&mut R` argument labels that parameter. Rejected: labelling the body's closing brace, which an expression body lacks.
+
+Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **A capturing closure or function input cannot be passed to a generic slot** (`E5007`, "passed to a generic parameter here"). A parameter whose declared type has a type parameter outside a function type may be stored, returned or kept by the generic body, which is checked without knowing the instantiation. A closure passed for `calc: () -> T` is a function-typed parameter, so `remember { count }` stays allowed. This is the second half of the borrow-free rule of `generics`; owning, move-capturing closures (`closures`) will pass.

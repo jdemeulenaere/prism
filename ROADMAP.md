@@ -55,7 +55,7 @@ Agreed with the user in an `/opsx:explore` session (2026-10-17). Each item is on
 ### Then: the road to Milestone 2
 Planned autonomously on 2026-10-17, when the user asked for iteration up to Milestone 2 (see [`docs/decisions-for-review.md`](docs/decisions-for-review.md)). Each item is one OpenSpec change, in this order; the order and scope may be revised as changes land, and any revision is logged there.
 
-10. [ ] `generics`: type parameters on functions, extensions, structs and enums (`fun <T> id`, `fun <T> Box<T>.get()`), checked once at declaration with `Copy`/`Clone` bounds; explicit (`f<Int>(x)`) and inferred type arguments; borrow-free type arguments; conditional markers on generic types; polymorphic typed trees and MIR, and generic signatures in the ABI. Needed for `State<T>`. Monomorphization was split out into its own change, item 17 (2026-10-18).
+10. [x] `generics`: type parameters on functions, extensions, structs and enums (`fun <T> id`, `fun <T> Box<T>.get()`), checked once at declaration with `Copy`/`Clone` bounds; explicit (`f<Int>(x)`) and inferred type arguments; borrow-free type arguments; conditional markers on generic types; polymorphic typed trees and MIR, and generic signatures in the ABI. Needed for `State<T>`. Monomorphization was split out into its own change, item 17 (2026-10-18). Also: one extension per receiver constructor (`E4010`), the new codes `E4020` to `E4022`, generic default value generators, MIR aggregates with type arguments, and expected types reaching `?:` fallbacks and borrowed arguments (from the review).
 11. [ ] `compound-assignment`: `+=`, `-=`, `*=`, `/=`, `%=` as statements.
 12. [ ] `abi-cache`: decide the ABI hash algorithm, write `.abi` and artifact caches, and verify compilation avoidance (body edits recompile no importer).
 13. [ ] `prism-fmt`: the `prism fmt` code formatter.
@@ -93,8 +93,18 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] Smart casts (`if (n != null) greet(n)`), and borrowing through a safe navigation (`&u?.nick`) as an optional place rather than a temporary (from `reference-access`). `?.` receivers already are optional places (`extension-methods`, D10); extend them to explicit `&u?.nick` and to `(&T)?` arguments.
 - [x] How long an explicitly borrowed temporary in a `val` initializer lives (`val r = &make()`), for `borrowck-exclusivity` or `borrowck-elision` (from `reference-access`). Decided and done in `mir-lowering`: the temporary lives as long as the binding.
 - [ ] Extensions on nullable receiver types (`fun String?.orEmpty()`), and which extension a call on a `T?` picks when both `T` and `T?` have one (non-goal of `extension-methods`).
-- [ ] Generic receivers (`fun <T> Heap<T>.size()`), with `generics`; today a receiver is a single type name (non-goal of `extension-methods`).
+- [x] Generic receivers (`fun <T> Heap<T>.size()`), with `generics`; today a receiver is a single type name (non-goal of `extension-methods`). Done in `generics` for nominal receivers (`fun <T> Box<T>.get()`, `fun Box<Int>.sum()`); `Heap<...>` receivers stay `E2001` because calls look through `Heap` layers, and are tracked below.
 - [ ] Extension properties (`val User.fullName: String`) (non-goal of `extension-methods`).
+- [ ] Bounds on struct and enum type parameters (`struct Box<T : Copy>`), `E2001` today; they need a well-formedness check at every annotation (non-goal of `generics`, D5).
+- [ ] `==`, `!=` and orderings on type parameters, with traits and an equality bound; `E4002` today (from `generics`, D5).
+- [ ] Explicit type arguments without a call (`Option<Int>.None`, `id<Int>` as a value), and generic functions as values with an expected function type (`val f: (Int) -> Int = id`), `E4013` today (from `generics`, D8).
+- [ ] Extensions on a bare type parameter (`fun <T> T.also()`) and on `Heap<...>` receivers, `E2001` today (non-goal of `generics`, D10).
+- [ ] Possible relaxation: an opt-in bound for borrowed type arguments (`Box<&T>`), which `E4022` rejects today (from `generics`, D7).
+- [ ] Possible relaxation: global or later-use type argument inference (Kotlin's constraint solving), so `take(Box(null), 1)` for `fun <T> take(b: Box<T>, c: T)` and an empty `listOf()` fixed by a later use are accepted; local inference rejects them today (risk of `generics`, D8, confirmed in its review).
+- [ ] Possible relaxation: conditional markers computed from the field types' own markers rather than syntactically, so `struct W<T> : Copy { val h: Handle<T> }` is `Copy` for every `T` when `Handle<T>` is (from `generics`, D6).
+- [ ] Trailing commas in call type-argument lists (`id<Int,>(1)`), which annotations and type parameter lists accept but the call rule does not (found while reviewing `generics`).
+- [ ] Decide whether the typed-tree dump should distinguish inferred type arguments from written ones (open question of `generics`).
+- [ ] Decide whether the `E4013` help for an uninferable generic call should print the full suggested call (`make<...>()`) or only the type parameter's name (open question of `generics`).
 - [ ] Method references and extensions as values (`u::greet`); reading `u.greet` without a call is `E4006` today (non-goal of `extension-methods`).
 - [ ] Decide whether `this` in a `consuming fun` should be mutable, like Swift's consuming parameters; today it is a `val` and is moved into a `var` first (from `extension-methods`, D4).
 - [ ] Decide whether a bare `clone()` in an extension body calls the built-in `clone()` of a `Clone` receiver; implicit `this` covers only fields and extensions, so it is `E4001` today (found while archiving `extension-methods`).
@@ -137,8 +147,8 @@ Deliberately left until after the borrow checker (from the same session):
 - [ ] `.abi` cache and compilation avoidance ([`docs/architecture.md`](docs/architecture.md) §1).
 - [ ] Incremental compilation verification: ensuring body edits produce zero downstream recompilations.
 - [ ] Compound assignment (`+=`, `-=`) and bitwise operators (deferred by the `lexer-parser` change).
-- [ ] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`). Until `Copy` and `Clone` bounds exist, type parameters are neither `Copy` nor `Clone` (from `value-semantics`).
-- [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`).
+- [x] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`). Until `Copy` and `Clone` bounds exist, type parameters are neither `Copy` nor `Clone` (from `value-semantics`). Checking, `Copy`/`Clone` bounds and polymorphic MIR are done in `generics`; monomorphization is its own item, step 17 of the road to Milestone 2.
+- [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`). Generic scoping now exists (`generics`), so only the builtin list and the migration of the opaque-name fixtures remain.
 - [ ] Qualified type paths such as `models.User`; imports currently bring symbols in by bare name (deferred by `resolve-nominal-type-annotations`).
 - [ ] Fix: calling a struct-typed value (`p()` where `p: Point`) goes through the constructor branch of `infer_call_expr` (noted in `resolve-nominal-type-annotations`).
 - [ ] Decide whether safe-navigation assignment (`a?.b = c`, allowed in Kotlin) is valid; it is currently rejected (from the parser plain fixes, `ecc5da3`).

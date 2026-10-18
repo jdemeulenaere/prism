@@ -225,6 +225,24 @@ The typed tree MUST record every struct and enum known to its file (its own decl
 - **WHEN** `prism dump-typed-tree main.prism` runs on a file that does not parse
 - **THEN** it reports the `E2xxx` error, prints no tree, and exits with a failure status
 
+### Requirement: Generic Declarations Record Their Type Parameters
+Every generic function, extension, struct and enum in the typed tree MUST record its type parameters, in order, with their bounds. Inside it, a type parameter MUST be a type of its own, distinct from every struct, enum and opaque name. Each generic struct and enum in the file's types MUST record its type parameters and marker parameters, and its fields or variants with the declared types.
+
+#### Scenario: A generic function and struct in the tree
+- **WHEN** `struct Box<T> : Copy { val v: T }` and `fun <T : Copy> wrap(x: T): Box<T> = Box(x)` are declared
+- **THEN** the typed tree records `Box` with the type parameter `T` and the marker parameter `T`, and `wrap` with the type parameter `T` bounded by `Copy`, whose parameter `x` and construction of `Box<T>` are typed with that parameter, and `prism dump-typed-tree` prints `fun <T : Copy>` before the function's path
+
+### Requirement: Generic Calls Record Their Type Arguments
+A call of a generic function or extension MUST record its type arguments, written or inferred, in declaration order, together with the callee's declared parameter types, so each argument's type is its declared parameter type with the type arguments substituted. A construction of a generic struct or variant MUST have the instantiated type, which gives its type arguments.
+
+#### Scenario: Inferred type arguments are recorded
+- **WHEN** `fun <T> id(x: T): T = x` and `struct Box<T>(val v: T)` are declared and `fun f(): Box<Int> = Box(id(1))` is checked
+- **THEN** the call of `main::id` records the type argument `Int` and the declared parameter type `T`, its argument is the literal `1` of type `Int`, and the construction has type `Box<Int>`; `prism dump-typed-tree` prints the call as `main::id<Int>`
+
+#### Scenario: Type arguments inside a generic body
+- **WHEN** `fun <T> id(x: T): T = x` and `fun <U> twice(x: U): U = id(id(x))` are declared
+- **THEN** both calls of `main::id` in `twice` record the type argument `U`, the type parameter of `twice`
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -242,3 +260,8 @@ Decisions from `typed-tree` (the shape agreed with the user in the borrow-checke
 - **A file's tree depends only on the file and its imports' ABIs**, by the deterministic hermetic builds invariant: `prism dump-typed-tree` runs Phase 1 over the import graph and Phase 2 for the entry only, so a dependency's bodies and their errors cannot affect it.
 - **A stable text dump and a validator.** The dump (one node per line, role labels, types after `:`, `@line:column`) drives snapshot fixtures, re-blessed with `PRISM_BLESS=1`, and `TypedFile::validate` checks the structural invariants of the tree of every fixture and example: single parents, places under moves, copies, borrows and assignments, payloads only inside chains, jumps inside their loops, slot types (arguments, fields, branches, tails, returns, closure bodies, patterns, operands, coercions), discarded blocks without values, exact capture lists, and calls and constructions repeating the file's own signatures. JSON output and a `--dump-typed-tree` flag on `prism check` were rejected.
 - **The tree carries its file's type table** (`mir-lowering`). `TypedFile::types` holds what the checker knew about each struct and enum: its own declarations, those its direct imports export (from their ABIs), the markers of types an imported signature mentions, and the built-in `Range`, with `is_copy` and `is_clone` moved from the checker unchanged (the error type still counts as `Copy`). So MIR lowering, the borrow checker and the backend need neither the checker nor the ABIs to know whether a type is `Copy` or what its fields are. The dump lists the imported entries after the `module` line, since own declarations already print as items. Rejected: asking the checker (gone once the tree exists) and field types stored in each MIR projection (which still leaves markers to find).
+
+Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **One polymorphic tree per declaration; calls record declared types and type arguments.** Generic items record their type parameters, and a call or construction records its type arguments with the callee's declared parameter (or field) types, the slot type being their substitution (`Call::parameter_type`). Recording the declared types keeps calls self-describing, lets monomorphization substitute only the caller's type arguments, and lets the borrow checker see which slots are generic. Rejected: recording only substituted types (the generic slots disappear) or both lists (a consistency rule).
+- **Dumps print generics as declared:** `fun <T : Copy> main::wrap`, `call main::id<Int>`, `Box<Int>`, and a generic type's marker parameters after its marker (`struct main::Box<T> : Copy if T`), for the file's own types and imported ones alike.

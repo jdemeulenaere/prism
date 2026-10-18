@@ -29,7 +29,7 @@ A struct or enum MUST be `Copy` only when it declares `: Copy`, and `Clone` only
 - **THEN** the file typechecks successfully
 
 ### Requirement: Built-In Copy Types
-`Int`, `Float`, `Bool`, `Char`, `Unit`, `Nothing`, the built-in `Range` and shared borrows `&T` MUST be `Copy`, and `T?` MUST be `Copy` exactly when `T` is. `&mut T`, `String`, `Heap<T>`, function types (composable or not), type parameters and type names with no declaration in scope MUST NOT be `Copy`.
+`Int`, `Float`, `Bool`, `Char`, `Unit`, `Nothing`, the built-in `Range` and shared borrows `&T` MUST be `Copy`, and `T?` MUST be `Copy` exactly when `T` is. A type parameter MUST be `Copy` exactly when it is bounded by `Copy`. `&mut T`, `String`, `Heap<T>`, function types (composable or not), unbounded or `Clone`-bounded type parameters and type names with no declaration in scope MUST NOT be `Copy`.
 
 #### Scenario: Copy built-ins as fields of a Copy struct
 - **WHEN** `struct S : Copy { val a: Int, val b: Float, val c: Bool, val d: Char, val e: Unit, val r: Range, val n: Int? }` is declared
@@ -40,7 +40,7 @@ A struct or enum MUST be `Copy` only when it declares `: Copy`, and `Clone` only
 - **THEN** the type checker emits `E4016` naming the field `name` and the type `String`
 
 #### Scenario: Non-Copy built-ins rejected in a Copy declaration
-- **WHEN** a `: Copy` struct declares a field of type `Heap<Int>`, `() -> Unit`, `compose () -> Unit`, `String?` or a type parameter `T` (`struct Box<T> : Copy { val v: T }`)
+- **WHEN** a `: Copy` struct declares a field of type `Heap<Int>`, `() -> Unit`, `compose () -> Unit` or `String?`
 - **THEN** the type checker emits `E4016` naming that field
 
 #### Scenario: Unknown type name is not Copy
@@ -51,19 +51,27 @@ A struct or enum MUST be `Copy` only when it declares `: Copy`, and `Clone` only
 - **WHEN** a file declares `val LIMIT = 10`, `val REF: &Int = &LIMIT` and `fun f(): &Int = REF` at top level
 - **THEN** the file typechecks successfully, because reading a `&Int` copies the borrow
 
+#### Scenario: Copy-bounded type parameters are Copy
+- **WHEN** `fun <T : Copy> get(x: &T): T = x` and `fun <T : Clone> take(x: &T): T = x` are checked
+- **THEN** `get` typechecks successfully, copying `x` out of the borrow, and the type checker emits `E4017` for `take`
+
 ### Requirement: Built-In Clone Types
-Every `Copy` type and `String` MUST be `Clone`, and `T?` and `Heap<T>` MUST be `Clone` exactly when `T` is. `&mut T`, function types, type parameters and type names with no declaration in scope MUST NOT be `Clone`.
+Every `Copy` type and `String` MUST be `Clone`, and `T?` and `Heap<T>` MUST be `Clone` exactly when `T` is. A type parameter MUST be `Clone` exactly when it is bounded by `Copy` or `Clone`. `&mut T`, function types, unbounded type parameters and type names with no declaration in scope MUST NOT be `Clone`.
 
 #### Scenario: Clone built-ins as fields of a Clone struct
 - **WHEN** `struct Doc : Clone { val title: String, val note: String?, val body: Heap<Int>, val size: Int }` is declared
 - **THEN** the declaration typechecks successfully
 
 #### Scenario: Non-Clone built-ins rejected in a Clone declaration
-- **WHEN** a `: Clone` struct declares a field of type `() -> Unit` (`struct Task : Clone { val run: () -> Unit }`) or a type parameter `T`
+- **WHEN** a `: Clone` struct declares a field of type `() -> Unit` (`struct Task : Clone { val run: () -> Unit }`)
 - **THEN** the type checker emits `E4016` naming that field
 
+#### Scenario: Clone-bounded type parameters are Clone
+- **WHEN** `fun <T : Clone> c(x: &Heap<T>): Heap<T> = x.clone()` is checked
+- **THEN** the file typechecks successfully
+
 ### Requirement: Marker Declarations Are Checked Structurally
-A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`) when any field or variant payload is not `Copy`, and a `: Clone` declaration when any is not `Clone`. The diagnostic MUST name the marker, the field (or the variant and payload position) and its type, once per offending field. A local or imported struct or enum is `Copy` or `Clone` as its marker says.
+A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`) when any field or variant payload is not `Copy`, and a `: Clone` declaration when any is not `Clone`; its marker parameters, if generic, count as satisfying it. The diagnostic MUST name the marker, the field (or the variant and payload position) and its type, once per offending field. A local or imported struct or enum is `Copy` or `Clone` as its marker and, for a generic type, its type arguments say.
 
 #### Scenario: Copy declaration with a non-Copy field rejected
 - **WHEN** `struct User : Copy { val id: Int, val name: String, val tags: Heap<Int> }` is declared
@@ -88,6 +96,10 @@ A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`
 #### Scenario: Field of an imported marked type
 - **WHEN** `geo/types` exports `public struct Point : Copy { val x: Int }`, `public struct Label : Clone { val text: String }` and `public struct Path { val name: String }`, and a file importing `/geo/types` declares `struct Seg : Copy { val a: Point }`, `struct Pin : Clone { val l: Label }` and `struct Bad : Copy { val l: Label }`
 - **THEN** `Seg` and `Pin` typecheck successfully and the type checker emits `E4016` for `Bad.l`
+
+#### Scenario: Generic fields of a marked declaration
+- **WHEN** `struct Box<T> : Copy { val v: T }`, `struct Cell<T> : Clone { val v: T, val next: Heap<T>? }` and `struct Bad<T> : Copy { val b: Box<String> }` are declared
+- **THEN** `Box` and `Cell` typecheck successfully, and the type checker emits `E4016` for `Bad.b`, because `Box<String>` is not `Copy`
 
 ### Requirement: Explicit Clone
 Every `Clone` type MUST have a built-in `clone()` member taking no arguments, unless a field named `clone` takes precedence. It looks through `&` and `&mut` and returns an owned temporary of the receiver's type without those borrows (a receiver that is not a place is a temporary, see `references`). `x?.clone()` MUST work on nullables. On a type that is not `Clone`, `x.clone()` MUST call a visible extension named `clone`, or else report `NotCloneable` (`E4018`) naming the type.
@@ -349,6 +361,21 @@ A local MUST NOT be read on a path on which it has not been assigned. Such a rea
 - **WHEN** `fun next(): Int = 0` is declared and `fun f(c: Bool) { do { val x = next(); if (c) continue; val y = "b" } while (x > 0) }` is checked
 - **THEN** the file passes `prism check`
 
+### Requirement: Markers of Generic Types Are Conditional
+A marker's parameters MUST be the type parameters that occur in a field or payload type of its declaration. An instantiation MUST be `Copy` when the marker is `Copy` and every marker parameter's argument is `Copy`, and `Clone` when the marker is `Copy` or `Clone` and every marker parameter's argument is `Clone`. The declaration check MUST treat each marker parameter as satisfying the marker.
+
+#### Scenario: A Copy generic struct
+- **WHEN** `struct Pair<A, B> : Copy { val a: A, val b: B }`, `struct User : Clone { val name: String }` and `struct Raw { val n: Int }` are declared, and `fun f(p: &Pair<Int, Int>): Pair<Int, Int> = p`, `fun g(p: &Pair<User, Int>): Pair<User, Int> = p.clone()`, `fun h(p: &Pair<String, Int>): Pair<String, Int> = p` and `fun k(p: &Pair<Raw, Int>): Pair<Raw, Int> = p.clone()` are checked
+- **THEN** `f` and `g` typecheck successfully, the type checker emits `E4017` for `h`, because `Pair<String, Int>` is `Clone` but not `Copy`, and `E4018` for `k`
+
+#### Scenario: A type parameter that no field uses does not condition the marker
+- **WHEN** `struct Handle<T> : Copy { val id: Int }` is declared and `fun f(h: &Handle<String>): Handle<String> = h` is checked
+- **THEN** the file typechecks successfully, because `Handle<String>` is `Copy`
+
+#### Scenario: A marker parameter inside a non-Copy built-in
+- **WHEN** `struct W<T> : Copy { val h: Heap<T> }` and `struct C<T> : Clone { val h: Heap<T>, val n: T? }` are declared
+- **THEN** the type checker emits `E4016` for `W.h` and accepts `C`
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -389,3 +416,7 @@ Decisions from `borrowck-moves`:
 Decisions from `borrowck-exclusivity`:
 
 - **A closure does not move its captures.** A closure borrows what it captures (`references`), so moving a capture inside it is a move out of a borrow. Whether an expression moves a captured binding depends only on its shape and on the closure nesting, so it is `E4017` in the type checker, like a default value moving an earlier parameter, with the source "captured variable 's', which the closure borrows": this settles `run { take(s) }; take(s)`, which passed and dropped `s` twice. Rejected: a borrow-checker code, and accepting the move as a move capture, which needs the escaping-closure design of `closures` (a closure owning `s` could run at most once).
+
+Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Markers of generic types are conditional on the type parameters their fields use.** For `struct Pair<A, B> : Copy`, the marker parameters are the type parameters that occur syntactically in a field or payload type, read from the AST alone so Phase 1 can record them. `Pair<X, Y>` is `Copy` when every marker parameter's argument is, and the declaration check treats each marker parameter as satisfying the marker, so `struct Box<T> : Copy { val v: T }` is accepted and a phantom `struct Handle<T> : Copy { val id: Int }` is `Copy` for every `T`, which `State<T>` needs. Rejected: unconditional markers requiring bounds (no `Box<String>` could exist), Rust's derive rule conditioning on every parameter (a phantom handle would not be `Copy`), and a semantic condition from the field types' own markers, which needs imported marker parameters in Phase 1a; the syntactic rule only ever errs towards "not `Copy`".

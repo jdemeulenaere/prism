@@ -157,7 +157,7 @@ The lexer MUST parse decimal integers, hexadecimal, binary, floating-point numbe
 - **THEN** tokenizer emits `Int(4)`, `DotDot`, and `Int(10)` rather than a malformed float
 
 ### Requirement: Pratt Expression Precedence and Associativity
-The parser MUST parse expressions according to Pratt operator precedence, correctly ordering assignment, Elvis, logical, comparison, range, arithmetic, prefix, postfix, and function call operators.
+The parser MUST parse expressions according to Pratt operator precedence, correctly ordering assignment, Elvis, logical, comparison, range, arithmetic, prefix, postfix, and function call operators. Comparison operators (`<`, `<=`, `>`, `>=`) MUST be non-associative: an operand of a comparison MUST NOT itself be an unparenthesized comparison.
 
 #### Scenario: Arithmetic and comparison precedence
 - **WHEN** parsing expression `a + b * c > d`
@@ -166,6 +166,10 @@ The parser MUST parse expressions according to Pratt operator precedence, correc
 #### Scenario: Non-associative assignment
 - **WHEN** code attempts chained assignment (`a = b = c`)
 - **THEN** the parser rejects the expression with a compile error requiring separate statements
+
+#### Scenario: Non-associative comparison
+- **WHEN** parsing `a < b < c` or `a < b > c`
+- **THEN** the parser reports `E2001` at the second operator, suggesting `&&` between two comparisons, while `(a < b) == c` and `a < b == c > d` parse
 
 #### Scenario: Invalid assignment target rejected
 - **WHEN** the left side of `=` is not a variable, a `.` field access, an index expression or a write through `*` (`a + b = c`, `1 = 2`, `g() = 1`, `a?.b = c`)
@@ -495,15 +499,23 @@ An assignment target MAY start with one or more prefix `*` operators followed by
 - **THEN** both parse as multiplication
 
 ### Requirement: Extension Function Declarations
-A function declaration MAY name a receiver type before its name, `fun T.name(...)`, which declares an extension function on `T`. The receiver MUST be a single type name. A receiver with type arguments, a `?`, a `&` or `&mut`, or a parenthesized or function type MUST be rejected with `E2001`, with a message saying what receivers may be.
+A function declaration MAY name a receiver type before its name, `fun T.name(...)`, which declares an extension function on `T`. The receiver MUST be a single type name, optionally with type arguments (`fun <T> Box<T>.get()`, `fun Box<Int>.sum()`). A receiver that is one of the function's own type parameters, a `Heap<...>` receiver, a `?`, a `&` or `&mut`, or a parenthesized or function type MUST be rejected with `E2001`, with a message saying what receivers may be.
 
 #### Scenario: Extension declarations
 - **WHEN** parsing `fun User.greet(): String = "Hi " + name`, `public fun Int.squared(): Int = this * this` and `public compose fun User.Avatar(): Unit { }`
 - **THEN** each parses as a function named `greet`, `squared` or `Avatar` with the receiver type `User`, `Int` or `User` and the shared receiver mode
 
+#### Scenario: Receivers with type arguments
+- **WHEN** parsing `fun <T> Box<T>.get(): &T = &v` and `fun Box<Int>.sum(): Int = v`
+- **THEN** each parses as an extension whose receiver type is `Box<T>` or `Box<Int>`
+
 #### Scenario: Receiver with type arguments rejected
 - **WHEN** parsing `fun Heap<User>.size(): Int = 0`
-- **THEN** the parser reports `E2001`, saying that a receiver type with type arguments is not supported yet
+- **THEN** the parser reports `E2001`, saying that calls look through `Heap`, so the extension is declared on its contents (`fun User.size()`)
+
+#### Scenario: Type-parameter receiver rejected
+- **WHEN** parsing `fun <T> T.also(): T = this`
+- **THEN** the parser reports `E2001`, saying that a bare type parameter cannot be a receiver
 
 #### Scenario: Nullable or borrowed receiver rejected
 - **WHEN** parsing `fun User?.greet(): String = "x"`, `fun &User.greet(): String = "x"` or `fun &mut User.rename() { }`
@@ -538,6 +550,36 @@ A function declaration MAY name a receiver type before its name, `fun T.name(...
 #### Scenario: this as a name rejected
 - **WHEN** parsing `fun f() { val this = 1 }` or `fun g(this: Int) { }`
 - **THEN** the parser reports `E2001`
+
+### Requirement: Type Parameter Lists
+A function MUST declare its type parameters between `fun` and its name or receiver (`fun <T> id(x: T)`, `fun <T> Box<T>.get()`), and a struct or enum after its name. A list MUST hold one or more names, optionally with a trailing comma. A function type parameter MAY have a bound, `: Copy` or `: Clone`. Type parameters after a function's name, an empty list, any other bound, and a bound in a struct or enum MUST be rejected with `E2001`.
+
+#### Scenario: Type parameter lists
+- **WHEN** parsing `fun <T> id(x: T): T = x`, `public compose fun <T : Copy, U : Clone,> show(a: T, b: U) {}`, `mut fun <T> Box<T>.put(v: T) {}`, `struct Pair<A, B>(val a: A, val b: B)` and `enum Option<T> : Copy { Some(T), None }`
+- **THEN** each declaration parses with its type parameters in order, `T` bounded by `Copy` and `U` by `Clone` in `show`
+
+#### Scenario: Type parameters after the function name rejected
+- **WHEN** parsing `fun id<T>(x: T): T = x` or `fun User.f<T>(x: T) {}`
+- **THEN** the parser reports `E2001`, saying that type parameters go before the name, as in `fun <T> id(...)`
+
+#### Scenario: Malformed type parameter lists rejected
+- **WHEN** parsing `fun <> f() {}`, `fun <T : Eq> f(x: T) {}`, `fun <T : Copy, Clone> f(x: T) {}` or `struct Box<T : Copy>(val v: T)`
+- **THEN** the parser reports `E2001`: a list needs a type parameter, only `Copy` or `Clone` can bound one, and struct and enum type parameters cannot be bounded yet
+
+### Requirement: Explicit Type Arguments at Call Sites
+After an identifier or a member name in an expression, `<` MUST start a type-argument list of the call when the tokens up to the matching `>` parse as types, the list closes with `>`, and the next token is a `(` or `{` on the same line. Otherwise `<` MUST be the comparison operator. In `g(a < b, c > (d))`, the type-argument reading MUST win.
+
+#### Scenario: Type arguments on calls
+- **WHEN** parsing `id<Int>(1)`, `Box<String?>(null)`, `remember<Int> { 0 }`, `s.map<Box<Int>> { n -> Box(n) }` and `u?.pick<Int>(1)`
+- **THEN** each parses as a call with the written type arguments, and `Box<Box<Int>>` closes with two `>` tokens
+
+#### Scenario: Comparisons stay comparisons
+- **WHEN** parsing `a < b`, `if (i<n) f()`, `val m = a < b + 1` and `val k = a < b >= c`
+- **THEN** the first three are comparisons, and the last is rejected with `E2001` as a chained comparison, because a list closed by the `>` of `>=` is not a type-argument list
+
+#### Scenario: Comma-separated comparisons read as type arguments
+- **WHEN** parsing `g(a < b, c > (d))`
+- **THEN** the call `g` has one argument, the call `a<b, c>(d)`, while `g((a < b), c > (d))` has two comparison arguments
 
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
@@ -584,5 +626,11 @@ Decisions from `extension-methods`:
 
 - **Receiver modes are modifiers in a fixed order** (user for the modifiers, order autonomous): `[visibility] [compose] [mut | consuming] fun Receiver.name`. The common case stays unmarked and the forms follow Swift's `mutating` / `consuming`; Rust's explicit `&self` / `&mut self` / `self` parameter was the alternative. A fixed order buys a simpler grammar and formatter at no cost with three modifiers. The mode lives in the receiver node, so a mode without a receiver cannot be represented.
 - **`consuming` is a contextual keyword, like `compose`.** It is a modifier only directly before `fun` at the start of a declaration, so no existing name breaks; a hard keyword would have bought nothing grammatically.
-- **A receiver is a single type name for now.** Type arguments wait for `generics`, a nullable receiver is declared on the non-null type and called with `?.`, and a reference receiver is expressed by the mode. Each is `E2001` with a message saying so, and lifting any of them only accepts more programs. When qualified type paths arrive, the last `.` segment before the name is the method name, as in Kotlin.
+- **A receiver is a single type name for now.** Type arguments came with `generics` (see its decisions below), a nullable receiver is declared on the non-null type and called with `?.`, and a reference receiver is expressed by the mode. Each is `E2001` with a message saying so, and lifting any of them only accepts more programs. When qualified type paths arrive, the last `.` segment before the name is the method name, as in Kotlin.
 - **`this` is a reserved keyword and its own expression node,** so the formatter and LSP can tell it apart from a name, and no declaration can be called `this`.
+
+Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Type parameters go between `fun` and the name or receiver** (`fun <T> id`, `fun <T> Box<T>.get()`), as in Kotlin, because a generic receiver mentions them and must not read `T` before declaring it. Structs and enums keep `struct Box<T>`. The old `fun id<T>` placement is `E2001` with a hint. `Copy` and `Clone` cannot name a type parameter, so `<T : Copy, Clone>` is a rejected second bound rather than a parameter named `Clone`. Rejected: Rust/Swift's `fun id<T>` plus a second placement for extensions.
+- **Call type arguments use Kotlin's syntax with a deterministic rule.** After an identifier or member name, `<` is tried as a type-argument list, kept when the tokens up to the matching `>` parse as types, the list closes with `>` (never the `>` of `>=`), and a `(` or `{` follows on the same line; otherwise the parser rewinds and `<` is a comparison. Comparisons are non-associative, as in Kotlin's grammar (`a < b < c` never typechecked), which leaves `g(a < b, c > (d))` as the only double reading; it is a generic call, as in Kotlin and C#, the way `else` binds to the nearest `if`. Rejected: Rust's turbofish (foreign to `mutableStateOf<String?>(null)`, and it takes `::` from method references), whitespace-sensitive `<`, and name-directed parsing, which would make the parser depend on the type checker.
+- **A receiver may carry type arguments, but not be a bare type parameter or `Heap<...>`.** `fun <T> T.also()` would make every extension lookup generic, and a `Heap` receiver competes with looking through `Heap` layers.
