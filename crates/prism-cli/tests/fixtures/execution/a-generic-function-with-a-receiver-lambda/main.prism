@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+struct User { val name: String }
+
+fun <T> with(receiver: &T, block: T.() -> String): String = block(receiver)
+
+fun main() {
+    val u = User("Ada")
+    println(with(u) { name + "!" })
+    println(with(3) { (this * 2).toString() })
+}

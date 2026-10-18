@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+struct Scope : Copy { val depth: Int }
+struct Section { val title: String, val content: Scope.() -> String }
+
+fun section(title: String, content: escaping Scope.() -> String): Section = Section(title, content)
+
+fun main() {
+    val mark = "!" + "?"
+    val s = section("intro") { "depth " + depth.toString() + mark }
+    println(s.title)
+    println(s.content(Scope(2)))
+    println(s.content(Scope(3)))
+}

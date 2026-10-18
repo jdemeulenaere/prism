@@ -34,7 +34,7 @@ Baseline: compare the main specs with this change's MODIFIED blocks (`syntax`, `
 
 ## 6. Execution
 
-- [ ] 6.1 Add executable fixtures under `execution/` for every scenario of "Receiver Lambdas Run as Closures Over Their Receiver" and "Context Extensions Run the Extension of Their Context", run under `--check-allocations`. Verify that each prints its THEN and reports no live allocation.
+- [x] 6.1 Add executable fixtures under `execution/` for every scenario of "Receiver Lambdas Run as Closures Over Their Receiver" and "Context Extensions Run the Extension of Their Context", run under `--check-allocations`. Verify that each prints its THEN and reports no live allocation.
 
 ## 7. Integration (D13)
 

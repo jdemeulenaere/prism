@@ -1,0 +1,25 @@
+// expect: ok
+// run: 0
+struct Builder { var lines: List<String> }
+
+mut fun Builder.line(s: String) {
+    lines.add(s)
+}
+
+fun build(content: mut Builder.() -> Unit): List<String> {
+    var b = Builder(listOf())
+    b.content()
+    content(&mut b)
+    val (lines) = b
+    return lines
+}
+
+fun main() {
+    var n = 0
+    val out = build {
+        n += 1
+        line("a" + n.toString())
+        lines.add("b")
+    }
+    out.forEach { println(it) }
+}

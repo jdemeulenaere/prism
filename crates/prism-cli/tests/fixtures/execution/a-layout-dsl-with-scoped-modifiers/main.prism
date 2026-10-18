@@ -1,0 +1,38 @@
+// expect: ok
+// run: 0
+struct Modifier : Copy { val fraction: Double }
+struct ColumnScope : Copy { val factor: Double }
+struct RowScope : Copy {}
+
+context(scope: RowScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w)
+
+context(scope: ColumnScope)
+fun Modifier.weight(w: Double): Modifier = Modifier(w * scope.factor)
+
+fun Column(content: ColumnScope.() -> Unit) {
+    println("column {")
+    content(ColumnScope(2.0))
+    println("}")
+}
+
+fun Row(content: RowScope.() -> Unit) {
+    println("row {")
+    RowScope().content()
+    println("}")
+}
+
+fun Text(text: String, modifier: Modifier = Modifier(0.0)) {
+    println(text + " " + modifier.fraction.toString())
+}
+
+fun main() {
+    Column {
+        Text("a", Modifier(0.0).weight(1.0))
+        Row {
+            Text("b", Modifier(0.0).weight(1.0))
+            Text("c")
+        }
+        listOf(3.0).forEach { Text("d", Modifier(0.0).weight(it)) }
+    }
+}
