@@ -12,8 +12,8 @@
 //! chained to their predecessor ([`Results`]), and a backward cursor visited in program order
 //! keeps the states of its current block instead of replaying the block for each location.
 //! The states keep that cost small in large bodies: a [`BitSet`] holds few bits as a list and
-//! many in chunks shared between copies, and the solver walks the edges from a flat [`Graph`]
-//! read once from the body.
+//! many in chunks shared between copies, a [`PairSet`] holds its pairs in shared chunks, and
+//! the solver walks the edges from a flat [`Graph`] read once from the body.
 
 use crate::location::{Graph, Location};
 use prism_mir::{BlockId, Body, Statement, Terminator};
@@ -368,6 +368,189 @@ fn set_bits(mut word: u64, start: usize) -> impl Iterator<Item = usize> {
         word &= word - 1;
         Some(start + bit)
     })
+}
+
+/// The pairs a chunk of a [`PairSet`] holds before it is split in two.
+const PAIR_CHUNK: usize = 128;
+
+/// A set of pairs of small integers, sorted, in chunks of at most `PAIR_CHUNK` pairs shared
+/// copy-on-write between the copies of a state, as [`BitSet`]'s chunks are. Copying a set copies
+/// one pointer per chunk, adding or removing a pair copies at most one chunk, and joining two
+/// states that share most of their chunks, such as the two branches of an `if` over the state
+/// before it, skips the shared ones: so a state of `n` pairs costs `n / PAIR_CHUNK` to copy or
+/// join, and `PAIR_CHUNK + n / PAIR_CHUNK` to change.
+#[derive(Debug, Clone, Default)]
+pub struct PairSet {
+    /// Non-empty chunks, each sorted, every pair of a chunk before every pair of the next.
+    chunks: Vec<Rc<Vec<(u32, u32)>>>,
+    len: usize,
+}
+
+impl PartialEq for PairSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for PairSet {}
+
+impl PairSet {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The pairs, in increasing order.
+    pub fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.chunks.iter().flat_map(|chunk| chunk.iter().copied())
+    }
+
+    /// The chunk where `pair` is or would be inserted: the first whose last pair is not below
+    /// it, or the last chunk.
+    fn chunk_of(&self, pair: (u32, u32)) -> usize {
+        self.chunks
+            .partition_point(|chunk| *chunk.last().expect("a non-empty chunk") < pair)
+            .min(self.chunks.len().saturating_sub(1))
+    }
+
+    pub fn contains(&self, pair: (u32, u32)) -> bool {
+        self.chunks
+            .get(self.chunk_of(pair))
+            .is_some_and(|chunk| chunk.binary_search(&pair).is_ok())
+    }
+
+    /// The pairs whose first element is `first`, in increasing order.
+    pub fn with_first(&self, first: u32) -> impl Iterator<Item = (u32, u32)> + '_ {
+        let start = self.chunk_of((first, 0));
+        self.chunks[start.min(self.chunks.len())..]
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .skip_while(move |pair| pair.0 < first)
+            .take_while(move |pair| pair.0 == first)
+    }
+
+    /// Adds `pair`, returning whether it was absent.
+    pub fn insert(&mut self, pair: (u32, u32)) -> bool {
+        if self.chunks.is_empty() {
+            self.chunks.push(Rc::new(vec![pair]));
+            self.len = 1;
+            return true;
+        }
+        let index = self.chunk_of(pair);
+        let Err(position) = self.chunks[index].binary_search(&pair) else {
+            return false;
+        };
+        let chunk = Rc::make_mut(&mut self.chunks[index]);
+        chunk.insert(position, pair);
+        if chunk.len() > PAIR_CHUNK {
+            let upper = chunk.split_off(chunk.len() / 2);
+            self.chunks.insert(index + 1, Rc::new(upper));
+        }
+        self.len += 1;
+        true
+    }
+
+    /// Removes `pair`, returning whether it was present.
+    pub fn remove(&mut self, pair: (u32, u32)) -> bool {
+        if self.chunks.is_empty() {
+            return false;
+        }
+        let index = self.chunk_of(pair);
+        let Ok(position) = self.chunks[index].binary_search(&pair) else {
+            return false;
+        };
+        let chunk = Rc::make_mut(&mut self.chunks[index]);
+        chunk.remove(position);
+        let small = chunk.len();
+        self.len -= 1;
+        if small == 0 {
+            self.chunks.remove(index);
+        } else if small < PAIR_CHUNK / 4 && index + 1 < self.chunks.len() {
+            // A small chunk joins the next one when both fit in one, so that a set that shrank
+            // keeps about `len / PAIR_CHUNK` chunks.
+            if small + self.chunks[index + 1].len() <= PAIR_CHUNK {
+                let next = self.chunks.remove(index + 1);
+                Rc::make_mut(&mut self.chunks[index]).extend(next.iter().copied());
+            }
+        }
+        true
+    }
+
+    /// Keeps only the pairs for which `keep` holds.
+    pub fn retain(&mut self, keep: impl Fn(&(u32, u32)) -> bool) {
+        if self.iter().all(|pair| keep(&pair)) {
+            return;
+        }
+        let kept: Vec<(u32, u32)> = self.iter().filter(|pair| keep(pair)).collect();
+        *self = Self::from_sorted(kept);
+    }
+
+    /// The set of `pairs`, sorted and without duplicates.
+    fn from_sorted(pairs: Vec<(u32, u32)>) -> Self {
+        let len = pairs.len();
+        let chunks = pairs
+            .chunks(PAIR_CHUNK / 2)
+            .map(|chunk| Rc::new(chunk.to_vec()))
+            .collect();
+        Self { chunks, len }
+    }
+
+    /// Adds every pair of `other`, returning whether this set changed. The chunks of `other`
+    /// that this set shares are skipped; when it shares few, the two are merged in one pass.
+    pub fn union(&mut self, other: &PairSet) -> bool {
+        if other.is_empty() {
+            return false;
+        }
+        if self.is_empty() {
+            *self = other.clone();
+            return true;
+        }
+        let shared: std::collections::HashSet<*const Vec<(u32, u32)>> =
+            self.chunks.iter().map(Rc::as_ptr).collect();
+        let unshared: Vec<&Rc<Vec<(u32, u32)>>> = other
+            .chunks
+            .iter()
+            .filter(|chunk| !shared.contains(&Rc::as_ptr(chunk)))
+            .collect();
+        let missing: Vec<(u32, u32)> = unshared
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .filter(|pair| !self.contains(*pair))
+            .collect();
+        if missing.is_empty() {
+            return false;
+        }
+        // A few new pairs go in one by one, which keeps the other chunks shared.
+        if missing.len() * 8 <= self.len {
+            for pair in missing {
+                self.insert(pair);
+            }
+            return true;
+        }
+        let mut merged = Vec::with_capacity(self.len + other.len);
+        {
+            let (mut left, mut right) = (self.iter().peekable(), other.iter().peekable());
+            loop {
+                let next = match (left.peek(), right.peek()) {
+                    (Some(a), Some(b)) if a < b => left.next(),
+                    (Some(a), Some(b)) if b < a => right.next(),
+                    (Some(_), Some(_)) => {
+                        right.next();
+                        left.next()
+                    }
+                    (Some(_), None) => left.next(),
+                    (None, Some(_)) => right.next(),
+                    (None, None) => break,
+                };
+                merged.extend(next);
+            }
+        }
+        *self = Self::from_sorted(merged);
+        true
+    }
 }
 
 /// Whether an analysis follows the edges of the control-flow graph or runs against them.
@@ -873,6 +1056,60 @@ mod tests {
         assert_eq!(joined.iter().count(), SPARSE_BITS * 2 + 1 + 3);
         let mut empty = BitSet::new(size);
         assert!(!empty.union(&BitSet::new(size)) && empty.is_empty());
+    }
+
+    #[test]
+    fn pair_sets() {
+        let mut set = PairSet::default();
+        assert!(set.is_empty() && !set.remove((0, 0)));
+        // Enough pairs, inserted out of order, for several chunks.
+        let pairs: Vec<(u32, u32)> = (0..1000u32).map(|i| ((i * 7) % 100, i)).collect();
+        for pair in &pairs {
+            assert!(set.insert(*pair));
+        }
+        assert!(!set.insert(pairs[3]));
+        assert!(set.chunks.len() > 1);
+        assert!(set.chunks.iter().all(|chunk| chunk.len() <= PAIR_CHUNK));
+        let mut sorted = pairs.clone();
+        sorted.sort_unstable();
+        assert_eq!(set.iter().collect::<Vec<_>>(), sorted);
+        assert_eq!(set.len(), 1000);
+        assert_eq!(
+            set.with_first(7).collect::<Vec<_>>(),
+            sorted
+                .iter()
+                .copied()
+                .filter(|(first, _)| *first == 7)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(set.with_first(100).count(), 0);
+        // A copy shares the chunks; a change to it leaves the original as it was.
+        let mut copy = set.clone();
+        assert!(copy.remove((7, 1)) && !copy.contains((7, 1)) && set.contains((7, 1)));
+        assert!(!set.union(&copy));
+        assert!(copy.union(&set) && copy == set);
+        // Removing most pairs merges the chunks that became small.
+        for pair in &pairs[..990] {
+            assert!(set.remove(*pair));
+        }
+        assert_eq!(set.len(), 10);
+        assert!(set.chunks.len() <= 2, "{} chunks", set.chunks.len());
+        set.retain(|(first, _)| first % 2 == 0);
+        assert!(set.iter().all(|(first, _)| first % 2 == 0));
+        // A union with few shared chunks merges the sets.
+        let mut other = PairSet::default();
+        for i in 0..300 {
+            other.insert((i, i));
+        }
+        let expected: Vec<(u32, u32)> = {
+            let mut all: Vec<(u32, u32)> = set.iter().chain(other.iter()).collect();
+            all.sort_unstable();
+            all.dedup();
+            all
+        };
+        assert!(set.union(&other));
+        assert_eq!(set.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(set.len(), expected.len());
     }
 
     /// Forward: the blocks that may have run before a point. Backward: the blocks that may run

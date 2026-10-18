@@ -15,7 +15,8 @@
 //!    and infers how each closure borrows its captures ([`captures`]).
 //! 2. **Exclusivity.** For each elaborated body it gathers the loans ([`borrows`]), solves the
 //!    liveness of loan-carrying locals ([`liveness`], backward) and the loans each may hold
-//!    ([`loan_flow`], forward), then checks every access against the live loans of overlapping
+//!    ([`loan_flow`], forward, dropping what a local holds once it is dead, so that its states
+//!    hold the loans in scope rather than every loan made so far), then checks every access against the live loans of overlapping
 //!    places (`E5003` to `E5006`) and every write of a function value that may hold a capture
 //!    or a function-typed parameter to a place it escapes through (`E5007`), then each write of
 //!    its return place against the lifetime elision rules ([`elision`]): a returned borrow of a
@@ -70,27 +71,45 @@ pub fn check_file(file: &MirFile) -> Result<MirFile, Vec<BorrowError>> {
     let (elaborated, captures) = check_moves_and_elaborate(file)?;
     let mut errors = Vec::new();
     for (_, body) in elaborated.bodies.iter() {
-        let borrows = borrows::BorrowSet::gather(&elaborated, body);
-        let liveness = solve(body, liveness::Liveness::new(body, &borrows));
-        let flow = solve(body, loan_flow::LoanFlow::new(&elaborated, body, &borrows));
-        let (escapes, escaped) = escapes::check_escapes(&elaborated, body, &borrows, &flow);
-        errors.extend(conflicts::check_conflicts(
-            &elaborated,
-            body,
-            &captures,
-            &borrows,
-            &liveness,
-            &flow,
-            &escaped,
-        ));
-        errors.extend(escapes);
-        errors.extend(returns::check_returns(&elaborated, body, &borrows, &flow));
+        errors.extend(check_exclusivity(&elaborated, body, &captures));
     }
     if !errors.is_empty() {
         sort_errors(&mut errors);
         return Err(errors);
     }
     Ok(elaborated)
+}
+
+/// The conflicts, escapes and returned borrows of the elaborated `body` of `file`, whose
+/// closures borrow their captures by `captures`.
+fn check_exclusivity(
+    file: &MirFile,
+    body: &prism_mir::Body,
+    captures: &captures::CaptureModes,
+) -> Vec<BorrowError> {
+    let borrows = borrows::BorrowSet::gather(file, body);
+    // A body that makes no loan and has no local that could hold one, as most bodies of plain
+    // values, has nothing in scope to conflict with, escape or return.
+    if borrows.carriers.is_empty() && borrows.loans.is_empty() {
+        return Vec::new();
+    }
+    let liveness = solve(body, liveness::Liveness::new(body, &borrows));
+    let flow = solve(
+        body,
+        loan_flow::LoanFlow::pruned(file, body, &borrows, &liveness),
+    );
+    let (mut escapes, escaped) = escapes::check_escapes(file, body, &borrows, &flow);
+    // An escape's diagnostic may name what an owned capture's operand holds after the operand
+    // is dead, which only the full flow keeps.
+    if !escapes.is_empty() {
+        let full = solve(body, loan_flow::LoanFlow::new(file, body, &borrows));
+        escapes = escapes::check_escapes(file, body, &borrows, &full).0;
+    }
+    let mut errors =
+        conflicts::check_conflicts(file, body, captures, &borrows, &liveness, &flow, &escaped);
+    errors.extend(escapes);
+    errors.extend(returns::check_returns(file, body, &borrows, &flow));
+    errors
 }
 
 /// The move check of every body of `file`, as lowered; when no body has an error, the file

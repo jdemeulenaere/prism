@@ -353,16 +353,35 @@ pub(crate) fn check_conflicts(
                 }
                 _ => borrows.loans_of(place.local),
             };
-            let Some(loan) = candidates
-                .iter()
-                .copied()
-                .filter(|loan| checker.conflicts(place, *kind, *loan))
-                .find(|loan| {
-                    state
-                        .holders(loan.index())
-                        .any(|carrier| in_scope(borrows.carriers[carrier]))
-                })
-            else {
+            if candidates.is_empty() {
+                continue;
+            }
+            // The candidates' holders, or the state's pairs by loan when they are fewer: many
+            // loans of one place made over a body, of which only a few are held at a time,
+            // cost what the state holds, not what the body made.
+            let found = if candidates.len() <= state.len() {
+                candidates
+                    .iter()
+                    .copied()
+                    .filter(|loan| checker.conflicts(place, *kind, *loan))
+                    .find(|loan| {
+                        state
+                            .holders(loan.index())
+                            .any(|carrier| in_scope(borrows.carriers[carrier]))
+                    })
+            } else {
+                state
+                    .by_item()
+                    .take_while(|(item, _)| *item < borrows.loans.len())
+                    .map(|(item, carrier)| (LoanId(item as u32), carrier))
+                    .find(|(loan, carrier)| {
+                        borrows.loans[*loan].place.local == place.local
+                            && checker.conflicts(place, *kind, *loan)
+                            && in_scope(borrows.carriers[*carrier])
+                    })
+                    .map(|(loan, _)| loan)
+            };
+            let Some(loan) = found else {
                 continue;
             };
             // A value that ends while an escaping closure borrows it is reported as the escape.

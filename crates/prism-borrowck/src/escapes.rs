@@ -62,7 +62,7 @@ pub(crate) fn check_escapes(
             else {
                 continue;
             };
-            let state = cursor.seek(location).clone();
+            let state = cursor.seek(location);
             for (index, (operand, parameter)) in arguments.iter().zip(parameters).enumerate() {
                 // A box is an owned container that can be returned or stored anywhere, like a
                 // struct (D11 of `heap-boxes`); an `escaping` parameter may be kept by the
@@ -82,11 +82,11 @@ pub(crate) fn check_escapes(
                 if !places::contains_function(&place.ty(body, &file.types)) {
                     continue;
                 }
-                let items = flow.analysis.holds(&state, place.local);
+                let items = flow.analysis.holds(state, place.local);
                 escaped.extend(checker.loans(&items));
                 let value = Value::Local(place.local);
                 errors.extend(checker.error(
-                    &state,
+                    state,
                     &items,
                     &value,
                     position,
@@ -98,7 +98,7 @@ pub(crate) fn check_escapes(
         let StatementKind::Assign(destination, rvalue) = &statement.kind else {
             continue;
         };
-        let state = cursor.seek(location).clone();
+        let state = cursor.seek(location);
         if let Rvalue::Aggregate(kind, operands) = rvalue.as_ref() {
             let position = match kind {
                 AggregateKind::Struct { .. } => "stored in a field here",
@@ -111,11 +111,11 @@ pub(crate) fn check_escapes(
                 if !places::contains_function(&place.ty(body, &file.types)) {
                     continue;
                 }
-                let items = flow.analysis.holds(&state, place.local);
+                let items = flow.analysis.holds(state, place.local);
                 escaped.extend(checker.loans(&items));
                 let value = Value::Local(place.local);
                 errors.extend(checker.error(
-                    &state,
+                    state,
                     &items,
                     &value,
                     position,
@@ -132,7 +132,7 @@ pub(crate) fn check_escapes(
         };
         let items: Vec<Item> = flow
             .analysis
-            .rvalue_items(&state, rvalue, location)
+            .rvalue_items(state, rvalue, location)
             .into_iter()
             .map(|item| borrows.item(item))
             .collect();
@@ -147,7 +147,7 @@ pub(crate) fn check_escapes(
             _ => (Value::Other, statement.span),
         };
         escaped.extend(checker.loans(&items));
-        errors.extend(checker.error(&state, &items, &value, position, span));
+        errors.extend(checker.error(state, &items, &value, position, span));
     }
     (errors, escaped)
 }

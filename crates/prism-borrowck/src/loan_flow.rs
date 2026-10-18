@@ -27,8 +27,9 @@
 //! reference holds, not the borrow of the reference.
 
 use crate::borrows::{BorrowSet, Item, LoanKind};
-use crate::dataflow::{Analysis, Domain};
+use crate::dataflow::{Analysis, Domain, PairSet, Results};
 use crate::elision::{self, Rule, Signature};
+use crate::liveness::Liveness;
 use crate::location::Location;
 use crate::places;
 use prism_mir::{
@@ -38,102 +39,89 @@ use prism_mir::{
 use prism_typed_tree::{ArenaId, Type};
 
 /// The state of the loan flow: the items each loan-carrying local may hold, as pairs of a
-/// carrier (its position among [`BorrowSet::carriers`]) and an item, sorted.
+/// carrier (its position among [`BorrowSet::carriers`]) and an item, sorted, and the same pairs
+/// by item, so that both what a carrier holds and who holds an item are found by binary search.
 ///
 /// A state's size is the number of pairs it holds, not the number of carriers times the number
-/// of items: most locals hold nothing or one loan, so a body with many borrows has small states.
+/// of items: most locals hold nothing or one loan, and a local's items are dropped once it is
+/// dead ([`LoanFlow::pruned`]), so a body with many borrows has small states.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Holdings {
-    pairs: Vec<(u32, u32)>,
+    /// `(carrier, item)`.
+    pairs: PairSet,
+    /// `(item, carrier)` for each pair.
+    by_item: PairSet,
 }
 
 impl Holdings {
-    /// The positions in `pairs` of the pairs of `carrier`.
-    fn range(&self, carrier: usize) -> std::ops::Range<usize> {
-        let carrier = carrier as u32;
-        let start = self
-            .pairs
-            .partition_point(|(held_by, _)| *held_by < carrier);
-        let end = start + self.pairs[start..].partition_point(|(held_by, _)| *held_by == carrier);
-        start..end
+    /// The number of pairs.
+    pub fn len(&self) -> usize {
+        self.pairs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
     }
 
     /// The items `carrier` holds, in increasing order.
     pub fn items(&self, carrier: usize) -> impl Iterator<Item = usize> + '_ {
-        self.pairs[self.range(carrier)]
-            .iter()
-            .map(|(_, item)| *item as usize)
+        self.pairs
+            .with_first(carrier as u32)
+            .map(|(_, item)| item as usize)
     }
 
     /// Whether `carrier` holds `item`.
     pub fn contains(&self, carrier: usize, item: usize) -> bool {
-        self.pairs
-            .binary_search(&(carrier as u32, item as u32))
-            .is_ok()
+        self.pairs.contains((carrier as u32, item as u32))
     }
 
     /// The carriers that hold `item`, in increasing order.
     pub fn holders(&self, item: usize) -> impl Iterator<Item = usize> + '_ {
-        let item = item as u32;
-        self.pairs
+        self.by_item
+            .with_first(item as u32)
+            .map(|(_, carrier)| carrier as usize)
+    }
+
+    /// Every pair as `(item, carrier)`, by item, then carrier.
+    pub fn by_item(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.by_item
             .iter()
-            .filter(move |(_, held)| *held == item)
-            .map(|(carrier, _)| *carrier as usize)
+            .map(|(item, carrier)| (item as usize, carrier as usize))
     }
 
     /// Adds `items` to what `carrier` holds.
     fn insert(&mut self, carrier: usize, items: impl IntoIterator<Item = usize>) {
-        let range = self.range(carrier);
-        let mut held: Vec<(u32, u32)> = self.pairs[range.clone()].to_vec();
-        let before = held.len();
-        held.extend(items.into_iter().map(|item| (carrier as u32, item as u32)));
-        if held.len() == before {
-            return;
+        for item in items {
+            if self.pairs.insert((carrier as u32, item as u32)) {
+                self.by_item.insert((item as u32, carrier as u32));
+            }
         }
-        held.sort_unstable();
-        held.dedup();
-        self.pairs.splice(range, held);
     }
 
     /// Removes everything `carrier` holds.
     fn clear(&mut self, carrier: usize) {
-        let range = self.range(carrier);
-        if !range.is_empty() {
-            self.pairs.drain(range);
+        let held: Vec<(u32, u32)> = self.pairs.with_first(carrier as u32).collect();
+        for (carrier, item) in held {
+            self.pairs.remove((carrier, item));
+            self.by_item.remove((item, carrier));
         }
     }
 
     /// Removes `items`, sorted, from every carrier.
     fn remove_items(&mut self, items: &[usize]) {
-        self.pairs
-            .retain(|(_, item)| items.binary_search(&(*item as usize)).is_err());
+        let kept = |item: u32| items.binary_search(&(item as usize)).is_err();
+        self.pairs.retain(|(_, item)| kept(*item));
+        self.by_item.retain(|(item, _)| kept(*item));
     }
 }
 
 impl Domain for Holdings {
     fn join(&mut self, other: &Self) -> bool {
-        if other.pairs.is_empty() {
+        if !self.pairs.union(&other.pairs) {
             return false;
         }
-        let mut joined = Vec::with_capacity(self.pairs.len() + other.pairs.len());
-        let (mut left, mut right) = (self.pairs.iter().peekable(), other.pairs.iter().peekable());
-        loop {
-            let next = match (left.peek(), right.peek()) {
-                (Some(a), Some(b)) if a < b => left.next(),
-                (Some(a), Some(b)) if b < a => right.next(),
-                (Some(_), Some(_)) => {
-                    right.next();
-                    left.next()
-                }
-                (Some(_), None) => left.next(),
-                (None, Some(_)) => right.next(),
-                (None, None) => break,
-            };
-            joined.extend(next.copied());
-        }
-        let changed = joined.len() != self.pairs.len();
-        self.pairs = joined;
-        changed
+        self.by_item.union(&other.by_item);
+        true
     }
 }
 
@@ -145,9 +133,78 @@ pub struct LoanFlow<'a> {
     /// The items of the loans of places through a dereference of each local, which no longer
     /// name what they borrowed once the local is re-pointed, sorted.
     through_dereference: Vec<Vec<usize>>,
+    /// When pruned, the carriers that each location, per block, uses or defines last: dead
+    /// after it, they hold nothing afterwards.
+    dying: Option<Vec<Vec<Vec<u32>>>>,
 }
 
 impl<'a> LoanFlow<'a> {
+    /// The loan flow of `body`, whose loans are `borrows`, which drops what a carrier holds
+    /// once `liveness` finds it dead after a location that uses or defines it.
+    ///
+    /// Every query of a state asks what a local holds where it is used, or which locals in
+    /// scope there hold a loan, and a dead local is used again only after a definition, which
+    /// replaces what it held: so the answers are those of the full flow, while a state holds
+    /// only the items of live locals, and a body whose locals each hold a loan but die one
+    /// after the other keeps its states small. The one exception is the diagnostic of an
+    /// escape, which names an owned capture by what its operand holds where the closure
+    /// escapes, perhaps after the operand is dead: its errors are rebuilt from the full flow
+    /// ([`crate::check_file`]).
+    pub fn pruned(
+        file: &'a MirFile,
+        body: &'a Body,
+        borrows: &'a BorrowSet,
+        liveness: &Results<Liveness>,
+    ) -> Self {
+        let mut flow = Self::new(file, body, borrows);
+        let mut dying = Vec::with_capacity(body.blocks.len());
+        for (block, data) in body.blocks.iter() {
+            // Backward through the block, from the state after its terminator.
+            let mut live = liveness.block_state(block, body);
+            let mut block_dying = vec![Vec::new(); data.statements.len() + 1];
+            for index in (0..=data.statements.len()).rev() {
+                let location = Location {
+                    block,
+                    statement: index,
+                };
+                let effects = liveness.analysis.carrier_effects(location);
+                if !effects.is_empty() {
+                    let mut touched: Vec<u32> = effects
+                        .iter()
+                        .map(|(carrier, _)| *carrier)
+                        .filter(|carrier| !live.contains(*carrier as usize))
+                        .collect();
+                    touched.sort_unstable();
+                    touched.dedup();
+                    block_dying[index] = touched;
+                }
+                match data.statements.get(index) {
+                    Some(statement) => liveness
+                        .analysis
+                        .apply_statement(&mut live, statement, location),
+                    None => {
+                        liveness
+                            .analysis
+                            .apply_terminator(&mut live, &data.terminator, location)
+                    }
+                }
+            }
+            dying.push(block_dying);
+        }
+        flow.dying = Some(dying);
+        flow
+    }
+
+    /// Drops what the locals dead after `location` hold.
+    fn prune(&self, state: &mut Holdings, location: Location) {
+        if let Some(dying) = &self.dying {
+            for carrier in &dying[location.block.index()][location.statement] {
+                state.clear(*carrier as usize);
+            }
+        }
+    }
+
+    /// The full loan flow of `body`, whose loans are `borrows`.
     pub fn new(file: &'a MirFile, body: &'a Body, borrows: &'a BorrowSet) -> Self {
         let through_dereference = body
             .locals
@@ -168,6 +225,7 @@ impl<'a> LoanFlow<'a> {
             body,
             borrows,
             through_dereference,
+            dying: None,
         }
     }
 
@@ -588,9 +646,18 @@ impl Analysis for LoanFlow<'_> {
                 }
             }
         }
+        self.prune(state, location);
     }
 
-    fn apply_terminator(&self, state: &mut Holdings, terminator: &Terminator, _: Location) {
+    fn apply_terminator(&self, state: &mut Holdings, terminator: &Terminator, location: Location) {
+        self.apply_call(state, terminator);
+        self.prune(state, location);
+    }
+}
+
+impl LoanFlow<'_> {
+    /// The effect of a call terminator.
+    fn apply_call(&self, state: &mut Holdings, terminator: &Terminator) {
         if let TerminatorKind::Call {
             callee,
             arguments,
@@ -639,7 +706,18 @@ mod tests {
         assert_eq!(state.holders(5).collect::<Vec<_>>(), vec![1, 2]);
         state.remove_items(&[5]);
         state.clear(0);
-        assert_eq!(state.pairs, vec![(2, 1)]);
+        assert_eq!(state.pairs.iter().collect::<Vec<_>>(), vec![(2, 1)]);
+        assert_eq!(state.by_item.iter().collect::<Vec<_>>(), vec![(1, 2)]);
+        // Many items at once are merged in; the index by item stays the same pairs.
+        state.insert(1, [9, 8, 7, 6, 1, 0]);
+        state.insert(3, [7]);
+        assert_eq!(state.holders(7).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(state.holders(1).collect::<Vec<_>>(), vec![1, 2]);
+        state.clear(1);
+        let mut swapped: Vec<(u32, u32)> = state.pairs.iter().map(|(c, i)| (i, c)).collect();
+        swapped.sort_unstable();
+        assert_eq!(state.by_item.iter().collect::<Vec<_>>(), swapped);
+        assert_eq!(state.by_item().collect::<Vec<_>>(), vec![(1, 2), (7, 3)]);
     }
 
     /// What the local named `name` of `f` in `source` may hold just before the first location
