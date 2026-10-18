@@ -229,3 +229,20 @@ impl Token {
         }
     }
 }
+
+/// Whether a comment is a `//` line comment or a `/* */` block comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentKind {
+    /// `// ...`, up to (not including) the newline that ends it.
+    Line,
+    /// `/* ... */`, including any nested block comments.
+    Block,
+}
+
+/// A comment skipped by the lexer, reported only in the comment-collecting mode
+/// ([`crate::Lexer::tokenize_with_comments`]). Its text is the source slice of its span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Comment {
+    pub kind: CommentKind,
+    pub span: Span,
+}

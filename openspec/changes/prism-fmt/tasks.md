@@ -4,7 +4,7 @@ The `formatting` scenarios are tested by golden files in `crates/prism-formatter
 
 ## 1. Comment-collecting lexer (D2)
 
-- [ ] 1.1 In `prism-lexer`, add `Comment { kind, span }`, `CommentKind::{Line, Block}` and `Lexer::tokenize_with_comments`, recording comments in `skip_whitespace_and_comments` only when collection is on; `tokenize_all` and `next_token` collect nothing. Verify with lexer tests for both scenarios of "Comments Are Available to Tools" (the token streams of both modes compared equal, kinds, spans and newline flags included), and that `cargo test -p prism-lexer` passes.
+- [x] 1.1 In `prism-lexer`, add `Comment { kind, span }`, `CommentKind::{Line, Block}` and `Lexer::tokenize_with_comments`, recording comments in `skip_whitespace_and_comments` only when collection is on; `tokenize_all` and `next_token` collect nothing. Verify with lexer tests for both scenarios of "Comments Are Available to Tools" (the token streams of both modes compared equal, kinds, spans and newline flags included), and that `cargo test -p prism-lexer` passes.
 
 ## 2. Document algebra and renderer (D1)
 

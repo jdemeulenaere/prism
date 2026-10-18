@@ -247,3 +247,44 @@ fn increment_and_decrement_are_single_tokens() {
         ]
     );
 }
+
+// --- Comments Are Available to Tools (`prism-fmt`)
+
+#[test]
+fn comment_collecting_lexer_yields_the_same_tokens() {
+    use prism_lexer::CommentKind;
+    let source = "a /* b /* c */ d */ + // e\nf";
+    let (with_comments, comments) = Lexer::new(source).tokenize_with_comments();
+    assert_eq!(with_comments, tokens(source));
+    assert_eq!(
+        with_comments.iter().map(|t| &t.kind).collect::<Vec<_>>(),
+        vec![&ident("a"), &TokenKind::Plus, &ident("f"), &TokenKind::Eof]
+    );
+    assert!(with_comments[2].is_preceded_by_newline);
+    let found: Vec<(CommentKind, &str, u32, u32)> = comments
+        .iter()
+        .map(|c| {
+            let text = &source[c.span.start..c.span.end];
+            (c.kind, text, c.span.line, c.span.column)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (CommentKind::Block, "/* b /* c */ d */", 1, 3),
+            (CommentKind::Line, "// e", 1, 23),
+        ]
+    );
+}
+
+#[test]
+fn comment_markers_inside_literals_are_not_comments() {
+    let source = r#"val s = "// not a comment /* either */""#;
+    let (with_comments, comments) = Lexer::new(source).tokenize_with_comments();
+    assert!(comments.is_empty());
+    assert_eq!(with_comments, tokens(source));
+    assert_eq!(
+        with_comments[3].kind,
+        TokenKind::String("// not a comment /* either */".to_string())
+    );
+}
