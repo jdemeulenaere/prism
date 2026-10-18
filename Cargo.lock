@@ -32,6 +32,7 @@ dependencies = [
  "prism-abi",
  "prism-ast",
  "prism-borrowck",
+ "prism-formatter",
  "prism-lexer",
  "prism-mir",
  "prism-parser",

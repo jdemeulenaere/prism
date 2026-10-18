@@ -1,6 +1,8 @@
 //! Developer CLI for the Prism programming language (`prism`).
 
 use prism_abi::FileAbi;
+use prism_formatter::files::{FileError, FileOutcome};
+use prism_formatter::FormatError;
 use prism_lexer::Lexer;
 use prism_parser::parse_source;
 use std::env;
@@ -26,6 +28,10 @@ COMMANDS:
                            Print the MIR of a source file that typechecks; with
                            --elaborated, borrow-check it and print its elaborated MIR
     abi <file.prism>       Extract and display exported ABI symbols and ABI hash
+    fmt [--check] <path>...
+                           Format files, and the .prism files under directories, in place and
+                           list the changed ones; with --check, only list the files that would
+                           change and fail if any would; '-' formats standard input to output
     tokens <file.prism>    Tokenize source file and print stream of tokens
     version                Show version information
     help                   Show this help message
@@ -92,6 +98,7 @@ fn main() {
             }
             run_abi(&args[2]);
         }
+        "fmt" => run_fmt(&args[2..]),
         "tokens" => {
             if args.len() < 3 {
                 eprintln!("Error: 'tokens' command requires a file path argument");
@@ -324,6 +331,112 @@ fn run_abi(path: &str) {
             } => {
                 println!("  {} val {}: {}", visibility, name, ty);
             }
+        }
+    }
+}
+
+/// `prism fmt [--check] <path>...` (the `formatting` spec). Exits with status 1 when a file
+/// could not be formatted, or with `--check` when a file is not formatted.
+fn run_fmt(arguments: &[String]) {
+    let check = arguments.iter().any(|argument| argument == "--check");
+    let paths: Vec<&String> = arguments
+        .iter()
+        .filter(|argument| argument.as_str() != "--check")
+        .collect();
+    if let Some(option) = paths
+        .iter()
+        .find(|path| path.starts_with("--") || path.starts_with('-') && path.len() > 1)
+    {
+        eprintln!("Error: unknown option '{}' for 'fmt'", option);
+        process::exit(1);
+    }
+    if paths.is_empty() {
+        eprintln!(
+            "Error: 'fmt' command requires a file or directory path argument, or '-' for standard input"
+        );
+        process::exit(1);
+    }
+    let mut failed = false;
+    let mut unformatted = false;
+    for path in paths {
+        if path == "-" {
+            match fmt_standard_input(check) {
+                Ok(changed) => unformatted |= changed,
+                Err(()) => failed = true,
+            }
+            continue;
+        }
+        let files = match prism_formatter::files::collect_files(&[path.into()]) {
+            Ok(files) => files,
+            Err((path, err)) => {
+                report_io_error(&path, &err);
+                failed = true;
+                continue;
+            }
+        };
+        for file in files {
+            match prism_formatter::files::format_file(&file, !check) {
+                FileOutcome::Unchanged => {}
+                FileOutcome::Changed => {
+                    println!("{}", file.display());
+                    unformatted = true;
+                }
+                FileOutcome::Failed { source, error } => {
+                    report_format_error(&file, source.as_deref(), &error);
+                    failed = true;
+                }
+            }
+        }
+    }
+    if failed || check && unformatted {
+        process::exit(1);
+    }
+}
+
+/// Formats standard input to standard output, or with `check` only reports whether it is
+/// formatted. Returns whether the input was not formatted.
+fn fmt_standard_input(check: bool) -> Result<bool, ()> {
+    let path = std::path::Path::new("<stdin>");
+    let mut source = String::new();
+    if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut source) {
+        report_io_error(path, &err);
+        return Err(());
+    }
+    match prism_formatter::format_source(&source) {
+        Ok(formatted) => {
+            let changed = formatted != source;
+            if !check {
+                print!("{}", formatted);
+            }
+            Ok(changed)
+        }
+        Err(err) => {
+            report_format_error(path, Some(&source), &FileError::Format(err));
+            Err(())
+        }
+    }
+}
+
+fn report_io_error(path: &std::path::Path, err: &std::io::Error) {
+    let err = prism_resolver::ResolveError::Io {
+        path: path.to_path_buf(),
+        message: err.to_string(),
+    };
+    eprint!("{}", prism_cli::format_resolve_error(&err));
+}
+
+fn report_format_error(path: &std::path::Path, source: Option<&str>, error: &FileError) {
+    match error {
+        FileError::Io(err) => report_io_error(path, err),
+        FileError::Format(FormatError::Syntax(err)) => {
+            eprint!("{}", prism_cli::format_parse_error(path, source, err));
+        }
+        FileError::Format(FormatError::Internal(reason)) => {
+            eprintln!(
+                "internal error: cannot format '{}': {}. This is a bug in prism fmt.",
+                path.display(),
+                reason
+            );
         }
     }
 }

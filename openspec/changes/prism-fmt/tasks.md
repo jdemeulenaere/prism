@@ -22,7 +22,7 @@ The `formatting` scenarios are tested by golden files in `crates/prism-formatter
 
 ## 5. Command (D10, D11)
 
-- [ ] 5.1 Add `prism_formatter::files` (collecting files from paths per D11, and formatting or checking one file) and the `fmt` command in `crates/prism-cli/src/main.rs` with its usage line, rendering syntax errors with `format_parse_error` and I/O errors as `E1000`. Verify with CLI tests for every scenario of "Format Command", "Formatting Directories", "Formatting Standard Input", "Check Mode" and "Files With Syntax Errors Are Not Formatted".
+- [x] 5.1 Add `prism_formatter::files` (collecting files from paths per D11, and formatting or checking one file) and the `fmt` command in `crates/prism-cli/src/main.rs` with its usage line, rendering syntax errors with `format_parse_error` and I/O errors as `E1000`. Verify with CLI tests for every scenario of "Format Command", "Formatting Directories", "Formatting Standard Input", "Check Mode" and "Files With Syntax Errors Are Not Formatted".
 
 ## 6. Integration
 
