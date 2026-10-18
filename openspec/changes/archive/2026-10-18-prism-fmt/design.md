@@ -141,6 +141,14 @@ A new `formatting` capability holds the command, the layout and the guarantees. 
 
 A lossless concrete syntax tree (rust-analyzer's rowan, Roslyn) would make the formatter, and later the LSP, simpler and more exact: every token, comment and parenthesis would be in the tree. It is the long-term design for the LSP of Phase 5, but it means replacing the parser's output type, which every stage consumes. This change keeps the AST and recovers what it lacks from the token list (D5) and the comment list (D2), which a later lossless tree would replace without changing the formatter's behaviour or its tests.
 
+### D14. Review fixes (autonomous, from the review)
+
+The review (2026-10-18) probed newline-sensitive constructs, comments in every position, width, line endings and the command, and extended the corpus test with a trailing comment on every line and with every identifier lengthened by 24 characters, which pass. It changed three things:
+
+- **Comments before a block's `{`** that end their line move inside the block, before its first item; they used to stay before the `{`, leaving it alone on the next line (`fun f(): Int // result` then `{`), against "Spacing". Rejected: keeping the comment on the header's line after the `{` (`fun f(): Int { // result`), which reorders a comment and a token and reads as a comment on the first statement anyway.
+- **A line comment in a fallback position** (after `[`, a prefix operator, a named argument's `=`, a type's `:`, inside type arguments) gets one space before it, and what it pushes to the next line is indented one level deeper than the line the comment ends; it used to be glued to the code (`x[// first`) and the code after it started at the enclosing indentation, sometimes column 0. The renderer decides this from the output, not the source, so a comment that the layout already moved to its own line is not indented twice, and the result is idempotent.
+- **"Indentation and Line Width"** promised the width wherever a break that keeps the parse exists, but a chain of field accesses never breaks (D6) although a break before `.` keeps the parse; the requirement now promises it where the layout rules provide a break, and states that width counts Unicode scalar values. "File Structure" also states the `\r\n` normalization that `format_source` always did.
+
 ## Risks / Trade-offs
 
 - [A comment in an unusual position is moved to the next node or to the end of its item, and in rare cases forces a line break the author did not want] → the order and text of comments are guaranteed and verified; placement is tested on the common positions (D3).

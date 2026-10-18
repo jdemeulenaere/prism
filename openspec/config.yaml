@@ -32,6 +32,7 @@ operations:
   apply:
     guidance:
       - Before marking the change complete, run cargo fmt --all -- --check, cargo clippy --workspace --all-targets, cargo test --workspace, and prism check on every file under examples/ (only files needing an unbuilt subsystem, such as examples/demo/ui, may fail).
+      - Keep examples/ formatted - run prism fmt --check examples/ (cargo run -q -p prism-cli -- fmt --check examples/) and, if it lists files, format them with prism fmt examples/ and read the diff before committing.
   archive:
     guidance:
       - Promote key design decisions from design.md into a "## Design Rationale" section of the affected main spec, so agents never need to read the archive.

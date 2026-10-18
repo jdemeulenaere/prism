@@ -133,6 +133,17 @@ The compiler MUST tokenize source text into a stream of typed tokens with accura
 - **WHEN** a generic argument list is closed directly before `=` (`val y: Heap<Int>= x`), or `&&` appears where a prefix borrow is expected (`&&x`, `&&Int`)
 - **THEN** the parser reads `>=` as `>` followed by `=`, and `&&` as two borrows, while `a && b` stays a logical and
 
+### Requirement: Comments Are Available to Tools
+The lexer MUST offer a comment-collecting mode for tools such as the formatter. In that mode it MUST yield exactly the token stream of normal lexing, with the same kinds, spans and newline flags, and also every comment in source order, each with its kind (a `//` line comment, which ends before the newline, or a `/* */` block comment, nested comments included) and its span. Normal lexing, which compilation uses, MUST NOT collect comments.
+
+#### Scenario: Comment-collecting lexer yields the same tokens
+- **WHEN** tokenizing `a /* b /* c */ d */ + // e\nf` in comment-collecting mode
+- **THEN** the tokens are those of normal lexing (`a`, `+`, `f` preceded by a newline, end of file), and the comments are the block comment `/* b /* c */ d */` and the line comment `// e`, in that order, with their spans
+
+#### Scenario: Comment markers inside literals are not comments
+- **WHEN** tokenizing `val s = "// not a comment /* either */"` in comment-collecting mode
+- **THEN** no comment is collected and the string literal keeps its text
+
 ### Requirement: Numeric Literal Formats
 The lexer MUST parse decimal integers, hexadecimal, binary, floating-point numbers with fractional decimals, visual digit separators (`_`), and scientific notation.
 
@@ -682,3 +693,7 @@ Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refine
 - **Compound assignment is a statement with the targets of `=`.** `+=`, `-=`, `*=`, `/=` and `%=` are single tokens, accepted wherever `=` is, with the same target check, same-line rule and chained-assignment error; in expression position they reach the "an assignment is a statement" error, because a compound assignment is an assignment. The AST has its own `CompoundAssign` statement rather than an optional operator on `Assign`, so every consumer (type checker, ABI body hash, formatter) must decide what it means instead of silently treating it as `=`.
 - **`++` and `--` are reserved tokens that are always rejected.** The lexer reads them as Kotlin's does and the parser reports `E2001` with help suggesting `x += 1`, in prefix and postfix position. Kotlin's `++` expressions were rejected because their value (old or new, by position) makes an assignment an expression, against "Assignment Is a Statement"; a statement-only `x++` because it still invites `val y = x++` (Swift removed both, SE-0004); leaving the lexer alone because `a--b` would keep meaning `a - (-b)`, a reading Kotlin does not have. **Breaking:** `a--b` and `--x` need a space or parentheses. Reserving the tokens keeps adding the operators later non-breaking.
 - **Bitwise operators are deferred.** Their spelling has real ambiguity costs (`&` is the borrow operator and `&&x` is two borrows, `|` is a lexer error, `>>` closes nested type arguments) and depends on sized integer types; Kotlin uses named infix functions (`and`, `shl`). A `bitwise-operators` change decides both and extends the compound token set (ROADMAP).
+
+Decisions from `prism-fmt` (planned autonomously on 2026-10-17 and logged in `docs/decisions-for-review.md`):
+
+- **Comments come from an opt-in lexer mode** (D2). `Lexer::tokenize_with_comments` returns the token stream of normal lexing plus every `Comment { kind, span }` (the text is the span's slice of the source); the lexer pushes to an optional list in `skip_whitespace_and_comments` only when collection is on, so compilation pays one untaken branch per comment. The formatter lexes once in this mode and hands the tokens to the parser, so its tree and comments come from the same scan. Rejected: trivia on every token (Roslyn, rust-analyzer), which grows every token for one tool and is right only for a lossless syntax tree (a follow-up, see `formatting`); re-scanning the gaps between tokens, which would duplicate the nested block-comment rules; comments as AST nodes, which every later stage would have to skip.

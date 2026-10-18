@@ -49,7 +49,7 @@ What is implemented and what is planned live in different places. Never treat a 
 
 - **Implemented behavior: [`openspec/specs/`](openspec/specs)**, the source of truth for what the compiler does today. Each spec's `## Design Rationale` section records why past decisions were made:
   - [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker root discovery, import resolution, and package scanning.
-  - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
+  - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs, and the comment-collecting lexer mode tools use.
   - [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, and nominal types.
   - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): Phase 1 ABI extraction, deterministic ABI hashing, generic signatures and marker parameters, and monomorphization hashes.
   - [`ownership`](openspec/specs/ownership/spec.md): `Copy` and `Clone` markers, explicit `.clone()`, whole-value moves, immutable top-level declarations, the borrow checker's use-after-move and uninitialized-read rules, and closures never moving their captures.
@@ -59,6 +59,8 @@ What is implemented and what is planned live in different places. Never treat a 
   - [`generics`](openspec/specs/generics/spec.md): Type parameters on functions, extensions, structs and enums: `Copy`/`Clone` bounds, move-only unbounded parameters, explicit and inferred type arguments, borrow-free type arguments, invariant generic types and generic extension receivers. Checked once at the declaration; monomorphization is planned.
   - [`typed-tree`](openspec/specs/typed-tree/spec.md): The type checker's output: resolved bindings and declaration paths, a type on every node, explicit coercions, moves, copies and borrows, normalized calls, captures and the `prism dump-typed-tree` command.
   - [`mir`](openspec/specs/mir/spec.md): The control-flow graph lowered from each typed file: typed locals, places, storage, drops, temporary scopes, branches, calls, default generators, closures and the `prism dump-mir` command.
+  - [`build-cache`](openspec/specs/build-cache/spec.md): The per-user, content-addressed build cache through which `prism check` skips unchanged files, `--no-cache` and `--explain-cache`.
+  - [`formatting`](openspec/specs/formatting/spec.md): `prism fmt`, its canonical layout, comment preservation, and the meaning and idempotency guarantees.
   - [`diagnostics`](openspec/specs/diagnostics/spec.md): The catalog of every compiler error code. A change that adds an error adds its code here.
   - [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable invariants. These are design constraints, so they also cover subsystems not built yet.
 - **Planned design: [`docs/architecture.md`](docs/architecture.md)**: code generation, compilation avoidance, execution tiers, the rest of the memory model, and the compose engine. A change that implements an item moves its requirements into `openspec/specs/` as delta specs and removes them from this document.
