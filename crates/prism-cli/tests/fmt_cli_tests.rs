@@ -110,6 +110,11 @@ fn formatting_a_directory() {
     assert_eq!(read(&src.join("d.prism")), FORMATTED);
     assert_eq!(read(&src.join(".hidden/e.prism")), UNFORMATTED);
     assert_eq!(read(&src.join("notes.txt")), UNFORMATTED);
+
+    // A file named explicitly is formatted whatever its extension.
+    let explicit = prism(&["fmt", "src/notes.txt"], &directory);
+    assert!(explicit.status.success(), "{}", stderr(&explicit));
+    assert_eq!(read(&src.join("notes.txt")), FORMATTED);
     fs::remove_dir_all(&directory).ok();
 }
 

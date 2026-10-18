@@ -10,7 +10,7 @@ public struct Point {
 public struct User {
     val id: UInt64
     var name: String
-    val email: String?   // Nullable type
+    val email: String? // Nullable type
 }
 
 // Methods are extension functions. A `mut fun` borrows its receiver mutably, with nothing

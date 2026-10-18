@@ -26,7 +26,7 @@ The `formatting` scenarios are tested by golden files in `crates/prism-formatter
 
 ## 6. Integration
 
-- [ ] 6.1 Run `prism fmt examples/` and commit the result after reading the diff. Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), `prism fmt --check examples/`, and `openspec validate --all --strict`. Verify all pass.
+- [x] 6.1 Run `prism fmt examples/` and commit the result after reading the diff. Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), `prism fmt --check examples/`, and `openspec validate --all --strict`. Verify all pass.
 
 ## Workflow follow-up
 
