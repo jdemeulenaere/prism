@@ -91,11 +91,19 @@ The grammar MUST recognize `compose` as a native modifier on function declaratio
 - **THEN** the compiler parses it as a composable UI function eligible for slot-table transformation
 
 ### Requirement: Lexical Tokenization and Escape Sequences
-The compiler MUST tokenize source text into a stream of typed tokens with accurate source spans, processing whitespace, line comments, nested block comments, and escape sequences while rejecting raw unescaped newlines in single-line strings.
+The compiler MUST tokenize source text into a stream of typed tokens with accurate source spans, processing whitespace, line comments, nested block comments, and escape sequences while rejecting raw unescaped newlines in single-line strings. A single byte order mark (U+FEFF) at the very start of a source file MUST be ignored; a U+FEFF anywhere else is an unexpected character.
 
 #### Scenario: Columns count characters
 - **WHEN** non-ASCII text precedes a token on its line (`/* café */ fun`)
 - **THEN** the token's column counts characters, not UTF-8 bytes (`fun` is at column 12)
+
+#### Scenario: Leading byte order mark ignored
+- **WHEN** a source file begins with a byte order mark (`\u{FEFF}package app\nfun main() {}`)
+- **THEN** the mark yields no token and takes no column, so `package` is at line 1, column 1 and every later token has the same line and column as without the mark
+
+#### Scenario: Byte order mark elsewhere rejected
+- **WHEN** U+FEFF appears anywhere but the first character of the file, including a second mark after the first
+- **THEN** the lexer emits an `Error` token for it, as for any other unexpected character
 
 #### Scenario: Declaration and argument spans
 - **WHEN** a function has no body (`fun a(): Int` followed by blank lines), a call has a named argument (`n = 1`) or a trailing lambda, or a closure body holds a single `val`

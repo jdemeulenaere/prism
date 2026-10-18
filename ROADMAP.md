@@ -39,7 +39,6 @@ Following the **Elephant-Goldfish model** via OpenSpec, this roadmap represents 
 - [ ] Decide whether `prism check` should warn about unformatted files, as `cargo fmt --check` does in CI (open question of `prism-fmt`).
 - [ ] Possible addition: break a chain of field accesses that does not fit before its `.`s; `prism fmt` breaks chains only before calls, so a long `a.b.c` initializer exceeds 100 columns (found while reviewing `prism-fmt`).
 - [ ] Decide whether the line width counts display columns (an East Asian wide character or emoji as two), as rustfmt does; `prism fmt` counts Unicode scalar values (found while reviewing `prism-fmt`).
-- [ ] Decide whether a UTF-8 byte order mark at the start of a file is skipped; the lexer rejects it as an unexpected character today, so neither `prism check` nor `prism fmt` accepts such a file (found while reviewing `prism-fmt`).
 
 ---
 

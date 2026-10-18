@@ -53,10 +53,13 @@ fn parse(source: &str) -> Result<Parsed, ParseError> {
     })
 }
 
-/// Formats `source` with the canonical layout. Line endings are normalized to `\n`, and a
-/// non-empty result ends with exactly one newline.
+/// Formats `source` with the canonical layout. Line endings are normalized to `\n`, a leading
+/// byte order mark is dropped, and a non-empty result ends with exactly one newline.
 pub fn format_source(source: &str) -> Result<String, FormatError> {
-    let source = source.replace("\r\n", "\n");
+    let source = source
+        .strip_prefix('\u{FEFF}')
+        .unwrap_or(source)
+        .replace("\r\n", "\n");
     let input = parse(&source).map_err(FormatError::Syntax)?;
     let output = printer::print(&source, &input.tokens, &input.comments, &input.file);
     let reparsed = parse(&output).map_err(|err| {

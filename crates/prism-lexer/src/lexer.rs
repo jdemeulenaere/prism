@@ -17,11 +17,21 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    /// Creates a lexer over `input`. One byte order mark (U+FEFF) at the very start is skipped:
+    /// spans keep byte offsets into `input` as given, but the mark takes no column, so the first
+    /// token is at column 1. A U+FEFF anywhere else is an error token like any other stray
+    /// character.
     pub fn new(input: &'a str) -> Self {
+        let byte_order_mark = '\u{FEFF}';
+        let skipped = if input.starts_with(byte_order_mark) {
+            byte_order_mark.len_utf8()
+        } else {
+            0
+        };
         Self {
             input,
             bytes: input.as_bytes(),
-            cursor: 0,
+            cursor: skipped,
             line: 1,
             column: 1,
             unclosed_comment_span: None,

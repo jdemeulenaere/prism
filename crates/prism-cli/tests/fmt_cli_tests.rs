@@ -228,3 +228,19 @@ fn missing_path_and_unknown_option_are_errors() {
     assert!(stderr(&unknown).contains("unknown option"));
     fs::remove_dir_all(&directory).ok();
 }
+
+#[test]
+fn leading_byte_order_mark_dropped() {
+    let directory = temporary_directory("byte_order_mark");
+    let file = directory.join("main.prism");
+    write(&file, "\u{FEFF}val x = 1\n");
+    let output = prism(&["fmt", "main.prism"], &directory);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "main.prism\n");
+    assert_eq!(fs::read(&file).unwrap(), b"val x = 1\n");
+
+    // Without the mark the file is already formatted.
+    let again = prism(&["fmt", "--check", "main.prism"], &directory);
+    assert!(again.status.success(), "{}", stderr(&again));
+    fs::remove_dir_all(&directory).ok();
+}

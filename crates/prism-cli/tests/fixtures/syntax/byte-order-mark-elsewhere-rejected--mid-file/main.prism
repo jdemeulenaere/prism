@@ -1,0 +1,3 @@
+// expect: E2001
+fun main(): Int { return 1 }
+﻿val x = 1

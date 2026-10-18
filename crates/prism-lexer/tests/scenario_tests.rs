@@ -288,3 +288,52 @@ fn comment_markers_inside_literals_are_not_comments() {
         TokenKind::String("// not a comment /* either */".to_string())
     );
 }
+
+#[test]
+fn leading_byte_order_mark_ignored() {
+    let plain = tokens("package app\nfun main() {}");
+    let marked = tokens("\u{FEFF}package app\nfun main() {}");
+    assert_eq!(marked[0].kind, TokenKind::Package);
+    assert_eq!(
+        (marked[0].span.line, marked[0].span.column),
+        (1, 1),
+        "the mark takes no column"
+    );
+    assert_eq!(marked.len(), plain.len());
+    for (marked, plain) in marked.iter().zip(&plain) {
+        assert_eq!(marked.kind, plain.kind);
+        assert_eq!(
+            (marked.span.line, marked.span.column),
+            (plain.span.line, plain.span.column)
+        );
+        // Spans index the source as given, so the mark's three bytes shift the offsets.
+        assert_eq!(marked.span.start, plain.span.start + 3);
+        assert_eq!(marked.span.end, plain.span.end + 3);
+    }
+
+    // The comment-collecting mode skips the mark too.
+    let (collected, comments) = Lexer::new("\u{FEFF}// note\nval x = 1").tokenize_with_comments();
+    assert!(collected.iter().all(|token| !is_error(&token.kind)));
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].span.column, 1);
+
+    // A file of only a mark is empty.
+    assert_eq!(kinds("\u{FEFF}"), vec![TokenKind::Eof]);
+}
+
+#[test]
+fn byte_order_mark_elsewhere_rejected() {
+    for source in [
+        "val x = 1\n\u{FEFF}val y = 2",
+        "\u{FEFF}\u{FEFF}val x = 1",
+        " \u{FEFF}val x = 1",
+        "val x = \u{FEFF}1",
+    ] {
+        assert_eq!(
+            kinds(source).iter().filter(|kind| is_error(kind)).count(),
+            1,
+            "{:?}",
+            source
+        );
+    }
+}
