@@ -20,6 +20,10 @@ Dropping a `Heap<T>` MUST run the drop glue of `T` on its contents when `T` owns
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }` and `fun f(e: Expr) {}`
 - **THEN** after the file's functions it prints `function main#drop(main::Expr)` and `function main#drop(Heap<main::Expr>)`, each calling the other, and the latter freeing the allocation after the call
 
+#### Scenario: A struct holding a heap value
+- **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(size(Node(Heap(1)))) }` are declared
+- **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0
+
 ### Requirement: Cloning a Box Allocates a New Box
 The clone glue of `Heap<T>` MUST allocate a new box and clone the contents into it, by the clone glue of `T` when `T` owns storage and by a bitwise copy otherwise, so that the clone shares no memory with the original.
 
@@ -60,17 +64,24 @@ Before generating any code, the backend MUST check every body it compiles and re
 - **WHEN** `fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }` and `fun g(): Int { val c = { 3 }; return 2 }` are declared with a `main` that calls neither
 - **THEN** `prism run` reports exactly two `E6001`, one at the first closure in `f` and one at the closure in `g`
 
+### Requirement: Aggregates Holding Function Values Are Rejected
+A struct, enum or nullable holding a function value MUST be rejected with `E6001`, naming what it holds, until `closures` supports them.
+
+#### Scenario: A struct holding a function value
+- **WHEN** `struct Task { val run: () -> Int }`, `fun size(t: &Task): Int = 1` and `fun main() { println(1) }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming function values and closures, and exits with status 1
+
+#### Scenario: An enum holding a function value is rejected
+- **WHEN** `enum Job { Run(() -> Int), Idle }` and `fun main() { val j = Job.Idle }` are declared
+- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at `Job.Idle`, naming function values and closures, prints nothing to stdout and exits with status 1
+
 ## MODIFIED Requirements
 
-### Requirement: Symbols Derive from Declaration Paths
-Every compiled function of a declaration MUST have a symbol derived from its declaration's identity alone: `<module>::<name>` for a function, `<module>::<receiver>.<name>` for an extension, where the receiver is written as the ABI writes its type constructor, `<function symbol>#default(<parameter>)` for a default value's generator, and `<module>::<name>#init` and `<module>::<name>#get` for a top-level `val`'s initializer and accessor. Symbols MUST be unique in a program. Drop, clone and equality glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)`, `<module>#clone(<type>)` or `<module>#equals(<type>)` after that unit's module and the type it handles.
-
-#### Scenario: Symbols of a file
-- **WHEN** `lib/math.prism`, in package `lib`, declares `public fun Int.double(): Int = this * 2`, `public fun scale(a: Int, b: Int = 2): Int = a * b` and `public val BASE: Int = 3`
-- **THEN** `prism dump-clif lib/math.prism` prints the functions `lib/math::Int.double`, `lib/math::scale`, `lib/math::scale#default(b)`, `lib/math::BASE#init` and `lib/math::BASE#get`
+### Requirement: Glue Has No Function Table Slot
+Drop, clone and equality glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<module>#drop(<type>)`, `<module>#clone(<type>)` or `<module>#equals(<type>)` after that unit's module and the type it handles.
 
 #### Scenario: Glue of one type in two files
-- **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User) {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
+- **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User): Unit {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
 - **THEN** `prism run --check-allocations app/main.prism` exits with status 0, and `prism dump-clif` of each file prints its own drop glue of `lib/user::User`, `lib/user#drop(lib/user::User)` and `app/main#drop(lib/user::User)`
 
 ### Requirement: Glue Is Local to Its Code Unit
@@ -88,27 +99,8 @@ Each code unit MUST generate the drop, clone and equality glue of the types its 
 - **WHEN** `lib/tree.prism` declares `public enum Tree { Leaf, Node(Heap<Tree>, Int, Heap<Tree>) }` and `public fun leaf(): Tree = Tree.Leaf`, and `app/main.prism` imports `/lib/tree` and declares `fun main() { val t = Tree.Node(Heap(leaf()), 1, Heap(leaf())); println(t == t) }`
 - **THEN** `prism run --check-allocations app/main.prism` prints `true` and exits with status 0, and `prism dump-clif app/main.prism` prints `app/main#drop(lib/tree::Tree)`, `app/main#drop(Heap<lib/tree::Tree>)` and `app/main#equals(lib/tree::Tree)`
 
-### Requirement: Drops of Values That Own Nothing Do Nothing
-A value whose type owns no storage (no `String`, `Heap<T>` or function value in it, through any field, payload or nullable) MUST be dropped without running any code. A struct or enum holding a function value MUST be rejected with `E6001` naming what it holds, until `closures` supports them.
-
-#### Scenario: A non-Copy struct is moved and dropped
-- **WHEN** `struct Counter { var n: Int }`, `fun take(c: Counter): Int = c.n` and `fun flag(): Bool = false` are declared and `fun main() { val c = Counter(4); if (flag()) println(take(c)); println(1) }` runs
-- **THEN** the program prints `1` and exits with status 0
-
-#### Scenario: A struct holding a string
-- **WHEN** `struct User { val name: String }`, `fun size(u: &User): Int = 1` and `fun main() { println(size(User("a"))) }` are declared
-- **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0
-
-#### Scenario: A struct holding a heap value
-- **WHEN** `struct Node { val next: Heap<Int>? }`, `fun size(n: &Node): Int = 1` and `fun main() { println(size(Node(Heap(1)))) }` are declared
-- **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0
-
-#### Scenario: A struct holding a function value
-- **WHEN** `struct Task { val run: () -> Int }`, `fun size(t: &Task): Int = 1` and `fun main() { println(1) }` are declared
-- **THEN** `prism check main.prism` passes, and `prism run main.prism` reports `E6001` at the declaration of `size`, naming function values and closures, and exits with status 1
-
 ### Requirement: Cranelift IR Dump
-`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, each headed by its symbol, followed by the file's drop, clone and equality glue, each headed by `<module>#drop(<type>)`, `<module>#clone(<type>)` or `<module>#equals(<type>)`, in order of their names. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
+`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's drop, clone and equality glue in order of their names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
 
 #### Scenario: Dumping a file's IR
 - **WHEN** `prism dump-clif main.prism` runs twice on a file that `prism run` accepts
@@ -121,5 +113,9 @@ A value whose type owns no storage (no `String`, `Heap<T>` or function value in 
 ## REMOVED Requirements
 
 ### Requirement: Unsupported Constructs Are Rejected Before Code Generation
-**Reason**: Its scenarios pin `Heap<T>` values as unsupported ("An enum holding a heap value is rejected"), which this change makes run, and a MODIFIED block cannot drop a scenario.
-**Migration**: Replaced, with the same rule, by "Constructs the Backend Lacks Are Rejected Before Code Generation", whose scenarios use function values where these used `Heap<T>`, and by "A recursive enum runs".
+**Reason**: Renamed, so that the pending changes building on this one (`monomorphization`, `closures`) modify one stable name, and its scenarios pin `Heap<T>` values as unsupported, which this change makes run.
+**Migration**: Replaced, with the same rule, by "Constructs the Backend Lacks Are Rejected Before Code Generation", whose scenarios use function values where these used `Heap<T>`, plus "A struct is rejected" and "A recursive enum runs".
+
+### Requirement: Aggregates Holding Heap or Function Values Are Rejected
+**Reason**: This change makes boxes run, so an aggregate is no longer rejected for holding a `Heap<T>`, and its scenarios pin boxes as unsupported ("An enum holding a heap value is rejected"), which a MODIFIED block cannot drop.
+**Migration**: Replaced by "Aggregates Holding Function Values Are Rejected", which keeps the rule for function values. "A struct holding a heap value" now runs, under "Box Glue Drops the Contents Before Freeing", and "A recursive enum runs" under "Constructs the Backend Lacks Are Rejected Before Code Generation".

@@ -23,7 +23,7 @@ Where a pattern takes its subject apart through a box, MIR MUST move the box par
 ## MODIFIED Requirements
 
 ### Requirement: Calls Name Their Callee
-A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `length`, `get` (a string's character), `toString`, `Heap` (constructing a box), `unbox`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable. The first operand of a call of an extension or of `clone`, `length`, `get`, `toString` or `unbox`, and the first argument of an extension's body, MUST be the receiver, whose type the path or the built-in names; no other call has one.
+A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `length`, `get` (a string's character), `toString`, `Heap` (constructing a box), `unbox`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable.
 
 #### Scenario: Imported function named by its module
 - **WHEN** `models/user.prism` declares `public fun greet(n: Int): Int = n`, and a file importing `/models/user` declares `fun hello(): Int = greet(1)`
@@ -32,6 +32,9 @@ A call MUST name its callee (a declaration path for an own or imported function 
 #### Scenario: Composable calls are marked
 - **WHEN** `compose fun Label() {}`, `fun log() {}` and `compose fun Screen() { Label(); log() }` are declared
 - **THEN** the body of `Screen` is composable, its call of `Label` is marked composable, and its call of `log` is not
+
+### Requirement: Receivers Lead the Operands of Calls
+The first operand of a call of an extension or of `clone`, `length`, `get`, `toString` or `unbox`, and the first argument of an extension's body, MUST be the receiver, whose type the path or the built-in names; no other call has one.
 
 #### Scenario: An extension call names its receiver
 - **WHEN** `lib/team.prism` declares `public struct Team { var lead: String }` and `public fun Team.captain(o: &String): &String = &lead`, and a file importing `/lib/team` declares `fun f(t: Team, s: String): Int { val c = t.captain(&s); return 1 }`

@@ -143,6 +143,6 @@ Before generating any code, the backend MUST check every body it compiles, each 
 
 ## REMOVED Requirements
 
-### Requirement: Aggregates Holding Heap or Function Values Are Rejected
-**Reason**: `heap-boxes` makes boxes run and this change makes function values run, so no struct, enum or nullable is rejected for what it holds, except a value of unknown type.
-**Migration**: "Function Values Are a Descriptor and an Environment" and "Dropping a Function Value Runs Its Drop Entry" lay out and drop aggregates holding function values; `heap-boxes` does the same for boxes. Whatever narrower requirement `heap-boxes` leaves in this one's place (naming function values only) is removed with it.
+### Requirement: Aggregates Holding Function Values Are Rejected
+**Reason**: This change makes function values run, so no struct, enum or nullable is rejected for what it holds, except a value of unknown type. (`heap-boxes` replaced "Aggregates Holding Heap or Function Values Are Rejected" with this narrower requirement.)
+**Migration**: "Function Values Are a Descriptor and an Environment" and "Dropping a Function Value Runs Its Drop Entry" lay out and drop aggregates holding function values.
