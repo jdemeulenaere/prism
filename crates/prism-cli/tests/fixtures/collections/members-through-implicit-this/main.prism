@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+mut fun List<Int>.push(x: Int) {
+    if (!contains(x)) add(x)
+}
+fun List<Int>.lastIndex(): Int = size - 1
+fun main() {
+    var xs = listOf(1)
+    xs.push(2)
+    xs.push(1)
+    println(xs.lastIndex())
+}

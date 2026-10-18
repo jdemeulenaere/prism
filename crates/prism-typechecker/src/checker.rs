@@ -6864,6 +6864,12 @@ impl TypeChecker {
             return None;
         }
         let receiver = self.current_receiver()?;
+        // A built-in list member is an extension on `List<T>` that wins over declared ones
+        // (D6 of `collections`), so a bare call of one in an extension on a list is a call on
+        // `this` too.
+        if matches!(receiver, Type::List(_)) && Extension::list_member(name).is_some() {
+            return Some(this_member(name, callee.span));
+        }
         match self.find_extension(&receiver, name) {
             ExtensionLookup::None => None,
             _ => Some(this_member(name, callee.span)),

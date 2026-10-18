@@ -110,11 +110,15 @@ A call `xs.name(...)` or read `xs.name` on a `List<T>` MUST use the built-in mem
 - **THEN** the type checker emits `E4010` for each, saying that the built-in member always takes precedence
 
 ### Requirement: Extensions on Lists
-Extensions with other names MUST be declarable on `List<T>`, generic (`fun <T> List<T>.second(): &T`) or for one element type (`fun List<Int>.sum(): Int`), keyed by the `List` type constructor like the extensions of a generic struct, and called through any `&`, `&mut` and `Heap<T>` layers.
+Extensions with other names MUST be declarable on `List<T>`, generic (`fun <T> List<T>.second(): &T`) or for one element type (`fun List<Int>.sum(): Int`), keyed by the `List` type constructor like the extensions of a generic struct, and called through any `&`, `&mut` and `Heap<T>` layers. In the body of an extension on a list, a bare name that is no local or parameter MUST resolve to the built-in member of that name on `this`, read (`size`) or called (`add(x)`), as a receiver's fields and extensions do (`extension-functions`, "The Receiver in Extension Bodies").
 
 #### Scenario: An extension on lists
 - **WHEN** `fun List<Int>.sum(): Int { var total = 0; for (n in this) total += n; return total }` and `fun <T> List<T>.second(): &T = &this[1]` are declared and `fun f(xs: &List<Int>): Int = xs.sum() + xs.second()` is checked
 - **THEN** the file typechecks successfully
+
+#### Scenario: Members through implicit this
+- **WHEN** `mut fun List<Int>.push(x: Int) { if (!contains(x)) add(x) }` and `fun List<Int>.lastIndex(): Int = size - 1` are declared and `fun main() { var xs = listOf(1); xs.push(2); xs.push(1); println(xs.lastIndex()) }` runs with `--check-allocations`
+- **THEN** it prints `1`, writes nothing to stderr and exits with status 0, `add`, `contains` and `size` being the members of `this`
 
 ### Requirement: Elements Are Places
 `xs[i]` on a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST take an `Int` index (`E4002` otherwise) and name element `i` of the list, a place of type `T`. A `Copy` element MUST be copied out where a value is read, and a borrow of `xs[i]`, written or implicit at an argument or receiver, MUST borrow the element where it lives. Indexing any type other than `List` and `String` MUST be rejected with `E4002`.
