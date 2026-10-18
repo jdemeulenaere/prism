@@ -1,0 +1,17 @@
+fun g(
+    // leading param
+    a: Int, // after a
+    /* inline */ b: Int
+    // dangling param
+): Int {
+    when (a) {
+        // before branch
+        1 -> 2 // after branch
+        else -> 3
+        // end of when
+    }
+    val t: /* type */ Int = 3
+    foo(a, /* middle */ b)
+    bar(/* nothing */)
+    return a /* end */
+}

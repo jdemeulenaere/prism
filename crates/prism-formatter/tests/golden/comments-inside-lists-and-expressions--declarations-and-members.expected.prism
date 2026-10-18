@@ -1,0 +1,32 @@
+// License header
+
+/** Doc comment
+ * for the package
+ */
+package app // trailing package
+
+// before import
+import util /* after import */
+
+// before fun
+fun f() {}
+
+struct S {
+    // field comment
+    val a: Int // after a
+
+    val b: Int
+    // end of struct
+}
+
+enum E {
+    A
+    /* b */ B
+}
+
+enum F {
+    // first variant
+    A // a
+    B
+}
+// end of file

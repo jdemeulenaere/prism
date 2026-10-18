@@ -1,0 +1,12 @@
+fun f() {
+    val result = items
+        .filter { x -> x > threshold }
+        .map { x -> x * factor }
+        .fold(0) { a, b -> a + b }
+    val short = items.filter { x -> x > 0 }.size()
+    val fields = this.owner.account.history
+        .entries()
+        .filter { e -> e.amount > limitForTheReport }
+        .count()
+    val safe = user?.profile()?.settings()?.notificationPreferences()?.emailFrequencyInDaysValue()
+}

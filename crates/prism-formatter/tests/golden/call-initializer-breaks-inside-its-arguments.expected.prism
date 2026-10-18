@@ -1,0 +1,7 @@
+fun f() {
+    val longName = someVeryLongFunctionName(
+        argumentNumberOne,
+        argumentNumberTwo,
+        argumentNumberThree,
+    )
+}

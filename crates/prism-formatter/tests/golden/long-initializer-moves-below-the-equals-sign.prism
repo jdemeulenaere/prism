@@ -1,0 +1,4 @@
+fun f() {
+    val fieldChain = someObjectWithAVeryLongName.someFieldWithAnEvenLongerName.anotherFieldName.lastOne
+    val label = when (n) { 0 -> theLabelForZeroIsQuiteALongStringExpressionHere + anotherPartOfTheLabelText; else -> "x" }
+}

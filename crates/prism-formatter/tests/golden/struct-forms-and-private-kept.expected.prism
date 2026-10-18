@@ -1,0 +1,11 @@
+private struct Id(id: Int)
+
+struct P {
+    val x: Int
+}
+
+struct Pair(val first: Int, var second: Int)
+
+private fun hidden() {}
+
+struct Empty {}

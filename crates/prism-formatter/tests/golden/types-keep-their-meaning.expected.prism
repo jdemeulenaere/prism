@@ -1,0 +1,9 @@
+fun types(
+    a: (() -> Unit)?,
+    b: (&Int)?,
+    c: &Int?,
+    d: compose () -> Unit,
+    e: (Int, String) -> Bool,
+) {}
+
+fun more(f: ((Int) -> Int) -> Int, g: &mut Heap<Box<Int>>, h: (Int?)?, u: ()): () -> &Int = f

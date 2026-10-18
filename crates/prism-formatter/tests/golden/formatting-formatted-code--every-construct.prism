@@ -1,0 +1,80 @@
+// Every construct of the grammar, already formatted: formatting it changes nothing.
+package demo.every
+
+import /core/fmt
+import util
+
+public struct Point : Copy {
+    val x: Double
+    val y: Double
+}
+
+struct Pair<A, B>(val first: A, var second: B)
+
+public enum Shape : Clone {
+    Circle(Double)
+    Rectangle(Point, Point)
+    Empty
+}
+
+enum Bit { Zero, One }
+
+val origin: Point = Point(0.0, 0.0)
+val limit = 0xFF_FF
+
+public fun <T : Copy> Box<T>.get(): T = value
+
+mut fun User.rename(name: &String) {
+    this.name = name.clone()
+}
+
+consuming fun User.take(): User = this
+
+public compose fun Counter(initial: Int = 0): Unit {
+    val count = remember { mutableStateOf(initial) }
+    Column(padding = 16) {
+        Text("Count")
+        Button(onClick = { count.value += 1 }) { Text("+") }
+    }
+}
+
+fun declaredOnly(
+    callback: (Int, String) -> Bool,
+    view: compose () -> Unit,
+    maybe: (() -> Unit)?,
+): Int
+
+fun control(n: Int, r: &mut Int, items: List<Int>): String {
+    var total = 0
+    for (i in 0..<n) {
+        total += i
+    }
+    while (total > 100) total -= 7
+    do {
+        *r = r - 1
+    } while (r > 0)
+    val doubled = items.map { x -> x * 2 }.filter { x -> x > 2 }
+    val first = items[0]
+    val label = when (n) {
+        0 -> "zero"
+        1, 2, 3 -> "few"
+        in 4..<10 -> "some"
+        else -> {
+            val big = n * 2
+            "many $big"
+        }
+    }
+    val sign = if (n < 0) -1 else if (n == 0) 0 else 1
+    if (n > 10 && total != 0 || !items.isEmpty()) {
+        return label
+    } else {
+        total = id<Int>(total) ?: 0
+    }
+    val maybe: String? = null
+    val length = maybe?.length ?: -1
+    val borrowed = &items
+    {
+        val scoped = 1
+    }
+    return label
+}

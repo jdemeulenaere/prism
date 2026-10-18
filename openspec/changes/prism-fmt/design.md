@@ -47,7 +47,9 @@ Comments are attached while printing, in source order, by a cursor over the comm
 - **Leading**: before each item of a list (top-level declaration, struct field, enum variant, statement, block tail, `when` branch, parameter, argument), the comments that start before the item are printed on their own lines, at the item's indentation. A block comment followed by the item on its line stays inline (`/* two */ val b = 2`).
 - **Trailing**: after an item and its separator, a line comment, or a block comment ending its line, that starts on the line where the item ends is printed after one space on the same line.
 - **Dangling**: comments left before a list's closing `}` or `)` go on their own lines before it.
-- **Fallback**: a comment elsewhere (between an operator and its operand, inside a type) is printed before the next node that starts after it: a block comment inline, followed by a space, and a line comment followed by a forced line break. Comments left inside an item when it ends are flushed at its end.
+- **In comma lists** (parameters, arguments), the comments after an item on its line, and those left inside it, follow the item's comma, where the next run finds them in the same place; this keeps `a /* x */, b` stable as `a, /* x */ b`.
+- **Before tokens**: a comment between an operand and its binary operator, or between an assignment target and its `=`, stays before the operator; a comment after an operator on its line stays there (`1 + // plus`); a comment before a `.` of a call chain breaks the chain there, so it stays before that member.
+- **Fallback**: a comment elsewhere (inside a type, between modifiers) is printed before the next node that starts after it: a block comment inline, followed by a space, and a line comment followed by a forced line break. Comments left inside an item when it ends are flushed at its end.
 
 A line comment is a document primitive that ends the output line: anything printed after it starts a new line, and its groups are broken. That keeps the comment's meaning (the rest of the line is a comment) without a deferred "line suffix", whose reordering against a later block comment on the same line would break the order guarantee.
 
@@ -104,13 +106,15 @@ Rejected: never printing trailing commas (Kotlin before 1.4); keeping each autho
 
 ### D8. Blank lines: at most one, kept where written (autonomous)
 
-Between two items of a vertical list (declarations, members, statements, branches) and around comments, one or more blank lines in the input become one; there are none after `{`, before `}` or at the start of the file. Exactly one blank line follows the package declaration and the import block. The file ends with one newline; a file with nothing in it formats to empty. Blank lines inside parameter and argument lists are dropped. The formatter does not insert blank lines between declarations that the author wrote adjacent (gofmt and ktfmt do not either).
+Between two items of a vertical list (declarations, members, statements, branches) and around comments, one or more blank lines in the input become one; there are none after `{`, before `}` or at the start of the file. Exactly one blank line follows the package declaration and the import block, and separates two top-level declarations unless both are `val`s (IntelliJ's Kotlin defaults: one blank line around functions and classes, none required between properties). The file ends with one newline; a file with nothing in it formats to empty. Blank lines inside parameter and argument lists are dropped.
 
-### D9. Struct and enum bodies keep the author's one-line choice (autonomous)
+Rejected: keeping adjacent top-level declarations adjacent (gofmt), which leaves functions and structs run together; deciding by whether a declaration spans several lines, which depends on the width and would not be idempotent.
 
-A struct or enum body written on one line (`enum Color { Red, Green, Blue }`) and without comments is a group: flat, with `, ` separators, when it fits, otherwise one member per line without separators. A body written over several lines is always one member per line. This is Prettier's rule for object literals: the author decides between a compact and an expanded form, and the formatter never joins what was written expanded. A `when` has no such choice (D6).
+### D9. Struct and enum bodies and closures keep the author's one-line choice (autonomous)
 
-Rejected: always one member per line, which turns `enum Bit { Zero, One }` into four lines; always joining when it fits, which collapses carefully laid-out enums.
+A struct or enum body written on one line (`enum Color { Red, Green, Blue }`) and without comments is a group: flat, with `, ` separators, when it fits, otherwise one member per line without separators. A body written over several lines is always one member per line. Likewise a closure with a single statement or expression stays on one line only when it was written on one line and fits: `remember { mutableStateOf(0) }` and `onClick = { count += 1 }` stay compact, while a layout closure written expanded (`Column {\n    Text("a")\n}`) stays expanded. This is Prettier's rule for object literals and gofmt's for function literals: the author decides between a compact and an expanded form, and the formatter never joins what was written expanded. The choice is idempotent, since the output's line structure is what the next run reads. A `when` has no such choice (D6), and a closure with several items is always broken.
+
+Rejected: always one member per line, which turns `enum Bit { Zero, One }` into four lines; always joining when it fits, which collapses carefully laid-out enums and turns every compose container with one child into a one-liner.
 
 ### D10. Files with syntax errors are refused (autonomous)
 

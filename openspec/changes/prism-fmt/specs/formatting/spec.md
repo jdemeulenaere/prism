@@ -122,11 +122,15 @@ The formatter MUST print one top-level declaration, struct field, enum variant, 
 - **THEN** each branch is on its own line indented one level, the separators are dropped, and the `else` branch keeps its braced block, broken over lines
 
 ### Requirement: Blocks and Closures
-Blocks (function bodies, braced branches, loop bodies and statement-position scopes) MUST be broken over lines, an empty block being `{}`. A closure whose body is a single expression MUST stay on one line when it fits (`{ x -> x + 1 }`); a closure with statements is broken, its parameters staying after the `{`. An empty argument list before a trailing lambda MUST be dropped.
+Blocks (function bodies, braced branches, loop bodies and statement-position scopes) MUST be broken over lines, an empty block being `{}`. A closure whose body is a single statement or expression, written on one line, MUST stay on one line when it fits (`{ x -> x + 1 }`); any other closure is broken, its parameters staying after the `{`. An empty argument list before a trailing lambda MUST be dropped.
 
 #### Scenario: Closures and trailing lambdas
 - **WHEN** formatting `val f = { x -> x+1 }`, `run() { compute() }` and `items.forEach { x -> total += x; count += 1 }` inside a function
 - **THEN** the results are `val f = { x -> x + 1 }`, `run { compute() }` and `items.forEach { x ->` followed by the two statements on their own lines and `}`
+
+#### Scenario: Closure written over lines stays broken
+- **WHEN** formatting `Column(padding = 16) {\n    Text("Hello")\n}` and `button(onClick = { count += 1 })` inside a function
+- **THEN** the first keeps its closure broken over three lines and the second stays on one line
 
 #### Scenario: Loops, references and write-through
 - **WHEN** formatting `for(i in 0..<n){*r+=i}`, `do{n-=1}while(n>0)` and `val r=&mut x` inside a function
@@ -151,11 +155,15 @@ Spacing MUST follow the Kotlin conventions: one space around binary operators, `
 - **THEN** they are printed `(() -> Unit)?`, `(&Int)?`, `&Int?`, `compose () -> Unit` and `(Int, String) -> Bool`, keeping the parentheses that their meaning needs
 
 ### Requirement: Blank Lines Between Items
-Where the input has one or more blank lines between two declarations, members, statements or `when` branches, or between a comment and what surrounds it, the formatter MUST keep exactly one. It MUST remove every other blank line: none after an opening brace, before a closing brace, or at the start of the file.
+Where the input has one or more blank lines between two declarations, members, statements or `when` branches, or between a comment and what surrounds it, the formatter MUST keep exactly one. It MUST remove every other blank line: none after an opening brace, before a closing brace, or at the start of the file. Two consecutive top-level declarations MUST be separated by one blank line, unless both are top-level `val`s.
 
 #### Scenario: Blank lines collapsed
 - **WHEN** formatting `fun f() {\n\n    val a = 1\n\n\n\n    val b = 2\n\n}`
 - **THEN** the result is `fun f() {\n    val a = 1\n\n    val b = 2\n}\n`
+
+#### Scenario: Declarations separated
+- **WHEN** formatting `val a = 1\nval b = 2\nfun f() {}\nstruct S {}`
+- **THEN** the result is `val a = 1\nval b = 2\n\nfun f() {}\n\nstruct S {}\n`
 
 ### Requirement: File Structure
 The formatter MUST put exactly one blank line after the package declaration and after the last import when something follows them, and print import paths with `/` between segments. The output MUST end with exactly one newline, and an input without declarations or comments MUST format to the empty file.

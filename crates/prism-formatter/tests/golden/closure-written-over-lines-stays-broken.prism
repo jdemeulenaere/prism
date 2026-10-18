@@ -1,0 +1,7 @@
+fun f() {
+    Column(padding = 16) {
+        Text("Hello")
+    }
+    button(onClick = { count += 1 })
+    val state = remember { mutableStateOf(0) }
+}

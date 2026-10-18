@@ -1,0 +1,7 @@
+val mask = (0xFF_FF)
+val n = (a + b) * c
+val literals = f(0b1010, 1_000, 1e3, 3.14e-2, '\n', "\u{1F680}\t", -9223372036854775808, true, null)
+val nested = (a ?: b) ?: c
+val difference = a - (b - c)
+val grouped = (if (c) 1 else 2) + 3
+val negated = - -x

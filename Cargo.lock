@@ -40,6 +40,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-formatter"
+version = "0.1.0"
+dependencies = [
+ "prism-ast",
+ "prism-lexer",
+ "prism-parser",
+]
+
+[[package]]
 name = "prism-lexer"
 version = "0.1.0"
 dependencies = [

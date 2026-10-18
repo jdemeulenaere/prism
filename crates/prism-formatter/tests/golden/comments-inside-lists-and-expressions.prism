@@ -1,0 +1,11 @@
+fun f() {
+    foo(
+        a, // first
+        b, // second
+    )
+    val x = a + /* c */ b
+    val y = 1 + // plus
+        2
+    val z = a // trailing
+        .b()
+}

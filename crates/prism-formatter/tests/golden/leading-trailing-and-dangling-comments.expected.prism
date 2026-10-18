@@ -1,0 +1,6 @@
+fun f() {
+    // first
+    val a = 1 // one
+    /* two */ val b = 2
+    // last
+}
