@@ -1,0 +1,3 @@
+// expect: ok
+fun <T : Copy> f(x: T, y: T = x): T = y
+fun g(): Int = f(1)

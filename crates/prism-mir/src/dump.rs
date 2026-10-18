@@ -299,9 +299,12 @@ impl Printer<'_> {
                     }
                     Callee::Builtin(BuiltinFunction::Clone) => "builtin clone".to_string(),
                     Callee::Value(place, _) => self.place(place),
-                    Callee::Default { function, name, .. } => {
-                        format!("default {} {}", function, name)
-                    }
+                    Callee::Default { function, name, .. } => format!(
+                        "default {}{} {}",
+                        function,
+                        render_type_arguments(type_arguments),
+                        name
+                    ),
                 };
                 let target = match target {
                     Some(target) => format!(" -> bb{}", target.0),
