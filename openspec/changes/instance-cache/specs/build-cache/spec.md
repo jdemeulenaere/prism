@@ -26,7 +26,7 @@ The cache MUST live in the directory named by the `PRISM_CACHE` environment vari
 - **THEN** the second check reuses every file and the second run loads every unit and instance from the cache, because no cache key contains an absolute path
 
 ### Requirement: Cache Keys Cover Exactly the Compilation Inputs
-The key of a file's check entry MUST be a BLAKE3 hash of the cache format version, the compiler's identity, the file's module path, its exact source text, and the ABI hashes of its direct imports in import order. The compiler's identity MUST cover the compiler version and the content of the compiler executable. No other input MUST affect a check key.
+The key of a file's check entry MUST be a BLAKE3 hash of the cache format version, the compiler's identity, the file's module path, its exact source text, and the ABI hashes of its direct imports in import order. The compiler's identity MUST cover the compiler version and the content of the compiler executable. No other input MUST affect a check key. The hash of the executable's content MAY be read from an entry under the cache's `executables` directory keyed by the executable's path, size, modification and status-change times and file identity, which MUST be written only for an executable whose metadata did not change while it was hashed and that is at least two seconds old.
 
 #### Scenario: Unchanged workspace reuses every file
 - **WHEN** `prism check` runs twice on an unchanged workspace with the same compiler
@@ -39,6 +39,10 @@ The key of a file's check entry MUST be a BLAKE3 hash of the cache format versio
 #### Scenario: A different compiler re-checks everything
 - **WHEN** a workspace checked by one compiler executable is checked by a different one, of the same version or not
 - **THEN** no entry of the first is reused
+
+#### Scenario: A rebuilt compiler is identified by its content
+- **WHEN** the hash of a compiler executable has been recorded, and the executable is then replaced by one with other content at the same path
+- **THEN** the next `prism check` hashes the new executable and reuses no entry of the first
 
 ### Requirement: Versioned Self-Checking Entries
 Every entry MUST record the cache format version, its kind, its key and the length of its body, and end with a BLAKE3 checksum of its contents. The cache MUST keep entries of format version `N` under a `vN` directory. An entry that is missing, truncated, corrupt, undecodable, of another version, kind or key, or unreadable MUST be treated as a miss and overwritten by the next successful check or run.

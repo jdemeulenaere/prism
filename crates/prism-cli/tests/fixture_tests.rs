@@ -305,9 +305,12 @@ fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
             .map_err(|error| format!("{}: cannot run prism: {}", case.name, error))
     };
     let cold = run()?;
-    let entries = cache_entries(&cache);
+    // The entries of checks, records and code: the compiler's executable hash, which a run
+    // records apart once the executable is a few seconds old (D16 of `instance-cache`), is no
+    // output of the run.
+    let entries = cache_entries(&cache.join("v2"));
     let warm = run()?;
-    let warm_entries = cache_entries(&cache);
+    let warm_entries = cache_entries(&cache.join("v2"));
     let _ = fs::remove_dir_all(&cache);
     let stdout = String::from_utf8_lossy(&cold.stdout).to_string();
     let stderr = String::from_utf8_lossy(&cold.stderr).to_string();

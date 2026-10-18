@@ -46,6 +46,9 @@ pub enum EntryKind {
     Unit,
     /// The compiled code of an instance's unit.
     Instance,
+    /// The hash of the compiler executable, keyed by its path and file metadata, so that a
+    /// process need not read and hash its whole executable to know its identity.
+    Executable,
 }
 
 impl EntryKind {
@@ -55,6 +58,7 @@ impl EntryKind {
             EntryKind::Record => "record",
             EntryKind::Unit => "unit",
             EntryKind::Instance => "instance",
+            EntryKind::Executable => "executable",
         }
     }
 }
@@ -87,7 +91,8 @@ impl BuildCache {
     pub fn from_environment() -> Option<Self> {
         let variable = |name: &str| std::env::var(name).ok();
         let directory = cache_directory(std::env::consts::OS, &variable)?;
-        Some(Self::open(directory, compiler_identity()?))
+        let compiler = compiler_identity_in(&directory)?;
+        Some(Self::open(directory, compiler))
     }
 
     /// The cache's directory.
@@ -379,12 +384,103 @@ pub fn cache_directory(os: &str, variable: &dyn Fn(&str) -> Option<String>) -> O
 pub fn compiler_identity() -> Option<ContentHash> {
     static IDENTITY: OnceLock<Option<ContentHash>> = OnceLock::new();
     *IDENTITY.get_or_init(|| {
-        let executable = fs::read(std::env::current_exe().ok()?).ok()?;
+        let executable = std::env::current_exe().ok()?;
         Some(identity_of(
             env!("CARGO_PKG_VERSION"),
-            &ContentHash::of(&executable),
+            &ContentHash::of(&fs::read(executable).ok()?),
         ))
     })
+}
+
+/// [`compiler_identity`], with the hash of the executable taken from the cache in `directory`
+/// when an `executable` entry records it for the executable's current path and file metadata,
+/// and recorded there otherwise (D16 of `instance-cache`). Reading and hashing the whole
+/// executable would otherwise be most of a warm run of a small program.
+pub fn compiler_identity_in(directory: &Path) -> Option<ContentHash> {
+    static IDENTITY: OnceLock<Option<ContentHash>> = OnceLock::new();
+    *IDENTITY.get_or_init(|| {
+        let executable = std::env::current_exe().ok()?;
+        let hash = executable_hash(directory, &executable, std::time::SystemTime::now())?;
+        Some(identity_of(env!("CARGO_PKG_VERSION"), &hash))
+    })
+}
+
+/// How long after its last change an executable's hash is first recorded: a file changed this
+/// recently might change again within its file system's timestamp granularity without its
+/// metadata changing, as Git's index treats "racily clean" files.
+const EXECUTABLE_SETTLE_TIME: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The hash of the file `executable`, read from its `executable` entry in the cache in
+/// `directory` or computed and recorded there. The entry's key covers the file's path and every
+/// piece of metadata that changes when its content does: its size, its modification and status
+/// change times and, on Unix, its device and inode numbers. A file whose metadata changes
+/// while it is hashed, or that changed less than [`EXECUTABLE_SETTLE_TIME`] before `now`, is
+/// hashed without being recorded.
+fn executable_hash(
+    directory: &Path,
+    executable: &Path,
+    now: std::time::SystemTime,
+) -> Option<ContentHash> {
+    let before = fs::metadata(executable).ok()?;
+    let memo = executable_memo(directory);
+    let key = executable_key(executable, &before);
+    if let Some(key) = &key {
+        if let Some(body) = memo.read_entry(EntryKind::Executable, key) {
+            if let Ok(hash) = <[u8; 32]>::try_from(body.as_slice()) {
+                return Some(ContentHash(hash));
+            }
+        }
+    }
+    let hash = ContentHash::of(&fs::read(executable).ok()?);
+    let after = fs::metadata(executable).ok()?;
+    let settled = before
+        .modified()
+        .ok()
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age >= EXECUTABLE_SETTLE_TIME);
+    if let Some(key) = key.filter(|key| settled && executable_key(executable, &after) == Some(*key))
+    {
+        memo.write_entry(EntryKind::Executable, &key, &hash.0);
+    }
+    Some(hash)
+}
+
+/// The store of `executable` entries in the cache in `directory`: `<directory>/executables`, kept
+/// apart from the entries of checks, records and code, so that what a check or run writes there
+/// stays a function of its inputs alone. An executable entry's key is a function of a file's
+/// metadata, and whether one is written depends on the file's age.
+fn executable_memo(directory: &Path) -> BuildCache {
+    BuildCache::open(directory.join("executables"), ContentHash([0; 32]))
+}
+
+/// The key of the `executable` entry of the file at `path` with `metadata`, or `None` when the
+/// platform reports no modification time.
+fn executable_key(path: &Path, metadata: &fs::Metadata) -> Option<ContentHash> {
+    let nanoseconds = |time: std::time::SystemTime| {
+        time.duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos() as u64)
+    };
+    let mut hasher = DeterministicHasher::new();
+    hasher.write_str(MAGIC);
+    hasher.write_str(EntryKind::Executable.as_str());
+    hasher.write_u64(FORMAT_VERSION);
+    hasher.write_str(env!("CARGO_PKG_VERSION"));
+    hasher.write_str(&path.to_string_lossy());
+    hasher.write_u64(metadata.len());
+    hasher.write_u64(nanoseconds(metadata.modified().ok()?));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hasher.write_u64(metadata.dev());
+        hasher.write_u64(metadata.ino());
+        hasher.write_u64(metadata.ctime() as u64);
+        hasher.write_u64(metadata.ctime_nsec() as u64);
+    }
+    #[cfg(not(unix))]
+    if let Ok(created) = metadata.created() {
+        hasher.write_u64(nanoseconds(created));
+    }
+    Some(hasher.finish())
 }
 
 /// The identity of the compiler of version `version` whose executable hashes to `executable`.
@@ -708,5 +804,57 @@ mod tests {
     fn the_running_compiler_has_an_identity() {
         assert!(compiler_identity().is_some());
         assert_eq!(compiler_identity(), compiler_identity());
+    }
+
+    /// "A rebuilt compiler is identified by its content" (D16 of `instance-cache`): the hash of
+    /// an executable is recorded once it has settled, read back while its metadata is
+    /// unchanged, and computed afresh when its content changes.
+    #[test]
+    fn a_rebuilt_compiler_is_identified_by_its_content() {
+        let (directory, _) = temporary_cache("executable");
+        fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("prism-executable");
+        fs::write(&executable, b"first").unwrap();
+        let first = ContentHash::of(b"first");
+        let now = SystemTime::now();
+        let entries = |directory: &Path| {
+            fs::read_dir(
+                directory
+                    .join("executables")
+                    .join(format!("v{}", FORMAT_VERSION)),
+            )
+            .map_or(0, |entries| entries.count())
+        };
+        let checks_and_code = |directory: &Path| directory.join(format!("v{}", FORMAT_VERSION));
+        // Just changed: hashed, not recorded.
+        assert_eq!(executable_hash(&directory, &executable, now), Some(first));
+        assert_eq!(entries(&directory), 0);
+        // Settled: recorded, then read back (a wrong recorded hash proves the read).
+        let later = now + EXECUTABLE_SETTLE_TIME * 2;
+        assert_eq!(executable_hash(&directory, &executable, later), Some(first));
+        assert_eq!(entries(&directory), 1);
+        assert!(!checks_and_code(&directory).exists());
+        let key = executable_key(&executable, &fs::metadata(&executable).unwrap()).unwrap();
+        let memo = executable_memo(&directory);
+        memo.write_entry(EntryKind::Executable, &key, &[9; 32]);
+        assert_eq!(
+            executable_hash(&directory, &executable, later),
+            Some(ContentHash([9; 32]))
+        );
+        // Replaced with other content: its metadata changes, so it is hashed again.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&executable, b"second, longer").unwrap();
+        assert_eq!(
+            executable_hash(&directory, &executable, later),
+            Some(ContentHash::of(b"second, longer"))
+        );
+        // A corrupt entry is a miss.
+        let key = executable_key(&executable, &fs::metadata(&executable).unwrap()).unwrap();
+        fs::write(memo.entry_path(&key), b"garbage").unwrap();
+        assert_eq!(
+            executable_hash(&directory, &executable, later),
+            Some(ContentHash::of(b"second, longer"))
+        );
+        fs::remove_dir_all(&directory).ok();
     }
 }
