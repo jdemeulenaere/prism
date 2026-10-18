@@ -1,0 +1,14 @@
+module main
+fun main::print(n: &Int): Unit @2:1
+  local %0 n: &Int (parameter)
+  block: Unit @2:20
+fun main::f(): Unit @3:1
+  block: Unit @3:9
+    expression @3:11
+      call main::print: Unit @3:11
+        argument n: borrow (argument): &Int @3:17
+          temporary: Int @3:17
+            literal 1: Int @3:17
+    expression @3:21
+      call builtin println: Unit @3:21
+        argument 0: literal 2: Int @3:29

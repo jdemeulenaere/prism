@@ -264,6 +264,18 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 "   = help: verify parameter counts, argument types, or named parameters\n",
             );
         }
+        TypeError::UnprintableArgument { function, .. } => {
+            out.push_str(&format!(
+                "   = help: '{}' accepts an 'Int', 'Double', 'Bool', 'Char' or 'String', or a reference to one\n",
+                function
+            ));
+        }
+        TypeError::BuiltinFunctionAsValue { name, .. } => {
+            out.push_str(&format!(
+                "   = help: '{}' is a built-in function and can only be called, as in '{}(x)'\n",
+                name, name
+            ));
+        }
         TypeError::VisibilityViolation { .. } => {
             out.push_str("   = help: change declaration visibility to 'public' or access from the defining package\n");
         }

@@ -1,0 +1,2 @@
+// expect: E4004
+fun f() { print(); println(1, 2); println(value = 1) }

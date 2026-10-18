@@ -13,6 +13,10 @@ pub enum TypeError {
     /// E4001: `this` used outside an extension function, where nothing binds it.
     ThisOutsideExtension { span: Span },
 
+    /// E4001: An output built-in (`print` or `println`) named without being called, which only
+    /// a call can do (D15 of `codegen-core`).
+    BuiltinFunctionAsValue { name: String, span: Span },
+
     /// E4002: Expression type is not assignable to the expected type.
     TypeMismatch {
         expected: Type,
@@ -47,6 +51,14 @@ pub enum TypeError {
 
     /// E4004: Function invocation argument count or parameter type incompatibility.
     CallSignatureMismatch { message: String, span: Span },
+
+    /// E4004: An argument of `print` or `println` of a type it cannot print (D15 of
+    /// `codegen-core`).
+    UnprintableArgument {
+        function: String,
+        ty: Type,
+        span: Span,
+    },
 
     /// E4004: An argument's type is not assignable to its parameter's type (including struct
     /// constructor fields and enum payloads).
@@ -198,11 +210,13 @@ impl TypeError {
         match self {
             TypeError::UnresolvedSymbol { .. } => "E4001",
             TypeError::ThisOutsideExtension { .. } => "E4001",
+            TypeError::BuiltinFunctionAsValue { .. } => "E4001",
             TypeError::TypeMismatch { .. } => "E4002",
             TypeError::OperatorMismatch { .. } => "E4002",
             TypeError::TypeNameAsValue { .. } => "E4002",
             TypeError::ImmutabilityViolation { .. } => "E4003",
             TypeError::CallSignatureMismatch { .. } => "E4004",
+            TypeError::UnprintableArgument { .. } => "E4004",
             TypeError::ArgumentTypeMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
             TypeError::UnknownField { .. } => "E4006",
@@ -237,6 +251,8 @@ impl TypeError {
             TypeError::TypeNameAsValue { span, .. } => *span,
             TypeError::ImmutabilityViolation { span, .. } => *span,
             TypeError::CallSignatureMismatch { span, .. } => *span,
+            TypeError::UnprintableArgument { span, .. } => *span,
+            TypeError::BuiltinFunctionAsValue { span, .. } => *span,
             TypeError::ArgumentTypeMismatch { span, .. } => *span,
             TypeError::ReturnTypeMismatch { span, .. } => *span,
             TypeError::UnknownField { span, .. } => *span,
@@ -305,6 +321,12 @@ impl TypeError {
             }
             TypeError::ImmutabilityViolation { message, .. } => message.clone(),
             TypeError::CallSignatureMismatch { message, .. } => message.clone(),
+            TypeError::UnprintableArgument { function, ty, .. } => {
+                format!("'{}' cannot print a value of type '{}'", function, ty)
+            }
+            TypeError::BuiltinFunctionAsValue { name, .. } => {
+                format!("built-in function '{}' cannot be used as a value", name)
+            }
             TypeError::ReturnTypeMismatch {
                 expected, found, ..
             } => {

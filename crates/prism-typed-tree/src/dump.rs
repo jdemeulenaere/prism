@@ -280,9 +280,7 @@ impl Printer<'_> {
                     Callee::Function(path) => {
                         format!("{}{}", path, render_type_arguments(&call.type_arguments))
                     }
-                    Callee::Builtin(builtin) => match builtin {
-                        crate::tree::BuiltinFunction::Clone => "builtin clone".to_string(),
-                    },
+                    Callee::Builtin(builtin) => format!("builtin {}", builtin.name()),
                     Callee::Value(_) => "value".to_string(),
                 };
                 let mut text = format!(

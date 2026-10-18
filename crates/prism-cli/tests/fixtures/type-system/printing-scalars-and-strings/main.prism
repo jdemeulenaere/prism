@@ -1,0 +1,2 @@
+// expect: ok
+fun f(r: &Int, s: String) { print(1); println(2.5); println(true); println('c'); println(r); println(s); println(s); println() }

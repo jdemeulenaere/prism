@@ -510,6 +510,27 @@ pub enum Callee {
 pub enum BuiltinFunction {
     /// `clone()` of a `Clone` type, called with a shared receiver borrow.
     Clone,
+    /// `print(x)`: writes the text of its argument, an `Int`, `Double`, `Bool` or `Char` passed
+    /// by value or a borrowed `String` (D15 of `codegen-core`).
+    Print,
+    /// `println(x)` or `println()`: writes the text of its argument, if any, then a newline.
+    PrintLine,
+}
+
+impl BuiltinFunction {
+    /// The name the built-in is called by.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinFunction::Clone => "clone",
+            BuiltinFunction::Print => "print",
+            BuiltinFunction::PrintLine => "println",
+        }
+    }
+
+    /// Whether the built-in's first argument is a receiver: only `clone`'s is.
+    pub fn has_receiver(self) -> bool {
+        matches!(self, BuiltinFunction::Clone)
+    }
 }
 
 /// One argument of a call.

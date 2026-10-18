@@ -474,12 +474,13 @@ pub enum Callee {
 impl Callee {
     /// Whether the call's first operand is a receiver: exactly for a call of an extension,
     /// whose declaration path names its receiver type, and of the built-in `clone`, which
-    /// takes a shared receiver borrow (D3 of `borrowck-elision`). A function value is never an
-    /// extension, since an extension cannot be named as a value.
+    /// takes a shared receiver borrow (D3 of `borrowck-elision`). The argument of `print` and
+    /// `println` is not a receiver. A function value is never an extension, since an extension
+    /// cannot be named as a value.
     pub fn has_receiver(&self) -> bool {
         match self {
             Callee::Function(path) => path.receiver.is_some(),
-            Callee::Builtin(_) => true,
+            Callee::Builtin(builtin) => builtin.has_receiver(),
             Callee::Value(..) | Callee::Default { .. } => false,
         }
     }

@@ -14,7 +14,7 @@ use crate::mir::{
 };
 use crate::types::projection_type;
 use prism_ast::Span;
-use prism_typed_tree::{BuiltinFunction, NominalId, Type, TypeParameter, TypeTable};
+use prism_typed_tree::{NominalId, Type, TypeParameter, TypeTable};
 use std::fmt::Write;
 
 impl MirFile {
@@ -297,7 +297,7 @@ impl Printer<'_> {
                     Callee::Function(path) => {
                         format!("{}{}", path, render_type_arguments(type_arguments))
                     }
-                    Callee::Builtin(BuiltinFunction::Clone) => "builtin clone".to_string(),
+                    Callee::Builtin(builtin) => format!("builtin {}", builtin.name()),
                     Callee::Value(place, _) => self.place(place),
                     Callee::Default { function, name, .. } => format!(
                         "default {}{} {}",

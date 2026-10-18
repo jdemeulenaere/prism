@@ -52,7 +52,8 @@ pub enum Rule {
 
 impl Signature {
     /// The signature a call of `callee` follows: the built-in `clone` is a method with a shared
-    /// receiver.
+    /// receiver, and `print` and `println` are plain functions, whose `Unit` result borrows
+    /// nothing.
     pub fn of_callee(callee: &Callee) -> Self {
         match callee {
             Callee::Function(_) | Callee::Builtin(_) => Signature::Function {

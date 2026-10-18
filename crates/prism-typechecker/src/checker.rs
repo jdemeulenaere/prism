@@ -922,6 +922,14 @@ impl TypeChecker {
                 self.check_visibility(&sym, span);
                 Some(sym)
             }
+            Err(TypeError::UnresolvedSymbol { .. }) if output_builtin_named(name).is_some() => {
+                // An output built-in can only be called (D15 of `codegen-core`).
+                self.errors.push(TypeError::BuiltinFunctionAsValue {
+                    name: name.to_string(),
+                    span,
+                });
+                None
+            }
             Err(TypeError::UnresolvedSymbol { .. })
                 if self.unimported_type_named(name).is_some() =>
             {
@@ -4177,6 +4185,11 @@ impl TypeChecker {
         if let Some(member) = self.implicit_this_callee(callee) {
             return self.infer_call_expr(&member, type_arguments, args, span, expected);
         }
+        // `print(...)` and `println(...)` call the output built-ins unless a declaration of the
+        // name is in scope (D15 of `codegen-core`).
+        if let Some(builtin) = self.output_builtin(callee) {
+            return self.infer_output_call(builtin, type_arguments, args, span);
+        }
         // `recv.name(...)`: a field, the built-in `clone()` or an extension function.
         if let ExprKind::MemberAccess {
             target,
@@ -4251,6 +4264,121 @@ impl TypeChecker {
             expected.as_ref(),
             span,
         )
+    }
+
+    /// The output built-in a bare `print` or `println` callee names: only when no local,
+    /// parameter, top-level declaration or import of that name is in scope, so the built-ins are
+    /// found last (D15 of `codegen-core`).
+    fn output_builtin(&self, callee: &Expr) -> Option<BuiltinFunction> {
+        let ExprKind::Ident(name) = &callee.kind else {
+            return None;
+        };
+        let builtin = output_builtin_named(name)?;
+        let declared = self.env.lookup(name).is_some()
+            || !matches!(self.env.lookup_import(name, |_| true), ImportLookup::None);
+        (!declared).then_some(builtin)
+    }
+
+    /// Checks a call of the output built-in `builtin`: `print` takes one positional argument and
+    /// `println` zero or one, of a printable type (the `type-system` spec, "Output Built-In
+    /// Arguments"). The call has type `Unit`.
+    fn infer_output_call(
+        &mut self,
+        builtin: BuiltinFunction,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        span: Span,
+    ) -> ExpressionId {
+        let name = builtin.name();
+        self.reject_type_arguments(&format!("'{}'", name), type_arguments);
+        let maximum = 1;
+        let minimum = usize::from(builtin == BuiltinFunction::Print);
+        let problem = if args.iter().any(|arg| arg.name.is_some()) {
+            Some(format!("'{}' takes no named arguments", name))
+        } else if args.len() < minimum || args.len() > maximum {
+            let expected = if minimum == maximum {
+                "exactly one argument"
+            } else {
+                "at most one argument"
+            };
+            Some(format!(
+                "'{}' takes {}, found {}",
+                name,
+                expected,
+                args.len()
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = problem {
+            self.errors
+                .push(TypeError::CallSignatureMismatch { message, span });
+            let children = args
+                .iter()
+                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
+                .collect();
+            return self.error_node(children, span);
+        }
+        let mut arguments = Vec::new();
+        let mut parameters = Vec::new();
+        if let Some(arg) = args.first() {
+            match self.check_printed_argument(name, &arg.value) {
+                Ok(value) => {
+                    parameters.push((None, self.ty(value)));
+                    arguments.push(Argument::Written(value));
+                }
+                Err(value) => return self.error_node(vec![value], span),
+            }
+        }
+        let call = Call {
+            callee: Callee::Builtin(builtin),
+            evaluation_order: (0..arguments.len()).collect(),
+            arguments,
+            parameters,
+            type_arguments: Vec::new(),
+            has_receiver: false,
+            is_compose: false,
+        };
+        self.add(ExpressionKind::Call(call), Type::Unit, span)
+    }
+
+    /// Checks the argument of an output built-in named `name`, adjusted as for a parameter of
+    /// its type: a `Copy` scalar is passed by value, copied out of references, and a `String`
+    /// is borrowed implicitly, as for a `&String` parameter, without being moved. Any other type
+    /// is `E4004`; the error result is the node checked so far.
+    fn check_printed_argument(
+        &mut self,
+        name: &str,
+        expr: &Expr,
+    ) -> Result<ExpressionId, ExpressionId> {
+        let is_place = self.is_place(expr);
+        let found = self.with_origin(Origin::Value, |c| {
+            c.with_consuming(!is_place, |c| c.infer_expr(expr))
+        });
+        let found_ty = self.ty(found);
+        let mut referent = &found_ty;
+        while let Type::Reference { inner, .. } = referent {
+            referent = inner;
+        }
+        let parameter = match referent {
+            Type::Int | Type::Float | Type::Bool | Type::Char => referent.clone(),
+            Type::String => Type::Reference {
+                mutable: false,
+                inner: Box::new(Type::String),
+            },
+            Type::Error => return Err(found),
+            other => {
+                self.errors.push(TypeError::UnprintableArgument {
+                    function: name.to_string(),
+                    ty: other.clone(),
+                    span: expr.span,
+                });
+                return Err(found);
+            }
+        };
+        Ok(self.with_origin(Origin::Argument, |c| {
+            c.fit(expr, found, &parameter, Site::Argument { is_place }, false)
+        }))
     }
 
     /// The parameter names, defaults and type parameters of the callee of a call: a declared
@@ -6460,6 +6588,15 @@ impl TypeChecker {
 
 /// The parameters of a callee as a call records them: each with its name, when the callee is a
 /// declared function, and its type.
+/// The output built-in called by the bare name `name`, if any (D15 of `codegen-core`).
+fn output_builtin_named(name: &str) -> Option<BuiltinFunction> {
+    match name {
+        "print" => Some(BuiltinFunction::Print),
+        "println" => Some(BuiltinFunction::PrintLine),
+        _ => None,
+    }
+}
+
 fn parameter_list(names: &[String], params: &[Type]) -> Vec<(Option<String>, Type)> {
     params
         .iter()
