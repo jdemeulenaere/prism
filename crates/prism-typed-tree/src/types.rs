@@ -471,9 +471,13 @@ pub enum Type {
     /// and have no members.
     Opaque(String),
     /// First-class function type, with whether each parameter is `escaping`: one flag per
-    /// parameter, always as many as `params`.
+    /// parameter, always as many as `params`. With `receiver`, a function type with a receiver
+    /// (`ColumnScope.(Int) -> Unit`, D2 of `receiver-lambdas`): `params[0]` is the receiver's
+    /// borrow, `&T` or `&mut T` for `mut T.() -> R`, and is never `escaping`. The flag is part of
+    /// the type's identity, but not of its representation: `converts_in_place` ignores it.
     Fn {
         is_compose: bool,
+        receiver: bool,
         params: Vec<Type>,
         escaping: Vec<bool>,
         ret: Box<Type>,
@@ -489,6 +493,7 @@ impl Type {
     pub fn function(is_compose: bool, params: Vec<Type>, ret: Type) -> Type {
         Type::Fn {
             is_compose,
+            receiver: false,
             escaping: vec![false; params.len()],
             params,
             ret: Box::new(ret),
@@ -548,11 +553,13 @@ impl Type {
             },
             Type::Fn {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 ret,
             } => Type::Fn {
                 is_compose: *is_compose,
+                receiver: *receiver,
                 params: params.iter().map(|ty| ty.substitute(arguments)).collect(),
                 escaping: escaping.clone(),
                 ret: Box::new(ret.substitute(arguments)),
@@ -702,17 +709,21 @@ impl Type {
                         .all(|(a, b)| a.converts_in_place(b) && b.converts_in_place(a))
             }
             (
+                // Whether either type has a receiver is ignored: `T.(A) -> R` and `(&T, A) -> R`
+                // share a representation (D2 of `receiver-lambdas`).
                 Type::Fn {
                     is_compose,
                     params,
                     escaping,
                     ret,
+                    ..
                 },
                 Type::Fn {
                     is_compose: target_compose,
                     params: target_params,
                     escaping: target_escaping,
                     ret: target_ret,
+                    ..
                 },
             ) => {
                 is_compose == target_compose
@@ -796,19 +807,17 @@ impl Type {
             Type::List(inner) => format!("List<{}>", inner.qualified()),
             Type::Fn {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 ret,
-            } => format!(
-                "{}({}) -> {}",
-                if *is_compose { "compose " } else { "" },
-                params
-                    .iter()
-                    .zip(escaping)
-                    .map(|(param, &flag)| render_parameter(param, flag, Type::qualified))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                ret.qualified()
+            } => render_function(
+                *is_compose,
+                *receiver,
+                params,
+                escaping,
+                ret,
+                Type::qualified,
             ),
             other => other.to_string(),
         }
@@ -845,25 +854,67 @@ impl fmt::Display for Type {
             Type::Opaque(name) => write!(f, "{}", name),
             Type::Fn {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 ret,
-            } => {
-                let comp = if *is_compose { "compose " } else { "" };
-                write!(f, "{}(", comp)?;
-                for (i, p) in params.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    let flag = escaping.get(i).copied().unwrap_or(false);
-                    write!(f, "{}", render_parameter(p, flag, Type::to_string))?;
-                }
-                write!(f, ") -> {}", ret)
-            }
+            } => write!(
+                f,
+                "{}",
+                render_function(
+                    *is_compose,
+                    *receiver,
+                    params,
+                    escaping,
+                    ret,
+                    Type::to_string
+                )
+            ),
             Type::Parameter(parameter) => write!(f, "{}", parameter.name),
             Type::Error => write!(f, "<error>"),
         }
     }
+}
+
+/// Renders a function type as written: `compose `, then the receiver (`mut Builder.`) when it
+/// has one, then its other parameters and its result.
+fn render_function(
+    is_compose: bool,
+    receiver: bool,
+    params: &[Type],
+    escaping: &[bool],
+    ret: &Type,
+    render: impl Fn(&Type) -> String,
+) -> String {
+    let mut text = String::new();
+    if is_compose {
+        text.push_str("compose ");
+    }
+    let mut skipped = 0;
+    if receiver {
+        if let Some(Type::Reference { mutable, inner }) = params.first() {
+            if *mutable {
+                text.push_str("mut ");
+            }
+            text.push_str(&render(inner));
+            text.push('.');
+            skipped = 1;
+        }
+    }
+    let rendered: Vec<String> = params
+        .iter()
+        .enumerate()
+        .skip(skipped)
+        .map(|(index, param)| {
+            render_parameter(
+                param,
+                escaping.get(index).copied().unwrap_or(false),
+                &render,
+            )
+        })
+        .collect();
+    text.push_str(&format!("({}) -> {}", rendered.join(", "), render(ret)));
+    text
 }
 
 /// Renders a function type's parameter, with `escaping ` before it when it is marked.
@@ -908,6 +959,7 @@ mod tests {
     fn escaping_function(params: Vec<Type>, ret: Type) -> Type {
         Type::Fn {
             is_compose: false,
+            receiver: false,
             escaping: vec![true; params.len()],
             params,
             ret: Box::new(ret),
@@ -928,6 +980,46 @@ mod tests {
         assert!(takes_keeping.converts_in_place(&takes_lending));
         assert!(!takes_lending.converts_in_place(&takes_keeping));
         assert_eq!(keeping.to_string(), "(escaping () -> Unit) -> Unit");
+    }
+
+    /// `T.(params) -> ret`, or `mut T.(params) -> ret` with `mutable`.
+    fn receiver_function(mutable: bool, receiver: Type, params: Vec<Type>, ret: Type) -> Type {
+        let mut all = vec![reference(mutable, receiver)];
+        all.extend(params);
+        Type::Fn {
+            is_compose: false,
+            receiver: true,
+            escaping: vec![false; all.len()],
+            params: all,
+            ret: Box::new(ret),
+        }
+    }
+
+    #[test]
+    fn receiver_and_plain_function_types_convert_in_place() {
+        let scope = Type::plain_struct(NominalId::new("main", "Scope"));
+        let with_receiver = receiver_function(false, scope.clone(), vec![Type::Int], Type::Unit);
+        let plain = function(vec![reference(false, scope.clone()), Type::Int], Type::Unit);
+        // One representation: both directions, though the types differ.
+        assert_ne!(with_receiver, plain);
+        assert!(with_receiver.converts_in_place(&plain));
+        assert!(plain.converts_in_place(&with_receiver));
+        // A shared receiver may become a mutable one, never the reverse.
+        let mutable = receiver_function(true, scope.clone(), vec![Type::Int], Type::Unit);
+        assert!(with_receiver.converts_in_place(&mutable));
+        assert!(!mutable.converts_in_place(&with_receiver));
+        let plain_mutable = function(vec![reference(true, scope.clone()), Type::Int], Type::Unit);
+        assert!(mutable.converts_in_place(&plain_mutable));
+        assert!(!plain_mutable.converts_in_place(&with_receiver));
+        // Rendering keeps the receiver as written.
+        assert_eq!(with_receiver.to_string(), "Scope.(Int) -> Unit");
+        assert_eq!(mutable.to_string(), "mut Scope.(Int) -> Unit");
+        assert_eq!(plain.to_string(), "(&Scope, Int) -> Unit");
+        assert_eq!(
+            function(vec![with_receiver.clone()], Type::Unit).to_string(),
+            "(Scope.(Int) -> Unit) -> Unit"
+        );
+        assert_eq!(with_receiver.qualified(), "main::Scope.(Int) -> Unit");
     }
 
     #[test]

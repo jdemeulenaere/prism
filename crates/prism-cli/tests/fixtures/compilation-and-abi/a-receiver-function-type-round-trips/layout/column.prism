@@ -1,0 +1,7 @@
+package layout
+
+public struct ColumnScope : Copy {}
+
+public fun column(content: ColumnScope.() -> Unit): Unit {
+    content(ColumnScope())
+}

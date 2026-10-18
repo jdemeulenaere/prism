@@ -115,11 +115,13 @@ impl<'t> TypeFingerprints<'t> {
                 hasher.write_u8(11);
                 self.hash_type(inner, stack, cycles, hasher)
             }
+            // A receiver does not change the representation (D2 of `receiver-lambdas`).
             Type::Fn {
                 is_compose,
                 params,
                 escaping,
                 ret,
+                ..
             } => {
                 hasher.write_u8(12);
                 hasher.write_u8(u8::from(*is_compose));

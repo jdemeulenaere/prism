@@ -17,7 +17,7 @@ A function type with a receiver `T.(A) -> R` MUST be a function type whose first
 A function value of a receiver function type MUST convert to the plain function type with the same parameters (`T.(A) -> R` to `(&T, A) -> R`, `mut T.(A) -> R` to `(&mut T, A) -> R`) and back, in place, under the other rules of "Function Values Convert Only Without Changing Representation": a shared receiver's type MAY become a mutable receiver's, and a mutable receiver's MUST NOT become a shared one's.
 
 #### Scenario: Converting between receiver and plain function types
-- **WHEN** `struct Scope : Copy {}`, `fun header(s: &Scope) {}`, `fun column(content: Scope.() -> Unit) { content(Scope()) }` and `fun plain(f: (&Scope) -> Unit) { f(Scope()) }` are declared, and a body runs `val h: (&Scope) -> Unit = header`, `column(h)`, `val c: Scope.() -> Unit = { }`, `plain(c)`, `val m: mut Scope.() -> Unit = c` and `val p: (&mut Scope) -> Unit = m`
+- **WHEN** `struct Scope : Copy {}`, `fun header(s: &Scope) {}`, `fun column(content: Scope.() -> Unit) { content(Scope()) }` and `fun plain(f: (&Scope) -> Unit) { f(Scope()) }` are declared, and a body runs `val h: (&Scope) -> Unit = header`, `column(h)`, `val c: Scope.() -> Unit = { }`, `plain(c)`, `val d: Scope.() -> Unit = { }`, `val m: mut Scope.() -> Unit = d` and `val p: (&mut Scope) -> Unit = m`
 - **THEN** the file passes `prism check`
 
 #### Scenario: A mutable receiver does not become a shared one

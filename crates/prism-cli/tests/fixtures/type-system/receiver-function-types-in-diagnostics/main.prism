@@ -1,0 +1,4 @@
+// expect: E4005
+struct ColumnScope : Copy {}
+fun Column(content: ColumnScope.(Int) -> Unit) {}
+fun f(): String = Column

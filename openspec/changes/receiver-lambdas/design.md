@@ -187,3 +187,8 @@ No external users and no existing program changes meaning: no function type has 
 ## Open Questions
 
 - The exact wording of `E4034`'s and `E4001`'s helps can be tuned during implementation.
+
+## Implementation Notes
+
+- **Changed scenario.** "Converting between receiver and plain function types" passed `c` to `plain(c)` and then converted `c` again, which uses a moved value (`E5001`): function values are not `Copy`. It now converts a second closure `d` to the mutable receiver type, which keeps its intent (each direction of D2 converts) and passes `prism check`.
+- **Glue names.** Drop and clone glue are keyed by type, and a receiver function type and its plain form are distinct types, so glue names write the receiver as source does (`main::Scope.() -> Unit`); otherwise a unit needing the glue of both would define one symbol twice. The contract hash, which describes representations, ignores the receiver. The MIR codec gives a function type with a receiver its own tag, so plain function types encode as before.

@@ -1,0 +1,18 @@
+// expect: ok
+struct Scope : Copy {}
+fun header(s: &Scope) {}
+fun column(content: Scope.() -> Unit) {
+    content(Scope())
+}
+fun plain(f: (&Scope) -> Unit) {
+    f(Scope())
+}
+fun main() {
+    val h: (&Scope) -> Unit = header
+    column(h)
+    val c: Scope.() -> Unit = { }
+    plain(c)
+    val d: Scope.() -> Unit = { }
+    val m: mut Scope.() -> Unit = d
+    val p: (&mut Scope) -> Unit = m
+}

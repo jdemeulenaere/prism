@@ -1,0 +1,9 @@
+// expect: ok
+struct ColumnScope : Copy {}
+compose fun Item() {}
+compose fun Column(content: compose ColumnScope.() -> Unit) {
+    content(ColumnScope())
+}
+compose fun Screen() {
+    Column { Item() }
+}

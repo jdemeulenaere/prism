@@ -1,0 +1,6 @@
+// expect: E4004
+struct ColumnScope : Copy {}
+fun later(f: ColumnScope.() -> Unit) {}
+compose fun P(content: compose ColumnScope.() -> Unit) {
+    later(content)
+}

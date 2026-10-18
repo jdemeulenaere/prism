@@ -186,15 +186,28 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
         ),
         Type::Heap(inner) => format!("Heap<{}>", qualified_name(inner)),
         Type::List(inner) => format!("List<{}>", qualified_name(inner)),
+        // A receiver is written as in source (`main::Scope.() -> Unit`), so the glue of a type
+        // with a receiver and of its plain form, distinct types, never share a name.
         Type::Fn {
             is_compose,
+            receiver,
             params,
             escaping,
             ret,
         } => {
+            let mut receiver_name = String::new();
+            let mut skipped = 0;
+            if *receiver {
+                if let Some(Type::Reference { mutable, inner }) = params.first() {
+                    let prefix = if *mutable { "mut " } else { "" };
+                    receiver_name = format!("{}{}.", prefix, qualified_name(inner));
+                    skipped = 1;
+                }
+            }
             let params: Vec<String> = params
                 .iter()
                 .zip(escaping)
+                .skip(skipped)
                 .map(|(param, &flag)| {
                     let name = qualified_name(param);
                     if flag {
@@ -205,8 +218,9 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
                 })
                 .collect();
             format!(
-                "{}({}) -> {}",
+                "{}{}({}) -> {}",
                 if *is_compose { "compose " } else { "" },
+                receiver_name,
                 params.join(", "),
                 qualified_name(ret)
             )

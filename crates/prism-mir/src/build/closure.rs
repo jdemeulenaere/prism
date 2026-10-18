@@ -149,6 +149,7 @@ impl Builder<'_> {
             ret: declared_result,
             is_compose: declared_compose,
             escaping: declared_escaping,
+            ..
         } = &expression.ty
         else {
             panic!("internal error: a function value of type {}", expression.ty);
@@ -178,6 +179,7 @@ impl Builder<'_> {
             ret: result,
             is_compose,
             escaping: value_escaping,
+            ..
         } = value_type
         else {
             panic!("internal error: an adapter of type {}", value_type);

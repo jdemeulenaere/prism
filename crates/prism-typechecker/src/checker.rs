@@ -1224,6 +1224,7 @@ impl TypeChecker {
                 flags.extend(escaping.iter().copied());
                 Type::Fn {
                     is_compose: *is_compose,
+                    receiver: receiver.is_some(),
                     params: lowered,
                     escaping: flags,
                     ret: Box::new(self.lower_type(return_type)),
@@ -1818,6 +1819,7 @@ impl TypeChecker {
                     let has_default = params.iter().map(|p| p.default.is_some()).collect();
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
+                        receiver: false,
                         params: param_types,
                         escaping: params.iter().map(|p| p.escaping).collect(),
                         ret: Box::new(type_from_abi(return_type, &type_parameters)),
@@ -2561,6 +2563,7 @@ impl TypeChecker {
 
         let fn_ty = Type::Fn {
             is_compose: f.is_compose,
+            receiver: false,
             params,
             escaping: f.params.iter().map(|p| p.escaping).collect(),
             ret: Box::new(ret),
@@ -3079,6 +3082,7 @@ impl TypeChecker {
                         return_type = expr_ty.clone();
                         let inferred = Type::Fn {
                             is_compose: f.is_compose,
+                            receiver: false,
                             params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
                             escaping: f.params.iter().map(|p| p.escaping).collect(),
                             ret: Box::new(expr_ty),
@@ -3336,6 +3340,7 @@ impl TypeChecker {
             };
             if let Type::Fn {
                 is_compose,
+                receiver: expected_receiver,
                 params: exp_params,
                 escaping: exp_escaping,
                 ret: exp_ret,
@@ -3346,6 +3351,7 @@ impl TypeChecker {
                     arrow.is_some(),
                     body,
                     *is_compose,
+                    *expected_receiver,
                     exp_params,
                     exp_escaping,
                     ClosureReturn::Expected(exp_ret),
@@ -3452,6 +3458,7 @@ impl TypeChecker {
         has_header: bool,
         body: &Block,
         is_compose: bool,
+        receiver: bool,
         exp_params: &[Type],
         exp_escaping: &[bool],
         exp_ret: ClosureReturn,
@@ -3529,6 +3536,7 @@ impl TypeChecker {
         let captures = self.exit_closure(prev);
         let ty = Type::Fn {
             is_compose,
+            receiver,
             params: exp_params.to_vec(),
             escaping: (0..exp_params.len())
                 .map(|index| exp_escaping.get(index).copied().unwrap_or(false))
@@ -5903,6 +5911,7 @@ impl TypeChecker {
                 params,
                 escaping,
                 ret,
+                ..
             } => {
                 // Composable context enforcement (first-class compose invariant, E4008)
                 if is_compose && !self.is_in_compose() {
@@ -6265,7 +6274,7 @@ impl TypeChecker {
         declared: &Type,
         expr: &Expr,
     ) -> ExpressionId {
-        let (is_compose, params, escaping, ret) =
+        let (is_compose, receiver, params, escaping, ret) =
             closure_signature(declared).expect("deferred closures have a function type");
         let ExprKind::Closure {
             params: written,
@@ -6302,6 +6311,7 @@ impl TypeChecker {
             arrow.is_some(),
             body,
             is_compose,
+            receiver,
             &params,
             &escaping,
             closure_return,
@@ -7078,6 +7088,7 @@ impl TypeChecker {
                     params,
                     escaping,
                     ret,
+                    ..
                 },
             param_names,
             has_default,
@@ -9271,18 +9282,23 @@ fn this_member(member: &str, span: Span) -> Expr {
     )
 }
 
+/// The signature a closure literal is checked against: its compose flag, whether it has a
+/// receiver, its parameter types, their `escaping` flags and its return type.
+type ClosureSignature = (bool, bool, Vec<Type>, Vec<bool>, Type);
+
 /// The function type a closure argument is checked against, for a parameter of declared type
-/// `declared`: a function type, possibly nullable. Returns its compose flag, parameter types and
-/// return type.
-fn closure_signature(declared: &Type) -> Option<(bool, Vec<Type>, Vec<bool>, Type)> {
+/// `declared`: a function type, possibly nullable.
+fn closure_signature(declared: &Type) -> Option<ClosureSignature> {
     match declared {
         Type::Fn {
             is_compose,
+            receiver,
             params,
             escaping,
             ret,
         } => Some((
             *is_compose,
+            *receiver,
             params.clone(),
             escaping.clone(),
             (**ret).clone(),

@@ -989,3 +989,126 @@ fn reachable_types_keep_the_hash_stable_across_reordering() {
         plain("package lib\npublic fun g(): Int = 2\npublic fun f(): Int = 1\n")
     );
 }
+
+// --- Receivers and contexts in the ABI (receiver-lambdas)
+
+#[test]
+fn a_receiver_function_type_round_trips() {
+    let abi = FileAbi::extract(
+        &parse_source(
+            "package layout\npublic struct ColumnScope : Copy {}\npublic fun column(content: ColumnScope.() -> Unit): Unit { content(ColumnScope()) }\npublic fun build(f: mut ColumnScope.(Int) -> Unit): Unit {}",
+        )
+        .expect("source must parse"),
+        "layout/column",
+        &no_imports,
+    )
+    .expect("ABI must extract");
+    let parameter_type = |name: &str| {
+        abi.symbols
+            .iter()
+            .find_map(|symbol| match symbol {
+                ExportedSymbol::Function {
+                    name: function,
+                    params,
+                    ..
+                } if function == name => Some(params[0].ty.clone()),
+                _ => None,
+            })
+            .expect("the function is exported")
+    };
+    let content = parameter_type("column");
+    let AbiType::Fn {
+        receiver: true,
+        params,
+        escaping,
+        ..
+    } = &content
+    else {
+        panic!("expected a function type with a receiver, found {:?}", content);
+    };
+    assert_eq!(escaping, &[false]);
+    let [AbiType::Ref {
+        mutable: false,
+        inner,
+    }] = params.as_slice()
+    else {
+        panic!("expected the receiver as a shared borrow, found {:?}", params);
+    };
+    assert!(
+        matches!(&**inner, AbiType::Nominal { module, name, .. } if module == "layout/column" && name == "ColumnScope")
+    );
+    assert_eq!(content.to_string(), "ColumnScope.() -> Unit");
+    assert_eq!(
+        parameter_type("build").to_string(),
+        "mut ColumnScope.(Int) -> Unit"
+    );
+}
+
+#[test]
+fn receivers_and_contexts_change_the_abi_hash() {
+    let prelude = "public struct ColumnScope : Copy {}\npublic struct RowScope : Copy {}\npublic struct Modifier : Copy {}\n";
+    let column = |ty: &str| format!("{prelude}public fun column(content: {ty}): Unit {{}}");
+    assert_hash_differs(
+        &column("ColumnScope.() -> Unit"),
+        &column("(&ColumnScope) -> Unit"),
+        "dropping a function type's receiver",
+    );
+    assert_hash_differs(
+        &column("ColumnScope.() -> Unit"),
+        &column("mut ColumnScope.() -> Unit"),
+        "making a function type's receiver mutable",
+    );
+    let weight = |context: &str| {
+        format!("{prelude}context(scope: {context}) public fun Modifier.weight(w: Double): Modifier = this")
+    };
+    assert_hash_differs(
+        &weight("RowScope"),
+        &weight("ColumnScope"),
+        "changing a context's type",
+    );
+    assert_hash_differs(
+        &weight("RowScope"),
+        &format!("{prelude}public fun Modifier.weight(w: Double): Modifier = this"),
+        "dropping a context",
+    );
+}
+
+#[test]
+fn extensions_differing_by_context_in_the_abi() {
+    let prelude = "public struct ColumnScope : Copy {}\npublic struct RowScope : Copy {}\npublic struct Modifier : Copy {}\n";
+    let row = "context(scope: RowScope) public fun Modifier.weight(w: Double): Modifier = this\n";
+    let column =
+        "context(scope: ColumnScope) public fun Modifier.weight(w: Double): Modifier = this\n";
+    let abi = extract(&format!("{prelude}{row}{column}"));
+    let contexts: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(|symbol| match symbol {
+            ExportedSymbol::Function {
+                name,
+                context: Some(context),
+                ..
+            } if name == "weight" => Some(context.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(contexts.len(), 2, "two distinct functions");
+    assert_hash_equal(
+        &format!("{prelude}{row}{column}"),
+        &format!("{prelude}{column}{row}"),
+        "reordering extensions differing by context",
+    );
+    let text: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(ExportedSymbol::declaration_text)
+        .filter(|text| text.contains("weight"))
+        .collect();
+    assert_eq!(
+        text,
+        [
+            "context(ColumnScope) public fun Modifier.weight(w: Float): Modifier",
+            "context(RowScope) public fun Modifier.weight(w: Float): Modifier",
+        ]
+    );
+}

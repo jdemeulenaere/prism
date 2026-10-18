@@ -119,17 +119,21 @@ impl TypeRelations for Type {
 
         // Function subtyping: matching compose flag, contravariant params, covariant return
         if let (
+            // Whether either has a receiver is ignored: `T.(A) -> R` and `(&T, A) -> R` convert
+            // into each other (D2 of `receiver-lambdas`).
             Type::Fn {
                 is_compose: self_comp,
                 params: self_params,
                 escaping: self_escaping,
                 ret: self_ret,
+                ..
             },
             Type::Fn {
                 is_compose: exp_comp,
                 params: exp_params,
                 escaping: exp_escaping,
                 ret: exp_ret,
+                ..
             },
         ) = (self, expected)
         {
@@ -237,12 +241,13 @@ pub fn type_from_abi(ty: &AbiType, parameters: &[TypeParameter]) -> Type {
         AbiType::List(inner) => Type::List(Box::new(convert(inner))),
         AbiType::Fn {
             compose,
-            receiver: _,
+            receiver,
             params,
             escaping,
             ret,
         } => Type::Fn {
             is_compose: *compose,
+            receiver: *receiver,
             params: params.iter().map(convert).collect(),
             escaping: escaping.clone(),
             ret: Box::new(convert(ret)),
@@ -312,17 +317,20 @@ fn same_modulo_errors(a: &Type, b: &Type) -> bool {
                 && a.iter().zip(b).all(|(a, b)| same_modulo_errors(a, b))
         }
         (
+            // A receiver does not change the representation (D2 of `receiver-lambdas`).
             Type::Fn {
                 is_compose: a_compose,
                 params: a_params,
                 escaping: a_escaping,
                 ret: a_ret,
+                ..
             },
             Type::Fn {
                 is_compose: b_compose,
                 params: b_params,
                 escaping: b_escaping,
                 ret: b_ret,
+                ..
             },
         ) => {
             a_compose == b_compose

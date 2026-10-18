@@ -467,11 +467,14 @@ impl Codec for Type {
             }
             Type::Fn {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 ret,
             } => {
-                encoder.u8(14);
+                // A function type with a receiver has its own tag, so plain ones encode as
+                // they always did.
+                encoder.u8(if *receiver { 17 } else { 14 });
                 is_compose.encode(encoder);
                 params.encode(encoder);
                 escaping.encode(encoder);
@@ -509,15 +512,17 @@ impl Codec for Type {
                 arguments: decoder.decode()?,
             },
             13 => Type::Opaque(decoder.decode()?),
-            14 => {
+            tag @ (14 | 17) => {
+                let receiver = tag == 17;
                 let is_compose = decoder.decode()?;
                 let params: Vec<Type> = decoder.decode()?;
                 let escaping: Vec<bool> = decoder.decode()?;
-                if escaping.len() != params.len() {
+                if escaping.len() != params.len() || (receiver && params.is_empty()) {
                     return None;
                 }
                 Type::Fn {
                     is_compose,
+                    receiver,
                     params,
                     escaping,
                     ret: decoder.decode()?,
@@ -1598,6 +1603,7 @@ mod tests {
         };
         let ty = Type::Fn {
             is_compose: true,
+            receiver: true,
             params: vec![
                 Type::Reference {
                     mutable: true,

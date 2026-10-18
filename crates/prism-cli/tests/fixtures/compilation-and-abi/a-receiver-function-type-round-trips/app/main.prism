@@ -1,0 +1,9 @@
+// expect: ok
+// entry: app/main.prism
+package app
+
+import /layout/column
+
+fun main() {
+    column { }
+}
