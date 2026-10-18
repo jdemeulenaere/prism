@@ -19,7 +19,8 @@
 //! A drop that the next statement's assignment of the same place follows is the drop of the
 //! assigned place's old value: the assignment is checked as the write. Each access reports the
 //! earliest conflicting loan by creation, and a dropped value is reported once per loan, and
-//! not at all for the capture loan of a closure that escapes, which the escape check reports.
+//! not at all for the capture loan of a closure that escapes, which the escape check reports;
+//! other accesses that conflict with a loan reported as dropped are not reported.
 
 use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::captures::CaptureModes;
@@ -309,10 +310,20 @@ pub(crate) fn check_conflicts(
             {
                 continue;
             }
-            errors.push(checker.error(location, index, &events, place, *kind, *span, loan));
+            let error = checker.error(location, index, &events, place, *kind, *span, loan);
+            errors.push((loan, *kind, error));
         }
     }
+    // A value that ends while borrowed is reported once: an access that conflicts with the
+    // same loan later, such as the value's next iteration in a loop, is a consequence of it.
     errors
+        .into_iter()
+        .filter(|(loan, kind, _)| {
+            matches!(kind, AccessKind::Drop | AccessKind::StorageDead)
+                || !reported_drops.contains(loan)
+        })
+        .map(|(_, _, error)| error)
+        .collect()
 }
 
 /// The loan-carrying locals live just after an event, given the events that follow it in its

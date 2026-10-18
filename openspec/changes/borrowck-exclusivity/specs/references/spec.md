@@ -151,6 +151,10 @@ A local or temporary MUST NOT be dropped, or end its storage, while a borrow of 
 - **WHEN** `fun make(): String = "x"` and `fun greet(s: &String): Int = 1` are declared, and `fun f() { val r = &make(); greet(r) }`, `fun g(c: Bool, s: String) { val r = if (c) &make() else &s; greet(r) }` and `fun h(n: String?): Int = greet(&n ?: &"anon")` are checked
 - **THEN** the file passes `prism check`, because each temporary lives as long as `r`, or until the end of the statement that borrows it
 
+#### Scenario: A borrow of a loop's local kept for the next iteration
+- **WHEN** `fun print(n: &Int) {}` is declared and `fun f(c: Bool) { var a = 1; var r: &Int = &a; while (c) { val n = 1; print(r); r = &n } }` is checked
+- **THEN** the borrow checker emits `E5006` at `&n`, with the later use `print(r)` labelled as in a later iteration of the loop, and nothing for the assignment of the next iteration's `n`
+
 #### Scenario: A closure stores a borrow of its own local in a capture
 - **WHEN** `fun print(n: &Int) {}` and `fun run(f: () -> Int): Int = f()` are declared and `fun f() { var a = 1; var r: &Int = &a; run { val n = 2; r = &n; 1 }; print(r) }` is checked
 - **THEN** the borrow checker emits `E5006` at `&n`, because the closure's local `n` ends while `r` refers to it
