@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn a_call_goes_through_the_slot() {
-        let slot = AtomicUsize::new(first as usize);
+        let slot = AtomicUsize::new(first as *const () as usize);
         let descriptor = Descriptor {
             slot: &slot,
             drop_environment: None,
@@ -135,7 +135,7 @@ mod tests {
             "the inline environment word is passed"
         );
         // A repointed slot is followed by the value built before.
-        slot.store(second as usize, Ordering::Release);
+        slot.store(second as *const () as usize, Ordering::Release);
         unsafe { value.call_with_word(3) };
         assert_eq!(SEEN.with(Cell::get), 300);
         assert_eq!(unsafe { value.slot() }, &slot as *const AtomicUsize);
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn release_calls_the_drop_entry_once_and_skips_a_null_one() {
-        let slot = AtomicUsize::new(first as usize);
+        let slot = AtomicUsize::new(first as *const () as usize);
         let with_drop = Descriptor {
             slot: &slot,
             drop_environment: Some(count_drop),
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn a_value_is_read_from_its_address() {
-        let slot = AtomicUsize::new(first as usize);
+        let slot = AtomicUsize::new(first as *const () as usize);
         let descriptor = Descriptor {
             slot: &slot,
             drop_environment: None,

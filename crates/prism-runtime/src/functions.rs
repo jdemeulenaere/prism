@@ -66,6 +66,11 @@ unsafe impl Sync for RuntimeAddress {}
 unsafe impl Send for RuntimeAddress {}
 
 impl RuntimeAddress {
+    /// The address of a function, for the tables of other runtime crates (`prism-compose`).
+    pub const fn new(address: *const u8) -> Self {
+        RuntimeAddress(address)
+    }
+
     pub fn as_ptr(self) -> *const u8 {
         self.0
     }

@@ -53,13 +53,13 @@ Prerequisites (design, "Baseline"): groups 1 to 6 need only `closures`' function
 
 ## 6. Entry points, misuse errors and measurements (D2, D3, D12, D16)
 
-- [ ] 6.1 Add `src/entry.rs` with every `#[no_mangle] pub extern "C" fn prism_compose_*` of D6, D10 and D11, each validating its handles and turning a misuse into `panic_without_location(PanicKind::CompositionMisuse, detail)`:
+- [x] 6.1 Add `src/entry.rs` with every `#[no_mangle] pub extern "C" fn prism_compose_*` of D6, D10 and D11, each validating its handles and turning a misuse into `panic_without_location(PanicKind::CompositionMisuse, detail)`:
   - the protocol functions: `start(content: *mut FunctionValue) -> u64`, `set_content`, `recompose -> u8`, `dispose`, `root_scope`, `dump(destination: *mut PrismString, composition)`, `start_group`, `start_movable_group`, `start_restart_group`, `start_node_group -> u64`, `end_group`, `end_restart_group(composer, restart: *mut FunctionValue)`, `skipping -> u8`, `skip_to_group_end`, `current_scope`, `invalidate`, `has_word -> u8`, `word -> i64`, `set_word` and `changed_word -> u8`;
   - the typed slot functions `slot`, `set_slot` and `changed`.
 
   A composer is the active pass's identifier (D3). Function values passed by address are read and owned (`FunctionValue::read_from`). List every one in `COMPOSE_FUNCTIONS` with its `RuntimeType`s (`I64` for words, `I8` for `Bool`, `Pointer` for addresses). Verify with the task 2.4 tests, and with Rust tests calling the entry points through their C signatures. A child-process test (spawning the test binary with an environment variable, as `prism-runtime`'s exit tests do) checks the scenario "Reading a slot that is not there" and its status 101.
-- [ ] 6.2 Add `crates/prism-compose/tests/allocations.rs` with a counting `#[global_allocator]` and the scenario "A steady-state pass allocates nothing", with restart functions from `test_support.rs` that allocate nothing. Verify with `cargo test -p prism-compose --test allocations`.
-- [ ] 6.3 Add `crates/prism-compose/tests/runtime_timing.rs`, `#[ignore]`d, measuring as D16 describes and asserting the bounds of "Recomposing one scope does not depend on the composition's size" under `PRISM_ASSERT_TIMING=1`. Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-compose --test runtime_timing -- --ignored --nocapture` and record the medians in design.md, D16.
+- [x] 6.2 Add `crates/prism-compose/tests/allocations.rs` with a counting `#[global_allocator]` and the scenario "A steady-state pass allocates nothing", with restart functions from `test_support.rs` that allocate nothing. Verify with `cargo test -p prism-compose --test allocations`.
+- [x] 6.3 Add `crates/prism-compose/tests/runtime_timing.rs`, `#[ignore]`d, measuring as D16 describes and asserting the bounds of "Recomposing one scope does not depend on the composition's size" under `PRISM_ASSERT_TIMING=1`. Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-compose --test runtime_timing -- --ignored --nocapture` and record the medians in design.md, D16.
 
 ## 7. Backend and library (D2, D10, D13)
 

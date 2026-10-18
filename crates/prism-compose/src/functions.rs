@@ -3,10 +3,179 @@
 //! which the backend checks externals (`E6005`), declares its imports and the JIT resolves
 //! them.
 
-use prism_runtime::RuntimeFunction;
+use crate::entry::*;
+use prism_runtime::{RuntimeAddress, RuntimeFunction, RuntimeType};
+use RuntimeType::{Pointer, I64, I8};
 
-/// Every `extern "C"` function of the compose runtime, once each.
-pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[];
+const fn address(function: *const ()) -> RuntimeAddress {
+    RuntimeAddress::new(function.cast())
+}
+
+/// Every `extern "C"` function of the compose runtime, once each. Words (handles, composers,
+/// keys, tags) are `I64`, `Bool` results `I8`, and addresses `Pointer`.
+pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
+    RuntimeFunction {
+        name: "prism_compose_start",
+        address: address(prism_compose_start as *const ()),
+        parameters: &[Pointer],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_set_content",
+        address: address(prism_compose_set_content as *const ()),
+        parameters: &[I64, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_recompose",
+        address: address(prism_compose_recompose as *const ()),
+        parameters: &[I64],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_dispose",
+        address: address(prism_compose_dispose as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_root_scope",
+        address: address(prism_compose_root_scope as *const ()),
+        parameters: &[I64],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_dump",
+        address: address(prism_compose_dump as *const ()),
+        parameters: &[Pointer, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_start_group",
+        address: address(prism_compose_start_group as *const ()),
+        parameters: &[I64, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_start_movable_group",
+        address: address(prism_compose_start_movable_group as *const ()),
+        parameters: &[I64, I64, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_start_restart_group",
+        address: address(prism_compose_start_restart_group as *const ()),
+        parameters: &[I64, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_start_node_group",
+        address: address(prism_compose_start_node_group as *const ()),
+        parameters: &[I64, I64, I64],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_end_group",
+        address: address(prism_compose_end_group as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_end_restart_group",
+        address: address(prism_compose_end_restart_group as *const ()),
+        parameters: &[I64, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_skipping",
+        address: address(prism_compose_skipping as *const ()),
+        parameters: &[I64],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_skip_to_group_end",
+        address: address(prism_compose_skip_to_group_end as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_current_scope",
+        address: address(prism_compose_current_scope as *const ()),
+        parameters: &[I64],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_invalidate",
+        address: address(prism_compose_invalidate as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_has_word",
+        address: address(prism_compose_has_word as *const ()),
+        parameters: &[I64, I64],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_word",
+        address: address(prism_compose_word as *const ()),
+        parameters: &[I64],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_set_word",
+        address: address(prism_compose_set_word as *const ()),
+        parameters: &[I64, I64, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_changed_word",
+        address: address(prism_compose_changed_word as *const ()),
+        parameters: &[I64, I64, I64],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_slot",
+        address: address(prism_compose_slot as *const ()),
+        parameters: &[I64, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_set_slot",
+        address: address(prism_compose_set_slot as *const ()),
+        parameters: &[I64, Pointer, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_changed",
+        address: address(prism_compose_changed as *const ()),
+        parameters: &[I64, Pointer, Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+];
 
 /// The compose entry point named `name`.
 pub fn compose_function(name: &str) -> Option<&'static RuntimeFunction> {

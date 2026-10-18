@@ -278,6 +278,16 @@ The runtime's own buffers (the composer stack, the scratch children, the key map
 - `crates/prism-compose/tests/allocations.rs` installs a counting `#[global_allocator]` and checks the spec's scenario. Its restart functions are function values with static descriptors, slots and inline environments, so that only the runtime's allocations are counted.
 - `crates/prism-compose/tests/runtime_timing.rs` is an ignored benchmark in the style of `compile_timing.rs`. It reports the first composition, steady-state passes and the recomposition of one leaf scope for 1,000, 10,000 and 100,000 groups, and a keyed reversal of 1,000 movable groups. Under `PRISM_ASSERT_TIMING=1` it asserts the spec's growth bounds. It also records reference medians in this file at apply time, as `codegen-core` did for its benchmark.
 
+Reference medians at apply time (2026-10-18, release build, Apple silicon), from `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-compose --test runtime_timing -- --ignored --nocapture`:
+
+| groups | first composition, per group | steady-state pass (root recomposed, children skipping) | one invalid leaf scope |
+|---|---|---|---|
+| 1,000 | 54 ns | 125 ns | 83 ns |
+| 10,000 | 54 ns | 125 ns | 83 ns |
+| 100,000 | 57 ns | 125 ns | 83 ns |
+
+The leaf pass grows x1.00 and the first composition per group x1.06 from 1,000 to 100,000 groups. A keyed reversal of 1,000 movable groups takes 79 µs. `allocations.rs` records no allocation and no free in its last 98 passes.
+
 Compile-time cost of the whole change: none. No stage, analysis or pass is added. The backend's entry-point lookup covers one more table, and `/prism/composer` is parsed only when imported.
 
 ### D17. A new `compose` capability, and how the change is tested
