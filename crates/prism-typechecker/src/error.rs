@@ -519,7 +519,7 @@ impl TypeError {
                 source, ty
             ),
             TypeError::NotAReference { ty, .. } => format!(
-                "cannot write through a value of type '{}': '*' needs a reference",
+                "cannot write through a value of type '{}': '*' needs a reference or a 'Heap'",
                 ty
             ),
             TypeError::WrongTypeArgumentCount {

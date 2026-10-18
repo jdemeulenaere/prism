@@ -3728,7 +3728,25 @@ impl TypeChecker {
             }
         }
 
+        let reported = self.errors.len();
         let value_id = self.with_consuming(true, |c| c.check_expr(value, &target_ty));
+        // `m = 5` for a box `m`: the value fits the contents, which `*m = 5` writes (D5 of
+        // `heap-boxes`).
+        if let (Some(name), Type::Heap(contents), [TypeError::TypeMismatch { found, help, .. }]) =
+            (binding_name(target), &target_ty, &self.errors[reported..])
+        {
+            let fits_contents =
+                matches!(self.coerce(found, contents, Site::Value), Coercion::Fits(_));
+            if help.is_none() && fits_contents {
+                let fix = format!(
+                    "to write the contents of the box, use '*{} = {}'",
+                    name, value
+                );
+                if let Some(TypeError::TypeMismatch { help, .. }) = self.errors.last_mut() {
+                    *help = Some(fix);
+                }
+            }
+        }
         let kind = TreeStatementKind::Assign {
             target: target_id,
             value: value_id,
@@ -3855,25 +3873,58 @@ impl TypeChecker {
         });
     }
 
-    /// Types the referent written by `*reference = ...` (D5 of `reference-access`): `reference`
-    /// is read in place and must be a reference, and every reference layer written through must
-    /// be `&mut`. Returns the referent's place (a dereference), its type and whether the write is
-    /// allowed; a refusal is reported once, at the first layer that refuses it.
+    /// Types the place written by `*reference = ...` (D5 of `reference-access`, D5 of
+    /// `heap-boxes`): each `*` peels exactly one layer, a reference or a box, of `reference`,
+    /// which is read in place. A reference layer must be `&mut`, reached by a path that may be
+    /// written through, and a box layer must be a mutable place (a `var` binding, a `var` field
+    /// on a writable path, or a box reached through `&mut`), as field writes through boxes are
+    /// (`contents_writable`). Returns the written place (a dereference), its type and whether
+    /// the write is allowed; a refusal is reported once, at the first layer that refuses it.
     fn write_through(&mut self, reference: &Expr, span: Span) -> (ExpressionId, Type, bool) {
-        let (node, ty, writable) = match &reference.kind {
+        let (node, ty, writable, _) = self.write_through_layer(reference, span);
+        (node, ty, writable)
+    }
+
+    /// One layer of [`Self::write_through`]: the place `*reference` denotes, its type, whether
+    /// it may be written, and whether it lies behind a reference.
+    fn write_through_layer(
+        &mut self,
+        reference: &Expr,
+        span: Span,
+    ) -> (ExpressionId, Type, bool, bool) {
+        let (node, ty, writable, behind_reference) = match &reference.kind {
             ExprKind::Unary {
                 op: UnaryOp::Deref,
                 expr: inner,
-            } => self.write_through(inner, span),
+            } => self.write_through_layer(inner, span),
+            _ if self.is_place(reference) => {
+                let (id, writable) = self.infer_place(reference);
+                let ty = self.ty(id);
+                (id, ty, writable, false)
+            }
             _ => {
                 let id = self.infer_expr(reference);
-                (id, self.ty(id), true)
+                (id, self.ty(id), true, false)
             }
         };
+        // Whether a refusal was reported at an inner layer: a write through a layer that may
+        // not be written is refused there, not again.
+        let refused = matches!(
+            &reference.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                ..
+            }
+        ) && !writable;
         match ty {
-            Type::Error => (node, Type::Error, false),
+            Type::Error => (node, Type::Error, false, behind_reference),
             Type::Reference { mutable, inner } => {
-                if writable && !mutable {
+                let through = if behind_reference {
+                    writable && mutable
+                } else {
+                    mutable
+                };
+                if !through && !refused {
                     self.errors.push(TypeError::ImmutabilityViolation {
                         message: format!(
                             "cannot write through '{}': it is a shared '&' borrow, which cannot be written through",
@@ -3887,16 +3938,29 @@ impl TypeChecker {
                     });
                 }
                 let referent = self.deref(node);
-                (referent, *inner, writable && mutable)
+                (referent, *inner, through, true)
             }
-            // A refusal at an inner layer was reported there.
-            other if !writable => (self.wrap_error(node), other, false),
+            Type::Heap(inner) => {
+                if !writable && !refused {
+                    self.errors.push(TypeError::ImmutabilityViolation {
+                        message: format!(
+                            "cannot write the contents of the box '{}': it is not in a mutable place",
+                            reference
+                        ),
+                        span,
+                        help: Some(box_write_help(reference, behind_reference)),
+                    });
+                }
+                let contents = self.deref(node);
+                (contents, *inner, writable, behind_reference)
+            }
+            other if refused => (self.wrap_error(node), other, false, behind_reference),
             other => {
                 self.errors.push(TypeError::NotAReference {
                     ty: other,
                     span: reference.span,
                 });
-                (self.wrap_error(node), Type::Error, false)
+                (self.wrap_error(node), Type::Error, false, behind_reference)
             }
         }
     }
@@ -7356,6 +7420,26 @@ fn box_contents(found: &Type, expected: &Type, site: Site) -> Option<Adjustment>
             _ => return None,
         };
         steps += 1;
+    }
+}
+
+/// The help of writing the contents of the box `reference` from a place that may not be
+/// written (D5 of `heap-boxes`).
+fn box_write_help(reference: &Expr, behind_reference: bool) -> String {
+    match &reference.kind {
+        _ if behind_reference => {
+            "reach the box through a mutable borrow '&mut', 'var' bindings and 'var' fields"
+                .to_string()
+        }
+        ExprKind::Ident(name) => format!(
+            "declare '{}' with 'var', or move it into a 'var' binding, as in 'var m = {}'",
+            name, name
+        ),
+        ExprKind::MemberAccess { member, .. } => format!(
+            "declare the field '{}' with 'var', and reach it through 'var' bindings or '&mut' borrows",
+            member
+        ),
+        _ => "write the contents through a 'var' binding holding the box".to_string(),
     }
 }
 

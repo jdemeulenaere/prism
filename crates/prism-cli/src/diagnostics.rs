@@ -440,7 +440,7 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             ));
         }
         TypeError::NotAReference { .. } => {
-            out.push_str("   = help: '*r = v' writes through a reference 'r'; assign a variable or field directly with 'x = v'\n");
+            out.push_str("   = help: '*r = v' writes through a reference 'r', and '*h = v' into the contents of a box 'h'; assign a variable or field directly with 'x = v'\n");
         }
         TypeError::NotCloneable { ty, .. } => {
             let help = match ty {

@@ -1,0 +1,4 @@
+// expect: E4003
+fun g(r: &Heap<Int>) {
+    **r = 1
+}

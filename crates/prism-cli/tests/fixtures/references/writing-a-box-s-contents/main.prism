@@ -1,0 +1,9 @@
+// expect: ok
+fun f(h: Heap<Int>, r: &mut Heap<Int>): Int {
+    var m = h
+    *m = 2
+    *m += 1
+    **r = 3
+    *r = Heap(4)
+    return m
+}

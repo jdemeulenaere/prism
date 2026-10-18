@@ -1,0 +1,5 @@
+// expect: E4002
+fun f(h: Heap<Int>) {
+    var m = h
+    m = 5
+}

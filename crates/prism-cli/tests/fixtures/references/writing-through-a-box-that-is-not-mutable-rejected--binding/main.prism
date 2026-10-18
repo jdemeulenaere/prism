@@ -1,0 +1,4 @@
+// expect: E4003
+fun f(h: Heap<Int>) {
+    *h = 1
+}

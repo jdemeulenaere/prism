@@ -1,0 +1,7 @@
+// expect: E4003
+struct Holder { val h: Heap<Int> }
+
+fun k(o: Holder) {
+    var p = o
+    *p.h = 1
+}
