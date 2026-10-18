@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Todo { val title: String, var done: Bool }
+
+fun main() {
+    val todos = listOf(Todo("a", true), Todo("b", false))
+    println(todos.joinToString { it.title.clone() })
+    println(todos.count { it.done })
+}

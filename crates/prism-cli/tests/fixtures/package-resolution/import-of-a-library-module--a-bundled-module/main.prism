@@ -1,0 +1,4 @@
+// expect: ok
+import /prism/system
+
+fun f(): Nothing = exitProcess(0)

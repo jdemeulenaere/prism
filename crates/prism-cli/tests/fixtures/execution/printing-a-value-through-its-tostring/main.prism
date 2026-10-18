@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct P(val x: Int, val y: Int)
+
+fun P.toString(): String = "(" + x.toString() + ", " + y.toString() + ")"
+
+fun main() {
+    val p = P(1, 2)
+    println(p)
+    print(p)
+    println("!")
+}

@@ -16,6 +16,9 @@ pub enum CodegenErrorKind {
     /// `E6004`: generics of several files instantiate each other with a growing type argument,
     /// which only an import cycle allows (D8 of `monomorphization`).
     PolymorphicRecursionAcrossFiles,
+    /// `E6005`: an external of the library names no entry point of the runtime, or another
+    /// machine signature (D5 of `standard-library`).
+    ExternalMismatch,
 }
 
 impl CodegenErrorKind {
@@ -26,6 +29,7 @@ impl CodegenErrorKind {
             CodegenErrorKind::MissingMain => "E6002",
             CodegenErrorKind::InvalidMain => "E6003",
             CodegenErrorKind::PolymorphicRecursionAcrossFiles => "E6004",
+            CodegenErrorKind::ExternalMismatch => "E6005",
         }
     }
 }

@@ -244,3 +244,17 @@ fn leading_byte_order_mark_dropped() {
     assert!(again.status.success(), "{}", stderr(&again));
     fs::remove_dir_all(&directory).ok();
 }
+
+/// formatting: "Library declarations formatted".
+#[test]
+fn library_declarations_formatted() {
+    let output = prism_with_input(
+        &["fmt", "-"],
+        "public   intrinsic  mut fun <T> List<T>.add( element :T )\npublic intrinsic val <T> List<T>.size :Int\n",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "public intrinsic mut fun <T> List<T>.add(element: T)\n\npublic intrinsic val <T> List<T>.size: Int\n"
+    );
+}

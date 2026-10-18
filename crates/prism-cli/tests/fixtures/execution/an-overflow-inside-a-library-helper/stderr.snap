@@ -1,0 +1,2 @@
+panic: integer overflow in '+'
+  at prism/collections.prism:153:9

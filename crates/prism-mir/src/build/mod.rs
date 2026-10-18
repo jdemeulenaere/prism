@@ -19,8 +19,9 @@ mod place;
 mod scope;
 
 use crate::mir::{
-    BasicBlock, BlockId, Body, BodyId, BodyOwner, LocalDeclaration, LocalId, LocalKind, MirFile,
-    MirPhase, Place, Projection, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    BasicBlock, BlockId, Body, BodyId, BodyOwner, ExternalDeclaration, LocalDeclaration, LocalId,
+    LocalKind, MirFile, MirPhase, Place, Projection, Rvalue, Statement, StatementKind, Terminator,
+    TerminatorKind,
 };
 use crate::types::mir_type_table;
 use prism_ast::Span;
@@ -44,11 +45,36 @@ pub fn lower_file(file: &TypedFile) -> MirFile {
             Item::Struct(_) | Item::Enum(_) => {}
         }
     }
+    // The externals the file declares, with their signatures, which the backend checks
+    // against the runtime (D5 of `standard-library`).
+    let externals = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function)
+                if function.path.module == file.module
+                    && file.externals.contains(&function.path) =>
+            {
+                Some(ExternalDeclaration {
+                    path: function.path.clone(),
+                    parameters: function
+                        .parameters
+                        .iter()
+                        .map(|(_, ty)| ty.clone())
+                        .collect(),
+                    result: function.return_type.clone(),
+                    span: function.span,
+                })
+            }
+            _ => None,
+        })
+        .collect();
     MirFile {
         module: file.module.clone(),
         phase: MirPhase::Built,
         types,
         bodies: bodies.finish(),
+        externals,
     }
 }
 

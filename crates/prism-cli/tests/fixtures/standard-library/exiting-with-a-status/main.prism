@@ -1,0 +1,10 @@
+// expect: ok
+// run: 7
+import /prism/system
+
+fun main() {
+    val s = "a" + "b"
+    print(s)
+    exitProcess(7)
+    println("never")
+}

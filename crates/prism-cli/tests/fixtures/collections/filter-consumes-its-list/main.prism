@@ -1,0 +1,7 @@
+// expect: E5001
+fun f(): List<String> {
+    val names = listOf("a", "bb", "c")
+    val short = names.filter { n -> n.length == 1 }
+    println(names.size)
+    return short
+}

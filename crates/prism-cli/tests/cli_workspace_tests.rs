@@ -1225,3 +1225,33 @@ fn replacement_files_of_edit_scripts_are_not_sources() {
     }
     fs::remove_dir_all(&temp).ok();
 }
+
+/// build-cache: "A check report without library lines".
+#[test]
+fn a_check_report_without_library_lines() {
+    let dir = std::env::temp_dir().join(format!(
+        "prism_report_without_library_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("main.prism"), "fun main() { println(1) }\n").unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
+        .current_dir(&dir)
+        .args(["check", "--no-cache", "main.prism"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}", stdout);
+    assert!(stdout.contains("Total units: 1"), "{}", stdout);
+    let listed: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("  - "))
+        .collect();
+    assert_eq!(listed.len(), 1, "{}", stdout);
+    assert!(listed[0].starts_with("  - main.prism"), "{}", stdout);
+    assert!(!stdout.contains("prism/"), "{}", stdout);
+    std::fs::remove_dir_all(&dir).ok();
+}

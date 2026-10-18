@@ -1,0 +1,3 @@
+package prism
+
+public intrinsic fun Int.toString(radix: Int): String

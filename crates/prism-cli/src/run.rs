@@ -57,6 +57,9 @@ pub struct RunOptions {
     /// Whether to print, before `main` runs, what was checked, compiled or loaded
     /// (`--explain-cache`).
     pub explain_cache: bool,
+    /// The bundled library, which tests replace to add modules to it (D13 of
+    /// `standard-library`). The command line never does.
+    pub library: std::sync::Arc<prism_library::Library>,
 }
 
 impl Default for RunOptions {
@@ -68,6 +71,7 @@ impl Default for RunOptions {
             started: Instant::now(),
             cache: None,
             explain_cache: false,
+            library: prism_library::Library::shared(),
         }
     }
 }
@@ -539,7 +543,7 @@ pub fn compile_program_with(
 ) -> Result<CompiledProgram, WorkspaceError> {
     let start = Instant::now();
     validate_entry_file(entry)?;
-    let graph = DependencyGraph::from_entry(entry)?;
+    let graph = DependencyGraph::from_entries_with_library(&[entry], &options.library)?;
     assert_workspace_boundary(&graph)?;
     let entry_path = entry_in_graph(&graph, entry)?;
     let graph_time = start.elapsed();

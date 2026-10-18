@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun main() {
+    val xs = listOf(1, 5, 9)
+    println(
+        xs.any { x ->
+            print(x)
+            x > 4
+        },
+    )
+}

@@ -487,3 +487,73 @@ fn an_initializer_hash_ignores_positions_and_covers_the_initializer() {
         initializer_of("val W: Int = noisy() + 1\nfun noisy(): Int = 1\n")
     );
 }
+
+// --- Library declarations in the ABI (`standard-library`, D6 and D12)
+
+const LIBRARY: &str = "package prism\n\
+    public intrinsic mut fun <T> List<T>.add(element: T): Unit\n\
+    public intrinsic val <T> List<T>.size: Int\n\
+    public fun <T, R> List<T>.map(transform: (&T) -> R): List<R> { return listOf<R>() }\n";
+
+fn library_abi(source: &str) -> prism_abi::FileAbi {
+    let file = prism_parser::parse_source(source).expect("the source parses");
+    let no_definition = |_: &str, _: &str| None;
+    prism_abi::FileAbi::extract_with_origin(
+        &file,
+        "prism/collections",
+        &prism_abi::no_imports,
+        &no_definition,
+        true,
+    )
+    .expect("the ABI extracts")
+}
+
+/// compilation-and-abi: "The ABI of a library module".
+#[test]
+fn the_abi_of_a_library_module() {
+    let abi = library_abi(LIBRARY);
+    let texts: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "public intrinsic mut fun <T> List<T>.add(element: T): Unit",
+            "public fun <T, R> List<T>.map(transform: (&T) -> R): List<R>",
+            "public intrinsic val <T> List<T>.size: Int",
+        ]
+    );
+    // An entry changed from intrinsic to ordinary changes the module's ABI hash.
+    let ordinary = library_abi(&LIBRARY.replace(
+        "public intrinsic mut fun <T> List<T>.add(element: T): Unit",
+        "public mut fun <T> List<T>.add(element: T): Unit {}",
+    ));
+    assert_ne!(abi.abi_hash, ordinary.abi_hash);
+    // So does a property's type.
+    let retyped = library_abi(&LIBRARY.replace("size: Int", "size: Bool"));
+    assert_ne!(abi.abi_hash, retyped.abi_hash);
+}
+
+/// standard-library: "External declarations outside the bundled library rejected".
+#[test]
+fn a_workspace_file_may_not_declare_library_forms() {
+    for (source, modifier) in [
+        ("external fun f(): Int\n", "external"),
+        ("public intrinsic fun g(): Int\n", "intrinsic"),
+        (
+            "fun h() {}\npublic intrinsic val String.n: Int\n",
+            "intrinsic",
+        ),
+    ] {
+        let file = prism_parser::parse_source(source).expect("the source parses");
+        let error = prism_abi::FileAbi::extract(&file, "main", &prism_abi::no_imports)
+            .expect_err("a workspace file declares a library form");
+        assert!(
+            matches!(&error, prism_abi::AbiError::LibraryOnlyDeclaration { modifier: m, .. } if m == modifier),
+            "{:?}",
+            error
+        );
+    }
+}

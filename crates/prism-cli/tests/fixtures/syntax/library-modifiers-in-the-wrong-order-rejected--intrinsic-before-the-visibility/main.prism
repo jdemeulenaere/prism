@@ -1,0 +1,2 @@
+// expect: E2001
+intrinsic public fun b(): Int

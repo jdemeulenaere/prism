@@ -1,0 +1,6 @@
+// expect: ok
+struct Todo { val title: String, var done: Bool }
+
+fun f(todos: &List<Todo>): String = todos.joinToString { t -> t.title.clone() }
+
+fun g(todos: &List<Todo>): Int = todos.count { t -> t.done }

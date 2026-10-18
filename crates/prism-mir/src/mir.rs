@@ -57,6 +57,20 @@ pub struct MirFile {
     /// (D4).
     pub types: TypeTable,
     pub bodies: Arena<BodyId, Body>,
+    /// The `external` functions the file declares, which have no body (D5 of
+    /// `standard-library`).
+    pub externals: Vec<ExternalDeclaration>,
+}
+
+/// An `external fun` a file declares: a runtime entry point named by the C symbol equal to the
+/// name, with the Prism signature that gives its machine signature (D5 of `standard-library`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalDeclaration {
+    pub path: DeclarationPath,
+    pub parameters: Vec<Type>,
+    pub result: Type,
+    /// The declaration, where `E6005` points.
+    pub span: Span,
 }
 
 /// The stage a file's MIR is at (D12 of `borrowck-moves`).

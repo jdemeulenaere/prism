@@ -143,6 +143,7 @@ pub(crate) fn check_moves_and_elaborate(
         phase: MirPhase::Elaborated,
         types: file.types.clone(),
         bodies: elaborated,
+        externals: file.externals.clone(),
     };
     let captures = captures::infer_capture_modes(&elaborated);
     for (id, modes) in &captures.modes {

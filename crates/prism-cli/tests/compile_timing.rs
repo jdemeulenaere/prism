@@ -782,6 +782,28 @@ fn contract_fingerprints(n: usize) -> String {
     source
 }
 
+/// `n` statements calling the prelude's intrinsics and helpers (`standard-library`): the
+/// front end looks each name and member up in the shared prelude scope. Not compiled here: the
+/// helpers' instances need the library's records, which `prelude_costs_a_lookup_per_file`
+/// leaves out too.
+fn prelude_calls(n: usize) -> String {
+    format!(
+        "fun main() {{\n    val xs = listOf(1, 2, 3)\n{}}}\n",
+        join(n, "", |i| format!(
+            "    println(xs.map {{ x -> x + {} }}.sumOf {{ x -> x }} + xs.size)\n",
+            i
+        )),
+    )
+}
+
+/// A small workspace file of the shape of `prelude_costs_a_lookup_per_file`: calls of
+/// `println`, `listOf` and two helpers.
+fn prelude_file(i: usize) -> String {
+    format!(
+        "fun f{i}(): Int {{\n    val xs = listOf({i}, 2)\n    println(xs.size)\n    return xs.map {{ x -> x * 2 }}.count {{ x -> x > {i} }}\n}}\n"
+    )
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -880,6 +902,7 @@ fn shapes() -> Vec<Shape> {
         shape("list-element-types", true, SIZES, list_element_types),
         shape("nested-lists", true, DEPTHS, nested_lists),
         shape("contract-fingerprints", true, SIZES, contract_fingerprints),
+        shape("prelude-calls", false, SIZES, prelude_calls),
     ]
 }
 
@@ -1134,6 +1157,98 @@ fn every_stage_compiles_in_linear_time() {
     std::thread::Builder::new()
         .stack_size(8 << 20)
         .spawn(run_benchmark)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// D4 of `standard-library`: Phase 2 of `n` small workspace files, each calling `println`,
+/// `listOf` and two helpers, with the prelude scope built once and shared, and, for comparison,
+/// with the prelude modules' ABIs ingested into each file's checker instead. The time per file
+/// of the shared scope must stay flat as `n` grows (within x2 of the smallest size's, under
+/// `PRISM_ASSERT_TIMING=1`): the prelude costs each file a pointer copy and a lookup per name,
+/// never a check of the library.
+fn prelude_benchmark() {
+    let library = prism_library::Library::bundled();
+    let prelude_abis: Vec<prism_abi::FileAbi> = library
+        .prelude()
+        .iter()
+        .map(|module| {
+            let file = prism_parser::parse_source(&library.module(module).unwrap().source).unwrap();
+            let no_definition = |_: &str, _: &str| None;
+            prism_abi::FileAbi::extract_with_origin(
+                &file,
+                module,
+                &prism_abi::no_imports,
+                &no_definition,
+                true,
+            )
+            .unwrap()
+        })
+        .collect();
+    let (scope, build_time) = timed(|| {
+        std::sync::Arc::new(prism_typechecker::PreludeScope::from_abis(
+            &prelude_abis.iter().collect::<Vec<_>>(),
+        ))
+    });
+    println!(
+        "prelude scope built once in {:.3} ms",
+        milliseconds(build_time)
+    );
+    println!(
+        "  {:<12} {:>14} {:>14} {:>18}",
+        "files", "shared ms", "us per file", "ingested us/file"
+    );
+    let mut per_file = Vec::new();
+    for files in [256, 1024, 4096] {
+        let parsed: Vec<_> = (0..files)
+            .map(|i| prism_parser::parse_source(&prelude_file(i)).unwrap())
+            .collect();
+        let check_all = |ingest: bool| {
+            let start = Instant::now();
+            for (i, file) in parsed.iter().enumerate() {
+                let mut checker = prism_typechecker::TypeChecker::new(None, format!("f{}", i));
+                if ingest {
+                    for abi in &prelude_abis {
+                        checker.ingest_file_abi(abi);
+                    }
+                } else {
+                    checker = checker.with_prelude(std::sync::Arc::clone(&scope));
+                }
+                checker.check_module(file);
+                assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+            }
+            start.elapsed()
+        };
+        let shared = (0..3).map(|_| check_all(false)).min().unwrap();
+        let ingested = (0..3).map(|_| check_all(true)).min().unwrap();
+        let micros = shared.as_secs_f64() * 1e6 / files as f64;
+        println!(
+            "  {:<12} {:>14.1} {:>14.2} {:>18.2}",
+            files,
+            milliseconds(shared),
+            micros,
+            ingested.as_secs_f64() * 1e6 / files as f64
+        );
+        per_file.push(micros);
+    }
+    if std::env::var_os("PRISM_ASSERT_TIMING").is_some_and(|value| value == "1") {
+        let (first, last) = (per_file[0], per_file[per_file.len() - 1]);
+        assert!(
+            last <= 2.0 * first,
+            "the prelude's cost per file grows: {:.2} us at 256 files, {:.2} us at 4096",
+            first,
+            last
+        );
+    }
+}
+
+#[test]
+#[ignore = "a benchmark: run it with --ignored --nocapture"]
+fn prelude_costs_a_lookup_per_file() {
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(prelude_benchmark)
         .unwrap()
         .join()
         .unwrap();

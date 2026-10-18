@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+fun main() {
+    val xs = listOf(1, 2, 3)
+    println(xs.map { x -> x * 2 }.sumOf { x -> x })
+}

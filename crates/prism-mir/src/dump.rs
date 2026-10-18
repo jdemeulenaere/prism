@@ -555,6 +555,7 @@ pub(crate) mod tests {
             phase: MirPhase::Built,
             types: types(),
             bodies,
+            externals: Vec::new(),
         }
     }
 

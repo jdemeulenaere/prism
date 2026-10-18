@@ -1,0 +1,6 @@
+// expect: E4010
+fun Int.toString(): String = "x"
+
+fun String.length(): Int = 0
+
+fun <T> List<T>.add(element: T) {}

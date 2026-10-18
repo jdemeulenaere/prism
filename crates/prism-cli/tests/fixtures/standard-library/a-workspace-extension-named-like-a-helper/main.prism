@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun <T> List<T>.map(f: (&T) -> Int): Int = 0
+
+fun f(xs: &List<Int>): Int = xs.map { x -> x }
+
+fun main() {
+    println(f(listOf(5)))
+}

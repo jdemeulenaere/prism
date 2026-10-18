@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun main() {
+    val xs = listOf(3, 1, 4, 1, 5)
+    println(xs.count { x -> x == 1 })
+    println(xs.indexOfFirst { x -> x == 1 })
+    println(xs.all { x -> x > 0 })
+    println(xs.none { x -> x > 5 })
+}

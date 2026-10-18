@@ -29,6 +29,7 @@ mod functions;
 mod list;
 mod output;
 mod panic;
+mod process;
 pub mod reload;
 mod stack;
 mod string;
@@ -58,6 +59,7 @@ pub use panic::{
     prism_rt_panic_without_location, prism_rt_unlinked_function, set_watch_mode, PanicKind,
     StopHandler, PANIC_EXIT_STATUS,
 };
+pub use process::{exit_status, prism_rt_exit};
 pub use stack::{
     clear_stack_limit, interrupt, prism_rt_stack_check_failed, set_stack_limit, INTERRUPT,
     STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,

@@ -236,6 +236,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
             prism_cli::BuildCache::from_environment()
         },
         explain_cache,
+        ..prism_cli::RunOptions::default()
     };
     if watch {
         let status = prism_cli::run_watch(
@@ -426,7 +427,26 @@ fn run_abi(path: &str) {
         .as_ref()
         .map(|p| format!("{}/{}", p.package_string().replace('.', "/"), stem))
         .unwrap_or_else(|| stem.to_string());
-    let abi = match FileAbi::extract(&ast, &module, &prism_abi::no_imports) {
+    // A file of the root package `prism` is shown as a library module, which may declare
+    // external and intrinsic declarations (D12 of `standard-library`).
+    let in_library = ast
+        .package
+        .as_ref()
+        .is_some_and(|package| package.path.first().map(String::as_str) == Some("prism"));
+    // The reachable definitions are the file's own, as `FileAbi::extract` finds them.
+    let own = prism_abi::type_definitions(&ast, &module, &prism_abi::no_imports);
+    let definition = |type_module: &str, name: &str| {
+        own.iter()
+            .find(|d| d.module == type_module && d.name == name)
+            .cloned()
+    };
+    let abi = match FileAbi::extract_with_origin(
+        &ast,
+        &module,
+        &prism_abi::no_imports,
+        &definition,
+        in_library,
+    ) {
         Ok(abi) => abi,
         Err(err) => {
             eprintln!("ABI Error: {}", err);

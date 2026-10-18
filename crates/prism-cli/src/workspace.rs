@@ -86,7 +86,7 @@ impl Default for CheckOptions {
         Self {
             cache: None,
             explain_cache: false,
-            library: Arc::new(Library::bundled().clone()),
+            library: Library::shared(),
         }
     }
 }
@@ -912,6 +912,77 @@ fn typecheck_entry(entry: &Path) -> Result<(TypedFile, Option<WorkspaceError>), 
     Ok((tree, type_errors))
 }
 
+/// The typed tree and the MIR of the library module `module` (`prism/test`) in the program of
+/// the entry file `entry`, built with `library` as the bundled library: what the fixtures of
+/// injected library modules snapshot (D13 of `standard-library`). The MIR is `None` when the
+/// module has type errors, which come with the tree.
+pub fn dump_library_module(
+    entry: &Path,
+    library: &Library,
+    module: &str,
+) -> Result<(TypedTreeDump, Option<MirDump>), WorkspaceError> {
+    validate_entry_file(entry)?;
+    let graph = DependencyGraph::from_entries_with_library(&[entry], library)?;
+    assert_workspace_boundary(&graph)?;
+    let (abis, _) = extract_abis(&graph)?;
+    let key = prism_resolver::library_key(module);
+    if graph.get_node(&key).is_none() {
+        return Err(WorkspaceError::InvalidTarget(format!(
+            "the program of '{}' does not reach the library module '{}'",
+            entry.display(),
+            module
+        )));
+    }
+    let (tree, errors) = typecheck_file(&graph, &abis, &key);
+    let type_errors = (!errors.is_empty()).then(|| WorkspaceError::Type {
+        path: key.clone(),
+        source: source_of(&graph, &key),
+        errors,
+    });
+    let mir = type_errors.is_none().then(|| {
+        let mir = prism_mir::lower_file(&tree);
+        MirDump {
+            text: mir.dump(),
+            mir,
+        }
+    });
+    Ok((
+        TypedTreeDump {
+            text: tree.dump(),
+            type_errors,
+            tree,
+        },
+        mir,
+    ))
+}
+
+/// Checks every module of `library` as the compiler checks a program (D13 of
+/// `standard-library`): Phase 1 and Phase 2 of each, in dependency order, the backend's support
+/// check of each, which compares every external it declares with the runtime's entry point
+/// (`E6005`), and the compilation of each module's unit. Returns the modules' elaborated MIR,
+/// in check order, or the first module's errors.
+pub fn check_library(library: &Library) -> Result<Vec<MirFile>, WorkspaceError> {
+    let graph = DependencyGraph::from_library(library)?;
+    let (abis, _) = extract_abis(&graph)?;
+    let mut linker = prism_codegen::Linker::new().map_err(WorkspaceError::Backend)?;
+    let mut files = Vec::new();
+    for cluster in graph.topological_order() {
+        for path in &cluster.files {
+            let mir = elaborate_file(&graph, &abis, path)?;
+            prism_codegen::check_file(&mir).map_err(|errors| WorkspaceError::Codegen {
+                path: path.clone(),
+                source: source_of(&graph, path),
+                errors,
+            })?;
+            linker
+                .compile_unit(&mir, &mir.module)
+                .map_err(WorkspaceError::Backend)?;
+            files.push(mir);
+        }
+    }
+    Ok(files)
+}
+
 /// The MIR of one file, as `prism dump-mir` prints it.
 #[derive(Debug)]
 pub struct MirDump {
@@ -1212,6 +1283,41 @@ mod tests {
             }
         }
         assert!(compared >= 6, "{}", compared);
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    /// build-cache: "Cache Keys Cover Exactly the Compilation Inputs": a workspace file's key
+    /// covers the prelude modules' ABI hashes after its imports', and a library module's key
+    /// its own inputs only (D3 and D4 of `standard-library`).
+    #[test]
+    fn keys_cover_the_prelude() {
+        let temp = create_temp_dir("prelude_keys");
+        let main = temp.join("main.prism");
+        fs::write(&main, "fun main() {}\n").unwrap();
+        let keys = crate::cache::CacheKeys::in_process();
+        let key_of = |library: &Library, path: &Path| {
+            let graph = DependencyGraph::from_entries_with_library(&[&main], library).unwrap();
+            let (abis, _) = extract_abis(&graph).unwrap();
+            file_check_key(&keys, &graph, &abis, path)
+        };
+        let bundled = Library::bundled();
+        let collections = &bundled.module("prism/collections").unwrap().source;
+        // A new public helper changes the prelude's ABI hash.
+        let grown = Library::with_modules(vec![(
+            "prism/collections".to_string(),
+            format!(
+                "{}\n// Nothing.\npublic fun nothing(): Unit {{}}\n",
+                collections
+            ),
+        )]);
+        assert_ne!(key_of(bundled, &main), key_of(&grown, &main));
+        let core = Path::new("prism/core.prism");
+        assert_eq!(key_of(bundled, core), key_of(&grown, core));
+        let collections_key = Path::new("prism/collections.prism");
+        assert_ne!(
+            key_of(bundled, collections_key),
+            key_of(&grown, collections_key)
+        );
         fs::remove_dir_all(&temp).ok();
     }
 

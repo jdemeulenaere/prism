@@ -1,0 +1,4 @@
+package prism
+
+// Gives a number.
+public fun number(): Int = "one"

@@ -160,6 +160,7 @@ pub fn build_instance_unit(
         phase: MirPhase::Elaborated,
         types: table,
         bodies,
+        externals: Vec::new(),
     };
     #[cfg(debug_assertions)]
     {

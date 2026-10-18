@@ -1518,3 +1518,132 @@ fn an_empty_or_statement_part_rejected() {
     let error = parse_source("val s = \"${a b}\"").unwrap_err();
     assert!(error.message.contains("to close '${'"), "{}", error.message);
 }
+
+// --- Library declarations (`standard-library`, D6 and D12)
+
+/// syntax: "Library declarations parse".
+#[test]
+fn library_declarations_parse() {
+    let file = parse(
+        "private external fun prism_rt_exit(status: Int): Nothing\n\
+         public intrinsic fun <T> print(value: &T)\n\
+         public intrinsic mut fun <T> List<T>.add(element: T)\n\
+         public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T\n",
+    );
+    let shapes: Vec<_> = file
+        .declarations
+        .iter()
+        .map(|d| match d {
+            Declaration::Function(f) => (
+                f.library.map(|m| m.kind),
+                f.visibility,
+                f.receiver.as_ref().map(|r| r.mode),
+                f.is_compose,
+                f.body.is_none(),
+            ),
+            _ => panic!("expected functions"),
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        vec![
+            (
+                Some(LibraryKind::External),
+                Visibility::Private,
+                None,
+                false,
+                true
+            ),
+            (
+                Some(LibraryKind::Intrinsic),
+                Visibility::Public,
+                None,
+                false,
+                true
+            ),
+            (
+                Some(LibraryKind::Intrinsic),
+                Visibility::Public,
+                Some(ReceiverMode::Mutable),
+                false,
+                true
+            ),
+            (
+                Some(LibraryKind::Intrinsic),
+                Visibility::Public,
+                None,
+                true,
+                true
+            ),
+        ]
+    );
+}
+
+/// syntax: "Intrinsic properties parse".
+#[test]
+fn intrinsic_properties_parse() {
+    let file = parse(
+        "public intrinsic val String.length: Int\npublic intrinsic val <T> List<T>.indices: Range\n",
+    );
+    let shapes: Vec<(String, String, String, usize)> = file
+        .declarations
+        .iter()
+        .map(|d| match d {
+            Declaration::ExtensionProperty(p) => (
+                p.receiver.to_string(),
+                p.name.clone(),
+                p.ty.to_string(),
+                p.type_parameters.len(),
+            ),
+            _ => panic!("expected properties"),
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        vec![
+            ("String".into(), "length".into(), "Int".into(), 0),
+            ("List<T>".into(), "indices".into(), "Range".into(), 1),
+        ]
+    );
+}
+
+/// syntax: "external and intrinsic as identifiers".
+#[test]
+fn external_and_intrinsic_as_identifiers() {
+    let file = parse(
+        "fun external(intrinsic: Int): Int = intrinsic\nfun f() { val external = 1; g(intrinsic = external) }\nfun h(x: X) = x.intrinsic()\n",
+    );
+    assert_eq!(file.declarations.len(), 3);
+    for declaration in &file.declarations {
+        let Declaration::Function(f) = declaration else {
+            panic!("expected functions");
+        };
+        assert!(f.library.is_none() && f.body.is_some());
+    }
+}
+
+/// syntax: "A function without a body rejected", "A library declaration with a body rejected"
+/// and "Library modifiers in the wrong order rejected".
+#[test]
+fn misplaced_library_forms_are_rejected() {
+    for source in [
+        "fun a(): Int\nfun b() {}\n",
+        "external fun f(): Int = 1\n",
+        "intrinsic fun g() { }\n",
+        "compose intrinsic fun A() { }\n",
+        "intrinsic public fun b(): Int\n",
+        "external intrinsic fun c(): Int\n",
+        "mut external fun Int.d()\n",
+        "val String.twice: Int = 2\n",
+        "intrinsic val String.a: Int = 1\n",
+    ] {
+        let error = prism_parser::parse_source(source).expect_err(source);
+        assert_eq!(error.code, "E2001", "{}", source);
+    }
+    let error = prism_parser::parse_source("fun a(): Int\nfun b() {}\n").unwrap_err();
+    assert_eq!(
+        (error.span.line, error.span.column),
+        (1, 10),
+        "at the end of the signature"
+    );
+}

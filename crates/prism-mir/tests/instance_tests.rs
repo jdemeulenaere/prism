@@ -64,6 +64,7 @@ fn instance(source: &str, name: &str, arguments: &[Type]) -> String {
         phase: MirPhase::Built,
         types,
         bodies,
+        externals: Vec::new(),
     };
     let violations = instance.validate();
     assert!(

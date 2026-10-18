@@ -41,8 +41,17 @@ pub fn lower_files(files: &[(&str, &str)]) -> Vec<MirFile> {
                         Some((header, other.to_string()))
                     })
             };
-            FileAbi::extract(file, module, &bind)
-                .unwrap_or_else(|error| panic!("{} has no ABI: {:?}", module, error))
+            // A module under `prism/` is a library module, which may declare externals and
+            // intrinsics (D12 of `standard-library`).
+            let no_definition = |_: &str, _: &str| None;
+            FileAbi::extract_with_origin(
+                file,
+                module,
+                &bind,
+                &no_definition,
+                module.starts_with("prism/"),
+            )
+            .unwrap_or_else(|error| panic!("{} has no ABI: {:?}", module, error))
         })
         .collect();
     parsed

@@ -1,0 +1,2 @@
+// expect: E4004
+fun f(xs: &List<Int>): Bool = xs.isEmpty(1)

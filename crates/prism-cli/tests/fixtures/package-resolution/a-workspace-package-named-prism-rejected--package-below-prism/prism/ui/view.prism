@@ -1,0 +1,4 @@
+// expect: E1008
+package prism.ui
+
+fun f() {}

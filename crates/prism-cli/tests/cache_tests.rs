@@ -877,6 +877,89 @@ fn explaining_a_warm_check() {
     let output = workspace.run(&["run", "app/main.prism"]);
     assert_success(&output);
     assert_eq!(workspace.explain("app/main.prism"), lines(&WARM));
+    // The library modules come first, reused here: the workspace's cache already holds the
+    // entries another workspace wrote for them.
+    let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
+    let all = all_explanation_lines(&output);
+    assert_eq!(
+        all[..2],
+        lines(&["reused prism/collections.prism", "reused prism/core.prism"])
+    );
+}
+
+/// The lines after `Cache: ...` of a `prism check --explain-cache`, the library's included.
+fn all_explanation_lines(output: &Output) -> Vec<String> {
+    assert_success(output);
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip_while(|line| !line.starts_with("Cache: "))
+        .skip(1)
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+/// standard-library: "Unreached modules are not parsed", and build-cache: "Explaining a warm
+/// check", on a cache no workspace used before.
+#[test]
+fn unreached_modules_are_not_parsed() {
+    let base = unique_temp_dir("unreached");
+    fs::write(base.join("main.prism"), "fun main() {}\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+        .current_dir(&base)
+        .env("PRISM_CACHE", base.join("cache"))
+        .args(["check", "--explain-cache", "main.prism"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        all_explanation_lines(&output),
+        lines(&[
+            "checked prism/collections.prism",
+            "checked prism/core.prism",
+            "checked main.prism",
+        ])
+    );
+    fs::remove_dir_all(&base).ok();
+}
+
+/// build-cache: "Library entries are shared between workspaces".
+#[test]
+fn library_entries_are_shared_between_workspaces() {
+    let base = unique_temp_dir("shared_library");
+    let cache = base.join("cache");
+    let mut outputs = Vec::new();
+    for name in ["first", "second"] {
+        let root = base.join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("main.prism"),
+            format!("fun main() {{ println(listOf(\"{}\").size) }}\n", name),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+            .current_dir(&root)
+            .env("PRISM_CACHE", &cache)
+            .args(["check", "--explain-cache", "main.prism"])
+            .output()
+            .unwrap();
+        outputs.push(all_explanation_lines(&output));
+    }
+    assert_eq!(
+        outputs[0],
+        lines(&[
+            "checked prism/collections.prism",
+            "checked prism/core.prism",
+            "checked main.prism",
+        ])
+    );
+    assert_eq!(
+        outputs[1],
+        lines(&[
+            "reused prism/collections.prism",
+            "reused prism/core.prism",
+            "checked main.prism",
+        ])
+    );
+    fs::remove_dir_all(&base).ok();
 }
 
 /// build-cache: "Explaining a warm run".

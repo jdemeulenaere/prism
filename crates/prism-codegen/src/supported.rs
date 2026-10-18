@@ -103,7 +103,7 @@ pub fn is_compiled(body: &Body) -> bool {
 /// Checks every compiled body of `file`, reporting one `E6001` per body with an unsupported
 /// construct.
 pub fn check_file(file: &MirFile) -> Result<(), Vec<CodegenError>> {
-    let errors: Vec<CodegenError> = file
+    let mut errors: Vec<CodegenError> = file
         .bodies
         .iter()
         .filter(|(_, body)| is_compiled(body))
@@ -111,6 +111,9 @@ pub fn check_file(file: &MirFile) -> Result<(), Vec<CodegenError>> {
             first_unsupported(body, &file.types).map(|(construct, span)| construct.error(span))
         })
         .collect();
+    // Every external the file declares meets the runtime's entry point (`E6005`, D5 of
+    // `standard-library`).
+    errors.extend(crate::externals::check_externals(file));
     if errors.is_empty() {
         Ok(())
     } else {

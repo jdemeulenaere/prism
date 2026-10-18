@@ -8,6 +8,7 @@ pub mod dump;
 pub mod entry;
 mod equality;
 pub mod error;
+pub mod externals;
 pub mod glue;
 pub mod instances;
 pub mod isa;

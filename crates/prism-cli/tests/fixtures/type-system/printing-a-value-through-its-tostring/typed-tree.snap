@@ -1,0 +1,31 @@
+module main
+struct main::P @2:1
+  field 0 val x: Int
+fun main::P.toString(this): String @4:1
+  local %0 this: &P (receiver)
+  binary +: String @4:28
+    binary +: String @4:28
+      literal "P(": String @4:28
+      call builtin toString: String @4:35
+        receiver: copy: Int @4:35
+          field 0 x: Int @4:35
+            deref: P @4:35
+              local %0 this: &P @4:35
+    literal ")": String @4:50
+fun main::f(p: P): Unit @6:1
+  local %0 p: P (parameter)
+  block: Unit @6:13
+    expression @7:5
+      call builtin println: Unit @7:5
+        argument 0: borrow (argument): &String @7:13
+          temporary: String @7:13
+            call main::P.toString: String @7:13
+              receiver: borrow (receiver): &P @7:13
+                local %0 p: P @7:13
+    expression @8:5
+      call builtin println: Unit @8:5
+        argument 0: borrow (argument): &String @8:13
+          temporary: String @8:13
+            call main::P.toString: String @8:13
+              receiver: borrow (receiver): &P @8:13
+                local %0 p: P @8:13

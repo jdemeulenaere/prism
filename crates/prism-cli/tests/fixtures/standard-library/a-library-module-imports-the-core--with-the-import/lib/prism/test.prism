@@ -1,0 +1,8 @@
+package prism
+
+import core
+
+// Writes a greeting.
+public fun greet(): Unit {
+    println("hi")
+}

@@ -1,0 +1,2 @@
+// expect: E2001
+val String.twice: Int = 2

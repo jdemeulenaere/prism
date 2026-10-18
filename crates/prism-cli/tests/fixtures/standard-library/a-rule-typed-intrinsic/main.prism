@@ -1,0 +1,6 @@
+// expect: ok
+fun f() {
+    println()
+    println(1)
+    val xs = listOf(1, 2, 3)
+}

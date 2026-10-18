@@ -1,0 +1,2 @@
+// expect: E2001
+mut external fun Int.d()

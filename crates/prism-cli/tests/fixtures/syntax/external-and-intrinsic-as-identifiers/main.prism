@@ -1,0 +1,13 @@
+// expect: ok
+struct X { val n: Int }
+
+fun external(intrinsic: Int): Int = intrinsic
+
+fun g(intrinsic: Int): Int = intrinsic
+
+fun X.intrinsic(): Int = n
+
+fun f(x: X): Int {
+    val external = 1
+    return g(intrinsic = external) + x.intrinsic()
+}

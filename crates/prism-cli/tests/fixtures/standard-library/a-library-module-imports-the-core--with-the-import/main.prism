@@ -1,0 +1,7 @@
+// expect: ok
+// library: lib
+import /prism/test
+
+fun main() {
+    greet()
+}

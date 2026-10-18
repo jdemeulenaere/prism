@@ -81,6 +81,17 @@
 //! `runtime-strings-and-drops`), each one also asserts that no allocation outlives its owner and
 //! none is freed twice: a leak or an invalid free changes its status to `102`.
 //!
+//! ## Library cases
+//!
+//! A case whose header has a `// library: <dir>` line adds test modules to the bundled library
+//! (D13 of `standard-library`): each `<dir>/prism/<name>.prism` of the case becomes the library
+//! module `prism/<name>`, checked in-process with the library of `Library::with_modules`, so
+//! the diagnostics of library files (`E4029`, library imports, locations in library files) have
+//! real-source cases. The entry file is a workspace file reaching them, by an import of
+//! `/prism/<name>`. In such a case, `typed-tree.snap` and `mir.snap` hold the dumps of the
+//! injected modules, in name order, rather than the entry's. Library cases cannot be executable:
+//! the `prism` command line never injects modules, so the runner rejects a `// run:` line.
+//!
 //! ## Watch cases
 //!
 //! An executable case whose header also has a `// watch: <script>` line runs under a watch
@@ -111,6 +122,10 @@ const UNFIXTURED_CODES: &[(&str, &str)] = &[
         "E2002",
         "needs input nested more than 256 levels deep; see parser_tests.rs",
     ),
+    (
+        "E6005",
+        "needs a wrong external in the library, which only an injected module has, and library cases cannot run; see externals.rs and library_tests.rs",
+    ),
 ];
 
 struct Case {
@@ -123,6 +138,8 @@ struct Case {
     run_status: Option<i32>,
     /// The edit script of a watch case, relative to the case directory.
     watch_script: Option<String>,
+    /// The directory of a library case's test modules, relative to the case directory.
+    library: Option<String>,
 }
 
 /// The scenarios of the `hot-reload` spec whose WHEN is a Rust test or a save on disk, tested in
@@ -205,7 +222,11 @@ fn load_cases() -> Vec<Case> {
             let mut pinned_current = false;
             let mut run_status = None;
             let mut watch_script = None;
+            let mut library = None;
             for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("// library:") {
+                    library = Some(rest.trim().to_string());
+                }
                 if let Some(rest) = line.strip_prefix("// watch:") {
                     watch_script = Some(rest.trim().to_string());
                 }
@@ -236,6 +257,11 @@ fn load_cases() -> Vec<Case> {
                 name
             );
             assert!(
+                library.is_none() || run_status.is_none(),
+                "{}: a `// library:` case cannot be executable: the command line never injects library modules",
+                name
+            );
+            assert!(
                 watch_script.is_none() || run_status.is_some(),
                 "{}: a `// watch:` case needs a `// run:` line for its status",
                 name
@@ -258,6 +284,7 @@ fn load_cases() -> Vec<Case> {
                 pinned_current,
                 run_status,
                 watch_script,
+                library,
             });
         }
     }
@@ -296,9 +323,33 @@ fn codes_in(rendered: &str) -> BTreeSet<String> {
     codes
 }
 
+/// The test modules of a library case, as `(module path, source)` pairs in name order.
+fn library_modules(case: &Case) -> Vec<(String, String)> {
+    let Some(dir) = &case.library else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    prism_files(&case.dir.join(dir).join("prism"), &mut files);
+    files
+        .iter()
+        .map(|file| {
+            let stem = file.file_stem().unwrap().to_string_lossy();
+            (format!("prism/{}", stem), fs::read_to_string(file).unwrap())
+        })
+        .collect()
+}
+
+/// The options a case is checked with: its injected library modules, if any.
+fn case_options(case: &Case) -> prism_cli::CheckOptions {
+    prism_cli::CheckOptions {
+        library: std::sync::Arc::new(prism_library::Library::with_modules(library_modules(case))),
+        ..prism_cli::CheckOptions::default()
+    }
+}
+
 fn run(case: &Case) -> Result<(), String> {
     let entry = entry_of(case);
-    let (actual, rendered) = match prism_cli::check_path(&entry) {
+    let (actual, rendered) = match prism_cli::check_path_with(&entry, &case_options(case)) {
         Ok(_) => (BTreeSet::new(), String::new()),
         Err(err) => {
             let rendered = err.render();
@@ -555,12 +606,40 @@ fn check_snapshot(case: &Case, entry: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The typed trees, or with `mir` the MIR, of the injected modules of a library case, in name
+/// order.
+fn library_dump(case: &Case, entry: &Path, mir: bool) -> Result<String, String> {
+    let options = case_options(case);
+    let mut text = String::new();
+    for (module, _) in library_modules(case) {
+        let (tree, lowered) = prism_cli::dump_library_module(entry, &options.library, &module)
+            .map_err(|err| err.render())?;
+        match (mir, lowered) {
+            (false, _) => text.push_str(&tree.text),
+            (true, Some(lowered)) => text.push_str(&lowered.text),
+            (true, None) => {
+                return Err(tree
+                    .type_errors
+                    .map(|errors| errors.render())
+                    .unwrap_or_default())
+            }
+        }
+    }
+    Ok(text)
+}
+
 fn check_one_snapshot(case: &Case, entry: &Path, snapshot: &Snapshot) -> Result<(), String> {
     let path = case.dir.join(snapshot.file);
     if !path.exists() && !needs_snapshot(case, snapshot) {
         return Ok(());
     }
-    let actual = match (snapshot.dump)(entry) {
+    let dumped = match (&case.library, snapshot.file) {
+        (Some(_), "typed-tree.snap") => library_dump(case, entry, false),
+        (Some(_), "mir.snap") => library_dump(case, entry, true),
+        (Some(_), file) => Err(format!("a library case holds no {}", file)),
+        (None, _) => (snapshot.dump)(entry),
+    };
+    let actual = match dumped {
         Ok(text) => text,
         Err(err) => {
             return Err(format!(
@@ -892,7 +971,8 @@ fn fixture_elaborated_mir_is_well_formed() {
     let mut violations = Vec::new();
     let mut verified = 0;
     for case in load_cases() {
-        if !case.expected.is_empty() {
+        // A library case's program needs its injected modules, which the dumps do not take.
+        if !case.expected.is_empty() || case.library.is_some() {
             continue;
         }
         let entry = entry_of(&case);

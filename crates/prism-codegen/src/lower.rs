@@ -1630,12 +1630,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 // signature its table entry records, which `check_file` compared with the
                 // declaration's (D5 of `standard-library`).
                 if let Callee::External(path) = callee {
-                    let entry = prism_runtime::RUNTIME_FUNCTIONS
-                        .iter()
-                        .find(|function| function.name == path.name)
-                        .ok_or_else(|| {
-                            BackendError::new(format!("no runtime function {}", path.name))
-                        })?;
+                    let entry = crate::externals::entry_point(&path.name).ok_or_else(|| {
+                        BackendError::new(format!("no runtime function {}", path.name))
+                    })?;
                     let function = self.runtime_function(entry.name)?;
                     let call = self.builder.ins().call(function, &values);
                     if let Some(result) = self.builder.inst_results(call).first().copied() {

@@ -13,8 +13,9 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 /// What a watch session is told when the program stops, with the status the process would have
-/// exited with.
-pub type StopHandler = Arc<dyn Fn(i32) + Send + Sync>;
+/// exited with, and whether the program ended itself with `exitProcess` (D10 of
+/// `standard-library`) rather than with a runtime error or a failed allocation check.
+pub type StopHandler = Arc<dyn Fn(i32, bool) + Send + Sync>;
 
 static WATCH_MODE: Mutex<Option<StopHandler>> = Mutex::new(None);
 
@@ -31,6 +32,12 @@ pub fn set_watch_mode(on_stop: Option<StopHandler>) {
 /// the program's thread. No runtime lock is held here: the output and stderr locks are released
 /// after each write.
 pub(crate) fn stop(status: i32) -> ! {
+    stop_program(status, false)
+}
+
+/// Ends the program with `status`, as [`stop`] does, telling a watch session whether the
+/// program `exited` by itself.
+pub(crate) fn stop_program(status: i32, exited: bool) -> ! {
     let handler = WATCH_MODE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -38,7 +45,7 @@ pub(crate) fn stop(status: i32) -> ! {
     match handler {
         Some(on_stop) => {
             crate::stack::clear_stack_limit();
-            on_stop(status);
+            on_stop(status, exited);
             loop {
                 std::thread::park();
             }
@@ -280,7 +287,7 @@ mod tests {
         let _lock = crate::test_lock();
         let (sender, receiver) = std::sync::mpsc::channel();
         let sender = Mutex::new(sender);
-        set_watch_mode(Some(Arc::new(move |status| {
+        set_watch_mode(Some(Arc::new(move |status, _| {
             let _ = sender.lock().unwrap().send(status);
         })));
         let thread = std::thread::spawn(|| {

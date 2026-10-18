@@ -1,0 +1,8 @@
+// expect: E3002
+private external fun prism_rt_exit(status: Int): Nothing
+
+public intrinsic fun <T> print(value: &T)
+
+public intrinsic mut fun <T> List<T>.add(element: T)
+
+public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T

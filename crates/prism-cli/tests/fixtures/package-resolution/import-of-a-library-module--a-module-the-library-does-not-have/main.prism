@@ -1,0 +1,4 @@
+// expect: E1002
+import /prism/nothing
+
+fun f() {}

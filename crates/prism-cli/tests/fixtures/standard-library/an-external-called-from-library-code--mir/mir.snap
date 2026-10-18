@@ -1,0 +1,12 @@
+module prism/test
+fun prism/test::printNumber(_1: Int): Unit @4:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  local _2: Int (temporary)
+  bb0:
+    storage_live _2 @4:59
+    _2 = copy _1 @4:59
+    _0 = call external prism/test::prism_rt_print_int(move _2) -> bb1 @4:40
+  bb1:
+    storage_dead _2 @4:40
+    return @4:1

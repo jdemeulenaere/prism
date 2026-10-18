@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun main() {
+    val names = listOf("a" + "", "bb" + "", "c" + "")
+    val short = names.filter { n -> n.length == 1 }
+    println(short.joinToString { n -> n.clone() })
+}

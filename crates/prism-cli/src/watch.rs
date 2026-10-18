@@ -187,9 +187,14 @@ impl WatchSession {
     /// process (D13).
     pub fn install_stop_handler(&self) {
         let sender = Mutex::new(self.sender.clone());
-        prism_runtime::set_watch_mode(Some(Arc::new(move |status| {
+        prism_runtime::set_watch_mode(Some(Arc::new(move |status, exited| {
             if let Ok(sender) = sender.lock() {
-                let _ = sender.send(SessionEvent::Stopped(status));
+                // A program that ends itself with `exitProcess` ends its run as `main`
+                // returning does (D10 of `standard-library`).
+                let _ = sender.send(match exited {
+                    true => SessionEvent::MainReturned(status),
+                    false => SessionEvent::Stopped(status),
+                });
             }
         })));
     }

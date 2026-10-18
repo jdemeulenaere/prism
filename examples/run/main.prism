@@ -3,8 +3,9 @@
 // with payloads matched by patterns, a destructuring declaration, a nullable, strings and string
 // templates, an expression tree built from boxes, generic functions and extensions, closures
 // and function values, closures that own their captures (a handler kept in a struct and a
-// closure returned from a function), and lists built, updated by index, iterated, shrunk and
-// cloned.
+// closure returned from a function), lists built, updated by index, iterated, shrunk and
+// cloned, and the bundled library: a struct printed through its `toString()` and the list
+// helpers `map` and `joinToString`.
 package run
 
 import /run/generic/labels
@@ -24,6 +25,8 @@ fun button(label: String, onClick: escaping () -> Int): Button = Button(label, o
 fun press(b: &Button): Int = b.onClick()
 
 fun describer(name: String): (Int) -> String = { "$name = $it" }
+
+fun Point.toString(): String = "($x, $y)"
 
 fun main() {
     var primes = 0
@@ -96,4 +99,6 @@ fun main() {
     println("$removed removed, ${kept.size} left, total $total, ${squares.isEmpty()}")
     val labels = listOf(ok.label.clone(), describeLimit(1))
     println(labels.contains("ok") && labels.indexOf("limit = 1") == 1)
+    println(p)
+    println(kept.map { it * 2 }.joinToString { it.toString() })
 }

@@ -1,0 +1,9 @@
+// expect: ok
+struct P { val x: Int }
+
+fun P.toString(): String = "P(" + x.toString() + ")"
+
+fun f(p: P) {
+    println(p)
+    println(p)
+}

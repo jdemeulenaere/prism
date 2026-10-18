@@ -10,7 +10,7 @@
 //! The crate has no dependencies, and no build script: `library_tests.rs` checks that
 //! [`MODULES`] lists exactly the files of `prism/`.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// One module of the library: its module path (`prism/core`) and its source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +57,12 @@ impl Library {
                 .collect(),
             prelude: PRELUDE.iter().map(|path| path.to_string()).collect(),
         })
+    }
+
+    /// The bundled library, shared: what the compiler's options hold by default.
+    pub fn shared() -> Arc<Library> {
+        static SHARED: OnceLock<Arc<Library>> = OnceLock::new();
+        Arc::clone(SHARED.get_or_init(|| Arc::new(Library::bundled().clone())))
     }
 
     /// The bundled library with `extra` modules, as `(module path, source)` pairs: each

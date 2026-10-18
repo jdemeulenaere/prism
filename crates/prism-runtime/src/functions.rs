@@ -18,6 +18,7 @@ use crate::panic::{
     prism_rt_double_remainder, prism_rt_panic, prism_rt_panic_without_location,
     prism_rt_unlinked_function,
 };
+use crate::process::prism_rt_exit;
 use crate::stack::prism_rt_stack_check_failed;
 use crate::string::{
     prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
@@ -305,6 +306,14 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
         result: None,
         never_returns: true,
     },
+    // The external of `/prism/system`'s `exitProcess` (D10 of `standard-library`).
+    RuntimeFunction {
+        name: "prism_rt_exit",
+        address: RuntimeAddress(prism_rt_exit as *const u8),
+        parameters: &[I64],
+        result: None,
+        never_returns: true,
+    },
 ];
 
 /// The runtime function named `name`.
@@ -330,6 +339,7 @@ mod tests {
             include_str!("string.rs"),
             include_str!("list.rs"),
             include_str!("stack.rs"),
+            include_str!("process.rs"),
         ];
         let mut names = HashSet::new();
         for source in sources {

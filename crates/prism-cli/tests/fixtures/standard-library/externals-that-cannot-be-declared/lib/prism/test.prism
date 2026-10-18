@@ -1,0 +1,11 @@
+package prism
+
+public external fun prism_rt_a(): Int
+
+external fun <T> prism_rt_b(x: T): Unit
+
+external fun Int.prism_rt_c(): Unit
+
+external fun prism_rt_d(n: Int = 0): Unit
+
+external fun prism_rt_e(s: &String): &Int

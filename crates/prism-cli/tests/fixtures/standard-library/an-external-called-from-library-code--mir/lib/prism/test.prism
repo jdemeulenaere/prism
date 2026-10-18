@@ -1,0 +1,7 @@
+package prism
+
+// Writes `n`.
+public fun printNumber(n: Int): Unit = prism_rt_print_int(n)
+
+// The runtime's entry point that writes an `Int`.
+external fun prism_rt_print_int(value: Int): Unit

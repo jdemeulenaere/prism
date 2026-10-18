@@ -1,0 +1,7 @@
+// expect: ok
+// run: 2
+import /prism/system
+
+fun main() {
+    exitProcess(258)
+}

@@ -1,0 +1,5 @@
+// expect: E4005
+// library: lib
+import /prism/test
+
+fun main() {}
