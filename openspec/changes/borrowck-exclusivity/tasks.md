@@ -53,7 +53,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 11. Documentation and final checks
 
-- [ ] 11.1 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism dump-mir --elaborated` on every file under `examples/` (except `examples/demo/ui`), and `openspec validate --all --strict`. Verify all pass.
+- [x] 11.1 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism dump-mir --elaborated` on every file under `examples/` (except `examples/demo/ui`), and `openspec validate --all --strict`. Verify all pass.
 
 ## Workflow follow-up
 
