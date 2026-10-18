@@ -1,0 +1,4 @@
+// expect: E4003
+enum Box { Of(Int) }
+fun set(n: &mut Int): Bool = true
+fun f(b: &mut Box): Int = when (b) { Box.Of(val n) if set(n) -> 1; else -> 2 }

@@ -1,0 +1,3 @@
+// expect: E4006
+struct Point : Copy { val x: Int, val y: Int }
+fun f(p: Point): Int = when (p) { Point(z = 1) -> 1; else -> 0 }

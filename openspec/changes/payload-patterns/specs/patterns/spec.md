@@ -148,6 +148,10 @@ Inside a guard, every binding of its branch MUST be read-only and MUST NOT be mo
 - **WHEN** `enum Msg { Text(String) }` and `fun take(s: String): Bool = true` are declared and `fun f(m: Msg): Int = when (m) { Msg.Text(val s) if take(s) -> 1; else -> 2 }` is checked
 - **THEN** the type checker emits `E4017` for `s`, stating that a binding cannot be moved in a guard
 
+#### Scenario: Mutating a binding in a guard rejected
+- **WHEN** `enum Box { Of(Int) }` and `fun set(n: &mut Int): Bool = true` are declared and `fun f(b: &mut Box): Int = when (b) { Box.Of(val n) if set(n) -> 1; else -> 2 }` is checked
+- **THEN** the type checker emits `E4003` for `n`, stating that a binding cannot be mutated in a guard
+
 #### Scenario: Reading a binding in a guard
 - **WHEN** with that `Msg`, `fun short(s: &String): Bool = true` and `fun f(m: Msg): String = when (m) { Msg.Text(val s) if short(s) -> s; Msg.Text(_) -> "long" }` are checked
 - **THEN** the file typechecks: the guard borrows the payload, and the body moves it

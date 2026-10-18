@@ -29,6 +29,8 @@ use prism_typed_tree::{
 };
 use std::collections::{HashMap, HashSet};
 
+mod patterns;
+
 /// The help of a type argument that cannot be inferred (`E4013`, D8 of `generics`).
 const TYPE_ARGUMENTS_HELP: &str =
     "write the type arguments, as in 'name<...>(...)', or annotate the expected type";
@@ -433,6 +435,9 @@ pub struct TypeChecker {
     /// Bare variant names declared by more than one enum. They are not bound at module level and
     /// must be qualified (`B.None`), except as a `when` pattern over one of those enums.
     ambiguous_variants: HashSet<String>,
+    /// While a guard is checked: the bindings of its branch and their modes, which the guard may
+    /// neither move nor mutate (D9 of `payload-patterns`).
+    guard_bindings: Vec<(prism_typed_tree::LocalId, prism_typed_tree::BindingMode)>,
 }
 
 impl TypeChecker {
@@ -466,6 +471,7 @@ impl TypeChecker {
             file: FileBuilder::default(),
             variant_owners: HashMap::new(),
             ambiguous_variants: HashSet::new(),
+            guard_bindings: Vec::new(),
         }
     }
 
@@ -3473,6 +3479,9 @@ impl TypeChecker {
                 if ty == Type::Error {
                     return self.error_node(vec![value], span);
                 }
+                if self.reject_guard_mutation(inner, span) {
+                    return self.error_node(vec![value], span);
+                }
                 match (binding_name(inner), &inner.kind) {
                     (Some(name), _) => {
                         let is_val = matches!(
@@ -3525,6 +3534,9 @@ impl TypeChecker {
     /// binding, a writable field or a write through `&mut`. Implicit `this` fields are resolved
     /// by the caller.
     fn assignment_target(&mut self, target: &Expr, span: Span) -> (ExpressionId, Type, bool) {
+        if self.reject_guard_mutation(target, span) {
+            return (self.error_node(Vec::new(), target.span), Type::Error, false);
+        }
         let (target_id, target_ty, is_mutable) = match (&target.kind, binding_name(target)) {
             (ExprKind::This, _) if self.env.lookup(THIS).is_none() => {
                 self.errors
@@ -4155,6 +4167,11 @@ impl TypeChecker {
     /// branches either join to a common type (`WhenUse::Infer`) or are each checked against the
     /// expected type (`WhenUse::Check`). As a statement its value is discarded, so neither
     /// applies and its type is `Unit`.
+    ///
+    /// Each pattern is checked against the subject (`patterns.rs`); the bindings of a branch are
+    /// defined, read-only, for its guard and then for its body (D9 and D10 of
+    /// `payload-patterns`). A pattern that moves a part takes the subject apart, which must then
+    /// be a whole owned value (D6).
     fn infer_when_expr(
         &mut self,
         target: Option<&Expr>,
@@ -4169,10 +4186,15 @@ impl TypeChecker {
         let branch_origin = self.origin;
         self.origin = Origin::Value;
         // Patterns match the borrowed value, so a `&Enum` or `&mut Enum` subject matches as
-        // `Enum`; the subject is read in place through its dereferences (D9 of `typed-tree`).
-        let subject = target.map(|t| {
-            let id = self.infer_expr(t);
-            let id = self.peel_reference_nodes(id);
+        // `Enum`; the subject is read in place through its dereferences (D9 of `typed-tree`),
+        // and the layers peeled decide the binding modes (D5 of `payload-patterns`).
+        let mut layers = Vec::new();
+        let mut subject = target.map(|t| {
+            let mut id = self.infer_expr(t);
+            while let Type::Reference { mutable, .. } = self.builder.type_of(id) {
+                layers.push(*mutable);
+                id = self.deref(id);
+            }
             let ty = self.ty(id);
             // Matching on variants needs the enum's definition, which needs its module.
             if self.reject_unimported_members(&ty, t.span) {
@@ -4181,142 +4203,62 @@ impl TypeChecker {
                 id
             }
         });
+        let mode = Self::subject_mode(&layers);
         let subject_ty = subject.map(|id| self.ty(id));
-        let subject_variants = match &subject_ty {
-            Some(Type::Enum { id, .. }) => self
-                .enum_variants(id)
-                .map(|variants| (id.clone(), variants)),
-            _ => None,
-        };
-        let mut has_else = false;
+        // A pattern that does not check covers nothing reliably: its `when` is not reported as
+        // non-exhaustive on top of its own error.
+        let errors_before = self.errors.len();
+        let mut pattern_errors = false;
         let mut unified_ty: Option<Type> = None;
-        let mut matched_variants = HashSet::new();
-        // The literals a `Bool` or `Bool?` subject is matched against, which cover it like the
-        // variants of an enum: `true`, `false` and, for `Bool?`, `null`.
-        let mut matched_literals = HashSet::new();
         let mut tree_branches = Vec::new();
 
         for branch in branches {
             let mut patterns = Vec::new();
+            // The bindings of the branch's first pattern, which its alternatives must repeat.
+            let mut first: Option<Vec<patterns::PatternBinding>> = None;
             for pattern in &branch.patterns {
-                // A constructor pattern of values spells a value (D2 of `payload-patterns`).
-                let spelled = match pattern {
-                    WhenPattern::Pattern(
-                        p @ prism_ast::Pattern {
-                            kind: PatternKind::Constructor { .. },
-                            ..
-                        },
-                    ) => p.to_expression().map(|value| {
-                        WhenPattern::Pattern(prism_ast::Pattern {
-                            span: value.span,
-                            kind: PatternKind::Value(value),
-                        })
-                    }),
-                    _ => None,
-                };
-                let pattern = spelled.as_ref().unwrap_or(pattern);
-                match pattern {
+                let pattern = match pattern {
                     WhenPattern::Else => {
-                        has_else = true;
                         patterns.push(Pattern::Else);
+                        continue;
                     }
-                    WhenPattern::Pattern(prism_ast::Pattern {
-                        kind: PatternKind::Value(p_expr),
-                        ..
-                    }) => {
-                        let covered = subject_variants.as_ref().and_then(|(id, variants)| {
-                            self.unit_variant_pattern(p_expr, id, variants)
-                                .map(|name| (id.clone(), variants, name))
-                        });
-                        if let Some((enum_id, variants, v_name)) = covered {
-                            let index = variants
-                                .iter()
-                                .position(|(name, _)| name == &v_name)
-                                .expect("a covered variant is a variant");
-                            let arguments = match &subject_ty {
-                                Some(Type::Enum { arguments, .. }) => arguments.clone(),
-                                _ => Vec::new(),
-                            };
-                            patterns.push(Pattern::Variant {
-                                enum_id,
-                                index,
-                                name: v_name.clone(),
-                                arguments,
-                                fields: Vec::new(),
-                            });
-                            matched_variants.insert(v_name);
-                        } else if let Some(s_ty) = &subject_ty {
-                            if let ExprKind::Literal(literal @ (Literal::Bool(_) | Literal::Null)) =
-                                &p_expr.kind
-                            {
-                                matched_literals.insert(match literal {
-                                    Literal::Bool(value) => Some(*value),
-                                    _ => None,
-                                });
-                            }
-                            patterns.push(Pattern::Value(self.check_expr(p_expr, s_ty)));
-                        } else {
-                            patterns
-                                .push(Pattern::Condition(self.check_operand(p_expr, &Type::Bool)));
-                        }
-                    }
-                    // Whether the end is included only matters at runtime.
-                    WhenPattern::Pattern(prism_ast::Pattern {
-                        kind:
-                            PatternKind::Wildcard
-                            | PatternKind::Binding { .. }
-                            | PatternKind::Constructor { .. },
-                        span,
-                    }) => {
-                        self.errors.push(TypeError::InvalidPattern {
-                            message: "this pattern is not supported yet".to_string(),
-                            span: *span,
-                            help: None,
-                        });
-                        let error = self.error_node(Vec::new(), *span);
-                        patterns.push(Pattern::Value(error));
-                    }
-                    WhenPattern::Pattern(prism_ast::Pattern {
-                        kind:
-                            PatternKind::InRange {
-                                start,
-                                end,
-                                end_inclusive,
-                            },
-                        ..
-                    }) => {
-                        if let Some(s_ty) = &subject_ty {
-                            let start = self.check_expr(start, s_ty);
-                            let end = self.check_expr(end, s_ty);
-                            patterns.push(Pattern::Range {
-                                start,
-                                end,
-                                end_inclusive: *end_inclusive,
-                            });
-                        } else {
-                            // Without a subject, a pattern is a condition, which a range is
-                            // not: its ends are checked as a range's, and the range rejected.
-                            let start = self.check_operand(start, &Type::Int);
-                            let end = self.check_operand(end, &Type::Int);
-                            let span = self.builder.span_of(start).merge(self.builder.span_of(end));
-                            self.report_mismatch(
-                                &Type::Bool,
-                                Type::plain_struct(NominalId::builtin_range()),
-                                span,
-                            );
-                            let condition = self.error_node(vec![start, end], span);
-                            patterns.push(Pattern::Condition(condition));
-                        }
+                    WhenPattern::Pattern(pattern) => pattern,
+                };
+                let Some(s_ty) = &subject_ty else {
+                    patterns.push(self.condition_pattern(pattern));
+                    continue;
+                };
+                let mut bindings = patterns::PatternBindings {
+                    bound: Vec::new(),
+                    first: first.clone(),
+                };
+                patterns.push(self.check_pattern(pattern, s_ty, mode, &mut bindings));
+                match &first {
+                    None => first = Some(bindings.bound),
+                    Some(first) => {
+                        self.check_alternative_bindings(first, &bindings.bound, pattern.span)
                     }
                 }
             }
+            let bindings = first.unwrap_or_default();
+            pattern_errors |= self.errors.len() > errors_before;
 
-            if let Some(guard) = &branch.guard {
-                self.errors.push(TypeError::InvalidPattern {
-                    message: "guards are not supported yet".to_string(),
-                    span: guard.span,
-                    help: None,
-                });
+            let guard = branch.guard.as_ref().map(|guard| {
+                self.env.enter_scope();
+                for binding in &bindings {
+                    self.define_local(binding.symbol(true));
+                }
+                let guarded = bindings.iter().map(|b| (b.local, b.mode)).collect();
+                let saved = std::mem::replace(&mut self.guard_bindings, guarded);
+                let guard = self.check_operand(guard, &Type::Bool);
+                self.guard_bindings = saved;
+                self.env.exit_scope();
+                guard
+            });
+
+            self.env.enter_scope();
+            for binding in &bindings {
+                self.define_local(binding.symbol(false));
             }
             let body = if let WhenUse::Check(expected) = use_ {
                 self.with_consuming(branch_consuming, |c| {
@@ -4343,37 +4285,31 @@ impl TypeChecker {
                 }
                 body
             };
+            self.env.exit_scope();
             tree_branches.push(prism_typed_tree::WhenBranch {
                 patterns,
-                guard: None,
+                guard,
                 body,
                 span: branch.span,
             });
         }
 
+        // A pattern that moves a part takes the whole subject apart (D6 of `payload-patterns`).
+        let takes_apart = tree_branches
+            .iter()
+            .any(|branch| branch.patterns.iter().any(Pattern::moves));
+        if let (true, Some(target), Some(id)) = (takes_apart, target, subject) {
+            self.check_take_apart_source(target, "match on");
+            subject = Some(self.as_place(id));
+        }
+
         self.origin = branch_origin;
-        let covers_variants = subject_variants.as_ref().is_some_and(|(_, variants)| {
-            !variants.is_empty()
-                && variants
-                    .iter()
-                    .all(|(v_name, _)| matched_variants.contains(v_name))
-        });
-        // `true` and `false` cover a `Bool`, and with `null` a `Bool?`.
-        let covers_booleans = match &subject_ty {
-            Some(Type::Bool) => [Some(true), Some(false)]
-                .iter()
-                .all(|literal| matched_literals.contains(literal)),
-            Some(Type::Nullable(inner)) if **inner == Type::Bool => [Some(true), Some(false), None]
-                .iter()
-                .all(|literal| matched_literals.contains(literal)),
-            _ => false,
-        };
-        let covers_variants = covers_variants || covers_booleans;
+        let covered = self.interim_coverage(subject_ty.as_ref(), &tree_branches, branches);
         let build = |checker: &mut Self, branches, ty| {
             let kind = ExpressionKind::When {
                 subject,
                 branches,
-                exhaustive: has_else || covers_variants,
+                exhaustive: covered,
             };
             checker.add(kind, ty, span)
         };
@@ -4386,7 +4322,7 @@ impl TypeChecker {
 
         // Exhaustiveness check: a `when` in value position needs an `else` or every variant. A
         // subject whose type is already an error has nothing more to report.
-        let is_exhaustive = has_else || subject_ty == Some(Type::Error) || covers_variants;
+        let is_exhaustive = covered || subject_ty == Some(Type::Error) || pattern_errors;
 
         if !is_exhaustive {
             self.errors.push(TypeError::NonExhaustiveWhen {
@@ -4408,40 +4344,90 @@ impl TypeChecker {
         }
     }
 
-    /// If `pattern` names a payload-free variant of the subject enum `enum_id`, returns that
-    /// variant's name. Such a pattern covers the whole variant. A qualified path `Enum.Variant`
-    /// counts only when `Enum` is the subject's enum, and a bare `Variant` counts unless a local
-    /// binding shadows it. Values that merely equal a variant (`Shape.Circle(1)`, `h.Green`) never
-    /// count.
-    fn unit_variant_pattern(
-        &self,
-        pattern: &Expr,
-        enum_id: &NominalId,
-        variants: &[(String, Vec<Type>)],
-    ) -> Option<String> {
-        let v_name = match &pattern.kind {
-            ExprKind::Ident(name) => {
-                let shadowed =
-                    self.env.lookup(name).is_some() && !self.env.resolves_at_module_level(name);
-                if shadowed {
-                    return None;
-                }
-                name
+    /// A branch pattern of a `when` without a subject: a condition. A range is not one: its
+    /// ends are checked as a range's, and the range rejected.
+    fn condition_pattern(&mut self, pattern: &prism_ast::Pattern) -> Pattern {
+        match &pattern.kind {
+            PatternKind::InRange { start, end, .. } => {
+                let start = self.check_operand(start, &Type::Int);
+                let end = self.check_operand(end, &Type::Int);
+                let span = self.builder.span_of(start).merge(self.builder.span_of(end));
+                self.report_mismatch(
+                    &Type::Bool,
+                    Type::plain_struct(NominalId::builtin_range()),
+                    span,
+                );
+                Pattern::Condition(self.error_node(vec![start, end], span))
             }
-            ExprKind::MemberAccess {
-                target,
-                member,
-                is_safe_nav: false,
-            } => match self.type_name_symbol(target).map(|sym| sym.kind) {
-                Some(SymbolKind::Enum { id, .. }) if &id == enum_id => member,
-                _ => return None,
-            },
-            _ => return None,
-        };
-        variants
-            .iter()
-            .any(|(name, payloads)| name == v_name && payloads.is_empty())
-            .then(|| v_name.clone())
+            PatternKind::Value(condition) => {
+                Pattern::Condition(self.check_operand(condition, &Type::Bool))
+            }
+            // The parser accepts only conditions and ranges without a subject.
+            _ => Pattern::Condition(self.error_node(Vec::new(), pattern.span)),
+        }
+    }
+
+    /// Whether the branches cover every value of the subject: an unguarded `else`, wildcard,
+    /// binding or irrefutable struct pattern; every variant of an enum by an unguarded variant
+    /// pattern whose sub-patterns are irrefutable; or `true`, `false` (and `null` for a `Bool?`).
+    /// Interim rule until the usefulness check of `payload-patterns` 4.2 replaces it.
+    fn interim_coverage(
+        &self,
+        subject_ty: Option<&Type>,
+        tree_branches: &[prism_typed_tree::WhenBranch],
+        branches: &[WhenBranch],
+    ) -> bool {
+        fn irrefutable(pattern: &Pattern) -> bool {
+            match pattern {
+                Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Else => true,
+                Pattern::Struct { fields, .. } => fields.iter().all(irrefutable),
+                _ => false,
+            }
+        }
+        let mut variants = HashSet::new();
+        let mut literals = HashSet::new();
+        for (tree, branch) in tree_branches.iter().zip(branches) {
+            if tree.guard.is_some() {
+                continue;
+            }
+            for (pattern, written) in tree.patterns.iter().zip(&branch.patterns) {
+                if irrefutable(pattern) {
+                    return true;
+                }
+                if let Pattern::Variant { index, fields, .. } = pattern {
+                    if fields.iter().all(irrefutable) {
+                        variants.insert(*index);
+                    }
+                }
+                if let WhenPattern::Pattern(prism_ast::Pattern {
+                    kind: PatternKind::Value(value),
+                    ..
+                }) = written
+                {
+                    match &value.kind {
+                        ExprKind::Literal(Literal::Bool(value)) => {
+                            literals.insert(Some(*value));
+                        }
+                        ExprKind::Literal(Literal::Null) => {
+                            literals.insert(None);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        match subject_ty {
+            Some(Type::Enum { id, .. }) => self.enum_variants(id).is_some_and(|all| {
+                !all.is_empty() && (0..all.len()).all(|i| variants.contains(&i))
+            }),
+            Some(Type::Bool) => [Some(true), Some(false)]
+                .iter()
+                .all(|literal| literals.contains(literal)),
+            Some(Type::Nullable(inner)) if **inner == Type::Bool => [Some(true), Some(false), None]
+                .iter()
+                .all(|literal| literals.contains(literal)),
+            _ => false,
+        }
     }
 
     /// Infers the call `callee<type_arguments>(args)`, checked against `expected` when the call
@@ -5809,7 +5795,9 @@ impl TypeChecker {
             ReceiverMode::Shared => ReceiverPass::SharedBorrow,
             ReceiverMode::Mutable => {
                 // A temporary may be mutated unless it is reached through a shared borrow.
-                if !contents_writable(receiver.ty, receiver.writable) {
+                if !self.reject_guard_mutation(expr, expr.span)
+                    && !contents_writable(receiver.ty, receiver.writable)
+                {
                     self.report_immutable_receiver(receiver, method);
                 }
                 ReceiverPass::MutableBorrow
@@ -5849,6 +5837,7 @@ impl TypeChecker {
                         ty: reached,
                         borrow: None,
                         clone,
+                        destructure: None,
                         span: expr.span,
                     });
                 }
@@ -6243,6 +6232,13 @@ impl TypeChecker {
                 };
                 self.coerce_to(id, expected)
             }
+            // A mutable reborrow of a guard's binding would mutate it (D9 of `payload-patterns`).
+            Coercion::Fits(Adjustment::Reborrow)
+                if matches!(expected, Type::Reference { mutable: true, .. })
+                    && self.reject_guard_mutation(expr, expr.span) =>
+            {
+                self.wrap_error(found_id)
+            }
             Coercion::Fits(adjustment) => self.apply_adjustment(found_id, adjustment, expected),
             Coercion::MovesOutOfBorrow { ty, nullable } => {
                 let clone = self.is_clone(&ty).then(|| match nullable {
@@ -6254,6 +6250,7 @@ impl TypeChecker {
                     ty: if nullable { ty.nullable() } else { ty },
                     borrow: None,
                     clone,
+                    destructure: None,
                     span: expr.span,
                 });
                 self.wrap_error(found_id)
@@ -6351,36 +6348,19 @@ impl TypeChecker {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.check_move_source(&field, ty);
         }
-        let mut borrowed = false;
-        let source = match &expr.kind {
-            ExprKind::Ident(name) if self.is_default_input(name) => {
-                borrowed = true;
-                format!("parameter '{}', which a default value borrows", name)
+        // A binding of the guard being checked may not move: the guard may be false (D9 of
+        // `payload-patterns`).
+        if let Some(name) = binding_name(expr) {
+            if self.guard_binding(name).is_some() {
+                self.errors.push(TypeError::MoveInGuard {
+                    name: name.to_string(),
+                    span: expr.span,
+                });
+                return;
             }
-            ExprKind::This if self.is_default_input(THIS) => {
-                borrowed = true;
-                "'this', which a default value borrows".to_string()
-            }
-            ExprKind::Ident(name) if self.is_capture(name) => {
-                borrowed = true;
-                format!("captured variable '{}', which the closure borrows", name)
-            }
-            ExprKind::This if self.is_capture(THIS) => {
-                borrowed = true;
-                "'this', which the closure borrows".to_string()
-            }
-            ExprKind::Ident(name) if self.is_top_level_value(name) => {
-                format!("top-level value '{}'", name)
-            }
-            // `Color.Red` names a variant: a fresh value, not a field.
-            ExprKind::MemberAccess { target, .. } if self.type_name_symbol(target).is_some() => {
-                return
-            }
-            ExprKind::MemberAccess { target, member, .. } => {
-                format!("field '{}' of '{}'", member, target)
-            }
-            ExprKind::Index { target, .. } => format!("an element of '{}'", target),
-            _ => return,
+        }
+        let Some((source, borrowed)) = self.move_source(expr) else {
+            return;
         };
         let clone = self.is_clone(ty).then(|| match ty {
             Type::Nullable(_) => format!("{}?.clone()", expr),
@@ -6396,13 +6376,84 @@ impl TypeChecker {
                     ..
                 }
             );
+        // A field of a whole owned struct local can be taken out by destructuring it (D7 of
+        // `payload-patterns`).
+        let destructure = match &expr.kind {
+            ExprKind::MemberAccess {
+                target,
+                member,
+                is_safe_nav: false,
+            } => self
+                .destructurable_local(target)
+                .map(|local| format!("val ({}) = {}", member, local)),
+            _ => None,
+        };
         self.errors.push(TypeError::CannotMoveOut {
             source,
             ty: ty.clone(),
             borrow: (!is_borrowed).then(|| format!("&{}", expr)),
             clone,
+            destructure,
             span: expr.span,
         });
+    }
+
+    /// The name of the whole owned local of struct type that `expr` names, when a destructuring
+    /// declaration could take it apart: a local or by-value parameter that no closure or default
+    /// value borrows, or `this` of a `consuming fun`.
+    fn destructurable_local(&self, expr: &Expr) -> Option<String> {
+        let name = match &expr.kind {
+            ExprKind::Ident(name) => name.as_str(),
+            ExprKind::This => THIS,
+            _ => return None,
+        };
+        let sym = self.env.lookup(name)?;
+        let is_struct_local = matches!(
+            &sym.kind,
+            SymbolKind::Variable {
+                ty: Type::Struct { .. },
+                local: Some(_),
+                ..
+            }
+        );
+        let borrowed = self.is_default_input(name) || self.is_capture(name);
+        (is_struct_local && !borrowed).then(|| name.to_string())
+    }
+
+    /// What a move or a take-apart of `expr` would take a value out of, when that is not a whole
+    /// owned value: its description, and whether it is already a borrow (so that borrowing it
+    /// is no fix). `None` for a whole local or parameter, a temporary, or a pass-through form,
+    /// whose children are checked instead.
+    fn move_source(&self, expr: &Expr) -> Option<(String, bool)> {
+        let source = match &expr.kind {
+            ExprKind::Ident(name) if self.is_default_input(name) => (
+                format!("parameter '{}', which a default value borrows", name),
+                true,
+            ),
+            ExprKind::This if self.is_default_input(THIS) => {
+                ("'this', which a default value borrows".to_string(), true)
+            }
+            ExprKind::Ident(name) if self.is_capture(name) => (
+                format!("captured variable '{}', which the closure borrows", name),
+                true,
+            ),
+            ExprKind::This if self.is_capture(THIS) => {
+                ("'this', which the closure borrows".to_string(), true)
+            }
+            ExprKind::Ident(name) if self.is_top_level_value(name) => {
+                (format!("top-level value '{}'", name), false)
+            }
+            // `Color.Red` names a variant: a fresh value, not a field.
+            ExprKind::MemberAccess { target, .. } if self.type_name_symbol(target).is_some() => {
+                return None
+            }
+            ExprKind::MemberAccess { target, member, .. } => {
+                (format!("field '{}' of '{}'", member, target), false)
+            }
+            ExprKind::Index { target, .. } => (format!("an element of '{}'", target), false),
+            _ => return None,
+        };
+        Some(source)
     }
 
     /// Whether `name` resolves to a binding that the default value being checked borrows (`this`

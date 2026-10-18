@@ -1,0 +1,3 @@
+// expect: E4024
+enum Color { Red, Green }
+fun f(c: Color): Int = when (c) { Color.Red(_) -> 1; else -> 2 }

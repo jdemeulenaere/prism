@@ -1,0 +1,3 @@
+// expect: E4002
+enum Shape { Circle(Double), Square(Double) }
+fun f(s: Shape): Int = when (s) { Shape.Circle(val r) if r -> 1; else -> 2 }

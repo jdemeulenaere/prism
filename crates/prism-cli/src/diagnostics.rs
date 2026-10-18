@@ -331,13 +331,35 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 ));
             }
         }
+        TypeError::UnboundPatternName { name, .. } => {
+            out.push_str(&format!("   = help: to bind it, write 'val {}'\n", name));
+        }
+        TypeError::CannotTakeApart { help, .. } => {
+            out.push_str(&format!("   = help: {}\n", help));
+        }
+        TypeError::MoveInGuard { name, .. } => {
+            out.push_str(&format!(
+                "   = help: read or borrow '{}' in the guard, and move it in the branch body\n",
+                name
+            ));
+        }
         TypeError::CannotMoveOut {
-            borrow, clone, ty, ..
+            borrow,
+            clone,
+            destructure,
+            ty,
+            ..
         } => match borrow {
             Some(borrow) => {
                 out.push_str(&format!("   = help: borrow it instead: '{}'\n", borrow));
                 if let Some(clone) = clone {
                     out.push_str(&format!("   = help: or clone it: '{}'\n", clone));
+                }
+                if let Some(destructure) = destructure {
+                    out.push_str(&format!(
+                        "   = help: or take the value apart: '{}'\n",
+                        destructure
+                    ));
                 }
             }
             // The source is already a borrow: clone it, or keep borrowing where it is used.
@@ -632,6 +654,26 @@ mod tests {
         assert!(out.contains("help: or clone it: 'u.name.clone()'"), "{out}");
         assert!(
             out.contains("help: or clone it: 'u.nick?.clone()'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("help: or take the value apart: 'val (name) = u'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn test_pattern_diagnostics_name_their_fixes() {
+        let out = render_type_errors(
+            "enum Box { Of(Int) }\nstruct Inbox { val last: Box }\nenum Msg { Text(String), Empty }\nstruct Mail { val last: Msg }\nfun f(b: Box): Int = when (b) { Box.Of(n) -> 1 }\nfun g(m: Mail): String = when (m.last) { Msg.Text(val s) -> s; Msg.Empty -> \"\" }\n",
+        );
+        assert!(out.contains("help: to bind it, write 'val n'"), "{out}");
+        assert!(
+            out.contains("error[E4017]: cannot take apart field 'last' of 'm'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("help: match on its borrow instead: '&m.last'"),
             "{out}"
         );
     }

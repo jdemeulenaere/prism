@@ -1,0 +1,3 @@
+// expect: E4024
+enum Shape { Circle(Double), Rect(Double, Double) }
+fun f(s: Shape): Double = when (s) { Shape.Rect(val w) -> w; else -> 0.0 }

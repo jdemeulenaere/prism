@@ -1,0 +1,3 @@
+// expect: E4001
+enum Box { Of(Int) }
+fun f(b: Box): Int = when (b) { Box.Of(n) -> n }

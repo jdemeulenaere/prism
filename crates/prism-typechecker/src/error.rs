@@ -10,6 +10,10 @@ pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
     UnresolvedSymbol { name: String, span: Span },
 
+    /// E4001: A bare name in a pattern that resolves to nothing. A bare name compares with a
+    /// value; a binding needs `val` (D1 of `payload-patterns`).
+    UnboundPatternName { name: String, span: Span },
+
     /// E4001: `this` used outside an extension function, where nothing binds it.
     ThisOutsideExtension { span: Span },
 
@@ -170,8 +174,23 @@ pub enum TypeError {
         ty: Type,
         borrow: Option<String>,
         clone: Option<String>,
+        /// For a field of a whole owned local, the destructuring declaration that takes it out
+        /// (`val (name) = u`, D7 of `payload-patterns`).
+        destructure: Option<String>,
         span: Span,
     },
+
+    /// E4017: A pattern or destructuring declaration would take apart a value that is not a whole
+    /// owned value (D6 of `payload-patterns`). `source` describes it, `help` the fix.
+    CannotTakeApart {
+        source: String,
+        help: String,
+        span: Span,
+    },
+
+    /// E4017: A binding that takes its part by value is moved in a guard, which may be false
+    /// (D9 of `payload-patterns`).
+    MoveInGuard { name: String, span: Span },
 
     /// E4019: `*` writes through a value that is not a reference (`*x = 1` for `x: Int`).
     NotAReference { ty: Type, span: Span },
@@ -233,6 +252,7 @@ impl TypeError {
     pub fn code(&self) -> &'static str {
         match self {
             TypeError::UnresolvedSymbol { .. } => "E4001",
+            TypeError::UnboundPatternName { .. } => "E4001",
             TypeError::ThisOutsideExtension { .. } => "E4001",
             TypeError::BuiltinFunctionAsValue { .. } => "E4001",
             TypeError::TypeMismatch { .. } => "E4002",
@@ -257,6 +277,8 @@ impl TypeError {
             TypeError::BreakOutsideLoop { .. } => "E4015",
             TypeError::InvalidMarkerDeclaration { .. } => "E4016",
             TypeError::CannotMoveOut { .. } => "E4017",
+            TypeError::CannotTakeApart { .. } => "E4017",
+            TypeError::MoveInGuard { .. } => "E4017",
             TypeError::NotCloneable { .. } => "E4018",
             TypeError::NotAReference { .. } => "E4019",
             TypeError::WrongTypeArgumentCount { .. } => "E4020",
@@ -272,6 +294,9 @@ impl TypeError {
     pub fn span(&self) -> Span {
         match self {
             TypeError::UnresolvedSymbol { span, .. } => *span,
+            TypeError::UnboundPatternName { span, .. } => *span,
+            TypeError::CannotTakeApart { span, .. } => *span,
+            TypeError::MoveInGuard { span, .. } => *span,
             TypeError::ThisOutsideExtension { span } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
             TypeError::OperatorMismatch { span, .. } => *span,
@@ -313,6 +338,20 @@ impl TypeError {
             TypeError::UnresolvedSymbol { name, .. } => {
                 format!("unresolved symbol '{}'", name)
             }
+            TypeError::UnboundPatternName { name, .. } => {
+                format!(
+                    "unresolved symbol '{}': a bare name in a pattern is a value compared with the matched part",
+                    name
+                )
+            }
+            TypeError::CannotTakeApart { source, .. } => format!(
+                "cannot take apart {}: a pattern that moves a part takes the whole value, which must be an owned local or a temporary",
+                source
+            ),
+            TypeError::MoveInGuard { name, .. } => format!(
+                "cannot move binding '{}' in a guard: the guard may be false, and the next branches must still find the subject whole",
+                name
+            ),
             TypeError::ThisOutsideExtension { .. } => {
                 "'this' is only available in an extension function ('fun T.name()')".to_string()
             }

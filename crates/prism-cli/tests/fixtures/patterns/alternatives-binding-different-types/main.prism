@@ -1,0 +1,3 @@
+// expect: E4025
+enum V { I(Int), D(Double) }
+fun f(v: V): Int = when (v) { V.I(val x), V.D(val x) -> 1 }

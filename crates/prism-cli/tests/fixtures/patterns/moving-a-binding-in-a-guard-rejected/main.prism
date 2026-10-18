@@ -1,0 +1,4 @@
+// expect: E4017
+enum Msg { Text(String) }
+fun take(s: String): Bool = true
+fun f(m: Msg): Int = when (m) { Msg.Text(val s) if take(s) -> 1; else -> 2 }

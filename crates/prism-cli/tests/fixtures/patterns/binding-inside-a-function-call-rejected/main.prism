@@ -1,0 +1,3 @@
+// expect: E4024
+fun g(n: Int): Int = n
+fun f(x: Int): Int = when (x) { g(val n) -> n; else -> 0 }

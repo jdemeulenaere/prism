@@ -1,0 +1,4 @@
+// expect: E4017
+enum Msg { Text(String), Empty }
+struct Inbox { val last: Msg }
+fun f(i: Inbox): String = when (i.last) { Msg.Text(val s) -> s; Msg.Empty -> "" }

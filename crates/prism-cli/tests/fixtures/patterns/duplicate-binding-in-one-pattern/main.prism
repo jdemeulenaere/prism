@@ -1,0 +1,3 @@
+// expect: E4010
+enum P { Two(Int, Int) }
+fun f(p: P): Int = when (p) { P.Two(val a, val a) -> a }
