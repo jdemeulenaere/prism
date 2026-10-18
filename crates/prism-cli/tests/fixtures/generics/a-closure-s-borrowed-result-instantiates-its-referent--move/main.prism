@@ -1,0 +1,2 @@
+// expect: E4017
+fun g(): List<String> = listOf("a").map { it }

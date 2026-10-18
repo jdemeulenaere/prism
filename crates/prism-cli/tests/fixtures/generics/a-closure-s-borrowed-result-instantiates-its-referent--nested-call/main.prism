@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun <T> first(a: &T): &T = a
+
+fun main() {
+    println(
+        listOf(listOf(1, 2), listOf(3))
+            .map { row -> row.map { first(it) }.sumOf { it } }
+            .sumOf { it },
+    )
+}

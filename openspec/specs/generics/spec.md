@@ -106,6 +106,10 @@ A type argument, written or inferred, MUST NOT contain a reference outside a fun
 - **WHEN** `fun <T> id(x: T): T = x` is declared, and `fun f(a: Int): Int = id(&a)` and `fun g(s: String): String = id(&s)` are checked
 - **THEN** `f` typechecks successfully, with `id` instantiated with `Int` and `a` copied out of the borrow, and the type checker emits `E4017` for `g`
 
+#### Scenario: A closure's borrowed result instantiates its referent
+- **WHEN** `fun <T> first(a: &T): &T = a` is declared, and `fun main() { println(listOf(1, 2).map { it }.sumOf { it }) }`, `fun main() { println(listOf(listOf(1, 2), listOf(3)).map { row -> row.map { first(it) }.sumOf { it } }.sumOf { it }) }` and `fun g(): List<String> = listOf("a").map { it }` are checked
+- **THEN** both `main`s run, printing `3` and `6`: `map`'s result type parameter is instantiated with `Int`, the referent of each closure's `&Int` result, which is copied out of the borrow without checking the closure body again; and the type checker emits `E4017` for `g`, with help suggesting `it.clone()`
+
 #### Scenario: Borrows in a generic signature accepted
 - **WHEN** `fun <T> first(a: &T, b: &T): &T = a` is declared and `fun f(x: String, y: String): Int { val r = first(&x, &y); return 1 }` is checked
 - **THEN** the file passes `prism check`

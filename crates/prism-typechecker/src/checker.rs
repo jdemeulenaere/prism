@@ -181,6 +181,20 @@ enum Site {
     Argument { is_place: bool },
 }
 
+/// What the body of a closure is checked for, in [`TypeChecker::check_closure`].
+#[derive(Debug, Clone, Copy)]
+enum ClosureReturn<'t> {
+    /// The body is checked against the expected return type.
+    Expected(&'t Type),
+    /// The body's type is the closure's return type.
+    Inferred,
+    /// The body's type is the closure's return type, which solves a by-value type parameter of
+    /// a generic call. Type arguments are borrow-free, so a borrowed result is copied out of
+    /// its borrows, or rejected as a move out of a borrow (`E4017`), and the closure returns
+    /// the referent (`generics`, "Type Arguments Are Borrow-Free").
+    InferredReferent,
+}
+
 /// The outcome of [`TypeChecker::coerce`].
 #[derive(Debug, Clone, PartialEq)]
 enum Coercion {
@@ -3314,7 +3328,7 @@ impl TypeChecker {
                     *is_compose,
                     exp_params,
                     exp_escaping,
-                    Some(exp_ret),
+                    ClosureReturn::Expected(exp_ret),
                     expr.span,
                 );
                 return if nullable {
@@ -3407,7 +3421,8 @@ impl TypeChecker {
 
     /// Checks the closure `{ params -> body }` against a function type with parameter types
     /// `exp_params`, whose `escaping` flags `exp_escaping` its parameters take, and, when known,
-    /// return type `exp_ret`; without one the body's type is the closure's return type. A closure
+    /// return type `exp_ret`; without one the body's type is the closure's return type, or its
+    /// referent for [`ClosureReturn::InferredReferent`]. A closure
     /// without a header (`has_header` false) expecting one parameter gets the implicit parameter
     /// `it` (D1 of `implicit-it`), decided here from the expected type alone.
     #[allow(clippy::too_many_arguments)]
@@ -3419,7 +3434,7 @@ impl TypeChecker {
         is_compose: bool,
         exp_params: &[Type],
         exp_escaping: &[bool],
-        exp_ret: Option<&Type>,
+        exp_ret: ClosureReturn,
         span: Span,
     ) -> ExpressionId {
         let implicit = !has_header && exp_params.len() == 1;
@@ -3456,7 +3471,11 @@ impl TypeChecker {
         } else {
             Some(MissingImplicitParameter::NoExpectedParameters(None))
         };
-        let prev = self.enter_closure(is_compose, exp_ret.cloned(), missing);
+        let expected_return = match exp_ret {
+            ClosureReturn::Expected(ret) => Some(ret),
+            ClosureReturn::Inferred | ClosureReturn::InferredReferent => None,
+        };
+        let prev = self.enter_closure(is_compose, expected_return.cloned(), missing);
         let mut parameters = Vec::new();
         for (index, ((name, parameter_span, kind), param_ty)) in
             declared.into_iter().zip(exp_params.iter()).enumerate()
@@ -3477,8 +3496,16 @@ impl TypeChecker {
 
         // The body's value is what the closure returns.
         let body_id = self.with_origin(Origin::Return, |c| {
-            c.with_consuming(true, |c| c.check_block(body, exp_ret))
+            c.with_consuming(true, |c| c.check_block(body, expected_return))
         });
+        let body_id = match (exp_ret, &body.tail) {
+            (ClosureReturn::InferredReferent, Some(tail))
+                if matches!(self.ty(body_id), Type::Reference { .. }) =>
+            {
+                self.copy_result_out_of_borrow(body_id, tail)
+            }
+            _ => body_id,
+        };
         let captures = self.exit_closure(prev);
         let ty = Type::Fn {
             is_compose,
@@ -3496,6 +3523,38 @@ impl TypeChecker {
             ownership_reason: None,
         };
         self.add(kind, ty, span)
+    }
+
+    /// Fits the borrowed tail `tail` of the closure body `block_id` to its referent, copying it
+    /// out of its borrows when the referent is `Copy` and reporting a move out of a borrow
+    /// (`E4017`) otherwise, as a borrowed argument of a by-value type parameter is (`generics`,
+    /// "Type Arguments Are Borrow-Free"). The body is not checked again: only its tail's node is
+    /// wrapped. The block takes the referent's type either way, so the type parameter it solves
+    /// is the referent and an error is reported once.
+    fn copy_result_out_of_borrow(&mut self, block_id: ExpressionId, tail: &Expr) -> ExpressionId {
+        let ExpressionKind::Block {
+            statements,
+            tail: Some(tail_id),
+            close_brace,
+        } = self.builder.kind(block_id).clone()
+        else {
+            return block_id;
+        };
+        let mut referent = self.ty(tail_id);
+        while let Type::Reference { inner, .. } = referent {
+            referent = *inner;
+        }
+        let fitted = self.with_origin(Origin::Return, |c| {
+            c.fit(tail, tail_id, &referent, Site::Value, false)
+        });
+        let kind = ExpressionKind::Block {
+            statements,
+            tail: Some(fitted),
+            close_brace,
+        };
+        let span = self.builder.span_of(block_id);
+        self.builder.replace(block_id, kind, referent, span);
+        block_id
     }
 
     /// Enters the body of a closure: a scope, a compose context, a fresh set of open loops (a
@@ -6211,6 +6270,13 @@ impl TypeChecker {
         let params: Vec<Type> = params.iter().map(|p| p.substitute(&partial)).collect();
         let infer_return = state.unknowns.mentions_inexact(&ret);
         let expected_return = (!infer_return).then(|| ret.substitute(&partial));
+        let closure_return = match &expected_return {
+            Some(ret) => ClosureReturn::Expected(ret),
+            // A by-value type parameter takes the referent of a borrowed result, as `match_lower`
+            // takes the referent of a borrowed argument.
+            None if matches!(ret, Type::Parameter(_)) => ClosureReturn::InferredReferent,
+            None => ClosureReturn::Inferred,
+        };
         let node = self.check_closure(
             written,
             arrow.is_some(),
@@ -6218,7 +6284,7 @@ impl TypeChecker {
             is_compose,
             &params,
             &escaping,
-            expected_return.as_ref(),
+            closure_return,
             expr.span,
         );
         if infer_return {

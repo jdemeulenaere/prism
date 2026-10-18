@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+fun main() {
+    println(listOf(1, 2).map { it }.sumOf { it })
+}
