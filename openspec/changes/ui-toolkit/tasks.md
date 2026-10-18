@@ -59,15 +59,15 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 5. Text measurement and layout (D11, D12)
 
-- [ ] 5.1 Add `src/text.rs`: `TextMeasurer`, `FixedAdvanceMetrics` (advance `font_size / 2`, line height `font_size * 5 / 4`, 16 for an unspecified size), and the line breaker of D12 (newlines, greedy breaks at spaces, overlong words kept whole) returning line ranges and widths into a reused buffer. Verify with unit tests: wrapping at an exact width, a trailing space, an overlong word, an empty text with one line, and newlines.
-- [ ] 5.2 Add `src/layout.rs`:
+- [x] 5.1 Add `src/text.rs`: `TextMeasurer`, `FixedAdvanceMetrics` (advance `font_size / 2`, line height `font_size * 5 / 4`, 16 for an unspecified size), and the line breaker of D12 (newlines, greedy breaks at spaces, overlong words kept whole) returning line ranges and widths into a reused buffer. Verify with unit tests: wrapping at an exact width, a trailing space, an overlong word, an empty text with one line, and newlines.
+- [x] 5.2 Add `src/layout.rs`:
   - `Constraints` and `measure(node, constraints)`, folding the chain as D11's first table says (padding, sizes, minimum sizes, fills), recording the bounds at each drawing and input element, then the kind's policy with its result clamped into what remains;
   - the policies of every kind, the arrangements and the alignments;
   - parent data: weights with `fill`, the remainder going to the last weighted child, and per-child `align`, the first in a chain counting;
   - placement relative to the parent, and the cache, reusing the last size of a clean node measured with its last constraints.
 
   Verify with Rust unit tests through the tree builder, one per element and per policy, for the numbers of the `ui` scenarios "Column stacks children", "Space between two texts", "Centred content in a box", "A weighted text fills a row", "Aligning one child", "Padding around a column", "A size larger than the window is clamped", "Padding before or after a size", "Minimum and fractional sizes", "Chained paddings add up" and "A button's size and label position".
-- [ ] 5.3 Add the Rust test of "One changed text is measured alone", with a measurer that counts the characters it measures.
+- [x] 5.3 Add the Rust test of "One changed text is measured alone", with a measurer that counts the characters it measures.
 
 ## 6. Display list and dumps (D9, D13, D16)
 

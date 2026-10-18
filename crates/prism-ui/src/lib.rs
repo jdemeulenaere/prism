@@ -30,11 +30,13 @@ pub mod error;
 pub mod geometry;
 pub mod handle;
 pub mod handlers;
+pub mod layout;
 pub mod modifier;
 pub mod node;
 pub mod properties;
 pub mod runtime;
 pub mod test_support;
+pub mod text;
 pub mod thread;
 pub mod tree;
 
