@@ -196,13 +196,20 @@ pub enum ExprKind {
     /// A closure `{ a, b -> ... }`, or `{ ... }` with no parameters. The body is
     /// always a block, whatever the number of statements.
     Closure {
-        params: Vec<String>,
+        params: Vec<ClosureParameter>,
         body: Block,
     },
     Index {
         target: Box<Expr>,
         index: Box<Expr>,
     },
+}
+
+/// A parameter of a closure `{ a, b -> ... }`: its name and where it is declared.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClosureParameter {
+    pub name: String,
+    pub span: Span,
 }
 
 /// A complete expression node with its source span.
@@ -280,7 +287,8 @@ impl fmt::Display for Expr {
             ExprKind::Closure { params, body } => {
                 write!(f, "{{ ")?;
                 if !params.is_empty() {
-                    write!(f, "{} -> ", params.join(", "))?;
+                    let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                    write!(f, "{} -> ", names.join(", "))?;
                 }
                 write!(f, "{} }}", body.summary())
             }

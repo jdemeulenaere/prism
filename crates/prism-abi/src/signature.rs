@@ -642,7 +642,7 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
             hasher.write_u8(23);
             hasher.write_u64(params.len() as u64);
             for p in params {
-                hasher.write_str(p);
+                hasher.write_str(&p.name);
             }
             hash_block_span_free(body, hasher);
         }

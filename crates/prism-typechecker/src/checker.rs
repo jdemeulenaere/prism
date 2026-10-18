@@ -2022,13 +2022,13 @@ impl TypeChecker {
 
                 let prev = self.enter_closure(*is_compose, Some((**exp_ret).clone()));
                 let mut parameters = Vec::new();
-                for (name, param_ty) in params.iter().zip(exp_params.iter()) {
+                for (parameter, param_ty) in params.iter().zip(exp_params.iter()) {
                     let sym = self.bind_local(
-                        name,
+                        &parameter.name,
                         param_ty.clone(),
                         Mutability::Val,
                         LocalKind::ClosureParameter,
-                        expr.span,
+                        parameter.span,
                     );
                     parameters.push(Self::local_of(&sym).expect("a bound local"));
                     self.define_local(sym);
@@ -2394,13 +2394,14 @@ impl TypeChecker {
                 // checked for other errors.
                 let mut param_types = Vec::new();
                 let mut parameters = Vec::new();
-                for name in params {
+                for parameter in params {
+                    let name = &parameter.name;
                     let sym = self.bind_local(
                         name,
                         Type::Error,
                         Mutability::Val,
                         LocalKind::ClosureParameter,
-                        expr.span,
+                        parameter.span,
                     );
                     parameters.push(Self::local_of(&sym).expect("a bound local"));
                     match self.env.define(sym) {
@@ -5610,7 +5611,10 @@ mod tests {
     fn test_closure_checking_against_fn_type() {
         let mut checker = TypeChecker::new(None, "<test>");
         let closure = expr(ExprKind::Closure {
-            params: vec!["n".to_string()],
+            params: vec![prism_ast::ClosureParameter {
+                name: "n".to_string(),
+                span: Span::dummy(),
+            }],
             body: Block {
                 statements: Vec::new(),
                 tail: Some(Box::new(expr(ExprKind::Binary {

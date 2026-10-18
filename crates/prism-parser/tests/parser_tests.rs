@@ -276,7 +276,7 @@ mod tests {
                         }
                         assert_eq!(args.len(), 1);
                         if let ExprKind::Closure { params, body } = &args[0].value.kind {
-                            assert_eq!(params, &vec!["item".to_string()]);
+                            assert_eq!(names(params), vec!["item"]);
                             assert_eq!(items(body).len(), 2);
                         } else {
                             panic!("Expected Closure in trailing lambda");
@@ -807,7 +807,7 @@ mod tests {
         let ExprKind::Closure { params, .. } = &args[0].value.kind else {
             panic!("Expected closure");
         };
-        assert_eq!(params, &vec!["compose".to_string()]);
+        assert_eq!(names(params), vec!["compose"]);
     }
 
     #[test]
@@ -964,6 +964,11 @@ mod tests {
 
     // --- harden-parser-grammar: braces, declarations, function types, newlines ---
 
+    /// The names of closure parameters.
+    fn names(params: &[ClosureParameter]) -> Vec<&str> {
+        params.iter().map(|p| p.name.as_str()).collect()
+    }
+
     /// A block's items in source order as statements, the tail last.
     fn items(b: &Block) -> Vec<Statement> {
         let mut items = b.statements.clone();
@@ -1086,7 +1091,9 @@ mod tests {
         let ExprKind::Closure { params, body } = &call_args(&e)[0].value.kind else {
             panic!("Expected closure");
         };
-        assert_eq!(params, &vec!["x".to_string()]);
+        assert_eq!(names(params), vec!["x"]);
+        // A parameter's span is its name.
+        assert_eq!((params[0].span.line, params[0].span.column), (1, 17));
         assert_eq!(items(body).len(), 1);
         assert_eq!(items(body)[0].to_string(), "(x + 1)");
     }

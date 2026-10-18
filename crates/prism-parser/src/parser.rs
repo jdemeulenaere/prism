@@ -1252,8 +1252,8 @@ impl Parser {
 
         if has_header {
             while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
-                let (param, _) = self.expect_ident()?;
-                params.push(param);
+                let (name, span) = self.expect_ident()?;
+                params.push(ClosureParameter { name, span });
                 if self.peek_kind() == &TokenKind::Comma {
                     self.bump();
                 } else {
