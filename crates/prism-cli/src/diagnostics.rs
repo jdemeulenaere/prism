@@ -169,9 +169,12 @@ pub fn format_resolve_error(err: &ResolveError) -> String {
             out.push_str(&format!("error[{}]: IO error\n", code));
             out.push_str(&format!("  --> {}: {}\n", display_path(path), message));
         }
-        ResolveError::Parse { path, error } => {
-            let source = std::fs::read_to_string(path).ok();
-            out.push_str(&format_parse_error(path, source.as_deref(), error));
+        ResolveError::Parse {
+            path,
+            source,
+            error,
+        } => {
+            out.push_str(&format_parse_error(path, Some(source), error));
         }
     }
 

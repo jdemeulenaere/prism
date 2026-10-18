@@ -79,6 +79,7 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<PathBuf>, ResolveError> {
         })?;
         let ast = prism_parser::parse_source(&content).map_err(|e| ResolveError::Parse {
             path: file.clone(),
+            source: content.clone(),
             error: e,
         })?;
 

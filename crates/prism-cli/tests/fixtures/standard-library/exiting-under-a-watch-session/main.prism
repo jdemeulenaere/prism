@@ -1,0 +1,10 @@
+// expect: ok
+// run: 4
+// watch: edits
+import /prism/system
+
+fun main() {
+    println(1)
+    exitProcess(3)
+    println("never")
+}

@@ -183,3 +183,40 @@ fn a_diagnostic_in_a_library_file_names_its_module_path() {
     assert!(rendered.contains("--> prism/test.prism:3:"), "{}", rendered);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// package-resolution: "A diagnostic in a library file", for a syntax error: the diagnostic
+/// shows the line of the embedded source, which is not on disk.
+#[test]
+fn a_syntax_error_in_a_library_file_shows_its_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "prism_library_syntax_error_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("main.prism"),
+        "import /prism/test\nfun main() {}\n",
+    )
+    .unwrap();
+    let options = prism_cli::CheckOptions {
+        library: std::sync::Arc::new(Library::with_modules(vec![(
+            "prism/test".to_string(),
+            "package prism\n// Gives a number.\npublic fun number(): Int = )\n".to_string(),
+        )])),
+        ..prism_cli::CheckOptions::default()
+    };
+    let error = prism_cli::check_path_with(&dir.join("main.prism"), &options)
+        .expect_err("the library module does not parse");
+    let rendered = error.render();
+    assert!(rendered.contains("error[E2001]"), "{}", rendered);
+    assert!(rendered.contains("--> prism/test.prism:3:"), "{}", rendered);
+    assert!(
+        rendered.contains("public fun number(): Int = )"),
+        "the snippet shows the embedded source:\n{}",
+        rendered
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

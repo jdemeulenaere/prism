@@ -520,9 +520,13 @@ impl WatchSession {
                 }
                 self.watched.sort();
                 return Err(match error {
-                    // The source shown is what the store read, which may be an overlay's.
-                    ResolveError::Parse { path, error } => WorkspaceError::Parse {
-                        source: self.store.current_content(&path).unwrap_or_default(),
+                    // The source shown is what the store parsed, which may be an overlay's.
+                    ResolveError::Parse {
+                        path,
+                        source,
+                        error,
+                    } => WorkspaceError::Parse {
+                        source,
                         path,
                         error,
                     },

@@ -137,6 +137,10 @@ A workspace file declaring anything `external` or `intrinsic` MUST be rejected i
 - **WHEN** a program calls `exitProcess(258)`
 - **THEN** its exit status is 2
 
+#### Scenario: Exiting under a watch session
+- **WHEN** `prism run --watch --edits edits main.prism` runs `import /prism/system` and `fun main() { println(1); exitProcess(3); println("never") }`, with an edit script whose only step is `after exit` and changes the program to print `2` and exit with status 4
+- **THEN** stdout holds `1` and `2`, each on its own line, stderr holds `watch: main returned with status 3; waiting for changes`, `watch: running main again` and `watch: main returned with status 4; waiting for changes`, and the session's exit status is 4
+
 ### Requirement: The Library Passes Its Own Checks
 Every library module MUST pass `prism check` with no diagnostic and `prism fmt --check`, and every external MUST match the runtime's function table. The prelude modules MUST export pairwise distinct names. The modules the executable contains MUST be exactly the `.prism` files of the library's source directory.
 

@@ -51,8 +51,14 @@ pub enum ResolveError {
     ReservedPackage { file: PathBuf, package: String },
     /// E1000: IO error during resolution.
     Io { path: PathBuf, message: String },
-    /// E2xxx: Lexer or parser error in a file; the code comes from `error`.
-    Parse { path: PathBuf, error: ParseError },
+    /// E2xxx: Lexer or parser error in a file; the code comes from `error`. `source` is the
+    /// text that was parsed, which diagnostics show: a library module's embedded source or a
+    /// watch session's overlay is not what the disk holds.
+    Parse {
+        path: PathBuf,
+        source: String,
+        error: ParseError,
+    },
 }
 
 impl ResolveError {
@@ -218,7 +224,7 @@ impl fmt::Display for ResolveError {
                     message
                 )
             }
-            ResolveError::Parse { path, error } => {
+            ResolveError::Parse { path, error, .. } => {
                 write!(
                     f,
                     "{}: Parse error in '{}' at {}:{}: {}",

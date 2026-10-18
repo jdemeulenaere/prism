@@ -436,6 +436,7 @@ impl SourceStore {
             self.entries.remove(path);
             ResolveError::Parse {
                 path: path.to_path_buf(),
+                source: content.clone(),
                 error: e,
             }
         })?;
@@ -473,6 +474,7 @@ fn library_node(
     let source_file =
         parse_library_module(module, &source, library).map_err(|error| ResolveError::Parse {
             path: key.to_path_buf(),
+            source: source.clone(),
             error,
         })?;
     let package_dir: Vec<&str> = module.split('/').collect();

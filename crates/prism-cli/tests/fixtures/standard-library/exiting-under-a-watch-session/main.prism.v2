@@ -1,0 +1,7 @@
+import /prism/system
+
+fun main() {
+    println(2)
+    exitProcess(4)
+    println("never")
+}
