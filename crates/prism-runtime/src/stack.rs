@@ -57,8 +57,17 @@ pub fn clear_stack_limit() {
 
 /// Asks the program thread to take the cold path of its next stack check, where it applies the
 /// pending reload (D3 of `hot-reload`). Called by [`crate::reload::request`].
+///
+/// Only a run's real limit is replaced: outside a run, and once `main` returned while the run
+/// ends (its top-level values are dropped by glue, which checks the stack too), the limit stays
+/// zero, so a reload requested then is never applied to a run that is over. A run that starts
+/// later raises the interrupt itself ([`set_stack_limit`]).
 pub fn interrupt() {
-    STACK_LIMIT.store(INTERRUPT, Ordering::SeqCst);
+    let real = REAL_LIMIT.load(Ordering::SeqCst);
+    if real != 0 {
+        // Fails when the run ended or the interrupt is raised already, which is as wanted.
+        let _ = STACK_LIMIT.compare_exchange(real, INTERRUPT, Ordering::SeqCst, Ordering::SeqCst);
+    }
 }
 
 /// Restores the real limit if the limit holds the interrupt sentinel, returning whether it did.
@@ -99,6 +108,23 @@ mod tests {
         );
         clear_stack_limit();
         assert_eq!(STACK_LIMIT.load(Ordering::Relaxed), 0);
+    }
+
+    /// A reload requested outside a run, or after `main` returned, leaves the limit alone; a run
+    /// that starts afterwards raises the interrupt itself.
+    #[test]
+    fn a_request_outside_a_run_waits_for_the_next_run() {
+        let _lock = crate::test_lock();
+        clear_stack_limit();
+        crate::reload::request(crate::reload::PendingReload::new(Default::default));
+        assert_eq!(STACK_LIMIT.load(Ordering::SeqCst), 0);
+        set_stack_limit(0x1000_0000, 8 * 1024 * 1024);
+        assert_eq!(STACK_LIMIT.load(Ordering::SeqCst), INTERRUPT);
+        let real = REAL_LIMIT.load(Ordering::SeqCst);
+        assert_eq!(prism_rt_stack_check_failed(real + 64), 0);
+        assert!(crate::reload::withdraw().is_none(), "the run applied it");
+        assert_eq!(STACK_LIMIT.load(Ordering::SeqCst), real);
+        clear_stack_limit();
     }
 
     /// An interrupt with no pending reload lets the function continue and restores the limit;

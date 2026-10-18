@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn a_request_replaces_an_earlier_one() {
         let _lock = crate::test_lock();
-        crate::stack::clear_stack_limit();
+        crate::stack::set_stack_limit(0x1000_0000, 8 * 1024 * 1024);
         assert!(request(applying(&["a"])).is_none());
         let replaced = request(applying(&["b"]));
         assert!(replaced.is_some());

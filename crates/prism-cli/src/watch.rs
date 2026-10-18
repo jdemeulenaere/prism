@@ -602,8 +602,11 @@ impl WatchSession {
     pub fn run_script(&mut self, script: EditScript) -> i32 {
         self.install_stop_handler();
         self.install_line_hook();
-        self.start();
         let mut groups = script.groups.into_iter().peekable();
+        // The line a step waits for is set before the program can run past it: before it
+        // starts, and before it continues from the line of the step before.
+        self.arm(groups.peek());
+        self.start();
         loop {
             let Some(group) = groups.peek() else {
                 if !self.running {
@@ -621,12 +624,12 @@ impl WatchSession {
                         );
                         return 1;
                     }
-                    self.stop_at_line(line);
                     match self.next_event() {
                         Some(SessionEvent::LineWritten(_)) => {
                             let group = groups.next().expect("a group is next");
                             let changed = self.apply_edits(group);
                             self.reload(&changed, Instant::now());
+                            self.arm(groups.peek());
                             self.resume();
                         }
                         Some(SessionEvent::MainReturned(status)) => {
@@ -644,9 +647,21 @@ impl WatchSession {
                     }
                     let group = groups.next().expect("a group is next");
                     let changed = self.apply_edits(group);
+                    self.arm(groups.peek());
                     self.reload(&changed, Instant::now());
                 }
             }
+        }
+    }
+
+    /// Stops the program at the line `next` waits for, if it is an `after line` step.
+    fn arm(&self, next: Option<&EditGroup>) {
+        if let Some(EditGroup {
+            trigger: Trigger::Line(line),
+            ..
+        }) = next
+        {
+            self.stop_at_line(*line);
         }
     }
 
