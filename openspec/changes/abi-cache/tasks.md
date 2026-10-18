@@ -1,0 +1,35 @@
+# Tasks
+
+The cache scenarios are integration tests in `crates/prism-cli/tests/cache_tests.rs` (D11): each builds a workspace and a cache in temporary directories, runs the `prism` binary with `PRISM_CACHE` set, edits files between runs and compares the `--explain-cache` lines. Each test is named after the scenario it protects (snake case of its heading). The ABI scenarios are tests in `crates/prism-abi/tests/abi_scenario_tests.rs` running real `.prism` source.
+
+## 1. BLAKE3 and the interface hash (D1, D2)
+
+- [ ] 1.1 Add `blake3` to `prism-abi` and `[profile.dev.package.blake3] opt-level = 3` to the workspace `Cargo.toml`. Make `DeterministicHasher` wrap `blake3::Hasher` with its current `write_*` API, and have `finish` return a new `ContentHash([u8; 32])` (with `to_hex`, `Display` as hex, and `from_hex`). Make `generic_body_hash` and `abi_hash` `ContentHash`es, add `interface_hash` (the symbol walk without Monomorphization Hashes) and compute the ABI hash from it and the body hashes per D2. Rename `abi_hash_hex` users as needed, add `interface_hash_hex`, and update the `FileAbi` built in a `prism-typechecker` test. Verify with tests for "Changing a generic body keeps the interface hash" and "Changing a signature changes the interface hash", and that `cargo test -p prism-abi -p prism-typechecker` passes with every existing equality and inequality unchanged.
+- [ ] 1.2 In `prism-cli`, print the 64-digit hashes and the interface hash in `prism abi` (`Interface Hash: 0x...`, after `ABI Hash:`). Verify with a CLI test for "Hashes printed in full" and "Interface hash printed by `prism abi`" (both commands, `0x` and 64 lowercase hex digits), and that `cargo test -p prism-cli` passes.
+
+## 2. The cache store (D3, D5, D6, D7, D8)
+
+- [ ] 2.1 In `prism-resolver`, keep the parsed source text in `SourceNode` (`source: String`). Verify that `cargo test -p prism-resolver` passes.
+- [ ] 2.2 Add `crates/prism-cli/src/cache.rs`: `BuildCache` opened from a directory and a compiler identity, or from the environment (`PRISM_CACHE`, `off`, the platform default per D3, the identity per D5); `CACHEDIR.TAG`; entry paths `v1/<2 hex>/<key>`; `read_check`, `write_check`, `has_instance` and `record_instance` with the D6 format, validation and checksum, and D8's temporary file and rename. Every IO error is a miss or a skipped write (D7). Verify with unit tests: an entry round-trips; a truncated, garbage, wrong-version, wrong-kind or wrong-key entry is a miss; a cache directory that is a regular file reads and writes nothing without error; the default location for each platform's environment ("Default cache location", with the environment injected); two identities give different keys.
+
+## 3. Compilation avoidance in `prism check` (D2, D4, D9, D10, D11)
+
+- [ ] 3.1 In `workspace.rs`, add `CheckOptions { cache: Option<BuildCache> }` and `check_path_with`, with `check_path` uncached. Per file in check order: compute the check key (D5); on a hit skip Phase 2; on a miss run it and, if it passes, collect the instance requests from its elaborated MIR (D9) and write the entry. Then look up or record each instance. Record the outcomes on `CheckedFile` (`CacheOutcome::{Checked, Reused}` and the instance outcomes). Verify with a library test that a reused file and an uncached run give equal reports apart from the outcomes, and that `cargo test --workspace` passes, the fixture harness included, without touching a user cache.
+- [ ] 3.2 In `main.rs`, accept `--no-cache` and `--explain-cache` before or after the path of `check`, open the cache from the environment unless `--no-cache`, and print the explanation of the `build-cache` spec after the report. Document both flags and `PRISM_CACHE` in the usage text. Keep the edit local to the `check` command. Verify with `prism check --explain-cache examples/...` run twice by hand.
+- [ ] 3.3 Add `crates/prism-cli/tests/cache_tests.rs` with a test per scenario of "Compilation Avoidance via Interface Hashes", "Instantiation Records for Generic Body Changes" and the `build-cache` spec that a CLI run can show: modifying a non-generic function body, modifying a public function signature, an incompatible signature change reported in the importer, modifying a private helper function, a failing file checked again, cached and uncached checks agree, changing a generic function body, polymorphic calls not recorded, cache directory override, checking writing nothing in the workspace, the cache shared across checkouts, an unchanged workspace reusing every file, a comment-only edit, a corrupt entry being a miss, an unwritable cache directory, concurrent checks sharing a cache, checking without the cache (both `--no-cache` and `PRISM_CACHE=off`), and explaining a warm check. "A different compiler re-checks everything" is a unit test of 2.2 with two identities. Verify that `cargo test -p prism-cli --test cache_tests` passes, and that each test fails if the cache is bypassed or keyed by ABI hashes instead of interface hashes, by trying both once.
+
+## 4. Integration
+
+- [ ] 4.1 Log the decisions in `docs/decisions-for-review.md` (done at proposal time; update if a decision changed while implementing). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` on every file under `examples/` (only `examples/demo/ui` may fail), run twice with `--explain-cache` to see the second run reuse every file, and `openspec validate --all --strict`. Verify all pass.
+
+## Workflow follow-up
+
+- On archive, promote D1, D2, D5 and D9 into `compilation-and-abi`'s `## Design Rationale` (replacing "The hash algorithm is not final"), and D3, D4, D6 to D8 and D10 into the new `build-cache` spec's. Update `compilation-and-abi`'s Purpose, which still calls the `.abi` cache and compilation avoidance planned.
+- In `docs/architecture.md` section 1, remove "Compilation Avoidance via ABI Hashes" and "Open decision: ABI hash algorithm", and narrow "Re-monomorphization on Generic Body Change" to the instantiation itself, pointing at the instance records.
+- In `ROADMAP.md`, tick item 12 and the Phase 2 items "Decide the authoritative ABI hash algorithm", "`.abi` cache and compilation avoidance" (noting that `.abi` entries are deferred) and "Incremental compilation verification", and add as unchecked items, each naming `abi-cache`:
+  - `.abi` and import-list entries keyed by content, so a warm run neither parses nor extracts an unchanged file (D4), which completes "Identical inputs produce cache hit";
+  - per-symbol fingerprints, re-checking an importer only when a symbol it uses changes (D2);
+  - cache eviction by last use and a `prism cache clean` command (risk);
+  - the target triple in object-code keys, for `codegen-core` (D5);
+  - `monomorphization` fills or replaces the instance records and decides what their key covers (D9);
+  - the open question on naming the module path in the hermetic builds invariant.
