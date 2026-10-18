@@ -405,9 +405,6 @@ pub struct TypeChecker {
     /// The type parameters in scope: those of the generic declaration whose signature, fields or
     /// body is being registered or checked (D12 of `generics`).
     type_parameter_scope: Vec<TypeParameter>,
-    /// The type a call is checked against, set just before the call is inferred and taken by
-    /// [`Self::infer_call_expr`], which uses it to infer type arguments (D8 of `generics`).
-    call_expectation: Option<Type>,
     /// Set while the callee of a call is inferred, where a generic function or variant
     /// constructor may be named; anywhere else it is a value whose type arguments nothing
     /// infers (`E4013`). Taken by the first name typed.
@@ -453,7 +450,6 @@ impl TypeChecker {
             seen_nominals: HashMap::new(),
             default_inputs: None,
             type_parameter_scope: Vec::new(),
-            call_expectation: None,
             generic_callee: false,
             errors: Vec::new(),
             in_compose_stack: vec![false],
@@ -2564,10 +2560,7 @@ impl TypeChecker {
         if let ExprKind::Call { .. } = &expr.kind {
             let consuming = self.parent_consuming;
             let inferred = self.with_origin(Origin::Value, |c| {
-                c.call_expectation = Some(expected.clone());
-                let id = c.with_consuming(consuming, |c| c.infer_expr(expr));
-                c.call_expectation = None;
-                id
+                c.with_consuming(consuming, |c| c.infer_expr_expecting(expr, Some(expected)))
             });
             return self.fit(expr, inferred, expected, Site::Value, false);
         }
@@ -2748,12 +2741,19 @@ impl TypeChecker {
     /// Infers the type of an expression in inference mode, returning its node. A consumed place
     /// is wrapped in a move or a copy (D5 of `typed-tree`).
     pub fn infer_expr(&mut self, expr: &Expr) -> ExpressionId {
+        self.infer_expr_expecting(expr, None)
+    }
+
+    /// Infers `expr` as [`Self::infer_expr`] does. A call uses `expected`, the type it is checked
+    /// against, to infer the type arguments of a generic callee (D8 of `generics`); any other
+    /// expression ignores it.
+    fn infer_expr_expecting(&mut self, expr: &Expr, expected: Option<&Type>) -> ExpressionId {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.infer_expr(&field);
         }
         let consuming = std::mem::replace(&mut self.consuming, false);
         let saved = std::mem::replace(&mut self.parent_consuming, consuming);
-        let id = self.infer_expr_kind(expr);
+        let id = self.infer_expr_kind(expr, expected);
         self.parent_consuming = saved;
         if consuming {
             let ty = self.ty(id);
@@ -2763,7 +2763,7 @@ impl TypeChecker {
         id
     }
 
-    fn infer_expr_kind(&mut self, expr: &Expr) -> ExpressionId {
+    fn infer_expr_kind(&mut self, expr: &Expr, expected: Option<&Type>) -> ExpressionId {
         match &expr.kind {
             ExprKind::Literal(lit) => {
                 let ty = match lit {
@@ -2851,10 +2851,7 @@ impl TypeChecker {
                 callee,
                 type_arguments,
                 args,
-            } => {
-                let expected = self.call_expectation.take();
-                self.infer_call_expr(callee, type_arguments, args, expr.span, expected)
-            }
+            } => self.infer_call_expr(callee, type_arguments, args, expr.span, expected.cloned()),
 
             ExprKind::MemberAccess {
                 target,
