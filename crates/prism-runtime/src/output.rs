@@ -8,7 +8,8 @@
 use crate::allocation::{finish_tracking, start_tracking, ALLOCATION_CHECK_EXIT_STATUS};
 use crate::double::format_double;
 use std::io::{IsTerminal, Write};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// The size at which buffered output is written out.
 pub const OUTPUT_BUFFER_SIZE: usize = 8 * 1024;
@@ -30,6 +31,49 @@ static STATE: Mutex<State> = Mutex::new(State {
     arguments: Vec::new(),
 });
 
+/// What an edit script runs at each newline the program writes (D16 of `hot-reload`), with the
+/// number of newlines written so far in the current run.
+pub type LineHook = Arc<dyn Fn(u64) + Send + Sync>;
+
+static LINE_HOOK: Mutex<Option<LineHook>> = Mutex::new(None);
+/// Whether a line hook is installed, so that output without one counts no newlines.
+static HOOKED: AtomicBool = AtomicBool::new(false);
+/// The newlines written in the current run while a hook is installed.
+static LINES: AtomicU64 = AtomicU64::new(0);
+
+/// Installs `hook`, called with the newline count of the current run after each newline the
+/// program writes, outside the output lock and after the output is flushed, so that it can stop
+/// the program there; `None` removes it.
+pub fn set_line_hook(hook: Option<LineHook>) {
+    let mut installed = LINE_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    HOOKED.store(hook.is_some(), Ordering::SeqCst);
+    *installed = hook;
+}
+
+/// Calls the line hook once per newline of `text`, if one is installed.
+fn run_line_hook(text: &[u8]) {
+    if !HOOKED.load(Ordering::Relaxed) {
+        return;
+    }
+    let newlines = text.iter().filter(|byte| **byte == b'\n').count();
+    if newlines == 0 {
+        return;
+    }
+    flush();
+    let hook = LINE_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    for _ in 0..newlines {
+        let count = LINES.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(hook) = &hook {
+            hook(count);
+        }
+    }
+}
+
 fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
     // A poisoned lock only means an earlier panic of the host; the buffer is still usable.
     let mut state = STATE
@@ -48,6 +92,7 @@ pub fn start(arguments: Vec<String>, check_allocations: bool) {
         state.line_buffered = std::io::stdout().is_terminal();
         state.arguments = arguments;
     });
+    LINES.store(0, Ordering::SeqCst);
     start_tracking(check_allocations);
 }
 
@@ -93,6 +138,7 @@ pub(crate) fn append(text: &[u8]) {
             write_out(state);
         }
     });
+    run_line_hook(text);
 }
 
 /// Takes the buffered output without writing it, for tests of what a function prints.
@@ -169,6 +215,27 @@ mod tests {
     fn booleans_are_words() {
         assert_eq!(format_bool(true), "true");
         assert_eq!(format_bool(false), "false");
+    }
+
+    #[test]
+    fn the_line_hook_counts_the_newlines_of_a_run() {
+        let _lock = crate::test_lock();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        start(Vec::new(), false);
+        set_line_hook(Some(Arc::new(move |count| {
+            recorded.lock().unwrap().push(count)
+        })));
+        prism_rt_print_int(1);
+        prism_rt_print_newline();
+        prism_rt_print_newline();
+        append(b"a\nb\n");
+        set_line_hook(None);
+        prism_rt_print_newline();
+        assert_eq!(*seen.lock().unwrap(), [1, 2, 3, 4]);
+        start(Vec::new(), false);
+        assert_eq!(LINES.load(Ordering::SeqCst), 0);
+        take_output();
     }
 
     #[test]

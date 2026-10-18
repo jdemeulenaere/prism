@@ -16,7 +16,9 @@
 //! [`PANIC_EXIT_STATUS`], without unwinding (D12).
 //!
 //! Generated code also reads one runtime static, [`STACK_LIMIT`], to detect a stack overflow
-//! before it reaches the guard page.
+//! before it reaches the guard page. The same check is where the program thread applies a
+//! reload a watch session prepared ([`reload`], D3 of `hot-reload`): the session interrupts the
+//! limit, and the check's cold path, [`prism_rt_stack_check_failed`], applies the reload.
 //!
 //! This crate depends on nothing, so Tier 2 can link it into native executables without
 //! Cranelift (D1).
@@ -27,6 +29,7 @@ mod functions;
 mod list;
 mod output;
 mod panic;
+pub mod reload;
 mod stack;
 mod string;
 
@@ -47,14 +50,17 @@ pub use list::{
 };
 pub use output::{
     finish, format_bool, format_char, format_int, prism_rt_print_bool, prism_rt_print_char,
-    prism_rt_print_double, prism_rt_print_int, prism_rt_print_newline, start, OUTPUT_BUFFER_SIZE,
+    prism_rt_print_double, prism_rt_print_int, prism_rt_print_newline, set_line_hook, start,
+    LineHook, OUTPUT_BUFFER_SIZE,
 };
 pub use panic::{
     panic_message, panic_without_location, prism_rt_double_remainder, prism_rt_panic,
-    prism_rt_panic_without_location, prism_rt_unlinked_function, PanicKind, PANIC_EXIT_STATUS,
+    prism_rt_panic_without_location, prism_rt_unlinked_function, set_watch_mode, PanicKind,
+    StopHandler, PANIC_EXIT_STATUS,
 };
 pub use stack::{
-    clear_stack_limit, set_stack_limit, STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,
+    clear_stack_limit, interrupt, prism_rt_stack_check_failed, set_stack_limit, INTERRUPT,
+    STACK_LIMIT, STACK_LIMIT_SYMBOL, STACK_RESERVE,
 };
 pub use string::{
     prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,

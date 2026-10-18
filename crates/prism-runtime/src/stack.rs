@@ -6,6 +6,14 @@
 //! stack, which leaves room for the frame that detects the overflow and for reporting it, so the
 //! guard page is never reached by a Prism frame and the program's output is flushed as for any
 //! other runtime error. It is zero, which disables the check, outside a run.
+//!
+//! The same check makes every such function entry a reload point (D3 of `hot-reload`): to have
+//! the program thread apply a pending reload, the watch session stores the interrupt sentinel
+//! [`INTERRUPT`] into the limit, which every stack pointer is below, so the next entry takes the
+//! check's cold path. That path calls [`prism_rt_stack_check_failed`], which restores the real
+//! limit, applies the reload and lets the function continue, and reports an overflow only when
+//! the stack really is below the real limit. This is Go's preemption trick (`stackguard0` set to
+//! `stackPreempt`) applied to reloads, and costs nothing on the hot path.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -13,6 +21,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// zero outside a run.
 #[export_name = "prism_rt_stack_limit"]
 pub static STACK_LIMIT: AtomicUsize = AtomicUsize::new(0);
+
+/// The limit [`set_stack_limit`] computed, which [`STACK_LIMIT`] holds whenever it does not hold
+/// the interrupt sentinel.
+static REAL_LIMIT: AtomicUsize = AtomicUsize::new(0);
+
+/// The value of [`STACK_LIMIT`] that asks the program thread to apply a pending reload at its
+/// next function entry: no stack pointer is at or above it, so every check takes its cold path.
+pub const INTERRUPT: usize = usize::MAX;
 
 /// The symbol under which generated code imports [`STACK_LIMIT`].
 pub const STACK_LIMIT_SYMBOL: &str = "prism_rt_stack_limit";
@@ -25,12 +41,48 @@ pub const STACK_RESERVE: usize = 256 * 1024;
 /// `stack_top` is an address near the start (the highest address, since the stack grows down).
 pub fn set_stack_limit(stack_top: usize, stack_size: usize) {
     let limit = stack_top.saturating_sub(stack_size.saturating_sub(STACK_RESERVE));
-    STACK_LIMIT.store(limit, Ordering::Relaxed);
+    REAL_LIMIT.store(limit, Ordering::SeqCst);
+    STACK_LIMIT.store(limit, Ordering::SeqCst);
+    // A reload requested before the program thread got here must not lose its interrupt.
+    if crate::reload::has_pending_interrupt() {
+        interrupt();
+    }
 }
 
 /// Disables the check, at the end of a run.
 pub fn clear_stack_limit() {
-    STACK_LIMIT.store(0, Ordering::Relaxed);
+    REAL_LIMIT.store(0, Ordering::SeqCst);
+    STACK_LIMIT.store(0, Ordering::SeqCst);
+}
+
+/// Asks the program thread to take the cold path of its next stack check, where it applies the
+/// pending reload (D3 of `hot-reload`). Called by [`crate::reload::request`].
+pub fn interrupt() {
+    STACK_LIMIT.store(INTERRUPT, Ordering::SeqCst);
+}
+
+/// Restores the real limit if the limit holds the interrupt sentinel, returning whether it did.
+/// The limit is restored before the pending reload is taken, so a request that arrives in
+/// between either is taken now, leaving a harmless spurious interrupt, or sets the sentinel
+/// again after the restore: no request is lost.
+pub(crate) fn take_interrupt() -> bool {
+    let real = REAL_LIMIT.load(Ordering::SeqCst);
+    STACK_LIMIT
+        .compare_exchange(INTERRUPT, real, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+/// The cold path of every stack check (the `code-generation` requirement "Stack Checks Are
+/// Reload Points"), called with the stack pointer of the function being entered. When the limit
+/// held the interrupt sentinel, restores the real limit and applies the pending reload. Returns
+/// 0 when the function may continue, and 1 when the stack pointer is below the real limit, so
+/// that the function raises "stack overflow".
+#[no_mangle]
+pub extern "C" fn prism_rt_stack_check_failed(stack_pointer: usize) -> u8 {
+    if take_interrupt() {
+        crate::reload::apply_pending();
+    }
+    u8::from(stack_pointer < REAL_LIMIT.load(Ordering::SeqCst))
 }
 
 #[cfg(test)]
@@ -39,6 +91,7 @@ mod tests {
 
     #[test]
     fn the_limit_leaves_the_reserve_above_the_end_of_the_stack() {
+        let _lock = crate::test_lock();
         set_stack_limit(0x1000_0000, 8 * 1024 * 1024);
         assert_eq!(
             STACK_LIMIT.load(Ordering::Relaxed),
@@ -46,5 +99,23 @@ mod tests {
         );
         clear_stack_limit();
         assert_eq!(STACK_LIMIT.load(Ordering::Relaxed), 0);
+    }
+
+    /// An interrupt with no pending reload lets the function continue and restores the limit;
+    /// a real overflow is still one.
+    #[test]
+    fn an_interrupt_without_a_reload_continues_and_restores_the_limit() {
+        let _lock = crate::test_lock();
+        set_stack_limit(0x1000_0000, 8 * 1024 * 1024);
+        let real = STACK_LIMIT.load(Ordering::SeqCst);
+        interrupt();
+        assert_eq!(STACK_LIMIT.load(Ordering::SeqCst), INTERRUPT);
+        assert_eq!(prism_rt_stack_check_failed(real + 64), 0);
+        assert_eq!(STACK_LIMIT.load(Ordering::SeqCst), real);
+        assert_eq!(prism_rt_stack_check_failed(real - 64), 1);
+        interrupt();
+        assert_eq!(prism_rt_stack_check_failed(real - 64), 1);
+        assert_eq!(STACK_LIMIT.load(Ordering::SeqCst), real);
+        clear_stack_limit();
     }
 }

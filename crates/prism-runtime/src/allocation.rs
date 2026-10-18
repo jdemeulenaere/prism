@@ -194,10 +194,12 @@ pub fn allocation_statistics() -> AllocationStatistics {
 /// [`ALLOCATION_CHECK_EXIT_STATUS`].
 fn report_check_failure(message: &str) -> ! {
     flush();
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "{}", message);
-    let _ = stderr.flush();
-    std::process::exit(ALLOCATION_CHECK_EXIT_STATUS)
+    {
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "{}", message);
+        let _ = stderr.flush();
+    }
+    crate::panic::stop(ALLOCATION_CHECK_EXIT_STATUS)
 }
 
 /// Allocates `size` bytes aligned to `alignment`, a power of two, raising "out of memory" when

@@ -6,6 +6,7 @@
 Arguments after `--` MUST be passed to the program and never interpreted by `prism`; no built-in reads them yet. The options go before the file:
 
 - `--timings` MUST print to stderr the time spent in each stage (front end, code generation, linking) and the total time from the start of `prism` until `main` is called, before `main` runs. With `--watch`, it MUST also print the stages of each reload (`hot-reload`).
+- `--no-cache` and `--explain-cache` MUST act as the `build-cache` spec states. With `--watch`, `--no-cache` keeps the whole session out of the cache, and `--explain-cache` explains the session's first load.
 - `--watch` MUST run the program in a watch session that reloads it when its files change (`hot-reload`), passing the same arguments to every run of `main`.
 - `--edits <script>` MUST drive that session's reloads from a script. It requires `--watch`, and without it is a usage error with status 1.
 
@@ -16,6 +17,10 @@ Arguments after `--` MUST be passed to the program and never interpreted by `pri
 #### Scenario: Reporting timings
 - **WHEN** `prism run --timings main.prism` runs on `fun main() { println(1) }`
 - **THEN** stderr holds one line per stage and one line with the total time to `main`, each in milliseconds, and stdout holds `1`
+
+#### Scenario: Cache options before the file
+- **WHEN** `prism run --no-cache --explain-cache main.prism` runs on `fun main() { println(1) }`
+- **THEN** stderr holds `Cache: off` and `  checked main.prism`, stdout holds `1`, and it exits with status 0
 
 #### Scenario: Edits without watching
 - **WHEN** `prism run --edits edits main.prism` runs

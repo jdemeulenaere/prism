@@ -3,9 +3,49 @@
 //! A runtime error flushes the program's output, writes `panic: <message>` and
 //! `  at <file>:<line>:<column>` to stderr and exits the process with status
 //! [`PANIC_EXIT_STATUS`]. It does not unwind: no drop runs and nothing can catch it.
+//!
+//! Under a watch session ([`set_watch_mode`], D13 of `hot-reload`), it stops the program's thread
+//! instead of the process: it reports the error the same way, tells the session, and parks the
+//! thread forever, so no further code of the program runs and no drop runs.
 
 use crate::output::flush;
 use std::io::Write;
+use std::sync::{Arc, Mutex};
+
+/// What a watch session is told when the program stops, with the status the process would have
+/// exited with.
+pub type StopHandler = Arc<dyn Fn(i32) + Send + Sync>;
+
+static WATCH_MODE: Mutex<Option<StopHandler>> = Mutex::new(None);
+
+/// Under `Some(on_stop)`, a runtime error, or a failed allocation check, stops the program's
+/// thread instead of ending the process: after reporting, it calls `on_stop` with the exit
+/// status and parks the thread forever. `None` restores ending the process.
+pub fn set_watch_mode(on_stop: Option<StopHandler>) {
+    *WATCH_MODE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = on_stop;
+}
+
+/// Ends the program with `status` once its error is reported: the process, or under watch mode
+/// the program's thread. No runtime lock is held here: the output and stderr locks are released
+/// after each write.
+pub(crate) fn stop(status: i32) -> ! {
+    let handler = WATCH_MODE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    match handler {
+        Some(on_stop) => {
+            crate::stack::clear_stack_limit();
+            on_stop(status);
+            loop {
+                std::thread::park();
+            }
+        }
+        None => std::process::exit(status),
+    }
+}
 
 /// The exit status of a program that ended with a runtime error, distinct from `1` (the program
 /// did not compile) and from signal statuses.
@@ -172,10 +212,12 @@ pub extern "C" fn prism_rt_unlinked_function() -> ! {
 /// [`PANIC_EXIT_STATUS`].
 fn report(report: &str) -> ! {
     flush();
-    let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(report.as_bytes());
-    let _ = stderr.flush();
-    std::process::exit(PANIC_EXIT_STATUS)
+    {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(report.as_bytes());
+        let _ = stderr.flush();
+    }
+    stop(PANIC_EXIT_STATUS)
 }
 
 /// `%` of two `Double`s: the remainder of truncated division, with the sign of the dividend
@@ -229,6 +271,28 @@ mod tests {
             assert_eq!(PanicKind::from_code(kind as u32), Some(kind));
         }
         assert_eq!(PanicKind::from_code(99), None);
+    }
+
+    /// Under watch mode a runtime error parks the program's thread and tells the session,
+    /// instead of ending the process.
+    #[test]
+    fn a_runtime_error_under_watch_mode_parks_the_thread() {
+        let _lock = crate::test_lock();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let sender = Mutex::new(sender);
+        set_watch_mode(Some(Arc::new(move |status| {
+            let _ = sender.lock().unwrap().send(status);
+        })));
+        let thread = std::thread::spawn(|| {
+            panic_without_location(PanicKind::DivisionByZero, "");
+        });
+        let status = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the session is told");
+        assert_eq!(status, PANIC_EXIT_STATUS);
+        set_watch_mode(None);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!thread.is_finished(), "the thread stays parked");
     }
 
     #[test]

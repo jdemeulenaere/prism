@@ -18,6 +18,7 @@ use crate::panic::{
     prism_rt_double_remainder, prism_rt_panic, prism_rt_panic_without_location,
     prism_rt_unlinked_function,
 };
+use crate::stack::prism_rt_stack_check_failed;
 use crate::string::{
     prism_rt_bool_to_string, prism_rt_char_to_string, prism_rt_double_to_string,
     prism_rt_int_to_string, prism_rt_print_string, prism_rt_string_character,
@@ -291,6 +292,13 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
+        name: "prism_rt_stack_check_failed",
+        address: RuntimeAddress(prism_rt_stack_check_failed as *const u8),
+        parameters: &[Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_rt_unlinked_function",
         address: RuntimeAddress(prism_rt_unlinked_function as *const u8),
         parameters: &[],
@@ -321,6 +329,7 @@ mod tests {
             include_str!("allocation.rs"),
             include_str!("string.rs"),
             include_str!("list.rs"),
+            include_str!("stack.rs"),
         ];
         let mut names = HashSet::new();
         for source in sources {
