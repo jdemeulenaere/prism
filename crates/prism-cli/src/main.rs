@@ -437,11 +437,11 @@ fn run_abi(path: &str) {
                 };
                 let param_str = params
                     .iter()
-                    .map(|(p, t, def)| {
-                        if let Some(d) = def {
-                            format!("{}: {} = {}", p, t, d)
-                        } else {
-                            format!("{}: {}", p, t)
+                    .map(|p| {
+                        let modifier = if p.escaping { "escaping " } else { "" };
+                        match &p.default {
+                            Some(d) => format!("{}: {}{} = {}", p.name, modifier, p.ty, d),
+                            None => format!("{}: {}{}", p.name, modifier, p.ty),
                         }
                     })
                     .collect::<Vec<_>>()

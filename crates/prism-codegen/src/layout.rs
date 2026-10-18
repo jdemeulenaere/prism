@@ -719,11 +719,7 @@ mod tests {
             (task.size, task.align, offsets(&task)),
             (24, 8, vec![0, 16])
         );
-        let function = Type::Fn {
-            is_compose: false,
-            params: Vec::new(),
-            ret: Box::new(Type::Unit),
-        };
+        let function = Type::function(false, Vec::new(), Type::Unit);
         let layout = layout_in(source, &function);
         assert_eq!(
             (layout.size, layout.align, layout.shape),

@@ -1,0 +1,3 @@
+package lib
+
+public fun button(onClick: escaping () -> Unit, register: (escaping () -> Unit) -> Unit): Int = 1

@@ -129,9 +129,9 @@ fn surface_extraction_records_package_and_every_exported_kind() {
             } if name == "area" => {
                 assert_eq!(*visibility, Visibility::Public);
                 assert_eq!(params.len(), 2);
-                assert_eq!(params[0].0, "p");
-                assert_eq!(params[1].1.to_string(), "Int");
-                assert!(params[1].2.is_some(), "the default value is recorded");
+                assert_eq!(params[0].name, "p");
+                assert_eq!(params[1].ty.to_string(), "Int");
+                assert!(params[1].default.is_some(), "the default value is recorded");
                 assert_eq!(return_type.to_string(), "Float");
                 seen.push("area");
             }
@@ -633,7 +633,7 @@ fn exported_extension_recorded_with_its_receiver() {
     assert_eq!(name, "rename");
     assert_eq!(params.len(), 1);
     assert_eq!(
-        (params[0].0.as_str(), params[0].1.to_string()),
+        (params[0].name.as_str(), params[0].ty.to_string()),
         ("n", "String".to_string())
     );
     assert_eq!(return_type, &AbiType::Unit);
@@ -810,8 +810,8 @@ fn type_parameters_recorded_by_position() {
             },
         ]
     );
-    assert_eq!(params[0].1, parameter(0, "A"));
-    assert_eq!(params[1].1, parameter(1, "B"));
+    assert_eq!(params[0].ty, parameter(0, "A"));
+    assert_eq!(params[1].ty, parameter(1, "B"));
     assert_eq!(
         return_type,
         &AbiType::Nominal {

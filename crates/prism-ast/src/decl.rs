@@ -74,6 +74,8 @@ impl ImportDecl {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    /// Whether the parameter is written `escaping`: its function value may be kept by the callee.
+    pub escaping: bool,
     pub default_value: Option<Expr>,
     pub span: Span,
 }

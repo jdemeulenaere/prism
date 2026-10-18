@@ -1,0 +1,10 @@
+// expect: ok
+fun escaping(escaping: Int): Int = escaping
+fun f(x: escaping, y: escaping?) {}
+fun h(escaping: Int) {}
+fun g() {
+    val escaping = 1
+    h(escaping = escaping)
+}
+fun Int.escaping(): Int = this
+fun k(x: Int): Int = x.escaping()

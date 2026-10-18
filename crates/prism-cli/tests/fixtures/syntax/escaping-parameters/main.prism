@@ -1,0 +1,4 @@
+// expect: ok
+fun button(onClick: escaping () -> Unit, content: escaping compose () -> Unit) {}
+fun later(f: escaping (() -> Unit)? = null) {}
+struct Bus { val register: (escaping () -> Unit, Int) -> Unit }

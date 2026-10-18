@@ -167,9 +167,21 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
         Type::Fn {
             is_compose,
             params,
+            escaping,
             ret,
         } => {
-            let params: Vec<String> = params.iter().map(qualified_name).collect();
+            let params: Vec<String> = params
+                .iter()
+                .zip(escaping)
+                .map(|(param, &flag)| {
+                    let name = qualified_name(param);
+                    if flag {
+                        format!("escaping {}", name)
+                    } else {
+                        name
+                    }
+                })
+                .collect();
             format!(
                 "{}({}) -> {}",
                 if *is_compose { "compose " } else { "" },

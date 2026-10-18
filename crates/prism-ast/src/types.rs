@@ -18,6 +18,9 @@ pub enum TypeKind {
     Function {
         is_compose: bool,
         params: Vec<Type>,
+        /// Whether each parameter is written `escaping`, one flag per parameter, as in
+        /// `(escaping () -> Unit) -> Unit`.
+        escaping: Vec<bool>,
         return_type: Box<Type>,
     },
 }
@@ -128,6 +131,7 @@ impl fmt::Display for Type {
             TypeKind::Function {
                 is_compose,
                 params,
+                escaping,
                 return_type,
             } => {
                 if *is_compose {
@@ -137,6 +141,9 @@ impl fmt::Display for Type {
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
+                    }
+                    if escaping.get(i).copied().unwrap_or(false) {
+                        write!(f, "escaping ")?;
                     }
                     write!(f, "{}", p)?;
                 }

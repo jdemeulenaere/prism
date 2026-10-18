@@ -193,6 +193,9 @@ pub struct Local {
     /// Whether the binding is a `var`.
     pub mutable: bool,
     pub kind: LocalKind,
+    /// Whether a parameter or closure parameter is `escaping`: its function value holds no
+    /// borrow and may be kept (D4 of `escaping-closures`). Always false for other bindings.
+    pub escaping: bool,
     pub span: Span,
 }
 

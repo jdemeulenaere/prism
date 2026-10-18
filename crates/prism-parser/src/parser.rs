@@ -684,7 +684,7 @@ impl Parser {
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
             let (param_name, p_span) = self.expect_ident()?;
             self.expect(TokenKind::Colon)?;
-            let ty = self.parse_type()?;
+            let (escaping, ty) = self.parse_parameter_type()?;
             let mut default_value = None;
             if self.peek_kind() == &TokenKind::Eq {
                 self.bump();
@@ -694,6 +694,7 @@ impl Parser {
             params.push(Param {
                 name: param_name,
                 ty,
+                escaping,
                 default_value,
                 span: p_span.merge(end_p_span),
             });
@@ -936,6 +937,58 @@ impl Parser {
 
     // --- Type Parsing ---
 
+    /// Whether the next tokens are `escaping` written before a type on the same line: the
+    /// modifier, directly before `(` or `compose`, or misplaced before a type that cannot take it
+    /// (`escaping Int`, `escaping &T`). Before anything else `escaping` is a name, also a type
+    /// name.
+    fn at_escaping_before_type(&self) -> bool {
+        self.at_escaping_before(|kind| {
+            matches!(
+                kind,
+                TokenKind::LParen
+                    | TokenKind::Compose
+                    | TokenKind::Ident(_)
+                    | TokenKind::Amp
+                    | TokenKind::AmpAmp
+            )
+        })
+    }
+
+    fn at_escaping_before(&self, next: impl Fn(&TokenKind) -> bool) -> bool {
+        let following = &self.tokens[(self.cursor + 1).min(self.tokens.len() - 1)];
+        matches!(self.peek_kind(), TokenKind::Ident(name) if name == "escaping")
+            && !following.is_preceded_by_newline
+            && next(&following.kind)
+    }
+
+    fn escaping_misplaced(span: Span) -> ParseError {
+        ParseError::new("'escaping' marks parameters of function type", span)
+    }
+
+    /// The type of a parameter of a declaration or a function type, with its `escaping`
+    /// modifier: `escaping () -> Unit`, `escaping compose () -> Unit` or
+    /// `escaping (() -> Unit)?`. The modifier is accepted only before a function type or a
+    /// parenthesized nullable function type.
+    fn parse_parameter_type(&mut self) -> Result<(bool, Type), ParseError> {
+        if !self.at_escaping_before_type() {
+            return Ok((false, self.parse_type()?));
+        }
+        let modifier = self.bump().span;
+        if !matches!(self.peek_kind(), TokenKind::LParen | TokenKind::Compose) {
+            return Err(Self::escaping_misplaced(modifier));
+        }
+        let ty = self.parse_type()?;
+        let is_function = match &ty.kind {
+            TypeKind::Function { .. } => true,
+            TypeKind::Nullable(inner) => matches!(inner.kind, TypeKind::Function { .. }),
+            _ => false,
+        };
+        if !is_function {
+            return Err(Self::escaping_misplaced(modifier));
+        }
+        Ok((true, ty))
+    }
+
     pub fn parse_type(&mut self) -> Result<Type, ParseError> {
         let outer_peak = self.enter()?;
         let result = self.parse_type_inner();
@@ -945,6 +998,11 @@ impl Parser {
 
     fn parse_type_inner(&mut self) -> Result<Type, ParseError> {
         let start_span = self.peek().span;
+
+        // `escaping` outside a parameter's type (`val h: escaping () -> Unit`).
+        if self.at_escaping_before_type() {
+            return Err(Self::escaping_misplaced(start_span));
+        }
 
         // 1. Borrow reference: &T or &mut T
         if matches!(self.peek_kind(), TokenKind::Amp | TokenKind::AmpAmp) {
@@ -1008,8 +1066,15 @@ impl Parser {
     fn parse_paren_type(&mut self, start_span: Span, is_compose: bool) -> Result<Type, ParseError> {
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
+        let mut escaping = Vec::new();
+        let mut first_escaping = None;
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-            params.push(self.parse_type()?);
+            if first_escaping.is_none() && self.at_escaping_before_type() {
+                first_escaping = Some(self.peek().span);
+            }
+            let (is_escaping, param) = self.parse_parameter_type()?;
+            params.push(param);
+            escaping.push(is_escaping);
             if self.peek_kind() == &TokenKind::Comma {
                 self.bump();
             } else {
@@ -1027,10 +1092,16 @@ impl Parser {
                 TypeKind::Function {
                     is_compose,
                     params,
+                    escaping,
                     return_type: Box::new(ret),
                 },
                 span,
             ));
+        }
+        // `escaping` inside parentheses that are not a function type's parameter list, as in
+        // `val h: (escaping () -> Unit)?`.
+        if let Some(span) = first_escaping {
+            return Err(Self::escaping_misplaced(span));
         }
         if is_compose {
             return Err(ParseError::new(

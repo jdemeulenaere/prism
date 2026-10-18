@@ -126,10 +126,11 @@ pub enum AbiType {
     Ref { mutable: bool, inner: Box<AbiType> },
     /// An owned heap indirection `Heap<T>`.
     Heap(Box<AbiType>),
-    /// A function type, possibly composable.
+    /// A function type, possibly composable, with whether each parameter is `escaping`.
     Fn {
         compose: bool,
         params: Vec<AbiType>,
+        escaping: Vec<bool>,
         ret: Box<AbiType>,
     },
 }
@@ -195,10 +196,12 @@ impl AbiType {
             TypeKind::Function {
                 is_compose,
                 params,
+                escaping,
                 return_type,
             } => AbiType::Fn {
                 compose: *is_compose,
                 params: params.iter().map(lower).collect(),
+                escaping: escaping.clone(),
                 ret: Box::new(lower(return_type)),
             },
         }
@@ -252,11 +255,15 @@ impl AbiType {
             AbiType::Fn {
                 compose,
                 params,
+                escaping,
                 ret,
             } => {
                 hasher.write_u8(8);
                 hasher.write_u8(u8::from(*compose));
                 Self::hash_list(params, hasher);
+                for flag in escaping {
+                    hasher.write_u8(u8::from(*flag));
+                }
                 ret.hash_into(hasher);
             }
             AbiType::Range => hasher.write_u8(9),
@@ -316,9 +323,20 @@ impl fmt::Display for AbiType {
             AbiType::Fn {
                 compose,
                 params,
+                escaping,
                 ret,
             } => {
-                let params: Vec<String> = params.iter().map(ToString::to_string).collect();
+                let params: Vec<String> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, param)| {
+                        if escaping.get(index).copied().unwrap_or(false) {
+                            format!("escaping {}", param)
+                        } else {
+                            param.to_string()
+                        }
+                    })
+                    .collect();
                 write!(
                     f,
                     "{}({}) -> {}",

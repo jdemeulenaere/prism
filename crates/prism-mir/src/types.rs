@@ -247,11 +247,7 @@ mod tests {
             user.clone(),
             user.clone().nullable(),
             Type::Opaque("File".to_string()),
-            Type::Fn {
-                is_compose: false,
-                params: vec![],
-                ret: Box::new(Type::Int),
-            },
+            Type::function(false, vec![], Type::Int),
         ] {
             assert!(needs_drop(&ty, &types), "{} needs a drop", ty);
         }

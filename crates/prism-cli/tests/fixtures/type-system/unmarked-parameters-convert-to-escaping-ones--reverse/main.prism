@@ -1,0 +1,4 @@
+// expect: E4004
+fun keepIt(f: escaping () -> Unit) {}
+fun now(r: (() -> Unit) -> Unit) {}
+fun h() { now(keepIt) }

@@ -190,6 +190,9 @@ pub enum TypeError {
         /// For the contents of a box, the call that moves them out (`h.unbox()`, D6 of
         /// `heap-boxes`).
         unbox: Option<String>,
+        /// Whether the source is a capture of the closure being checked, which never gives away
+        /// what it captures, whether it borrows or owns it (D15 of `escaping-closures`).
+        captured: bool,
         span: Span,
     },
 
@@ -564,6 +567,15 @@ impl TypeError {
                 ..
             } => format!(
                 "cannot move out of {}: its type '{}' is not 'Copy', so it cannot be copied out of the box",
+                source, ty
+            ),
+            TypeError::CannotMoveOut {
+                source,
+                ty,
+                captured: true,
+                ..
+            } => format!(
+                "cannot move out of {}: its type '{}' is not 'Copy', so it cannot be copied out of the closure",
                 source, ty
             ),
             TypeError::CannotMoveOut {

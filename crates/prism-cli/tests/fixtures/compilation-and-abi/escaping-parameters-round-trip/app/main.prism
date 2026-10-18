@@ -1,0 +1,7 @@
+// expect: ok
+package app
+
+import /lib/ui
+
+fun greet(s: &String) {}
+fun f(s: String): Int = button({ greet(s) }) { h -> h() }

@@ -372,6 +372,7 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             destructure,
             unbox,
             ty,
+            captured,
             ..
         } => match borrow {
             Some(borrow) => {
@@ -388,6 +389,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             }
             // The source is already a borrow: clone it, or keep borrowing where it is used.
             None => {
+                if *captured {
+                    out.push_str(
+                        "   = note: a closure may be called more than once, so it never gives away what it captures\n",
+                    );
+                }
                 if let Some(unbox) = unbox {
                     out.push_str(&format!(
                         "   = help: move the contents out of the box: '{}'\n",
@@ -799,7 +805,13 @@ mod tests {
         );
         assert!(
             out.contains(
-                "error[E4017]: cannot move out of captured variable 's', which the closure borrows"
+                "error[E4017]: cannot move out of captured variable 's': its type 'String' is not 'Copy', so it cannot be copied out of the closure"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "note: a closure may be called more than once, so it never gives away what it captures"
             ),
             "{out}"
         );

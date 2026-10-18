@@ -17,6 +17,16 @@ pub struct AbiReceiver {
     pub ty: AbiType,
 }
 
+/// A parameter of an exported function: its name, type, whether it is `escaping`, and the
+/// span-free hash of its default value's syntax, if it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbiParameter {
+    pub name: String,
+    pub ty: AbiType,
+    pub escaping: bool,
+    pub default: Option<String>,
+}
+
 /// Represents an exported symbol in a file's ABI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportedSymbol {
@@ -27,7 +37,7 @@ pub enum ExportedSymbol {
         receiver: Option<AbiReceiver>,
         name: String,
         type_parameters: Vec<AbiTypeParameter>,
-        params: Vec<(String, AbiType, Option<String>)>, // (name, type, default_value_expr)
+        params: Vec<AbiParameter>,
         return_type: AbiType,
         /// The Monomorphization Hash of a generic function's body, `None` for a non-generic one.
         generic_body_hash: Option<ContentHash>,
@@ -92,10 +102,11 @@ impl ExportedSymbol {
                 hasher.write_str(name);
                 hash_type_parameters(type_parameters, hasher);
                 hasher.write_u64(params.len() as u64);
-                for (pname, pty, pdef) in params {
-                    hasher.write_str(pname);
-                    pty.hash_into(hasher);
-                    if let Some(def) = pdef {
+                for parameter in params {
+                    hasher.write_str(&parameter.name);
+                    parameter.ty.hash_into(hasher);
+                    hasher.write_u8(u8::from(parameter.escaping));
+                    if let Some(def) = &parameter.default {
                         hasher.write_u8(1);
                         hasher.write_str(def);
                     } else {
@@ -481,7 +492,7 @@ fn symbol_types(symbol: &ExportedSymbol) -> Vec<&AbiType> {
         } => receiver
             .iter()
             .map(|r| &r.ty)
-            .chain(params.iter().map(|(_, ty, _)| ty))
+            .chain(params.iter().map(|parameter| &parameter.ty))
             .chain(std::iter::once(return_type))
             .collect(),
         ExportedSymbol::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
@@ -649,7 +660,7 @@ impl FileAbi {
                         }
                     };
 
-                    let params: Vec<(String, AbiType, Option<String>)> = f
+                    let params: Vec<AbiParameter> = f
                         .params
                         .iter()
                         .map(|p| {
@@ -660,7 +671,12 @@ impl FileAbi {
                                 hash_expr_span_free(d, &mut h);
                                 h.finish().to_hex()
                             });
-                            (p.name.clone(), lower(&p.ty), def_str)
+                            AbiParameter {
+                                name: p.name.clone(),
+                                ty: lower(&p.ty),
+                                escaping: p.escaping,
+                                default: def_str,
+                            }
                         })
                         .collect();
 

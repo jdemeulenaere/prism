@@ -451,11 +451,8 @@ mod tests {
 
     #[test]
     fn function_values_convert_only_in_place() {
-        let function = |parameter: Type, result: Type| Type::Fn {
-            is_compose: false,
-            params: vec![parameter],
-            ret: Box::new(result),
-        };
+        let function =
+            |parameter: Type, result: Type| Type::function(false, vec![parameter], result);
         let reference = |mutable| Type::Reference {
             mutable,
             inner: Box::new(Type::Int),

@@ -196,6 +196,7 @@ impl TypeChecker {
                 ty: ty.clone(),
                 mutable: is_var,
                 kind: LocalKind::PatternBinding,
+                escaping: false,
                 span,
             })
         });

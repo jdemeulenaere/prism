@@ -417,22 +417,22 @@ mod tests {
     #[test]
     fn function_types_and_nominal_arguments_are_descended() {
         let boxed = NominalId::new("main", "Box");
-        let pattern = Type::Fn {
-            is_compose: false,
-            params: vec![parameter(0)],
-            ret: Box::new(Type::Struct {
+        let pattern = Type::function(
+            false,
+            vec![parameter(0)],
+            Type::Struct {
                 id: boxed.clone(),
                 arguments: vec![parameter(1)],
-            }),
-        };
-        let found = Type::Fn {
-            is_compose: false,
-            params: vec![Type::Int],
-            ret: Box::new(Type::Struct {
+            },
+        );
+        let found = Type::function(
+            false,
+            vec![Type::Int],
+            Type::Struct {
                 id: boxed,
                 arguments: vec![Type::Bool],
-            }),
-        };
+            },
+        );
         let mut unknowns = Unknowns::new(2);
         unknowns.match_lower(&pattern, &found, span(1));
         assert_eq!(unknowns.solve().0, vec![Type::Int, Type::Bool]);
@@ -456,16 +456,8 @@ mod tests {
     #[test]
     fn a_borrow_inside_an_argument_is_kept() {
         // `apply(s)` with `s: (&Int) -> Unit` for `f: (T) -> Unit` gives `T = &Int`.
-        let pattern = Type::Fn {
-            is_compose: false,
-            params: vec![parameter(0)],
-            ret: Box::new(Type::Unit),
-        };
-        let found = Type::Fn {
-            is_compose: false,
-            params: vec![reference(Type::Int)],
-            ret: Box::new(Type::Unit),
-        };
+        let pattern = Type::function(false, vec![parameter(0)], Type::Unit);
+        let found = Type::function(false, vec![reference(Type::Int)], Type::Unit);
         let mut unknowns = Unknowns::new(1);
         unknowns.match_lower(&pattern, &found, span(1));
         assert_eq!(unknowns.solve().0, vec![reference(Type::Int)]);

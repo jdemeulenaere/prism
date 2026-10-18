@@ -193,7 +193,7 @@ Capture inference, `escaping` and `E5007` extend `references`; moves and `E4028`
 
 ## Migration Plan
 
-No external users. Programs that were `E5007` because a capturing closure escaped, and programs that were `E5006` because a closure outlived a captured binding, now pass and run, and their fixtures become running programs under the modified scenarios. Two rare shapes that passed now own a capture and may become `E5001` or `E4028` (D1): a `var` holding a capturing closure that later receives an escaping one, and a closure stored in an outer variable that is used only inside its captured binding's block; the repository has neither outside new fixtures. ABI hashes of signatures with function-typed parameters do not change unless a parameter is marked `escaping`. Rollback is a revert.
+No external users. Programs that were `E5007` because a capturing closure escaped, and programs that were `E5006` because a closure outlived a captured binding, now pass and run, and their fixtures become running programs under the modified scenarios. Two rare shapes that passed now own a capture and may become `E5001` or `E4028` (D1): a `var` holding a capturing closure that later receives an escaping one, and a closure stored in an outer variable that is used only inside its captured binding's block; the repository has neither outside new fixtures. ABI hashes change once, since every parameter and every function type's parameter now hashes its flag (the build cache is keyed by the compiler version, so nothing stale is reused); after that, marking a parameter `escaping` is what changes them. Rollback is a revert.
 
 ## Open Questions
 

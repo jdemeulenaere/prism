@@ -1207,6 +1207,59 @@ mod tests {
     }
 
     #[test]
+    fn escaping_parameters() {
+        let file = parse_source(
+            "fun b(onClick: escaping () -> Unit, content: escaping compose () -> Unit, f: escaping (() -> Unit)? = null, n: Int, r: (escaping () -> Unit, Int) -> Unit) {}",
+        )
+        .unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let flags: Vec<bool> = f.params.iter().map(|p| p.escaping).collect();
+        assert_eq!(flags, [true, true, true, false, false]);
+        let shown: Vec<String> = f.params.iter().map(|p| p.ty.to_string()).collect();
+        assert_eq!(
+            shown,
+            [
+                "() -> Unit",
+                "compose () -> Unit",
+                "(() -> Unit)?",
+                "Int",
+                "(escaping () -> Unit, Int) -> Unit",
+            ]
+        );
+        let TypeKind::Function { escaping, .. } = &f.params[4].ty.kind else {
+            panic!("Expected function type");
+        };
+        assert_eq!(escaping, &[true, false]);
+    }
+
+    #[test]
+    fn escaping_on_another_type_rejected() {
+        for src in [
+            "fun f(n: escaping Int) {}",
+            "fun f(n: escaping &Int) {}",
+            "fun g(x: escaping (Int)) {}",
+            "fun g(x: escaping ()) {}",
+            "fun h() { val k: escaping () -> Unit = {} }",
+            "fun h() { val k: (escaping () -> Unit)? = null }",
+            "fun m(): escaping () -> Unit = {}",
+            "struct S { val f: escaping () -> Unit }",
+        ] {
+            assert_parse_error(src, "'escaping' marks parameters of function type");
+        }
+    }
+
+    #[test]
+    fn escaping_as_an_identifier() {
+        let types = param_types("fun f(x: escaping, y: escaping?, z: escaping<Int>) {}");
+        let shown: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+        assert_eq!(shown, ["escaping", "escaping?", "escaping<Int>"]);
+        parse_source("fun escaping(escaping: Int): Int = escaping").unwrap();
+        parse_source("fun g() { val escaping = 1; h(escaping = escaping); x.escaping() }").unwrap();
+    }
+
+    #[test]
     fn multiple_types_in_parentheses_without_an_arrow_rejected() {
         assert_parse_error(
             "fun f(p: (Int, String)) { }",

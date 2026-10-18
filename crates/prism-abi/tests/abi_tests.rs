@@ -251,7 +251,7 @@ mod tests {
         let prism_abi::ExportedSymbol::Function { params, .. } = &compose_abi.symbols[0] else {
             panic!("Expected exported function");
         };
-        assert_eq!(params[0].1.to_string(), "compose () -> Unit");
+        assert_eq!(params[0].ty.to_string(), "compose () -> Unit");
         // The compose flag is part of the call contract, so it is part of the ABI.
         assert_ne!(compose_abi.abi_hash, plain_abi.abi_hash);
     }
@@ -264,7 +264,38 @@ mod tests {
         let ExportedSymbol::Function { params, .. } = &abi.symbols[0] else {
             panic!("Expected exported function");
         };
-        &params[0].1
+        &params[0].ty
+    }
+
+    #[test]
+    fn test_escaping_parameters_round_trip() {
+        let abi = extract(
+            "public fun button(onClick: escaping () -> Unit, register: (escaping () -> Unit) -> Unit): Int = 1\n",
+        );
+        let ExportedSymbol::Function { params, .. } = &abi.symbols[0] else {
+            panic!("Expected exported function");
+        };
+        let flags: Vec<bool> = params.iter().map(|p| p.escaping).collect();
+        assert_eq!(flags, [true, false]);
+        assert_eq!(params[0].ty.to_string(), "() -> Unit");
+        assert_eq!(params[1].ty.to_string(), "(escaping () -> Unit) -> Unit");
+        let AbiType::Fn { escaping, .. } = &params[1].ty else {
+            panic!("Expected a function type");
+        };
+        assert_eq!(escaping, &[true]);
+    }
+
+    #[test]
+    fn test_marking_a_parameter_escaping_changes_the_hashes() {
+        let plain = extract("public fun store(f: () -> Unit): Int = 1\n");
+        let marked = extract("public fun store(f: escaping () -> Unit): Int = 1\n");
+        assert_ne!(plain.abi_hash, marked.abi_hash);
+        assert_ne!(plain.interface_hash, marked.interface_hash);
+        // Inside a function type too.
+        let plain = extract("public fun store(r: (() -> Unit) -> Unit): Int = 1\n");
+        let marked = extract("public fun store(r: (escaping () -> Unit) -> Unit): Int = 1\n");
+        assert_ne!(plain.abi_hash, marked.abi_hash);
+        assert_ne!(plain.interface_hash, marked.interface_hash);
     }
 
     #[test]

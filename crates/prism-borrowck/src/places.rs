@@ -275,11 +275,7 @@ fun f(o: &mut Order, h: Heap<Point>, s: String) {
             mutable: false,
             inner: Box::new(Type::Int),
         };
-        let function = Type::Fn {
-            params: vec![],
-            ret: Box::new(Type::Int),
-            is_compose: false,
-        };
+        let function = Type::function(false, vec![], Type::Int);
         assert!(carries_loans(&int_reference));
         assert!(carries_loans(&int_reference.clone().nullable()));
         assert!(carries_loans(&function));

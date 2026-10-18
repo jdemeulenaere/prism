@@ -1,0 +1,12 @@
+// expect: ok
+fun runNow(f: () -> Unit) { f() }
+fun keepIt(f: escaping () -> Unit) {}
+fun register(r: (escaping () -> Unit) -> Unit) {}
+fun now(r: (() -> Unit) -> Unit) {}
+fun f() {
+    register(runNow)
+    register(keepIt)
+    now(runNow)
+    val g: (() -> Unit) -> Unit = runNow
+    register(g)
+}

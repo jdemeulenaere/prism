@@ -1,0 +1,4 @@
+// expect: E2001
+fun h() {
+    val k: escaping () -> Unit = {}
+}

@@ -193,11 +193,7 @@ mod tests {
             representation(&Type::String, pointer),
             Some(Representation::Memory)
         );
-        let function = Type::Fn {
-            is_compose: false,
-            params: vec![Type::Int],
-            ret: Box::new(Type::Unit),
-        };
+        let function = Type::function(false, vec![Type::Int], Type::Unit);
         assert_eq!(
             representation(&function, pointer),
             Some(Representation::Memory)

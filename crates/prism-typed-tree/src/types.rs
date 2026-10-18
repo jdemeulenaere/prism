@@ -459,10 +459,12 @@ pub enum Type {
     /// A type name with no struct or enum declaration in scope. Opaque types compare by name,
     /// and have no members.
     Opaque(String),
-    /// First-class function type.
+    /// First-class function type, with whether each parameter is `escaping`: one flag per
+    /// parameter, always as many as `params`.
     Fn {
         is_compose: bool,
         params: Vec<Type>,
+        escaping: Vec<bool>,
         ret: Box<Type>,
     },
     /// A type parameter of the enclosing generic declaration (`T` in `fun <T> id(x: T)`).
@@ -472,6 +474,16 @@ pub enum Type {
 }
 
 impl Type {
+    /// The function type with `params` and `ret`, no parameter `escaping`.
+    pub fn function(is_compose: bool, params: Vec<Type>, ret: Type) -> Type {
+        Type::Fn {
+            is_compose,
+            escaping: vec![false; params.len()],
+            params,
+            ret: Box::new(ret),
+        }
+    }
+
     /// The non-generic struct `id`.
     pub fn plain_struct(id: NominalId) -> Type {
         Type::Struct {
@@ -525,10 +537,12 @@ impl Type {
             Type::Fn {
                 is_compose,
                 params,
+                escaping,
                 ret,
             } => Type::Fn {
                 is_compose: *is_compose,
                 params: params.iter().map(|ty| ty.substitute(arguments)).collect(),
+                escaping: escaping.clone(),
                 ret: Box::new(ret.substitute(arguments)),
             },
             other => other.clone(),
@@ -615,7 +629,9 @@ impl Type {
     /// representation (D8 of `closures`): the types are equal, or differ only by `&mut T`
     /// weakening to `&T` (behind shared borrows too, inside a nullable, and in the parameters
     /// and result of a function type, contravariantly in the parameters). Compose flags must
-    /// match. An error on either side converts, so earlier errors are not reported again.
+    /// match, and a parameter may gain `escaping` (D3 of `escaping-closures`): a function that
+    /// accepts any function value also accepts an owned one, and both move their argument. An
+    /// error on either side converts, so earlier errors are not reported again.
     ///
     /// The type checker allows a function value other than a named function or variant
     /// constructor to convert only by this relation, and the backend lowers such a `Subtype`
@@ -672,16 +688,22 @@ impl Type {
                 Type::Fn {
                     is_compose,
                     params,
+                    escaping,
                     ret,
                 },
                 Type::Fn {
                     is_compose: target_compose,
                     params: target_params,
+                    escaping: target_escaping,
                     ret: target_ret,
                 },
             ) => {
                 is_compose == target_compose
                     && params.len() == target_params.len()
+                    && escaping
+                        .iter()
+                        .zip(target_escaping)
+                        .all(|(&flag, &target)| target || !flag)
                     && target_params
                         .iter()
                         .zip(params)
@@ -756,13 +778,15 @@ impl Type {
             Type::Fn {
                 is_compose,
                 params,
+                escaping,
                 ret,
             } => format!(
                 "{}({}) -> {}",
                 if *is_compose { "compose " } else { "" },
                 params
                     .iter()
-                    .map(Type::qualified)
+                    .zip(escaping)
+                    .map(|(param, &flag)| render_parameter(param, flag, Type::qualified))
                     .collect::<Vec<_>>()
                     .join(", "),
                 ret.qualified()
@@ -802,6 +826,7 @@ impl fmt::Display for Type {
             Type::Fn {
                 is_compose,
                 params,
+                escaping,
                 ret,
             } => {
                 let comp = if *is_compose { "compose " } else { "" };
@@ -810,13 +835,23 @@ impl fmt::Display for Type {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", p)?;
+                    let flag = escaping.get(i).copied().unwrap_or(false);
+                    write!(f, "{}", render_parameter(p, flag, Type::to_string))?;
                 }
                 write!(f, ") -> {}", ret)
             }
             Type::Parameter(parameter) => write!(f, "{}", parameter.name),
             Type::Error => write!(f, "<error>"),
         }
+    }
+}
+
+/// Renders a function type's parameter, with `escaping ` before it when it is marked.
+fn render_parameter(param: &Type, escaping: bool, render: impl Fn(&Type) -> String) -> String {
+    if escaping {
+        format!("escaping {}", render(param))
+    } else {
+        render(param)
     }
 }
 
@@ -847,11 +882,32 @@ mod tests {
     }
 
     fn function(params: Vec<Type>, ret: Type) -> Type {
+        Type::function(false, params, ret)
+    }
+
+    fn escaping_function(params: Vec<Type>, ret: Type) -> Type {
         Type::Fn {
             is_compose: false,
+            escaping: vec![true; params.len()],
             params,
             ret: Box::new(ret),
         }
+    }
+
+    #[test]
+    fn escaping_parameters_convert_in_place_one_way() {
+        let handler = function(Vec::new(), Type::Unit);
+        let lending = function(vec![handler.clone()], Type::Unit);
+        let keeping = escaping_function(vec![handler.clone()], Type::Unit);
+        // A function accepting any function value accepts an owned one.
+        assert!(lending.converts_in_place(&keeping));
+        assert!(!keeping.converts_in_place(&lending));
+        // Contravariantly: as a parameter, the flags go the other way.
+        let takes_lending = function(vec![lending.clone()], Type::Unit);
+        let takes_keeping = function(vec![keeping.clone()], Type::Unit);
+        assert!(takes_keeping.converts_in_place(&takes_lending));
+        assert!(!takes_lending.converts_in_place(&takes_keeping));
+        assert_eq!(keeping.to_string(), "(escaping () -> Unit) -> Unit");
     }
 
     #[test]
@@ -898,11 +954,7 @@ mod tests {
             .clone()
             .nullable()
             .converts_in_place(&show.clone().nullable()));
-        let composable = Type::Fn {
-            is_compose: true,
-            params: vec![],
-            ret: Box::new(Type::Unit),
-        };
+        let composable = Type::function(true, vec![], Type::Unit);
         assert!(!composable.converts_in_place(&function(vec![], Type::Unit)));
         assert!(show.is_function_value() && show.clone().nullable().is_function_value());
         assert!(!Type::Int.is_function_value());
@@ -1023,11 +1075,7 @@ mod tests {
             Type::String.nullable()
         );
         let boxed = NominalId::new("main", "Box");
-        let function = Type::Fn {
-            is_compose: false,
-            params: vec![t.clone()],
-            ret: Box::new(nominal(&boxed, vec![t.clone()])),
-        };
+        let function = Type::function(false, vec![t.clone()], nominal(&boxed, vec![t.clone()]));
         assert_eq!(
             function.substitute(&[Type::Int]).to_string(),
             "(Int) -> Box<Int>"
@@ -1050,14 +1098,7 @@ mod tests {
         assert!(!table.is_copy(&strings) && table.is_clone(&strings));
         let functions = nominal(
             &pair,
-            vec![
-                Type::Fn {
-                    is_compose: false,
-                    params: Vec::new(),
-                    ret: Box::new(Type::Unit),
-                },
-                Type::Int,
-            ],
+            vec![Type::function(false, Vec::new(), Type::Unit), Type::Int],
         );
         assert!(!table.is_clone(&functions));
         assert!(table.is_copy(&nominal(&handle, vec![Type::String])));
@@ -1090,11 +1131,7 @@ mod tests {
             inner: Box::new(Type::Int.nullable()),
         };
         assert_eq!(borrowed_nullable.to_string(), "&Int?");
-        let function = Type::Fn {
-            is_compose: false,
-            params: vec![],
-            ret: Box::new(Type::Int),
-        };
+        let function = Type::function(false, vec![], Type::Int);
         assert_eq!(function.nullable().qualified(), "(() -> Int)?");
     }
 }

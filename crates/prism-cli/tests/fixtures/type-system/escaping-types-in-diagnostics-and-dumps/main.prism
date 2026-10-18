@@ -1,0 +1,3 @@
+// expect: E4005
+fun keepIt(f: escaping () -> Unit): Int = 1
+fun h(): String = keepIt

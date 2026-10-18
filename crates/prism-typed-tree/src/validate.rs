@@ -145,6 +145,34 @@ impl Validator<'_> {
             }
             let what = format!("binding '{}'", local.name);
             self.check_type_parameters_of(&local.ty, &what);
+            if local.escaping
+                && (!matches!(
+                    local.kind,
+                    LocalKind::Parameter | LocalKind::ClosureParameter
+                ) || !(local.ty.is_function_value() || local.ty == Type::Error))
+            {
+                let message = format!(
+                    "binding '{}' is escaping but is not a parameter of function type",
+                    local.name
+                );
+                self.report(message);
+            }
+            if has_misshapen_escaping_flags(&local.ty) {
+                let message = format!(
+                    "binding '{}' has a function type whose escaping flags do not match its parameters",
+                    local.name
+                );
+                self.report(message);
+            }
+        }
+        for (id, expression) in self.body.expressions.iter() {
+            if has_misshapen_escaping_flags(&expression.ty) {
+                let message = format!(
+                    "node {} has a function type whose escaping flags do not match its parameters",
+                    id.0
+                );
+                self.report(message);
+            }
         }
         for parameter in self.body.parameters.clone() {
             self.check_local(parameter);
@@ -1281,6 +1309,29 @@ fn declared_parameters(function: &FunctionItem) -> Vec<(Option<String>, Type)> {
 }
 
 /// Whether `ty` is or contains the error type.
+/// Whether a function type in `ty` has a different number of `escaping` flags than parameters.
+fn has_misshapen_escaping_flags(ty: &Type) -> bool {
+    match ty {
+        Type::Reference { inner, .. } | Type::Nullable(inner) | Type::Heap(inner) => {
+            has_misshapen_escaping_flags(inner)
+        }
+        Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
+            arguments.iter().any(has_misshapen_escaping_flags)
+        }
+        Type::Fn {
+            params,
+            escaping,
+            ret,
+            ..
+        } => {
+            params.len() != escaping.len()
+                || params.iter().any(has_misshapen_escaping_flags)
+                || has_misshapen_escaping_flags(ret)
+        }
+        _ => false,
+    }
+}
+
 fn contains_error(ty: &Type) -> bool {
     match ty {
         Type::Error => true,
@@ -1554,11 +1605,7 @@ mod tests {
         let body = body(&mut file);
         // `{ a + 1 }` reads the parameter `a`, but records no capture.
         let sum = body.value.unwrap();
-        let fn_ty = Type::Fn {
-            is_compose: false,
-            params: vec![],
-            ret: Box::new(Type::Int),
-        };
+        let fn_ty = Type::function(false, vec![], Type::Int);
         let closure = add(
             body,
             ExpressionKind::Closure {
@@ -1865,6 +1912,7 @@ mod tests {
             ty: n_type,
             mutable: false,
             kind: LocalKind::PatternBinding,
+            escaping: false,
             span: Span::dummy(),
         });
         let subject = ExpressionId(0);

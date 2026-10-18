@@ -62,8 +62,17 @@ impl TypedFile {
                             ReceiverMode::Consuming => "consuming this".to_string(),
                         });
                     }
-                    for (name, ty) in &f.parameters {
-                        parameters.push(format!("{}: {}", name, ty));
+                    // The body's parameter locals start with the receiver, if any.
+                    let declared = self.bodies[f.body]
+                        .parameters
+                        .get(usize::from(f.receiver.is_some())..)
+                        .unwrap_or_default();
+                    for (index, (name, ty)) in f.parameters.iter().enumerate() {
+                        let escaping = declared
+                            .get(index)
+                            .is_some_and(|&local| self.bodies[f.body].locals[local].escaping);
+                        let modifier = if escaping { "escaping " } else { "" };
+                        parameters.push(format!("{}: {}{}", name, modifier, ty));
                     }
                     let type_parameters = TypeParameter::render_list(&f.type_parameters);
                     writeln!(
@@ -191,10 +200,12 @@ impl Printer<'_> {
         for (id, local) in self.body.locals.iter() {
             let kind = match local.kind {
                 LocalKind::Receiver => "receiver",
+                LocalKind::Parameter if local.escaping => "escaping parameter",
                 LocalKind::Parameter => "parameter",
                 LocalKind::Let if local.mutable => "var",
                 LocalKind::Let => "val",
                 LocalKind::ForVariable => "for",
+                LocalKind::ClosureParameter if local.escaping => "escaping closure parameter",
                 LocalKind::ClosureParameter => "closure parameter",
                 LocalKind::PatternBinding if local.mutable => "pattern var",
                 LocalKind::PatternBinding => "pattern val",
@@ -753,6 +764,7 @@ pub(crate) mod tests {
             ty: Type::Int,
             mutable: false,
             kind: LocalKind::Parameter,
+            escaping: false,
             span: span(1, 7),
         });
         body.parameters.push(a);

@@ -199,11 +199,7 @@ mod tests {
             (Rule::Multiple, vec![0, 1])
         );
         // A function-typed parameter is not an input borrow; a `(&T)?` one is.
-        let function_type = Type::Fn {
-            params: vec![shared(Type::Int)],
-            ret: Box::new(shared(Type::Int)),
-            is_compose: false,
-        };
+        let function_type = Type::function(false, vec![shared(Type::Int)], shared(Type::Int));
         let parameters = [function_type, shared(Type::Int).nullable(), Type::Int];
         assert_eq!(
             tied_inputs(function(), &parameters),

@@ -66,7 +66,7 @@ fn abi_symbol_types(sym: &ExportedSymbol) -> Vec<&AbiType> {
         } => receiver
             .iter()
             .map(|r| &r.ty)
-            .chain(params.iter().map(|(_, ty, _)| ty))
+            .chain(params.iter().map(|parameter| &parameter.ty))
             .chain(std::iter::once(return_type))
             .collect(),
         ExportedSymbol::Struct { fields, .. } => fields.iter().map(|(_, _, ty)| ty).collect(),
@@ -986,10 +986,12 @@ impl TypeChecker {
             TypeKind::Function {
                 is_compose,
                 params,
+                escaping,
                 return_type,
             } => Type::Fn {
                 is_compose: *is_compose,
                 params: params.iter().map(|p| self.lower_type(p)).collect(),
+                escaping: escaping.clone(),
                 ret: Box::new(self.lower_type(return_type)),
             },
         }
@@ -1569,13 +1571,14 @@ impl TypeChecker {
                     let type_parameters = type_parameters_from_abi(type_parameters);
                     let param_types = params
                         .iter()
-                        .map(|(_, ty, _)| type_from_abi(ty, &type_parameters))
+                        .map(|parameter| type_from_abi(&parameter.ty, &type_parameters))
                         .collect();
-                    let param_names = params.iter().map(|(n, _, _)| n.clone()).collect();
-                    let has_default = params.iter().map(|(_, _, d)| d.is_some()).collect();
+                    let param_names = params.iter().map(|p| p.name.clone()).collect();
+                    let has_default = params.iter().map(|p| p.default.is_some()).collect();
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
                         params: param_types,
+                        escaping: params.iter().map(|p| p.escaping).collect(),
                         ret: Box::new(type_from_abi(return_type, &type_parameters)),
                     };
                     let symbol = Symbol::function_with_defaults(
@@ -1666,11 +1669,7 @@ impl TypeChecker {
                         } else {
                             Symbol::function(
                                 v_name.clone(),
-                                Type::Fn {
-                                    is_compose: false,
-                                    params: f_types.clone(),
-                                    ret: Box::new(enum_ty.clone()),
-                                },
+                                Type::function(false, f_types.clone(), enum_ty.clone()),
                                 *visibility,
                                 abi.package.clone(),
                                 Span::dummy(),
@@ -1952,11 +1951,7 @@ impl TypeChecker {
                         } else {
                             Symbol::function_with_defaults(
                                 v_name.clone(),
-                                Type::Fn {
-                                    is_compose: false,
-                                    params: f_types.clone(),
-                                    ret: Box::new(enum_ty.clone()),
-                                },
+                                Type::function(false, f_types.clone(), enum_ty.clone()),
                                 vec![String::new(); f_types.len()],
                                 vec![false; f_types.len()],
                                 e.visibility,
@@ -2065,6 +2060,7 @@ impl TypeChecker {
         let fn_ty = Type::Fn {
             is_compose: f.is_compose,
             params,
+            escaping: f.params.iter().map(|p| p.escaping).collect(),
             ret: Box::new(ret),
         };
 
@@ -2402,6 +2398,7 @@ impl TypeChecker {
             ty: ty.clone(),
             mutable: mutability == Mutability::Var,
             kind,
+            escaping: false,
             span,
         });
         Symbol::variable(name, ty, mutability, span).with_local(local)
@@ -2498,6 +2495,7 @@ impl TypeChecker {
                 p.span,
             );
             let local = Self::local_of(&sym).expect("a bound local");
+            self.builder.body_mut().locals[local].escaping = p.escaping;
             self.builder.body_mut().parameters.push(local);
             self.define_local(sym);
             parameters.push((p.name.clone(), p_ty));
@@ -2552,6 +2550,7 @@ impl TypeChecker {
                         let inferred = Type::Fn {
                             is_compose: f.is_compose,
                             params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
+                            escaping: f.params.iter().map(|p| p.escaping).collect(),
                             ret: Box::new(expr_ty),
                         };
                         match &receiver_ty {
@@ -2794,6 +2793,7 @@ impl TypeChecker {
             if let Type::Fn {
                 is_compose,
                 params: exp_params,
+                escaping: exp_escaping,
                 ret: exp_ret,
             } = expected
             {
@@ -2802,6 +2802,7 @@ impl TypeChecker {
                     body,
                     *is_compose,
                     exp_params,
+                    exp_escaping,
                     Some(exp_ret),
                     expr.span,
                 );
@@ -2889,14 +2890,16 @@ impl TypeChecker {
     }
 
     /// Checks the closure `{ params -> body }` against a function type with parameter types
-    /// `exp_params` and, when known, return type `exp_ret`; without one the body's type is the
-    /// closure's return type.
+    /// `exp_params`, whose `escaping` flags `exp_escaping` its parameters take, and, when known,
+    /// return type `exp_ret`; without one the body's type is the closure's return type.
+    #[allow(clippy::too_many_arguments)]
     fn check_closure(
         &mut self,
         params: &[prism_ast::ClosureParameter],
         body: &Block,
         is_compose: bool,
         exp_params: &[Type],
+        exp_escaping: &[bool],
         exp_ret: Option<&Type>,
         span: Span,
     ) -> ExpressionId {
@@ -2914,7 +2917,7 @@ impl TypeChecker {
 
         let prev = self.enter_closure(is_compose, exp_ret.cloned());
         let mut parameters = Vec::new();
-        for (parameter, param_ty) in params.iter().zip(exp_params.iter()) {
+        for (index, (parameter, param_ty)) in params.iter().zip(exp_params.iter()).enumerate() {
             let sym = self.bind_local(
                 &parameter.name,
                 param_ty.clone(),
@@ -2922,7 +2925,10 @@ impl TypeChecker {
                 LocalKind::ClosureParameter,
                 parameter.span,
             );
-            parameters.push(Self::local_of(&sym).expect("a bound local"));
+            let local = Self::local_of(&sym).expect("a bound local");
+            self.builder.body_mut().locals[local].escaping =
+                exp_escaping.get(index).copied().unwrap_or(false);
+            parameters.push(local);
             self.define_local(sym);
         }
 
@@ -2934,6 +2940,9 @@ impl TypeChecker {
         let ty = Type::Fn {
             is_compose,
             params: exp_params.to_vec(),
+            escaping: (0..exp_params.len())
+                .map(|index| exp_escaping.get(index).copied().unwrap_or(false))
+                .collect(),
             ret: Box::new(self.ty(body_id)),
         };
         let kind = ExpressionKind::Closure {
@@ -3293,11 +3302,7 @@ impl TypeChecker {
                 let body_id = self.with_consuming(true, |c| c.check_block(body, None));
                 let captures = self.exit_closure(prev);
 
-                let ty = Type::Fn {
-                    is_compose: false,
-                    params: param_types,
-                    ret: Box::new(self.ty(body_id)),
-                };
+                let ty = Type::function(false, param_types, self.ty(body_id));
                 let kind = ExpressionKind::Closure {
                     parameters,
                     body: body_id,
@@ -5110,6 +5115,7 @@ impl TypeChecker {
                 is_compose,
                 params,
                 ret,
+                ..
             } => {
                 // Composable context enforcement (first-class compose invariant, E4008)
                 if is_compose && !self.is_in_compose() {
@@ -5465,7 +5471,7 @@ impl TypeChecker {
         declared: &Type,
         expr: &Expr,
     ) -> ExpressionId {
-        let (is_compose, params, ret) =
+        let (is_compose, params, escaping, ret) =
             closure_signature(declared).expect("deferred closures have a function type");
         let ExprKind::Closure {
             params: written,
@@ -5494,6 +5500,7 @@ impl TypeChecker {
             body,
             is_compose,
             &params,
+            &escaping,
             expected_return.as_ref(),
             expr.span,
         );
@@ -6079,6 +6086,7 @@ impl TypeChecker {
                 clone,
                 destructure: None,
                 unbox: None,
+                captured: false,
                 span: target.span,
             });
             return self.error_node(vec![receiver], span);
@@ -6216,6 +6224,7 @@ impl TypeChecker {
                     is_compose,
                     params,
                     ret,
+                    ..
                 },
             param_names,
             has_default,
@@ -6425,6 +6434,7 @@ impl TypeChecker {
                         clone,
                         destructure: None,
                         unbox: None,
+                        captured: false,
                         span: expr.span,
                     });
                     ReceiverPass::CopyOut
@@ -6876,6 +6886,7 @@ impl TypeChecker {
                     clone: None,
                     destructure: None,
                     unbox: Some(format!("{}.unbox()", expr)),
+                    captured: false,
                     span: expr.span,
                 });
                 self.wrap_error(found_id)
@@ -6892,6 +6903,7 @@ impl TypeChecker {
                     clone,
                     destructure: None,
                     unbox: None,
+                    captured: false,
                     span: expr.span,
                 });
                 self.wrap_error(found_id)
@@ -7081,6 +7093,11 @@ impl TypeChecker {
                 .map(|local| format!("val ({}) = {}", member, local)),
             _ => None,
         };
+        let captured = match &expr.kind {
+            ExprKind::Ident(name) => !self.is_default_input(name) && self.is_capture(name),
+            ExprKind::This => !self.is_default_input(THIS) && self.is_capture(THIS),
+            _ => false,
+        };
         self.errors.push(TypeError::CannotMoveOut {
             source,
             ty: ty.clone(),
@@ -7088,6 +7105,7 @@ impl TypeChecker {
             clone,
             destructure,
             unbox: None,
+            captured,
             span: expr.span,
         });
     }
@@ -7127,13 +7145,10 @@ impl TypeChecker {
             ExprKind::This if self.is_default_input(THIS) => {
                 ("'this', which a default value borrows".to_string(), true)
             }
-            ExprKind::Ident(name) if self.is_capture(name) => (
-                format!("captured variable '{}', which the closure borrows", name),
-                true,
-            ),
-            ExprKind::This if self.is_capture(THIS) => {
-                ("'this', which the closure borrows".to_string(), true)
+            ExprKind::Ident(name) if self.is_capture(name) => {
+                (format!("captured variable '{}'", name), true)
             }
+            ExprKind::This if self.is_capture(THIS) => ("captured 'this'".to_string(), true),
             ExprKind::Ident(name) if self.is_top_level_value(name) => {
                 (format!("top-level value '{}'", name), false)
             }
@@ -7610,11 +7625,7 @@ impl TypeChecker {
                     if payloads.is_empty() {
                         (wrap(enum_ty), None)
                     } else {
-                        let ctor = Type::Fn {
-                            is_compose: false,
-                            params: payloads.clone(),
-                            ret: Box::new(enum_ty),
-                        };
+                        let ctor = Type::function(false, payloads.clone(), enum_ty);
                         (ctor, None)
                     }
                 } else {
@@ -8168,13 +8179,19 @@ fn this_member(member: &str, span: Span) -> Expr {
 /// The function type a closure argument is checked against, for a parameter of declared type
 /// `declared`: a function type, possibly nullable. Returns its compose flag, parameter types and
 /// return type.
-fn closure_signature(declared: &Type) -> Option<(bool, Vec<Type>, Type)> {
+fn closure_signature(declared: &Type) -> Option<(bool, Vec<Type>, Vec<bool>, Type)> {
     match declared {
         Type::Fn {
             is_compose,
             params,
+            escaping,
             ret,
-        } => Some((*is_compose, params.clone(), (**ret).clone())),
+        } => Some((
+            *is_compose,
+            params.clone(),
+            escaping.clone(),
+            (**ret).clone(),
+        )),
         Type::Nullable(inner) => closure_signature(inner),
         _ => None,
     }
@@ -8438,11 +8455,7 @@ mod tests {
         let mut checker = TypeChecker::new(None, "<test>");
         let compose_fn_sym = Symbol::function(
             "MyView",
-            Type::Fn {
-                is_compose: true,
-                params: Vec::new(),
-                ret: Box::new(Type::Unit),
-            },
+            Type::function(true, Vec::new(), Type::Unit),
             Visibility::Public,
             None,
             Span::dummy(),
@@ -8509,11 +8522,7 @@ mod tests {
         let mut checker = TypeChecker::new(None, "<test>");
         let fn_sym = Symbol::function(
             "add",
-            Type::Fn {
-                is_compose: false,
-                params: vec![Type::Int, Type::Int],
-                ret: Box::new(Type::Int),
-            },
+            Type::function(false, vec![Type::Int, Type::Int], Type::Int),
             Visibility::Public,
             None,
             Span::dummy(),
@@ -8576,11 +8585,7 @@ mod tests {
             },
         });
 
-        let expected_fn = Type::Fn {
-            is_compose: false,
-            params: vec![Type::Int],
-            ret: Box::new(Type::Int),
-        };
+        let expected_fn = Type::function(false, vec![Type::Int], Type::Int);
 
         let checked = check(&mut checker, &closure, &expected_fn);
         assert_eq!(checked, expected_fn);
@@ -8982,8 +8987,18 @@ mod tests {
                     name: "add".to_string(),
                     type_parameters: Vec::new(),
                     params: vec![
-                        ("a".to_string(), AbiType::Prim(PrimKind::Int), None),
-                        ("b".to_string(), AbiType::Prim(PrimKind::Int), None),
+                        prism_abi::AbiParameter {
+                            name: "a".to_string(),
+                            ty: AbiType::Prim(PrimKind::Int),
+                            escaping: false,
+                            default: None,
+                        },
+                        prism_abi::AbiParameter {
+                            name: "b".to_string(),
+                            ty: AbiType::Prim(PrimKind::Int),
+                            escaping: false,
+                            default: None,
+                        },
                     ],
                     return_type: AbiType::Prim(PrimKind::Int),
                     generic_body_hash: None,
@@ -9046,11 +9061,11 @@ mod tests {
     #[test]
     fn test_default_param_omission_and_named_args() {
         let mut checker = TypeChecker::new(None, "<test>");
-        let fn_ty = Type::Fn {
-            is_compose: false,
-            params: vec![Type::String, Type::Int, Type::String],
-            ret: Box::new(Type::String),
-        };
+        let fn_ty = Type::function(
+            false,
+            vec![Type::String, Type::Int, Type::String],
+            Type::String,
+        );
         let sym = Symbol::function_with_defaults(
             "greet",
             fn_ty,
@@ -9317,11 +9332,7 @@ mod tests {
         let mut checker = TypeChecker::new(None, "<test>");
         let comp_fn = Symbol::function(
             "MyView",
-            Type::Fn {
-                is_compose: true,
-                params: Vec::new(),
-                ret: Box::new(Type::Unit),
-            },
+            Type::function(true, Vec::new(), Type::Unit),
             Visibility::Public,
             None,
             Span::dummy(),
@@ -9635,11 +9646,7 @@ mod tests {
         };
         let nullable = |inner: Type| Type::Nullable(Box::new(inner));
         let heap = |inner: Type| Type::Heap(Box::new(inner));
-        let function = Type::Fn {
-            is_compose: false,
-            params: Vec::new(),
-            ret: Box::new(Type::Unit),
-        };
+        let function = Type::function(false, Vec::new(), Type::Unit);
         // (type, is Copy, is Clone)
         let table = [
             (Type::Int, true, true),
