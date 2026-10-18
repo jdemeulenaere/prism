@@ -69,8 +69,12 @@ Each entry MUST be written to a temporary file in its final directory and then r
 - **THEN** every file is checked again, and no entry is written
 
 ### Requirement: Explaining Cache Use
-`prism check --explain-cache` MUST print, after a successful check's report, a line `Cache: <directory>` (or `Cache: off`), then for each file in check order `  checked <path>` or `  reused <path>`, with the path relative to the workspace root and `/` separators, each followed by its instances as `  instantiate <instance> for <path>` or `  reused instance <instance> for <path>`.
+`prism check --explain-cache` MUST print, after a successful check's report, a line `Cache: <directory>` (or `Cache: off`), then for each file in check order `  checked <path>` or `  reused <path>`, with the path relative to the workspace root and `/` separators, each followed by its instances as `  instantiate <instance> for <path>` or `  reused instance <instance> for <path>`. An instance MUST be shown as the generic's module, `::`, for an extension the name of its receiver type without type arguments and `.`, the generic's name, and its type arguments in angle brackets, so that a reused file shows exactly what checking it again would show.
 
 #### Scenario: Explaining a warm check
 - **WHEN** `app/main.prism` imports `/lib/box`, which exports `public fun <T> keep(x: T): T`, `app/main` calls `keep(1)`, and `prism check --explain-cache app/main.prism` runs twice with no edit
 - **THEN** the first run prints `  checked lib/box.prism`, `  checked app/main.prism` and `  instantiate lib/box::keep<Int> for app/main.prism`, and the second prints `  reused lib/box.prism`, `  reused app/main.prism` and `  reused instance lib/box::keep<Int> for app/main.prism`
+
+#### Scenario: Explaining an instance of a generic extension
+- **WHEN** `lib/box.prism` exports `public struct Box<T>(val value: T)` and `public fun <T> Box<T>.size(): Int`, `app/main.prism` calls `Box(1).size()`, and the extension's type parameter is renamed to `U` between two runs of `prism check --explain-cache app/main.prism`
+- **THEN** the first run prints `  instantiate lib/box::Box.size<Int> for app/main.prism`, and the second reuses `app/main.prism`, whose import's interface hash ignores type parameter names, and prints `  reused instance lib/box::Box.size<Int> for app/main.prism`

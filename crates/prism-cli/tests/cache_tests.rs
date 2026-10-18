@@ -380,6 +380,43 @@ fn polymorphic_calls_are_not_recorded() {
     );
 }
 
+/// build-cache: "Explaining an instance of a generic extension".
+#[test]
+fn explaining_an_instance_of_a_generic_extension() {
+    let library = "package lib\npublic struct Box<T>(val value: T)\n\
+                   public fun <T> Box<T>.size(): Int = 1\n";
+    let workspace = Workspace::new(
+        "extension_instance",
+        &[
+            ("lib/box.prism", library),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/box\nfun f(): Int = Box(1).size()\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked lib/box.prism",
+            "checked app/main.prism",
+            "instantiate lib/box::Box.size<Int> for app/main.prism",
+        ])
+    );
+    workspace.write(
+        "lib/box.prism",
+        &library.replace("<T> Box<T>", "<U> Box<U>"),
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&[
+            "checked lib/box.prism",
+            "reused app/main.prism",
+            "reused instance lib/box::Box.size<Int> for app/main.prism",
+        ])
+    );
+}
+
 // --- The cache itself
 
 /// build-cache: "Cache directory override".

@@ -504,13 +504,33 @@ fn instance_requests(mir: &MirFile, import_modules: &[String]) -> Vec<InstanceRe
                 receiver: path.receiver.as_ref().map(receiver_constructor),
                 name: path.name.clone(),
                 type_arguments: hasher.finish(),
-                display: format!("{}<{}>", path, shown.join(", ")),
+                display: instance_display(path, &shown),
             });
         }
     }
     requests.sort();
     requests.dedup();
     requests
+}
+
+/// How the instance of the generic `path` with the type arguments `shown` is shown to the user:
+/// `lib/box::keep<Int>`, or `lib/box::Box.get<Int>` for an extension. The receiver is shown by
+/// its type's name alone: its type arguments name the extension's own type parameters, which no
+/// interface hash covers, so showing them would let a reused entry show a stale name.
+fn instance_display(path: &prism_typed_tree::DeclarationPath, shown: &[String]) -> String {
+    use prism_typed_tree::Type;
+    let receiver = match &path.receiver {
+        Some(Type::Struct { id, .. } | Type::Enum { id, .. }) => format!("{}.", id.name),
+        Some(other) => format!("{}.", other),
+        None => String::new(),
+    };
+    format!(
+        "{}::{}{}<{}>",
+        path.module,
+        receiver,
+        path.name,
+        shown.join(", ")
+    )
 }
 
 /// The constructor of an extension's receiver type, as [`prism_abi::receiver_constructor`]
