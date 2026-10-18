@@ -62,12 +62,12 @@ pub(crate) fn elaborate_body(
             span: body.locals[*local].span,
         });
     }
-    let flag_of = |path| {
-        flags
-            .iter()
-            .find(|(local, _)| data.root(**local) == path)
-            .map(|(_, flag)| *flag)
-    };
+    // The flag of each guarded local's root path, which is the local's alone.
+    let flag_by_path: HashMap<crate::move_paths::MovePathId, LocalId> = flags
+        .iter()
+        .map(|(local, flag)| (data.root(*local), *flag))
+        .collect();
+    let flag_of = |path| flag_by_path.get(&path).copied();
     let incoming = predecessors(body);
     // Assignments at the start of each block, and new blocks for split call edges.
     let mut prefixes: Vec<Vec<Statement>> = vec![Vec::new(); body.blocks.len()];
