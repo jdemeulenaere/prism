@@ -153,6 +153,8 @@ nullable Int? (size 16, align 8, tag u8 at 0)
   payload Int at 8
 ```
 
+*Implementation note (autonomous).* "Types a body holds" are the types of its locals and, recursively, the structs, enums and nullables those hold through fields, payloads and referents, but not through `Heap<T>`: a local `Circle` also lists the `Vec` inside it, so the dump shows every layout the body's code embeds. The MIR's type table keeps no declaration order, so `prism dump-layout` takes the order of the file's own types from its typed tree. Rejected: listing the types of locals only. Field types are rendered as the other dumps render them (`Float` for `Double`).
+
 A type without a layout yet is listed with the construct it waits for rather than failing the dump, because layouts are what the dump is for; a file with type or borrow errors reports them and prints nothing, like `dump-clif`. Fixtures compare the dump with a `layout.snap` beside the case (the fixture runner gains that snapshot kind, like `mir.snap`), so the layout rules of D5 to D8 are pinned by tests, which `prism dump-clif` (no snapshots, codegen-core's D23) could not do. Rejected: layouts in `dump-clif`'s output (mixed with IR, and unstable across Cranelift upgrades); a `--layouts` flag on `dump-mir` (MIR does not know layouts).
 
 ### D19. What `E6001` still rejects
