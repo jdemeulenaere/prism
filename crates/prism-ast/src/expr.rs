@@ -128,17 +128,126 @@ pub struct CallArg {
     pub span: Span,
 }
 
-/// Pattern in a `when` branch.
+/// A pattern of a `when` branch (D1 of `payload-patterns`): it mirrors how the matched value is
+/// built.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum WhenPattern {
-    /// Single expression or constant match, e.g. `0` or `1, 2, 3`.
-    Expr(Expr),
+pub struct Pattern {
+    pub kind: PatternKind,
+    pub span: Span,
+}
+
+/// The specific kind of a pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PatternKind {
+    /// `_`: matches anything.
+    Wildcard,
+    /// `val name` or `var name`: matches anything and binds it.
+    Binding { is_var: bool, name: String },
+    /// `Callee(p1, ..., pn)`: a variant or struct matched by its parts, whose callee is a dotted
+    /// name (`Shape.Circle`, `Point`). The type checker resolves it; a callee that is neither a
+    /// variant nor a struct is the value [`Pattern::to_expression`] spells (D2).
+    Constructor {
+        callee: Expr,
+        arguments: Vec<PatternArgument>,
+    },
+    /// A value compared with the matched part by `==`. A bare variant name (`Red`,
+    /// `Shape.Circle`) is one too, which the type checker resolves to a variant pattern.
+    Value(Expr),
     /// Range pattern: `in start..end`, or `in start..<end`, which excludes `end`.
     InRange {
         start: Expr,
         end: Expr,
         end_inclusive: bool,
     },
+}
+
+/// A sub-pattern of a constructor pattern, optionally naming a struct field (`y = val y`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PatternArgument {
+    pub name: Option<String>,
+    pub pattern: Pattern,
+    pub span: Span,
+}
+
+impl Pattern {
+    pub fn new(kind: PatternKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+
+    /// The value expression the pattern spells, when it is a value or a constructor pattern
+    /// whose sub-patterns all spell values: `g(3)` for the constructor pattern `g(3)`. A
+    /// constructor pattern whose callee is a function is this value (D2 of `payload-patterns`).
+    pub fn to_expression(&self) -> Option<Expr> {
+        match &self.kind {
+            PatternKind::Value(expr) => Some(expr.clone()),
+            PatternKind::Constructor { callee, arguments } => {
+                let args = arguments
+                    .iter()
+                    .map(|argument| {
+                        argument.pattern.to_expression().map(|value| CallArg {
+                            name: argument.name.clone(),
+                            value,
+                            span: argument.span,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Expr::new(
+                    ExprKind::Call {
+                        callee: Box::new(callee.clone()),
+                        type_arguments: Vec::new(),
+                        args,
+                    },
+                    self.span,
+                ))
+            }
+            PatternKind::Wildcard | PatternKind::Binding { .. } | PatternKind::InRange { .. } => {
+                None
+            }
+        }
+    }
+}
+
+impl fmt::Display for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            PatternKind::Wildcard => write!(f, "_"),
+            PatternKind::Binding { is_var, name } => {
+                write!(f, "{} {}", if *is_var { "var" } else { "val" }, name)
+            }
+            PatternKind::Constructor { callee, arguments } => {
+                write!(f, "{}(", callee)?;
+                for (i, argument) in arguments.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    if let Some(name) = &argument.name {
+                        write!(f, "{} = ", name)?;
+                    }
+                    write!(f, "{}", argument.pattern)?;
+                }
+                write!(f, ")")
+            }
+            PatternKind::Value(expr) => write!(f, "{}", expr),
+            PatternKind::InRange {
+                start,
+                end,
+                end_inclusive,
+            } => {
+                let operator = if *end_inclusive { ".." } else { "..<" };
+                write!(f, "in {}{}{}", start, operator, end)
+            }
+        }
+    }
+}
+
+/// Pattern in a `when` branch.
+// `Else` is the rare case; boxing every pattern for it would cost more than its size.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WhenPattern {
+    /// A pattern: without a subject, a condition (always a [`PatternKind::Value`] or, rejected
+    /// by the type checker, a range).
+    Pattern(Pattern),
     /// Fallback `else` branch.
     Else,
 }
@@ -147,6 +256,8 @@ pub enum WhenPattern {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenPattern>,
+    /// `if condition` after the patterns (D9 of `payload-patterns`), only with a subject.
+    pub guard: Option<Expr>,
     pub body: Expr,
     pub span: Span,
 }

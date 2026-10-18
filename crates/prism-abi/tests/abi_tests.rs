@@ -195,6 +195,24 @@ mod tests {
     }
 
     #[test]
+    fn test_default_value_pattern_and_guard_changes_alter_abi_hash() {
+        let hash = |src: &str| {
+            let ast = parse_source(src).expect("Parse");
+            FileAbi::extract(&ast, "test/file", &no_imports)
+                .expect("ABI")
+                .abi_hash
+        };
+        let base = "public fun foo(x: Int = when (1) { val n -> n }): Int = x\n";
+        let renamed = "public fun foo(x: Int = when (1) { val m -> m }): Int = x\n";
+        let guarded =
+            "public fun foo(x: Int = when (1) { val n if n > 0 -> n; else -> 0 }): Int = x\n";
+        let moved = "public fun foo(x: Int =\n    when (1) { val n -> n }): Int = x\n";
+        assert_ne!(hash(base), hash(renamed));
+        assert_ne!(hash(base), hash(guarded));
+        assert_eq!(hash(base), hash(moved));
+    }
+
+    #[test]
     fn test_function_reordering_independence() {
         let src1 = r#"
             public fun first(): Int = 1

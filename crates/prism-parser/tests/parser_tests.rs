@@ -1268,7 +1268,10 @@ mod tests {
         let patterns: Vec<String> = branches
             .iter()
             .map(|b| match &b.patterns[..] {
-                [WhenPattern::Expr(p)] => p.to_string(),
+                [WhenPattern::Pattern(Pattern {
+                    kind: PatternKind::Value(p),
+                    ..
+                })] => p.to_string(),
                 [WhenPattern::Else] => "else".to_string(),
                 other => panic!("Unexpected patterns {:?}", other),
             })
@@ -1354,5 +1357,110 @@ mod tests {
             assert_parse_error(src, "import paths cannot contain '.' or '..'");
         }
         parse_source("import /core/fmt\nimport widgets").expect("identifier segments parse");
+    }
+
+    /// The patterns of each branch of the first function's `when` body, written back by
+    /// `Display`, with each guard after `if`.
+    fn when_patterns(src: &str) -> Vec<String> {
+        let e = expr_body(src);
+        let ExprKind::When { branches, .. } = &e.kind else {
+            panic!("Expected when in {}", src);
+        };
+        branches
+            .iter()
+            .map(|b| {
+                let patterns: Vec<String> = b
+                    .patterns
+                    .iter()
+                    .map(|p| match p {
+                        WhenPattern::Pattern(pattern) => match &pattern.kind {
+                            PatternKind::Value(value) => format!("value {}", value),
+                            _ => pattern.to_string(),
+                        },
+                        WhenPattern::Else => "else".to_string(),
+                    })
+                    .collect();
+                match &b.guard {
+                    Some(guard) => format!("{} if {}", patterns.join(", "), guard),
+                    None => patterns.join(", "),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn constructor_patterns_are_told_apart_from_values() {
+        assert_eq!(
+            when_patterns(
+                "fun f(x: Int) = when (x) { g(1) + 1 -> a; g(3) -> b; f(x).y -> c; h(1) { 2 } -> d; Shape.Rect(val w, _) -> e; else -> z }"
+            ),
+            [
+                "value (g(1) + 1)",
+                "g(3)",
+                "value f(x).y",
+                "value h(1, { ... (0 statements, tail) })",
+                "Shape.Rect(val w, _)",
+                "else",
+            ]
+        );
+        assert_eq!(
+            when_patterns(
+                "fun f(e: Event) = when (e) { Event.Click(Point(0, val y)), Event.Key(var k) if k > 1 -> a; Point(y = val y, x = 0) -> b; Box.Of(g(1) * 2) -> c }"
+            ),
+            [
+                "Event.Click(Point(0, val y)), Event.Key(var k) if (k > 1)",
+                "Point(y = val y, x = 0)",
+                "Box.Of((g(1) * 2))",
+            ]
+        );
+    }
+
+    #[test]
+    fn wildcards_bindings_and_ranges_as_patterns() {
+        assert_eq!(
+            when_patterns(
+                "fun f(x: Int) = when (x) { 0 -> a; in 1..<3 -> b; val n if n > 9 -> c; _ -> d }"
+            ),
+            ["value 0", "in 1..<3", "val n if (n > 9)", "_"]
+        );
+        assert_eq!(
+            when_patterns("fun f(x: Shape) = when (x) { Shape.Circle -> a; Red -> b }"),
+            ["value Shape.Circle", "value Red"]
+        );
+    }
+
+    #[test]
+    fn patterns_and_guards_need_a_subject() {
+        for src in [
+            "fun f(c: Bool): Int = when { _ -> 1 }",
+            "fun f(c: Bool): Int = when { val x -> 1; else -> 2 }",
+            "fun f(c: Bool): Int = when { c if c -> 1; else -> 2 }",
+        ] {
+            assert_parse_error(src, "without a subject is a condition");
+        }
+        assert_parse_error(
+            "fun f(x: Int): Int = when (x) { else if x > 0 -> 1 }",
+            "'else' branch cannot have a guard",
+        );
+    }
+
+    #[test]
+    fn destructuring_declarations() {
+        let stmts = block_stmts(
+            "fun f(u: User) { val (name as n, email,) = u; var (age) = u; val as = 1 }",
+        );
+        let shown: Vec<String> = stmts.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            shown,
+            ["val (name as n, email) = u", "var (age) = u", "val as = 1"]
+        );
+        for (src, message) in [
+            ("fun f() { val (a, b): Pair = p }", "no type annotation"),
+            ("fun f() { val () = p }", "at least one field name"),
+            ("fun f() { val (a.b) = p }", "Expected ',' or ')'"),
+            ("fun f() { val (_) = p }", "'_' is not needed"),
+        ] {
+            assert_parse_error(src, message);
+        }
     }
 }

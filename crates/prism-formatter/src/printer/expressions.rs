@@ -537,20 +537,13 @@ impl<'a> Printer<'a> {
                 parts.push(text(", "));
             }
             match pattern {
-                WhenPattern::Expr(expression) => parts.push(self.expression(expression)),
-                WhenPattern::InRange {
-                    start,
-                    end,
-                    end_inclusive,
-                } => {
-                    let level = precedence(BinaryOp::Range);
-                    parts.push(text("in "));
-                    parts.push(self.operand(start, level, Side::Left));
-                    parts.push(text(if *end_inclusive { ".." } else { "..<" }));
-                    parts.push(self.operand(end, level, Side::Right));
-                }
+                WhenPattern::Pattern(pattern) => parts.push(self.pattern(pattern)),
                 WhenPattern::Else => parts.push(text("else")),
             }
+        }
+        if let Some(guard) = &branch.guard {
+            parts.push(text(" if "));
+            parts.push(self.expression(guard));
         }
         parts.push(text(" ->"));
         let body = &branch.body;
@@ -566,6 +559,53 @@ impl<'a> Printer<'a> {
             _ => parts.push(self.right_side(body)),
         }
         concat(parts)
+    }
+
+    /// A pattern, as written: constructor patterns in the spacing of calls, their sub-patterns
+    /// breaking like arguments (the `formatting` spec, "Patterns and Destructuring Are Printed").
+    pub(crate) fn pattern(&mut self, pattern: &Pattern) -> Document {
+        match &pattern.kind {
+            PatternKind::Wildcard => text("_"),
+            PatternKind::Binding { is_var, name } => {
+                text(format!("{} {}", if *is_var { "var" } else { "val" }, name))
+            }
+            PatternKind::Value(expression) => self.expression(expression),
+            PatternKind::InRange {
+                start,
+                end,
+                end_inclusive,
+            } => {
+                let level = precedence(BinaryOp::Range);
+                concat(vec![
+                    text("in "),
+                    self.operand(start, level, Side::Left),
+                    text(if *end_inclusive { ".." } else { "..<" }),
+                    self.operand(end, level, Side::Right),
+                ])
+            }
+            PatternKind::Constructor { callee, arguments } => {
+                let callee = self.expression(callee);
+                let close_offset = pattern.span.end.saturating_sub(1);
+                let list = self.comma_list(
+                    arguments,
+                    |argument| argument.span,
+                    |printer, argument| {
+                        let pattern = printer.pattern(&argument.pattern);
+                        match &argument.name {
+                            Some(name) => concat(vec![text(format!("{} = ", name)), pattern]),
+                            None => pattern,
+                        }
+                    },
+                    CommaList {
+                        open: "(",
+                        close: ")",
+                        close_offset,
+                        trailing_comma: true,
+                    },
+                );
+                concat(vec![callee, list])
+            }
+        }
     }
 
     /// `{ a, b -> body }`: on one line when its body is a single statement or expression, it

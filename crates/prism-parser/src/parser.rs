@@ -29,6 +29,10 @@ pub enum Precedence {
 /// `E2002` instead of aborting the process.
 pub const MAX_NESTING_DEPTH: usize = 256;
 
+/// The error for `_`, a binding or a guard in a `when` without a subject (D2 of
+/// `payload-patterns`).
+const NO_SUBJECT_PATTERN: &str = "A branch of a 'when' without a subject is a condition: '_', 'val' and 'var' bindings and 'if' guards need a subject (use '&&' to combine conditions)";
+
 /// The error for a prefix `*` anywhere but at the start of an assignment target.
 /// The message for `++` or `--` (`operator`) anywhere: Prism has no increment or decrement
 /// operators (D8 of `compound-assignment`).
@@ -2042,7 +2046,8 @@ impl Parser {
         };
 
         self.expect(TokenKind::LBrace)?;
-        let branches = self.with_newlines(true, Self::parse_when_branches)?;
+        let has_subject = target.is_some();
+        let branches = self.with_newlines(true, |p| p.parse_when_branches(has_subject))?;
         let end = self.expect(TokenKind::RBrace)?.span;
 
         Ok(Expr::new(
@@ -2051,11 +2056,12 @@ impl Parser {
         ))
     }
 
-    /// `when` branches up to (not including) the closing `}`.
-    fn parse_when_branches(&mut self) -> Result<Vec<WhenBranch>, ParseError> {
+    /// `when` branches up to (not including) the closing `}`. `has_subject` tells whether
+    /// branches hold patterns or, without a subject, conditions.
+    fn parse_when_branches(&mut self, has_subject: bool) -> Result<Vec<WhenBranch>, ParseError> {
         let mut branches = Vec::new();
         while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
-            branches.push(self.parse_when_branch()?);
+            branches.push(self.parse_when_branch(has_subject)?);
 
             if self.peek_kind() == &TokenKind::Comma || self.peek_kind() == &TokenKind::Semicolon {
                 self.bump();
@@ -2066,16 +2072,27 @@ impl Parser {
         Ok(branches)
     }
 
-    fn parse_when_branch(&mut self) -> Result<WhenBranch, ParseError> {
+    fn parse_when_branch(&mut self, has_subject: bool) -> Result<WhenBranch, ParseError> {
         let mut patterns = Vec::new();
         let b_start = self.peek().span;
 
         if self.peek_kind() == &TokenKind::Else {
             self.bump();
             patterns.push(WhenPattern::Else);
+            if self.peek_kind() == &TokenKind::If {
+                return Err(ParseError::new(
+                    "An 'else' branch cannot have a guard; write the condition as a pattern or a guard of another branch",
+                    self.peek().span,
+                ));
+            }
         } else {
             while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
-                patterns.push(self.parse_when_pattern()?);
+                let pattern = if has_subject {
+                    self.parse_pattern(false)?
+                } else {
+                    self.parse_condition_pattern()?
+                };
+                patterns.push(WhenPattern::Pattern(pattern));
                 if self.peek_kind() == &TokenKind::Comma {
                     self.bump();
                 } else {
@@ -2090,33 +2107,196 @@ impl Parser {
             }
         }
 
+        let guard = if self.peek_kind() == &TokenKind::If {
+            if !has_subject {
+                return Err(ParseError::new(NO_SUBJECT_PATTERN, self.peek().span));
+            }
+            self.bump();
+            Some(self.parse_expr(Precedence::Lowest)?)
+        } else {
+            None
+        };
+
         self.expect(TokenKind::Arrow)?;
         let body = self.parse_branch_body()?;
         let b_end = body.span;
 
         Ok(WhenBranch {
             patterns,
+            guard,
             body,
             span: b_start.merge(b_end),
         })
     }
 
-    fn parse_when_pattern(&mut self) -> Result<WhenPattern, ParseError> {
-        if self.peek_kind() != &TokenKind::In {
-            return Ok(WhenPattern::Expr(self.parse_expr(Precedence::Lowest)?));
+    /// A branch pattern of a `when` without a subject: a condition, or a range (which the type
+    /// checker rejects). `_`, bindings and guards need a subject (D2 of `payload-patterns`).
+    fn parse_condition_pattern(&mut self) -> Result<Pattern, ParseError> {
+        match self.peek_kind() {
+            TokenKind::In => self.parse_range_pattern(),
+            TokenKind::Val | TokenKind::Var => {
+                Err(ParseError::new(NO_SUBJECT_PATTERN, self.peek().span))
+            }
+            TokenKind::Ident(name) if name == "_" => {
+                Err(ParseError::new(NO_SUBJECT_PATTERN, self.peek().span))
+            }
+            _ => {
+                let expr = self.parse_expr(Precedence::Lowest)?;
+                let span = expr.span;
+                Ok(Pattern::new(PatternKind::Value(expr), span))
+            }
         }
-        self.bump(); // 'in'
+    }
+
+    /// A pattern (D1 to D3 of `payload-patterns`): `_`, a binding `val x` or `var x`, a range
+    /// `in a..b`, a constructor pattern `Name.Variant(p, ...)`, or any value expression. A nested
+    /// pattern is a sub-pattern of a constructor pattern.
+    fn parse_pattern(&mut self, nested: bool) -> Result<Pattern, ParseError> {
+        let outer_peak = self.enter()?;
+        let result = self.parse_pattern_inner(nested);
+        self.exit(outer_peak);
+        result
+    }
+
+    fn parse_pattern_inner(&mut self, nested: bool) -> Result<Pattern, ParseError> {
+        let token = self.peek().clone();
+        match &token.kind {
+            TokenKind::Ident(name) if name == "_" => {
+                self.bump();
+                return Ok(Pattern::new(PatternKind::Wildcard, token.span));
+            }
+            TokenKind::Val | TokenKind::Var => {
+                let is_var = token.kind == TokenKind::Var;
+                self.bump();
+                let (name, name_span) = self.expect_ident()?;
+                return Ok(Pattern::new(
+                    PatternKind::Binding { is_var, name },
+                    token.span.merge(name_span),
+                ));
+            }
+            TokenKind::In => return self.parse_range_pattern(),
+            TokenKind::Ident(_) | TokenKind::Compose if self.is_constructor_pattern_ahead() => {
+                if let Some(pattern) = self.speculate(|p| p.parse_constructor_pattern(nested)) {
+                    return Ok(pattern);
+                }
+            }
+            _ => {}
+        }
+        let expr = self.parse_expr(Precedence::Lowest)?;
+        let span = expr.span;
+        Ok(Pattern::new(PatternKind::Value(expr), span))
+    }
+
+    /// Whether a dotted name followed by `(` on the same line starts here (D2).
+    fn is_constructor_pattern_ahead(&self) -> bool {
+        let mut index = self.cursor;
+        loop {
+            match &self.tokens[index.min(self.tokens.len() - 1)].kind {
+                TokenKind::Ident(_) | TokenKind::Compose => index += 1,
+                _ => return false,
+            }
+            let next = &self.tokens[index.min(self.tokens.len() - 1)];
+            match next.kind {
+                TokenKind::Dot => index += 1,
+                TokenKind::LParen => return !next.is_preceded_by_newline,
+                _ => return false,
+            }
+        }
+    }
+
+    /// A constructor pattern `Name.Variant(p, name = p, ...)`, kept only when a pattern
+    /// terminator follows its `)`: `,`, `->` or `if` at the top of a branch, `,` or `)` nested.
+    /// Otherwise it is an error, so that [`Self::speculate`] restores the stream and the
+    /// pattern is parsed as a value expression (`g(1) + 1`, `f(x).y`).
+    fn parse_constructor_pattern(&mut self, nested: bool) -> Result<Pattern, ParseError> {
+        let (name, name_span) = self.expect_ident()?;
+        let mut callee = Expr::new(ExprKind::Ident(name), name_span);
+        while self.peek_kind() == &TokenKind::Dot {
+            self.bump();
+            let (member, member_span) = self.expect_ident()?;
+            let span = callee.span.merge(member_span);
+            callee = Expr::new(
+                ExprKind::MemberAccess {
+                    target: Box::new(callee),
+                    member,
+                    is_safe_nav: false,
+                },
+                span,
+            );
+        }
+        self.expect(TokenKind::LParen)?;
+        let arguments = self.with_newlines(false, Self::parse_pattern_arguments)?;
+        let end = self.expect(TokenKind::RParen)?.span;
+        let terminated = if nested {
+            matches!(self.peek_kind(), TokenKind::Comma | TokenKind::RParen)
+        } else {
+            matches!(
+                self.peek_kind(),
+                TokenKind::Comma | TokenKind::Arrow | TokenKind::If
+            )
+        };
+        if !terminated {
+            return Err(ParseError::new(
+                "not a constructor pattern",
+                self.peek().span,
+            ));
+        }
+        let span = callee.span.merge(end);
+        Ok(Pattern::new(
+            PatternKind::Constructor { callee, arguments },
+            span,
+        ))
+    }
+
+    /// The sub-patterns of a constructor pattern up to (not including) the closing `)`, each
+    /// optionally named (`y = val y`), with an optional trailing comma.
+    fn parse_pattern_arguments(&mut self) -> Result<Vec<PatternArgument>, ParseError> {
+        let mut arguments = Vec::new();
+        while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
+            let mut name = None;
+            let mut start = self.peek().span;
+            if matches!(self.peek_kind(), TokenKind::Ident(_) | TokenKind::Compose)
+                && self.peek_ahead(1) == &TokenKind::Eq
+            {
+                let (n, n_span) = self.expect_ident()?;
+                self.bump(); // '='
+                name = Some(n);
+                start = n_span;
+            }
+            let pattern = self.parse_pattern(true)?;
+            let span = start.merge(pattern.span);
+            arguments.push(PatternArgument {
+                name,
+                pattern,
+                span,
+            });
+            if self.peek_kind() == &TokenKind::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        Ok(arguments)
+    }
+
+    /// `in start..end` or `in start..<end`.
+    fn parse_range_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let start_span = self.expect(TokenKind::In)?.span;
         let range_expr = self.parse_expr(Precedence::Lowest)?;
+        let span = start_span.merge(range_expr.span);
         match range_expr.kind {
             ExprKind::Binary {
                 op: op @ (BinaryOp::Range | BinaryOp::HalfOpenRange),
                 left,
                 right,
-            } => Ok(WhenPattern::InRange {
-                start: *left,
-                end: *right,
-                end_inclusive: op == BinaryOp::Range,
-            }),
+            } => Ok(Pattern::new(
+                PatternKind::InRange {
+                    start: *left,
+                    end: *right,
+                    end_inclusive: op == BinaryOp::Range,
+                },
+                span,
+            )),
             _ => Err(ParseError::new(
                 "Expected range expression 'a..b' or 'a..<b' after 'in'",
                 range_expr.span,
@@ -2153,6 +2333,10 @@ impl Parser {
             _ => unreachable!(),
         };
 
+        if self.peek_kind() == &TokenKind::LParen {
+            return self.parse_destructure(is_var, start);
+        }
+
         let (name, _) = self.expect_ident()?;
         let mut ty = None;
         if self.peek_kind() == &TokenKind::Colon {
@@ -2173,6 +2357,94 @@ impl Parser {
             },
             span,
         ))
+    }
+
+    /// The rest of a destructuring declaration `val (field, field as name, ...) = value`, from
+    /// its `(` (D13 of `payload-patterns`). `as` is a keyword only inside the list.
+    fn parse_destructure(&mut self, is_var: bool, start: Span) -> Result<Statement, ParseError> {
+        let open = self.expect(TokenKind::LParen)?.span;
+        let entries = self.with_newlines(false, |p| {
+            let mut entries = Vec::new();
+            while p.peek_kind() != &TokenKind::RParen && !p.is_eof() {
+                let (field, field_span) = p.destructure_name()?;
+                let (name, name_span) = if p.peek_kind() == &TokenKind::Ident("as".to_string())
+                {
+                    p.bump();
+                    p.destructure_name()?
+                } else {
+                    (field.clone(), field_span)
+                };
+                entries.push(DestructureEntry {
+                    field,
+                    field_span,
+                    name,
+                    name_span,
+                });
+                match p.peek_kind() {
+                    TokenKind::Comma => {
+                        p.bump();
+                    }
+                    TokenKind::RParen => break,
+                    _ => {
+                        return Err(ParseError::new(
+                            format!(
+                                "Expected ',' or ')' after a destructuring entry, found '{}'; an entry is a field name, optionally followed by 'as' and a name",
+                                p.peek_kind()
+                            ),
+                            p.peek().span,
+                        ))
+                    }
+                }
+            }
+            Ok(entries)
+        })?;
+        let close = self.expect(TokenKind::RParen)?.span;
+        if entries.is_empty() {
+            return Err(ParseError::new(
+                "A destructuring declaration needs at least one field name",
+                open.merge(close),
+            ));
+        }
+        if self.peek_kind() == &TokenKind::Colon {
+            return Err(ParseError::new(
+                "A destructuring declaration takes no type annotation; its locals have the types of the fields they bind",
+                self.peek().span,
+            ));
+        }
+        self.expect(TokenKind::Eq)?;
+        let initializer = self.parse_initializer()?;
+        let span = start.merge(initializer.span);
+        Ok(Statement::new(
+            StatementKind::Destructure {
+                is_var,
+                entries,
+                initializer,
+            },
+            span,
+        ))
+    }
+
+    /// A field or local name of a destructuring entry: an identifier other than `_` and `as`.
+    fn destructure_name(&mut self) -> Result<(String, Span), ParseError> {
+        let token = self.peek().clone();
+        match &token.kind {
+            TokenKind::Ident(name) if name == "_" => Err(ParseError::new(
+                "A destructuring entry names a field; '_' is not needed, since unnamed fields are not bound",
+                token.span,
+            )),
+            TokenKind::Ident(name) if name == "as" => Err(ParseError::new(
+                "Expected a field name before 'as' in a destructuring entry",
+                token.span,
+            )),
+            TokenKind::Ident(_) | TokenKind::Compose => self.expect_ident(),
+            _ => Err(ParseError::new(
+                format!(
+                    "Expected a field name in a destructuring declaration, found '{}'",
+                    token.kind
+                ),
+                token.span,
+            )),
+        }
     }
 
     /// A declaration's initializer. It is parsed above assignment precedence, so

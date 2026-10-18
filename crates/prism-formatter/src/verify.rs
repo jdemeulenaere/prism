@@ -171,6 +171,17 @@ fn erase_statement(statement: &mut Statement) {
             }
             erase_expression(initializer);
         }
+        StatementKind::Destructure {
+            entries,
+            initializer,
+            ..
+        } => {
+            for entry in entries {
+                erase(&mut entry.field_span);
+                erase(&mut entry.name_span);
+            }
+            erase_expression(initializer);
+        }
         StatementKind::Assign { target, value }
         | StatementKind::CompoundAssign { target, value, .. } => {
             erase_expression(target);
@@ -190,6 +201,25 @@ fn erase_statement(statement: &mut Statement) {
             erase(variable_span);
             erase_expression(iterable);
             erase_block(body);
+        }
+    }
+}
+
+fn erase_pattern(pattern: &mut Pattern) {
+    erase(&mut pattern.span);
+    match &mut pattern.kind {
+        PatternKind::Wildcard | PatternKind::Binding { .. } => {}
+        PatternKind::Value(expression) => erase_expression(expression),
+        PatternKind::InRange { start, end, .. } => {
+            erase_expression(start);
+            erase_expression(end);
+        }
+        PatternKind::Constructor { callee, arguments } => {
+            erase_expression(callee);
+            for argument in arguments {
+                erase(&mut argument.span);
+                erase_pattern(&mut argument.pattern);
+            }
         }
     }
 }
@@ -241,14 +271,12 @@ fn erase_expression(expression: &mut Expr) {
             for branch in branches {
                 erase(&mut branch.span);
                 for pattern in &mut branch.patterns {
-                    match pattern {
-                        WhenPattern::Expr(expression) => erase_expression(expression),
-                        WhenPattern::InRange { start, end, .. } => {
-                            erase_expression(start);
-                            erase_expression(end);
-                        }
-                        WhenPattern::Else => {}
+                    if let WhenPattern::Pattern(pattern) = pattern {
+                        erase_pattern(pattern);
                     }
+                }
+                if let Some(guard) = &mut branch.guard {
+                    erase_expression(guard);
                 }
                 erase_expression(&mut branch.body);
             }

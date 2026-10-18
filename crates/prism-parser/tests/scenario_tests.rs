@@ -189,22 +189,31 @@ fn when_branches_parse_into_value_list_range_and_else_patterns_in_source_order()
     let [zero, few, small, large] = &branches[..] else {
         panic!("expected four branches");
     };
-    assert!(matches!(&zero.patterns[..], [WhenPattern::Expr(e)] if int(e) == 0));
+    assert!(
+        matches!(&zero.patterns[..], [WhenPattern::Pattern(Pattern { kind: PatternKind::Value(e), .. })] if int(e) == 0)
+    );
     let few_values: Vec<_> = few
         .patterns
         .iter()
         .map(|p| match p {
-            WhenPattern::Expr(e) => int(e),
+            WhenPattern::Pattern(Pattern {
+                kind: PatternKind::Value(e),
+                ..
+            }) => int(e),
             other => panic!("expected a value pattern, got {:?}", other),
         })
         .collect();
     assert_eq!(few_values, vec![1, 2, 3]);
     match &small.patterns[..] {
-        [WhenPattern::InRange {
-            start,
-            end,
-            end_inclusive: true,
-        }] => assert_eq!((int(start), int(end)), (4, 10)),
+        [WhenPattern::Pattern(Pattern {
+            kind:
+                PatternKind::InRange {
+                    start,
+                    end,
+                    end_inclusive: true,
+                },
+            ..
+        })] => assert_eq!((int(start), int(end)), (4, 10)),
         other => panic!("expected a range pattern, got {:?}", other),
     }
     assert!(matches!(&large.patterns[..], [WhenPattern::Else]));
@@ -309,7 +318,9 @@ fn parenthesised_when_subject_and_branches_parse() {
     };
     assert_eq!(ident(target.as_ref().expect("subject")), "status");
     assert_eq!(branches.len(), 2);
-    assert!(matches!(&branches[0].patterns[..], [WhenPattern::Expr(e)] if int(e) == 0));
+    assert!(
+        matches!(&branches[0].patterns[..], [WhenPattern::Pattern(Pattern { kind: PatternKind::Value(e), .. })] if int(e) == 0)
+    );
     assert!(matches!(&branches[1].patterns[..], [WhenPattern::Else]));
 }
 
@@ -323,7 +334,7 @@ fn subjectless_when_has_no_target_and_condition_patterns() {
     assert_eq!(branches.len(), 3);
     assert!(matches!(
         &branches[0].patterns[..],
-        [WhenPattern::Expr(e)] if matches!(e.kind, ExprKind::Binary { op: BinaryOp::Lt, .. })
+        [WhenPattern::Pattern(Pattern { kind: PatternKind::Value(e), .. })] if matches!(e.kind, ExprKind::Binary { op: BinaryOp::Lt, .. })
     ));
 }
 
@@ -491,11 +502,15 @@ fn half_open_range_in_a_when_pattern() {
         panic!("expected a when");
     };
     match branches[0].patterns.as_slice() {
-        [WhenPattern::InRange {
-            start,
-            end,
-            end_inclusive: false,
-        }] => assert_eq!((int(start), int(end)), (0, 10)),
+        [WhenPattern::Pattern(Pattern {
+            kind:
+                PatternKind::InRange {
+                    start,
+                    end,
+                    end_inclusive: false,
+                },
+            ..
+        })] => assert_eq!((int(start), int(end)), (0, 10)),
         other => panic!("expected a half-open range pattern, got {:?}", other),
     }
 }

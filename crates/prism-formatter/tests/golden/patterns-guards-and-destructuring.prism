@@ -1,0 +1,1 @@
+fun f(s:Shape,u:User):Int{val(name as n,email)=u;return when(s){Shape.Rect(val w,_)if w>1->1;Point(y=0),_->2}}

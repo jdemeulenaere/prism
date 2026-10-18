@@ -1,6 +1,6 @@
 //! Blocks, statements, loops and the right side of `=`.
 
-use super::Printer;
+use super::{CommaList, Printer};
 use crate::document::*;
 use prism_ast::*;
 use prism_lexer::TokenKind;
@@ -93,6 +93,34 @@ impl<'a> Printer<'a> {
                 parts.push(text(" ="));
                 parts.push(self.right_side(initializer));
                 concat(parts)
+            }
+            StatementKind::Destructure {
+                is_var,
+                entries,
+                initializer,
+            } => {
+                let keyword = if *is_var { "var" } else { "val" };
+                let close_offset = self
+                    .token_before(initializer.span.start)
+                    .and_then(|equals| self.token_before(equals.span.start))
+                    .map_or(initializer.span.start, |close| close.span.start);
+                let list = self.comma_list(
+                    entries,
+                    |entry| entry.field_span.merge(entry.name_span),
+                    |_, entry| text(entry.to_string()),
+                    CommaList {
+                        open: "(",
+                        close: ")",
+                        close_offset,
+                        trailing_comma: true,
+                    },
+                );
+                concat(vec![
+                    text(format!("{} ", keyword)),
+                    list,
+                    text(" ="),
+                    self.right_side(initializer),
+                ])
             }
             StatementKind::Assign { target, value } => concat(vec![
                 self.expression(target),

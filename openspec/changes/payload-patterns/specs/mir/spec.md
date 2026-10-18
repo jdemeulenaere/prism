@@ -2,6 +2,17 @@
 
 ## MODIFIED Requirements
 
+### Requirement: Statements Assign Rvalues to Places
+Every place MUST be a local followed by projections: dereferences, fields by index, nullable payloads, payloads of a variant by index, and indices. A consumed place MUST be a move or copy operand, and every borrow MUST be an rvalue over a place recording whether it is shared or mutable and why it exists.
+
+#### Scenario: Field read through references
+- **WHEN** `struct User { val id: Int }` is declared and `fun f(u: &&User): Int = u.id` is lowered
+- **THEN** the return place is assigned a copy of field `id` of the place reached by two dereferences of the argument `u`
+
+#### Scenario: Moves, copies and borrows
+- **WHEN** `fun greet(n: &String): Int = 1` is declared and `fun f(s: String, n: Int): Int { val a = n; val b = s; return greet(b) }` is lowered
+- **THEN** `a` is assigned a copy of `n`, `b` a move of `s`, and `greet` is called with a shared argument borrow of `b`
+
 ### Requirement: When Branches Test Patterns in Order
 A `when` MUST evaluate its subject once. A `when` without guards whose patterns are all variant patterns with only wildcard and binding sub-patterns, or `else`, MUST switch on the subject's discriminant; any other `when` MUST test its patterns in order, each constructor pattern by its tag and then its sub-patterns from left to right. When no pattern matches, an exhaustive `when` without `else` MUST reach an unreachable terminator.
 

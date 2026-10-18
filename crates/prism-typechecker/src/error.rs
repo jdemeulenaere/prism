@@ -4,7 +4,7 @@ use crate::types::Type;
 use prism_ast::{Span, TypeMarker};
 use std::fmt;
 
-/// Semantic and type checking error categories (`E4001` - `E4023`).
+/// Semantic and type checking error categories (`E4001` - `E4025`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
@@ -211,6 +211,21 @@ pub enum TypeError {
         path: String,
         span: Span,
     },
+
+    /// E4024: A pattern that does not fit its subject's definition (D18 of `payload-patterns`):
+    /// the wrong number of sub-patterns, a named sub-pattern of a variant, a field named twice,
+    /// a positional sub-pattern after a named one, arguments of a payload-free variant, a
+    /// constructor pattern naming a function, or a destructuring of something other than a
+    /// struct. `help` suggests a fix when one applies.
+    InvalidPattern {
+        message: String,
+        span: Span,
+        help: Option<String>,
+    },
+
+    /// E4025: The patterns of one branch bind different names, or one name with different types
+    /// or binding modes (D10 of `payload-patterns`). `message` names the binding.
+    InconsistentAlternativeBindings { message: String, span: Span },
 }
 
 impl TypeError {
@@ -248,6 +263,8 @@ impl TypeError {
             TypeError::UnsatisfiedBound { .. } => "E4021",
             TypeError::BorrowInTypeArgument { .. } => "E4022",
             TypeError::InfinitelySizedType { .. } => "E4023",
+            TypeError::InvalidPattern { .. } => "E4024",
+            TypeError::InconsistentAlternativeBindings { .. } => "E4025",
         }
     }
 
@@ -285,6 +302,8 @@ impl TypeError {
             TypeError::UnsatisfiedBound { span, .. } => *span,
             TypeError::BorrowInTypeArgument { span, .. } => *span,
             TypeError::InfinitelySizedType { span, .. } => *span,
+            TypeError::InvalidPattern { span, .. } => *span,
+            TypeError::InconsistentAlternativeBindings { span, .. } => *span,
         }
     }
 
@@ -372,6 +391,8 @@ impl TypeError {
                 )
             }
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),
+            TypeError::InvalidPattern { message, .. } => message.clone(),
+            TypeError::InconsistentAlternativeBindings { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
             TypeError::DuplicateSymbol { name, .. } => {

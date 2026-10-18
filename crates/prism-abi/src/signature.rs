@@ -653,7 +653,13 @@ impl FileAbi {
                         .params
                         .iter()
                         .map(|p| {
-                            let def_str = p.default_value.as_ref().map(|d| d.to_string());
+                            // The default's whole syntax, span-free: its `Display` text summarizes blocks
+                            // and `when` branches, which would leave their contents unhashed.
+                            let def_str = p.default_value.as_ref().map(|d| {
+                                let mut h = DeterministicHasher::new();
+                                hash_expr_span_free(d, &mut h);
+                                h.finish().to_hex()
+                            });
                             (p.name.clone(), lower(&p.ty), def_str)
                         })
                         .collect();
@@ -909,6 +915,20 @@ fn hash_statement_span_free(statement: &Statement, hasher: &mut DeterministicHas
             }
             hash_expr_span_free(initializer, hasher);
         }
+        StatementKind::Destructure {
+            is_var,
+            entries,
+            initializer,
+        } => {
+            hasher.write_u8(32);
+            hasher.write_u8(if *is_var { 1 } else { 0 });
+            hasher.write_u64(entries.len() as u64);
+            for entry in entries {
+                hasher.write_str(&entry.field);
+                hasher.write_str(&entry.name);
+            }
+            hash_expr_span_free(initializer, hasher);
+        }
         StatementKind::Expression(expr) => {
             hasher.write_u8(24);
             hash_expr_span_free(expr, hasher);
@@ -933,6 +953,46 @@ fn hash_statement_span_free(statement: &Statement, hasher: &mut DeterministicHas
             hasher.write_str(variable);
             hash_expr_span_free(iterable, hasher);
             hash_block_span_free(body, hasher);
+        }
+    }
+}
+
+/// Hashes a pattern's syntax structure, ignoring all `Span` metadata.
+fn hash_pattern_span_free(pattern: &Pattern, hasher: &mut DeterministicHasher) {
+    match &pattern.kind {
+        PatternKind::Value(e) => {
+            hasher.write_u8(1);
+            hash_expr_span_free(e, hasher);
+        }
+        PatternKind::InRange {
+            start,
+            end,
+            end_inclusive,
+        } => {
+            hasher.write_u8(2);
+            hash_expr_span_free(start, hasher);
+            hash_expr_span_free(end, hasher);
+            hasher.write_u8(if *end_inclusive { 1 } else { 0 });
+        }
+        PatternKind::Wildcard => hasher.write_u8(4),
+        PatternKind::Binding { is_var, name } => {
+            hasher.write_u8(5);
+            hasher.write_u8(if *is_var { 1 } else { 0 });
+            hasher.write_str(name);
+        }
+        PatternKind::Constructor { callee, arguments } => {
+            hasher.write_u8(6);
+            hash_expr_span_free(callee, hasher);
+            hasher.write_u64(arguments.len() as u64);
+            for argument in arguments {
+                if let Some(name) = &argument.name {
+                    hasher.write_u8(1);
+                    hasher.write_str(name);
+                } else {
+                    hasher.write_u8(0);
+                }
+                hash_pattern_span_free(&argument.pattern, hasher);
+            }
         }
     }
 }
@@ -1052,24 +1112,20 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
                 hasher.write_u64(branch.patterns.len() as u64);
                 for pat in &branch.patterns {
                     match pat {
-                        WhenPattern::Expr(e) => {
+                        WhenPattern::Pattern(pattern) => {
                             hasher.write_u8(1);
-                            hash_expr_span_free(e, hasher);
-                        }
-                        WhenPattern::InRange {
-                            start,
-                            end,
-                            end_inclusive,
-                        } => {
-                            hasher.write_u8(2);
-                            hash_expr_span_free(start, hasher);
-                            hash_expr_span_free(end, hasher);
-                            hasher.write_u8(if *end_inclusive { 1 } else { 0 });
+                            hash_pattern_span_free(pattern, hasher);
                         }
                         WhenPattern::Else => {
                             hasher.write_u8(3);
                         }
                     }
+                }
+                if let Some(guard) = &branch.guard {
+                    hasher.write_u8(1);
+                    hash_expr_span_free(guard, hasher);
+                } else {
+                    hasher.write_u8(0);
                 }
                 hash_expr_span_free(&branch.body, hasher);
             }

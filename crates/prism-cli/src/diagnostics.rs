@@ -254,6 +254,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         | TypeError::CannotInferType {
             help: Some(help), ..
+        }
+        | TypeError::InvalidPattern {
+            help: Some(help), ..
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }
@@ -305,6 +308,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             out.push_str(
                 "   = help: add an 'else -> ...' branch to make the 'when' expression exhaustive\n",
             );
+        }
+        TypeError::InconsistentAlternativeBindings { .. } => {
+            out.push_str("   = help: bind the same names, with the same types, in every pattern of the branch, or split it into one branch per pattern\n");
         }
         TypeError::BreakOutsideLoop { .. } => {
             out.push_str("   = help: move it into a 'while', 'do' or 'for' loop body; inside a closure, return from the closure instead\n");

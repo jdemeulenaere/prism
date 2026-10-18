@@ -15,7 +15,7 @@ use crate::types::{
 use prism_abi::{AbiType, AbiTypeMembers, ExportedSymbol, FileAbi};
 use prism_ast::decl::{Declaration, FunctionBody, FunctionDecl, ReceiverMode, TopLevelVarDecl};
 use prism_ast::expr::{
-    BinaryOp, CallArg, Expr, ExprKind, Literal, UnaryOp, WhenBranch, WhenPattern,
+    BinaryOp, CallArg, Expr, ExprKind, Literal, PatternKind, UnaryOp, WhenBranch, WhenPattern,
 };
 use prism_ast::module::SourceFile;
 use prism_ast::statement::{Block, Statement, StatementKind};
@@ -3968,6 +3968,16 @@ impl TypeChecker {
                 ty,
                 initializer,
             } => self.check_local(*is_var, name, ty.as_ref(), initializer, statement.span),
+            StatementKind::Destructure { .. } => {
+                self.errors.push(TypeError::InvalidPattern {
+                    message: "destructuring declarations are not supported yet".to_string(),
+                    span: statement.span,
+                    help: None,
+                });
+                let value = self.error_node(Vec::new(), statement.span);
+                self.builder
+                    .add_statement(TreeStatementKind::Expression { value }, statement.span)
+            }
             StatementKind::Assign { target, value } => {
                 self.check_assignment(target, value, statement.span)
             }
@@ -4189,12 +4199,31 @@ impl TypeChecker {
         for branch in branches {
             let mut patterns = Vec::new();
             for pattern in &branch.patterns {
+                // A constructor pattern of values spells a value (D2 of `payload-patterns`).
+                let spelled = match pattern {
+                    WhenPattern::Pattern(
+                        p @ prism_ast::Pattern {
+                            kind: PatternKind::Constructor { .. },
+                            ..
+                        },
+                    ) => p.to_expression().map(|value| {
+                        WhenPattern::Pattern(prism_ast::Pattern {
+                            span: value.span,
+                            kind: PatternKind::Value(value),
+                        })
+                    }),
+                    _ => None,
+                };
+                let pattern = spelled.as_ref().unwrap_or(pattern);
                 match pattern {
                     WhenPattern::Else => {
                         has_else = true;
                         patterns.push(Pattern::Else);
                     }
-                    WhenPattern::Expr(p_expr) => {
+                    WhenPattern::Pattern(prism_ast::Pattern {
+                        kind: PatternKind::Value(p_expr),
+                        ..
+                    }) => {
                         let covered = subject_variants.as_ref().and_then(|(id, variants)| {
                             self.unit_variant_pattern(p_expr, id, variants)
                                 .map(|name| (id.clone(), variants, name))
@@ -4226,11 +4255,30 @@ impl TypeChecker {
                         }
                     }
                     // Whether the end is included only matters at runtime.
-                    WhenPattern::InRange {
-                        start,
-                        end,
-                        end_inclusive,
-                    } => {
+                    WhenPattern::Pattern(prism_ast::Pattern {
+                        kind:
+                            PatternKind::Wildcard
+                            | PatternKind::Binding { .. }
+                            | PatternKind::Constructor { .. },
+                        span,
+                    }) => {
+                        self.errors.push(TypeError::InvalidPattern {
+                            message: "this pattern is not supported yet".to_string(),
+                            span: *span,
+                            help: None,
+                        });
+                        let error = self.error_node(Vec::new(), *span);
+                        patterns.push(Pattern::Value(error));
+                    }
+                    WhenPattern::Pattern(prism_ast::Pattern {
+                        kind:
+                            PatternKind::InRange {
+                                start,
+                                end,
+                                end_inclusive,
+                            },
+                        ..
+                    }) => {
                         if let Some(s_ty) = &subject_ty {
                             let start = self.check_expr(start, s_ty);
                             let end = self.check_expr(end, s_ty);
@@ -4257,6 +4305,13 @@ impl TypeChecker {
                 }
             }
 
+            if let Some(guard) = &branch.guard {
+                self.errors.push(TypeError::InvalidPattern {
+                    message: "guards are not supported yet".to_string(),
+                    span: guard.span,
+                    help: None,
+                });
+            }
             let body = if let WhenUse::Check(expected) = use_ {
                 self.with_consuming(branch_consuming, |c| {
                     c.check_expr_at(&branch.body, expected, branch_origin)
@@ -7307,6 +7362,11 @@ mod tests {
     }
 
     // Helper to wrap expression in Expr
+    fn value_pattern(value: Expr) -> WhenPattern {
+        let span = value.span;
+        WhenPattern::Pattern(prism_ast::Pattern::new(PatternKind::Value(value), span))
+    }
+
     fn expr(kind: ExprKind) -> Expr {
         Expr::new(kind, Span::dummy())
     }
@@ -7412,7 +7472,8 @@ mod tests {
         let when_no_else = expr(ExprKind::When {
             target: Some(Box::new(expr(ExprKind::Literal(Literal::Int(1))))),
             branches: vec![WhenBranch {
-                patterns: vec![WhenPattern::Expr(expr(ExprKind::Literal(Literal::Int(1))))],
+                patterns: vec![value_pattern(expr(ExprKind::Literal(Literal::Int(1))))],
+                guard: None,
                 body: expr(ExprKind::Literal(Literal::String("one".to_string()))),
                 span: Span::dummy(),
             }],
@@ -7540,7 +7601,8 @@ mod tests {
             target: Some(Box::new(expr(ExprKind::Literal(Literal::Int(0))))),
             branches: vec![
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Literal(Literal::Int(0))))],
+                    patterns: vec![value_pattern(expr(ExprKind::Literal(Literal::Int(0))))],
+                    guard: None,
                     body: expr(ExprKind::Return(Some(Box::new(expr(ExprKind::Literal(
                         Literal::Int(99),
                     )))))),
@@ -7548,6 +7610,7 @@ mod tests {
                 },
                 WhenBranch {
                     patterns: vec![WhenPattern::Else],
+                    guard: None,
                     body: expr(ExprKind::Literal(Literal::Int(42))),
                     span: Span::dummy(),
                 },
@@ -8199,19 +8262,20 @@ mod tests {
             target: Some(Box::new(expr(ExprKind::Ident("c".to_string())))),
             branches: vec![
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident("Red".to_string())))],
+                    patterns: vec![value_pattern(expr(ExprKind::Ident("Red".to_string())))],
+                    guard: None,
                     body: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
                 },
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident(
-                        "Green".to_string(),
-                    )))],
+                    patterns: vec![value_pattern(expr(ExprKind::Ident("Green".to_string())))],
+                    guard: None,
                     body: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                 },
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident("Blue".to_string())))],
+                    patterns: vec![value_pattern(expr(ExprKind::Ident("Blue".to_string())))],
+                    guard: None,
                     body: expr(ExprKind::Literal(Literal::Int(3))),
                     span: Span::dummy(),
                 },
@@ -8226,14 +8290,14 @@ mod tests {
             target: Some(Box::new(expr(ExprKind::Ident("c".to_string())))),
             branches: vec![
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident("Red".to_string())))],
+                    patterns: vec![value_pattern(expr(ExprKind::Ident("Red".to_string())))],
+                    guard: None,
                     body: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
                 },
                 WhenBranch {
-                    patterns: vec![WhenPattern::Expr(expr(ExprKind::Ident(
-                        "Green".to_string(),
-                    )))],
+                    patterns: vec![value_pattern(expr(ExprKind::Ident("Green".to_string())))],
+                    guard: None,
                     body: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                 },

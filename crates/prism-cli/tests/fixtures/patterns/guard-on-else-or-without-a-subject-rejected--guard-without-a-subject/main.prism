@@ -1,0 +1,2 @@
+// expect: E2001
+fun g(c: Bool): Int = when { c if c -> 1; else -> 2 }

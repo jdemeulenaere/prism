@@ -1,0 +1,2 @@
+// expect: E2001
+fun f(x: Int): Int = when (x) { else if x > 0 -> 1 }

@@ -1,0 +1,8 @@
+fun f(e: Event, account: Account): Int {
+    var (name as accountName, email as accountEmail, identifier as accountIdentifier,) = account
+    return when (e) {
+        Event.Pointer(Position(horizontal = val horizontal, vertical = 0), Button.Primary, val modifiers) if horizontal > 1 -> 1
+        Event.Key(in 1..<3), Event.Key(var code) -> code
+        else -> 0
+    }
+}

@@ -42,6 +42,13 @@ pub enum StatementKind {
         ty: Option<Type>,
         initializer: Expr,
     },
+    /// A destructuring declaration `val (name, email as address) = user` (D13 of
+    /// `payload-patterns`): one local per entry, each bound to the field the entry names.
+    Destructure {
+        is_var: bool,
+        entries: Vec<DestructureEntry>,
+        initializer: Expr,
+    },
     /// An assignment `target = value`. Assignments are statements, never expressions.
     Assign { target: Expr, value: Expr },
     /// A compound assignment `target op= value` (`x += 1`), which means `target = target op
@@ -65,6 +72,26 @@ pub enum StatementKind {
         iterable: Expr,
         body: Block,
     },
+}
+
+/// An entry `field` or `field as name` of a destructuring declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DestructureEntry {
+    pub field: String,
+    pub field_span: Span,
+    /// The local's name: the field's, or the one after `as`.
+    pub name: String,
+    pub name_span: Span,
+}
+
+impl fmt::Display for DestructureEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.field == self.name && self.field_span == self.name_span {
+            write!(f, "{}", self.field)
+        } else {
+            write!(f, "{} as {}", self.field, self.name)
+        }
+    }
 }
 
 /// A statement node with its source span.
@@ -94,6 +121,15 @@ impl fmt::Display for Statement {
                     Some(t) => write!(f, "{} {}: {} = {}", keyword, name, t, initializer),
                     None => write!(f, "{} {} = {}", keyword, name, initializer),
                 }
+            }
+            StatementKind::Destructure {
+                is_var,
+                entries,
+                initializer,
+            } => {
+                let keyword = if *is_var { "var" } else { "val" };
+                let entries: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
+                write!(f, "{} ({}) = {}", keyword, entries.join(", "), initializer)
             }
             StatementKind::Assign { target, value } => write!(f, "{} = {}", target, value),
             StatementKind::CompoundAssign {
