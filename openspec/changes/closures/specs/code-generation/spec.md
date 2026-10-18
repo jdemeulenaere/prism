@@ -93,7 +93,7 @@ The closures lowered inside a generic body MUST be compiled as part of each inst
 - **THEN** it prints `18` and exits with status 0
 
 ### Requirement: Constructs the Backend Lacks Are Rejected Before Code Generation
-Before generating any code, the backend MUST check every body it compiles, each instance included, and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order; for an instance, at that location in the generic's source, once however many instances share it. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
+Before generating any code, the backend MUST check every body it compiles and report `E6001` (`UnsupportedByBackend`) for the first construct of each body that it does not support, naming the construct. An unsupported parameter or return type MUST be reported at the declaration, anything else at the first statement or terminator using it, in block order. A rejected program MUST NOT run. `prism check` MUST NOT report `E6001`.
 
 #### Scenario: A struct is rejected
 - **WHEN** `compose fun Label() {}`, `struct P { val content: compose () -> Unit }` and `fun main() { val p = P({ Label() }); println(1) }` are declared
@@ -111,12 +111,15 @@ Before generating any code, the backend MUST check every body it compiles, each 
 - **WHEN** `fun f(a: Widget, b: Gadget): Int = 1` and `fun g(c: Widget): Int = 2` are declared, with no declaration of `Widget` or `Gadget`, with a `main` that calls neither
 - **THEN** `prism run` reports exactly two `E6001`, one at the declaration of `f`, naming `Widget`, and one at the declaration of `g`
 
+### Requirement: The Backend Checks Each Instance
+The backend MUST check each instance it compiles as it checks every other body, closures of the instance included, and MUST report an unsupported construct of an instance at its location in the generic's source, once however many instances share it.
+
 #### Scenario: An unsupported construct in a generic body
 - **WHEN** `lib/run.prism` declares `public fun <T> later(x: T): Int { val f: compose () -> Unit = {}; return 1 }`, and `app/main.prism` imports `/lib/run` and declares `fun main() { println(later(1)); println(later(true)) }`
 - **THEN** `prism check app/main.prism` passes, and `prism run app/main.prism` reports exactly one `E6001`, at `{}` in `lib/run.prism`, naming composable functions, and runs nothing
 
 ### Requirement: Cranelift IR Dump
-`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, each headed by its symbol, followed by the file's drop, clone and equality glue, each headed by `<module>#drop(<type>)`, `<module>#clone(<type>)` or `<module>#equals(<type>)`, in order of their names. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs, so it prints no instance: a call of an instance appears as a load from its slot. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
+`prism dump-clif <file.prism>` MUST print, as deterministic text, the Cranelift IR of each function the backend generates for the file, in body order, followed by the file's glue in order of names, each headed by its symbol. Like `prism dump-mir --elaborated`, it MUST compile the file alone, against its direct imports' ABIs, so it prints no instance. When the file has errors of any stage, including `E6001`, it MUST report them, print no IR, and exit with a failure status.
 
 #### Scenario: Dumping a file's IR
 - **WHEN** `prism dump-clif main.prism` runs twice on a file that `prism run` accepts
