@@ -1,0 +1,2 @@
+// expect: E5006
+fun keep(slot: &mut &String, v: String) { *slot = &v }

@@ -16,6 +16,11 @@
 //! | write | any loan, except of a place reached from the written one through a reference | `E5004` |
 //! | drop, end of storage | any loan, except of a place reached through a reference | `E5006` |
 //!
+//! At each `Return`, every argument whose type needs no drop ends (an access of kind
+//! `StorageDead`, labelled at its declaration), before the caller's uses of the returned
+//! locals, which are labelled at the `&mut R` parameter they are seen through; an argument that
+//! needs a drop ends at its elaborated drop (D11 and D12 of `borrowck-elision`).
+//!
 //! A drop that the next statement's assignment of the same place follows is the drop of the
 //! assigned place's old value: the assignment is checked as the write. Each access reports the
 //! earliest conflicting loan by creation, and a dropped value is reported once per loan, and
@@ -36,7 +41,7 @@ use crate::location::{locations, Location};
 use crate::places;
 use prism_ast::Span;
 use prism_mir::{
-    Body, Callee, LocalId, LocalKind, MirFile, Operand, Place, Rvalue, StatementKind,
+    Body, BodyOwner, Callee, LocalId, LocalKind, MirFile, Operand, Place, Rvalue, StatementKind,
     TerminatorKind,
 };
 use std::collections::{HashSet, VecDeque};
@@ -50,8 +55,25 @@ pub(crate) enum Event {
         kind: AccessKind,
         span: Span,
     },
-    /// A use of the value of a local, which keeps the loans it holds live.
-    Use { local: LocalId, span: Span },
+    /// A use of the value of a local, which keeps the loans it holds live. `by_caller` marks a
+    /// `Return`'s use of an argument that the caller sees afterwards (a `&mut R` parameter),
+    /// whose span is the parameter's declaration (D12 of `borrowck-elision`).
+    Use {
+        local: LocalId,
+        span: Span,
+        by_caller: bool,
+    },
+}
+
+impl Event {
+    /// A use of `local` at `span` within the body.
+    fn using(local: LocalId, span: Span) -> Self {
+        Event::Use {
+            local,
+            span,
+            by_caller: false,
+        }
+    }
 }
 
 /// The events of `location` in `body`, in evaluation order.
@@ -102,10 +124,7 @@ pub(crate) fn location_events(
                             kind: AccessKind::Read,
                             span: *callee_span,
                         });
-                        uses.push(Event::Use {
-                            local: place.local,
-                            span: *callee_span,
-                        });
+                        uses.push(Event::using(place.local, *callee_span));
                     }
                     for argument in arguments {
                         let Some(place) = argument.place() else {
@@ -122,10 +141,7 @@ pub(crate) fn location_events(
                         } else {
                             operand_span(argument)
                         };
-                        uses.push(Event::Use {
-                            local: place.local,
-                            span: use_span,
-                        });
+                        uses.push(Event::using(place.local, use_span));
                     }
                     events.extend(uses);
                     destination_events(destination, span, &mut events);
@@ -143,10 +159,26 @@ pub(crate) fn location_events(
                     }
                 }
                 TerminatorKind::Return => {
+                    // The arguments end with the body (D11 of `borrowck-elision`): those that
+                    // need a drop at their elaborated drop or by being moved, the others here,
+                    // before the caller sees what the returned locals hold.
+                    for local in body.arguments() {
+                        let declaration = &body.locals[local];
+                        if !prism_mir::needs_drop(&declaration.ty, &file.types) {
+                            events.push(Event::Access {
+                                place: Place::local(local),
+                                kind: AccessKind::StorageDead,
+                                span: declaration.span,
+                            });
+                        }
+                    }
                     for local in returned {
+                        let declaration = &body.locals[*local];
+                        let by_caller = declaration.kind == LocalKind::Argument;
                         events.push(Event::Use {
                             local: *local,
-                            span,
+                            span: if by_caller { declaration.span } else { span },
+                            by_caller,
                         });
                     }
                 }
@@ -164,10 +196,7 @@ fn access(events: &mut Vec<Event>, place: &Place, kind: AccessKind, span: Span) 
         kind,
         span,
     });
-    events.push(Event::Use {
-        local: place.local,
-        span,
-    });
+    events.push(Event::using(place.local, span));
 }
 
 /// How `operand` accesses its place: a move of a `Copy` value is a read.
@@ -247,10 +276,7 @@ fn rvalue_events(
 /// The write of `destination`: a write through or into a place uses its root local first.
 fn destination_events(destination: &Place, span: Span, events: &mut Vec<Event>) {
     if !destination.projections.is_empty() {
-        events.push(Event::Use {
-            local: destination.local,
-            span,
-        });
+        events.push(Event::using(destination.local, span));
     }
     events.push(Event::Access {
         place: destination.clone(),
@@ -426,7 +452,21 @@ impl Checker<'_> {
         let (kind_of_error, primary) = match kind {
             AccessKind::Drop | AccessKind::StorageDead => {
                 let name = place_name.clone();
+                let ends_with_body = place.projections.is_empty()
+                    && self.body.locals[place.local].kind == LocalKind::Argument;
                 let (primary, at_end) = match &name {
+                    Some(name) if ends_with_body => (
+                        "borrowed value does not live long enough".to_string(),
+                        format!(
+                            "'{}' is dropped when the {} returns, while still borrowed",
+                            name,
+                            if matches!(self.body.owner, BodyOwner::Closure { .. }) {
+                                "closure"
+                            } else {
+                                "function"
+                            }
+                        ),
+                    ),
                     Some(name) => (
                         "borrowed value does not live long enough".to_string(),
                         format!("'{}' dropped here while still borrowed", name),
@@ -442,16 +482,19 @@ impl Checker<'_> {
                             .to_string(),
                     );
                 }
+                // An argument ends with the body, so it is labelled at its declaration (D12 of
+                // `borrowck-elision`).
+                let end_span = if ends_with_body {
+                    self.body.locals[place.local].span
+                } else {
+                    span
+                };
                 related.push(Label {
-                    span,
+                    span: end_span,
                     message: at_end,
                 });
-                if let Some((use_span, later_iteration)) = later {
-                    related.push(later_label(
-                        use_span,
-                        "borrow later used here",
-                        later_iteration,
-                    ));
+                if let Some(later) = later {
+                    related.push(later.label("borrow later used here"));
                 }
                 sort_labels(&mut related);
                 return BorrowError {
@@ -554,7 +597,7 @@ impl Checker<'_> {
                 },
             }),
         }
-        if let Some((use_span, later_iteration)) = later {
+        if let Some(later) = later {
             let message = if !conflict {
                 "borrow later used here"
             } else if both_mutable {
@@ -564,7 +607,7 @@ impl Checker<'_> {
             } else {
                 "shared borrow later used here"
             };
-            related.push(later_label(use_span, message, later_iteration));
+            related.push(later.label(message));
         }
         sort_labels(&mut related);
         BorrowError {
@@ -587,34 +630,57 @@ impl Checker<'_> {
     }
 
     /// The first use after event `index` of `location` of a local that holds `loan` there, by
-    /// breadth-first search, and whether it is reached only through a loop's back edge.
+    /// breadth-first search.
     fn later_use(
         &self,
         location: Location,
         index: usize,
         events: &[Event],
         loan: LoanId,
-    ) -> Option<(Span, bool)> {
+    ) -> Option<LaterUse> {
         let mut cursor = self.flow.cursor(self.body);
         let state = cursor.seek(location).clone();
         for event in &events[index + 1..] {
-            if let Event::Use { local, span } = event {
-                if self.holds(&state, *local, loan) {
-                    return Some((*span, false));
-                }
+            if let Some(found) = self.use_of(&state, event, loan, false) {
+                return Some(found);
             }
         }
         for later_iteration in [false, true] {
-            if let Some(span) = self.search(location, loan, later_iteration) {
-                return Some((span, later_iteration));
+            if let Some(found) = self.search(location, loan, later_iteration) {
+                return Some(found);
             }
         }
         None
     }
 
+    /// `event`, when it is a use of a local that holds `loan` in `state`.
+    fn use_of(
+        &self,
+        state: &BitSet,
+        event: &Event,
+        loan: LoanId,
+        later_iteration: bool,
+    ) -> Option<LaterUse> {
+        let Event::Use {
+            local,
+            span,
+            by_caller,
+        } = event
+        else {
+            return None;
+        };
+        self.holds(state, *local, loan).then(|| LaterUse {
+            span: *span,
+            later_iteration,
+            by_caller: by_caller
+                .then(|| self.body.locals[*local].name.clone())
+                .flatten(),
+        })
+    }
+
     /// The breadth-first search of [`Self::later_use`] from the successors of `location`,
     /// following back edges only when `back_edges` is set.
-    fn search(&self, location: Location, loan: LoanId, back_edges: bool) -> Option<Span> {
+    fn search(&self, location: Location, loan: LoanId, back_edges: bool) -> Option<LaterUse> {
         let mut cursor = self.flow.cursor(self.body);
         let mut visited: HashSet<Location> = HashSet::new();
         let mut queue: VecDeque<Location> = self.successors(location, back_edges).into();
@@ -625,10 +691,8 @@ impl Checker<'_> {
             let state = cursor.seek(next).clone();
             let events = location_events(self.file, self.body, next, &self.returned);
             for event in &events {
-                if let Event::Use { local, span } = event {
-                    if self.holds(&state, *local, loan) {
-                        return Some(*span);
-                    }
+                if let Some(found) = self.use_of(&state, event, loan, back_edges) {
+                    return Some(found);
                 }
             }
             queue.extend(self.successors(next, back_edges));
@@ -655,14 +719,30 @@ impl Checker<'_> {
     }
 }
 
-/// A label of a later use, ", in later iteration of loop" when reached only around a loop.
-fn later_label(span: Span, message: &str, later_iteration: bool) -> Label {
-    Label {
-        span,
-        message: if later_iteration {
-            format!("{}, in later iteration of loop", message)
-        } else {
-            message.to_string()
-        },
+/// A later use of a loan: where, whether it is reached only through a loop's back edge, and,
+/// for the caller's use through a parameter after the return, that parameter's name.
+struct LaterUse {
+    span: Span,
+    later_iteration: bool,
+    by_caller: Option<String>,
+}
+
+impl LaterUse {
+    /// Its label, from `message` ("borrow later used here"): "... by the caller through 'slot'"
+    /// for the caller's use, ", in later iteration of loop" when reached only around a loop.
+    fn label(&self, message: &str) -> Label {
+        let message = match &self.by_caller {
+            Some(parameter) => format!(
+                "{} by the caller through '{}'",
+                message.trim_end_matches(" here"),
+                parameter
+            ),
+            None if self.later_iteration => format!("{}, in later iteration of loop", message),
+            None => message.to_string(),
+        };
+        Label {
+            span: self.span,
+            message,
+        }
     }
 }

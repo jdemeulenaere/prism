@@ -1,0 +1,9 @@
+// expect: E5006
+fun run2(f: (Int) -> Int): Int = f(1)
+fun print(n: &Int) {}
+fun g() {
+    var a = 1
+    var r: &Int = &a
+    run2 { x -> r = &x; 1 }
+    print(r)
+}

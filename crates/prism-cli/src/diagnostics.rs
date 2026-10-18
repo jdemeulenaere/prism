@@ -687,6 +687,25 @@ error[E5006]: 'n' does not live long enough
         assert_eq!(out, expected);
     }
 
+    /// references: "Dropped parameter labels".
+    #[test]
+    fn test_dropped_parameter_labels() {
+        let out = render_borrow_errors("fun keep(slot: &mut &String, v: String) { *slot = &v }\n");
+        let expected = "\
+error[E5006]: 'v' does not live long enough
+  --> main.prism:1:51
+    1 | fun keep(slot: &mut &String, v: String) { *slot = &v }
+      |                                                   ^^ borrowed value does not live long enough
+  --> main.prism:1:10
+    1 | fun keep(slot: &mut &String, v: String) { *slot = &v }
+      |          ^^^^^^^^^^^^^^^^^^ borrow later used by the caller through 'slot'
+  --> main.prism:1:30
+    1 | fun keep(slot: &mut &String, v: String) { *slot = &v }
+      |                              ^^^^^^^^^ 'v' is dropped when the function returns, while still borrowed
+";
+        assert_eq!(out, expected);
+    }
+
     /// references: "Escaping closure labels".
     #[test]
     fn test_escaping_closure_labels() {
