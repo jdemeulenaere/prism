@@ -17,6 +17,10 @@ A constructor pattern MUST match exactly when the subject holds its variant, or 
 - **WHEN** `enum Counter { Running(Int), Stopped }`, `fun tick(c: &mut Counter) { when (c) { Counter.Running(val n) -> *n += 1; Counter.Stopped -> {} } }` and `fun value(c: &Counter): Int = when (c) { Counter.Running(val n) -> n; Counter.Stopped -> -1 }` are declared and `fun main() { var c = Counter.Running(1); tick(&mut c); tick(&mut c); println(value(&c)) }` runs
 - **THEN** it prints `3`
 
+#### Scenario: Binding the whole subject
+- **WHEN** `enum Note { Text(String), Empty }`, `fun keep(n: Note): Note = when (n) { Note.Empty -> Note.Empty; val other -> other }` and `fun text(n: &Note): String = when (n) { Note.Text(val s) -> s.clone(); Note.Empty -> "" }` are declared and `fun main() { println(text(&keep(Note.Text("kept")))) }` runs with `prism run --check-allocations`
+- **THEN** it prints `kept` and exits with status 0, reporting no leak and no invalid free
+
 ### Requirement: Guards Run After Their Pattern Matches
 A guard MUST run only when its pattern matched, after the tests of that pattern and before the next pattern is tested. A false guard MUST let testing continue with the next pattern, the subject unchanged.
 

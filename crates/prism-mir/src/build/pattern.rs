@@ -396,6 +396,16 @@ impl Builder<'_> {
         if !pattern.moves() || self.current.is_none() {
             return;
         }
+        if let Pattern::Binding {
+            local,
+            mode: BindingMode::Move,
+        } = pattern
+        {
+            // A binding of the whole value (`val all ->` at the top of a branch) takes it whole.
+            let binding = self.bindings[local].clone();
+            self.assign(binding, Rvalue::Use(Operand::Move(place, span)), span);
+            return;
+        }
         if let Pattern::NonNull(inner) = pattern {
             let payload = match ty {
                 Type::Nullable(payload) => payload.as_ref().clone(),
