@@ -1,0 +1,70 @@
+# MIR Specification Delta
+
+## ADDED Requirements
+
+### Requirement: Scope Exits Are Located Where Control Leaves the Scope
+The drops and storage ends that a braced block runs when control reaches its end MUST carry the span of the block's closing brace, and those that a `return`, `break` or `continue` runs MUST carry the span of that jump. Other scopes MUST keep their own span.
+
+#### Scenario: Block-end drops at the closing brace
+- **WHEN** `fun f(c: Bool) { if (c) { val s = "a" } }` is lowered, and `fun g(c: Bool) { while (c) { val s = "a"; if (c) break } }`
+- **THEN** in `f` the drop and the storage end of `s` are at the `}` that closes the `if` branch, and in `g` the drop of `s` on the path of the `break` is at the `break`, and on the other path at the `}` that closes the loop body
+
+### Requirement: Borrowed Branch Temporaries Live as Long as the Whole Value
+A temporary whose written borrow is the value of a branch of `if` or `when`, of the fallback of `?:` or of a block tail, through any nesting of these, MUST belong to the scope of the whole expression whose value that borrow becomes, instead of the branch's: its storage MUST start before that expression is evaluated, and it MUST be dropped at the end of that scope, on the paths where it was created.
+
+#### Scenario: A borrowed fallback temporary lives until the end of the statement
+- **WHEN** `fun greet(n: &String): Int = 1` is declared and `fun f(n: String?): Int = greet(&n ?: &"anon")` is lowered
+- **THEN** the storage of the temporary holding `"anon"` starts before the tag of `n` is read, the temporary is assigned only on the edge where `n` is `null`, and it is dropped after `greet` returns; in the elaborated MIR that drop is guarded by a drop flag
+
+### Requirement: Safe-Call Receivers Are Borrowed at Their Test
+A borrowed receiver that a `?.` test reaches (the payload of a nullable) MUST be borrowed right after its test, before the written arguments, so that no argument can change the tested value while the receiver is reached through it.
+
+#### Scenario: A safe-call receiver is borrowed after its test
+- **WHEN** `struct Stack { var count: Int }`, `mut fun Stack.push(n: Int) {}` and `fun next(): Int = 1` are declared and `fun f(s: Stack?) { var t = s; t?.push(next()) }` is lowered
+- **THEN** on the edge where `t` is present, the mutable receiver borrow of the payload of `t` is taken before `next` is called, and `push` is called with that borrow and the result of `next`
+
+## MODIFIED Requirements
+
+### Requirement: Call Arguments Are Evaluated in Order
+A call MUST evaluate its receiver first: a receiver that the call moves or copies (the receiver of a `consuming fun`, or a `Copy` receiver copied out of a reference) is moved or copied then, and a receiver that the call borrows has its place evaluated then and is borrowed after the written arguments. The written arguments MUST be evaluated in source order, then the omitted arguments in parameter order, and then the call made.
+
+#### Scenario: A mutable receiver is borrowed after the arguments
+- **WHEN** `struct Stack { var count: Int }`, `mut fun Stack.push(n: Int) {}` and `fun Stack.size(): Int = count` are declared and a body runs `var v = Stack(0); v.push(v.size())`
+- **THEN** `size` is called before the mutable receiver borrow of `v` is taken, and `push` is called with that borrow and the result of `size`
+
+#### Scenario: A consuming receiver is moved before the arguments
+- **WHEN** `struct Stack { var count: Int }`, `struct Point : Copy { val x: Int }`, `consuming fun Stack.into(n: Int): Int = n`, `consuming fun Point.moved(n: Int): Point = this` and `fun next(): Int = 1` are declared, and `fun f(s: Stack): Int = s.into(next())` and `fun g(p: &Point): Point = p.moved(next())` are lowered
+- **THEN** `s` is moved into a temporary, and the dereference of `p` copied into one, before `next` is called, and each call receives that temporary and the result of `next`
+
+#### Scenario: Named arguments are evaluated as written
+- **WHEN** `fun g(): Int = 1`, `fun h(): Int = 2` and `fun f(a: Int, b: Int = 2, c: Int = 3): Int = a` are declared and `fun k(): Int = f(c = g(), a = h())` is lowered
+- **THEN** `g` is called before `h`, then the generator of `b`, and `f` is called with the results of `h`, the generator and `g`, in that order
+
+### Requirement: Borrowed Initializer Temporaries Live as Long as Their Binding
+When the initializer of a `val` or `var` is a written borrow of a place rooted at a temporary, or an expression whose value is such a borrow in a branch of `if` or `when`, the fallback of `?:` or a block tail (the temporaries of the previous requirement), each such temporary MUST belong to the binding's block and be dropped just after the binding, instead of at the end of the declaration.
+
+#### Scenario: Borrowed temporary in a val initializer
+- **WHEN** `fun make(): String = "x"` and `fun greet(n: &String): Int = 1` are declared and `fun f(): Int { val r = &make(); return greet(r) }` is lowered
+- **THEN** the temporary holding the result of `make` is still live when `greet` is called, and is dropped when the block ends
+
+#### Scenario: Borrowed temporaries in the branches of a val initializer
+- **WHEN** `fun make(): String = "x"` and `fun greet(n: &String): Int = 1` are declared and `fun f(c: Bool, s: String): Int { val r = if (c) &make() else &s; return greet(r) }` is lowered
+- **THEN** the storage of the temporary holding the result of `make` starts before `c` is tested, it is assigned only in the `then` branch, and it is still live when `greet` is called and dropped when the block ends, under a drop flag in the elaborated MIR
+
+### Requirement: Closures Are Separate Bodies
+Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from the places of those bindings, in capture order. How each binding is captured MUST NOT be decided by the MIR as lowered: the borrow checker infers it, and the elaborated MIR MUST record exactly one mode per capture local, shared or mutable (see `references`), and MIR as lowered none.
+
+#### Scenario: Captured bindings
+- **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int, b: Int): Int = run { b + a + b }` is lowered
+- **THEN** the closure's body has the capture locals `b` and `a` and adds them, and the body of `g` builds the closure value from its arguments `b` and `a` and passes it to `run`
+
+#### Scenario: Capture modes in elaborated MIR
+- **WHEN** `struct User { var name: String }` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(n: Int) { var u = User("a"); run { u.name = "z"; n } }` passes the borrow checker
+- **THEN** the elaborated MIR of `f` builds the closure value from a mutable borrow of `u` and a shared borrow of `n`, while the MIR as lowered records no mode
+
+### Requirement: MIR Is Well Formed
+The MIR of a file without type errors MUST satisfy its structural invariants: every block ends in a terminator and is reachable, every local used is declared, every assignment's value has its place's type except for an explicit subtyping conversion, projections and call operands are well typed, no operand moves a place through a dereference or a place rooted at a capture local, only values whose type needs a drop are dropped, and every local is storage-live wherever it is used.
+
+#### Scenario: Error-free MIR
+- **WHEN** a file typechecks successfully
+- **THEN** its MIR satisfies every structural invariant, and so does its elaborated MIR when it passes the borrow checker

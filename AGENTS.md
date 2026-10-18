@@ -52,9 +52,9 @@ What is implemented and what is planned live in different places. Never treat a 
   - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.
   - [`type-system`](openspec/specs/type-system/spec.md): Bidirectional typing, Nothing bottom type, and nominal types.
   - [`compilation-and-abi`](openspec/specs/compilation-and-abi/spec.md): Phase 1 ABI extraction, deterministic ABI hashing, and monomorphization hashes.
-  - [`ownership`](openspec/specs/ownership/spec.md): `Copy` and `Clone` markers, explicit `.clone()`, whole-value moves, immutable top-level declarations, and the borrow checker's use-after-move and uninitialized-read rules.
+  - [`ownership`](openspec/specs/ownership/spec.md): `Copy` and `Clone` markers, explicit `.clone()`, whole-value moves, immutable top-level declarations, the borrow checker's use-after-move and uninitialized-read rules, and closures never moving their captures.
   - [`loops`](openspec/specs/loops/spec.md): `while`, `do`/`while` and `for` loops, and `break`/`continue`.
-  - [`references`](openspec/specs/references/spec.md): Implicit borrows at argument sites and of method receivers, copy-out, writing through references, reborrows and the borrowed-nullable view.
+  - [`references`](openspec/specs/references/spec.md): Implicit borrows at argument sites and of method receivers, copy-out, writing through references, reborrows and the borrowed-nullable view; and the borrow checker's exclusivity rules: non-lexical borrows, conflicts, disjoint fields, call results keeping their inputs borrowed, closure captures and non-escaping closures.
   - [`extension-functions`](openspec/specs/extension-functions/spec.md): Methods as extension functions: declaration, resolution through the file and its imports, implicit `this`, and safe-navigation calls.
   - [`typed-tree`](openspec/specs/typed-tree/spec.md): The type checker's output: resolved bindings and declaration paths, a type on every node, explicit coercions, moves, copies and borrows, normalized calls, captures and the `prism dump-typed-tree` command.
   - [`mir`](openspec/specs/mir/spec.md): The control-flow graph lowered from each typed file: typed locals, places, storage, drops, temporary scopes, branches, calls, default generators, closures and the `prism dump-mir` command.

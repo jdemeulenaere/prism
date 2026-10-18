@@ -11,7 +11,7 @@ This document holds the **planned** design of Prism subsystems that are **not im
 
 ## 1. Compilation Pipeline & Compilation Avoidance
 
-Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)). Borrow conflicts and returned borrows are planned in section 3. Everything below is planned.
+Implemented today (see [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md)): Phase 1 ABI extraction, a deterministic 128-bit ABI hash, recording a hash of each generic function's body, and the first three stages of the Phase 2 semantic pipeline: the typed tree ([`typed-tree`](../openspec/specs/typed-tree/spec.md)), MIR ([`mir`](../openspec/specs/mir/spec.md)), and borrow checking each file's MIR alone for uses of moved and uninitialized values, followed by drop elaboration (`borrowck-moves`, [`compilation-and-abi`](../openspec/specs/compilation-and-abi/spec.md) and [`ownership`](../openspec/specs/ownership/spec.md)), and then for borrow conflicts and escaping closures on the elaborated MIR (`borrowck-exclusivity`, [`references`](../openspec/specs/references/spec.md)). The callee's side of returned borrows is planned in section 3. Everything below is planned.
 
 ### Requirement: Single File as Compilation Unit
 Every `.prism` source file MUST be compiled into native machine code independently, with interface boundaries defined strictly by exported declarations.
@@ -77,9 +77,9 @@ The compiler MUST support two distinct native execution backends: Tier 1 (Cranel
 
 Compile-time memory safety: zero runtime garbage collection, zero hidden automatic reference counting (ARC), single-owner value semantics, stack-confined borrows with automatic lifetime elision, and data-oriented handles.
 
-Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)); and, from `borrowck-moves`, single-owner values checked by the borrow checker: use after move (`E5001`) through branches, loops, consuming receivers and closure captures, reinitialization by assignment, uninitialized reads (`E5002`), and drops elaborated so that each value is dropped exactly once where its owner's scope ends ([`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)). Everything below is planned.
+Implemented today: rejecting borrowed fields in structs ([`syntax`](../openspec/specs/syntax/spec.md)); basic borrow type compatibility, including rejecting `&mut` of a `val` and requiring `&mut` on an argument passed to a `&mut T` parameter (`E4004`, [`type-system`](../openspec/specs/type-system/spec.md)); and, from `value-semantics`, the `: Copy` and `: Clone` markers, the built-in `Copy` and `Clone` tables, explicit `.clone()`, whole-value moves (`E4017`) and immutable top-level declarations ([`ownership`](../openspec/specs/ownership/spec.md)); and, from `reference-access`, implicit shared borrows at argument sites, copy-out of `Copy` values from borrows, moving out of a borrow (`E4017`), prefix `*` for writes, re-pointing `var` references, reborrowing `&mut` arguments, the `&(T?)` to `(&T)?` view and invariant references ([`references`](../openspec/specs/references/spec.md)); and, from `extension-methods`, methods as extension functions whose receivers are borrowed shared, borrowed mutably or moved by their `fun` / `mut fun` / `consuming fun` mode with nothing written at the call site ([`extension-functions`](../openspec/specs/extension-functions/spec.md), [`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md)); and, from `borrowck-moves`, single-owner values checked by the borrow checker: use after move (`E5001`) through branches, loops, consuming receivers and closure captures, reinitialization by assignment, uninitialized reads (`E5002`), and drops elaborated so that each value is dropped exactly once where its owner's scope ends ([`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)); and, from `borrowck-exclusivity`, stack-scoped borrows checked by the borrow checker: any number of shared borrows or one mutable borrow, each lasting until the last use of the references holding it, with conflicting borrows and reads (`E5003`), assignments and moves of borrowed values (`E5004`, `E5005`) and values that end while borrowed (`E5006`) rejected, disjoint field borrows, two-phase receiver borrows, call results that keep their input borrows (the caller's half of the elision rules), closures that capture by inferred borrow and never move a capture (`E4017`), and capturing closures and function-typed parameters that cannot escape (`E5007`) ([`references`](../openspec/specs/references/spec.md), [`ownership`](../openspec/specs/ownership/spec.md), [`mir`](../openspec/specs/mir/spec.md)). Everything below is planned.
 
-The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `borrowck-exclusivity` and `borrowck-elision`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
+The requirements below were decided with the user on 2026-10-17 and are delivered by the rest of the "road to the borrow checker" sequence in [`ROADMAP.md`](../ROADMAP.md): `borrowck-elision`, with escaping, move-capturing closures left to `closures`. Flow-insensitive rules are type errors (`E4xxx`, in the type checker); flow-sensitive ones are borrow-checker errors in a new `E5xxx` range (see section 1 for the pipeline).
 
 ### Requirement: Recursive Heap Indirection via Heap<T>
 Self-referential or recursive structures MUST use the standard `Heap<T>` primitive to provide single-owner heap allocation. Constructing a `Heap<T>` and moving its contents out are not designed yet (see `ROADMAP.md`).
@@ -87,37 +87,6 @@ Self-referential or recursive structures MUST use the standard `Heap<T>` primiti
 #### Scenario: Dropping Heap<T> allocation
 - **WHEN** an instance of `Heap<T>` leaves scope
 - **THEN** the allocated heap buffer and the inner value `T` are freed deterministically with zero reference-counter traffic
-
-### Requirement: Stack-Scoped Borrowing and Mutation Rules
-The borrow checker MUST enforce borrowing rules: arbitrary concurrent shared borrows (`&T`), or exactly one exclusive mutable borrow (`&mut T`), strictly confined to function arguments and local execution scopes. A borrow MUST last until the last use of the reference (non-lexical), not until the end of its block.
-
-#### Scenario: Concurrent shared borrows
-- **WHEN** multiple functions inspect the same resource concurrently via `&T`
-- **THEN** the compiler allows the shared reads
-
-#### Scenario: Exclusive mutable borrow prevents concurrent access
-- **WHEN** an exclusive borrow `&mut T` is live on a value
-- **THEN** any other borrow or access through the owner is rejected at compile time (conflicting borrow, `E5xxx`), and assigning or moving a value while it is borrowed is rejected (`E5xxx`)
-
-#### Scenario: Borrow ends at its last use
-- **WHEN** a body runs `var x = 1; val r = &x; print(r); x = 2`
-- **THEN** the assignment is accepted, because `r` is not used after `print(r)`
-
-#### Scenario: Disjoint field borrows
-- **WHEN** `&mut o.user` and `&mut o.email` are live at the same time
-- **THEN** the borrows are accepted, while a borrow of `o` itself conflicts with either
-
-#### Scenario: Two-phase receiver borrows
-- **WHEN** a `mut fun` method is called with an argument that reads the receiver (`v.push(v.size())`)
-- **THEN** the call is accepted, because the receiver's `&mut` borrow starts when the call happens, after the arguments are evaluated
-
-#### Scenario: Closures capture by inferred borrow
-- **WHEN** a closure reads a captured variable, or writes one (`val f = { u.name = "z" }`)
-- **THEN** the closure holds a shared or mutable borrow of that variable for as long as the closure value is live, and conflicting uses of `u` meanwhile are rejected
-
-#### Scenario: Capturing closures do not escape
-- **WHEN** a closure that captures any variable, or a function-typed parameter, is returned, stored in a struct field, or assigned to a top-level declaration
-- **THEN** the borrow checker rejects it (`E5xxx`) until escaping, move-capturing closures are designed; a closure with no captures may escape
 
 ### Requirement: The Four Lifetime Elision Rules
 When a function returns a borrowed reference, its lifetime MUST be inferred deterministically from the signature alone, and borrowing a top-level `val` MUST always be valid, by the four lifetime elision rules, without explicit lifetime annotations. The rules need nothing beyond the exported signature (parameter types and receiver mode), so callers in other files apply them to the imported ABI. Input borrows are parameters whose type contains a reference (`&T`, `&mut T`, `(&T)?`) and the receiver of a non-`consuming` method; function-typed parameters and `consuming` receivers are not input borrows. Function types (`(&User) -> &String`) elide by the same rules.
@@ -163,8 +132,7 @@ Slot-table state handles (`State<T>`, `NodeId`) used in UI components MUST be de
 ### Design notes (2026-10-17 exploration)
 Why the requirements above were chosen; each change's `design.md` repeats the decisions it implements.
 
-- **Non-lexical borrows.** Liveness on the MIR makes them natural; lexical borrows reject code such as `val r = &x; print(r); x = 2`.
-- **Closures are conservative until escaping closures are designed.** Inferred-borrow captures plus "capturing closures cannot escape" are sound with no new syntax; move-capturing closures, which compose's `onClick` needs, come in their own change.
+- **Closures are conservative until escaping closures are designed.** Inferred-borrow captures plus "capturing closures cannot escape" are sound with no new syntax and are implemented (`references`); move-capturing closures, which compose's `onClick` needs, come in `closures`.
 - **Elision needs nothing new in the ABI.** A returned borrow's sources follow from parameter types and the receiver mode, both already exported, so files still compile independently and builds stay hermetic.
 - **`&String?` parses as `&(String?)`.** Postfix binds tighter than prefix, as in expressions (`&x.y` borrows `x.y`), and `&mut String?` is the natural type for a mutable nullable slot. An optional borrow is written `(&String)?`.
 
