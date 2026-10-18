@@ -112,6 +112,10 @@ Every `Clone` type MUST have a built-in `clone()` member taking no arguments, un
 - **WHEN** `struct User { val nick: String? }` is declared and `fun f(u: &User): String = u.nick?.clone() ?: "anonymous"` is checked
 - **THEN** the file typechecks successfully
 
+#### Scenario: Cloning through a safe navigation on a call result
+- **WHEN** `struct User { val name: String }` and `fun u(): User? = User("a".clone())` are declared and `fun main() { println(u()?.name?.clone() ?: "none") }` runs with `--check-allocations`
+- **THEN** it prints `a`, reports no live allocation and exits with status 0: the receiver of `clone()` is a `?.` chain of fields over the call's temporary, read in place as `u?.name?.clone()` is on a place
+
 #### Scenario: Cloning a Heap
 - **WHEN** `struct User : Clone { val name: String }` is declared and `fun f(h: &Heap<User>): Heap<User> = h.clone()` is checked
 - **THEN** the file typechecks successfully

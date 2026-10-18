@@ -181,7 +181,7 @@ The receiver of an extension call MUST be passed by the extension's receiver mod
 - **THEN** the type checker emits `E4017` for `u.name` and for `v.name`
 
 ### Requirement: Method-Call Receivers Are Classified Before Resolution
-The receiver of every call `value.name(...)` MUST be classified before the member it calls is resolved, since that depends on the receiver's type: a place, or a `?.` chain of fields over one, is read in place, and anything else is a temporary in a consuming position. This applies to a function-typed field call and to the built-in `clone()` as to an extension call.
+The receiver of every call `value.name(...)` MUST be classified before the member it calls is resolved, since that depends on the receiver's type: a place, or a `?.` chain of fields over a place or over a temporary root (`u()?.name`), is read in place, and anything else is a temporary in a consuming position. This applies to a function-typed field call and to the built-in `clone()` as to an extension call.
 
 #### Scenario: A branch receiver of clone is a temporary
 - **WHEN** `struct User { val name: String }` is declared and `fun g(c: Bool, u: User, v: User): String = (if (c) u.name else v.name).clone()` is checked

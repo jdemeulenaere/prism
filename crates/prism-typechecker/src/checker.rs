@@ -6491,10 +6491,11 @@ impl TypeChecker {
         });
     }
 
-    /// Whether `expr` is an optional place: a chain of `?.` (or `.`) field accesses whose root is
-    /// a place and which has at least one `?.` (`t?.lead` in `t?.lead?.greet()`). As the receiver
-    /// of a call it is borrowed where it lives when every link is present (D10 of
-    /// `extension-methods`).
+    /// Whether `expr` is an optional place: a chain of `?.` (or `.`) field accesses which has at
+    /// least one `?.` (`t?.lead` in `t?.lead?.greet()`), from any root, as a `.` field path is a
+    /// place from any root: a root that is not a place is evaluated into a temporary first
+    /// (`u()?.name`). As the receiver of a call it is borrowed where it lives when every link is
+    /// present (D10 of `extension-methods`).
     fn is_optional_place(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::MemberAccess {
@@ -6503,7 +6504,7 @@ impl TypeChecker {
                 ..
             } => {
                 self.type_name_symbol(target).is_none()
-                    && ((*is_safe_nav && self.is_place(target)) || self.is_optional_place(target))
+                    && (*is_safe_nav || self.is_optional_place(target))
             }
             _ => false,
         }
