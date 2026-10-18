@@ -6777,9 +6777,17 @@ impl TypeChecker {
     ) -> ExpressionId {
         let found = self.ty(found_id);
         let coercion = self.coerce(&found, expected, site);
-        // A function value keeps its representation when converted (D8 of `closures`).
-        if !matches!(coercion, Coercion::NoFit)
-            && !self.converts_function_value(found_id, &found, expected)
+        // A function value keeps its representation when converted (D8 of `closures`). A
+        // temporary is converted before it is lent.
+        let converted_to = match coercion {
+            Coercion::NoFit => None,
+            Coercion::Fits(Adjustment::BorrowTemporary) => {
+                Some(temporary_referent(&found, expected))
+            }
+            _ => Some(expected.clone()),
+        };
+        if let Some(to) =
+            converted_to.filter(|to| !self.converts_function_value(found_id, &found, to))
         {
             // A named function's own conversions are its adapter's, so a closure calling it
             // would not help.
@@ -6787,7 +6795,7 @@ impl TypeChecker {
                 self.builder.kind(found_id),
                 ExpressionKind::FunctionReference(_) | ExpressionKind::VariantConstructor { .. }
             ))
-            .then(|| closure_call_help(expr, expected));
+            .then(|| closure_call_help(expr, &to));
             self.report_mismatch_with_help(expected, found, expr.span, help);
             return self.wrap_error(found_id);
         }
@@ -6896,6 +6904,16 @@ impl TypeChecker {
             }
             Adjustment::Borrow => self.borrow(false, BorrowOrigin::Argument, found_id),
             Adjustment::BorrowTemporary => match self.ty(found_id) {
+                // A temporary is converted to the referent first, then borrowed: the borrow
+                // must point at a value of the referent's representation.
+                found
+                    if !(is_null_type(&found) && matches!(expected, Type::Nullable(_)))
+                        && found != temporary_referent(&found, expected) =>
+                {
+                    let referent = temporary_referent(&found, expected);
+                    let converted = self.coerce_to(found_id, &referent);
+                    return self.apply_adjustment(converted, Adjustment::BorrowTemporary, expected);
+                }
                 // A temporary lent as an optional borrow `(&T)?` lends its contents; `null`
                 // lends nothing, so it is an empty optional borrow.
                 Type::Nullable(inner)
@@ -7938,6 +7956,24 @@ fn is_reference_parameter(ty: &Type) -> bool {
 }
 
 /// The type a reference parameter refers to: `T` for `&T` or `&mut T`, and `T?` for `(&T)?`.
+/// The type an argument temporary of type `found` is converted to before it is lent to a
+/// parameter of type `expected` (`&T` or `(&T)?`): `T`, or `T?` for a nullable temporary lent
+/// as an optional borrow, which lends its payload.
+fn temporary_referent(found: &Type, expected: &Type) -> Type {
+    match (found, expected) {
+        (Type::Nullable(_), _) | (_, Type::Reference { .. }) => {
+            referent_of_reference_parameter(expected)
+        }
+        (_, Type::Nullable(inner)) => referent_of_reference_parameter(inner),
+        _ => found.clone(),
+    }
+}
+
+/// Whether `ty` is the type of `null`, `Nothing?`.
+fn is_null_type(ty: &Type) -> bool {
+    matches!(ty, Type::Nullable(inner) if **inner == Type::Nothing)
+}
+
 fn referent_of_reference_parameter(ty: &Type) -> Type {
     match ty {
         Type::Nullable(inner) => referent_of_reference_parameter(inner).nullable(),

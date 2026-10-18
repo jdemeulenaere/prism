@@ -1,0 +1,10 @@
+// expect: E4004
+fun show(n: Int?) {}
+
+fun make(): (Int?) -> Unit = show
+
+fun call(f: &((Int) -> Unit)) {}
+
+fun main() {
+    call(make())
+}

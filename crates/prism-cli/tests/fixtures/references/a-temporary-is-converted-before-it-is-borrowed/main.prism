@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun show(n: &Int?): Int {
+    val m: Int? = n
+    return m ?: 0
+}
+
+fun main() {
+    println(show(5))
+    println(show(null))
+}
