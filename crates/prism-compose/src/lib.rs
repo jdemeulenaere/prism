@@ -17,12 +17,30 @@
 //!   behavior.
 //! - **One pass at a time per thread** (D4). The state is per thread ([`thread`]); a scope
 //!   invalidated during a pass is recomposed by the next one.
+//! - **The slot table** (D5 to D7): a generational arena tree of [`group::Group`]s with keyed
+//!   matching, typed and word [`Slot`]s, and removals released at the end of the pass.
+//! - **Restart scopes** (D8) and **node groups** (D9), in [`composer`] and [`composition`].
 
+pub mod applier;
+pub mod composer;
+pub mod composition;
+mod dump;
 mod entry;
 mod functions;
+pub mod group;
 mod handle;
+pub mod slot;
+pub mod test_support;
 pub mod thread;
 
+#[cfg(test)]
+mod tests;
+
+pub use applier::{Applier, NodeHandle, NodeTree};
+pub use composer::{invalidate, ComposeResult, Composer, Misuse};
+pub use composition::{active_composer, Composition};
 pub use functions::{compose_function, COMPOSE_FUNCTIONS};
+pub use group::GroupKind;
 pub use handle::{Arena, Handle};
-pub use thread::live_compositions_report;
+pub use slot::{Slot, SlotType};
+pub use thread::{active_scope, live_compositions_report};
