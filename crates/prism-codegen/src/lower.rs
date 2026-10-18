@@ -35,8 +35,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variab
 use cranelift_module::{DataId, FuncId, Module};
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, BasicBlock, Body, Callee, Constant, LocalId, Operand, Place, Projection, Rvalue,
-    StatementKind, TerminatorKind,
+    AggregateKind, BasicBlock, Body, Callee, Constant, LocalId, LocalKind, Operand, Place,
+    Projection, Rvalue, StatementKind, TerminatorKind,
 };
 use prism_runtime::PanicKind;
 use prism_typed_tree::{BinaryOperator, BuiltinFunction, DeclarationPath, Type, UnaryOperator};
@@ -242,7 +242,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         Storage::Slot(self.slot(&layout))
                     }
                 },
-                Some(Representation::Scalar(_)) if self.borrowed.contains(&local) => {
+                // A drop flag lives in memory: it is live from its value's initialization to
+                // the end of its scope, and a variable live across many branches would make
+                // Cranelift's SSA construction visit every merge once per flag.
+                Some(Representation::Scalar(_))
+                    if self.borrowed.contains(&local)
+                        || declaration.kind == LocalKind::DropFlag =>
+                {
                     let layout = self.layout(&declaration.ty)?;
                     Storage::Slot(self.slot(&layout))
                 }
