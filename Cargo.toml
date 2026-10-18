@@ -16,6 +16,7 @@ members = [
     "crates/prism-codegen",
     "crates/prism-library",
     "crates/prism-compose",
+    "crates/prism-ui",
 ]
 
 [workspace.package]

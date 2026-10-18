@@ -1,0 +1,13 @@
+[package]
+name = "prism-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The UI toolkit's runtime depends on the base runtime and the composition runtime only, and on
+# no window system (D2 of `ui-toolkit`, §5 D1 of the compose plan): `prism-desktop` will depend
+# on this crate, not the reverse.
+[dependencies]
+prism-runtime = { path = "../prism-runtime" }
+prism-compose = { path = "../prism-compose" }
