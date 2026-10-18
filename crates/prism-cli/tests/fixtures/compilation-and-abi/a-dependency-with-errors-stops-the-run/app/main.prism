@@ -1,0 +1,6 @@
+// expect: E4001
+// run: 1
+// entry: app/main.prism
+package app
+import /lib/text
+fun main() { println(shout(1)) }

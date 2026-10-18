@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun main() {
+    for (i in 0..<3) println(i)
+    for (i in 3..<3) println(100)
+    println(-1)
+}

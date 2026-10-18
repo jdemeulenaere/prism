@@ -1,0 +1,4 @@
+error[E4001]: unresolved symbol 'nope'
+  --> lib/text.prism:2:33
+    2 | public fun shout(n: Int): Int = nope
+      |                                 ^

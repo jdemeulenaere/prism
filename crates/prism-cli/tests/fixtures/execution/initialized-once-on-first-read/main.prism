@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+fun noisy(): Int { println(0); return 5 }
+val V: Int = noisy()
+val W: Int = noisy()
+fun main() { println(1); println(V); println(V) }

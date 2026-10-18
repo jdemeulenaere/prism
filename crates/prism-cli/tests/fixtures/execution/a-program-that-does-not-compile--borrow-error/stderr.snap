@@ -1,0 +1,9 @@
+error[E5001]: use of moved value 's'
+  --> main.prism:4:41
+    4 | fun main() { val s = "a"; take(s); take(s) }
+      |                                         ^ value used here after move
+  --> main.prism:4:32
+    4 | fun main() { val s = "a"; take(s); take(s) }
+      |                                ^ value moved here
+   = note: 's' has type 'String', which is not 'Copy'
+   = help: clone it where it moves: 's.clone()'

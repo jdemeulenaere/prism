@@ -1,0 +1,4 @@
+// expect: E5001
+// run: 1
+fun take(s: String) {}
+fun main() { val s = "a"; take(s); take(s) }

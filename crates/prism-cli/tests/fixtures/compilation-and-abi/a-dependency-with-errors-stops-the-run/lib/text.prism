@@ -1,0 +1,2 @@
+package lib
+public fun shout(n: Int): Int = nope

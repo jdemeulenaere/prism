@@ -1,0 +1,4 @@
+error[E4002]: type mismatch: expected 'Int', found 'Bool'
+  --> main.prism:3:39
+    3 | fun main() { println(1); val x: Int = true }
+      |                                       ^

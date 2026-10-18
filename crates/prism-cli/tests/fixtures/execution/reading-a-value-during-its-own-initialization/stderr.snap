@@ -1,0 +1,2 @@
+panic: top-level value 'A' read during its own initialization
+  at main.prism:4:14

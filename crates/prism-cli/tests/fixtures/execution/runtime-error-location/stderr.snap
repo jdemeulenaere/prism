@@ -1,0 +1,2 @@
+panic: division by zero
+  at app/main.prism:3:33

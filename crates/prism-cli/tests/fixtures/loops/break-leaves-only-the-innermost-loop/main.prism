@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun main() {
+    for (i in 0..<3) {
+        var j = 0
+        while (true) {
+            if (j == i) break
+            j = j + 1
+        }
+        println(i * 10 + j)
+    }
+}

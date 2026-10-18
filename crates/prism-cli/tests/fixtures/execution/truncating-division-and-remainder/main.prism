@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun main() {
+    val m = -9223372036854775807 - 1
+    println(-7 / 2)
+    println(-7 % 2)
+    println(7 % -2)
+    println(m % -1)
+}

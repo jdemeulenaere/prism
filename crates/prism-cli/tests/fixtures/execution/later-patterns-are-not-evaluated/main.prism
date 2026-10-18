@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+fun loud(n: Int): Int { println(n); return n }
+fun main() { when (loud(1)) { loud(1) -> println(7); loud(2) -> println(8); else -> println(9) } }

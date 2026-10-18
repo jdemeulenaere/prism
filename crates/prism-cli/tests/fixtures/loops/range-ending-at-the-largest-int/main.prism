@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun main() {
+    var times = 0
+    for (i in 9223372036854775806..9223372036854775807) {
+        println(i)
+        times += 1
+    }
+    println(times)
+}

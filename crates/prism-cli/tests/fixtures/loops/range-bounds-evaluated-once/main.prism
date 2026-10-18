@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+fun next(): Int { println(100); return 3 }
+fun main() { for (i in 0..<next()) println(i) }

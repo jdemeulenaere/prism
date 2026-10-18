@@ -46,8 +46,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 8. Runtime semantics fixtures
 
-- [ ] 8.1 Add executable fixtures under `execution/` for every scenario of "Running a Program", "Output Built-Ins Print Their Argument", "Double Text Form", "Output Is Buffered and Flushed", "Integer Arithmetic" (one case per form of "Overflow in every form" and "Division by zero"), "Double Arithmetic", "Runtime Errors End the Program", "Top-Level Values Initialize on First Read", "When Branches Evaluate in Order" and "Logical Operators Short-Circuit", and under `compilation-and-abi/` for "A dependency with errors stops the run". Read each `stdout.snap` and `stderr.snap` against its scenario's THEN before committing it. Verify with `cargo test -p prism-cli --test fixture_tests`.
-- [ ] 8.2 Add executable fixtures under `loops/` for every scenario of "Loop and Range Evaluation Semantics", each printing what its THEN observes (the loop variable's values, `n`, `sum`, how often `next()` ran). Verify with `cargo test -p prism-cli --test fixture_tests`.
+- [x] 8.1 Add executable fixtures under `execution/` for every scenario of "Running a Program", "Output Built-Ins Print Their Argument", "Double Text Form", "Output Is Buffered and Flushed", "Integer Arithmetic" (one case per form of "Overflow in every form" and "Division by zero"), "Double Arithmetic", "Runtime Errors End the Program", "Top-Level Values Initialize on First Read", "When Branches Evaluate in Order" and "Logical Operators Short-Circuit", and under `compilation-and-abi/` for "A dependency with errors stops the run". Read each `stdout.snap` and `stderr.snap` against its scenario's THEN before committing it. Verify with `cargo test -p prism-cli --test fixture_tests`.
+- [x] 8.2 Add executable fixtures under `loops/` for every scenario of "Loop and Range Evaluation Semantics", each printing what its THEN observes (the loop variable's values, `n`, `sum`, how often `next()` ran). Verify with `cargo test -p prism-cli --test fixture_tests`.
 
 ## 9. Reference program and startup timing (D22)
 

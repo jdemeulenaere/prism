@@ -1,0 +1,3 @@
+// expect: E4002
+// run: 1
+fun main() { println(1); val x: Int = true }
