@@ -580,6 +580,10 @@ impl Analysis for DropStates<'_> {
         self.apply_location(state, location, None, &mut |_, _| {});
     }
 
+    fn has_edge_effects(&self) -> bool {
+        true
+    }
+
     /// A switch on a guarding flag lets only the states whose flag matches the edge through,
     /// and a nullable whose tag is `0` holds `null`.
     fn apply_edge(&self, state: &mut BitSet, from: BlockId, to: BlockId) {

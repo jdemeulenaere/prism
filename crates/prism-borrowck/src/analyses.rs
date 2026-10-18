@@ -125,6 +125,22 @@ impl ReachingUninitializations<'_> {
     /// The events in `state` of `path`, its ancestors and its descendants, in event order.
     pub fn reaching(&self, state: &BitSet, path: MovePathId) -> Vec<Event> {
         let data = self.data;
+        // When few events reach, each is tested against the family, which costs the depth of
+        // their paths rather than the size of the family: a value with many field paths, such
+        // as an enum whose many patterns each read a payload, is read many times.
+        if state.len() <= 16 {
+            let ancestors = data.ancestors(path);
+            let in_family = |event_path: MovePathId| {
+                ancestors.contains(&event_path)
+                    || std::iter::successors(Some(event_path), |path| data.paths[*path].parent)
+                        .any(|ancestor| ancestor == path)
+            };
+            return state
+                .iter()
+                .map(|index| data.event(index))
+                .filter(|event| in_family(data.event_path(*event)))
+                .collect();
+        }
         let mut family = data.ancestors(path);
         family.extend(data.descendants(path));
         let mut events: Vec<Event> = family

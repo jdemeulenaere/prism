@@ -7,7 +7,7 @@
 //! cycle enters through a block that dominates it, and the back edges are exactly the edges to a
 //! dominator of their source. `borrowck-exclusivity` reuses them.
 
-use crate::location::{predecessors, reverse_postorder};
+use crate::location::Graph;
 use prism_mir::{BlockId, Body};
 use prism_typed_tree::ArenaId;
 
@@ -26,16 +26,15 @@ pub struct Dominators {
 impl Dominators {
     pub fn compute(body: &Body) -> Self {
         let count = body.blocks.len();
-        let rpo = reverse_postorder(body);
+        let graph = Graph::new(body);
         let mut order = vec![usize::MAX; count];
-        for (position, block) in rpo.iter().enumerate() {
+        for (position, block) in graph.postorder().iter().rev().enumerate() {
             order[block.index()] = position;
         }
-        let predecessors = predecessors(body);
         let immediate = if count == 0 {
             Vec::new()
         } else {
-            lengauer_tarjan(body, &predecessors)
+            lengauer_tarjan(&graph)
         };
         let intervals = tree_intervals(&immediate);
         Self {
@@ -109,9 +108,9 @@ fn tree_intervals(immediate: &[Option<BlockId>]) -> Vec<(usize, usize)> {
 /// Lengauer and Tarjan's algorithm: semidominators computed in reverse depth-first order over a
 /// forest linked as it goes, evaluated with path compression, then corrected in depth-first
 /// order. Every step is iterative, so a deep tree cannot overflow the stack.
-fn lengauer_tarjan(body: &Body, predecessors: &[Vec<BlockId>]) -> Vec<Option<BlockId>> {
+fn lengauer_tarjan(graph: &Graph) -> Vec<Option<BlockId>> {
     const NONE: usize = usize::MAX;
-    let count = body.blocks.len();
+    let count = graph.block_count();
     // The depth-first preorder: the number of each block, the block of each number and the
     // number of each block's parent in the depth-first tree.
     let mut number = vec![NONE; count];
@@ -125,11 +124,7 @@ fn lengauer_tarjan(body: &Body, predecessors: &[Vec<BlockId>]) -> Vec<Option<Blo
         number[block] = vertex.len();
         vertex.push(block);
         parent.push(from);
-        let successors = body.blocks[BlockId(block as u32)]
-            .terminator
-            .kind
-            .successors();
-        for successor in successors.iter().rev() {
+        for successor in graph.successors(BlockId(block as u32)).iter().rev() {
             if number[successor.index()] == NONE {
                 stack.push((successor.index(), number[block]));
             }
@@ -165,7 +160,7 @@ fn lengauer_tarjan(body: &Body, predecessors: &[Vec<BlockId>]) -> Vec<Option<Blo
         label[v]
     };
     for w in (1..reached).rev() {
-        for predecessor in &predecessors[vertex[w]] {
+        for predecessor in graph.predecessors(BlockId(vertex[w] as u32)) {
             let v = number[predecessor.index()];
             if v == NONE {
                 continue;
@@ -249,7 +244,10 @@ mod tests {
         ];
         for body in &bodies {
             let dominators = Dominators::compute(body);
-            let reachable: Vec<usize> = reverse_postorder(body).iter().map(|b| b.index()).collect();
+            let reachable: Vec<usize> = crate::location::reverse_postorder(body)
+                .iter()
+                .map(|b| b.index())
+                .collect();
             for &a in &reachable {
                 for &b in &reachable {
                     assert_eq!(

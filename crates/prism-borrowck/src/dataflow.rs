@@ -7,27 +7,85 @@
 //! replays a block's effects to give the state at any location. `borrowck-exclusivity` adds its
 //! liveness (backward) and borrow analyses on the same framework.
 //!
-//! Its cost is linear in the body's locations times the size of a state, per iteration: a
-//! forward analysis stores a state only for the blocks that are not chained to their
-//! predecessor ([`Results`]), and a backward cursor visited in program order keeps the states
-//! of its current block instead of replaying the block for each location.
+//! Its cost is linear in the body's locations times the cost of copying, joining and changing
+//! a state, per iteration: a forward analysis stores a state only for the blocks that are not
+//! chained to their predecessor ([`Results`]), and a backward cursor visited in program order
+//! keeps the states of its current block instead of replaying the block for each location.
+//! The states keep that cost small in large bodies: a [`BitSet`] holds few bits as a list and
+//! many in chunks shared between copies, and the solver walks the edges from a flat [`Graph`]
+//! read once from the body.
 
-use crate::location::{postorder, predecessors, reverse_postorder, Location};
+use crate::location::{Graph, Location};
 use prism_mir::{BlockId, Body, Statement, Terminator};
 use prism_typed_tree::ArenaId;
+use std::rc::Rc;
 
-/// A fixed-size set of small integers.
+/// The words of one chunk of a [`BitSet`].
+const CHUNK_WORDS: usize = 32;
+/// The bits of one chunk of a [`BitSet`].
+const CHUNK_BITS: usize = CHUNK_WORDS * 64;
+
+/// One chunk of a [`BitSet`]: `CHUNK_BITS` bits, fewer for the last one. A chunk with no bit
+/// set is always `Zeros` and one with every bit set always `Ones`, so equal sets have equal
+/// chunks.
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum Chunk {
+    Zeros,
+    Ones,
+    /// Some bits, with their number, shared between the copies of a state until one of them
+    /// changes it.
+    Mixed(u16, Rc<[u64; CHUNK_WORDS]>),
+}
+
+/// The words of a chunk of `size` bits with every bit set.
+fn full_words(size: usize) -> [u64; CHUNK_WORDS] {
+    let mut words = [0; CHUNK_WORDS];
+    for (index, word) in words.iter_mut().enumerate() {
+        let bits = size.saturating_sub(index * 64).min(64);
+        *word = if bits == 64 {
+            u64::MAX
+        } else {
+            (1 << bits) - 1
+        };
+    }
+    words
+}
+
+/// The bits a [`BitSet`] holds as a sorted list before it switches to chunks.
+const SPARSE_BITS: usize = 32;
+
+/// A fixed-size set of small integers: a sorted list of at most `SPARSE_BITS` bits, or chunks
+/// of `CHUNK_BITS` bits, each empty, full or shared copy-on-write (rustc's `HybridBitSet` and
+/// `ChunkedBitSet`). Copying a small set copies its few bits, and copying a large one copies one
+/// word per chunk while changing it copies only the chunks it changes: so the states that an
+/// analysis stores per block and its cursors copy per location cost little even over the many
+/// locals or events of a large body, where most states hold few bits or share most chunks.
+#[derive(Debug, Clone)]
 pub struct BitSet {
-    words: Vec<u64>,
+    bits: Bits,
     size: usize,
 }
+
+#[derive(Debug, Clone)]
+enum Bits {
+    /// At most `SPARSE_BITS` bits, sorted.
+    Sparse(Vec<u32>),
+    Chunked(Vec<Chunk>),
+}
+
+impl PartialEq for BitSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for BitSet {}
 
 impl BitSet {
     /// The empty set over `0..size`.
     pub fn new(size: usize) -> Self {
         Self {
-            words: vec![0; size.div_ceil(64)],
+            bits: Bits::Sparse(Vec::new()),
             size,
         }
     }
@@ -37,36 +95,145 @@ impl BitSet {
         self.size
     }
 
-    /// Adds `bit`, returning whether it was absent.
-    pub fn insert(&mut self, bit: usize) -> bool {
+    /// The number of bits of chunk `chunk`.
+    fn chunk_size(&self, chunk: usize) -> usize {
+        (self.size - chunk * CHUNK_BITS).min(CHUNK_BITS)
+    }
+
+    fn check_bit(&self, bit: usize) {
         assert!(
             bit < self.size,
             "bit {} out of a domain of {}",
             bit,
             self.size
         );
-        let (word, mask) = (bit / 64, 1u64 << (bit % 64));
-        let absent = self.words[word] & mask == 0;
-        self.words[word] |= mask;
-        absent
+    }
+
+    /// Switches a sparse set to chunks.
+    fn make_chunked(&mut self) -> &mut Vec<Chunk> {
+        if let Bits::Sparse(bits) = &mut self.bits {
+            let bits = std::mem::take(bits);
+            self.bits = Bits::Chunked(vec![Chunk::Zeros; self.size.div_ceil(CHUNK_BITS)]);
+            for bit in bits {
+                self.insert_chunked(bit as usize);
+            }
+        }
+        match &mut self.bits {
+            Bits::Chunked(chunks) => chunks,
+            Bits::Sparse(_) => unreachable!("the set was switched to chunks"),
+        }
+    }
+
+    /// Adds `bit`, returning whether it was absent.
+    pub fn insert(&mut self, bit: usize) -> bool {
+        self.check_bit(bit);
+        if let Bits::Sparse(bits) = &mut self.bits {
+            let Err(position) = bits.binary_search(&(bit as u32)) else {
+                return false;
+            };
+            if bits.len() < SPARSE_BITS {
+                bits.insert(position, bit as u32);
+                return true;
+            }
+            self.make_chunked();
+        }
+        self.insert_chunked(bit)
+    }
+
+    /// Adds `bit` to a chunked set, returning whether it was absent.
+    fn insert_chunked(&mut self, bit: usize) -> bool {
+        let (index, offset) = (bit / CHUNK_BITS, bit % CHUNK_BITS);
+        let size = self.chunk_size(index);
+        let (word, mask) = (offset / 64, 1u64 << (offset % 64));
+        let Bits::Chunked(chunks) = &mut self.bits else {
+            unreachable!("a chunked set")
+        };
+        let chunk = &mut chunks[index];
+        match chunk {
+            Chunk::Ones => false,
+            Chunk::Zeros if size == 1 => {
+                *chunk = Chunk::Ones;
+                true
+            }
+            Chunk::Zeros => {
+                let mut words = [0; CHUNK_WORDS];
+                words[word] = mask;
+                *chunk = Chunk::Mixed(1, Rc::new(words));
+                true
+            }
+            Chunk::Mixed(count, words) => {
+                if words[word] & mask != 0 {
+                    return false;
+                }
+                if *count as usize + 1 == size {
+                    *chunk = Chunk::Ones;
+                } else {
+                    Rc::make_mut(words)[word] |= mask;
+                    *count += 1;
+                }
+                true
+            }
+        }
     }
 
     /// Removes `bit`, returning whether it was present.
     pub fn remove(&mut self, bit: usize) -> bool {
-        assert!(
-            bit < self.size,
-            "bit {} out of a domain of {}",
-            bit,
-            self.size
-        );
-        let (word, mask) = (bit / 64, 1u64 << (bit % 64));
-        let present = self.words[word] & mask != 0;
-        self.words[word] &= !mask;
-        present
+        self.check_bit(bit);
+        let (index, offset) = (bit / CHUNK_BITS, bit % CHUNK_BITS);
+        let size = self.chunk_size(index);
+        let (word, mask) = (offset / 64, 1u64 << (offset % 64));
+        let chunks = match &mut self.bits {
+            Bits::Sparse(bits) => {
+                let Ok(position) = bits.binary_search(&(bit as u32)) else {
+                    return false;
+                };
+                bits.remove(position);
+                return true;
+            }
+            Bits::Chunked(chunks) => chunks,
+        };
+        let chunk = &mut chunks[index];
+        match chunk {
+            Chunk::Zeros => false,
+            Chunk::Ones if size == 1 => {
+                *chunk = Chunk::Zeros;
+                true
+            }
+            Chunk::Ones => {
+                let mut words = full_words(size);
+                words[word] &= !mask;
+                *chunk = Chunk::Mixed((size - 1) as u16, Rc::new(words));
+                true
+            }
+            Chunk::Mixed(count, words) => {
+                if words[word] & mask == 0 {
+                    return false;
+                }
+                if *count == 1 {
+                    *chunk = Chunk::Zeros;
+                } else {
+                    Rc::make_mut(words)[word] &= !mask;
+                    *count -= 1;
+                }
+                true
+            }
+        }
     }
 
     pub fn contains(&self, bit: usize) -> bool {
-        bit < self.size && self.words[bit / 64] & (1u64 << (bit % 64)) != 0
+        if bit >= self.size {
+            return false;
+        }
+        let chunks = match &self.bits {
+            Bits::Sparse(bits) => return bits.binary_search(&(bit as u32)).is_ok(),
+            Bits::Chunked(chunks) => chunks,
+        };
+        let offset = bit % CHUNK_BITS;
+        match &chunks[bit / CHUNK_BITS] {
+            Chunk::Zeros => false,
+            Chunk::Ones => true,
+            Chunk::Mixed(_, words) => words[offset / 64] & (1u64 << (offset % 64)) != 0,
+        }
     }
 
     /// Adds every bit of `other`, returning whether this set changed.
@@ -75,28 +242,132 @@ impl BitSet {
             self.size, other.size,
             "union of sets over different domains"
         );
+        let other_chunks = match &other.bits {
+            Bits::Sparse(bits) => {
+                let mut changed = false;
+                for bit in bits {
+                    changed |= self.insert(*bit as usize);
+                }
+                return changed;
+            }
+            Bits::Chunked(chunks) => chunks,
+        };
+        if let Bits::Sparse(bits) = &self.bits {
+            // The other set's chunks, with these few bits added.
+            let mut joined = other.clone();
+            for bit in bits {
+                joined.insert_chunked(*bit as usize);
+            }
+            let changed = joined.chunked_len() != bits.len();
+            *self = joined;
+            return changed;
+        }
+        let size = self.size;
+        let chunks = self.make_chunked();
         let mut changed = false;
-        for (word, other) in self.words.iter_mut().zip(&other.words) {
-            let joined = *word | *other;
-            changed |= joined != *word;
-            *word = joined;
+        for (index, (chunk, other)) in chunks.iter_mut().zip(other_chunks).enumerate() {
+            match (&mut *chunk, other) {
+                (Chunk::Ones, _) | (_, Chunk::Zeros) => {}
+                (Chunk::Zeros, _) | (_, Chunk::Ones) => {
+                    *chunk = other.clone();
+                    changed = true;
+                }
+                (Chunk::Mixed(count, words), Chunk::Mixed(_, others)) => {
+                    if Rc::ptr_eq(words, others)
+                        || words.iter().zip(others.iter()).all(|(a, b)| b & !a == 0)
+                    {
+                        continue;
+                    }
+                    let joined = Rc::make_mut(words);
+                    for (word, other) in joined.iter_mut().zip(others.iter()) {
+                        *word |= other;
+                    }
+                    let total: u32 = joined.iter().map(|word| word.count_ones()).sum();
+                    if total as usize == (size - index * CHUNK_BITS).min(CHUNK_BITS) {
+                        *chunk = Chunk::Ones;
+                    } else {
+                        *count = total as u16;
+                    }
+                    changed = true;
+                }
+            }
         }
         changed
     }
 
+    /// The number of bits in the set.
+    pub fn len(&self) -> usize {
+        match &self.bits {
+            Bits::Sparse(bits) => bits.len(),
+            Bits::Chunked(_) => self.chunked_len(),
+        }
+    }
+
+    /// The number of bits of a chunked set, counted per chunk.
+    fn chunked_len(&self) -> usize {
+        let Bits::Chunked(chunks) = &self.bits else {
+            unreachable!("a chunked set")
+        };
+        chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| match chunk {
+                Chunk::Zeros => 0,
+                Chunk::Ones => self.chunk_size(index),
+                Chunk::Mixed(count, _) => *count as usize,
+            })
+            .sum()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.words.iter().all(|word| *word == 0)
+        match &self.bits {
+            Bits::Sparse(bits) => bits.is_empty(),
+            Bits::Chunked(chunks) => chunks.iter().all(|chunk| *chunk == Chunk::Zeros),
+        }
     }
 
     /// Removes every bit.
     pub fn clear(&mut self) {
-        self.words.iter_mut().for_each(|word| *word = 0);
+        self.bits = Bits::Sparse(Vec::new());
     }
 
     /// The bits of the set, in increasing order.
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        (0..self.size).filter(|bit| self.contains(*bit))
+        let (sparse, chunks): (&[u32], &[Chunk]) = match &self.bits {
+            Bits::Sparse(bits) => (bits, &[]),
+            Bits::Chunked(chunks) => (&[], chunks),
+        };
+        sparse
+            .iter()
+            .map(|bit| *bit as usize)
+            .chain(chunks.iter().enumerate().flat_map(move |(index, chunk)| {
+                let start = index * CHUNK_BITS;
+                let size = self.chunk_size(index);
+                let bits: Box<dyn Iterator<Item = usize>> = match chunk {
+                    Chunk::Zeros => Box::new(std::iter::empty()),
+                    Chunk::Ones => Box::new(start..start + size),
+                    Chunk::Mixed(_, words) => Box::new(
+                        words
+                            .iter()
+                            .enumerate()
+                            .flat_map(move |(word, bits)| set_bits(*bits, start + word * 64)),
+                    ),
+                };
+                bits
+            }))
     }
+}
+
+/// The positions of the bits set in `word`, offset by `start`.
+fn set_bits(mut word: u64, start: usize) -> impl Iterator<Item = usize> {
+    std::iter::from_fn(move || {
+        if word == 0 {
+            return None;
+        }
+        let bit = word.trailing_zeros() as usize;
+        word &= word - 1;
+        Some(start + bit)
+    })
 }
 
 /// Whether an analysis follows the edges of the control-flow graph or runs against them.
@@ -150,6 +421,12 @@ pub trait Analysis {
     /// Applies the effect of the edge `from -> to` to the state leaving `from`, forward only,
     /// for an analysis that tells the successors of a switch apart. None by default.
     fn apply_edge(&self, _state: &mut Self::Domain, _from: BlockId, _to: BlockId) {}
+
+    /// Whether [`Analysis::apply_edge`] changes states, so that the solver copies the state
+    /// leaving a block for each of its edges. False by default.
+    fn has_edge_effects(&self) -> bool {
+        false
+    }
 }
 
 /// The fixpoint of an analysis: the state where the analysis enters each block (its start
@@ -177,24 +454,17 @@ pub fn solve<A: Analysis>(body: &Body, analysis: A) -> Results<A> {
 /// edge between them is its only way in, its predecessor's only way out, and kept: the order
 /// visits a chained block right after its predecessor.
 fn chains(
-    body: &Body,
+    graph: &Graph,
     order: &[BlockId],
-    predecessors: &[Vec<BlockId>],
     keep_edge: &impl Fn(BlockId, BlockId) -> bool,
 ) -> Vec<Option<BlockId>> {
-    let mut chained_from = vec![None; body.blocks.len()];
-    // Each block's number of successors, counted once: a switch has many.
-    let exits: Vec<usize> = body
-        .blocks
-        .iter()
-        .map(|(_, data)| data.terminator.kind.successors().len())
-        .collect();
+    let mut chained_from = vec![None; graph.block_count()];
     for &block in order {
         if block.index() == 0 {
             continue;
         }
-        if let [predecessor] = predecessors[block.index()][..] {
-            let single_exit = exits[predecessor.index()] == 1;
+        if let [predecessor] = *graph.predecessors(block) {
+            let single_exit = graph.successors(predecessor).len() == 1;
             if predecessor != block && single_exit && keep_edge(predecessor, block) {
                 chained_from[block.index()] = Some(predecessor);
             }
@@ -219,13 +489,13 @@ pub fn solve_with<A: Analysis>(
 ) -> Results<A> {
     let count = body.blocks.len();
     let direction = analysis.direction();
+    let graph = Graph::new(body);
     let order = match direction {
-        Direction::Forward => reverse_postorder(body),
-        Direction::Backward => postorder(body),
+        Direction::Forward => graph.reverse_postorder(),
+        Direction::Backward => graph.postorder().to_vec(),
     };
-    let predecessors = predecessors(body);
     let chained_from = match direction {
-        Direction::Forward => chains(body, &order, &predecessors, &keep_edge),
+        Direction::Forward => chains(&graph, &order, &keep_edge),
         Direction::Backward => vec![None; count],
     };
     let mut block_states: Vec<Option<A::Domain>> = chained_from
@@ -239,8 +509,8 @@ pub fn solve_with<A: Analysis>(
             }
         }
         Direction::Backward => {
-            for (block, data) in body.blocks.iter() {
-                if data.terminator.kind.successors().is_empty() {
+            for (block, _) in body.blocks.iter() {
+                if graph.successors(block).is_empty() {
                     analysis.initialize_boundary(stored(&mut block_states, block));
                 }
             }
@@ -267,23 +537,28 @@ pub fn solve_with<A: Analysis>(
             apply_block(body, &analysis, block, &mut state);
             match direction {
                 Direction::Forward => {
-                    let successors = body.blocks[block].terminator.kind.successors();
-                    if let [successor] = successors[..] {
-                        if chained_from[successor.index()] == Some(block) {
+                    let successors = graph.successors(block);
+                    if let [next] = *successors {
+                        if chained_from[next.index()] == Some(block) {
                             carried = Some(state);
                             continue;
                         }
                     }
-                    for successor in successors {
-                        if keep_edge(block, successor) {
+                    for &next in successors {
+                        if !keep_edge(block, next) {
+                            continue;
+                        }
+                        if analysis.has_edge_effects() {
                             let mut edge_state = state.clone();
-                            analysis.apply_edge(&mut edge_state, block, successor);
-                            changed |= stored(&mut block_states, successor).join(&edge_state);
+                            analysis.apply_edge(&mut edge_state, block, next);
+                            changed |= stored(&mut block_states, next).join(&edge_state);
+                        } else {
+                            changed |= stored(&mut block_states, next).join(&state);
                         }
                     }
                 }
                 Direction::Backward => {
-                    for &predecessor in &predecessors[block.index()] {
+                    for &predecessor in graph.predecessors(block) {
                         if keep_edge(predecessor, block) {
                             changed |= stored(&mut block_states, predecessor).join(&state);
                         }
@@ -448,8 +723,14 @@ impl<A: Analysis> ResultsCursor<'_, A> {
             let data = &self.body.blocks[location.block];
             let mut state = self.results.block_state(location.block, self.body);
             // The state after each location, from the terminator's back to the first
-            // statement's.
-            let mut states = Vec::with_capacity(data.statements.len() + 1);
+            // statement's, in the buffer of the block entered before.
+            let mut states = match self.snapshots.take() {
+                Some((_, mut states)) => {
+                    states.clear();
+                    states
+                }
+                None => Vec::with_capacity(data.statements.len() + 1),
+            };
             for statement in (0..=data.statements.len()).rev() {
                 states.push(state.clone());
                 if statement == 0 {
@@ -502,6 +783,96 @@ mod tests {
         assert!(set.remove(3) && !set.remove(3));
         set.clear();
         assert!(set.is_empty());
+    }
+
+    impl BitSet {
+        fn chunks(&self) -> &[Chunk] {
+            match &self.bits {
+                Bits::Chunked(chunks) => chunks,
+                Bits::Sparse(_) => &[],
+            }
+        }
+    }
+
+    #[test]
+    fn chunked_bit_sets() {
+        // Three chunks, the last of 5 bits.
+        let size = 2 * CHUNK_BITS + 5;
+        let mut set = BitSet::new(size);
+        for bit in 0..CHUNK_BITS {
+            assert!(set.insert(bit));
+        }
+        assert_eq!(set.chunks()[0], Chunk::Ones);
+        for bit in 2 * CHUNK_BITS..size {
+            set.insert(bit);
+        }
+        assert_eq!(set.chunks()[2], Chunk::Ones);
+        assert_eq!(set.iter().count(), CHUNK_BITS + 5);
+        // A copy shares its chunks until one of them changes.
+        let mut copy = set.clone();
+        assert!(copy.remove(7) && !copy.contains(7) && set.contains(7));
+        assert!(copy.insert(CHUNK_BITS + 1));
+        assert!(!set.contains(CHUNK_BITS + 1));
+        // Removing a full chunk's bits, then joining them back, normalizes the chunks.
+        assert!(set.union(&copy));
+        assert!(!set.union(&copy));
+        assert!(copy.insert(7));
+        assert_eq!(copy, set);
+        for bit in 0..CHUNK_BITS {
+            copy.remove(bit);
+        }
+        assert_eq!(copy.chunks()[0], Chunk::Zeros);
+        assert_eq!(
+            copy.iter().collect::<Vec<_>>(),
+            [CHUNK_BITS + 1]
+                .into_iter()
+                .chain(2 * CHUNK_BITS..size)
+                .collect::<Vec<_>>()
+        );
+        let mut other = BitSet::new(size);
+        other.insert(CHUNK_BITS + 2);
+        assert!(copy.union(&other) && copy.contains(CHUNK_BITS + 2));
+        copy.clear();
+        assert!(copy.is_empty() && !copy.contains(size));
+    }
+
+    #[test]
+    fn sparse_bit_sets_switch_to_chunks() {
+        let size = 3 * CHUNK_BITS;
+        let mut sparse = BitSet::new(size);
+        for bit in [5, 2 * CHUNK_BITS, 70] {
+            sparse.insert(bit);
+        }
+        assert!(matches!(sparse.bits, Bits::Sparse(_)));
+        assert_eq!(
+            sparse.iter().collect::<Vec<_>>(),
+            vec![5, 70, 2 * CHUNK_BITS]
+        );
+        let mut chunked = BitSet::new(size);
+        for bit in 0..=SPARSE_BITS * 2 {
+            chunked.insert(bit * 3);
+        }
+        assert!(matches!(chunked.bits, Bits::Chunked(_)));
+        assert_eq!(chunked.iter().count(), SPARSE_BITS * 2 + 1);
+        // Equal sets are equal in either form.
+        let mut shrunk = chunked.clone();
+        for bit in 0..=SPARSE_BITS * 2 {
+            shrunk.remove(bit * 3);
+        }
+        for bit in [5, 2 * CHUNK_BITS, 70] {
+            shrunk.insert(bit);
+        }
+        assert_eq!(shrunk, sparse);
+        // Joining a sparse set into a chunked one and the other way round.
+        let mut joined = sparse.clone();
+        assert!(joined.union(&chunked));
+        assert!(!joined.union(&chunked) && !joined.union(&sparse));
+        let mut other = chunked.clone();
+        assert!(other.union(&sparse));
+        assert_eq!(joined, other);
+        assert_eq!(joined.iter().count(), SPARSE_BITS * 2 + 1 + 3);
+        let mut empty = BitSet::new(size);
+        assert!(!empty.union(&BitSet::new(size)) && empty.is_empty());
     }
 
     /// Forward: the blocks that may have run before a point. Backward: the blocks that may run

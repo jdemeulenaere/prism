@@ -20,6 +20,7 @@ use crate::location::Location;
 use crate::places;
 use crate::uses::{statement_effects, terminator_effects, PlaceEffect};
 use prism_mir::{Body, LocalId, LocalKind, Statement, Terminator, TerminatorKind};
+use prism_typed_tree::ArenaId;
 
 /// The locals every `Return` of `body` uses: its loan-carrying capture locals and its
 /// arguments of type `&mut R` (or `(&mut R)?`) whose `R` carries loans, which the caller sees
@@ -42,33 +43,53 @@ pub fn returned_locals(body: &Body, borrows: &BorrowSet) -> Vec<LocalId> {
 /// The loan-carrying locals that may be used later.
 pub struct Liveness<'a> {
     pub borrows: &'a BorrowSet,
-    /// The locals used at every `Return`.
-    returned: Vec<LocalId>,
+    /// What each location does to loan-carrying locals, in evaluation order: each carrier it
+    /// uses (`true`) or defines (`false`), found once rather than on every pass of the solver.
+    /// A `Return` uses the locals the caller sees afterwards.
+    effects: Vec<Vec<(u32, bool)>>,
+    /// The position in `effects` of each block's first location.
+    block_starts: Vec<usize>,
 }
 
 impl<'a> Liveness<'a> {
     pub fn new(body: &Body, borrows: &'a BorrowSet) -> Self {
+        let returned = returned_locals(body, borrows);
+        let carrier = |local: LocalId| borrows.carrier(local).map(|bit| bit as u32);
+        let mut effects = Vec::new();
+        let mut block_starts = Vec::with_capacity(body.blocks.len());
+        for (_, data) in body.blocks.iter() {
+            block_starts.push(effects.len());
+            for statement in &data.statements {
+                effects.push(carrier_effects(statement_effects(statement), &carrier));
+            }
+            effects.push(match data.terminator.kind {
+                TerminatorKind::Return => returned
+                    .iter()
+                    .filter_map(|local| carrier(*local))
+                    .map(|bit| (bit, true))
+                    .collect(),
+                _ => carrier_effects(terminator_effects(&data.terminator), &carrier),
+            });
+        }
         Self {
             borrows,
-            returned: returned_locals(body, borrows),
+            effects,
+            block_starts,
         }
     }
 
-    /// Applies `effects`, in evaluation order, backward.
-    fn apply_effects(&self, state: &mut BitSet, effects: Vec<PlaceEffect>) {
-        for effect in effects.into_iter().rev() {
-            match effect {
-                PlaceEffect::Use(place, _, _) | PlaceEffect::Move(place, _) => {
-                    if let Some(bit) = self.borrows.carrier(place.local) {
-                        state.insert(bit);
-                    }
-                }
-                PlaceEffect::Init(local) | PlaceEffect::StorageDead(local) => {
-                    if let Some(bit) = self.borrows.carrier(local) {
-                        state.remove(bit);
-                    }
-                }
-                PlaceEffect::StorageLive(_) => {}
+    /// The carriers `location` uses (`true`) or defines (`false`), in evaluation order.
+    pub fn carrier_effects(&self, location: Location) -> &[(u32, bool)] {
+        &self.effects[self.block_starts[location.block.index()] + location.statement]
+    }
+
+    /// Applies the effects of `location`, backward.
+    fn apply_location(&self, state: &mut BitSet, location: Location) {
+        for (bit, used) in self.carrier_effects(location).iter().rev() {
+            if *used {
+                state.insert(*bit as usize);
+            } else {
+                state.remove(*bit as usize);
             }
         }
     }
@@ -79,6 +100,25 @@ impl<'a> Liveness<'a> {
             .carrier(local)
             .is_some_and(|bit| state.contains(bit))
     }
+}
+
+/// The uses and definitions of carriers among `effects`.
+fn carrier_effects(
+    effects: Vec<PlaceEffect>,
+    carrier: &impl Fn(LocalId) -> Option<u32>,
+) -> Vec<(u32, bool)> {
+    effects
+        .into_iter()
+        .filter_map(|effect| match effect {
+            PlaceEffect::Use(place, _, _) | PlaceEffect::Move(place, _) => {
+                carrier(place.local).map(|bit| (bit, true))
+            }
+            PlaceEffect::Init(local) | PlaceEffect::StorageDead(local) => {
+                carrier(local).map(|bit| (bit, false))
+            }
+            PlaceEffect::StorageLive(_) => None,
+        })
+        .collect()
 }
 
 impl Analysis for Liveness<'_> {
@@ -94,20 +134,12 @@ impl Analysis for Liveness<'_> {
 
     fn initialize_boundary(&self, _: &mut BitSet) {}
 
-    fn apply_statement(&self, state: &mut BitSet, statement: &Statement, _: Location) {
-        self.apply_effects(state, statement_effects(statement));
+    fn apply_statement(&self, state: &mut BitSet, _: &Statement, location: Location) {
+        self.apply_location(state, location);
     }
 
-    fn apply_terminator(&self, state: &mut BitSet, terminator: &Terminator, _: Location) {
-        if let TerminatorKind::Return = terminator.kind {
-            for local in &self.returned {
-                if let Some(bit) = self.borrows.carrier(*local) {
-                    state.insert(bit);
-                }
-            }
-            return;
-        }
-        self.apply_effects(state, terminator_effects(terminator));
+    fn apply_terminator(&self, state: &mut BitSet, _: &Terminator, location: Location) {
+        self.apply_location(state, location);
     }
 }
 

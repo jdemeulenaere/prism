@@ -298,8 +298,18 @@ fun f(o: &mut Order, h: Heap<Point>, s: String) {
         // An element of a borrowed list continues `ys` through its reference only.
         let ys = Place::local(LocalId(2));
         let list = ys.project(Projection::Deref);
-        assert!(extends_through_reference(f, &file.types, borrowed_element, &ys));
-        assert!(!extends_through_reference(f, &file.types, borrowed_element, &list));
+        assert!(extends_through_reference(
+            f,
+            &file.types,
+            borrowed_element,
+            &ys
+        ));
+        assert!(!extends_through_reference(
+            f,
+            &file.types,
+            borrowed_element,
+            &list
+        ));
     }
 
     #[test]
