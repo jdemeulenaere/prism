@@ -231,6 +231,7 @@ fn run_abi(path: &str) {
                 is_compose,
                 receiver,
                 name,
+                type_parameters,
                 params,
                 return_type,
                 ..
@@ -252,15 +253,21 @@ fn run_abi(path: &str) {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
+                let type_parameters = match type_parameter_list(type_parameters) {
+                    list if list.is_empty() => list,
+                    list => format!("{} ", list),
+                };
                 println!(
-                    "  {} {}{}fun {}{}({}): {}",
-                    visibility, comp, mode, receiver, name, param_str, return_type
+                    "  {} {}{}fun {}{}{}({}): {}",
+                    visibility, comp, mode, type_parameters, receiver, name, param_str, return_type
                 );
             }
             prism_abi::ExportedSymbol::Struct {
                 visibility,
                 name,
+                type_parameters,
                 marker,
+                marker_parameters,
                 fields,
                 ..
             } => {
@@ -272,17 +279,20 @@ fn run_abi(path: &str) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "  {} struct {}{} {{ {} }}",
+                    "  {} struct {}{}{} {{ {} }}",
                     visibility,
                     name,
-                    marker_suffix(*marker),
+                    type_parameter_list(type_parameters),
+                    generic_marker_suffix(*marker, type_parameters, marker_parameters),
                     f_str
                 );
             }
             prism_abi::ExportedSymbol::Enum {
                 visibility,
                 name,
+                type_parameters,
                 marker,
+                marker_parameters,
                 variants,
                 ..
             } => {
@@ -299,10 +309,11 @@ fn run_abi(path: &str) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "  {} enum {}{} {{ {} }}",
+                    "  {} enum {}{}{} {{ {} }}",
                     visibility,
                     name,
-                    marker_suffix(*marker),
+                    type_parameter_list(type_parameters),
+                    generic_marker_suffix(*marker, type_parameters, marker_parameters),
                     v_str
                 );
             }
@@ -323,6 +334,40 @@ fn run_tokens(path: &str) {
     for tok in tokens {
         println!("{:?} at {}", tok.kind, tok.span);
     }
+}
+
+/// A declaration's type parameters with their bounds (`<A, B : Copy>`), or nothing.
+fn type_parameter_list(parameters: &[prism_abi::AbiTypeParameter]) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    let parameters: Vec<String> = parameters
+        .iter()
+        .map(|p| match p.bound {
+            Some(bound) => format!("{} : {}", p.name, bound.as_str()),
+            None => p.name.clone(),
+        })
+        .collect();
+    format!("<{}>", parameters.join(", "))
+}
+
+/// The marker suffix of a generic struct or enum, with the type parameters that condition it
+/// (` : Copy if T`), as the typed-tree dump prints it (D19 of `generics`).
+fn generic_marker_suffix(
+    marker: Option<prism_ast::TypeMarker>,
+    parameters: &[prism_abi::AbiTypeParameter],
+    marker_parameters: &[u32],
+) -> String {
+    let suffix = marker_suffix(marker);
+    if marker.is_none() || marker_parameters.is_empty() {
+        return suffix;
+    }
+    let names: Vec<&str> = marker_parameters
+        .iter()
+        .filter_map(|index| parameters.get(*index as usize))
+        .map(|p| p.name.as_str())
+        .collect();
+    format!("{} if {}", suffix, names.join(", "))
 }
 
 /// The ` : Copy` or ` : Clone` suffix of a struct or enum in the ABI dump.
