@@ -1,0 +1,4 @@
+// expect: E3002
+// Intrinsic structs parse; a workspace file may not declare one.
+public intrinsic struct Composition
+public intrinsic struct RecomposeScope : Copy

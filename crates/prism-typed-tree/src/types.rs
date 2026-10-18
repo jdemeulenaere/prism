@@ -31,6 +31,82 @@ impl NominalId {
     pub fn builtin_range() -> Self {
         Self::new(BUILTIN_MODULE, "Range")
     }
+
+    /// The intrinsic struct this names, when it names one.
+    pub fn intrinsic(&self) -> Option<IntrinsicStruct> {
+        IntrinsicStruct::of(self)
+    }
+}
+
+/// The module of the compose prelude, `/prism/compose/runtime` (D15 of `compose-transform`).
+pub const COMPOSE_RUNTIME_MODULE: &str = "prism/compose/runtime";
+
+/// A struct whose representation, glue and operations the compiler provides, declared in the
+/// bundled library as an `intrinsic struct` without fields (D16 of `compose-transform`). No
+/// program constructs one, reads a field of one or takes one apart: its intrinsic functions
+/// make and use its values. Each is one word, a runtime handle, which `==` compares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicStruct {
+    /// An owned composition, neither `Copy` nor `Clone`, disposed by its drop.
+    Composition,
+    /// A `Copy` handle of a restart scope.
+    RecomposeScope,
+}
+
+impl IntrinsicStruct {
+    /// Every intrinsic struct, in the order of the library's declarations.
+    pub const ALL: [IntrinsicStruct; 2] = [
+        IntrinsicStruct::Composition,
+        IntrinsicStruct::RecomposeScope,
+    ];
+
+    /// The intrinsic struct `id` names, if any: by its defining module and name.
+    pub fn of(id: &NominalId) -> Option<Self> {
+        if id.module != COMPOSE_RUNTIME_MODULE {
+            return None;
+        }
+        Self::ALL
+            .into_iter()
+            .find(|intrinsic| intrinsic.name() == id.name)
+    }
+
+    /// Its name in the library.
+    pub fn name(self) -> &'static str {
+        match self {
+            IntrinsicStruct::Composition => "Composition",
+            IntrinsicStruct::RecomposeScope => "RecomposeScope",
+        }
+    }
+
+    /// The library module declaring it.
+    pub fn module(self) -> &'static str {
+        COMPOSE_RUNTIME_MODULE
+    }
+
+    /// Its identity.
+    pub fn id(self) -> NominalId {
+        NominalId::new(self.module(), self.name())
+    }
+
+    /// Its marker, which its declaration must write.
+    pub fn marker(self) -> Option<TypeMarker> {
+        match self {
+            IntrinsicStruct::Composition => None,
+            IntrinsicStruct::RecomposeScope => Some(TypeMarker::Copy),
+        }
+    }
+
+    /// The canonical text of its declaration, as `prism abi` shows it.
+    pub fn declaration_text(self) -> String {
+        match self.marker() {
+            Some(marker) => format!(
+                "public intrinsic struct {} : {}",
+                self.name(),
+                marker.as_str()
+            ),
+            None => format!("public intrinsic struct {}", self.name()),
+        }
+    }
 }
 
 /// A type parameter of a generic function, struct or enum: its position in its declaration's

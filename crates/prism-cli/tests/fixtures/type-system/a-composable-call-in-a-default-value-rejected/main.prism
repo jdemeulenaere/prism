@@ -1,0 +1,4 @@
+// expect: E4008
+compose fun Size(): Int = 4
+
+compose fun Box(width: Int = Size()) { }

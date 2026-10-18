@@ -258,3 +258,17 @@ fn library_declarations_formatted() {
         "public intrinsic mut fun <T> List<T>.add(element: T)\n\npublic intrinsic val <T> List<T>.size: Int\n"
     );
 }
+
+/// formatting: "Intrinsic structs formatted".
+#[test]
+fn intrinsic_structs_formatted() {
+    let output = prism_with_input(
+        &["fmt", "-"],
+        "public  intrinsic struct RecomposeScope:Copy\n",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "public intrinsic struct RecomposeScope : Copy\n"
+    );
+}

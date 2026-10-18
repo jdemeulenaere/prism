@@ -1,0 +1,9 @@
+// expect: ok
+compose fun Counter() {
+    val id = remember { 7 }
+    val s = currentRecomposeScope()
+}
+
+fun main() {
+    val c = composition { Counter() }
+}

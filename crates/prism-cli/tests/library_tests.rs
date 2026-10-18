@@ -113,15 +113,27 @@ fn the_prelude_modules_export_distinct_names() {
 
 #[test]
 fn the_embedded_modules_are_the_library_directory() {
+    // Every `.prism` file of the directory and its subdirectories, by module path: the file
+    // `compose/runtime.prism` is the module `prism/compose/runtime`.
     let mut on_disk = BTreeMap::new();
-    for entry in std::fs::read_dir(library_directory()).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "prism") {
-            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-            on_disk.insert(
-                format!("prism/{}", stem),
-                std::fs::read_to_string(&path).unwrap(),
-            );
+    let root = library_directory();
+    let mut directories = vec![root.clone()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|e| e == "prism") {
+                let relative = path.strip_prefix(&root).unwrap().with_extension("");
+                let segments: Vec<String> = relative
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy().to_string())
+                    .collect();
+                on_disk.insert(
+                    format!("prism/{}", segments.join("/")),
+                    std::fs::read_to_string(&path).unwrap(),
+                );
+            }
         }
     }
     let embedded: BTreeMap<String, String> = MODULES
@@ -219,4 +231,51 @@ fn a_syntax_error_in_a_library_file_shows_its_source() {
         rendered
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// standard-library: "Signatures of the compose module", and compilation-and-abi: "The ABI of
+/// the compose module".
+#[test]
+fn signatures_of_the_compose_module() {
+    let library = Library::bundled();
+    let source = &library
+        .module("prism/compose/runtime")
+        .expect("the compose module")
+        .source;
+    let file = prism_parser::parse_source(source).expect("the module parses");
+    let no_definition = |_: &str, _: &str| None;
+    let abi = prism_abi::FileAbi::extract_with_origin(
+        &file,
+        "prism/compose/runtime",
+        &prism_abi::no_imports,
+        &no_definition,
+        true,
+    )
+    .expect("the module's ABI");
+    let texts: BTreeSet<String> = abi
+        .symbols
+        .iter()
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    for expected in [
+        "public intrinsic struct Composition",
+        "public intrinsic struct RecomposeScope : Copy",
+        "public intrinsic fun composition(content: escaping compose () -> Unit): Composition",
+        "public intrinsic fun Composition.setContent(content: escaping compose () -> Unit): Unit",
+        "public intrinsic fun Composition.recompose(): Bool",
+        "public intrinsic fun Composition.dump(): String",
+        "public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T",
+        "public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit",
+        "public intrinsic compose fun currentRecomposeScope(): RecomposeScope",
+        "public intrinsic fun RecomposeScope.invalidate(): Unit",
+    ] {
+        assert!(
+            texts.contains(expected),
+            "{} is missing from {:?}",
+            expected,
+            texts
+        );
+    }
+    assert_eq!(texts.len(), 10, "{:?}", texts);
+    assert!(PRELUDE.contains(&"prism/compose/runtime"));
 }

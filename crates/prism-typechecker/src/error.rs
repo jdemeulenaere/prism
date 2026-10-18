@@ -141,7 +141,17 @@ pub enum TypeError {
     },
 
     /// E4008: Invoking a composable function (`compose fun`) outside a composable context.
-    InvalidComposeContext { callee: String, span: Span },
+    /// `in_default` when the call is in a parameter's default value, which is never a
+    /// composable context (D17 of `compose-transform`).
+    InvalidComposeContext {
+        callee: String,
+        span: Span,
+        in_default: bool,
+    },
+
+    /// E4030: Starting, recomposing or setting the content of a composition in a composable
+    /// context, which always runs during a pass (D17 of `compose-transform`).
+    CompositionInComposable { operation: String, span: Span },
 
     /// E4009: Non-exhaustive `when` expression in value position.
     NonExhaustiveWhen {
@@ -555,6 +565,7 @@ impl TypeError {
             TypeError::UnknownField { .. } => "E4006",
             TypeError::VisibilityViolation { .. } => "E4007",
             TypeError::InvalidComposeContext { .. } => "E4008",
+            TypeError::CompositionInComposable { .. } => "E4030",
             TypeError::NonExhaustiveWhen { .. } => "E4009",
             TypeError::DuplicateSymbol { .. } => "E4010",
             TypeError::BuiltinNameDeclared { .. } => "E4010",
@@ -608,6 +619,7 @@ impl TypeError {
             TypeError::UnknownField { span, .. } => *span,
             TypeError::VisibilityViolation { span, .. } => *span,
             TypeError::InvalidComposeContext { span, .. } => *span,
+            TypeError::CompositionInComposable { span, .. } => *span,
             TypeError::NonExhaustiveWhen { span, .. } => *span,
             TypeError::DuplicateSymbol { span, .. } => *span,
             TypeError::BuiltinNameDeclared { span, .. } => *span,
@@ -794,6 +806,12 @@ impl TypeError {
                 format!(
                     "composable function '{}' can only be invoked within a composable context (inside a 'compose fun' or composable closure)",
                     callee
+                )
+            }
+            TypeError::CompositionInComposable { operation, .. } => {
+                format!(
+                    "'{}' cannot be called in a composable context, which always runs during a pass of a composition",
+                    operation
                 )
             }
             TypeError::NonExhaustiveWhen { message, .. } => message.clone(),

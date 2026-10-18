@@ -1,0 +1,4 @@
+package prism
+
+// A window the compiler does not provide.
+public intrinsic struct Window

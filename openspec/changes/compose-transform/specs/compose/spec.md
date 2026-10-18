@@ -30,7 +30,7 @@ Compose is Prism's native support for declarative UI. This change adds the langu
 ### Requirement: Setting the Content and Recomposing
 `c.setContent(content)` MUST replace the composition's root content and recompose its root. `c.recompose()` MUST recompose the composition's invalid scopes and return `true` when any ran, and `false` without running anything otherwise.
 
-#### Scenario: New content recomposes the root
+#### Scenario: New content recomposes a composition's root
 - **WHEN** `fun main() { val c = composition { println(1) }; c.setContent { println(2) }; println(c.recompose()) }` runs
 - **THEN** stdout is `1`, `2` and `false`, one per line
 
@@ -80,7 +80,7 @@ A group key MUST be a 64-bit hash of the enclosing top-level declaration's path 
 ### Requirement: Conditional and Repeated Composable Code Runs in Its Own Groups
 A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback of `?:`, the part of a safe call after its test, and a loop, around all its iterations, MUST run in a replaceable group of its own when it contains a composable call outside closures. Leaving such a region by any path, `return`, `break` and `continue` included, MUST end its group.
 
-#### Scenario: Branches get their own groups
+#### Scenario: Branches of a composable get their own groups
 - **WHEN** `compose fun V(on: Bool) { if (on) { val a = remember { println("on"); 1 } } else { val b = remember { println("off"); 2 } } }`, `fun screen(on: Bool): compose () -> Unit = { V(on) }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); c.setContent(screen(true)) }` run
 - **THEN** stdout is `on`, `off` and `on`: each switch removes the other branch's group with its slot
 
@@ -111,8 +111,12 @@ A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback o
 - **THEN** stdout starts with `calc 1`, `10`, `10`, `calc 2` and `20`, and the dump shows `K`'s group holding exactly the slots `slot Int` for the key and `slot Int` for the value
 
 #### Scenario: Keys that cannot be kept rejected
-- **WHEN** `compose fun K(s: String, r: &Int) { val a = remember(s) { 1 }; val b = remember(r) { 2 } }` is checked
+- **WHEN** `compose fun K(s: String, r: (&Int)?) { val a = remember(s) { 1 }; val b = remember(r) { 2 } }` is checked
 - **THEN** the type checker reports `E4021` for `s` and `E4022` for `r`
+
+#### Scenario: A borrowed key is copied out
+- **WHEN** `compose fun K(r: &Int) { val a = remember(r) { 1 } }` is checked
+- **THEN** it typechecks: the key is the `Int` copied out of `r`, as for any argument of a type parameter (references, "Copy-Out From References")
 
 ### Requirement: Keyed Groups
 `key(value) { content }` MUST compose `content` in a movable group identified by its own key and by the `Int` `value`, so that keyed groups reordered among their siblings keep their groups, slots and nodes.

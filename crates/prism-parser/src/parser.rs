@@ -490,6 +490,10 @@ impl Parser {
                 let property = self.parse_extension_property(visibility, modifier, start_span)?;
                 return Ok(Declaration::ExtensionProperty(property));
             }
+            if self.peek_kind() == &TokenKind::Struct && !is_compose && mode.is_none() {
+                let st = self.parse_intrinsic_struct(visibility, modifier, start_span)?;
+                return Ok(Declaration::Struct(st));
+            }
             if self.peek_kind() != &TokenKind::Fun {
                 return Err(ParseError::new(
                     format!(
@@ -852,7 +856,11 @@ impl Parser {
             _ => return Ok(None),
         };
         let follows_modifier = |kind: &TokenKind| match kind {
-            TokenKind::Compose | TokenKind::Mut | TokenKind::Fun | TokenKind::Val => true,
+            TokenKind::Compose
+            | TokenKind::Mut
+            | TokenKind::Fun
+            | TokenKind::Val
+            | TokenKind::Struct => true,
             TokenKind::Ident(word) => word == "consuming",
             _ => false,
         };
@@ -1116,6 +1124,54 @@ impl Parser {
             type_parameters,
             marker,
             fields,
+            intrinsic: None,
+            span: start_span.merge(end_span),
+        })
+    }
+
+    /// An `intrinsic struct` from `struct` on: a name, optional type parameters and an optional
+    /// marker, and no fields or block (D16 of `compose-transform`). An `external struct` is
+    /// rejected: externals are functions.
+    fn parse_intrinsic_struct(
+        &mut self,
+        visibility: Visibility,
+        library: LibraryModifier,
+        start_span: Span,
+    ) -> Result<StructDecl, ParseError> {
+        if library.kind == LibraryKind::External {
+            return Err(ParseError::new(
+                "An external declaration is a function: 'external fun name(...)'; types the compiler provides are 'intrinsic struct'",
+                library.span,
+            ));
+        }
+        self.expect(TokenKind::Struct)?;
+        let (name, name_span) = self.expect_ident()?;
+        let type_parameters = self.parse_optional_type_parameters()?;
+        let mut end_span = self.tokens[self.cursor.saturating_sub(1)].span;
+        let marker = match self.parse_optional_marker()? {
+            Some((marker, marker_span)) => {
+                end_span = marker_span;
+                Some(marker)
+            }
+            None => None,
+        };
+        if matches!(self.peek_kind(), TokenKind::LParen | TokenKind::LBrace) {
+            return Err(ParseError::new(
+                format!(
+                    "An intrinsic struct has no fields and no constructor: the compiler provides its representation, as in 'intrinsic struct {}'",
+                    name
+                ),
+                self.peek().span,
+            ));
+        }
+        Ok(StructDecl {
+            visibility,
+            name,
+            name_span,
+            type_parameters,
+            marker,
+            fields: Vec::new(),
+            intrinsic: Some(library),
             span: start_span.merge(end_span),
         })
     }

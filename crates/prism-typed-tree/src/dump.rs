@@ -139,11 +139,12 @@ impl TypedFile {
 
 impl TypedFile {
     /// Prints every struct and enum of the type table that the file neither declares nor gets
-    /// from the compiler, in [`NominalId`] order: those its direct imports export (with their
-    /// fields or variants) and those only an imported signature mentions (with their marker).
+    /// from the compiler (the built-in `Range` and the intrinsic structs), in [`NominalId`]
+    /// order: those its direct imports export (with their fields or variants) and those only an
+    /// imported signature mentions (with their marker).
     fn dump_imported_types(&self, out: &mut String) {
         for id in self.types.ids() {
-            if id.module == self.module || id.module == BUILTIN_MODULE {
+            if id.module == self.module || id.module == BUILTIN_MODULE || id.intrinsic().is_some() {
                 continue;
             }
             let marker = marker_suffix(self.types.marker(id));

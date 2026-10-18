@@ -100,6 +100,9 @@ fn erase_declaration(declaration: &mut Declaration) {
         Declaration::Struct(structure) => {
             erase(&mut structure.span);
             erase(&mut structure.name_span);
+            if let Some(library) = &mut structure.intrinsic {
+                erase(&mut library.span);
+            }
             erase_type_parameters(&mut structure.type_parameters);
             for field in &mut structure.fields {
                 erase(&mut field.span);

@@ -731,6 +731,14 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::ListRemoveLast => 18,
             BuiltinFunction::ListReverse => 19,
             BuiltinFunction::ListClear => 20,
+            BuiltinFunction::Composition => 21,
+            BuiltinFunction::SetContent => 22,
+            BuiltinFunction::Recompose => 23,
+            BuiltinFunction::DumpComposition => 24,
+            BuiltinFunction::Remember => 25,
+            BuiltinFunction::Key => 26,
+            BuiltinFunction::CurrentRecomposeScope => 27,
+            BuiltinFunction::InvalidateScope => 28,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -756,6 +764,14 @@ impl Codec for BuiltinFunction {
             18 => BuiltinFunction::ListRemoveLast,
             19 => BuiltinFunction::ListReverse,
             20 => BuiltinFunction::ListClear,
+            21 => BuiltinFunction::Composition,
+            22 => BuiltinFunction::SetContent,
+            23 => BuiltinFunction::Recompose,
+            24 => BuiltinFunction::DumpComposition,
+            25 => BuiltinFunction::Remember,
+            26 => BuiltinFunction::Key,
+            27 => BuiltinFunction::CurrentRecomposeScope,
+            28 => BuiltinFunction::InvalidateScope,
             _ => return None,
         })
     }

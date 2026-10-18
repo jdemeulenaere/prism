@@ -882,8 +882,12 @@ fn explaining_a_warm_check() {
     let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
     let all = all_explanation_lines(&output);
     assert_eq!(
-        all[..2],
-        lines(&["reused prism/collections.prism", "reused prism/core.prism"])
+        all[..3],
+        lines(&[
+            "reused prism/collections.prism",
+            "reused prism/compose/runtime.prism",
+            "reused prism/core.prism",
+        ])
     );
 }
 
@@ -914,6 +918,7 @@ fn unreached_modules_are_not_parsed() {
         all_explanation_lines(&output),
         lines(&[
             "checked prism/collections.prism",
+            "checked prism/compose/runtime.prism",
             "checked prism/core.prism",
             "checked main.prism",
         ])
@@ -970,6 +975,7 @@ fn library_entries_are_shared_between_workspaces() {
         outputs[0],
         lines(&[
             "checked prism/collections.prism",
+            "checked prism/compose/runtime.prism",
             "checked prism/core.prism",
             "checked main.prism",
         ])
@@ -978,6 +984,7 @@ fn library_entries_are_shared_between_workspaces() {
         outputs[1],
         lines(&[
             "reused prism/collections.prism",
+            "reused prism/compose/runtime.prism",
             "reused prism/core.prism",
             "checked main.prism",
         ])

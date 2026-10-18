@@ -1,0 +1,4 @@
+// expect: E4004
+compose fun R(name: String) {
+    key(name) { }
+}

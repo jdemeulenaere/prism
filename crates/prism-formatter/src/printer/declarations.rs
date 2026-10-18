@@ -235,6 +235,16 @@ impl<'a> Printer<'a> {
     }
 
     fn structure(&mut self, structure: &StructDecl) -> Document {
+        // An intrinsic struct is one line: its header and marker, without fields (D16 of
+        // `compose-transform`).
+        if structure.is_intrinsic() {
+            return concat(vec![
+                self.visibility(structure.visibility, structure.span),
+                text(format!("intrinsic struct {}", structure.name)),
+                self.type_parameters(&structure.type_parameters),
+                Self::marker(structure.marker),
+            ]);
+        }
         let mut parts = vec![
             self.visibility(structure.visibility, structure.span),
             text(format!("struct {}", structure.name)),

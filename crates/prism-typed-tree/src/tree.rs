@@ -650,6 +650,28 @@ pub enum BuiltinFunction {
     ListReverse,
     /// `xs.clear()`: drops every element, keeping the buffer.
     ListClear,
+    /// `composition(content)` of `/prism/compose/runtime`: starts a composition of the
+    /// composable `content`, composes it once and gives the owned `Composition` (D15 of
+    /// `compose-transform`).
+    Composition,
+    /// `c.setContent(content)`: replaces a composition's content and recomposes its root.
+    SetContent,
+    /// `c.recompose()`: recomposes a composition's invalid scopes, giving whether any ran.
+    Recompose,
+    /// `c.dump()`: the text dump of a composition.
+    DumpComposition,
+    /// `remember(keys..., calculation)`, a composable: the kept value of its slot, or the
+    /// calculation's result when the slot is new or a key changed (D12). Typed by a rule: up to
+    /// three keys, each of a type parameter of its own bounded by `Copy`, before the
+    /// calculation; its type arguments are the value's type, then the keys' types.
+    Remember,
+    /// `key(value) { content }`, a composable: composes `content` in a movable group whose
+    /// data key is `value` (D13).
+    Key,
+    /// `currentRecomposeScope()`, a composable: the innermost restart scope being composed.
+    CurrentRecomposeScope,
+    /// `s.invalidate()` of a `RecomposeScope`.
+    InvalidateScope,
 }
 
 /// The declared signature of a built-in list member (D5 of `collections`), written with the
@@ -688,6 +710,14 @@ impl BuiltinFunction {
             BuiltinFunction::ListRemoveLast => "removeLast",
             BuiltinFunction::ListReverse => "reverse",
             BuiltinFunction::ListClear => "clear",
+            BuiltinFunction::Composition => "composition",
+            BuiltinFunction::SetContent => "setContent",
+            BuiltinFunction::Recompose => "recompose",
+            BuiltinFunction::DumpComposition => "dump",
+            BuiltinFunction::Remember => "remember",
+            BuiltinFunction::Key => "key",
+            BuiltinFunction::CurrentRecomposeScope => "currentRecomposeScope",
+            BuiltinFunction::InvalidateScope => "invalidate",
         }
     }
 
@@ -791,8 +821,9 @@ impl BuiltinFunction {
     }
 
     /// Whether the built-in's first argument is a receiver: that of every built-in member
-    /// (`clone`, `length`, `get`, `toString`, `unbox` and the list members), not the arguments
-    /// of `print`, `println`, `Heap` and `listOf`.
+    /// (`clone`, `length`, `get`, `toString`, `unbox`, the list members and the members of
+    /// `Composition` and `RecomposeScope`), not the arguments of `print`, `println`, `Heap`,
+    /// `listOf`, `composition`, `remember`, `key` and `currentRecomposeScope`.
     pub fn has_receiver(self) -> bool {
         !matches!(
             self,
@@ -800,6 +831,26 @@ impl BuiltinFunction {
                 | BuiltinFunction::PrintLine
                 | BuiltinFunction::HeapAllocate
                 | BuiltinFunction::ListOf
+                | BuiltinFunction::Composition
+                | BuiltinFunction::Remember
+                | BuiltinFunction::Key
+                | BuiltinFunction::CurrentRecomposeScope
+        )
+    }
+
+    /// Whether the built-in is one of `/prism/compose/runtime`'s, which the compose transform
+    /// lowers to composer operations (D15 of `compose-transform`).
+    pub fn is_compose_runtime(self) -> bool {
+        matches!(
+            self,
+            BuiltinFunction::Composition
+                | BuiltinFunction::SetContent
+                | BuiltinFunction::Recompose
+                | BuiltinFunction::DumpComposition
+                | BuiltinFunction::Remember
+                | BuiltinFunction::Key
+                | BuiltinFunction::CurrentRecomposeScope
+                | BuiltinFunction::InvalidateScope
         )
     }
 

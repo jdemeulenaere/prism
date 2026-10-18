@@ -751,7 +751,7 @@ fn workspace_sccs(graph: &DependencyGraph) -> Vec<prism_resolver::SccCluster> {
 }
 
 #[test]
-fn a_file_without_imports_has_the_two_prelude_nodes_first() {
+fn a_file_without_imports_has_the_prelude_nodes_first() {
     let ws = TestWorkspace::new("prelude_nodes");
     let main = ws.write_file(
         "main.prism",
@@ -765,10 +765,11 @@ fn a_file_without_imports_has_the_two_prelude_nodes_first() {
         node.prelude_imports,
         vec![
             PathBuf::from("prism/core.prism"),
-            PathBuf::from("prism/collections.prism")
+            PathBuf::from("prism/collections.prism"),
+            PathBuf::from("prism/compose/runtime.prism")
         ]
     );
-    assert_eq!(graph.len(), 3);
+    assert_eq!(graph.len(), 4);
     let order: Vec<PathBuf> = graph.sccs().iter().flat_map(|c| c.files.clone()).collect();
     assert_eq!(order.last(), Some(&main), "library nodes come first");
     for key in &node.prelude_imports {
@@ -810,4 +811,26 @@ fn the_library_graph_holds_every_module() {
     let graph = DependencyGraph::from_library(library).unwrap();
     assert_eq!(graph.len(), library.modules().len());
     assert!(graph.nodes.values().all(|node| node.is_library()));
+}
+
+/// standard-library: library modules in a subdirectory (`compose-transform`, task 2.1): a
+/// sibling import of a file of `prism/compose/` names another module of `prism/compose/`.
+#[test]
+fn a_library_subdirectory_resolves_sibling_imports() {
+    let library = prism_library::Library::with_modules(vec![(
+        "prism/compose/extra".to_string(),
+        "package prism.compose\n\nimport runtime\n\n// Gives a number.\npublic fun number(): Int = 1\n".to_string(),
+    )]);
+    let graph = DependencyGraph::from_library(&library).unwrap();
+    let extra = graph
+        .get_node(Path::new("prism/compose/extra.prism"))
+        .expect("the injected module");
+    assert_eq!(
+        extra.direct_imports,
+        vec![PathBuf::from("prism/compose/runtime.prism")]
+    );
+    assert_eq!(
+        extra.package,
+        vec!["prism".to_string(), "compose".to_string()]
+    );
 }

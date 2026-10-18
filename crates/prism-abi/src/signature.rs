@@ -91,6 +91,10 @@ pub enum ExportedSymbol {
         /// The type parameters occurring in field types, which condition the marker.
         marker_parameters: Vec<u32>,
         fields: Vec<(String, bool, AbiType)>, // (name, is_var, type)
+        /// Whether it is an `intrinsic struct` of the bundled library, without fields, whose
+        /// layout the compiler provides and is no part of the ABI (D16 of
+        /// `compose-transform`).
+        intrinsic: bool,
     },
     Enum {
         visibility: Visibility,
@@ -183,8 +187,14 @@ impl ExportedSymbol {
                 marker,
                 marker_parameters,
                 fields,
+                intrinsic,
             } => {
-                hasher.write_str("struct");
+                // An ordinary struct keeps the tag it always had.
+                hasher.write_str(if *intrinsic {
+                    "intrinsic struct"
+                } else {
+                    "struct"
+                });
                 hasher.write_str(visibility.as_str());
                 hasher.write_str(name);
                 hash_marker(*marker, hasher);
@@ -252,8 +262,9 @@ impl ExportedSymbol {
     /// The symbol's declaration as `prism abi` shows it and the intrinsic catalog compares it
     /// (D6 of `standard-library`): visibility, library modifier, `compose`, receiver mode, type
     /// parameters, receiver, name, parameters without their defaults and result, as in
-    /// `public intrinsic mut fun <T> List<T>.add(element: T): Unit`. `None` for a struct or
-    /// enum.
+    /// `public intrinsic mut fun <T> List<T>.add(element: T): Unit`, or an intrinsic struct's
+    /// header (`public intrinsic struct RecomposeScope : Copy`). `None` for any other struct
+    /// or enum.
     pub fn declaration_text(&self) -> Option<String> {
         match self {
             ExportedSymbol::Function {
@@ -319,6 +330,26 @@ impl ExportedSymbol {
                 name,
                 ty,
             } => Some(format!("{} val {}: {}", visibility, name, ty)),
+            // An intrinsic struct is all header (D16 of `compose-transform`).
+            ExportedSymbol::Struct {
+                visibility,
+                name,
+                type_parameters,
+                marker,
+                intrinsic: true,
+                ..
+            } => {
+                let mut text = format!("{} intrinsic struct {}", visibility, name);
+                if !type_parameters.is_empty() {
+                    let names: Vec<&str> =
+                        type_parameters.iter().map(|p| p.name.as_str()).collect();
+                    text.push_str(&format!("<{}>", names.join(", ")));
+                }
+                if let Some(marker) = marker {
+                    text.push_str(&format!(" : {}", marker.as_str()));
+                }
+                Some(text)
+            }
             ExportedSymbol::Struct { .. } | ExportedSymbol::Enum { .. } => None,
         }
     }
@@ -920,6 +951,7 @@ impl FileAbi {
                         marker: s.marker,
                         marker_parameters: struct_header(s).marker_parameters,
                         fields,
+                        intrinsic: s.is_intrinsic(),
                     });
                 }
 

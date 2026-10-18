@@ -2,13 +2,15 @@
 //!
 //! The library's `.prism` files live in `prism/` beside this crate and are embedded in the
 //! `prism` executable with `include_str!`, so the compiler is one self-contained file that never
-//! reads its library from disk. Every module is a file of the reserved root package `prism`,
-//! whose module path is `prism/<name>` and which a root-anchored import `/prism/<name>` reaches.
+//! reads its library from disk. Every module is a file of the reserved root package `prism`, or
+//! of a package below it, whose module path is `prism/<name>` (`prism/compose/runtime` for the
+//! file `compose/runtime.prism` of the package `prism.compose`) and which a root-anchored import
+//! `/prism/<name>` reaches.
 //! The prelude modules' public names are in scope in every workspace file without an import
 //! (D4).
 //!
 //! The crate has no dependencies, and no build script: `library_tests.rs` checks that
-//! [`MODULES`] lists exactly the files of `prism/`.
+//! [`MODULES`] lists exactly the files of `prism/` and its subdirectories.
 
 use std::sync::{Arc, OnceLock};
 
@@ -26,12 +28,16 @@ pub const MODULES: &[(&str, &str)] = &[
         "prism/collections",
         include_str!("../prism/collections.prism"),
     ),
+    (
+        "prism/compose/runtime",
+        include_str!("../prism/compose/runtime.prism"),
+    ),
     ("prism/system", include_str!("../prism/system.prism")),
     ("prism/composer", include_str!("../prism/composer.prism")),
 ];
 
 /// The prelude modules, in the order a workspace file sees them after its explicit imports.
-pub const PRELUDE: &[&str] = &["prism/core", "prism/collections"];
+pub const PRELUDE: &[&str] = &["prism/core", "prism/collections", "prism/compose/runtime"];
 
 /// The root package that names the library, which no workspace file may declare (D2).
 pub const ROOT_PACKAGE: &str = "prism";

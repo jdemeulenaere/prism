@@ -1,0 +1,2 @@
+// expect: E4024
+fun g(s: RecomposeScope) { val (h) = s }

@@ -557,3 +557,66 @@ fn a_workspace_file_may_not_declare_library_forms() {
         );
     }
 }
+
+/// compilation-and-abi: "The ABI of the compose module", for the intrinsic structs: each is an
+/// entry with its modifier and marker, and its marker is part of the hash.
+#[test]
+fn intrinsic_structs_in_the_abi() {
+    let source = "package prism.compose\n\
+        public intrinsic struct Composition\n\
+        public intrinsic struct RecomposeScope : Copy\n";
+    let abi = {
+        let file = prism_parser::parse_source(source).expect("the source parses");
+        let no_definition = |_: &str, _: &str| None;
+        prism_abi::FileAbi::extract_with_origin(
+            &file,
+            "prism/compose/runtime",
+            &prism_abi::no_imports,
+            &no_definition,
+            true,
+        )
+        .expect("the ABI extracts")
+    };
+    let texts: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "public intrinsic struct Composition",
+            "public intrinsic struct RecomposeScope : Copy",
+        ]
+    );
+    let without_marker = {
+        let file = prism_parser::parse_source(&source.replace(" : Copy", "")).unwrap();
+        let no_definition = |_: &str, _: &str| None;
+        prism_abi::FileAbi::extract_with_origin(
+            &file,
+            "prism/compose/runtime",
+            &prism_abi::no_imports,
+            &no_definition,
+            true,
+        )
+        .unwrap()
+    };
+    assert_ne!(abi.abi_hash, without_marker.abi_hash);
+    // An ordinary struct of the same name and marker hashes differently.
+    let ordinary = {
+        let file = prism_parser::parse_source(
+            "package prism.compose\npublic struct Composition {}\npublic struct RecomposeScope : Copy {}\n",
+        )
+        .unwrap();
+        let no_definition = |_: &str, _: &str| None;
+        prism_abi::FileAbi::extract_with_origin(
+            &file,
+            "prism/compose/runtime",
+            &prism_abi::no_imports,
+            &no_definition,
+            true,
+        )
+        .unwrap()
+    };
+    assert_ne!(abi.abi_hash, ordinary.abi_hash);
+}

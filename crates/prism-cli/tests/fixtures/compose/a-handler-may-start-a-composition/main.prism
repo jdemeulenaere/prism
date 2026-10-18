@@ -1,0 +1,8 @@
+// expect: ok
+fun later(f: () -> Unit) {
+    f()
+}
+
+compose fun Screen() {
+    later { val d = composition { } }
+}

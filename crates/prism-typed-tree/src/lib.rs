@@ -15,6 +15,7 @@ pub mod validate;
 pub use arena::{Arena, ArenaId, BodyId, ExpressionId, LocalId, StatementId};
 pub use tree::*;
 pub use types::{
-    NominalId, NominalMarker, Type, TypeDef, TypeParameter, TypeTable, BUILTIN_MODULE,
+    IntrinsicStruct, NominalId, NominalMarker, Type, TypeDef, TypeParameter, TypeTable,
+    BUILTIN_MODULE, COMPOSE_RUNTIME_MODULE,
 };
 pub use validate::foreign_parameters;

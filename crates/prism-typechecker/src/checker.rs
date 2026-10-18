@@ -648,6 +648,12 @@ pub struct TypeChecker {
     generic_callee: bool,
     /// Ambient composable calling context stack (tracks `is_compose` across functions and closures).
     pub in_compose_stack: Vec<bool>,
+    /// Whether a parameter's default value is being checked, for `E4008`'s note (D17 of
+    /// `compose-transform`).
+    in_default: bool,
+    /// Whether the callee being inferred is a signature-typed intrinsic function in a call,
+    /// which `symbol_node` then names instead of rejecting it as a value.
+    intrinsic_call: bool,
     /// Expected return type of the currently enclosing function.
     pub current_expected_return: Option<Type>,
     /// Why the innermost enclosing closure has no implicit `it`, for the help of an unbound
@@ -706,6 +712,8 @@ impl TypeChecker {
             generic_callee: false,
             errors: Vec::new(),
             in_compose_stack: vec![false],
+            in_default: false,
+            intrinsic_call: false,
             current_expected_return: None,
             missing_implicit_parameter: Some(MissingImplicitParameter::OutsideClosures),
             unannotated_private_fns: Vec::new(),
@@ -840,6 +848,32 @@ impl TypeChecker {
     pub fn pop_compose_context(&mut self) {
         if self.in_compose_stack.len() > 1 {
             self.in_compose_stack.pop();
+        }
+    }
+
+    /// Reports `E4008` for a call of the composable `callee` outside a composable context,
+    /// noting when the call is in a default value (D17 of `compose-transform`).
+    fn report_compose_context(&mut self, callee: String, span: Span) {
+        self.errors.push(TypeError::InvalidComposeContext {
+            callee,
+            span,
+            in_default: self.in_default,
+        });
+    }
+
+    /// Reports `E4030` for a call of the composition operation `operation` in a composable
+    /// context (D17 of `compose-transform`). A closure that is not composable, a handler
+    /// written in a composable, is no composable context, so it may start compositions.
+    fn reject_composition_in_composable(&mut self, builtin: BuiltinFunction, span: Span) {
+        let starts_or_drives = matches!(
+            builtin,
+            BuiltinFunction::Composition | BuiltinFunction::SetContent | BuiltinFunction::Recompose
+        );
+        if starts_or_drives && self.is_in_compose() {
+            self.errors.push(TypeError::CompositionInComposable {
+                operation: builtin.name().to_string(),
+                span,
+            });
         }
     }
 
@@ -2311,6 +2345,9 @@ impl TypeChecker {
                         }
                     }
                     self.check_type_parameter_names(&s.type_parameters);
+                    if s.is_intrinsic() {
+                        self.check_intrinsic_struct(s);
+                    }
                     let id = NominalId::new(self.module_path.clone(), s.name.clone());
                     let members: Vec<&prism_ast::types::Type> =
                         s.fields.iter().map(|f| &f.ty).collect();
@@ -2494,6 +2531,46 @@ impl TypeChecker {
                     self.register_extension_decl(f);
                 }
             }
+        }
+    }
+
+    /// Checks the `intrinsic struct` `s` of a library file against the catalog of intrinsic
+    /// structs (D16 of `compose-transform`): `E4029` for a name the compiler provides no
+    /// intrinsic struct of in this module, or another declaration than its canonical one
+    /// (visibility, type parameters and marker).
+    fn check_intrinsic_struct(&mut self, s: &prism_ast::StructDecl) {
+        let id = NominalId::new(self.module_path.clone(), s.name.clone());
+        let Some(intrinsic) = id.intrinsic() else {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "the compiler provides no intrinsic struct '{}' in '/{}'",
+                    s.name, self.module_path
+                ),
+                help: Some(
+                    "an intrinsic struct declares a type the compiler lays out itself; declare a struct with fields instead".to_string(),
+                ),
+                span: s.name_span,
+            });
+            return;
+        };
+        let mut text = format!("{} intrinsic struct {}", s.visibility, s.name);
+        if !s.type_parameters.is_empty() {
+            let names: Vec<&str> = s.type_parameters.iter().map(|p| p.name.as_str()).collect();
+            text.push_str(&format!("<{}>", names.join(", ")));
+        }
+        if let Some(marker) = s.marker {
+            text.push_str(&format!(" : {}", marker.as_str()));
+        }
+        let expected = intrinsic.declaration_text();
+        if text != expected {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "the intrinsic struct '{}' is declared as '{}', but the compiler provides '{}'",
+                    s.name, text, expected
+                ),
+                help: Some(format!("declare it as '{}'", expected)),
+                span: s.name_span,
+            });
         }
     }
 
@@ -3233,9 +3310,15 @@ impl TypeChecker {
                 self.builder.closure_depth(),
             );
             let saved_inputs = self.default_inputs.replace(inputs);
+            // A default's generator runs in the caller before the call, outside the callee's
+            // groups, so it is never a composable context (D17 of `compose-transform`).
+            self.push_compose_context(false);
+            let saved_in_default = std::mem::replace(&mut self.in_default, true);
             let default = p.default_value.as_ref().map(|default| {
                 self.with_consuming(true, |c| c.check_argument(default, &p_ty, Origin::Value))
             });
+            self.in_default = saved_in_default;
+            self.pop_compose_context();
             self.default_inputs = saved_inputs;
             self.builder.body_mut().defaults.push(default);
             let sym = self.bind_local(
@@ -3894,10 +3977,11 @@ impl TypeChecker {
     /// top-level value or function by its path, or a variant of an enum.
     fn symbol_node(&mut self, sym: &Symbol, name: &str, span: Span) -> ExpressionId {
         let generic_callee = std::mem::take(&mut self.generic_callee);
+        let intrinsic_call = std::mem::take(&mut self.intrinsic_call);
         // An intrinsic has no code to name: its calls are lowered where they are written (D6
         // of `standard-library`).
         if let SymbolKind::Function { module, .. } = &sym.kind {
-            if self.intrinsic_function(module, name).is_some() {
+            if self.intrinsic_function(module, name).is_some() && !intrinsic_call {
                 self.errors.push(TypeError::CannotInferType {
                     help: Some(format!(
                         "call it, or wrap the call in a closure, as in '{{ x -> {}(x) }}'",
@@ -5803,6 +5887,9 @@ impl TypeChecker {
             Some(BuiltinFunction::ListOf) => {
                 return self.infer_list_construction(type_arguments, args, expected.as_ref(), span);
             }
+            Some(BuiltinFunction::Remember) => {
+                return self.infer_remember(type_arguments, args, expected.as_ref(), span);
+            }
             _ => {}
         }
         // `recv.name(...)`: a field, the built-in `clone()` or an extension function.
@@ -5867,10 +5954,14 @@ impl TypeChecker {
                 // A function value is called in place. A callee that is not a name or a path
                 // is a temporary, so what its branches and `?:` operands give is consumed (the
                 // `ownership` spec, "Consuming Positions").
+                // A signature-typed intrinsic function is named in its call, whose callee
+                // becomes its built-in (D6 of `standard-library`).
+                self.intrinsic_call = self.intrinsic_callee(callee).is_some();
                 let id = match callee.kind {
                     ExprKind::Ident(_) | ExprKind::MemberAccess { .. } => self.infer_expr(callee),
                     _ => self.infer_read(callee),
                 };
+                self.intrinsic_call = false;
                 self.generic_callee = false;
                 (Some(id), self.ty(id))
             }
@@ -5955,6 +6046,120 @@ impl TypeChecker {
                     has_receiver: false,
                     has_context: false,
                     is_compose: false,
+                };
+                self.add(ExpressionKind::Call(call), ty, span)
+            }
+        }
+    }
+
+    /// Checks `remember(k1, ..., kn, calculation)`, typed as a call of `fun <T : Copy, K1 :
+    /// Copy, ..., Kn : Copy> remember(k1: K1, ..., kn: Kn, calculation: () -> T): T` with up to
+    /// three keys before the calculation (D12 of `compose-transform`), so a key or a value that
+    /// is not `Copy` is `E4021` and a borrowed one `E4022`, through the bounds of the type
+    /// parameters. Named arguments and a fourth key are `E4004`; outside a composable context
+    /// the call is `E4008`. Its type arguments are the value's type, then each key's.
+    fn infer_remember(
+        &mut self,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> ExpressionId {
+        const MAXIMUM_KEYS: usize = 3;
+        let name = BuiltinFunction::Remember.name();
+        let problem = if args.iter().any(|arg| arg.name.is_some()) {
+            Some(format!("'{}' takes no named arguments", name))
+        } else if args.is_empty() {
+            Some(format!(
+                "'{}' takes a calculation, as in 'remember {{ 0 }}'",
+                name
+            ))
+        } else if args.len() > MAXIMUM_KEYS + 1 {
+            Some(format!(
+                "'{}' takes at most {} keys before its calculation, found {}",
+                name,
+                MAXIMUM_KEYS,
+                args.len() - 1
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = problem {
+            self.errors
+                .push(TypeError::CallSignatureMismatch { message, span });
+            let children = args
+                .iter()
+                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
+                .collect();
+            return self.error_node(children, span);
+        }
+        if !self.is_in_compose() {
+            self.report_compose_context(name.to_string(), span);
+        }
+        let keys = args.len() - 1;
+        let value_parameter = TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: Some(prism_ast::TypeMarker::Copy),
+        };
+        let mut type_parameters = vec![value_parameter.clone()];
+        let mut params = Vec::new();
+        let mut names = Vec::new();
+        for key in 0..keys {
+            let parameter = TypeParameter {
+                index: (key + 1) as u32,
+                name: format!("K{}", key + 1),
+                bound: Some(prism_ast::TypeMarker::Copy),
+            };
+            params.push(parameter.as_type());
+            names.push(format!("key{}", key + 1));
+            type_parameters.push(parameter);
+        }
+        params.push(Type::Fn {
+            is_compose: false,
+            receiver: false,
+            params: Vec::new(),
+            escaping: Vec::new(),
+            ret: Box::new(value_parameter.as_type()),
+        });
+        names.push("calculation".to_string());
+        let signature = GenericSignature {
+            owner: format!("'{}'", name),
+            type_parameters,
+            params,
+            ret: value_parameter.as_type(),
+            receiver: None,
+        };
+        let has_default = vec![false; args.len()];
+        let checked = self.check_generic_call_arguments(
+            &signature,
+            type_arguments,
+            expected,
+            &names,
+            &has_default,
+            args,
+            span,
+        );
+        match checked {
+            Err(CheckedArguments(children)) => self.error_node(children, span),
+            Ok((
+                NormalizedArguments {
+                    arguments,
+                    evaluation_order,
+                },
+                solution,
+            )) => {
+                let ty = signature.ret.substitute(&solution);
+                let call = Call {
+                    callee: Callee::Builtin(BuiltinFunction::Remember),
+                    arguments,
+                    parameters: parameter_list(&names, &signature.params),
+                    escaping: vec![false; signature.params.len()],
+                    type_arguments: solution,
+                    evaluation_order,
+                    has_receiver: false,
+                    has_context: false,
+                    is_compose: true,
                 };
                 self.add(ExpressionKind::Call(call), ty, span)
             }
@@ -6234,10 +6439,7 @@ impl TypeChecker {
                     } else {
                         "<closure>".to_string()
                     };
-                    self.errors.push(TypeError::InvalidComposeContext {
-                        callee: callee_name,
-                        span,
-                    });
+                    self.report_compose_context(callee_name, span);
                 }
 
                 let (param_names, has_default, type_parameters) =
@@ -6742,8 +6944,17 @@ impl TypeChecker {
     ) -> ExpressionId {
         match self.builder.kind(callee_node).clone() {
             ExpressionKind::FunctionReference(path) => {
-                // An external is called by its symbol (D5 of `standard-library`).
-                let callee = if self.is_external(&path) {
+                // An external is called by its symbol (D5 of `standard-library`), and an
+                // intrinsic is its built-in.
+                let intrinsic = if path.receiver.is_none() {
+                    self.intrinsic_function(&path.module, &path.name)
+                } else {
+                    None
+                };
+                let callee = if let Some(builtin) = intrinsic {
+                    self.reject_composition_in_composable(builtin, span);
+                    Callee::Builtin(builtin)
+                } else if self.is_external(&path) {
                     Callee::External(path)
                 } else {
                     Callee::Function(path)
@@ -6821,6 +7032,22 @@ impl TypeChecker {
         expected: Option<&Type>,
         span: Span,
     ) -> ExpressionId {
+        if let Some(intrinsic) = id.intrinsic() {
+            // Only the intrinsic functions of its module make one (D16 of
+            // `compose-transform`).
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!(
+                    "'{}' is an intrinsic struct: it has no constructor and no fields",
+                    intrinsic.name()
+                ),
+                span,
+            });
+            let children = args
+                .iter()
+                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
+                .collect();
+            return self.error_node(children, span);
+        }
         let fields = self.struct_fields(&id).unwrap_or_default();
         let type_parameters = self.types.parameters(&id).to_vec();
         let field_types: Vec<Type> = fields.iter().map(|(_, _, ty)| ty.clone()).collect();
@@ -7548,10 +7775,7 @@ impl TypeChecker {
             return self.error_node(vec![callee_node, receiver_argument], span);
         };
         if check_compose && is_compose && !self.is_in_compose() {
-            self.errors.push(TypeError::InvalidComposeContext {
-                callee: callee.to_string(),
-                span,
-            });
+            self.report_compose_context(callee.to_string(), span);
         }
         self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
         match self.check_call_arguments(&params[1..], &[], &[], args, span) {
@@ -7765,10 +7989,7 @@ impl TypeChecker {
             return self.error_node(vec![receiver_argument], span);
         };
         if *is_compose && !self.is_in_compose() {
-            self.errors.push(TypeError::InvalidComposeContext {
-                callee: callee.to_string(),
-                span,
-            });
+            self.report_compose_context(callee.to_string(), span);
         }
         // An extension with a context parameter takes its context argument first (D7 of
         // `receiver-lambdas`).
@@ -7878,7 +8099,10 @@ impl TypeChecker {
                     }
                 }
                 let callee = match extension.builtin {
-                    Some(builtin) => Callee::Builtin(builtin),
+                    Some(builtin) => {
+                        self.reject_composition_in_composable(builtin, span);
+                        Callee::Builtin(builtin)
+                    }
                     None => Callee::Function(extension.path(member)),
                 };
                 let has_context = context.is_some();
@@ -11301,6 +11525,7 @@ mod tests {
                     name_span: Span::dummy(),
                     type_parameters: Vec::new(),
                     marker: None,
+                    intrinsic: None,
                     fields: vec![
                         prism_ast::StructField {
                             name: "x".to_string(),

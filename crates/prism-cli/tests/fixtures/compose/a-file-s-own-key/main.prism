@@ -1,0 +1,4 @@
+// expect: ok
+fun key(n: Int): Int = n
+
+fun f(): Int = key(3)

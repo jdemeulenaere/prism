@@ -251,7 +251,18 @@ pub struct StructDecl {
     pub type_parameters: Vec<TypeParameter>,
     pub marker: Option<TypeMarker>,
     pub fields: Vec<StructField>,
+    /// The `intrinsic` modifier of a bundled library's `intrinsic struct`, which has no fields
+    /// and no constructor: the compiler provides its representation (D16 of
+    /// `compose-transform`).
+    pub intrinsic: Option<LibraryModifier>,
     pub span: Span,
+}
+
+impl StructDecl {
+    /// Whether the struct is an `intrinsic struct`.
+    pub fn is_intrinsic(&self) -> bool {
+        self.intrinsic.is_some()
+    }
 }
 
 /// Enum variant payload.
@@ -348,7 +359,8 @@ impl Declaration {
         match self {
             Declaration::Function(f) => f.library,
             Declaration::ExtensionProperty(p) => Some(p.library),
-            Declaration::Struct(_) | Declaration::Enum(_) | Declaration::Var(_) => None,
+            Declaration::Struct(s) => s.intrinsic,
+            Declaration::Enum(_) | Declaration::Var(_) => None,
         }
     }
 }

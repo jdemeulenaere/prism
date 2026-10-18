@@ -1789,4 +1789,44 @@ mod tests {
             }
         }
     }
+
+    /// syntax: "Intrinsic structs parse" and "An intrinsic struct with fields rejected".
+    #[test]
+    fn intrinsic_structs_parse_without_fields() {
+        let src = "public intrinsic struct Composition\npublic intrinsic struct RecomposeScope : Copy\nintrinsic struct Cell<T>\nfun f() {}";
+        let file = parse_source(src).unwrap();
+        let structs: Vec<&StructDecl> = file
+            .declarations
+            .iter()
+            .filter_map(|d| match d {
+                Declaration::Struct(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(structs.len(), 3);
+        assert_eq!(structs[0].name, "Composition");
+        assert_eq!(structs[0].visibility, Visibility::Public);
+        assert!(structs[0].is_intrinsic() && structs[0].fields.is_empty());
+        assert_eq!(structs[0].marker, None);
+        assert_eq!(structs[1].marker, Some(TypeMarker::Copy));
+        assert_eq!(
+            &src[structs[1].span.start..structs[1].span.end],
+            "public intrinsic struct RecomposeScope : Copy"
+        );
+        assert_eq!(structs[2].type_parameters.len(), 1);
+        assert_eq!(
+            structs[0].intrinsic.map(|m| m.kind),
+            Some(LibraryKind::Intrinsic)
+        );
+        for src in [
+            "intrinsic struct A(val n: Int)",
+            "intrinsic struct B { val n: Int }",
+            "external struct C",
+        ] {
+            let error = parse_source(src).unwrap_err();
+            assert_eq!(error.code, "E2001", "{}", src);
+        }
+        // `intrinsic` stays a name elsewhere.
+        assert!(parse_source("fun f() { val intrinsic = 1 }").is_ok());
+    }
 }

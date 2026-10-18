@@ -524,6 +524,23 @@ fn run_abi(path: &str) {
                 marker,
                 marker_parameters,
                 fields,
+                intrinsic: true,
+            } if fields.is_empty() => {
+                println!(
+                    "  {} intrinsic struct {}{}{}",
+                    visibility,
+                    name,
+                    type_parameter_list(type_parameters),
+                    generic_marker_suffix(*marker, type_parameters, marker_parameters),
+                );
+            }
+            prism_abi::ExportedSymbol::Struct {
+                visibility,
+                name,
+                type_parameters,
+                marker,
+                marker_parameters,
+                fields,
                 ..
             } => {
                 let f_str = fields

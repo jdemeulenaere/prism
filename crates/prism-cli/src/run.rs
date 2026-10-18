@@ -988,7 +988,7 @@ mod tests {
             .filter(|unit| !unit.module.starts_with("prism/"))
             .count();
         assert_eq!(workspace_units, 2);
-        assert_eq!(before.units.len(), 4);
+        assert_eq!(before.units.len(), 5);
         assert_eq!(before.instances.len(), 2);
         assert!(before.changed_since(&before).is_empty());
 

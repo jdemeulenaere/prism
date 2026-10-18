@@ -271,6 +271,8 @@ A changed key's `set_slot` forgets the old value, which is released at the end o
 
 Compile-time cost: constant per call. Run-time cost: one runtime call per key, one slot read, and on a miss the calculation and one write.
 
+Corrected at apply time: a key written as a reference (`remember(r)` with `r: &Int`) is not `E4022`. Like any argument of a type parameter, it is copied out of the reference when its referent is `Copy` (references, "Copy-Out From References"), so the key is an `Int`. `E4022` stays for a key whose type holds a borrow after that, such as `(&Int)?`, which the scenario now uses.
+
 Rejected:
 - Kotlin's `vararg` keys: no `vararg` yet, so up to three, as in Kotlin's common overloads.
 - `remember1`, `remember2`: names that Kotlin users would not look for.

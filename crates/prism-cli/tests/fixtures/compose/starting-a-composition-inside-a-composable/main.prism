@@ -1,0 +1,5 @@
+// expect: E4030
+compose fun Screen(c: &Composition) {
+    val d = composition { }
+    c.recompose()
+}

@@ -464,6 +464,20 @@ impl TypeChecker {
             self.sub_patterns_of_error(arguments, mode, bindings);
             return Pattern::Wildcard;
         }
+        if let Constructor::Struct(id) = &resolved {
+            if id.intrinsic().is_some() {
+                self.errors.push(TypeError::InvalidPattern {
+                    message: format!(
+                        "'{}' is an intrinsic struct: it has no constructor and no fields, so no pattern takes it apart",
+                        id.name
+                    ),
+                    span: pattern.span,
+                    help: None,
+                });
+                self.sub_patterns_of_error(arguments, mode, bindings);
+                return Pattern::Wildcard;
+            }
+        }
         let inner = match (resolved, &target) {
             (
                 Constructor::Variant { id, index },
@@ -712,6 +726,17 @@ impl TypeChecker {
         let ty = self.ty(value);
         let mut bindings = PatternBindings::default();
         let fields = match &ty {
+            Type::Struct { id, .. } if id.intrinsic().is_some() => {
+                self.errors.push(TypeError::InvalidPattern {
+                    message: format!(
+                        "'{}' is an intrinsic struct: it has no constructor and no fields, so it cannot be destructured",
+                        id.name
+                    ),
+                    span: initializer.span,
+                    help: None,
+                });
+                None
+            }
             Type::Struct { id, arguments }
                 if !self.reject_unimported_members(&ty, initializer.span) =>
             {

@@ -1,0 +1,2 @@
+// expect: E4010
+fun Composition.recompose(): Bool = false

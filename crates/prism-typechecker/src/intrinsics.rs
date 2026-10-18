@@ -32,6 +32,7 @@ pub struct Intrinsic {
 
 const CORE: &str = "prism/core";
 const COLLECTIONS: &str = "prism/collections";
+const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
 
 const fn entry(
     module: &'static str,
@@ -215,6 +216,73 @@ pub const CATALOG: &[Intrinsic] = &[
         "clear",
         BuiltinFunction::ListClear,
         "public intrinsic mut fun <T> List<T>.clear(): Unit",
+        false,
+    ),
+    // `/prism/compose/runtime` (D15 of `compose-transform`): the compose transform lowers every
+    // call to the compose runtime's protocol. `remember` also takes up to three keys before
+    // its calculation, until `vararg` exists.
+    entry(
+        COMPOSE_RUNTIME,
+        None,
+        "composition",
+        BuiltinFunction::Composition,
+        "public intrinsic fun composition(content: escaping compose () -> Unit): Composition",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("Composition"),
+        "setContent",
+        BuiltinFunction::SetContent,
+        "public intrinsic fun Composition.setContent(content: escaping compose () -> Unit): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("Composition"),
+        "recompose",
+        BuiltinFunction::Recompose,
+        "public intrinsic fun Composition.recompose(): Bool",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("Composition"),
+        "dump",
+        BuiltinFunction::DumpComposition,
+        "public intrinsic fun Composition.dump(): String",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        None,
+        "remember",
+        BuiltinFunction::Remember,
+        "public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T",
+        true,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        None,
+        "key",
+        BuiltinFunction::Key,
+        "public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        None,
+        "currentRecomposeScope",
+        BuiltinFunction::CurrentRecomposeScope,
+        "public intrinsic compose fun currentRecomposeScope(): RecomposeScope",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("RecomposeScope"),
+        "invalidate",
+        BuiltinFunction::InvalidateScope,
+        "public intrinsic fun RecomposeScope.invalidate(): Unit",
         false,
     ),
 ];

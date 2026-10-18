@@ -375,8 +375,19 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::VisibilityViolation { .. } => {
             out.push_str("   = help: change declaration visibility to 'public' or access from the defining package\n");
         }
+        TypeError::InvalidComposeContext {
+            in_default: true, ..
+        } => {
+            out.push_str("   = note: default values are not composable: a default is evaluated by the caller before the call, outside the callee's groups\n");
+            out.push_str(
+                "   = help: pass the value at each call, or compute it in the composable's body\n",
+            );
+        }
         TypeError::InvalidComposeContext { .. } => {
             out.push_str("   = help: add 'compose' modifier to the caller or invoke within a composable function/closure\n");
+        }
+        TypeError::CompositionInComposable { .. } => {
+            out.push_str("   = note: compositions are started and driven outside composition: in 'main', or in a handler that runs between passes\n");
         }
         TypeError::ReturnTypeMismatch { .. } => {
             out.push_str("   = help: return a value of the declared return type, or change the declared return type\n");

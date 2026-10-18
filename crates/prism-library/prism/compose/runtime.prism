@@ -1,0 +1,39 @@
+// The compose runtime for application code, after Jetpack Compose's `androidx.compose.runtime`:
+// owned compositions, positional memoization with `remember`, keyed groups and restart scopes.
+// It is a prelude module, so a file's own declaration or import of a name shadows it. Every
+// declaration here is an intrinsic: the compiler lowers its calls to the compose runtime's
+// protocol itself.
+package prism.compose
+
+// A composition: the groups, slots and nodes of one tree of composables. It is owned, neither
+// `Copy` nor `Clone`, and dropping it disposes everything it holds.
+public intrinsic struct Composition
+
+// A handle of a restart scope of a composition, which `invalidate` marks for recomposition.
+public intrinsic struct RecomposeScope : Copy
+
+// Starts a composition of `content` and composes it once.
+public intrinsic fun composition(content: escaping compose () -> Unit): Composition
+
+// Replaces the content of this composition and recomposes its root.
+public intrinsic fun Composition.setContent(content: escaping compose () -> Unit): Unit
+
+// Recomposes the invalid scopes of this composition, giving whether any was invalid.
+public intrinsic fun Composition.recompose(): Bool
+
+// The text dump of this composition: its groups and slots, then its nodes.
+public intrinsic fun Composition.dump(): String
+
+// The value `calculation` gave the first time this position of the composition was composed,
+// computed again when one of the keys written before `calculation` changed.
+public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T
+
+// Composes `content` in a group identified by `value`, which keeps its state when keyed groups
+// are reordered among their siblings.
+public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit
+
+// The innermost restart scope being composed, or the composition's root scope.
+public intrinsic compose fun currentRecomposeScope(): RecomposeScope
+
+// Marks this scope for recomposition by the next pass of its composition.
+public intrinsic fun RecomposeScope.invalidate(): Unit

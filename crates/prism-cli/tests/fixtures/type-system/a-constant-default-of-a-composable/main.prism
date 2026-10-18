@@ -1,0 +1,6 @@
+// expect: ok
+compose fun Box(width: Int = 4) { }
+
+compose fun Screen() {
+    Box()
+}
