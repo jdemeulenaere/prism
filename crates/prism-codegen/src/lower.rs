@@ -120,6 +120,11 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     body: &'a Body,
     builder: FunctionBuilder<'a>,
     blocks: Vec<Block>,
+    /// The MIR blocks lowered into their predecessor's Cranelift block, after it: each is the
+    /// only successor of its only predecessor, through a `Goto`, a `Call` or a `Drop`.
+    continued: Vec<bool>,
+    /// The block a terminator just continued into, lowered next in the same Cranelift block.
+    continuation: Option<prism_mir::BlockId>,
     locals: Vec<Storage>,
     /// The locals whose address is taken.
     borrowed: HashSet<LocalId>,
@@ -146,6 +151,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             body,
             builder,
             blocks: Vec::new(),
+            continued: continued_blocks(body),
+            continuation: None,
             locals: Vec::new(),
             borrowed: borrowed_locals(body),
             runtime: HashMap::new(),
@@ -221,11 +228,30 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         }
         self.check_stack()?;
         self.builder.ins().jump(self.blocks[0], &[]);
+        // Each block that starts a Cranelift block, then the blocks it continues into: a
+        // straight-line run of calls is one Cranelift block, so Cranelift's SSA construction
+        // finds a variable's value without walking a chain of blocks.
         for (index, (_, block)) in self.body.blocks.iter().enumerate() {
+            if self.continued[index] {
+                continue;
+            }
             self.builder.switch_to_block(self.blocks[index]);
             self.lower_block(block)?;
+            while let Some(next) = self.continuation.take() {
+                self.lower_block(&self.body.blocks[next])?;
+            }
         }
         Ok(())
+    }
+
+    /// Ends the current block by going to `target`: a jump, or nothing when `target` is
+    /// lowered next in the same Cranelift block.
+    fn go_to(&mut self, target: prism_mir::BlockId) {
+        if self.continued[target.0 as usize] {
+            self.continuation = Some(target);
+        } else {
+            self.builder.ins().jump(self.blocks[target.0 as usize], &[]);
+        }
     }
 
     /// Gives each local its storage: the memory the caller passed for an argument or result in
@@ -1291,9 +1317,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
         }
         match target {
-            Some(target) => {
-                self.builder.ins().jump(self.blocks[target.0 as usize], &[]);
-            }
+            Some(target) => self.go_to(target),
             // The callee returns `Nothing`.
             None => {
                 self.builder.ins().trap(UNREACHABLE);
@@ -1334,9 +1358,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
 
     fn terminator(&mut self, terminator: &TerminatorKind, span: Span) -> Result<(), BackendError> {
         match terminator {
-            TerminatorKind::Goto(target) => {
-                self.builder.ins().jump(self.blocks[target.0 as usize], &[]);
-            }
+            TerminatorKind::Goto(target) => self.go_to(*target),
             TerminatorKind::SwitchInt {
                 value,
                 targets,
@@ -1413,11 +1435,61 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     };
                     self.call_glue(GlueKind::Drop, &ty, &[address])?;
                 }
-                self.builder.ins().jump(self.blocks[target.0 as usize], &[]);
+                self.go_to(*target);
             }
         }
         Ok(())
     }
+}
+
+/// The blocks of `body` reached from `bb0` that are the only successor of their only
+/// predecessor, through a `Goto`, a `Call` that returns or a `Drop`: those the lowering continues
+/// into from their predecessor's Cranelift block. Each continued block's chain starts at a block
+/// that is not continued, since a cycle of them would be unreachable.
+fn continued_blocks(body: &Body) -> Vec<bool> {
+    let count = body.blocks.len();
+    // Every block's predecessors, reached or not, once per edge.
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (block, data) in body.blocks.iter() {
+        for successor in data.terminator.kind.successors() {
+            predecessors[successor.0 as usize].push(block.0 as usize);
+        }
+    }
+    let mut reached = vec![false; count];
+    let mut stack = if count == 0 { Vec::new() } else { vec![0usize] };
+    while let Some(block) = stack.pop() {
+        if reached[block] {
+            continue;
+        }
+        reached[block] = true;
+        for successor in body.blocks[prism_mir::BlockId(block as u32)]
+            .terminator
+            .kind
+            .successors()
+        {
+            stack.push(successor.0 as usize);
+        }
+    }
+    (0..count)
+        .map(|block| {
+            let [predecessor] = predecessors[block][..] else {
+                return false;
+            };
+            let only_exit = match &body.blocks[prism_mir::BlockId(predecessor as u32)]
+                .terminator
+                .kind
+            {
+                TerminatorKind::Goto(target)
+                | TerminatorKind::Drop { target, .. }
+                | TerminatorKind::Call {
+                    target: Some(target),
+                    ..
+                } => target.0 as usize == block,
+                _ => false,
+            };
+            block != 0 && predecessor != block && reached[block] && only_exit
+        })
+        .collect()
 }
 
 /// The locals whose address is taken: a borrow of the local itself, rather than of what it
