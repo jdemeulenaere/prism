@@ -668,6 +668,44 @@ A runtime error raised by a closure's body MUST report the location of the faili
 - **WHEN** `app/main.prism` declares `fun run(f: () -> Int): Int = f()` on line 2 and `fun main() { val zero = 0; println(1); println(run { 10 / zero }) }` on line 3, with `10 / zero` starting at column 54
 - **THEN** `prism run app/main.prism` prints `1` to stdout, stderr is exactly `panic: division by zero` and `  at app/main.prism:3:54`, each followed by a newline, and the exit status is 101
 
+### Requirement: Closures That Own Their Captures Keep Them
+A closure that owns its captures MUST keep the values it captured when it was built for as long as it lives, and each call MUST read those values, however many times it is called, wherever it is stored and after the function that built it has returned.
+
+#### Scenario: A returned closure keeps what it captured
+- **WHEN** `fun greeter(name: String): (String) -> String = { greeting -> greeting + ", " + name }` and `fun main() { val hello = greeter("Ada"); println(hello("Hello")); println(hello("Bye")) }` run with `--check-allocations`
+- **THEN** it prints `Hello, Ada` and then `Bye, Ada`, reports no live allocation and exits with status 0
+
+#### Scenario: A handler stored in a struct
+- **WHEN** `struct Button { val label: String, val onClick: () -> Unit }`, `fun button(label: String, onClick: escaping () -> Unit): Button = Button(label, onClick)`, `fun click(b: &Button) { b.onClick() }` and `fun main() { val name = "Ada"; val b = button("Greet") { println("Hi " + name) }; click(b); click(b); println(b.label) }` run with `--check-allocations`
+- **THEN** it prints `Hi Ada` twice and then `Greet`, reports no live allocation and exits with status 0
+
+#### Scenario: A closure owning another closure
+- **WHEN** `fun make(s: String): () -> Int = { s.length }`, `fun twice(g: escaping () -> Int): () -> Int = { g() * 2 }` and `fun main() { val h = twice(make("abc")); println(h()); println(h()) }` run with `--check-allocations`
+- **THEN** it prints `6` twice, reports no live allocation and exits with status 0
+
+#### Scenario: An owning closure in a default value
+- **WHEN** `fun pick(a: Int, f: () -> Int = { a * 2 }): Int = f()` and `fun main() { println(pick(4)); println(pick(4) { 1 }) }` run with `--check-allocations`
+- **THEN** it prints `8` and then `1`, reports no live allocation and exits with status 0
+
+#### Scenario: Closures in generic and boxed values
+- **WHEN** `struct Box<T>(val v: T)`, `fun <T> keep(x: T): T = x` and `fun main() { val s = "abc"; val b = Box(keep({ s.length })); println(b.v()); val t = "de"; val h = Heap({ t.length }); println(1) }` run with `--check-allocations`
+- **THEN** it prints `3` and then `1`, reports no live allocation and exits with status 0
+
+### Requirement: Owned Environments Are Freed Exactly Once
+An owned environment MUST be freed exactly once, when the function value that owns it is dropped: at the end of its owner's scope, when the variable holding it is assigned another value, or with the struct, enum, box or nullable holding it, and its owned captures MUST be dropped with it.
+
+#### Scenario: Reassigning a variable frees the old environment
+- **WHEN** `fun make(s: String): () -> Int = { s.length }` and `fun main() { var h = make("a" + "b"); println(h()); h = make("cde"); println(h()) }` run with `--check-allocations`
+- **THEN** it prints `2` and then `3`, reports no live allocation and exits with status 0
+
+#### Scenario: A closure kept past its binding's block
+- **WHEN** `fun main() { var h: () -> Int = { 0 }; var i = 0; while (i < 3) { val s = "a" + i.toString(); h = { s.length + 10 }; i += 1 }; println(h()) }` runs with `--check-allocations`
+- **THEN** it prints `12`, reports no live allocation and exits with status 0
+
+#### Scenario: A dropped struct frees its handler
+- **WHEN** `struct Item { val name: String, val onSelect: () -> Int }` and `fun item(name: String): Item { val n = name.clone(); return Item(name, { n.length }) }` are declared and `fun main() { val a = item("x" + "yz"); println(a.onSelect()); val b = item("w"); println(b.name) }` run with `--check-allocations`
+- **THEN** it prints `3` and then `w`, reports no live allocation and exits with status 0
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -727,3 +765,7 @@ Decisions from `closures` (planned autonomously on 2026-10-17, refined while imp
 - **Function names and variant constructors behave as closures that call them** (D7), converting their arguments to the declared parameter types, so `each(show)` for `show(n: Int?)` runs as `each { n -> show(n) }`.
 - **A function value is called through its references and boxes** (found in review): a payload bound from a borrowed enum, a boxed function value and a `&(() -> Int)` parameter are called in place. A callee that is not a name or path, such as `(opt ?: { 0 })()`, is a temporary that takes the value its `?:` or branch gives.
 - **Closures in default values and top-level values** (D12): a default value's closures belong to its generator; a capture-free closure or a function name may initialize a top-level `val`, which is never dropped, which is fine since its environment is null.
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Owned environments live as long as their function value** (D8, D17). Each is freed exactly once, when its owner is dropped, reassigned, or dropped with the struct, enum, box or nullable holding it, which every executable fixture checks under `--check-allocations` (the zero-cost memory safety invariant). A closure returned as a default value escapes, so `fun pick(a: Int, f: () -> Int = { a * 2 })` copies `a` and runs; top-level values are never captured, so a closure initializing a top-level `val` has a null environment.

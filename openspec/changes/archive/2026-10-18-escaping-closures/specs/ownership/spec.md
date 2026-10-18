@@ -18,7 +18,7 @@ A closure that owns a capture (see `references`) MUST copy a `Copy` binding and 
 - **THEN** the borrow checker emits `E5001` at `h` in `h()` of `f` and at the second `h` of `g`, and accepts `k`, whose closures borrow `h`
 
 ### Requirement: Captures by Value Are Values the Closure Can Take
-A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected by the type checker with `CannotCaptureByValue` (`E4028`), labelling the capture and why the closure owns it, with help suggesting to copy or clone it into a `val` first, or, for a `var` the closure writes, to keep the closure from escaping so that it borrows the `var`.
+A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected by the type checker with `CannotCaptureByValue` (`E4028`), labelling the capture and why the closure owns it, with help suggesting a fix that applies (a `val` copy or clone, or, for a written `var`, not escaping).
 
 #### Scenario: Capturing a var by value
 - **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(): Button { var n = 1; val b = Button({ n }); n = 2; return b }` is checked

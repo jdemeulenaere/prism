@@ -218,7 +218,7 @@ Inside a parameter's default value, an earlier parameter or `this` MUST NOT be m
 - **THEN** the type checker emits `E4017` for `a` in `f`, naming the parameter `a` and suggesting `a.clone()`, and for `this` in `g`, and accepts `h` and `k`
 
 ### Requirement: A Closure Does Not Move Its Captures
-Inside a closure, a non-`Copy` variable that the closure captures MUST NOT be moved, because the closure only borrows it (see `references`). Such a move MUST be rejected by the type checker with `CannotMoveOut` (`E4017`), naming the source "captured variable `s`, which the closure borrows", with help suggesting `.clone()` for a `Clone` type. A `Copy` capture MUST be copied, and a variable declared inside the closure MAY be moved.
+Inside a closure, a non-`Copy` variable that the closure captures MUST NOT be moved, since the closure may be called more than once, whether it borrows or owns its captures (see `references`). Such a move MUST be rejected by the type checker with `CannotMoveOut` (`E4017`), naming "captured variable `s`", noting that a closure never gives away what it captures, and suggesting `.clone()` for a `Clone` type. A `Copy` capture MUST be copied, and a variable declared inside the closure MAY be moved.
 
 #### Scenario: Moving a captured variable inside a closure
 - **WHEN** `fun take(s: String) {}`, `fun run(f: () -> Int): Int = f()` and `struct Token { val id: Int }` are declared, and `fun f(s: String): Int = run { take(s); 1 }`, `fun g(t: Token): Int = run { val u = t; 1 }`, `fun h(s: String): Int = run { take(s.clone()); 1 }`, `fun k(n: Int): Int = run { val m = n; m }` and `fun l(): Int = run { val s = "a"; take(s); 1 }` are checked
@@ -231,6 +231,10 @@ Inside a closure, a non-`Copy` variable that the closure captures MUST NOT be mo
 #### Scenario: Moving a captured variable after the closure ran
 - **WHEN** `fun take(s: String) {}`, `fun greet(s: &String): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(s: String) { run { greet(s) }; take(s) }` is checked
 - **THEN** the file passes `prism check`, because the closure's borrow of `s` ends when `run` returns
+
+#### Scenario: An owning closure does not move its capture
+- **WHEN** `fun take(s: String) {}` and `fun store(f: escaping () -> Int): Int = 1` are declared and `fun f(s: String): Int = store { take(s); 1 }` is checked
+- **THEN** the type checker emits `E4017` for `s`, naming the captured variable `s` and noting that a closure never gives away what it captures
 
 ### Requirement: No Mutable Top-Level State
 Top-level declarations MUST be immutable: a top-level `var` MUST be rejected by the parser with `E2001`, whatever its visibility, with a message saying that mutable state belongs in locals and parameters (and, in UI code, in state handles). Top-level `val` declarations and local `var` declarations MUST be unaffected.
@@ -460,6 +464,40 @@ Where a value of type `T` is expected and an expression of type `Heap<T>`, behin
 - **WHEN** `struct User { val name: String }` and `fun take(u: User) {}` are declared, and `fun f(h: Heap<User>) { take(h) }`, `fun g(h: Heap<User>): User = h` and `fun k(h: Heap<User>) { val u: User = h }` are checked
 - **THEN** the type checker emits `E4017` at each, naming the contents of `Heap` `h`, with help suggesting `h.unbox()`
 
+### Requirement: Capturing by Value Moves the Binding
+A closure that owns a capture (see `references`) MUST copy a `Copy` binding and move any other binding into itself where the closure is built. A later use of a moved binding MUST be rejected with `UseAfterMove` (`E5001`), labelling the closure as where the value moved and the reason the closure owns it. A copied binding MUST stay usable.
+
+#### Scenario: Using a binding a closure took
+- **WHEN** `struct Button { val onClick: () -> Int }`, `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String): Button { val b = Button({ greet(s) }); take(s); return b }` is checked
+- **THEN** the borrow checker emits `E5001` at `s` in `take(s)`, with a related location at the closure labelled "value moved into closure here" and one at the closure's use as a field labelled "the closure owns its captures because it is stored in a field here", and help suggesting `val m = s.clone()` before the closure, capturing `m` instead
+
+#### Scenario: A copied capture stays usable
+- **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(n: Int): Button { val b = Button({ n + 1 }); val m = n * 2; return b }` is checked
+- **THEN** the file passes `prism check`
+
+#### Scenario: Passing an owned function value moves it
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared, and `fun f(h: escaping () -> Int): Int { store(h); return h() }`, `fun g(h: escaping () -> Int): Int { run(h); return run(h) }` and `fun k(h: escaping () -> Int): Int { val a = run { h() }; return a + run { h() } }` are checked
+- **THEN** the borrow checker emits `E5001` at `h` in `h()` of `f` and at the second `h` of `g`, and accepts `k`, whose closures borrow `h`
+
+### Requirement: Captures by Value Are Values the Closure Can Take
+A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected by the type checker with `CannotCaptureByValue` (`E4028`), labelling the capture and why the closure owns it, with help suggesting a fix that applies (a `val` copy or clone, or, for a written `var`, not escaping).
+
+#### Scenario: Capturing a var by value
+- **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(): Button { var n = 1; val b = Button({ n }); n = 2; return b }` is checked
+- **THEN** the type checker emits `E4028` at `n` in the closure, saying that the variable `n` cannot be captured by value, with a related location at the closure's use as a field and help suggesting `val m = n` before the closure
+
+#### Scenario: Capturing what the closure cannot take
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1`, `fun run(f: () -> Int): Int = f()` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int = run { store { greet(s) } }`, `fun g(a: String, p: () -> Int = { greet(a) }): Int = p()` and `fun h(n: Int): Int = run { store { n } }` are checked
+- **THEN** the type checker emits `E4028` at `s` in `f`, noting that `s` is captured by the enclosing closure, and at `a` in `g`, noting that a default value only borrows earlier parameters, each with help suggesting to clone it into a `val` first, and accepts `h`, whose `n` is copied
+
+#### Scenario: Capturing a written var by value
+- **WHEN** `struct Button { val onClick: () -> Int }` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(): Button { var n = 0; return Button({ n += 1; n }) }` and `fun h(): Button { var n = 0; return Button({ run { n += 1; n } }) }` are checked
+- **THEN** the type checker emits `E4028` at `n` in each, with help saying that the closure writes `n` and a closure cannot write what it owns, and suggesting to keep it from escaping, rather than a `val` copy it could not write
+
+#### Scenario: A borrowed var capture is unaffected
+- **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun f(): Int { var n = 1; run { n += 1; n }; return n }` is checked
+- **THEN** the file passes `prism check`, because the closure borrows `n`
+
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
 
@@ -516,3 +554,10 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 - **Moving out is explicit: the consuming built-in `h.unbox()`** (D6). It moves the contents out and frees the box without dropping them, following the move rules of every consuming receiver (a field or a top-level `val` is `E4017`, a box behind a reference is a move out of the borrow, with help suggesting `.clone().unbox()`), works through `?.` (`n?.unbox()` is a `T?`) and peels one box. A non-`Copy` content where a `T` is expected (`val u: User = h`) is `E4017`, "the contents of `Heap` `h`", with help suggesting `h.unbox()`, mirroring a move out of a borrow; a `Copy` content is copied out. Rejected: Rust's move out of `*b` (no read `*`); implicit unboxing at by-value positions (a type mismatch would silently free a box, and `val x: T = h` would read unlike `val x = h`); a free function; the names `take()`, `get()` and `into()`.
 - **A `consuming fun` receiver reached through boxes is unboxed** (D7), once per box layer, as Rust's method calls move out of a `Box`: receivers look through boxes in every other mode with nothing written, and the source is consumed either way. The receiver must be movable as a whole; any reference layer keeps it a move out of a borrow (`E4017`). `h.unbox().f()` stays possible. Rejected: keeping `E4017` (it made `consuming` the one mode that does not look through boxes); unboxing through references.
 - **Branch and `?:` operands are consumed** (from the review). An `if`, `when`, block or `?:` used as an operand, a `when` subject or a member access target is a temporary, so a place in its branches is moved, as the rule above already said; the checker had read them in place, which MIR could not lower (a crash on `"a" + (k.t ?: "-")`).
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Capturing by value moves or copies the binding where the closure is built** (D2). The closure value's MIR moves each non-`Copy` capture it owns and copies each `Copy` one, so a later use is `E5001` and the enclosing body does not drop what moved, with no rule beside the ordinary move check. `E5001` labels the closure ("value moved into closure here") and the reason it owns its captures, recorded by the type checker (D15). Its help, and that of `E5005` for such a move, clones into a `val` captured instead, since a clone written inside the closure is moved with it (review).
+- **Owned captures are `val`s the closure can take: `E4028`** (D5, revised for compile speed). A `var` captured by value would silently stop seeing later writes, which Kotlin closures see; a non-`Copy` capture of an enclosing closure, which may be called again, or an earlier parameter read in a default value, which only borrows it, cannot be given away. Both get one type-checker code, since both are fixed by giving the closure a value it can own; the first design's borrow-checker code `E5010` moved to the type checker's range with the decision. Rejected: capturing `var`s by value, Java's effectively final rule for every closure, and boxing captured `var`s to share them (hidden reference counting).
+- **Each help names a fix that applies** (D15, D20): `val m = n` for a `var`, `val m = s.clone()` for a capture of the enclosing closure, passing an earlier parameter to the closure as a parameter (a default value cannot declare a `val`), and, for a `var` the closure writes, keeping the closure from escaping (review).
+- **A closure still never moves its capture** (D15): `E4017` names "captured variable 's'" with a note that a closure may be called more than once, whether it borrows or owns its captures, which the type checker's message cannot tell.

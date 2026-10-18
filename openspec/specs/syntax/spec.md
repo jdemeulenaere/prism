@@ -290,7 +290,7 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 - **THEN** the declaration parses
 
 ### Requirement: Contextual Keyword Identifier Permissibility
-Modifiers such as `compose` and `consuming` MUST function contextually, permitting their use as regular identifiers in member access and parameter declarations. `consuming` is a modifier only directly before `fun` at the start of a declaration.
+Modifiers such as `compose`, `consuming` and `escaping` MUST function contextually, permitting their use as regular identifiers in member access and parameter declarations. `consuming` is a modifier only directly before `fun` at the start of a declaration. `escaping` is a modifier only at the start of a parameter's type and directly before `(` or `compose`; elsewhere it is a name, also a type name.
 
 #### Scenario: Member access on compose identifier
 - **WHEN** code accesses a property or method named compose (`pipeline.compose(step)`)
@@ -303,6 +303,10 @@ Modifiers such as `compose` and `consuming` MUST function contextually, permitti
 #### Scenario: consuming as an identifier
 - **WHEN** parsing `fun consuming(consuming: Int): Int = consuming`, `fun f() { val consuming = 1; g(consuming = consuming) }` and `x.consuming()`
 - **THEN** each `consuming` parses as a function, parameter, variable, argument or member name, not as a modifier
+
+#### Scenario: escaping as an identifier
+- **WHEN** parsing `fun escaping(escaping: Int): Int = escaping`, `fun f(x: escaping, y: escaping?) {}`, `fun g() { val escaping = 1; h(escaping = escaping) }` and `x.escaping()`
+- **THEN** each `escaping` parses as a function, parameter, variable, argument, member or type name, not as a modifier
 
 ### Requirement: Braces Are Closures in Expression Position
 A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST have zero parameters, and every closure body MUST be a block.
@@ -702,6 +706,17 @@ The parser MUST turn a template into a template expression holding its text runs
 - **WHEN** a file contains `val s = "${}"` or `val t = "${val x = 1}"`
 - **THEN** `prism check` reports `E2001`
 
+### Requirement: Escaping Parameter Modifier
+A parameter of a function declaration, or a parameter in a function type's parameter list, MAY be written with `escaping` before its type when that type is a function type, composable or not, or a parenthesized nullable function type. `escaping` before any other type, or in any other type position, MUST be rejected with `E2001`, saying that `escaping` marks function-typed parameters.
+
+#### Scenario: Escaping parameters
+- **WHEN** parsing `fun button(onClick: escaping () -> Unit, content: escaping compose () -> Unit) {}`, `fun later(f: escaping (() -> Unit)? = null) {}` and `struct Bus { val register: (escaping () -> Unit, Int) -> Unit }`
+- **THEN** `onClick`, `content` and `f` are escaping parameters of types `() -> Unit`, `compose () -> Unit` and `(() -> Unit)?`, and the first parameter of the type of `register` is escaping while the second is not
+
+#### Scenario: Escaping on another type rejected
+- **WHEN** parsing `fun f(n: escaping Int) {}`, `fun g(x: escaping (Int)) {}`, `fun h() { val k: escaping () -> Unit = {} }` or `fun m(): escaping () -> Unit = {}`
+- **THEN** the parser reports `E2001` at `escaping` for each, saying that `escaping` marks parameters of function type
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -772,3 +787,7 @@ Decisions from `string-templates` (planned autonomously on 2026-10-17, refined w
 - **Flat template tokens and a lexer mode stack** (D3). A template is a flat token run (start, text runs, `$name` parts, `${` and its `}` around ordinary tokens, end), as Kotlin's lexer does, so the parser stays a parser over one token vector and the formatter and future tools find tokens by offset. The lexer keeps a stack of `Template` and `TemplateExpression { open_braces }` modes; brace counting is exact because braces in literals and comments are never tokens. A literal without parts stays one `String` token, and the text before a literal's first part is scanned twice, once. A raw newline in template text and the end of the file end the open modes with one `Error` token; an unknown escape or a keyword after `$` is one `Error` token after which the template continues, so its closing quote still closes it. Lexing stays linear. Rejected: a token holding nested token vectors per part, re-lexing a substring per part (loses spans and comments), and a parser driving the lexer.
 - **An expression part holds any expression** (D4), parsed with newlines insignificant as inside parentheses, so it may span lines and hold closures, `when`, nested templates and comments, as in Kotlin. Only the text between parts rejects a raw newline. Rejected: forbidding newlines or comments inside `${}`.
 - **One tree node for every template** (D5). `ExprKind::Template` holds text and expression parts; a name part is an `Ident` (or `This`) spanning the name, so `"$x"` and `"${x}"` give the same tree and the formatter reads which was written from the tokens. A template is an atom that postfix operators apply to, never a place, and the span-free body hash covers it, so editing a template in a generic body changes the hash.
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`escaping` is a contextual modifier at the start of a parameter's function type** (D3), only directly before `(` or `compose`, so `escaping` stays usable as a name and even as a type name; before any other type, or in any other type position, it is `E2001`, since a local, field or result already owns its value. The bare-modifier spelling follows `compose`, as Prism has no attribute syntax.

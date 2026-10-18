@@ -700,7 +700,7 @@ An `E4026` diagnostic MUST carry help naming a fix: for a nullable part, a fallb
 - **THEN** the help parenthesizes the part, suggesting `${(if (b > 0) a else null) ?: ...}`, since `?:` binds more tightly than `if`
 
 ### Requirement: Function Values Convert Only Without Changing Representation
-A function value MUST convert to another function type only when its parameters and result are equal or convert by `&mut T` to `&T`, also inside a nullable or a function type, with equal compose flags; otherwise its site's mismatch code (`E4002`, `E4004`, `E4005`) MUST be reported, with help suggesting a closure that calls it. A named function or variant constructor MAY convert its own parameters and result through any step, except function-typed ones.
+A function value MUST convert to another function type only when parameters and result are equal or convert by `&mut T` to `&T` (also inside a nullable or function type), compose flags are equal, and each parameter's `escaping` flag is equal or set only in the target; otherwise its site's mismatch code (`E4002`, `E4004`, `E4005`) MUST be reported, with help suggesting a calling closure. A named function or variant constructor MAY convert its non-function parameters and result through any step.
 
 #### Scenario: Converting a function value through a nullable parameter
 - **WHEN** `fun show(n: Int?) {}` and `fun each(f: (Int) -> Unit) { f(1) }` are declared, and a body runs `val g: (Int?) -> Unit = show; each(g)`
@@ -729,6 +729,21 @@ A function value MUST convert to another function type only when its parameters 
 #### Scenario: A function value lent to a reference parameter
 - **WHEN** `fun call(f: &(() -> Int)): Int = f()` is declared, and a body runs `val g: () -> Int = { 4 }; call(g); call(&g); call { 5 }`
 - **THEN** the file passes `prism check`: lending a function value converts nothing
+
+### Requirement: Escaping Parameters Are Part of Function Types
+Whether each parameter of a function or function type is `escaping` MUST be part of its type, rendered `(escaping () -> Unit) -> Unit`. A function type whose parameter is unmarked MUST be assignable to one that is equal except that the parameter is `escaping`, in parameter position contravariantly as usual, and that step MUST keep the value's representation. The reverse MUST be a type mismatch.
+
+#### Scenario: Unmarked parameters convert to escaping ones
+- **WHEN** `fun runNow(f: () -> Unit) { f() }`, `fun keepIt(f: escaping () -> Unit) {}`, `fun register(r: (escaping () -> Unit) -> Unit) {}` and `fun now(r: (() -> Unit) -> Unit) {}` are declared, and `fun f() { register(runNow); register(keepIt); now(runNow); val g: (() -> Unit) -> Unit = runNow; register(g) }` and `fun h() { now(keepIt) }` are checked
+- **THEN** the type checker accepts `f`, and emits `E4004` for `h`, saying that `(escaping () -> Unit) -> Unit` is not assignable to `(() -> Unit) -> Unit`
+
+#### Scenario: A closure's parameters take the expected flags
+- **WHEN** `fun keepIt(f: escaping () -> Unit) {}`, `fun register(r: (escaping () -> Unit) -> Unit) {}` and `fun now(r: (() -> Unit) -> Unit) {}` are declared, and `fun f() { register { g -> keepIt(g) } }` and `fun h() { now { g -> keepIt(g) } }` are checked
+- **THEN** `f` passes `prism check`, because the closure's parameter `g` is `escaping`, and the borrow checker emits `E5007` for `h`, saying that the parameter `g` cannot escape
+
+#### Scenario: Escaping types in diagnostics and dumps
+- **WHEN** `fun keepIt(f: escaping () -> Unit): Int = 1` is declared and `fun h(): String = keepIt` is checked
+- **THEN** the type checker emits `E4005`, naming the type `(escaping () -> Unit) -> Int`, and `prism dump-typed-tree` on a file declaring only `keepIt` shows its parameter `f` as escaping
 
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
@@ -815,3 +830,7 @@ Decisions from `string-templates` (planned autonomously on 2026-10-17, refined w
 Decisions from `closures` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **Function values convert only without changing representation** (D8, BREAKING; settles the risk `typed-tree` D6 left). The function-type steps `T` to `T?` and `Nothing` to `T` change a representation: `(Int?) -> Unit` used as `(Int) -> Unit` must receive an `Int` where its code reads an address of an `Int?`. A converted value would need adapter code holding it, by borrow (a temporary that dies with the statement) or by move (a hidden heap allocation per conversion, as `references` and `heap-boxes` refused for references and boxes). So a function value converts only when each parameter and the result are equal or convert by `&mut T` to `&T`, also inside nullables and function types (`Type::converts_in_place`), and the mismatch of its site is reported otherwise, with help writing the closure that converts it. A named function or variant constructor converts freely, since its adapter (`mir` D7) does the conversion, except a function-typed parameter or result, which the adapter would have to convert as a value. A closure literal is checked against its expected type, so it never needs one. Branch joins (`if`, `when`, `?:`) apply the rule too, as `E4002` without help. Lending a function value converts nothing: a lent place keeps its type, since references are invariant, and a lent temporary is converted to the referent first, under the same rule (found in review). Rejected: adapters for every function value, no conversion even for named functions (`each(show)` is ordinary Kotlin), and rejecting in the backend (`E6001` for a program `prism check` accepts).
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`escaping` is part of a function's type, contravariantly** (D3). `Type::Fn` carries one flag per parameter, rendered `(escaping () -> Unit) -> Unit`. A function whose parameter is unmarked is assignable to the type whose parameter is `escaping` (a function accepting any function value accepts an owned one), in place, since both move their argument and are called alike; the reverse is a mismatch, also nested, inside nullables and across branch joins. A closure literal takes its parameters' flags from the expected type. The cost is one comparison per parameter in assignability.

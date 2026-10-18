@@ -242,6 +242,13 @@ A template whose expression parts hold a comment, were written over several line
 - **WHEN** formatting `val s = "a ${when (n) {\n    1 -> "one"\n    else -> "many" // plural\n}} b"`
 - **THEN** the template is printed exactly as written, after `val s = ` on its first line, with the comment once, and formatting the result again leaves it unchanged
 
+### Requirement: Escaping Modifiers Are Kept
+The formatter MUST print `escaping` before each parameter type that has it, in declarations and in function types, followed by one space, and keep `compose` after it.
+
+#### Scenario: Escaping parameters formatted
+- **WHEN** formatting `fun b(o:escaping ()->Unit,f:escaping (()->Unit)?=null){}` and `fun c(content:escaping compose ()->Unit,r:(escaping ()->Unit)->Unit){}`
+- **THEN** the results are `fun b(o: escaping () -> Unit, f: escaping (() -> Unit)? = null) {}` and `fun c(content: escaping compose () -> Unit, r: (escaping () -> Unit) -> Unit) {}`
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):

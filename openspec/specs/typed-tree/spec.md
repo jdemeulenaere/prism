@@ -215,15 +215,19 @@ An assignment MUST be a statement whose target is a place: a binding (re-pointin
 - **THEN** the assignment's target is the binding `r` and its value a written shared borrow of the binding `b`
 
 ### Requirement: Closures Record Their Captures
-A closure MUST record its parameters as bindings, whether it is composable, and its captures: the bindings of enclosing scopes that its body uses, each once, in order of first use. How each capture is taken is not recorded.
+A closure MUST record its parameters as bindings, whether it is composable, and its captures: the bindings of enclosing scopes that its body uses, each once, in order of first use. Each capture MUST record whether the closure borrows, moves or copies it (see `references`), and a closure owning a capture MUST record why: the position that makes it escape, or the assignment storing it outside a captured binding's block. Whether a borrow is shared or mutable is not recorded.
 
 #### Scenario: Captured bindings
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and a body of `fun g(a: Int, b: Int): Int` runs `return run { b + a + b }`
-- **THEN** the closure captures `b` then `a`, each once
+- **THEN** the closure captures `b` then `a`, each once, both borrowed
 
 #### Scenario: Nested closures capture through their parent
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int): Int = run { run { a } }` is checked
 - **THEN** both closures capture `a`
+
+#### Scenario: Captures taken by value
+- **WHEN** `fun greet(s: &String): Int = 1` is declared and `prism dump-typed-tree` runs on `fun f(s: String, n: Int): () -> Int { var count = 0; val h = { count += 1; greet(s) + n }; h(); return { greet(s) + n } }`
+- **THEN** the closure `h` captures `count`, `s` and `n` borrowed, and the returned closure captures `s` moved and `n` copied, with the reason "returned here"
 
 ### Requirement: The Typed Tree Records Its File's Types
 The typed tree MUST record every struct and enum known to its file (its own declarations, those its direct imports export, and the built-in `Range`) with its `Copy` or `Clone` marker and, when the file knows them, its fields or variants in declaration order. The text dump MUST list the imported ones.
@@ -376,3 +380,7 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **A template node over parts read in place** (D9). Value parts have type `String`, `Int`, `Double`, `Bool` or `Char`; a place part is the place itself, a computed one a `Temporary`, a `toString()` part the normalized call in a `Temporary`, and a `Nothing` part a `Diverge` coercion to `String`. Rejected: a call of a variadic built-in with string-literal arguments (each text borrowed from a temporary), and `ToString` calls for scalar parts (one allocation per scalar).
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Closures record each capture's mode and why they own** (D2). The typed tree already records every move, copy and borrow, so the capture decision is made by the type checker and recorded there: `Borrowed`, `Moved` or `Copied` per capture, and for an owning closure the first owning position in source order, or the assignment that stores it outside a captured binding's block. `prism dump-typed-tree` prints `captures [move s, copy n, borrow count]`. Whether a borrowed capture is shared or mutable stays the borrow checker's inference. Calls record each parameter's `escaping` flag, which the decision and MIR lowering read.

@@ -1,7 +1,7 @@
 # References Specification
 
 ## Purpose
-The references specification defines how borrowed references are used: as the type checker enforces it, where borrows are created implicitly, how values are read and written through references, how reference bindings are re-pointed and reborrowed, how borrowed nullables are viewed, and how reference types relate; and as the borrow checker enforces it, how long each borrow lasts, which accesses conflict with it, what a call's result keeps borrowed, how closures borrow what they capture, and why a capturing closure cannot escape. It also defines the four lifetime elision rules, which tie a returned borrow to inputs from the signature alone, for callers (what a call's result keeps borrowed) and callees (what a body may return or store through its inputs).
+The references specification defines how borrowed references are used: as the type checker enforces it, where borrows are created implicitly, how values are read and written through references, how reference bindings are re-pointed and reborrowed, how borrowed nullables are viewed, and how reference types relate; and as the borrow checker enforces it, how long each borrow lasts, which accesses conflict with it, what a call's result keeps borrowed, how closures borrow or own what they capture, which `escaping` parameters may keep, and why an escaping function value holds no borrow. It also defines the four lifetime elision rules, which tie a returned borrow to inputs from the signature alone, for callers (what a call's result keeps borrowed) and callees (what a body may return or store through its inputs).
 
 ## Requirements
 
@@ -402,7 +402,7 @@ A body MUST return only borrows of top-level `val`s, which are valid everywhere,
 - **THEN** the file passes `prism check`: each returned borrow derives from the input its rule ties the result to, not from the local reference or the closure's borrow of the parameter it was read through
 
 ### Requirement: Function Types Elide by the Same Rules
-A function type MUST elide by rules 1, 3 and 4: a call of a function value MUST tie its result to every input-borrow argument, or, when its type has no input borrow, to the function value's own borrows. So a closure MUST return only borrows of top-level `val`s or derived from its reference parameters (`E5009` otherwise), or, when its type has no input borrow, also of what it captures; a borrow of its own local or temporary is `E5008`.
+A function type MUST elide by rules 1, 3 and 4: a call of a function value MUST tie its result to every input-borrow argument, or, when its type has no input borrow, to the function value's own borrows. So a closure MUST return only borrows of top-level `val`s or derived from its reference parameters (`E5009` otherwise), or, when its type has no input borrow, also of what it captures by borrow; a borrow of its own local or temporary is `E5008`.
 
 #### Scenario: A closure returning a borrow
 - **WHEN** `fun app(g: (&Int) -> &Int): Int = 1` is declared and `fun f(): Int = app { k -> k }` and `fun h(): Int = app { k -> val m = 2; &m }` are checked
@@ -481,7 +481,7 @@ A local or temporary MUST NOT be dropped, or end its storage, while a borrow of 
 - **THEN** the borrow checker emits `E5006` at `&n`, because the closure's local `n` ends while `r` refers to it
 
 ### Requirement: Closures Capture by Inferred Borrow
-A closure MUST borrow each variable it captures: mutably when its body assigns the variable or one of its fields, writes through it, borrows it or a part of it mutably, or contains a closure that captures it mutably, and shared otherwise. The borrows MUST start where the closure is created and last while the closure value is live. Conflicting uses of a captured variable meanwhile MUST be rejected as for any borrow.
+A closure MUST borrow each variable it captures that it does not own (see "Closures That Escape Own Their Captures" and "Closures That Outlive a Captured Binding Own It"): mutably when its body assigns it or a field of it, writes through it, borrows it or a part of it mutably, or holds a closure capturing it mutably, and shared otherwise. The borrows MUST last from the closure's creation while its value is live, and conflicting uses meanwhile MUST be rejected as for any borrow.
 
 #### Scenario: Closures capture by inferred borrow
 - **WHEN** `struct User { var name: String }`, `fun greet(s: &String): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared, and a body declares `var u = User("a")` and runs `val f = { u.name = "z"; 1 }; greet(u.name); run(f)`, or `val g = { greet(u.name) }; greet(u.name); run(g)`, or `val h = { greet(u.name) }; u.name = "b"; run(h)`, or `val k = { u.name = "z"; 1 }; run(k); u.name = "b"`
@@ -495,28 +495,6 @@ A closure MUST borrow each variable it captures: mutably when its body assigns t
 - **WHEN** `fun run(f: () -> Int): Int = f()` and `fun print(n: &Int) {}` are declared and a body runs `var x = 1; val f = { run { x = 2; 1 } }; print(x); run(f)`
 - **THEN** the borrow checker emits `E5003` at `x` in `print(x)`, because the outer closure borrows `x` mutably for the inner one
 
-### Requirement: Capturing Closures Do Not Escape
-A function value that may be a closure with captures, or a function-typed parameter, MUST NOT escape: being returned from a function, closure or default value, initializing a top-level `val`, being stored in a struct field, an enum payload or a box, being written through a reference, or being assigned to a captured variable MUST be rejected by the borrow checker with `EscapingClosure` (`E5007`). A closure without captures MAY escape. Passing any closure to a function-typed parameter is not one.
-
-#### Scenario: Capturing closures do not escape
-- **WHEN** `struct Button { val onClick: () -> Int }` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): () -> Int = { greet(s) }`, `fun g(s: String): Button = Button({ greet(s) })`, `fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }`, `fun k(p: () -> Int): () -> Int = p` and `fun m(a: Int, p: () -> Int = { a }): Int = p()` are checked
-- **THEN** the borrow checker emits `E5007` for each: for `f` saying that a closure that captures `s` cannot escape and labelling where it is returned, for `g`, `h` and `m` likewise, and for `k` saying that the function-typed parameter `p` cannot escape
-
-#### Scenario: A closure without captures may escape
-- **WHEN** `struct Button { val onClick: () -> Int }` and `fun run(f: () -> Int): Int = f()` are declared, and `fun f(): () -> Int = { 1 }`, `fun g(): Button = Button({ 2 })` and `fun h(s: String): Int = run { s.clone(); 3 }` are checked
-- **THEN** the file passes `prism check`
-
-#### Scenario: Boxing a capturing closure
-- **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String): Int { val h = Heap({ greet(s) }); return 1 }` and `fun g(): Heap<() -> Int> = Heap({ 2 })` are checked
-- **THEN** the borrow checker emits `E5007` for `f`, labelling the closure "stored in a box here", and accepts `g`
-
-### Requirement: Capturing Closures Are Not Passed to Generic Parameters
-A function value that may be a closure with captures, or a function-typed parameter, MUST NOT be passed where the callee's declared parameter type has a type parameter outside a function type, since the generic body may keep it: the borrow checker MUST reject it with `E5007`, labelling it as passed to a generic parameter. Passing it to a parameter of function type, such as `() -> T`, MUST be allowed.
-
-#### Scenario: A capturing closure passed to a generic parameter
-- **WHEN** `fun <T> keep(x: T): T = x`, `fun <T> remember(calc: () -> T): T = calc()` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int { val g = keep({ greet(s) }); return g() }`, `fun k(p: () -> Int): Int = keep(p)()`, `fun h(s: String): Int = remember { greet(s) }` and `fun n(): Int = keep({ 1 })()` are checked
-- **THEN** the borrow checker emits `E5007` for `f`, labelling the closure "passed to a generic parameter here", and for `k`, and accepts `h`, whose closure is passed to a function-typed parameter, and `n`, whose closure captures nothing
-
 ### Requirement: Borrow Conflict Diagnostics Show the Borrow and Its Later Use
 A diagnostic of `E5003`, `E5004` or `E5005` MUST point at the conflicting access and name the place, and MUST list as related locations where the conflicting borrow was created and where it is used later, with ", in later iteration of loop" when that use is reached only through a loop's back edge. A borrow made by a closure MUST also label the use inside the closure that decided how it is captured.
 
@@ -529,7 +507,7 @@ A diagnostic of `E5003`, `E5004` or `E5005` MUST point at the conflicting access
 - **THEN** it reports `error[E5003]: cannot borrow 'u.name' as shared because 'u' is borrowed as mutable` at `u.name` in `greet(u.name)`, labelled "shared borrow occurs here", with related locations at the closure labelled "closure borrows 'u' mutably here", at `u.name` inside the closure labelled "borrow occurs due to this use of 'u' in the closure", and at `g` in `run(g)` labelled "mutable borrow later used here"
 
 ### Requirement: Lifetime and Escape Diagnostics Show Where the Value Ends
-An `E5006` diagnostic MUST point at the borrow, with related locations where the borrowed value ends and where the borrow is used later. A parameter that ends when its body returns MUST be labelled at its declaration, and a later use by the caller, through a `&mut R` parameter, at that parameter. An `E5007` diagnostic MUST point at where the value escapes, with a related location at the capture or the parameter.
+An `E5006` diagnostic MUST point at the borrow, with related locations where the borrowed value ends and where the borrow is used later. A parameter that ends when its body returns MUST be labelled at its declaration, and a later use by the caller, through a `&mut R` parameter, at that parameter. An `E5007` diagnostic MUST point at where the value escapes, with a related location at the capture or the parameter that holds a borrow.
 
 #### Scenario: Dropped value labels
 - **WHEN** `fun print(n: &Int) {}` is declared and `prism check` runs on `fun f(c: Bool) { var a = 1; var r: &Int = &a; if (c) { val n = 1; r = &n }; print(r) }`
@@ -540,8 +518,12 @@ An `E5006` diagnostic MUST point at the borrow, with related locations where the
 - **THEN** it reports `error[E5006]: 'v' does not live long enough` at `&v` labelled "borrowed value does not live long enough", with a related location at the parameter `v` labelled "'v' is dropped when the function returns, while still borrowed" and one at the parameter `slot` labelled "borrow later used by the caller through 'slot'"
 
 #### Scenario: Escaping closure labels
-- **WHEN** `fun greet(s: &String): Int = 1` is declared and `prism check` runs on `fun f(s: String): () -> Int = { greet(s) }`
-- **THEN** it reports `error[E5007]: a closure that captures 's' cannot escape` at the closure labelled "returned here", with a related location at `s` inside the closure labelled "'s' is captured here", a note that a closure borrows what it captures, and help suggesting to pass `s` to the closure as a parameter
+- **WHEN** `prism check` runs on `fun f(r: &Int): () -> Int = { r }`
+- **THEN** it reports `error[E5007]: a closure that captures the reference 'r' cannot escape` at the closure labelled "returned here", with a related location at `r` inside the closure labelled "'r' is captured here", a note that an escaping closure owns what it captures and a reference cannot be owned, and help suggesting to pass the value `r` refers to instead
+
+#### Scenario: Escaping parameter labels
+- **WHEN** `prism check` runs on `fun k(p: () -> Int): () -> Int = p`
+- **THEN** it reports `error[E5007]: the parameter 'p' cannot escape` at `p` labelled "returned here", with a related location at the parameter labelled "'p' is a parameter here", a note that an unmarked function-typed parameter may borrow its caller's variables, and help suggesting `p: escaping () -> Int`
 
 ### Requirement: Returned Borrow Diagnostics Name the Source
 An `E5008` diagnostic MUST point at where the borrow is returned, name the local, temporary or parameter it borrows, and label where it is borrowed when that is elsewhere; for a function with no input borrow it MUST note that only borrows of top-level values can be returned. An `E5009` diagnostic MUST point at where the borrow is returned, name the parameter it derives from with a related location at that parameter, and note the rule that does not tie the result to it.
@@ -650,6 +632,99 @@ A scalar part MUST be read at its position in the template, so a later part writ
 - **WHEN** `fun bump(r: &mut Int): Int { *r = r + 1; return r }` and `fun f(): String { var n = 1; return "$n ${bump(&mut n)} $n" }` are checked
 - **THEN** the file typechecks and borrow-checks successfully, the first part reading `n` before `bump` writes it
 
+### Requirement: Closures That Escape Own Their Captures
+A closure whose value may escape MUST own every binding it captures. A value escapes when it is returned from a function, closure or default value, initializes a top-level `val`, is stored in a struct field, an enum payload or a box, is written through a reference or to a field, is assigned to a captured variable, is passed for a generic parameter or an `escaping` parameter, or is captured by value by another closure, also after flowing through locals, nullables and branches.
+
+#### Scenario: Escaping closures own their captures
+- **WHEN** `struct Button { val onClick: () -> Int }` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): () -> Int = { greet(s) }`, `fun g(s: String): Button = Button({ greet(s) })`, `fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }` and `fun m(a: Int, p: () -> Int = { a }): Int = p()` are checked
+- **THEN** the file passes `prism check`, and each closure owns what it captures
+
+#### Scenario: A closure bound to a local first
+- **WHEN** `struct Button { val onClick: () -> Int }` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String): Button { val h = { greet(s) }; val k: (() -> Int)? = h; return Button(k ?: { 0 }) }` is checked
+- **THEN** the file passes `prism check`, and the closure `{ greet(s) }` owns `s`, because its value reaches the field through `h`, the nullable `k` and the `?:`
+
+#### Scenario: Boxed and generic closures own their captures
+- **WHEN** `fun <T> keep(x: T): T = x`, `struct Box<T>(val v: T)` and `fun greet(s: &String): Int = 1` are declared, and `fun f(s: String): Int { val g = keep({ greet(s) }); return g() }`, `fun h(s: String): Int { val b = Heap({ greet(s) }); return 1 }`, `fun k(s: String): Box<() -> Int> = Box({ greet(s) })`, `fun m(): Heap<() -> Int> = Heap({ 2 })` and `fun n(): Int = keep({ 1 })()` are checked
+- **THEN** the file passes `prism check`, the closures of `f`, `h` and `k` own `s`, and those of `m` and `n` capture nothing
+
+#### Scenario: A nested closure captured by an escaping one
+- **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String): () -> Int { val inner = { greet(s) }; return { inner() + 1 } }` is checked
+- **THEN** the file passes `prism check`: the returned closure owns `inner`, so `inner` escapes and owns `s`
+
+#### Scenario: A closure passed to an unmarked parameter keeps borrowing
+- **WHEN** `fun <T> remember(calc: () -> T): T = calc()`, `fun run(f: () -> Int): Int = f()`, `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String) { run { greet(s) }; remember { greet(s) }; take(s) }` is checked
+- **THEN** the file passes `prism check`, because neither closure escapes, so both borrow `s`
+
+### Requirement: Capture Modes Are Decided From the Source
+The type checker MUST decide which captures a closure owns from the source, flow-insensitively, in time linear in the body: a closure stored in a local binding MUST own its captures when that binding, or a binding it flows into, is used at an escaping position anywhere in its body, whichever closure it holds there. The typed tree MUST record each capture's mode.
+
+#### Scenario: A variable that may escape owns every closure stored in it
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1`, `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String): Int { var h = { greet(s) }; h(); h = { 0 }; store(h); take(s); return 1 }` is checked
+- **THEN** the borrow checker emits `E5001` at `s` in `take(s)`, with a related location at the closure `{ greet(s) }` labelled "value moved into closure here" and one at `h` in `store(h)` labelled "the closure owns its captures because it is passed to an escaping parameter here"
+
+### Requirement: Closures That Outlive a Captured Binding Own It
+A closure stored, directly or through other bindings, in a binding declared outside the block that declares one of its captures MUST own that capture, and MUST keep borrowing its other captures unless its value escapes. The type checker MUST decide this from the blocks the bindings are declared in, whether or not the closure is used after the captured binding's block ends. A closure MUST NOT own a capture for any other reason, so a conflicting use of a borrowed capture stays a borrow error.
+
+#### Scenario: A closure kept past a block
+- **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(c: Bool): Int { var h: () -> Int = { 0 }; if (c) { val s = "a"; h = { greet(s) } }; return h() }` is checked
+- **THEN** the file passes `prism check`, and the closure owns `s`
+
+#### Scenario: Only the outlived capture is owned
+- **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(): Int { var count = 0; var h: () -> Int = { 0 }; var i = 0; while (i < 3) { val s = "a"; h = { count += 1; greet(s) }; i += 1 }; h(); return count }` is checked
+- **THEN** the file passes `prism check`: the closure owns `s`, which ends with each iteration, and borrows `count` mutably
+
+#### Scenario: A closure stored outside a binding's block owns it
+- **WHEN** `fun take(s: String) {}` and `fun greet(s: &String): Int = 1` are declared and `fun f(c: Bool): Int { var h: () -> Int = { 0 }; if (c) { val s = "a"; h = { greet(s) }; h(); take(s) }; return 1 }` is checked
+- **THEN** the borrow checker emits `E5001` at `s` in `take(s)`, with a related location at the closure labelled "value moved into closure here" and one at the assignment to `h` labelled "the closure is stored here, in a variable that outlives 's'"
+
+#### Scenario: A conflict does not make a closure own its capture
+- **WHEN** `fun take(s: String) {}`, `fun greet(s: &String): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(s: String) { val g = { greet(s) }; take(s); run(g) }` is checked
+- **THEN** the borrow checker emits `E5005` at `s` in `take(s)`, as it does for any closure that borrows `s`
+
+### Requirement: Escaping Parameters Keep Function Values
+A parameter declared `escaping` MUST hold a function value that holds no borrow: inside its function it MAY be stored, returned, boxed, passed to an `escaping` or generic parameter or captured by an escaping closure. Passing a value to it MUST make that value escape. An unmarked function-typed parameter MUST NOT escape, and MUST be rejected with `EscapingClosure` (`E5007`) when it does.
+
+#### Scenario: Storing an escaping parameter
+- **WHEN** `struct Button { val label: String, val onClick: () -> Unit }` is declared and `fun button(label: String, onClick: escaping () -> Unit): Button = Button(label, onClick)` and `fun later(f: escaping () -> Int): () -> Int = f` are checked
+- **THEN** the file passes `prism check`
+
+#### Scenario: An unmarked parameter cannot escape
+- **WHEN** `struct Button { val onClick: () -> Int }` and `fun <T> keep(x: T): T = x` are declared, and `fun k(p: () -> Int): () -> Int = p`, `fun g(p: () -> Int): Button = Button(p)`, `fun h(p: () -> Int): Int = keep(p)()` and `fun m(p: () -> Int): () -> Int = { p() }` are checked
+- **THEN** the borrow checker emits `E5007` for each: for `k`, `g` and `h` saying that the parameter `p` cannot escape, and for `m` that a closure that captures the parameter `p` cannot escape, each with help suggesting to declare `p` as `escaping`
+
+#### Scenario: A closure passed to an escaping parameter
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1` and `fun greet(s: &String): Int = 1` are declared and `fun f(s: String): Int = store { greet(s) }` is checked
+- **THEN** the file passes `prism check`, and the closure owns `s`
+
+### Requirement: Escaping Function Values Hold No Borrows
+A value whose type contains a function type MUST NOT escape when it may hold a borrow: a closure owning a reference, a borrowing closure or an unmarked function-typed parameter, or such a parameter itself. The borrow checker MUST reject it with `EscapingClosure` (`E5007`). A closure without captures, or owning only values that hold no borrow, MAY escape.
+
+#### Scenario: An escaping closure capturing a reference
+- **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(r: &Int): () -> Int = { r }` and `fun g(r: &Int): Button = Button({ r + 1 })` are checked
+- **THEN** the borrow checker emits `E5007` for each, saying that a closure that captures the reference `r` cannot escape
+
+#### Scenario: A closure without captures may escape
+- **WHEN** `struct Button { val onClick: () -> Int }` and `fun run(f: () -> Int): Int = f()` are declared, and `fun f(): () -> Int = { 1 }`, `fun g(): Button = Button({ 2 })` and `fun h(s: String): Int = run { s.clone(); 3 }` are checked
+- **THEN** the file passes `prism check`
+
+#### Scenario: Escaping through an escaping parameter
+- **WHEN** `fun store(f: escaping () -> Int): Int = 1` is declared, and `fun f(r: &Int): Int = store { r }` and `fun g(p: () -> Int): Int = store(p)` are checked
+- **THEN** the borrow checker emits `E5007` at the closure in `f`, labelled "passed to an escaping parameter here", and at `p` in `g`
+
+### Requirement: A Closure Returns No Borrow of What It Owns
+In a closure's body, a returned borrow of a capture the closure owns MUST be rejected with `DanglingBorrowReturn` (`E5008`), naming the capture as owned by the closure. A borrow of a capture the closure borrows follows "Function Types Elide by the Same Rules".
+
+#### Scenario: Returning a borrow of an owned capture
+- **WHEN** `fun f(s: String): () -> &String = { &s }` is checked
+- **THEN** the borrow checker emits `E5008` at `&s` in the closure, saying that it cannot return a borrow of captured `s`, which the closure owns
+
+### Requirement: Calling a Function Value Borrows It
+A call of a function value MUST only read it: it MUST NOT move it, and MAY be made through a shared reference or a `val`, any number of times. Passing a function value as an argument or storing it MUST move it.
+
+#### Scenario: Calling a stored handler through a borrow
+- **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun fire(b: &Button): Int = b.onClick() + b.onClick()` and `fun twice(h: escaping () -> Int): Int { val a = h(); return a + h() }` are checked
+- **THEN** the file passes `prism check`
+
 ## Design Rationale
 Decisions from `reference-access` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change, 2026-10-17):
 
@@ -674,7 +749,7 @@ Decisions from `extension-methods`:
 Decisions from `borrowck-exclusivity` (the scope agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: non-lexical borrows, disjoint field paths, two-phase receiver borrows, closures capturing by inferred borrow and never escaping; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`):
 
 - **Loans flow into locals and are live where a live local may hold them.** A loan is one borrow made in a body (written or implied, or a closure capture). A forward analysis computes which loans each local may hold at each point, a backward one which locals are used later, and an access conflicts with every live loan of an overlapping place. This is the location-sensitive formulation of Polonius on the bit-set dataflow of `borrowck-moves`, without regions or outlives constraints: non-lexical borrows come from liveness alone, re-pointing a `var` reference (`r = &a; r = &b; a = 3`) is accepted, which NLL's single region per reference rejects, and with no lifetime annotations (the zero-cost memory-safety invariant) a signature only says which inputs a returned borrow comes from. Rejected: NLL regions, full Polonius, lexical borrows (user).
-- **Only references and function types carry loans.** Structs and enums cannot hold borrows (the `syntax` spec) or capturing closures, so only locals of a reference or function type, or a nullable of one, take part. An argument or capture of function type holds a "function input" fact, and an argument of type `&mut R` (or `(&mut R)?`) whose `R` carries loans a "referent input", so that an escaping function-typed parameter is caught and a write through any copy of such an argument reaches what the caller sees.
+- **Only references and function types carry loans.** Structs and enums cannot hold borrows (the `syntax` spec) or, then, capturing closures (since `escaping-closures` they hold only closures that hold no borrow), so only locals of a reference or function type, or a nullable of one, take part. An argument or capture of function type holds a "function input" fact, and an argument of type `&mut R` (or `(&mut R)?`) whose `R` carries loans a "referent input", so that an escaping function-typed parameter is caught and a write through any copy of such an argument reaches what the caller sees.
 - **How loans move.** A borrow holds its loan and every loan of the borrowed place's root local, so reborrows, fields through a reference and borrows of references keep their source borrowed; copies, moves, wraps and subtyping pass loans on; a whole-local assignment replaces what the local held and kills the loans of places through its old referent; a write through `*r` gives the value's loans to what `r` points at. A call or closure is assumed to write the loans of its other operands through each `&mut R` argument, function-typed argument, called function value and mutable capture, into whatever they point at; an operand's own loans never reach its own referent, since a slot cannot hold a borrow of itself. A local never holds a loan of a place rooted at itself.
 - **Liveness ignores drops and the return place.** Only closure values among loan carriers need a drop, and dropping one reads nothing it borrowed, so a closure's borrows end at its last use. What a body returns is the callee's side of elision (`borrowck-elision`), but capture locals and `&mut R` arguments are used at every return, because the caller sees them afterwards, so a body that stores a borrow of its own local there is rejected when that local ends.
 - **Codes by fix, rules by access.** `E5003` for a conflicting borrow or read, `E5004` for an assignment, `E5005` for a move and `E5006` for a value that ends while borrowed, since each has its own fix. Writes are shallow (re-pointing `r` does not touch a loan of `*r`), moves and drops deep; a call uses all its operands together, after evaluating them, so `touch(&mut u, &mut u.name)` conflicts while `x = f(r)` does not; a local the access's own location reassigns keeps nothing of its old value in scope, so `r = &mut x` may replace a `&mut x` that `r` held. Each access reports its earliest conflicting loan, and a value reported as ending while borrowed is not reported again for the same loan. Rejected: one code, and Rust's split between borrow-borrow and use-borrow conflicts, whose fixes are the same.
@@ -682,7 +757,7 @@ Decisions from `borrowck-exclusivity` (the scope agreed with the user in the bor
 - **Fields are disjoint by path; closures capture whole bindings.** Overlap compares projections, so different fields never conflict, a prefix always does, two indices always do, and a `Heap<T>` dereference is owned memory unlike a reference's. `{ u.name = "z" }` borrows all of `u`: precise captures would need capture paths in the typed tree and partial environments in `closures`.
 - **A call's result holds every input borrow.** A call returning a reference keeps the loans of each argument whose parameter type contains a reference, in its own mode, so a `&mut` argument stays frozen: the caller's half of elision rules 1, 3 and 4, and an over-approximation of rule 2, since MIR does not yet record which operand is the receiver. A function value's result also holds its loans. A default value's generator does not keep its shared borrows of by-value earlier arguments, which the call then moves. `borrowck-elision` must make these assumptions true on the callee's side, including that a generator never returns a borrow of a by-value earlier argument. Rejected: rule 2 at call sites now; call results holding nothing until then. (`borrowck-elision` replaced this with the elision rules below.)
 - **Closures capture by inferred borrow** (user). A capture is mutable when the closure writes it, borrows it mutably or contains a closure capturing it mutably, decided innermost closure first, and shared otherwise; building the closure takes those loans, which last while the closure value is live, and a closure passed straight to a call releases them when the call returns. A mutable capture of a `val` needs no `var`, as with Rust's unique borrows. The modes are recorded in elaborated MIR for `closures` (`mir`).
-- **Capturing closures do not escape** (user for the rule). A function value that may hold a capture's loan or a function input escapes when it is returned (from a function, closure or default, or as a top-level `val`), stored in a field or payload, written through a reference or assigned to a captured variable (`E5007`). Writing through a reference and defaults that are capturing closures are rejected conservatively, since telling the body's storage from the caller's needs step 9; a closure without captures may escape. An escaping capture is not reported again when the captured value ends.
+- **Capturing closures do not escape** (user for the rule; superseded by `escaping-closures` D1 and D6, below: a capturing closure that escapes owns its captures, and only a value that may still hold a borrow is `E5007`). A function value that may hold a capture's loan or a function input escapes when it is returned (from a function, closure or default, or as a top-level `val`), stored in a field or payload, written through a reference or assigned to a captured variable (`E5007`). Writing through a reference and defaults that are capturing closures are rejected conservatively, since telling the body's storage from the caller's needs step 9; a closure without captures may escape. An escaping capture is not reported again when the captured value ends.
 - **Borrowed temporaries.** `val r = &make()`, and the same borrow as a branch, `?:` fallback or block tail of an initializer or argument, live as long as the binding or the statement (`mir`). The forms not extended, `r = &make()` and a borrowed argument whose call result outlives the statement, are `E5006` with help suggesting a `val`; extension through assignments remains a possible relaxation.
 - **Diagnostics follow rustc.** Titles and labels use rustc's wording: the borrow, its later use (", in later iteration of loop" when reached only through a back edge), a closure's capture with the use in its body that decided the mode, and where a borrowed value ends.
 
@@ -700,7 +775,7 @@ Decisions from `borrowck-elision` (the four rules agreed with the user in the bo
 
 Decisions from `generics` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **A capturing closure or function input cannot be passed to a generic slot** (`E5007`, "passed to a generic parameter here"). A parameter whose declared type has a type parameter outside a function type may be stored, returned or kept by the generic body, which is checked without knowing the instantiation. A closure passed for `calc: () -> T` is a function-typed parameter, so `remember { count }` stays allowed. This is the second half of the borrow-free rule of `generics`; owning, move-capturing closures (`closures`) will pass.
+- **A capturing closure or function input cannot be passed to a generic slot** (`E5007`, "passed to a generic parameter here"; for capturing closures superseded by `escaping-closures` D12, below, which makes them own their captures there). A parameter whose declared type has a type parameter outside a function type may be stored, returned or kept by the generic body, which is checked without knowing the instantiation. A closure passed for `calc: () -> T` is a function-typed parameter, so `remember { count }` stays allowed. This is the second half of the borrow-free rule of `generics`; owning closures pass since `escaping-closures`.
 
 Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -719,9 +794,21 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 - **A box reads like a reference to its contents** (D4). Every implicit read through `&T` (fields, receivers, operators, conditions, copy-out of `Copy` values, `print`, `toString()`) reads through `Heap<T>` layers too, at any depth and mixed with references, so code over a `Heap<T>` reads like code over a `&T`: a box is "an owning `&mut`". Conversions apply only where the value does not already fit, so `fun <T> same(x: &T)` given a `Heap<Int>` infers `T = Heap<Int>`. Rejected: reading only through fields and receivers (a `Heap<Int>` could not be read without moving it out); Rust's `Deref` trait coercion (no traits; these are fixed rules for one built-in type); a read form of `*h` (`*` is writes-only).
 - **Owned boxes lend only to reference parameters** (D4, D21 at implementation). An owned `Heap<T>` or `Heap<T>?` lends its contents to a shared `&T` or `(&T)?` parameter, from where it lives or from a temporary, as an owned `T` is borrowed implicitly only as an argument; never to a `&mut T` parameter. A borrowed box (`&Heap<T>`, `&mut Heap<T>`, `&(Heap<T>?)`) converts wherever such a type is expected, as `&(T?)` converts to `(&T)?`, and costs nothing: the box pointer is the contents' address. `val r: &T = h` is `E4002` with help suggesting `&h`. Rejected: borrowing owned boxes implicitly in value positions, which would make boxes the one owned value borrowed without `&`.
 - **`*h = v` writes a mutable box's contents** (D5), dropping the old contents and keeping the allocation. `*` peels exactly one layer, a reference or a box, so `**r = v` writes the contents of `r: &mut Heap<T>` and `*r = Heap(v)` replaces the box. A box layer must be a mutable place (a `var`, a `var` field path, or reached through `&mut`), as field writes through a box already required: a box owns its contents, as Rust's `let mut b: Box<T>` does, so unlike a `val` holding a `&mut`, a `val` box is not written through. `h = 5` for a box is `E4002` with help suggesting `*h = 5`. Rejected: writes through a `val` box; `*r = v` without the one-layer rule, ambiguous for `r: &mut Heap<Int>`.
-- **The borrow checker treats a box's contents as owned by the box** (D11): `*h` and `h.x` are places under `h` with a non-reference `Deref`, so borrowing them conflicts with `h`, and moving, reassigning or ending `h` while they are borrowed is `E5005`, `E5004` or `E5006`; a borrow of a by-value box's contents cannot be returned (`E5008`), one of `r: &Heap<T>` is tied to `r`. Boxing a capturing closure is an escape (`E5007`, "stored in a box here"), like storing it in a struct field, because a box can be returned or stored anywhere; `closures` and `escaping-closures` revisit both together.
+- **The borrow checker treats a box's contents as owned by the box** (D11): `*h` and `h.x` are places under `h` with a non-reference `Deref`, so borrowing them conflicts with `h`, and moving, reassigning or ending `h` while they are borrowed is `E5005`, `E5004` or `E5006`; a borrow of a by-value box's contents cannot be returned (`E5008`), one of `r: &Heap<T>` is tied to `r`. Boxing a capturing closure is an escape (`E5007`, "stored in a box here"), like storing it in a struct field, because a box can be returned or stored anywhere; since `escaping-closures` (D12, below) such a closure owns its captures and is rejected only when it may still hold a borrow.
 - **Safe navigation is still a temporary** (from the review). `f(t.right?.left)` for a `(&Tree)?` parameter moves the field out (`E4017`) as for any `T?`: lending a `?.` chain of fields read in place is a possible relaxation of "A borrow points at one place or one temporary", recorded in `ROADMAP.md`.
 
 Decisions from `string-templates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
 - **Template parts are borrowed until the template is built, scalars read at their position** (D11). Parts are evaluated left to right. A `String` part is a shared `Operator` borrow, as an operand of `+` is, used where the template is built, so a later part mutating it conflicts (`E5003`), and a template never moves a part (`"$s!"` leaves `s` usable). A scalar part is copied to a temporary first when a later part may write it (`"$n ${bump(&mut n)} $n"` gives `1 2 2`, as in Kotlin). A template of many string parts keeps that many shared loans live at once, the `live-borrows` shape of the compile-time benchmark. Rejected: copying string parts in Kotlin's style (a hidden copy per part), and moving temporary parts into the runtime call to reuse their buffers, a later optimization.
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Capture by value is inferred from the source, flow-insensitively** (D1, revised for compile speed). A closure owns every capture when its value may reach an owning position (returned; stored in a field, payload or box; written through a reference or to a field; assigned to a captured variable; passed for an `escaping` or generic parameter; captured by an owning closure), also through locals, branches, block results, `?:`, nullable wraps and `when` bindings of the whole subject. It owns a single capture when it may be stored in a binding declared outside that capture's block. Every other capture stays an inferred borrow, so only programs that were `E5007` or `E5006` change, apart from two rare shapes that now own (a `var` holding a capturing closure that later receives an escaping one; a closure stored in an outer variable but used only inside its capture's block), each reported naming the reason; a conflict never switches a capture to owned. Kotlin's syntax is kept: no `move`, no capture list, no marker on bindings. Rejected: Rust's `move { ... }` (every compose handler would need it), a marker on bindings, Swift's capture lists, following only the literal's own position (it misses `val h = { ... }; Button(onClick = h)`), owning every capture of a closure that outlives one, retrying a failed borrow check, and a flow-sensitive borrow-checker stage (the first design: exact, but a dataflow over locals times closures plus a liveness, O(blocks x locals x closures) per round and cubic in a body's size, for precision in the two rare shapes only).
+- **The type checker decides captures in one linear walk** (D2, D19). After a body with closures is checked, one walk of its finished typed tree builds a flow graph of closure literals and function-valued bindings, with roots at owning positions, source edges from initializers, assignments and whole-subject `when` bindings, and capture edges. One graph search marks escaping nodes; one pass over the strongly connected components of the source edges (cycles come from `var` reassignments), with blocks numbered by entry and exit, gives the outermost block each closure may be stored in; a second search follows the outlived captures. Each step is O(nodes + edges); on bodies far denser in closures than real code the pass measured 10% to 14% of `prism check`. The typed tree records each mode and the reason, and MIR builds owned captures as operands, so the move check, drop elaboration and the loan flow need no new stage. Rejected: threading an owning flag with the expected type through every checking path (no cheaper, much more invasive), and deciding in MIR lowering or in the borrow checker, whose elaborated MIR already depends on the decision.
+- **`escaping` parameters keep function values; unmarked ones are lent** (D3, D4). A function-typed parameter the callee may keep is marked in its declaration, so a caller is checked from the signature alone and a body edit never changes what callers may pass (the deterministic hermetic builds invariant). Inside the callee an `escaping` parameter holds no input in the loan flow and may be stored, returned or captured by an owning closure; an unmarked one keeps its input and is `E5007` when it escapes, with help to mark it. Passing a function value to either still moves it. Rejected: owned by default (every `forEach`, `run` and `remember` would move and allocate), inferring the flag from the body, a type qualifier valid anywhere, Swift's `@escaping` spelling and other names.
+- **`E5007` narrows to escaping values that may hold a borrow** (D6). At every escape position the escape check stays the safety net: a closure owning a reference, a borrowing closure or an unmarked function-typed parameter, or such a parameter itself, is rejected, naming what holds the borrow. Closures without captures or owning only borrow-free values pass, which settles the conservative cases of `borrowck-exclusivity` (closures written through references, stored in local structs or used as defaults) and those of boxes and generic slots. A closure that owns only an outlived capture does not escape, so its other captures stay borrowed. Rejected: escaping closures holding borrows tied by elision, which would need lifetimes on function values.
+- **Calling a function value borrows it, and environments never change** (D7). Owned captures are `val`s, so a call reads the environment in place, through a `val` or a shared reference (`b.onClick()` for `b: &Button`), and function types do not split into `Fn` and `FnMut` families. Compose state is written through `Copy` handles, never through the captured handle itself. Rejected: Rust's `FnMut` (a mutable environment, ambiguous `() -> Unit` fields, mutable borrows on every UI tree walk) and `FnOnce` (no compose case).
+- **A closure returns no borrow of what it owns** (D10): `E5008`, since its environment may be dropped while the result is live; a borrowed capture keeps `borrowck-elision`'s rule. Rejected: tying a call's result to the function value itself, a possible relaxation.
+- **Generic slots and boxes accept owning closures; type arguments stay borrow-free** (D12). `keep({ ... })`, `Heap({ ... })` and `Box({ ... })` own their captures, `E5007` still rejects a value that may hold a borrow there, and `remember<T : Copy>(calc: () -> T)` keeps an unmarked `calc` that borrows and allocates nothing.
+- **No closure refers to itself** (D13): `val f = { f() }` is `E4001` and recursion goes through named functions, so owned environments form a tree that single-owner drops free once each, with no cycle collection. Rejected: Kotlin's local `fun` and self-referencing lambdas.
+- **Liveness keeps ignoring drops** (D14). An environment's drop frees memory through structural glue and reads nothing it borrows, so a closure that owns some captures and borrows others ends its loans at its last use. User-defined destructors must revisit this.

@@ -302,7 +302,7 @@ Where a `(&mut T)?` place is lent as a `(&mut T)?`, the MIR MUST read its tag an
 - **THEN** before each call the tag of `m` is read, and `edit` receives either `null` or a wrapped mutable argument borrow of the dereference of `m`'s payload; `m` is never moved
 
 ### Requirement: Closures Are Separate Bodies
-Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from the places of those bindings, in capture order. How each binding is captured MUST NOT be decided by the MIR as lowered: the borrow checker infers it, and the elaborated MIR MUST record exactly one mode per capture local, shared or mutable (see `references`), and MIR as lowered none.
+Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from them in capture order: a move or copy of each one the typed tree records as owned, the place of each other one. MIR as lowered MUST record no capture mode; the borrow checker infers how a borrowed one is borrowed, and elaborated MIR MUST record one mode per capture local, shared, mutable or owned (see `references`).
 
 #### Scenario: Captured bindings
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int, b: Int): Int = run { b + a + b }` is lowered
@@ -311,6 +311,10 @@ Each closure MUST be lowered to its own body whose captured bindings are capture
 #### Scenario: Capture modes in elaborated MIR
 - **WHEN** `struct User { var name: String }` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(n: Int) { var u = User("a"); run { u.name = "z"; n } }` passes the borrow checker
 - **THEN** the elaborated MIR of `f` builds the closure value from a mutable borrow of `u` and a shared borrow of `n`, while the MIR as lowered records no mode
+
+#### Scenario: Mixed capture modes in elaborated MIR
+- **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(): Int { var count = 0; var h: () -> Int = { 0 }; if (count == 0) { val s = "a"; h = { count += 1; greet(s) } }; h(); return count }` passes the borrow checker
+- **THEN** the elaborated MIR of `f` builds the closure `{ count += 1; greet(s) }` from a mutable borrow of `count` and a move of `s`, and its body records the modes mutable and owned
 
 ### Requirement: Comparisons Borrow Non-Copy Operands
 `==` and `!=` over a type that is not `Copy` MUST compare shared borrows of their operands, nullable operands as optional borrows, without moving or copying them. Any other operator over a type that is not `Copy` (string concatenation) MUST likewise read shared borrows of its operands. A comparison with `null` MUST read the tag.
@@ -513,6 +517,13 @@ An instance of a generic body MUST include every closure lowered inside that bod
 - **WHEN** `fun run(g: () -> Int): Int = g()` and `fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }` are declared and `fun main() { println(count(2) { n -> n * 10 }) }` runs through `prism dump-mir --instances main.prism`
 - **THEN** it prints the body `main::count<Int>`, which builds the closure value `main::count<Int>#closure0` from its arguments `f` and `x`, and the body `main::count<Int>#closure0`, which has the capture locals `f` of type `(Int) -> Int` and `x` of type `Int`
 
+### Requirement: Owned Captures Are Operands of the Closure Value
+A closure value MUST be built from a move of each non-`Copy` capture it owns and a copy of each `Copy` capture it owns, as the typed tree records them, already in MIR as lowered, and, in elaborated MIR, a borrow of each capture it borrows, in capture order. The enclosing body MUST NOT drop a binding a closure moved, and `prism dump-mir` MUST print owned captures as operands (`[move _1, copy _2, _3]` as lowered, `[move _1, copy _2, &_3]` elaborated).
+
+#### Scenario: Owned captures in elaborated MIR
+- **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String, n: Int): () -> Int = { greet(s) + n }` passes the borrow checker
+- **THEN** the MIR of `f`, as lowered and elaborated, builds the closure value from a move of `s` and a copy of `n`, and the elaborated MIR has no drop of `s`
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -598,3 +609,7 @@ Decisions from `closures` (planned autonomously on 2026-10-17, refined while imp
 
 - **Function names and variant constructors as values are adapter closures** (D7). A function's code takes no environment and a variant constructor has no code, so neither can be a descriptor's target. Lowering turns each `FunctionReference` and `VariantConstructor` read as a value, with any `Subtype` coercion directly around it, into a closure without captures, the next closure of its parent, whose body calls the function or builds the variant with each argument converted (`WrapNullable`, `Subtype`, `Unreachable` after a `Nothing` call). `Constant::Function` and `Constant::VariantConstructor` left MIR, so the backend has one kind of function value. Adapters are borrow-checked like any closure and always pass, and call the function through its slot, so they never need recompiling. They are not shared: two uses make two tiny bodies; a per-file cache is an open option if their count shows in compile times. Rejected: an environment-taking entry point for every top-level function (doubles every file's functions, since a file cannot know which are used as values), every function taking an environment (a register at every call) and backend-generated adapters (outside the symbol scheme, invisible to MIR and the dumps).
 - **Instances carry their closures** (D11). `instantiate` instantiates every closure lowered inside the generic body, nested ones and adapters included, with the instance's type arguments, and renumbers each `Rvalue::Closure` and `BodyOwner::Closure` parent to the instance unit's bodies; `prism dump-mir --instances` prints them after their parent.
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Owned captures are operands of the closure value** (D2). Lowering builds `Rvalue::Closure` from `Capture::Owned(Operand::Move)` or `Capture::Owned(Operand::Copy)` for the captures the typed tree records as owned and `Capture::Borrowed(place)` for the others, so stage 1 of the borrow checker sees ordinary moves and copies and drop elaboration needs nothing new. In elaborated MIR `CaptureMode::Owned` keeps one mode per capture local; `Body::ownership_reason` carries the reason for diagnostics; calls and argument locals carry `escaping` flags, which the escape check and the loan flow read.

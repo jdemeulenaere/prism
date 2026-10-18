@@ -379,7 +379,7 @@ The backend MUST check each instance it compiles as it checks every other body, 
 - **THEN** `prism check app/main.prism` passes, and `prism run app/main.prism` reports exactly one `E6001`, at `{}` in `lib/run.prism`, naming composable functions, and runs nothing
 
 ### Requirement: Function Values Are a Descriptor and an Environment
-A value of a function type, composable or not, MUST be 16 bytes with the alignment of a pointer: the address of its closure's descriptor at offset 0, never null, and the address of its environment at offset 8, null when the closure captures nothing. It MUST be held, passed and returned in memory like a struct, and a nullable function value MUST be laid out with a tag byte.
+A value of a function type, composable or not, MUST be 16 bytes with the alignment of a pointer: the address of its closure's descriptor at offset 0, never null, and at offset 8 its environment word: the address of its environment, null when the closure captures nothing, or the environment itself when it is held inline. It MUST be held, passed and returned in memory like a struct, and a nullable function value MUST be laid out with a tag byte.
 
 #### Scenario: Layout of a struct holding a function value
 - **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Task { val run: () -> Unit, val id: Int }` and `fun later(f: (() -> Unit)?) {}`
@@ -389,8 +389,12 @@ A value of a function type, composable or not, MUST be 16 bytes with the alignme
 - **WHEN** `fun call(f: () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs
 - **THEN** `call` takes one machine value, the address of `f`, and returns a 64-bit integer
 
+#### Scenario: An escaping parameter is represented alike
+- **WHEN** `fun call(f: escaping () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs
+- **THEN** `call` takes one machine value, the address of `f`, and returns a 64-bit integer
+
 ### Requirement: Each Closure Has a Descriptor
-Each compiled closure body MUST have one descriptor, static data of its code unit named `<closure symbol>#descriptor`, holding the address of the function-table slot of the closure's code and the environment's drop entry, which MUST be null for a closure that captures by borrow. Every value the closure builds MUST point at that descriptor.
+Each compiled closure body MUST have one descriptor, static data of its code unit named `<closure symbol>#descriptor`, holding the address of the function-table slot of the closure's code and the environment's drop entry: the address of its `#drop-environment` function when its environment is allocated, and null when the closure only borrows or its environment is held inline. Every value the closure builds MUST point at that descriptor.
 
 #### Scenario: Building a closure names its descriptor
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `prism dump-clif main.prism` runs on a file holding `fun main() { val a = 1; println(run { a + 1 }) }`
@@ -419,7 +423,7 @@ A call of a function value MUST load the slot address from the value's descripto
 - **THEN** the program prints `2` twice
 
 ### Requirement: Environments of Borrowing Closures Hold Pointers in the Creating Frame
-The environment of a closure that captures by borrow MUST hold the address of each captured place, one pointer per capture in capture order, in stack storage of the function that builds the closure. Building or calling such a closure MUST NOT allocate.
+The environment of a closure that captures only by borrow MUST hold the address of each captured place, one pointer per capture in capture order, in stack storage of the function that builds the closure. Building or calling such a closure MUST NOT allocate. A closure that owns any capture MUST NOT keep its environment in the creating frame.
 
 #### Scenario: A writing closure allocates nothing
 - **WHEN** `fun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }` is declared and `prism dump-clif main.prism` runs on a file holding `fun main() { var count = 0; repeat(3) { count += 1 }; println(count) }`
@@ -427,7 +431,7 @@ The environment of a closure that captures by borrow MUST hold the address of ea
 
 #### Scenario: A closure built in an earlier iteration still runs
 - **WHEN** `fun main() { val a = 10; var keep: () -> Int = { 0 }; var i = 0; while (i < 3) { val g = { a + 1 }; if (i == 0) keep = g; i += 1 }; println(keep()) }` runs with `--check-allocations`
-- **THEN** it prints `11`, reports no live allocation and exits with status 0
+- **THEN** it prints `11`, reports no live allocation and exits with status 0: `a` is declared in a block enclosing `keep`'s, so the closure keeps borrowing it
 
 ### Requirement: Dropping a Function Value Runs Its Drop Entry
 Dropping a function value, alone or as a part of a struct, enum or nullable, MUST run the drop glue of its function type, `<module>#drop(<function type>)`, which MUST call the descriptor's drop entry with the environment's address when the entry is not null and do nothing otherwise.
@@ -446,6 +450,27 @@ The closures lowered inside a generic body MUST be compiled as part of each inst
 #### Scenario: A closure in an instance
 - **WHEN** `fun run(g: () -> Int): Int = g()` and `fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }` are declared and `prism dump-clif --instances main.prism` runs on a file holding `fun main() { println(count(2) { n -> n * 10 }) }`
 - **THEN** it prints the functions `main::count<Int>` and `main::count<Int>#closure0`, and `prism run main.prism` prints `21`
+
+### Requirement: Owned Environments Are One Allocation
+A closure that owns at least one capture, unless its environment is held inline, MUST allocate its environment once where it is built, with exactly the size and alignment of the environment's layout: each owned capture by value and each borrowed capture as a pointer, laid out like a struct's fields. Calling the closure MUST NOT allocate.
+
+#### Scenario: An owning closure allocates once
+- **WHEN** `fun make(s: String): () -> Int = { s.length }` is declared and `prism dump-clif main.prism` runs on a file holding it and `fun main() { val g = make("abc"); println(g() + g()) }`
+- **THEN** the body of `make` calls the runtime's allocation function once and `main::make#closure0` calls none, and `prism run --check-allocations main.prism` prints `6`, reports no live allocation and exits with status 0
+
+### Requirement: Owned Environments Are Freed by Their Drop Function
+Each closure with an environment that is allocated MUST have a function `<closure symbol>#drop-environment` in its code unit, named by its descriptor's drop entry, that drops each owned capture needing a drop, in capture order, and then frees the environment. Dropping the function value MUST run it exactly once.
+
+#### Scenario: The environment's drop function in the IR dump
+- **WHEN** `fun make(s: String, n: Int): () -> Int = { s.length + n }` is declared and `prism dump-clif main.prism` runs
+- **THEN** it prints the function `main::make#closure0#drop-environment`, which drops a `String` and calls the runtime's free function, and the data `main::make#closure0#descriptor` names it as its drop entry
+
+### Requirement: Small Owned Environments Are Held in the Function Value
+When an owned environment's layout fits in one pointer-sized word and none of its captures needs a drop, the function value MUST hold the environment's bytes in its environment word, its descriptor's drop entry MUST be null, and building it MUST NOT allocate.
+
+#### Scenario: A handler capturing one handle allocates nothing
+- **WHEN** `struct Handle : Copy { val id: Int }`, `struct Button { val onClick: () -> Int }` and `fun button(h: Handle): Button = Button({ h.id * 2 })` are declared and `prism dump-clif main.prism` runs on a file holding them and `fun main() { val b = button(Handle(21)); println(b.onClick()) }`
+- **THEN** no function of the file calls the runtime's allocation function, and `prism run --check-allocations main.prism` prints `42` and exits with status 0
 
 ## Design Rationale
 
@@ -525,12 +550,18 @@ Decisions from `monomorphization` (planned autonomously on 2026-10-17, refined w
 
 Decisions from `closures` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change on 2026-10-18, and logged in `docs/decisions-for-review.md`):
 
-- **A function value is a descriptor address and an environment address** (D2). 16 bytes, held in memory like a struct: the closure's descriptor (never null) and its environment (null without captures). One representation serves closures with and without captures, adapters for function names, and the owned environments of `escaping-closures`, so `(A) -> R` is one type and a call never asks where the value came from. Rejected: a bare code pointer (cannot carry captures), a code address and an environment (a stored value would keep running pre-reload code, and there is no place for a drop), three words (every later entry would grow every function value), a boxed closure (allocates per closure) and an inline environment (the type's size would depend on the closure). A nullable function value is a tag and the value, 24 bytes; a null descriptor as `null` is an open niche.
+- **A function value is a descriptor address and an environment address** (D2). 16 bytes, held in memory like a struct: the closure's descriptor (never null) and its environment (null without captures). One representation serves closures with and without captures, adapters for function names, and the owned environments of `escaping-closures` (D8, below), so `(A) -> R` is one type and a call never asks where the value came from. Rejected: a bare code pointer (cannot carry captures), a code address and an environment (a stored value would keep running pre-reload code, and there is no place for a drop), three words (every later entry would grow every function value), a boxed closure (allocates per closure) and an inline environment (the type's size would depend on the closure). A nullable function value is a tag and the value, 24 bytes; a null descriptor as `null` is an open niche.
 - **One descriptor per closure body, static data** (D3). `<closure symbol>#descriptor` holds a data relocation to the closure's slot, never a code address, so a repointed slot is followed by every value built before it and old descriptors stay valid across `hot-reload`, and the environment's drop entry, null for every borrowing closure. Rejected: descriptors per site (the same thing, one site per body), per function type (a descriptor names its closure's slot) and in the function table (slots hold code only).
 - **A closure's code is a function with its own slot** (D4), `<parent symbol>#closure<i>`, the name `codegen-core` reserved, with the environment after the result address and before the parameters, even when null, so every call of a function value has one shape. Rejected: the environment last (moves with every parameter list) and in a fixed register (the host C convention has none).
-- **Borrowing environments are pointers in the creating frame** (D5). One word per capture, the captured place's address, in a stack slot of the building function, rewritten each time the closure is built. It is sound because a capturing closure never outlives its frame (`E5007`) and a capture's loan keeps the captured place alive (`E5006`); rebuilding in a loop writes the same addresses, so a value from an earlier iteration still reads correct ones. Every captured local is kept in memory. Rejected: copying shared `Copy` captures (a closure may return a borrow of what it captures, which must point at the binding), an explicit MIR environment local (a type and MIR change for frame-lived storage) and a heap environment (an allocation per `run { ... }`).
+- **Borrowing environments are pointers in the creating frame** (D5). One word per capture, the captured place's address, in a stack slot of the building function, rewritten each time the closure is built. It is sound because a borrowing closure never outlives its frame (`E5007`; a closure that would owns its captures, `escaping-closures`) and a capture's loan keeps the captured place alive (`E5006`); rebuilding in a loop writes the same addresses, so a value from an earlier iteration still reads correct ones. Every captured local is kept in memory. Rejected: copying shared `Copy` captures (a closure may return a borrow of what it captures, which must point at the binding), an explicit MIR environment local (a type and MIR change for frame-lived storage) and a heap environment (an allocation per `run { ... }`).
 - **Calls go through the descriptor's slot** (D6): three dependent loads, one more than a named call, the price of reaching reloaded code from a stored value in Tier 1; Tier 2 can call known closures directly. The function value is read in place, also through references and boxes (found in review).
-- **Dropping a function value runs its descriptor's drop entry** (D9) through `<unit>#drop(<function type>)`, dynamic because one parameter can hold either kind of closure once `escaping-closures` lands. Function types stay neither `Copy` nor `Clone` (a copy would duplicate mutable borrows; an owned environment's clone is not promised by the type).
+- **Dropping a function value runs its descriptor's drop entry** (D9) through `<unit>#drop(<function type>)`, dynamic because one parameter can hold either kind of closure, borrowing or owning (`escaping-closures`). Function types stay neither `Copy` nor `Clone` (a copy would duplicate mutable borrows; an owned environment's clone is not promised by the type).
 - **Composable closures wait for `compose-transform`** (D10), `E6001` at the closure, which will give composable code a composer and group keys; compiling them as plain functions now would have to be undone.
 - **Closures of generic bodies are instantiated with their parent** (D11), placed in the instance's unit after its body as `<instance symbol>#closure<i>`; `GenericRecord` keeps the file's ids of its function, defaults and closures so `instantiate` renumbers them.
 - **Measured cost** (2026-10-18, `compile_timing.rs` shapes `nested-closures`, `many-closures`, `many-captures`, `many-adapters` and `generic-closures`). Closure conversion adds no analysis and every stage grows linearly: one Cranelift function per closure and adapter. Capture-mode inference scanned a closure once per capture (x10 per x4 at 4096 captures) and now finds every capture's first mutable use in one pass (`first_mutable_uses`). 4096 closures in one body still grow x6 per x4 in `borrow`, the loan flow over many live loans, as `live-borrows` does.
+
+Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised for compile speed on 2026-10-19, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **An owned environment is one exact-sized allocation, dropped through the descriptor** (D8). It holds owned captures by value and borrowed ones as pointers, laid out like a struct's fields, is allocated when the closure is built and freed by `<closure symbol>#drop-environment`, which drops the owned captures in capture order. The drop entry is a direct address, so a value built before a reload keeps the drop function of its layout. An owning closure never keeps its environment in the creating frame, since a closure rebuilt in a loop would overwrite captures an earlier value still owns. Rejected: a reference-counted environment (hidden ARC), an arena per frame (an escaping closure outlives its frame) and environments owned by the slot table (only composable code has one).
+- **A one-word environment without drops is held in the environment word** (D9). An owned layout of at most 8 bytes and alignment 8 whose captures need no drop is written into a zeroed word, the drop entry is null and building allocates nothing; the closure spills the word on entry. Equal captures give equal words, which compose's handler comparison needs, and the common handler capturing one `Copy` state handle allocates nothing. Rejected: always allocating (an allocation and a free per handler per recomposition), two-word inline environments (every function value would grow) and inline environments for borrowing closures.
+- **Closures of generic bodies decide once** (D16). Capture modes do not depend on type arguments (a capture of a `T` moves unless `T : Copy`), so the generic record carries them, and each instance gets its own environment layout, descriptor and drop function in its unit: `T = Int` may be inline where `T = String` allocates.
