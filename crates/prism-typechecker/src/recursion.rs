@@ -15,7 +15,9 @@ use crate::error::TypeError;
 use prism_ast::decl::Declaration;
 use prism_ast::module::SourceFile;
 use prism_ast::Span;
-use prism_typed_tree::instantiation::{edges_of, generic_name, growing_cycles, InstantiationEdge};
+use prism_typed_tree::instantiation::{
+    cycle_generics, edges_of, generic_name, growing_cycles, InstantiationEdge,
+};
 use prism_typed_tree::{
     Callee, ExpressionKind, FunctionItem, Item, NominalId, Type, TypeDef, TypeParameter, TypedFile,
 };
@@ -106,13 +108,13 @@ fn function_cycles(file: &TypedFile) -> Vec<TypeError> {
         .into_iter()
         .map(|cycle| {
             let growing = &cycle[0];
-            let names: Vec<String> = cycle
+            let names: Vec<String> = cycle_generics(&cycle)
                 .iter()
-                .map(|edge| display_name(generics[&edge.from.generic]))
+                .map(|generic| display_name(generics[generic]))
                 .collect();
             let callee = generics[&growing.to.generic];
             let parameter = parameter_name(&callee.type_parameters, growing.to.parameter);
-            let message = if cycle.len() == 1 {
+            let message = if names.len() == 1 {
                 format!(
                     "'{}' instantiates itself with '{}' for '{}'",
                     names[0], growing.argument, parameter
@@ -228,19 +230,19 @@ fn type_cycles(source_file: &SourceFile, file: &TypedFile, errors: &[TypeError])
                 cycle.iter().find(|edge| sites[edge.site].own)?
             };
             let growing = &cycle[0];
-            let type_names: Vec<String> = cycle
-                .iter()
-                .map(|edge| {
+            let type_names: Vec<String> = cycle_generics(&cycle)
+                .into_iter()
+                .map(|generic| {
                     names
-                        .get(&edge.from.generic)
-                        .map_or_else(|| edge.from.generic.clone(), |(name, _)| name.clone())
+                        .get(&generic)
+                        .map_or_else(|| generic.clone(), |(name, _)| name.clone())
                 })
                 .collect();
             let application = sites[growing.site]
                 .application
                 .as_ref()
                 .map_or_else(String::new, Type::to_string);
-            let message = if cycle.len() == 1 {
+            let message = if type_names.len() == 1 {
                 format!("'{}' contains '{}'", type_names[0], application)
             } else {
                 format!(

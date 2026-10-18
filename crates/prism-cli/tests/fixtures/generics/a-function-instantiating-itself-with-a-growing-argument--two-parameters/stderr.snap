@@ -1,0 +1,6 @@
+error[E4027]: polymorphic recursion: 'grow' instantiates itself with 'Pair<A, Int>' for 'B'
+  --> main.prism:4:63
+    4 | fun <A, B> grow(a: A, b: B, n: Int): Int = if (n == 0) 0 else grow(b, Pair(a, 1), n - 1)
+      |                                                               ^
+   = note: the cycle 'grow' -> 'grow' would need infinitely many instances
+   = help: pass the same type arguments on every recursive call, or wrap the value in a non-generic type

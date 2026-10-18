@@ -1,0 +1,5 @@
+// expect: E4027
+// run: 1
+struct Pair<A, B>(val a: A, val b: B)
+fun <A, B> grow(a: A, b: B, n: Int): Int = if (n == 0) 0 else grow(b, Pair(a, 1), n - 1)
+fun main() { println(grow(1, "x", 3)) }

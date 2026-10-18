@@ -181,6 +181,23 @@ pub fn growing_cycles(edges: &[InstantiationEdge]) -> Vec<Vec<InstantiationEdge>
     cycles
 }
 
+/// The generics a cycle passes through, in order from its first edge's source, each named once
+/// per visit: a step between two type parameters of the same generic (`f<A, B>` calling
+/// `f<B, Box<A>>`) stays in that generic, so consecutive repeats, the wrap-around included, are
+/// one visit. A cycle within one generic gives that generic alone.
+pub fn cycle_generics(cycle: &[InstantiationEdge]) -> Vec<String> {
+    let mut generics: Vec<String> = Vec::new();
+    for edge in cycle {
+        if generics.last() != Some(&edge.from.generic) {
+            generics.push(edge.from.generic.clone());
+        }
+    }
+    while generics.len() > 1 && generics.last() == generics.first() {
+        generics.pop();
+    }
+    generics
+}
+
 /// The component of each node, by Tarjan's algorithm without recursion.
 fn strongly_connected_components(
     count: usize,
@@ -317,6 +334,20 @@ mod tests {
         let cycle = growing_cycle(&edges).expect("a cycle");
         assert_eq!(cycle.len(), 2);
         assert!(cycle[0].grows);
+        assert_eq!(cycle_generics(&cycle), ["f"]);
+    }
+
+    #[test]
+    fn a_cycle_names_each_generic_once_per_visit() {
+        // `ping<A, B>` calls `pong<Box<B>>` and `ping<A, A>`, and `pong<C>` calls
+        // `ping<C, Int>`: the cycle steps from `ping`'s `B` to `pong`'s `C`, to `ping`'s `A`
+        // and back to `ping`'s `B`, so it visits `ping`, `pong` and `ping` again.
+        let mut edges = edges_of("ping", "pong", &[boxed(parameter(1))], 0);
+        edges.extend(edges_of("pong", "ping", &[parameter(0), Type::Int], 0));
+        edges.extend(edges_of("ping", "ping", &[parameter(0), parameter(0)], 0));
+        let cycle = growing_cycle(&edges).expect("a cycle");
+        assert_eq!(generics(&cycle), ["ping", "pong", "ping"]);
+        assert_eq!(cycle_generics(&cycle), ["ping", "pong"]);
     }
 
     #[test]

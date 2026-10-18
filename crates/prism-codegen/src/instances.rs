@@ -15,7 +15,7 @@ use crate::supported::{check_file, is_compiled};
 use crate::symbols::callee_symbol;
 use prism_ast::Span;
 use prism_mir::{instantiate, Body, Callee, GenericRecord, MirFile, MirPhase, TerminatorKind};
-use prism_typed_tree::instantiation::{edges_of, generic_name, growing_cycles};
+use prism_typed_tree::instantiation::{cycle_generics, edges_of, generic_name, growing_cycles};
 use prism_typed_tree::{Arena, Type, TypeTable};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -209,7 +209,7 @@ fn check_cross_file_recursion(
         .into_iter()
         .map(|cycle| {
             let growing = &cycle[0];
-            let names: Vec<String> = cycle.iter().map(|edge| edge.from.generic.clone()).collect();
+            let names = cycle_generics(&cycle);
             let parameter = records[&growing.to.generic]
                 .function
                 .type_parameters
