@@ -1,0 +1,11 @@
+[package]
+name = "prism-compose"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The composition runtime depends on the base runtime only, and knows nothing about UI (D2 of
+# `compose-runtime`, §5 D1 of the compose plan).
+[dependencies]
+prism-runtime = { path = "../prism-runtime" }

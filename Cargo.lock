@@ -520,6 +520,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-compose"
+version = "0.1.0"
+dependencies = [
+ "prism-runtime",
+]
+
+[[package]]
 name = "prism-formatter"
 version = "0.1.0"
 dependencies = [
