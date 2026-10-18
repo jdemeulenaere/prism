@@ -1607,3 +1607,25 @@ fn random_tree_edits_match_the_model() {
         );
     }
 }
+
+/// compose: "Handles Are Validated": the state is per thread, so a composition's handle used on
+/// another thread names nothing there, and that thread's misuse leaves the first one intact.
+#[test]
+fn a_handle_from_another_thread_is_stale() {
+    let c = Composition::start(tree(), content(|_| {})).unwrap();
+    let scope = Composition::root_scope(c).unwrap();
+    std::thread::spawn(move || {
+        assert_eq!(Composition::recompose(c), Err(STALE_COMPOSITION));
+        assert_eq!(Composition::dispose(c), Err(STALE_COMPOSITION));
+        assert_eq!(Composition::dump(c), Err(STALE_COMPOSITION));
+        invalidate(scope);
+        assert_eq!(crate::live_compositions_report(), None);
+    })
+    .join()
+    .unwrap();
+    assert!(
+        !Composition::recompose(c).unwrap(),
+        "the other thread invalidated nothing here"
+    );
+    Composition::dispose(c).unwrap();
+}

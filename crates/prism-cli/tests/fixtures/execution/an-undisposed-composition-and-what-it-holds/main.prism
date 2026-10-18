@@ -1,0 +1,13 @@
+// expect: ok
+// run: 102
+import /prism/composer
+
+fun Greeting(k: Int, name: String) {
+    startRestartGroup(k, 3)
+    println("hello " + name)
+    endRestartGroup(k) { c -> Greeting(c, name.clone()) }
+}
+
+fun main() {
+    val c = startComposition { k -> Greeting(k, "a" + "b") }
+}

@@ -1,0 +1,19 @@
+// expect: ok
+// run: 101
+import /prism/composer
+
+fun Label(k: Int) {
+    startRestartGroup(k, 1)
+    if (changedInt(k, 0, 1)) {
+        invalidate(currentScope(k))
+    }
+    endRestartGroup(k) { c ->
+        val n = rememberInt(c, 0) { 1 }
+        Label(c)
+    }
+}
+
+fun main() {
+    val c = startComposition { k -> Label(k) }
+    recomposeComposition(c)
+}

@@ -1,0 +1,2 @@
+allocation check: compositions still live at exit: 1
+allocation check: allocations still live at exit: 2 (34 bytes)
