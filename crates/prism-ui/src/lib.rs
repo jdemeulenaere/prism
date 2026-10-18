@@ -25,6 +25,7 @@
 //!   composition.
 
 pub mod applier;
+pub mod draw;
 pub mod dump;
 pub mod error;
 pub mod geometry;

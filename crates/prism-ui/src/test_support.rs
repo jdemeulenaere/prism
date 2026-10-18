@@ -393,3 +393,56 @@ impl Drop for TreeBuilder {
         release_functions(&mut self.drops);
     }
 }
+
+/// The nodes of [`counter_screen`].
+#[derive(Debug, Clone, Copy)]
+pub struct CounterScreen {
+    pub column: NodeId,
+    pub count: NodeId,
+    pub button: NodeId,
+    pub row: NodeId,
+    pub label: NodeId,
+    pub handler: HandlerId,
+}
+
+/// The counter screen of the `ui` scenarios, as its composables build it (D24):
+/// `Column(Modifier.padding(16.dp), Arrangement.spacedBy(8.dp)) { Text(count); Button(onClick)
+/// { Text("+") } }`, the button a box with the primary background in `CircleShape`, a
+/// clickable with the role `Button` and a white content colour, holding a centred row.
+pub fn counter_screen(
+    builder: &mut TreeBuilder,
+    count: &str,
+    on_click: FunctionValue,
+) -> CounterScreen {
+    let root = builder.root();
+    let column = builder.add(root, NodeKind::Column);
+    builder
+        .chain(column, &[padding(16)])
+        .arrangement(column, Arrangement::SpacedBy(8));
+    let count = builder.text(column, count);
+    let button = builder.add(column, NodeKind::Box);
+    let handler = builder.register(HandlerKind::Click, on_click);
+    builder
+        .chain(
+            button,
+            &[
+                background(0xFF67_50A4, Shape::new(0, 50)),
+                clickable(handler, true, Some(Role::Button)),
+            ],
+        )
+        .content_color(button, 0xFFFF_FFFF);
+    let row = builder.add(button, NodeKind::Row);
+    builder
+        .chain(row, &[default_min_size(58, 40), padding_each(24, 8, 24, 8)])
+        .arrangement(row, Arrangement::Center)
+        .alignment(row, Alignment::CENTER_VERTICALLY);
+    let label = builder.text(row, "+");
+    CounterScreen {
+        column,
+        count,
+        button,
+        row,
+        label,
+        handler,
+    }
+}

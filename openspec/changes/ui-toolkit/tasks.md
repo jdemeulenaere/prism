@@ -71,15 +71,15 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 6. Display list and dumps (D9, D13, D16)
 
-- [ ] 6.1 Add `src/draw.rs` with `DrawCommand` and `DisplayList`, reused between builds. Implement `build_display_list(tree)` in one walk, parents first:
+- [x] 6.1 Add `src/draw.rs` with `DrawCommand` and `DisplayList`, reused between builds. Implement `build_display_list(tree)` in one walk, parents first:
   - the clear;
   - each node's drawing elements in chain order at their recorded bounds, the text field frame by the node's focus, and corner radii resolved from shapes against those bounds;
   - each kind's own commands (text lines, a text field's value and caret);
   - content colours resolved through the walk.
 
   Verify with unit tests for each element, element order, a focused text field's frame and caret, and an unspecified text colour inside and outside a node with a content colour.
-- [ ] 6.2 In `src/dump.rs`, add `dump_display_list` in the format of "Dumping the Display List". Verify with unit tests over built display lists, including rounded corners.
-- [ ] 6.3 In `src/dump.rs`, add `dump_tree` in the format of "Dumping the Laid-Out Tree" and design D16: absolute bounds, properties in their fixed order, the chain's elements in order with their arguments (`padding(<all>)` or four values, `size(<w>x<h>)`, `defaultMinSize` with `-`, fractions, shapes, roles, `disabled`), colours as `#AARRGGBB`, `arrangement spacedBy(8)` and Compose's names for the others, quoted text with `\"`, `\\` and `\n` escapes. Verify both dumps with unit tests over built trees.
+- [x] 6.2 In `src/dump.rs`, add `dump_display_list` in the format of "Dumping the Display List". Verify with unit tests over built display lists, including rounded corners.
+- [x] 6.3 In `src/dump.rs`, add `dump_tree` in the format of "Dumping the Laid-Out Tree" and design D16: absolute bounds, properties in their fixed order, the chain's elements in order with their arguments (`padding(<all>)` or four values, `size(<w>x<h>)`, `defaultMinSize` with `-`, fractions, shapes, roles, `disabled`), colours as `#AARRGGBB`, `arrangement spacedBy(8)` and Compose's names for the others, quoted text with `\"`, `\\` and `\n` escapes. Verify both dumps with unit tests over built trees.
 
 ## 7. Input dispatch (D14)
 
