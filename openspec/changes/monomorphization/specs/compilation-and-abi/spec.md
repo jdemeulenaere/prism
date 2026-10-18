@@ -13,7 +13,7 @@ For each generic function and extension of a file that passes Phase 2, private o
 Phase 3 MUST build each instance from its generic's record and the definitions of the structs and enums its type arguments mention, never from another body of the generic's file or of the calling file, so that an instance is the same whichever file requests it first, and a file's own code never depends on a generic body.
 
 #### Scenario: An instance of a generic from a module the caller does not import
-- **WHEN** `lib/util.prism` declares `public struct Pair<A, B>(val a: A, val b: B)` and `public fun <T> twin(x: T): Pair<T, T> = Pair(x, x)`, `lib/box.prism` imports `/lib/util` and declares `public fun <T : Copy> first(x: T): T = twin(x).a`, and `app/main.prism` imports only `/lib/box` and declares `fun main() { println(first(7)) }`
+- **WHEN** `lib/util.prism` declares `public struct Pair<A, B>(val a: A, val b: B)` and `public fun <T : Copy> twin(x: T): Pair<T, T> = Pair(x, x)`, `lib/box.prism` imports `/lib/util` and declares `public fun <T : Copy> first(x: T): T = twin(x).a`, and `app/main.prism` imports only `/lib/box` and declares `fun main() { println(first(7)) }`
 - **THEN** `prism run --check-allocations app/main.prism` prints `7`, compiling the instances `lib/box::first<Int>` and `lib/util::twin<Int>`
 
 ## MODIFIED Requirements

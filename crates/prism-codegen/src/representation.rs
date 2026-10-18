@@ -195,7 +195,7 @@ mod tests {
         let mut bodies = HashMap::new();
         for file in files {
             for (_, body) in file.bodies.iter() {
-                let symbol = symbol_of(&body.owner, file);
+                let symbol = symbol_of(body, file);
                 bodies.insert(symbol, body_signature(body, CALL_CONV, pointer));
             }
         }
@@ -206,13 +206,14 @@ mod tests {
                     let TerminatorKind::Call {
                         callee,
                         parameters,
+                        type_arguments,
                         destination,
                         ..
                     } = &block.terminator.kind
                     else {
                         continue;
                     };
-                    let Some(symbol) = callee_symbol(callee) else {
+                    let Some(symbol) = callee_symbol(callee, type_arguments) else {
                         continue;
                     };
                     let result = destination.ty(body, &file.types);
@@ -274,7 +275,7 @@ mod tests {
         let pointer = types::I64;
         let mut bodies = HashMap::new();
         for (_, body) in files[0].bodies.iter() {
-            let symbol = symbol_of(&body.owner, &files[0]);
+            let symbol = symbol_of(body, &files[0]);
             bodies.insert(symbol, body_signature(body, CALL_CONV, pointer));
         }
         let mut calls = 0;
@@ -284,13 +285,14 @@ mod tests {
                     let TerminatorKind::Call {
                         callee,
                         parameters,
+                        type_arguments,
                         destination,
                         ..
                     } = &block.terminator.kind
                     else {
                         continue;
                     };
-                    let Some(symbol) = callee_symbol(callee) else {
+                    let Some(symbol) = callee_symbol(callee, type_arguments) else {
                         continue;
                     };
                     let result = destination.ty(body, &file.types);

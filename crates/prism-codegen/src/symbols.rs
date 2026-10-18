@@ -7,13 +7,18 @@
 //! | extension `name` on receiver `R` of module `m` | `m::R.name`, `R` as the ABI writes it |
 //! | generator of the default of parameter `p` | `<function symbol>#default(p)` |
 //! | initializer and accessor of top-level `val` `name` | `m::name#init`, `m::name#get` |
+//! | instance of a generic function or extension for type arguments `A, B` | `<symbol><A, B>` |
+//! | instance of a default generator | `<instance symbol>#default(p)` |
 //! | slot of any of these in the function table | `<symbol>#slot` |
 //! | storage of top-level `val` `name` | `m::name#storage`, `m::name#state` |
 //!
-//! A closure, which is never compiled yet, is named `<parent symbol>#closure<index>`.
+//! A closure, which is never compiled yet, is named `<parent symbol>#closure<index>`. An
+//! instance's type arguments are written as glue names types: every struct and enum qualified by
+//! its module (`lib/box::keep<lib/user::User>`, D4 of `monomorphization`).
 
-use prism_mir::{BodyOwner, Callee, MirFile};
-use prism_typed_tree::DeclarationPath;
+use crate::glue::qualified_name;
+use prism_mir::{Body, BodyOwner, Callee, MirFile};
+use prism_typed_tree::{DeclarationPath, Type};
 
 /// The symbol of the function or extension `path`.
 pub fn function_symbol(path: &DeclarationPath) -> String {
@@ -28,9 +33,34 @@ pub fn function_symbol(path: &DeclarationPath) -> String {
     }
 }
 
+/// The symbol of the instance of the generic function or extension `path` for
+/// `type_arguments`, or the function's own symbol when there are none.
+pub fn instance_symbol(path: &DeclarationPath, type_arguments: &[Type]) -> String {
+    let symbol = function_symbol(path);
+    if type_arguments.is_empty() {
+        return symbol;
+    }
+    let arguments: Vec<String> = type_arguments.iter().map(qualified_name).collect();
+    format!("{}<{}>", symbol, arguments.join(", "))
+}
+
 /// The symbol of the generator of the default value of the parameter `parameter` of `function`.
 pub fn default_symbol(function: &DeclarationPath, parameter: &str) -> String {
-    format!("{}#default({})", function_symbol(function), parameter)
+    default_instance_symbol(function, &[], parameter)
+}
+
+/// The symbol of the instance for `type_arguments` of the generator of the default value of the
+/// parameter `parameter` of `function`.
+pub fn default_instance_symbol(
+    function: &DeclarationPath,
+    type_arguments: &[Type],
+    parameter: &str,
+) -> String {
+    format!(
+        "{}#default({})",
+        instance_symbol(function, type_arguments),
+        parameter
+    )
 }
 
 /// The symbol of the initializer of the top-level `val` `path`, its MIR body.
@@ -64,25 +94,33 @@ pub fn slot_owner(name: &str) -> Option<&str> {
     name.strip_suffix("#slot")
 }
 
-/// The symbol of the body owned by `owner` in `file`.
-pub fn symbol_of(owner: &BodyOwner, file: &MirFile) -> String {
-    match owner {
-        BodyOwner::Function(path) => function_symbol(path),
+/// The symbol of `body` of `file`, an instance's with its type arguments.
+pub fn symbol_of(body: &Body, file: &MirFile) -> String {
+    match &body.owner {
+        BodyOwner::Function(path) => instance_symbol(path, &body.type_arguments),
         BodyOwner::Value(path) => initializer_symbol(path),
-        BodyOwner::Default { function, name, .. } => default_symbol(function, name),
+        BodyOwner::Default { function, name, .. } => {
+            default_instance_symbol(function, &body.type_arguments, name)
+        }
         BodyOwner::Closure { parent, index } => {
-            let parent = &file.bodies[*parent].owner;
-            format!("{}#closure{}", symbol_of(parent, file), index)
+            format!(
+                "{}#closure{}",
+                symbol_of(&file.bodies[*parent], file),
+                index
+            )
         }
     }
 }
 
-/// The symbol a call of `callee` calls through its slot: `None` for a built-in, which is not a
-/// generated function, and for a function value.
-pub fn callee_symbol(callee: &Callee) -> Option<String> {
+/// The symbol a call of `callee` with `type_arguments` calls through its slot, an instance's for
+/// a generic callee: `None` for a built-in, which is not a generated function, and for a
+/// function value.
+pub fn callee_symbol(callee: &Callee, type_arguments: &[Type]) -> Option<String> {
     match callee {
-        Callee::Function(path) => Some(function_symbol(path)),
-        Callee::Default { function, name, .. } => Some(default_symbol(function, name)),
+        Callee::Function(path) => Some(instance_symbol(path, type_arguments)),
+        Callee::Default { function, name, .. } => {
+            Some(default_instance_symbol(function, type_arguments, name))
+        }
         Callee::Builtin(_) | Callee::Value(..) => None,
     }
 }
@@ -96,7 +134,7 @@ mod tests {
     fn symbols(file: &MirFile) -> Vec<String> {
         file.bodies
             .iter()
-            .map(|(_, body)| symbol_of(&body.owner, file))
+            .map(|(_, body)| symbol_of(body, file))
             .collect()
     }
 
@@ -147,10 +185,47 @@ mod tests {
             .iter()
             .flat_map(|(_, body)| body.blocks.iter())
             .find_map(|(_, block)| match &block.terminator.kind {
-                TerminatorKind::Call { callee, .. } => callee_symbol(callee),
+                TerminatorKind::Call {
+                    callee,
+                    type_arguments,
+                    ..
+                } => callee_symbol(callee, type_arguments),
                 _ => None,
             });
         assert_eq!(call.as_deref(), Some("app/main::lib/team.Team.grow"));
+    }
+
+    #[test]
+    fn symbols_of_instances() {
+        // The names of the scenario "Symbols of instances" of the `code-generation` spec.
+        let user = Type::plain_struct(prism_typed_tree::NominalId::new("lib/user", "User"));
+        let keep = DeclarationPath::new("lib/box", "keep");
+        assert_eq!(
+            instance_symbol(&keep, std::slice::from_ref(&user)),
+            "lib/box::keep<lib/user::User>"
+        );
+        let boxed = Type::Struct {
+            id: prism_typed_tree::NominalId::new("lib/box", "Box"),
+            arguments: vec![Type::Int],
+        };
+        let get = DeclarationPath::extension("lib/box", boxed, "get");
+        assert_eq!(
+            instance_symbol(&get, &[Type::Int]),
+            "lib/box::lib/box.Box.get<Int>"
+        );
+        let pad = DeclarationPath::new("lib/box", "pad");
+        assert_eq!(
+            default_instance_symbol(&pad, &[Type::Int], "y"),
+            "lib/box::pad<Int>#default(y)"
+        );
+        assert_eq!(
+            instance_symbol(
+                &DeclarationPath::new("main", "pair"),
+                &[Type::Int.nullable(), Type::Heap(Box::new(user))]
+            ),
+            "main::pair<Int?, Heap<lib/user::User>>"
+        );
+        assert_eq!(instance_symbol(&keep, &[]), "lib/box::keep");
     }
 
     #[test]

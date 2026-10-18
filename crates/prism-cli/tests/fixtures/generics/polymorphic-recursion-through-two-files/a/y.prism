@@ -1,0 +1,3 @@
+package a
+import /a/x
+public fun <T> pong(x: T, n: Int): Int = ping(x, n)

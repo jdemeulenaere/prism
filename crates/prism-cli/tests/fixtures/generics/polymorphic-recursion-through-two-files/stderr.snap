@@ -1,0 +1,6 @@
+error[E6004]: polymorphic recursion across files: 'a/x::ping' instantiates itself through 'a/y::pong' with 'Box<T>' for 'T'
+  --> a/x.prism:4:61
+    4 | public fun <T> ping(x: T, n: Int): Int = if (n == 0) 0 else pong(Box(x), n - 1)
+      |                                                             ^
+   = note: the cycle 'a/x::ping' -> 'a/y::pong' -> 'a/x::ping' would need infinitely many instances
+   = help: pass the same type arguments on every recursive call, or wrap the value in a non-generic type

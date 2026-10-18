@@ -1,0 +1,4 @@
+package lib
+public struct Box<T>(val v: T)
+public fun <T> boxed(x: T): Box<T> = Box(x)
+public fun <T> Box<T>.get(): &T = &v

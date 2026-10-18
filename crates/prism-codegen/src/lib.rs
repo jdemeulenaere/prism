@@ -7,6 +7,7 @@ pub mod entry;
 mod equality;
 pub mod error;
 pub mod glue;
+pub mod instances;
 pub mod isa;
 pub mod layout;
 pub mod link;
@@ -22,9 +23,10 @@ mod lowering_tests;
 #[cfg(test)]
 mod test_support;
 
-pub use dump::{dump_file, DumpError};
+pub use dump::{dump_file, dump_instances, DumpError, InstanceDumpError};
 pub use entry::find_main;
 pub use error::{BackendError, CodegenError, CodegenErrorKind};
+pub use instances::{check_instances, collect_instances, InstanceError, InstanceUnit};
 pub use layout::{dump_layouts, Layout, LayoutTable};
 pub use link::{FunctionTable, Linker};
 pub use program::Program;

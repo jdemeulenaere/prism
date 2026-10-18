@@ -206,7 +206,9 @@ impl<'t> LayoutTable<'t> {
                 shape: Shape::String,
             },
             Type::Fn { .. } => return Err(Construct::FunctionValues),
-            Type::Parameter(_) => return Err(Construct::GenericCalls),
+            Type::Parameter(parameter) => {
+                return Err(Construct::TypeParameter(parameter.name.clone()))
+            }
             Type::Opaque(name) => return Err(Construct::UnknownType(name.clone())),
             Type::Error => return Err(Construct::UnknownType("<error>".to_string())),
         })
@@ -700,7 +702,7 @@ mod tests {
         };
         assert!(matches!(
             layouts.layout(&generic),
-            Err(Construct::GenericCalls)
+            Err(Construct::TypeParameter(_))
         ));
     }
 

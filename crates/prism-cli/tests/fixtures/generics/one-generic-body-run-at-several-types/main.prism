@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Point : Copy { val x: Int }
+fun <T> pick(a: T, b: T, first: Bool): T = if (first) a else b
+fun main() {
+    println(pick(1, 2, false))
+    println(pick("a", "b", true))
+    println(pick(Point(3), Point(4), true).x)
+}

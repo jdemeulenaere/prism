@@ -849,7 +849,7 @@ fn fixture_symbols_are_distinct() {
         files += 1;
         let mut seen = BTreeSet::new();
         for (_, body) in dump.mir.bodies.iter() {
-            let symbol = prism_codegen::symbols::symbol_of(&body.owner, &dump.mir);
+            let symbol = prism_codegen::symbols::symbol_of(body, &dump.mir);
             assert!(
                 seen.insert(symbol.clone()),
                 "{}: two bodies named {}",

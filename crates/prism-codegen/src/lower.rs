@@ -1245,11 +1245,19 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         callee: &Callee,
         arguments: &[Operand],
         parameters: &[Type],
+        type_arguments: &[Type],
         destination: &Place,
         target: Option<prism_mir::BlockId>,
         span: Span,
     ) -> Result<(), BackendError> {
         let result_type = destination.ty(self.body, self.types());
+        // A generic callee's declared parameter types, as its instance for the call's type
+        // arguments has them.
+        let parameters: Vec<Type> = parameters
+            .iter()
+            .map(|ty| ty.substitute(type_arguments))
+            .collect();
+        let parameters = &parameters[..];
         match callee {
             Callee::Function(_) | Callee::Default { .. } => {
                 let mut values = Vec::new();
@@ -1278,7 +1286,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         Lowered::Scalar(value) | Lowered::Memory(value) => values.push(value),
                     }
                 }
-                let symbol = callee_symbol(callee).expect("a generated function has a symbol");
+                let symbol = callee_symbol(callee, type_arguments)
+                    .expect("a generated function has a symbol");
                 let target = self.slot_target(&symbol)?;
                 let signature = signature(
                     parameters,
@@ -1513,10 +1522,19 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 callee,
                 arguments,
                 parameters,
+                type_arguments,
                 destination,
                 target,
                 ..
-            } => self.call(callee, arguments, parameters, destination, *target, span)?,
+            } => self.call(
+                callee,
+                arguments,
+                parameters,
+                type_arguments,
+                destination,
+                *target,
+                span,
+            )?,
             TerminatorKind::Return => {
                 // A result in memory is already in the caller's memory.
                 match self.representation(self.body.return_type()) {

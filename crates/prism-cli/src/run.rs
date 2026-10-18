@@ -4,15 +4,19 @@
 //! `prism run` checks the entry file and everything it transitively imports as `prism check`
 //! does, in topological order and stopping at the first file with errors, without the build
 //! cache: a cached verdict carries no MIR. It then finds the entry file's `main`, runs the
-//! backend's support check over every file, lowers each file into its own code unit and links
-//! the units in memory before calling `main`.
+//! backend's support check over every file, collects and checks the instances of generics the
+//! program needs, lowers each file and each instance into its own code unit and links the units
+//! in memory before calling `main`.
 
 #![allow(clippy::result_large_err)]
 
 use crate::workspace::{
     assert_workspace_boundary, elaborate_file, extract_abis, validate_entry_file, WorkspaceError,
 };
-use prism_codegen::{check_file, dump_file, dump_layouts, find_main, DumpError, Linker, Program};
+use prism_codegen::{
+    check_file, check_instances, collect_instances, dump_file, dump_instances, dump_layouts,
+    find_main, DumpError, InstanceDumpError, InstanceError, InstanceUnit, Linker, Program,
+};
 use prism_mir::MirFile;
 use prism_resolver::DependencyGraph;
 use prism_typed_tree::{DeclarationPath, Item, NominalId};
@@ -65,10 +69,9 @@ pub struct CompiledProgram {
     pub timings: Timings,
 }
 
-/// Compiles the program whose entry file is `entry`: every file it transitively imports,
-/// checked and lowered in topological order.
-pub fn compile_program(entry: &Path) -> Result<CompiledProgram, WorkspaceError> {
-    let start = Instant::now();
+/// The elaborated MIR of every file of the program whose entry file is `entry`, checked and
+/// lowered in topological order, with the entry's path as the graph knows it.
+fn elaborate_program(entry: &Path) -> Result<(PathBuf, Vec<(PathBuf, MirFile)>), WorkspaceError> {
     validate_entry_file(entry)?;
     let graph = DependencyGraph::from_entry(entry)?;
     assert_workspace_boundary(&graph)?;
@@ -81,14 +84,70 @@ pub fn compile_program(entry: &Path) -> Result<CompiledProgram, WorkspaceError> 
             files.push((path.clone(), mir));
         }
     }
-    let front_end = start.elapsed();
+    Ok((entry_path, files))
+}
 
-    let start = Instant::now();
-    let codegen_error = |path: &Path, errors| WorkspaceError::Codegen {
+/// The `E6xxx` errors `errors` of `path`.
+fn codegen_error(path: &Path, errors: Vec<prism_codegen::CodegenError>) -> WorkspaceError {
+    WorkspaceError::Codegen {
         path: path.to_path_buf(),
         source: fs::read_to_string(path).unwrap_or_default(),
         errors,
-    };
+    }
+}
+
+/// The errors of a program's instances, each in the file of its generic's module, grouped by
+/// file in the order the program's files are compiled.
+fn instance_errors(files: &[(PathBuf, MirFile)], errors: Vec<InstanceError>) -> WorkspaceError {
+    let mut grouped: Vec<WorkspaceError> = Vec::new();
+    for (path, mir) in files {
+        let in_file: Vec<prism_codegen::CodegenError> = errors
+            .iter()
+            .filter(|error| error.module == mir.module)
+            .map(|error| error.error.clone())
+            .collect();
+        if !in_file.is_empty() {
+            grouped.push(codegen_error(path, in_file));
+        }
+    }
+    if grouped.len() == 1 {
+        grouped.remove(0)
+    } else {
+        WorkspaceError::Several(grouped)
+    }
+}
+
+/// The instance units the program of `files` needs (D5 of `monomorphization`), with `check`
+/// the backend's support check of each one, or their errors.
+fn program_instances(
+    files: &[(PathBuf, MirFile)],
+    check: bool,
+) -> Result<Vec<InstanceUnit>, WorkspaceError> {
+    let mirs: Vec<MirFile> = files.iter().map(|(_, mir)| mir.clone()).collect();
+    let instances = collect_instances(&mirs).map_err(|errors| instance_errors(files, errors))?;
+    if check {
+        check_instances(&instances).map_err(|errors| instance_errors(files, errors))?;
+    }
+    Ok(instances)
+}
+
+/// Runs the backend's support check on every file of the program.
+fn check_files(files: &[(PathBuf, MirFile)]) -> Result<(), WorkspaceError> {
+    for (path, mir) in files {
+        check_file(mir).map_err(|errors| codegen_error(path, errors))?;
+    }
+    Ok(())
+}
+
+/// Compiles the program whose entry file is `entry`: every file it transitively imports,
+/// checked and lowered in topological order, and the instances of generics they need, each
+/// in a unit of its own (D3 of `monomorphization`).
+pub fn compile_program(entry: &Path) -> Result<CompiledProgram, WorkspaceError> {
+    let start = Instant::now();
+    let (entry_path, files) = elaborate_program(entry)?;
+    let front_end = start.elapsed();
+
+    let start = Instant::now();
     let (_, entry_mir) = files
         .iter()
         .find(|(path, _)| *path == entry_path)
@@ -97,12 +156,16 @@ pub fn compile_program(entry: &Path) -> Result<CompiledProgram, WorkspaceError> 
             message: "the entry file is not in its own dependency graph".to_string(),
         })?;
     let main = find_main(entry_mir).map_err(|error| codegen_error(&entry_path, vec![error]))?;
-    for (path, mir) in &files {
-        check_file(mir).map_err(|errors| codegen_error(path, errors))?;
-    }
+    check_files(&files)?;
+    let instances = program_instances(&files, true)?;
     let mut linker = Linker::new().map_err(WorkspaceError::Backend)?;
     for (_, mir) in &files {
         linker.add_file(mir).map_err(WorkspaceError::Backend)?;
+    }
+    for instance in &instances {
+        linker
+            .add_instance(instance)
+            .map_err(WorkspaceError::Backend)?;
     }
     let code_generation = start.elapsed();
 
@@ -117,6 +180,32 @@ pub fn compile_program(entry: &Path) -> Result<CompiledProgram, WorkspaceError> 
             code_generation,
             linking,
         },
+    })
+}
+
+/// The elaborated MIR of every instance the program whose entry file is `entry` needs, in order
+/// of their symbols, as `prism dump-mir --instances` prints it (D11 of `monomorphization`).
+/// The whole program is compiled, as for `prism run`, since an instance needs other files'
+/// records; a program with errors returns them instead.
+pub fn dump_instance_mir(entry: &Path) -> Result<String, WorkspaceError> {
+    let (_, files) = elaborate_program(entry)?;
+    let instances = program_instances(&files, false)?;
+    Ok(instances
+        .iter()
+        .map(|instance| instance.file.dump_bodies())
+        .collect())
+}
+
+/// The Cranelift IR of every instance unit the program whose entry file is `entry` needs, as
+/// `prism dump-clif --instances` prints it (D11 of `monomorphization`), or the program's errors
+/// of any stage.
+pub fn dump_instance_clif(entry: &Path) -> Result<String, WorkspaceError> {
+    let (_, files) = elaborate_program(entry)?;
+    check_files(&files)?;
+    let mirs: Vec<MirFile> = files.iter().map(|(_, mir)| mir.clone()).collect();
+    dump_instances(&mirs).map_err(|error| match error {
+        InstanceDumpError::Rejected(errors) => instance_errors(&files, errors),
+        InstanceDumpError::Backend(error) => WorkspaceError::Backend(error),
     })
 }
 

@@ -34,10 +34,13 @@ pub struct LoweredFunction {
     pub function: Function,
 }
 
-/// The code unit of one file.
+/// The code unit of one file, or of one instance of a generic (D3 of `monomorphization`).
 pub struct CodeUnit {
-    /// The file's module path.
+    /// The file's module path, or the module of the instance's generic.
     pub module: String,
+    /// The unit's name, which prefixes its data and glue: the module for a file's unit, the
+    /// instance's symbol for an instance's.
+    pub name: String,
     /// Its functions, in body order, each top-level value's accessor after its initializer.
     /// Each has a slot in the function table.
     pub functions: Vec<LoweredFunction>,
@@ -61,14 +64,25 @@ impl CodeUnit {
     /// Lowers every compiled body of `file`, which passed [`crate::check_file`], into functions
     /// declared in `module`, and defines the unit's data objects there.
     pub fn lower<M: Module>(file: &MirFile, module: &mut M) -> Result<CodeUnit, BackendError> {
-        let mut context = UnitContext::new(file, module)?;
+        Self::lower_named(file, &file.module, module)
+    }
+
+    /// [`CodeUnit::lower`] under the unit name `name`, which prefixes the unit's data and glue,
+    /// so that the units of one module (its file's and its generics' instances) never collide.
+    /// Runtime errors still report the file of `file`'s module.
+    pub fn lower_named<M: Module>(
+        file: &MirFile,
+        name: &str,
+        module: &mut M,
+    ) -> Result<CodeUnit, BackendError> {
+        let mut context = UnitContext::new(file, name, module)?;
         let mut builder_context = FunctionBuilderContext::new();
         let mut functions = Vec::new();
         for (_, body) in file.bodies.iter() {
             if !is_compiled(body) {
                 continue;
             }
-            let symbol = symbol_of(&body.owner, file);
+            let symbol = symbol_of(body, file);
             let signature = body_signature(body, context.call_conv, context.pointer);
             let id = context.declare_function(&symbol, &signature)?;
             let mut function =
@@ -87,6 +101,7 @@ impl CodeUnit {
         let glue = context.lower_glue(&mut builder_context)?;
         Ok(CodeUnit {
             module: file.module.clone(),
+            name: name.to_string(),
             functions,
             glue,
         })
@@ -98,6 +113,8 @@ impl CodeUnit {
 pub(crate) struct UnitContext<'m, M: Module> {
     pub module: &'m mut M,
     pub file: &'m MirFile,
+    /// The unit's name (see [`CodeUnit::name`]).
+    pub name: String,
     pub pointer: ir::Type,
     pub call_conv: CallConv,
     /// The layouts of the file's types, shared by its bodies.
@@ -113,13 +130,14 @@ pub(crate) struct UnitContext<'m, M: Module> {
 }
 
 impl<'m, M: Module> UnitContext<'m, M> {
-    fn new(file: &'m MirFile, module: &'m mut M) -> Result<Self, BackendError> {
+    fn new(file: &'m MirFile, unit_name: &str, module: &'m mut M) -> Result<Self, BackendError> {
         let pointer = module.target_config().pointer_type();
         let call_conv = module.target_config().default_call_conv;
         let name = format!("{}.prism", file.module);
         let mut context = Self {
             module,
             file,
+            name: unit_name.to_string(),
             pointer,
             call_conv,
             layouts: LayoutTable::new(&file.types, pointer),
@@ -130,7 +148,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             slots: HashMap::new(),
             stack_limit: None,
         };
-        let id = context.define_bytes(&format!("{}#file", file.module), name.as_bytes())?;
+        let id = context.define_bytes(&format!("{}#file", unit_name), name.as_bytes())?;
         context.file_name = (id, name.len());
         Ok(context)
     }
@@ -180,7 +198,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
         if let Some(id) = self.texts.get(text) {
             return Ok(*id);
         }
-        let name = format!("{}#text{}", self.file.module, self.texts.len());
+        let name = format!("{}#text{}", self.name, self.texts.len());
         let id = self.define_bytes(&name, text.as_bytes())?;
         self.texts.insert(text.to_string(), id);
         Ok(id)

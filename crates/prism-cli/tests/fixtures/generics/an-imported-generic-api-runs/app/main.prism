@@ -1,0 +1,10 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+import /lib/box
+fun main() {
+    val b = boxed("hi")
+    println(b.get())
+    println(boxed(2).v)
+}

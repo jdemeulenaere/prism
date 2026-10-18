@@ -13,6 +13,9 @@ pub enum CodegenErrorKind {
     MissingMain,
     /// `E6003`: the entry file's `main` breaks a rule of the entry point (D13).
     InvalidMain,
+    /// `E6004`: generics of several files instantiate each other with a growing type argument,
+    /// which only an import cycle allows (D8 of `monomorphization`).
+    PolymorphicRecursionAcrossFiles,
 }
 
 impl CodegenErrorKind {
@@ -22,6 +25,7 @@ impl CodegenErrorKind {
             CodegenErrorKind::UnsupportedByBackend => "E6001",
             CodegenErrorKind::MissingMain => "E6002",
             CodegenErrorKind::InvalidMain => "E6003",
+            CodegenErrorKind::PolymorphicRecursionAcrossFiles => "E6004",
         }
     }
 }

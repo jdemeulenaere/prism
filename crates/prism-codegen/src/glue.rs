@@ -130,7 +130,8 @@ pub struct GlueTable {
     queued: Vec<(GlueKind, Type, String, FuncId)>,
 }
 
-/// The symbol of the glue of `kind` for `ty` in the unit of `module`: `<module>#drop(<type>)`,
+/// The symbol of the glue of `kind` for `ty` in the unit named `module` (a file's module or an
+/// instance's symbol): `<module>#drop(<type>)`,
 /// `<module>#clone(<type>)` or `<module>#equals(<type>)`, the type written with every struct and enum qualified by its
 /// module, so that two types never share a name.
 pub fn glue_symbol(module: &str, kind: GlueKind, ty: &Type) -> String {
@@ -138,7 +139,7 @@ pub fn glue_symbol(module: &str, kind: GlueKind, ty: &Type) -> String {
 }
 
 /// `ty` as written, with every struct and enum qualified by its module.
-fn qualified_name(ty: &Type) -> String {
+pub(crate) fn qualified_name(ty: &Type) -> String {
     match ty {
         Type::Struct { id, arguments } | Type::Enum { id, arguments } => {
             let mut name = format!("{}::{}", id.module, id.name);
@@ -188,7 +189,7 @@ impl<M: Module> UnitContext<'_, M> {
         if let Some(id) = self.glue.declared.get(&key) {
             return Ok(*id);
         }
-        let symbol = glue_symbol(&self.file.module, kind, ty);
+        let symbol = glue_symbol(&self.name, kind, ty);
         let signature = self.glue_signature(kind);
         let id = self
             .module

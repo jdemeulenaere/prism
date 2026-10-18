@@ -1,0 +1,4 @@
+package a
+import /a/y
+public struct Box<T>(val v: T)
+public fun <T> ping(x: T, n: Int): Int = if (n == 0) 0 else pong(Box(x), n - 1)

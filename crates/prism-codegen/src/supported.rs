@@ -34,8 +34,11 @@ const MAXIMUM_DEPTH: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Construct {
     FunctionValues,
-    GenericCalls,
     ComposableFunctions,
+    /// A value of a type parameter's type in a compiled body: only generic bodies, which are
+    /// compiled as their instances, have them, so this is an internal error that no program
+    /// gives (D10 of `monomorphization`).
+    TypeParameter(String),
     /// A conversion between two types that are otherwise supported, which the backend does not
     /// lower; the type system produces none over supported types.
     Conversion {
@@ -52,7 +55,9 @@ impl Construct {
     pub fn description(&self) -> String {
         match self {
             Construct::FunctionValues => "function values and closures".to_string(),
-            Construct::GenericCalls => "calls of generic functions".to_string(),
+            Construct::TypeParameter(name) => {
+                format!("values of the uninstantiated type parameter '{}'", name)
+            }
             Construct::ComposableFunctions => "composable functions".to_string(),
             Construct::Conversion { from, to } => {
                 format!("conversions from '{}' to '{}'", from, to)
@@ -65,9 +70,10 @@ impl Construct {
     pub fn change(&self) -> Option<&'static str> {
         match self {
             Construct::FunctionValues => Some("closures"),
-            Construct::GenericCalls => Some("monomorphization"),
             Construct::ComposableFunctions => Some("compose-transform"),
-            Construct::Conversion { .. } | Construct::UnknownType(_) => None,
+            Construct::Conversion { .. }
+            | Construct::UnknownType(_)
+            | Construct::TypeParameter(_) => None,
         }
     }
 
@@ -91,8 +97,9 @@ impl Construct {
     }
 }
 
-/// Whether the backend compiles `body`: every body except generic bodies, which wait for
-/// monomorphization, and closure bodies, which wait for closure conversion.
+/// Whether the backend compiles `body`: every body except generic bodies, which are compiled
+/// only as their instances (D3 of `monomorphization`), and closure bodies, which wait for
+/// closure conversion.
 pub fn is_compiled(body: &Body) -> bool {
     body.type_parameters.is_empty() && !matches!(body.owner, BodyOwner::Closure { .. })
 }
@@ -199,7 +206,7 @@ fn classify_at(
             None => unknown(),
         },
         Type::Fn { .. } => Some(Construct::FunctionValues),
-        Type::Parameter(_) => Some(Construct::GenericCalls),
+        Type::Parameter(parameter) => Some(Construct::TypeParameter(parameter.name.clone())),
         Type::Opaque(name) => Some(Construct::UnknownType(name.clone())),
         Type::Error => Some(Construct::UnknownType("<error>".to_string())),
     }
@@ -339,10 +346,6 @@ impl BodyChecker<'_> {
                 if *is_compose {
                     return Some(Construct::ComposableFunctions);
                 }
-                // A built-in's type argument, the contents of `Heap(...)`, is no generic call.
-                if !type_arguments.is_empty() && !matches!(callee, Callee::Builtin(_)) {
-                    return Some(Construct::GenericCalls);
-                }
                 match callee {
                     Callee::Value(..) => return Some(Construct::FunctionValues),
                     Callee::Builtin(_) | Callee::Function(_) | Callee::Default { .. } => {}
@@ -453,10 +456,6 @@ mod tests {
             (
                 "struct C { val f: () -> Int }\nfun f(c: &C) {}\n",
                 "function values and closures",
-            ),
-            (
-                "fun <T> id(x: T): T = x\nfun f() { println(id(1)) }\n",
-                "calls of generic functions",
             ),
             ("compose fun Label() {}\n", "composable functions"),
             ("fun f(x: File) {}\n", "values of unknown type 'File'"),

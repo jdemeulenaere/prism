@@ -12,6 +12,7 @@
 //! [`crate::Program`] rather than being a global, so a test process can link several programs.
 
 use crate::error::BackendError;
+use crate::instances::InstanceUnit;
 use crate::isa::{is_large, isa, large_function_isa};
 use crate::program::Program;
 use crate::symbols::slot_owner;
@@ -146,6 +147,18 @@ impl Linker {
     /// functions.
     pub fn add_file(&mut self, file: &MirFile) -> Result<(), BackendError> {
         let unit = CodeUnit::lower(file, &mut self.module)?;
+        self.add_unit(unit)
+    }
+
+    /// Lowers the instance unit `instance`, which passed [`crate::check_instances`], under its
+    /// symbol and compiles its function, which gets its own slot, and its glue (D3 of
+    /// `monomorphization`).
+    pub fn add_instance(&mut self, instance: &InstanceUnit) -> Result<(), BackendError> {
+        let unit = CodeUnit::lower_named(&instance.file, &instance.symbol, &mut self.module)?;
+        self.add_unit(unit)
+    }
+
+    fn add_unit(&mut self, unit: CodeUnit) -> Result<(), BackendError> {
         let mut context = self.module.make_context();
         let glue = unit.glue.into_iter().map(|function| (function, false));
         for (function, has_slot) in unit

@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun <T> orElse(a: T, c: T): T = a ?: c
+fun main() {
+    println(orElse<Int?>(null, 3) ?: 0)
+    println(orElse<Int?>(4, 3) ?: 0)
+    println(orElse(1, 2))
+}

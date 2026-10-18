@@ -95,6 +95,9 @@ pub enum WorkspaceError {
     },
     /// A failure inside the backend, which a checked program never causes.
     Backend(prism_codegen::BackendError),
+    /// Errors of several files, rendered in order: the instances of a program may be rejected
+    /// in the sources of several generics (D10 of `monomorphization`).
+    Several(Vec<WorkspaceError>),
     Io {
         path: PathBuf,
         message: String,
@@ -135,6 +138,10 @@ impl WorkspaceError {
             WorkspaceError::Backend(error) => {
                 format!("error: internal compiler error in the backend: {}\n", error)
             }
+            WorkspaceError::Several(errors) => errors
+                .iter()
+                .map(WorkspaceError::render)
+                .collect::<String>(),
             WorkspaceError::Io { path, message } => {
                 format!(
                     "error[E1000]: IO error at '{}': {}\n",

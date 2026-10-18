@@ -1,0 +1,6 @@
+// expect: ok
+// entry: a/main.prism
+// run: 1
+package a
+import /a/x
+fun main() { println(ping(1, 3)) }

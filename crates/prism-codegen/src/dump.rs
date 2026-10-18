@@ -8,6 +8,7 @@
 //! symbol. The text is deterministic for one compiler and host.
 
 use crate::error::{BackendError, CodegenError};
+use crate::instances::{check_instances, collect_instances, InstanceError};
 use crate::isa::isa;
 use crate::supported::check_file;
 use crate::unit::CodeUnit;
@@ -47,6 +48,44 @@ pub fn dump_file(file: &MirFile) -> Result<String, DumpError> {
         text.push_str(&with_symbols(&function.function, &module));
     }
     Ok(text)
+}
+
+/// The Cranelift IR of every instance unit the program of `files` needs (D11 of
+/// `monomorphization`), in order of the instances' symbols: each unit's function, then its glue
+/// in order of its symbols, each headed by `function <symbol>`.
+pub fn dump_instances(files: &[MirFile]) -> Result<String, InstanceDumpError> {
+    let instances = collect_instances(files).map_err(InstanceDumpError::Rejected)?;
+    check_instances(&instances).map_err(InstanceDumpError::Rejected)?;
+    let mut module = JITModule::new(JITBuilder::with_isa(isa()?, default_libcall_names()));
+    let mut text = String::new();
+    let mut first = true;
+    for instance in &instances {
+        let unit = CodeUnit::lower_named(&instance.file, &instance.symbol, &mut module)?;
+        for function in unit.functions.iter().chain(&unit.glue) {
+            if !first {
+                text.push('\n');
+            }
+            first = false;
+            writeln!(text, "function {}", function.symbol).unwrap();
+            text.push_str(&with_symbols(&function.function, &module));
+        }
+    }
+    Ok(text)
+}
+
+/// Why a program's instances have no IR to show.
+#[derive(Debug)]
+pub enum InstanceDumpError {
+    /// An instance is rejected: `E6004`, or `E6001` in a generic's source.
+    Rejected(Vec<InstanceError>),
+    /// The backend failed internally.
+    Backend(BackendError),
+}
+
+impl From<BackendError> for InstanceDumpError {
+    fn from(error: BackendError) -> Self {
+        InstanceDumpError::Backend(error)
+    }
 }
 
 /// The text of `function` with each external name replaced by its symbol: `%"<symbol>"`.

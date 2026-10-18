@@ -27,9 +27,11 @@ COMMANDS:
     dump-typed-tree <file.prism>
                            Print the typed tree of a source file, checked against the ABIs of
                            its imports
-    dump-mir [--elaborated] <file.prism>
+    dump-mir [--elaborated | --instances] <file.prism>
                            Print the MIR of a source file that typechecks; with
-                           --elaborated, borrow-check it and print its elaborated MIR
+                           --elaborated, borrow-check it and print its elaborated MIR; with
+                           --instances, compile the program the file is the entry of and
+                           print the MIR of every instance of a generic it needs
     run [--timings] [--check-allocations] <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
                            'fun main()', exiting with the program's status (101 after a
@@ -38,7 +40,10 @@ COMMANDS:
                            every allocation and, when main returns, reports those still live
                            and any invalid free, exiting with 102; the arguments after '--'
                            are the program's
-    dump-clif <file.prism> Print the Cranelift IR the backend generates for a source file
+    dump-clif [--instances] <file.prism>
+                           Print the Cranelift IR the backend generates for a source file;
+                           with --instances, compile the program the file is the entry of
+                           and print the IR of every instance of a generic it needs
     dump-layout <file.prism>
                            Print the memory layout of every struct, enum and nullable type a
                            source file declares or its compiled bodies hold
@@ -108,10 +113,15 @@ fn main() {
             run_dump_typed_tree(&args[2]);
         }
         "dump-mir" => {
-            let elaborated = args.get(2).is_some_and(|arg| arg == "--elaborated");
-            let path = args.get(if elaborated { 3 } else { 2 });
+            let flag = args
+                .get(2)
+                .filter(|arg| *arg == "--elaborated" || *arg == "--instances");
+            let path = args.get(if flag.is_some() { 3 } else { 2 });
             match path {
-                Some(path) => run_dump_mir(path, elaborated),
+                Some(path) if flag.is_some_and(|flag| flag == "--instances") => {
+                    run_dump(prism_cli::dump_instance_mir(std::path::Path::new(path)))
+                }
+                Some(path) => run_dump_mir(path, flag.is_some()),
                 None => {
                     eprintln!("Error: 'dump-mir' command requires a file path argument");
                     process::exit(1);
@@ -120,11 +130,19 @@ fn main() {
         }
         "run" => run_program(&args[2..], started),
         "dump-clif" => {
-            if args.len() != 3 {
+            let instances = args.get(2).is_some_and(|arg| arg == "--instances");
+            let expected = if instances { 4 } else { 3 };
+            if args.len() != expected {
                 eprintln!("Error: 'dump-clif' command requires a file path argument");
                 process::exit(1);
             }
-            run_dump_clif(&args[2]);
+            if instances {
+                run_dump(prism_cli::dump_instance_clif(std::path::Path::new(
+                    &args[3],
+                )));
+            } else {
+                run_dump_clif(&args[2]);
+            }
         }
         "dump-layout" => {
             if args.len() != 3 {
@@ -191,6 +209,17 @@ fn run_program(args: &[String], started: std::time::Instant) {
     };
     match prism_cli::run_file(std::path::Path::new(file), &options) {
         Ok(status) => process::exit(status),
+        Err(err) => {
+            eprint!("{}", err.render());
+            process::exit(1);
+        }
+    }
+}
+
+/// Prints a dump, or reports its errors with a failure status.
+fn run_dump(dump: Result<String, prism_cli::WorkspaceError>) {
+    match dump {
+        Ok(text) => print!("{}", text),
         Err(err) => {
             eprint!("{}", err.render());
             process::exit(1);

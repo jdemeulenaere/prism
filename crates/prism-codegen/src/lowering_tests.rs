@@ -913,3 +913,19 @@ fn a_template_allocates_its_result_once() {
     });
     assert_eq!(allocations, 1);
 }
+
+#[test]
+fn instances_of_one_generic_run_from_one_program() {
+    // `keep<Int>` and `keep<String>` from one program (D3 of `monomorphization`).
+    let program = compile(
+        "fun <T> keep(x: T): T = x\n\
+         fun length(s: String): Int = s.length\n\
+         fun f(n: Int): Int = keep(n) + length(keep(\"abc\"))\n",
+    );
+    let f: IntToInt = function(&program, "main::f");
+    assert_eq!(f(4), 7);
+    let keep: IntToInt = function(&program, "main::keep<Int>");
+    assert_eq!(keep(9), 9);
+    assert!(program.function_address("main::keep<String>").is_some());
+    assert!(program.function_address("main::keep").is_none());
+}

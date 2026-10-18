@@ -31,6 +31,16 @@ impl MirFile {
         out
     }
 
+    /// Renders the bodies alone, without the `module` and `phase` lines, as a program's
+    /// instances are printed one unit after another (D11 of `monomorphization`).
+    pub fn dump_bodies(&self) -> String {
+        let mut out = String::new();
+        for (id, body) in self.bodies.iter() {
+            self.dump_body(&mut out, id, body);
+        }
+        out
+    }
+
     /// The name of body `id`: its declaration's path, `<function> <parameter>` for a default
     /// generator, `<parent>#closure<index>` for a closure. An instance's path is followed by its
     /// type arguments (`lib/box::keep<Int>`, `main::pad<Int> y`).

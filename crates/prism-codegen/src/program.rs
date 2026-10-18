@@ -1,6 +1,7 @@
 //! A linked program and how it runs (D19 and D27 of `codegen-core`).
 
 use crate::error::BackendError;
+use crate::instances::{check_instances, collect_instances};
 use crate::link::{FunctionTable, Linker};
 use crate::symbols::function_symbol;
 use cranelift_jit::JITModule;
@@ -27,11 +28,19 @@ impl Program {
         }
     }
 
-    /// Compiles and links `files`, each of which passed [`crate::check_file`].
+    /// Compiles and links `files`, each of which passed [`crate::check_file`], with the
+    /// instances of generics they need, which must pass [`crate::check_instances`].
     pub fn compile(files: &[MirFile]) -> Result<Program, BackendError> {
+        let instances = collect_instances(files)
+            .map_err(|errors| BackendError::new(format!("instances rejected: {:?}", errors)))?;
+        check_instances(&instances)
+            .map_err(|errors| BackendError::new(format!("instances rejected: {:?}", errors)))?;
         let mut linker = Linker::new()?;
         for file in files {
             linker.add_file(file)?;
+        }
+        for instance in &instances {
+            linker.add_instance(instance)?;
         }
         linker.link()
     }
