@@ -694,6 +694,75 @@ fn equality_glue_in_the_ir_dump() {
     fs::remove_dir_all(&directory).ok();
 }
 
+/// code-generation: "The bounds check in the IR dump" (D8 of `collections`).
+#[test]
+fn the_bounds_check_in_the_ir_dump() {
+    let directory = single_file(
+        "list_bounds_check",
+        "fun get(xs: &List<Int>, i: Int): Int = xs[i]\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    let get = function_ir(&dump, "main::get");
+    // The size is the word at offset 8, compared unsigned with the index.
+    assert!(get.contains("load.i64 notrap aligned "), "{}", get);
+    assert!(get.contains("+8\n"), "{}", get);
+    assert!(get.contains("icmp.i64 uge"), "{}", get);
+    assert!(
+        calls_directly(get, "prism_rt_list_index_out_of_range"),
+        "{}",
+        get
+    );
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "List glue in the IR dump" (D15 of `collections`).
+#[test]
+fn list_glue_in_the_ir_dump() {
+    let directory = single_file("list_glue", "fun f(xs: List<String>) {}\n");
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    assert_eq!(
+        function_headers(&dump),
+        ["main::f", "main#drop(List<String>)"]
+    );
+    assert!(
+        calls_directly(function_ir(&dump, "main::f"), "main#drop(List<String>)"),
+        "{}",
+        dump
+    );
+    let glue = function_ir(&dump, "main#drop(List<String>)");
+    assert!(calls_directly(glue, "prism_rt_string_drop"), "{}", glue);
+    assert!(calls_directly(glue, "prism_rt_list_free"), "{}", glue);
+    // Each element is dropped before the buffer is freed.
+    let drop = glue.find("call fn1(").expect("the string drop");
+    let free = glue.find("call fn2(").expect("the free");
+    assert!(drop < free, "{}", glue);
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// code-generation: "List equality glue in the IR dump" (D15 of `collections`).
+#[test]
+fn list_equality_glue_in_the_ir_dump() {
+    let directory = single_file(
+        "list_equality_glue",
+        "fun same(a: &List<Int>, b: &List<Int>): Bool = a == b\n",
+    );
+    let dump = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    let dump = stdout(&dump);
+    assert!(
+        function_headers(&dump).contains(&"main#equals(List<Int>)"),
+        "{}",
+        dump
+    );
+    let same = function_ir(&dump, "main::same");
+    assert!(calls_directly(same, "main#equals(List<Int>)"), "{}", same);
+    fs::remove_dir_all(&directory).ok();
+}
+
 /// code-generation: "A large struct is compared by equality glue".
 #[test]
 fn a_large_struct_is_compared_by_equality_glue() {

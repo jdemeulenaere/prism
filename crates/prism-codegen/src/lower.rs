@@ -29,9 +29,10 @@
 
 use crate::equality::{Compared, Comparison};
 use crate::error::BackendError;
-use crate::glue::{allocate_box, free_box, Glue, GlueKind};
+use crate::glue::{allocate_box, drop_list_elements, free_box, Glue, GlueKind};
 use crate::layout::{
-    EnvironmentKind, EnvironmentLayout, FunctionField, Layout, Member, Shape, StringField,
+    EnvironmentKind, EnvironmentLayout, FunctionField, Layout, ListField, Member, Shape,
+    StringField,
 };
 use crate::representation::{
     function_value_signature, is_pointer, representation, signature, Representation,
@@ -125,11 +126,15 @@ enum Location {
 }
 
 /// Whether two places may share bytes: when they have one root local, or either is reached
-/// through a dereference (D12 of `codegen-aggregates`).
+/// through a dereference or a list's buffer (D12 of `codegen-aggregates`).
 fn may_overlap(a: &Place, b: &Place) -> bool {
-    a.local == b.local
-        || a.projections.contains(&Projection::Deref)
-        || b.projections.contains(&Projection::Deref)
+    let indirect = |place: &Place| {
+        place
+            .projections
+            .iter()
+            .any(|p| matches!(p, Projection::Deref | Projection::Index(_)))
+    };
+    a.local == b.local || indirect(a) || indirect(b)
 }
 
 /// The flags of a load or store of a scalar at its natural alignment, which every field, payload
@@ -172,6 +177,9 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     /// The environment slot of each closure body this body builds a value of, with captures
     /// (D5 of `closures`).
     environments: HashMap<BodyId, ir::StackSlot>,
+    /// The span of the statement, terminator or operand being lowered, where a list's bounds
+    /// check reports an index out of range (D8 of `collections`).
+    span: Span,
 }
 
 impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
@@ -201,6 +209,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             environment: None,
             environment_layout: None,
             environments: HashMap::new(),
+            span: body.span,
         };
         lowering.lower_body()?;
         let config = lowering.context.module.target_config();
@@ -377,6 +386,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
 
     fn lower_block(&mut self, block: &BasicBlock) -> Result<(), BackendError> {
         for statement in &block.statements {
+            self.span = statement.span;
             match &statement.kind {
                 StatementKind::Assign(place, rvalue) => {
                     self.assign(place, rvalue, statement.span)?
@@ -407,6 +417,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 }
             }
         }
+        self.span = block.terminator.span;
         self.terminator(&block.terminator.kind, block.terminator.span)
     }
 
@@ -504,8 +515,20 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     location = self.offset(location, member.offset)?;
                     ty = member.ty;
                 }
-                Projection::Index(_) => {
-                    return Err(BackendError::new("an index projection".to_string()))
+                // An element of a list, at its index once it is checked against the size (D8 of
+                // `collections`).
+                Projection::Index(index) => {
+                    let element = match &ty {
+                        Type::List(element) => element.as_ref().clone(),
+                        other => return Err(BackendError::new(format!("an index of {}", other))),
+                    };
+                    let Location::Memory(list) = location else {
+                        return Err(BackendError::new("a list that is not in memory"));
+                    };
+                    let index = self.read_place(&Place::local(*index))?.scalar()?;
+                    let span = self.span;
+                    location = Location::Memory(self.element_address(list, index, &element, span)?);
+                    ty = element;
                 }
             }
         }
@@ -642,7 +665,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
 
     fn operand(&mut self, operand: &Operand, span: Span) -> Result<Lowered, BackendError> {
         Ok(match operand {
-            Operand::Copy(place, _) | Operand::Move(place, _) => self.read_place(place)?,
+            Operand::Copy(place, read) | Operand::Move(place, read) => {
+                // An element read here is checked at the read (D8 of `collections`).
+                let outer = std::mem::replace(&mut self.span, *read);
+                let value = self.read_place(place);
+                self.span = outer;
+                value?
+            }
             Operand::Constant(constant) => match constant {
                 Constant::Int(value) => {
                     Lowered::Scalar(self.builder.ins().iconst(types::I64, *value))
@@ -1703,10 +1732,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 free_box(self.context, &mut self.builder, address, &layout)?;
             }
             Callee::Builtin(builtin) => {
-                return Err(BackendError::new(format!(
-                    "the list built-in '{}' is not lowered yet",
-                    builtin.name()
-                )))
+                self.list_call(*builtin, arguments, type_arguments, destination, span)?
             }
         }
         match target {
@@ -1717,6 +1743,305 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             }
         }
         Ok(())
+    }
+
+    // Lists.
+
+    /// The layout of the elements of a list of `element`, whose size is their stride, and
+    /// whether that is known.
+    fn element_layout(&self, element: &Type) -> Result<Rc<Layout>, BackendError> {
+        self.layout(element)
+    }
+
+    /// The address of element `index` of the list at `list`, whose elements are of type
+    /// `element`, after checking `index` against its size as an unsigned word, so a negative
+    /// index fails too: a failure calls the runtime's list-index error at `span` (D8 of
+    /// `collections`).
+    fn element_address(
+        &mut self,
+        list: Value,
+        index: Value,
+        element: &Type,
+        span: Span,
+    ) -> Result<Value, BackendError> {
+        let pointer = self.pointer();
+        let size = self.builder.ins().load(
+            pointer,
+            aligned(),
+            list,
+            ListField::Size.offset(pointer) as i32,
+        );
+        let outside = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, size);
+        self.fail_if(outside, span, |lowering, location| {
+            let mut arguments = vec![index, size];
+            arguments.extend(location);
+            lowering.call_runtime("prism_rt_list_index_out_of_range", &arguments)?;
+            Ok(())
+        })?;
+        let layout = self.element_layout(element)?;
+        let base = self.builder.ins().load(
+            pointer,
+            aligned(),
+            list,
+            ListField::Pointer.offset(pointer) as i32,
+        );
+        let offset = self.builder.ins().imul_imm_s(index, i64::from(layout.size));
+        Ok(self.builder.ins().iadd(base, offset))
+    }
+
+    /// Continues in a new block when `condition` is false; when it is true, runs `failure` in a
+    /// cold block, with the file, its length, the line and the column of `span` as values, and
+    /// ends that block, `failure` having called a runtime function that never returns.
+    fn fail_if(
+        &mut self,
+        condition: Value,
+        span: Span,
+        failure: impl FnOnce(&mut Self, [Value; 4]) -> Result<(), BackendError>,
+    ) -> Result<(), BackendError> {
+        let failed = self.builder.create_block();
+        let success = self.builder.create_block();
+        self.builder.set_cold_block(failed);
+        self.builder
+            .ins()
+            .brif(condition, failed, &[], success, &[]);
+        self.builder.switch_to_block(failed);
+        let location = self.location_values(span);
+        failure(self, location)?;
+        self.builder.ins().trap(UNREACHABLE);
+        self.builder.switch_to_block(success);
+        Ok(())
+    }
+
+    /// The file, its length, the line and the column of `span`, as a runtime error takes them.
+    fn location_values(&mut self, span: Span) -> [Value; 4] {
+        let pointer = self.pointer();
+        let (file_data, file_length) = self.context.file_name();
+        let file = self.data(file_data);
+        let file_length = self.builder.ins().iconst(pointer, file_length as i64);
+        let line = self.builder.ins().iconst(types::I32, i64::from(span.line));
+        let column = self
+            .builder
+            .ins()
+            .iconst(types::I32, i64::from(span.column));
+        [file, file_length, line, column]
+    }
+
+    /// Calls the runtime function `name` on `arguments`, giving its results.
+    fn call_runtime(
+        &mut self,
+        name: &'static str,
+        arguments: &[Value],
+    ) -> Result<Vec<Value>, BackendError> {
+        let function = self.runtime_function(name)?;
+        let call = self.builder.ins().call(function, arguments);
+        Ok(self.builder.inst_results(call).to_vec())
+    }
+
+    /// A word of the list at `list`.
+    fn list_word(&mut self, list: Value, field: ListField) -> Value {
+        let pointer = self.pointer();
+        self.builder
+            .ins()
+            .load(pointer, aligned(), list, field.offset(pointer) as i32)
+    }
+
+    /// Writes `value` to a word of the list at `list`.
+    fn set_list_word(&mut self, list: Value, field: ListField, value: Value) {
+        let pointer = self.pointer();
+        self.builder
+            .ins()
+            .store(aligned(), value, list, field.offset(pointer) as i32);
+    }
+
+    /// The element's stride and alignment, as runtime arguments.
+    fn element_words(&mut self, layout: &Layout) -> (Value, Value) {
+        let pointer = self.pointer();
+        let stride = self.builder.ins().iconst(pointer, i64::from(layout.size));
+        let align = self.builder.ins().iconst(pointer, i64::from(layout.align));
+        (stride, align)
+    }
+
+    /// A call of a list built-in (D15 of `collections`): `size`, `isEmpty`, `add`, element
+    /// moves and the bounds checks inline, growth, gaps, reversal and the errors in the runtime,
+    /// and searches in index-of glue. The receiver, a borrow of the list, comes first.
+    fn list_call(
+        &mut self,
+        builtin: BuiltinFunction,
+        arguments: &[Operand],
+        type_arguments: &[Type],
+        destination: &Place,
+        span: Span,
+    ) -> Result<(), BackendError> {
+        let element = type_arguments
+            .first()
+            .ok_or_else(|| {
+                BackendError::new(format!("{} without an element type", builtin.name()))
+            })?
+            .clone();
+        let layout = self.element_layout(&element)?;
+        let pointer = self.pointer();
+        if builtin == BuiltinFunction::ListOf {
+            // Every argument is evaluated, then the buffer allocated once and each moved in.
+            let mut values = Vec::with_capacity(arguments.len());
+            for argument in arguments {
+                values.push(self.operand(argument, span)?);
+            }
+            let list = self.address(destination)?;
+            let count = self.builder.ins().iconst(pointer, values.len() as i64);
+            let (stride, align) = self.element_words(&layout);
+            self.call_runtime("prism_rt_list_with_capacity", &[list, count, stride, align])?;
+            if !values.is_empty() {
+                let base = self.list_word(list, ListField::Pointer);
+                for (index, value) in values.into_iter().enumerate() {
+                    let address = self.add(base, index as u32 * layout.size);
+                    self.write_location(Location::Memory(address), &element, value, false)?;
+                }
+                self.set_list_word(list, ListField::Size, count);
+            }
+            return Ok(());
+        }
+        let list = self.receiver(arguments, span)?;
+        match builtin {
+            BuiltinFunction::ListSize => {
+                let size = self.list_word(list, ListField::Size);
+                self.write_place(destination, Lowered::Scalar(size), false)?;
+            }
+            BuiltinFunction::ListIsEmpty | BuiltinFunction::ListIsNotEmpty => {
+                let size = self.list_word(list, ListField::Size);
+                let condition = if builtin == BuiltinFunction::ListIsEmpty {
+                    IntCC::Equal
+                } else {
+                    IntCC::NotEqual
+                };
+                let test = self.builder.ins().icmp_imm_s(condition, size, 0);
+                self.write_place(destination, Lowered::Scalar(test), false)?;
+            }
+            // `0..<size`: the MIR's `Range`, with `endInclusive` false.
+            BuiltinFunction::ListIndices => {
+                let size = self.list_word(list, ListField::Size);
+                let range = destination.ty(self.body, self.types());
+                let range_layout = self.layout(&range)?;
+                let Shape::Struct { fields } = &range_layout.shape else {
+                    return Err(BackendError::new(format!("indices into a {}", range)));
+                };
+                let fields = fields.clone();
+                let address = self.address(destination)?;
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let exclusive = self.builder.ins().iconst(types::I8, 0);
+                for (field, value) in fields.iter().zip([zero, size, exclusive]) {
+                    self.builder
+                        .ins()
+                        .store(aligned(), value, address, field.offset as i32);
+                }
+            }
+            // Written in place; the runtime is called only to grow a full buffer.
+            BuiltinFunction::ListAdd => {
+                let value = self.argument_value(arguments, 1, span)?;
+                let size = self.list_word(list, ListField::Size);
+                let capacity = self.list_word(list, ListField::Capacity);
+                let full = self.builder.ins().icmp(IntCC::Equal, size, capacity);
+                let grow = self.builder.create_block();
+                let write = self.builder.create_block();
+                self.builder.set_cold_block(grow);
+                self.builder.ins().brif(full, grow, &[], write, &[]);
+                self.builder.switch_to_block(grow);
+                let (stride, align) = self.element_words(&layout);
+                self.call_runtime("prism_rt_list_grow", &[list, stride, align])?;
+                self.builder.ins().jump(write, &[]);
+                self.builder.switch_to_block(write);
+                let base = self.list_word(list, ListField::Pointer);
+                let offset = self.builder.ins().imul_imm_s(size, i64::from(layout.size));
+                let address = self.builder.ins().iadd(base, offset);
+                self.write_location(Location::Memory(address), &element, value, false)?;
+                let grown = self.builder.ins().iadd_imm_s(size, 1);
+                self.set_list_word(list, ListField::Size, grown);
+            }
+            BuiltinFunction::ListInsert => {
+                let index = self.argument_value(arguments, 1, span)?.scalar()?;
+                let value = self.argument_value(arguments, 2, span)?;
+                let (stride, align) = self.element_words(&layout);
+                let location = self.location_values(span);
+                let mut call = vec![list, index, stride, align];
+                call.extend(location);
+                let gap = self.call_runtime("prism_rt_list_open_gap", &call)?[0];
+                self.write_location(Location::Memory(gap), &element, value, false)?;
+            }
+            // The element moves to the destination before the gap closes over it.
+            BuiltinFunction::ListRemoveAt => {
+                let index = self.argument_value(arguments, 1, span)?.scalar()?;
+                let address = self.element_address(list, index, &element, span)?;
+                let value = self.read_location(Location::Memory(address), &element)?;
+                self.write_place(destination, value, false)?;
+                let stride = self.builder.ins().iconst(pointer, i64::from(layout.size));
+                self.call_runtime("prism_rt_list_close_gap", &[list, index, stride])?;
+            }
+            BuiltinFunction::ListRemoveLast => {
+                let size = self.list_word(list, ListField::Size);
+                let empty = self.builder.ins().icmp_imm_s(IntCC::Equal, size, 0);
+                self.fail_if(empty, span, |lowering, location| {
+                    lowering.call_runtime("prism_rt_list_empty", &location)?;
+                    Ok(())
+                })?;
+                let last = self.builder.ins().iadd_imm_s(size, -1);
+                let base = self.list_word(list, ListField::Pointer);
+                let offset = self.builder.ins().imul_imm_s(last, i64::from(layout.size));
+                let address = self.builder.ins().iadd(base, offset);
+                let value = self.read_location(Location::Memory(address), &element)?;
+                self.write_place(destination, value, false)?;
+                self.set_list_word(list, ListField::Size, last);
+            }
+            BuiltinFunction::ListReverse => {
+                let stride = self.builder.ins().iconst(pointer, i64::from(layout.size));
+                self.call_runtime("prism_rt_list_reverse", &[list, stride])?;
+            }
+            // The elements are dropped and the buffer kept.
+            BuiltinFunction::ListClear => {
+                drop_list_elements(self.context, &mut self.builder, list, &element)?;
+                let zero = self.builder.ins().iconst(pointer, 0);
+                self.set_list_word(list, ListField::Size, zero);
+            }
+            BuiltinFunction::ListContains | BuiltinFunction::ListIndexOf => {
+                let searched = self.argument_value(arguments, 1, span)?.scalar()?;
+                let list_type = Type::List(Box::new(element.clone()));
+                let id = self.context.index_of_glue(&list_type)?;
+                let reference = self
+                    .context
+                    .glue_reference(Glue::Generated(id), self.builder.func)?;
+                let call = self.builder.ins().call(reference, &[list, searched]);
+                let index = self.builder.inst_results(call)[0];
+                let result = if builtin == BuiltinFunction::ListContains {
+                    self.builder
+                        .ins()
+                        .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, index, 0)
+                } else {
+                    index
+                };
+                self.write_place(destination, Lowered::Scalar(result), false)?;
+            }
+            other => {
+                return Err(BackendError::new(format!(
+                    "the built-in '{}' is not a list member",
+                    other.name()
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    /// The value of argument `index` of a built-in call.
+    fn argument_value(
+        &mut self,
+        arguments: &[Operand],
+        index: usize,
+        span: Span,
+    ) -> Result<Lowered, BackendError> {
+        let argument = arguments.get(index).ok_or_else(|| {
+            BackendError::new(format!("a built-in call without argument {}", index))
+        })?;
+        self.operand(argument, span)
     }
 
     /// The address of the referent of the receiver borrow that a built-in member receives

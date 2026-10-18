@@ -25,6 +25,15 @@
 //! its type, `<unit module>#equals(<type>)`, which takes the two values' addresses and returns a
 //! `Bool` ([`crate::equality`]).
 //!
+//! Every list type has glue too (D15 of `collections`): its drop glue drops each element in
+//! index order with the element's glue, when the element owns storage, then frees the buffer;
+//! its clone glue allocates a buffer of exactly the source's size and copies the elements
+//! bitwise, or clones each owning element in order; its equality glue compares sizes and then
+//! elements in order, stopping at the first difference; and its index-of glue,
+//! `<unit module>#indexOf(<type>)`, taking the list's and an element's addresses, gives the
+//! first index whose element equals the given one, or -1, for `contains` and `indexOf`.
+//! Elements compare as `==` of their type does, through [`crate::equality`].
+//!
 //! Each part is handled by calling its own glue, so glue is a set of small functions, one per
 //! type, recursive for a type that reaches itself through boxes. Each code unit generates the
 //! glue of the types its bodies drop, clone and compare through boxes or beyond the inline
@@ -34,13 +43,15 @@
 //! user code. It checks the stack on entry, as bodies do, raising "stack overflow" without a
 //! location when a structure is deeper than the stack allows.
 
+use crate::equality::Compared;
 use crate::equality::Comparison;
 use crate::error::BackendError;
-use crate::layout::{FunctionField, Layout, Member, Shape};
+use crate::layout::{FunctionField, Layout, ListField, Member, Shape};
+use crate::representation::{representation, Representation};
 use crate::symbols::{environment_drop_symbol, symbol_of};
 use crate::unit::{data_global, LoweredFunction, UnitContext};
 use cranelift_codegen::ir::{
-    self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, TrapCode,
+    self, condcodes::IntCC, types, AbiParam, Block, Function, InstBuilder, MemFlagsData, TrapCode,
     UserFuncName, Value,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
@@ -68,6 +79,7 @@ fn owns_storage_at(ty: &Type, types: &TypeTable, depth: usize) -> bool {
         return false;
     }
     match ty {
+        // A list owns its buffer, or may come to: an empty list grows (D13 of `collections`).
         Type::String | Type::Heap(_) | Type::List(_) | Type::Fn { .. } => true,
         Type::Nullable(inner) => owns_storage_at(inner, types, depth + 1),
         Type::Struct { id, arguments } => types
@@ -100,6 +112,8 @@ pub enum GlueKind {
     Drop,
     Clone,
     Equals,
+    /// The search of a list for an element (D15 of `collections`).
+    IndexOf,
 }
 
 impl GlueKind {
@@ -108,15 +122,17 @@ impl GlueKind {
             GlueKind::Drop => "drop",
             GlueKind::Clone => "clone",
             GlueKind::Equals => "equals",
+            GlueKind::IndexOf => "indexOf",
         }
     }
 
-    /// The runtime function that is the glue of a `String`.
-    fn string_function(self) -> &'static str {
+    /// The runtime function that is the glue of a `String`, which has no index-of glue.
+    fn string_function(self) -> Option<&'static str> {
         match self {
-            GlueKind::Drop => "prism_rt_string_drop",
-            GlueKind::Clone => "prism_rt_string_clone",
-            GlueKind::Equals => "prism_rt_string_equals",
+            GlueKind::Drop => Some("prism_rt_string_drop"),
+            GlueKind::Clone => Some("prism_rt_string_clone"),
+            GlueKind::Equals => Some("prism_rt_string_equals"),
+            GlueKind::IndexOf => None,
         }
     }
 }
@@ -169,6 +185,7 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
             qualified_name(inner)
         ),
         Type::Heap(inner) => format!("Heap<{}>", qualified_name(inner)),
+        Type::List(inner) => format!("List<{}>", qualified_name(inner)),
         Type::Fn {
             is_compose,
             params,
@@ -207,9 +224,17 @@ impl<M: Module> UnitContext<'_, M> {
             return Ok(None);
         }
         if *ty == Type::String {
-            return Ok(Some(Glue::Runtime(kind.string_function())));
+            if let Some(function) = kind.string_function() {
+                return Ok(Some(Glue::Runtime(function)));
+            }
         }
         Ok(Some(Glue::Generated(self.generated_glue(kind, ty)?)))
+    }
+
+    /// The index-of glue of the list type `ty`, declared and queued the first time it is asked
+    /// for (D15 of `collections`).
+    pub fn index_of_glue(&mut self, ty: &Type) -> Result<FuncId, BackendError> {
+        self.generated_glue(GlueKind::IndexOf, ty)
     }
 
     /// The equality glue of `ty`, a struct, an enum or a nullable in memory, declared and queued
@@ -253,18 +278,21 @@ impl<M: Module> UnitContext<'_, M> {
 
     /// The signature of glue of `kind`: the value's address for a drop, the destination's and
     /// the source's for a clone, returning nothing; the two values' addresses for equality,
-    /// returning a `Bool`.
+    /// returning a `Bool`; the list's and the element's addresses for index-of, returning an
+    /// `Int`.
     fn glue_signature(&self, kind: GlueKind) -> ir::Signature {
         let mut signature = ir::Signature::new(self.call_conv);
         let parameters = match kind {
             GlueKind::Drop => 1,
-            GlueKind::Clone | GlueKind::Equals => 2,
+            GlueKind::Clone | GlueKind::Equals | GlueKind::IndexOf => 2,
         };
         for _ in 0..parameters {
             signature.params.push(AbiParam::new(self.pointer));
         }
-        if kind == GlueKind::Equals {
-            signature.returns.push(AbiParam::new(types::I8));
+        match kind {
+            GlueKind::Equals => signature.returns.push(AbiParam::new(types::I8)),
+            GlueKind::IndexOf => signature.returns.push(AbiParam::new(types::I64)),
+            GlueKind::Drop | GlueKind::Clone => {}
         }
         signature
     }
@@ -348,6 +376,24 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         lowering.check_stack()?;
         let layout = lowering.layout(ty)?;
         match (kind, ty) {
+            (GlueKind::Drop, Type::List(element)) => lowering.drop_list(element, parameters[0])?,
+            (GlueKind::Clone, Type::List(element)) => {
+                lowering.clone_list(element, parameters[0], parameters[1])?
+            }
+            (GlueKind::Equals, Type::List(element)) => {
+                let equal = lowering.list_equality(element, parameters[0], parameters[1])?;
+                lowering.builder.ins().return_(&[equal]);
+            }
+            (GlueKind::IndexOf, Type::List(element)) => {
+                let index = lowering.list_index_of(element, parameters[0], parameters[1])?;
+                lowering.builder.ins().return_(&[index]);
+            }
+            (GlueKind::IndexOf, _) => {
+                return Err(BackendError::new(format!(
+                    "index-of glue for {}, which is not a list",
+                    ty
+                )))
+            }
             (GlueKind::Drop, Type::Heap(contents)) => lowering.drop_box(contents, parameters[0])?,
             (GlueKind::Drop, Type::Fn { .. }) => lowering.drop_function_value(parameters[0])?,
             (GlueKind::Clone | GlueKind::Equals, Type::Fn { .. }) => {
@@ -378,7 +424,7 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
                 lowering.builder.ins().return_(&[equal]);
             }
         }
-        if kind != GlueKind::Equals {
+        if matches!(kind, GlueKind::Drop | GlueKind::Clone) {
             lowering.builder.ins().return_(&[]);
         }
         let config = lowering.context.module.target_config();
@@ -569,6 +615,159 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         Ok(())
     }
 
+    /// The drop glue of a `List<element>` at `list`: each element in index order, then the
+    /// buffer (D15 of `collections`).
+    fn drop_list(&mut self, element: &Type, list: Value) -> Result<(), BackendError> {
+        drop_list_elements(self.context, &mut self.builder, list, element)?;
+        let layout = self.layout(element)?;
+        let pointer = self.context.pointer;
+        let stride = self.builder.ins().iconst(pointer, i64::from(layout.size));
+        let align = self.builder.ins().iconst(pointer, i64::from(layout.align));
+        self.call_runtime("prism_rt_list_free", &[list, stride, align])?;
+        Ok(())
+    }
+
+    /// The clone glue of a `List<element>`: a buffer of exactly the source's size, holding a
+    /// bitwise copy of the elements when they own nothing, or a clone of each in order.
+    fn clone_list(
+        &mut self,
+        element: &Type,
+        destination: Value,
+        source: Value,
+    ) -> Result<(), BackendError> {
+        let pointer = self.context.pointer;
+        let flags = MemFlagsData::trusted();
+        let layout = self.layout(element)?;
+        let size_offset = ListField::Size.offset(pointer) as i32;
+        let size = self.builder.ins().load(pointer, flags, source, size_offset);
+        let stride = self.builder.ins().iconst(pointer, i64::from(layout.size));
+        let align = self.builder.ins().iconst(pointer, i64::from(layout.align));
+        self.call_runtime(
+            "prism_rt_list_with_capacity",
+            &[destination, size, stride, align],
+        )?;
+        let pointer_offset = ListField::Pointer.offset(pointer) as i32;
+        let target = self
+            .builder
+            .ins()
+            .load(pointer, flags, destination, pointer_offset);
+        if owns_storage(element, &self.context.file.types) {
+            let each = begin_element_loop(&mut self.builder, pointer, source, layout.size);
+            let offset = self
+                .builder
+                .ins()
+                .imul_imm_s(each.index, i64::from(layout.size));
+            let to = self.builder.ins().iadd(target, offset);
+            self.call_glue(GlueKind::Clone, element, &[to, each.address])?;
+            end_element_loop(&mut self.builder, each);
+        } else if layout.size > 0 {
+            let origin = self
+                .builder
+                .ins()
+                .load(pointer, flags, source, pointer_offset);
+            let bytes = self.builder.ins().imul(size, stride);
+            let config = self.context.module.target_config();
+            self.builder.call_memcpy(config, target, origin, bytes);
+        }
+        self.builder
+            .ins()
+            .store(flags, size, destination, size_offset);
+        Ok(())
+    }
+
+    /// The equality glue of a `List<element>`: equal sizes, then equal elements in order,
+    /// stopping at the first difference.
+    fn list_equality(
+        &mut self,
+        element: &Type,
+        left: Value,
+        right: Value,
+    ) -> Result<Value, BackendError> {
+        let pointer = self.context.pointer;
+        let flags = MemFlagsData::trusted();
+        let layout = self.layout(element)?;
+        let size_offset = ListField::Size.offset(pointer) as i32;
+        let left_size = self.builder.ins().load(pointer, flags, left, size_offset);
+        let right_size = self.builder.ins().load(pointer, flags, right, size_offset);
+        let same = self.builder.ins().icmp(IntCC::Equal, left_size, right_size);
+        let unequal = self.builder.create_block();
+        let compare = self.builder.create_block();
+        self.builder.ins().brif(same, compare, &[], unequal, &[]);
+        self.builder.switch_to_block(compare);
+        let pointer_offset = ListField::Pointer.offset(pointer) as i32;
+        let right_base = self
+            .builder
+            .ins()
+            .load(pointer, flags, right, pointer_offset);
+        let each = begin_element_loop(&mut self.builder, pointer, left, layout.size);
+        let offset = self
+            .builder
+            .ins()
+            .imul_imm_s(each.index, i64::from(layout.size));
+        let right_element = self.builder.ins().iadd(right_base, offset);
+        let equal = self.compare_elements(element, each.address, right_element)?;
+        let next = self.builder.create_block();
+        self.builder.ins().brif(equal, next, &[], unequal, &[]);
+        self.builder.switch_to_block(next);
+        end_element_loop(&mut self.builder, each);
+        let one = self.builder.ins().iconst(types::I8, 1);
+        self.builder.ins().return_(&[one]);
+        self.builder.switch_to_block(unequal);
+        Ok(self.builder.ins().iconst(types::I8, 0))
+    }
+
+    /// The index-of glue of a `List<element>`: the first index whose element equals the one at
+    /// `searched`, or -1.
+    fn list_index_of(
+        &mut self,
+        element: &Type,
+        list: Value,
+        searched: Value,
+    ) -> Result<Value, BackendError> {
+        let pointer = self.context.pointer;
+        let layout = self.layout(element)?;
+        let each = begin_element_loop(&mut self.builder, pointer, list, layout.size);
+        let equal = self.compare_elements(element, each.address, searched)?;
+        let found = self.builder.create_block();
+        let next = self.builder.create_block();
+        self.builder.ins().brif(equal, found, &[], next, &[]);
+        self.builder.switch_to_block(found);
+        self.builder.ins().return_(&[each.index]);
+        self.builder.switch_to_block(next);
+        end_element_loop(&mut self.builder, each);
+        Ok(self.builder.ins().iconst(types::I64, -1))
+    }
+
+    /// `==` of the two values of type `element` at `left` and `right`, as `==` of the element
+    /// type compares them.
+    fn compare_elements(
+        &mut self,
+        element: &Type,
+        left: Value,
+        right: Value,
+    ) -> Result<Value, BackendError> {
+        let left = element_value(&mut self.builder, self.context.pointer, element, left);
+        let right = element_value(&mut self.builder, self.context.pointer, element, right);
+        let mut functions = HashMap::new();
+        let mut comparison = Comparison::new(&mut self.builder, &mut *self.context, &mut functions);
+        comparison.equality(element, left, right)
+    }
+
+    /// Calls the runtime function `name` on `arguments`.
+    fn call_runtime(
+        &mut self,
+        name: &'static str,
+        arguments: &[Value],
+    ) -> Result<(), BackendError> {
+        let id = self.context.runtime_function(name)?;
+        let function = self
+            .context
+            .module
+            .declare_func_in_func(id, self.builder.func);
+        self.builder.ins().call(function, arguments);
+        Ok(())
+    }
+
     fn add(&mut self, address: Value, offset: u32) -> Value {
         if offset == 0 {
             address
@@ -745,6 +944,110 @@ enum Parts {
     IfNotNull(Member),
 }
 
+/// A loop over the elements of a list, between [`begin_element_loop`] and
+/// [`end_element_loop`]: the code between them runs once per element, in index order, with the
+/// element's index and address.
+pub(crate) struct ElementLoop {
+    header: Block,
+    done: Block,
+    /// The element's index, an `Int`.
+    pub index: Value,
+    /// The element's address.
+    pub address: Value,
+}
+
+/// Starts a loop over the elements of `stride` bytes of the list at `list`, whose size is read
+/// once, here (D15 of `collections`). Generated code is for 64-bit targets, where an `Int` is a
+/// pointer-sized word.
+pub(crate) fn begin_element_loop(
+    builder: &mut FunctionBuilder<'_>,
+    pointer: ir::Type,
+    list: Value,
+    stride: u32,
+) -> ElementLoop {
+    let flags = MemFlagsData::trusted();
+    let size = builder
+        .ins()
+        .load(pointer, flags, list, ListField::Size.offset(pointer) as i32);
+    let header = builder.create_block();
+    builder.append_block_param(header, pointer);
+    let body = builder.create_block();
+    let done = builder.create_block();
+    let zero = builder.ins().iconst(pointer, 0);
+    builder.ins().jump(header, &[zero.into()]);
+    builder.switch_to_block(header);
+    let index = builder.block_params(header)[0];
+    let more = builder.ins().icmp(IntCC::SignedLessThan, index, size);
+    builder.ins().brif(more, body, &[], done, &[]);
+    builder.switch_to_block(body);
+    let base = builder.ins().load(
+        pointer,
+        flags,
+        list,
+        ListField::Pointer.offset(pointer) as i32,
+    );
+    let offset = builder.ins().imul_imm_s(index, i64::from(stride));
+    let address = builder.ins().iadd(base, offset);
+    ElementLoop {
+        header,
+        done,
+        index,
+        address,
+    }
+}
+
+/// Ends the loop `each`, continuing after it.
+pub(crate) fn end_element_loop(builder: &mut FunctionBuilder<'_>, each: ElementLoop) {
+    let next = builder.ins().iadd_imm_s(each.index, 1);
+    builder.ins().jump(each.header, &[next.into()]);
+    builder.switch_to_block(each.done);
+}
+
+/// Drops each element of the `List<element>` at `list` in index order, with the element's drop
+/// glue, when it owns storage: what dropping and clearing a list do (D15 of `collections`).
+pub(crate) fn drop_list_elements<M: Module>(
+    context: &mut UnitContext<'_, M>,
+    builder: &mut FunctionBuilder<'_>,
+    list: Value,
+    element: &Type,
+) -> Result<(), BackendError> {
+    let Some(glue) = context.glue(GlueKind::Drop, element)? else {
+        return Ok(());
+    };
+    let layout = context.layouts.layout(element).map_err(|construct| {
+        BackendError::new(format!(
+            "no layout for {}: {}",
+            element,
+            construct.description()
+        ))
+    })?;
+    let each = begin_element_loop(builder, context.pointer, list, layout.size);
+    let reference = context.glue_reference(glue, builder.func)?;
+    builder.ins().call(reference, &[each.address]);
+    end_element_loop(builder, each);
+    Ok(())
+}
+
+/// The value of type `ty` at `address`, as a comparison reads it: a scalar is loaded, a value in
+/// memory is its address.
+pub(crate) fn element_value(
+    builder: &mut FunctionBuilder<'_>,
+    pointer: ir::Type,
+    ty: &Type,
+    address: Value,
+) -> Compared {
+    match representation(ty, pointer) {
+        Some(Representation::Scalar(machine)) => Compared::Scalar(builder.ins().load(
+            machine,
+            MemFlagsData::trusted(),
+            address,
+            0,
+        )),
+        Some(Representation::Memory) => Compared::Memory(address),
+        Some(Representation::Empty) | None => Compared::Empty,
+    }
+}
+
 /// The trap that ends a block after a call that never returns; it is never reached.
 const UNREACHABLE: TrapCode = match TrapCode::user(1) {
     Some(code) => code,
@@ -863,5 +1166,20 @@ mod tests {
             glue_symbol("main", GlueKind::Equals, &expr),
             "main#equals(main::Expr)"
         );
+        // Lists (D15 of `collections`).
+        let users = Type::List(Box::new(user));
+        assert_eq!(
+            glue_symbol("main", GlueKind::Drop, &users),
+            "main#drop(List<lib/user::User>)"
+        );
+        assert_eq!(
+            glue_symbol("main", GlueKind::IndexOf, &users),
+            "main#indexOf(List<lib/user::User>)"
+        );
+        // A list owns its buffer whatever its elements are.
+        assert!(owns_storage(
+            &Type::List(Box::new(Type::Int)),
+            &TypeTable::new()
+        ));
     }
 }

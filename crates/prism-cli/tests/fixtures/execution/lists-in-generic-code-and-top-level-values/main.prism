@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+val primes = listOf(2, 3, 5)
+fun <T> lastOf(xs: &List<T>): &T = &xs[xs.size - 1]
+fun <T> pushAll(into: &mut List<T>, from: List<T>) {
+    var source = from
+    source.reverse()
+    while (source.isNotEmpty()) into.add(source.removeLast())
+}
+fun main() {
+    var names = listOf("a".clone())
+    pushAll(&mut names, listOf("b".clone(), "c".clone()))
+    println(lastOf(names))
+    println(lastOf(primes))
+    println(names.size)
+}

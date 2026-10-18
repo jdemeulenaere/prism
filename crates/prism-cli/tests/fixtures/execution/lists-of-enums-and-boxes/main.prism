@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+enum Shape { Circle(Int), Label(String) }
+fun main() {
+    var shapes = listOf(Shape.Circle(1), Shape.Label("a".clone()))
+    shapes.add(Shape.Label(2.toString()))
+    var boxes = listOf(Heap(1), Heap(2))
+    boxes[0] = Heap(3)
+    var total = 0
+    for (b in boxes) total += b
+    for (s in shapes) when (s) {
+        Shape.Circle(val r) -> total += r
+        Shape.Label(val t) -> total += t.length
+    }
+    println(total)
+    println(shapes == listOf(Shape.Circle(1), Shape.Label("a"), Shape.Label("2")))
+}

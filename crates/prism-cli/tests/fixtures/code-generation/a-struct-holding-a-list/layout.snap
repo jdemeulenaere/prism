@@ -1,0 +1,7 @@
+struct main::Model (size 32, align 8)
+  todos: List<Int> at 0
+  count: Int at 24
+list List<Int> (size 24, align 8)
+  pointer: &Int at 0
+  size: Int at 8
+  capacity: Int at 16

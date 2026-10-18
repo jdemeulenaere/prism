@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun makeHandler(label: String): () -> Unit = { println(label) }
+fun main() {
+    var handlers = listOf<() -> Unit>()
+    for (i in 0..<3) handlers.add(makeHandler(i.toString()))
+    val greeting = "hi".clone()
+    handlers.add { println(greeting) }
+    for (h in handlers) h()
+    handlers.clear()
+    println(handlers.size)
+}

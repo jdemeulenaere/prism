@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+fun make(): List<String> = listOf(1.toString(), 2.toString())
+fun main() {
+    for (s in make()) println(s)
+}

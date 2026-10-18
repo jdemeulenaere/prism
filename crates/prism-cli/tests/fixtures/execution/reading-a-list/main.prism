@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun main() {
+    val xs = listOf(5, 6, 7)
+    println(xs.size)
+    println(xs[2])
+    println(xs.isNotEmpty())
+    for (i in xs.indices) print(i)
+    println()
+}

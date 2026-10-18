@@ -90,6 +90,6 @@ Every list type MUST have drop and clone glue, whatever its element type. Droppi
 ### Requirement: List Equality and Search Are Glue
 `==` on lists MUST call equality glue, `<module>#equals(List<T>)`, which compares sizes and then elements in order, stopping at the first difference. `contains` and `indexOf` MUST call index-of glue, `<module>#indexOf(List<T>)`, which compares the given element with each element in order and gives the first equal index or -1. Element comparisons MUST use `==` of the element type, through its equality glue when it has one.
 
-#### Scenario: Equality glue in the IR dump
+#### Scenario: List equality glue in the IR dump
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `fun same(a: &List<Int>, b: &List<Int>): Bool = a == b`
 - **THEN** it prints the equality glue of `List<Int>`, headed `function main#equals(List<Int>)`, and `same` calls it directly

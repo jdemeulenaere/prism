@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun main() {
+    val xs = listOf(1, 2, 3, 4, 5)
+    var sum = 0
+    for (x in xs) {
+        if (x == 2) continue
+        if (x == 5) break
+        sum += x
+    }
+    println(sum)
+}

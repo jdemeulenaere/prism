@@ -46,8 +46,6 @@ pub enum Construct {
     /// A value of an opaque type, which names no declaration, or of a struct or enum whose
     /// definition the file does not know.
     UnknownType(String),
-    /// A value of a `List<T>`, until the backend lowers lists (`collections`).
-    Lists,
 }
 
 impl Construct {
@@ -62,7 +60,6 @@ impl Construct {
                 format!("conversions from '{}' to '{}'", from, to)
             }
             Construct::UnknownType(name) => format!("values of unknown type '{}'", name),
-            Construct::Lists => "lists".to_string(),
         }
     }
 
@@ -70,7 +67,6 @@ impl Construct {
     pub fn change(&self) -> Option<&'static str> {
         match self {
             Construct::ComposableFunctions => Some("compose-transform"),
-            Construct::Lists => Some("collections"),
             Construct::Conversion { .. }
             | Construct::UnknownType(_)
             | Construct::TypeParameter(_) => None,
@@ -184,8 +180,9 @@ fn classify_at(
         Type::Reference { inner, .. } | Type::Nullable(inner) => {
             classify_at(inner, types, boxed, depth + 1)
         }
-        // A box is named by its contents (D3 of `heap-boxes`).
-        Type::Heap(inner) => {
+        // A box is named by its contents (D3 of `heap-boxes`), and a list by its elements (D13
+        // of `collections`), each looked into once.
+        Type::Heap(inner) | Type::List(inner) => {
             if boxed.insert(inner.as_ref().clone()) {
                 classify_at(inner, types, boxed, depth + 1)
             } else {
@@ -208,7 +205,6 @@ fn classify_at(
         // A function value is a descriptor and an environment (D2 of `closures`), whatever its
         // parameters and result: they are the closure's concern.
         Type::Fn { .. } => None,
-        Type::List(_) => Some(Construct::Lists),
         Type::Parameter(parameter) => Some(Construct::TypeParameter(parameter.name.clone())),
         Type::Opaque(name) => Some(Construct::UnknownType(name.clone())),
         Type::Error => Some(Construct::UnknownType("<error>".to_string())),

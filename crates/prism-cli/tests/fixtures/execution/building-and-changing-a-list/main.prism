@@ -1,0 +1,22 @@
+// expect: ok
+// run: 0
+fun show(xs: &List<Int>) {
+    for (x in xs) print(x)
+    println()
+}
+fun main() {
+    var xs = listOf(1, 2, 3)
+    xs.add(4)
+    xs.insert(0, 0)
+    show(xs)
+    println(xs.removeAt(2))
+    println(xs.removeLast())
+    xs[0] = 9
+    xs[1] += 10
+    show(xs)
+    xs.reverse()
+    show(xs)
+    println(xs.size)
+    xs.clear()
+    println(xs.isEmpty())
+}

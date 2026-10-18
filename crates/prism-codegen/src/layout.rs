@@ -664,10 +664,14 @@ fn write_entry(text: &mut String, layouts: &LayoutTable, ty: &Type) {
         Shape::List => {
             writeln!(text, "{} ({})", name, size).unwrap();
             let pointer = layouts.pointer;
+            let element = match ty {
+                Type::List(element) => element.to_string(),
+                other => other.to_string(),
+            };
             for field in [ListField::Pointer, ListField::Size, ListField::Capacity] {
                 let ty = match field {
-                    ListField::Pointer => "pointer",
-                    ListField::Size | ListField::Capacity => "Int",
+                    ListField::Pointer => format!("&{}", element),
+                    ListField::Size | ListField::Capacity => "Int".to_string(),
                 };
                 let offset = field.offset(pointer);
                 writeln!(text, "  {}: {} at {}", field.name(), ty, offset).unwrap();
@@ -758,6 +762,26 @@ mod tests {
         let offsets: Vec<u32> = allocated.captures.iter().map(|c| c.offset).collect();
         assert_eq!(offsets, [0, 32]);
         assert!(allocated.captures.iter().all(|c| c.owned));
+    }
+
+    /// D13 of `collections`: three words, whatever the element, laid out like any field.
+    #[test]
+    fn lists_are_three_words() {
+        let list = Type::List(Box::new(Type::Char));
+        let layout = layout_in("fun f() {}\n", &list);
+        assert_eq!(
+            (layout.size, layout.align, &layout.shape),
+            (24, 8, &Shape::List)
+        );
+        assert_eq!(
+            [ListField::Pointer, ListField::Size, ListField::Capacity].map(|f| f.offset(POINTER)),
+            [0, 8, 16]
+        );
+        let model = layout_in(
+            "struct Model { val flag: Bool, val todos: List<Int> }\n",
+            &main_struct("Model"),
+        );
+        assert_eq!((model.size, offsets(&model)), (32, vec![24, 0]));
     }
 
     #[test]

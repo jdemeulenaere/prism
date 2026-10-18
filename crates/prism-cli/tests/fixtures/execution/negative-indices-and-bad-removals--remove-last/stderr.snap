@@ -1,0 +1,2 @@
+panic: removeLast() on an empty list
+  at main.prism:5:5

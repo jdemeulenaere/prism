@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+struct Node { val name: String, var children: List<Node> }
+fun Node.count(): Int {
+    var n = 1
+    for (c in children) n += c.count()
+    return n
+}
+fun main() {
+    var root = Node("root".clone(), listOf())
+    root.children.add(Node("a".clone(), listOf(Node("b".clone(), listOf()))))
+    root.children.add(Node("c".clone(), listOf()))
+    println(root.count())
+}

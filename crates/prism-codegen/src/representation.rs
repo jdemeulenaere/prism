@@ -23,8 +23,8 @@ pub enum Representation {
     Empty,
     /// One machine value.
     Scalar(MachineType),
-    /// Bytes in memory, laid out by the type's [`crate::layout::Layout`]: a `String`, a struct,
-    /// an enum, a function value, or a nullable that is not a nullable pointer.
+    /// Bytes in memory, laid out by the type's [`crate::layout::Layout`]: a `String`, a list, a
+    /// struct, an enum, a function value, or a nullable that is not a nullable pointer.
     Memory,
 }
 
@@ -34,9 +34,11 @@ pub enum Representation {
 pub fn representation(ty: &Type, pointer: MachineType) -> Option<Representation> {
     match ty {
         Type::Unit | Type::Nothing => Some(Representation::Empty),
-        Type::String | Type::Struct { .. } | Type::Enum { .. } | Type::Fn { .. } => {
-            Some(Representation::Memory)
-        }
+        Type::String
+        | Type::List(_)
+        | Type::Struct { .. }
+        | Type::Enum { .. }
+        | Type::Fn { .. } => Some(Representation::Memory),
         Type::Nullable(inner) if !is_pointer(inner) => Some(Representation::Memory),
         _ => machine_type(ty, pointer).map(Representation::Scalar),
     }

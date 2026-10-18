@@ -1,0 +1,6 @@
+// expect: ok
+// run: 101
+fun main() {
+    var xs = listOf<Int>()
+    xs.removeLast()
+}

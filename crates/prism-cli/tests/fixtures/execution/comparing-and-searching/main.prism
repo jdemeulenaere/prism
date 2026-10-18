@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct P : Copy { val x: Int }
+fun main() {
+    val a = listOf("a".clone(), "b".clone())
+    val b = listOf("a", "b")
+    println(a == b)
+    println(a != listOf("a"))
+    println(listOf(P(1), P(2)).indexOf(P(2)))
+    println(a.contains("c"))
+    println(listOf(listOf(1)) == listOf(listOf(1)))
+}

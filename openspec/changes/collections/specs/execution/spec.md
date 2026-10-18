@@ -36,7 +36,7 @@ Generic structs and enums that reach themselves through `Heap<T>` with the same 
 ### Requirement: List Indices Are Checked
 An element access, `removeAt(i)` or `insert(i, e)` whose index is outside `0..<size` (for `insert`, outside `0..size`) MUST end the program with the runtime error "list index <i> out of range for size <n>", located at the access or the call, after the operands of the access or the call are evaluated and before the list changes. `removeLast()` on an empty list MUST end it with the runtime error "removeLast() on an empty list".
 
-#### Scenario: An index out of range
+#### Scenario: A list index out of range
 - **WHEN** `fun main() { val xs = listOf(1, 2, 3); println(xs[0]); println(xs[3]) }` runs
 - **THEN** stdout holds `1` and a newline, stderr holds `panic: list index 3 out of range for size 3` and the location of `xs[3]`, and the exit status is 101
 
@@ -84,6 +84,14 @@ Dropping a list MUST drop each of its elements once and free its buffer. Cloning
 #### Scenario: A list of handlers
 - **WHEN** `fun main() { var handlers = listOf<() -> Unit>(); handlers.add { println("one") }; handlers.add { println("two") }; for (h in handlers) h(); handlers.removeAt(0); handlers[0]() }` runs with `--check-allocations`
 - **THEN** it prints `one`, `two` and `two`, writes nothing to stderr and exits with status 0
+
+#### Scenario: Lists of enums and boxes
+- **WHEN** `enum Shape { Circle(Int), Label(String) }` is declared and `fun main() { var shapes = listOf(Shape.Circle(1), Shape.Label("a".clone())); shapes.add(Shape.Label(2.toString())); var boxes = listOf(Heap(1), Heap(2)); boxes[0] = Heap(3); var total = 0; for (b in boxes) total += b; for (s in shapes) when (s) { Shape.Circle(val r) -> total += r; Shape.Label(val t) -> total += t.length }; println(total); println(shapes == listOf(Shape.Circle(1), Shape.Label("a"), Shape.Label("2"))) }` runs with `--check-allocations`
+- **THEN** it prints `8` and `true`, writes nothing to stderr and exits with status 0
+
+#### Scenario: Handlers that own their captures
+- **WHEN** `fun makeHandler(label: String): () -> Unit = { println(label) }` is declared and `fun main() { var handlers = listOf<() -> Unit>(); for (i in 0..<3) handlers.add(makeHandler(i.toString())); val greeting = "hi".clone(); handlers.add { println(greeting) }; for (h in handlers) h(); handlers.clear(); println(handlers.size) }` runs with `--check-allocations`
+- **THEN** it prints `0`, `1`, `2`, `hi` and `0`, writes nothing to stderr and exits with status 0, every closure's environment freed by `clear()`
 
 ### Requirement: Adding to a List Takes Amortized Constant Time
 On a release build, `prism run` of a program that adds a million `Int`s to an empty list and then sums them MUST take under 20 ms of wall time, startup included, on a developer machine. A timing benchmark MUST report this time against the target; it MUST NOT fail a test run on the time alone.

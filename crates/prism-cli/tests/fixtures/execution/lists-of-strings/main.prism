@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun main() {
+    var names = listOf("a" + "da", "bob".clone())
+    names.add(3.toString())
+    names[1] = "eve".clone()
+    val first = names.removeAt(0)
+    println(first)
+    for (n in names) println(n)
+    println(names[0].length)
+}

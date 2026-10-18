@@ -1023,3 +1023,45 @@ fn every_kind_of_environment_runs() {
     // The string, then the environment.
     assert_eq!(checked(|| assert_eq!(allocated(123), 126)), 2);
 }
+
+// Lists (D13 to D15 of `collections`).
+
+const LISTS: &str = "\
+struct User : Clone { val name: String, val id: Int }\n\
+struct Marker : Copy {}\n\
+fun ints(n: Int): Int { var xs = listOf<Int>(); for (i in 0..<n) xs.add(i); xs.insert(0, 100); val first = xs.removeAt(0); val last = xs.removeLast(); xs.reverse(); var sum = 0; for (x in xs) sum += x; return sum + first + last + xs.size }\n\
+fun strings(): Int { var names = listOf(\"a\".clone(), \"bb\".clone()); names.add(3.toString()); names[0] = \"cccc\".clone(); val copy = names.clone(); names.clear(); return copy[0].length + copy.size + names.size + copy.indexOf(\"bb\") }\n\
+fun users(): Int { var users = listOf(User(\"a\".clone(), 1), User(\"b\".clone(), 2)); val cloned = users.clone(); users[1] = User(\"c\".clone(), 3); var total = 0; for (u in &mut users) total += u.id; if (cloned == listOf(User(\"a\", 1), User(\"b\", 2))) total += 10; return total }\n\
+fun markers(): Int { var ms = listOf<Marker>(); for (i in 0..<5) ms.add(Marker()); ms.removeLast(); return ms.size }\n\
+fun empty(): Int { val xs = listOf<String>(); return xs.size + xs.indexOf(\"a\") }\n";
+
+#[test]
+fn lists_hold_move_clone_and_free_their_elements() {
+    let program = compile(LISTS);
+    let ints: IntToInt = function(&program, "main::ints");
+    let strings: ToInt = function(&program, "main::strings");
+    let users: ToInt = function(&program, "main::users");
+    let made = checked(|| {
+        assert_eq!(ints(10), 36 + 100 + 9 + 9);
+        assert_eq!(strings(), 4 + 3 + 1);
+        assert_eq!(users(), 1 + 3 + 10);
+    });
+    assert!(made > 10, "{}", made);
+    // Growth by doubling from 4: 0, then 4, 8, 16 for twenty adds.
+    let grown = checked(|| assert_eq!(ints(20), (0..19).sum::<i64>() + 100 + 19 + 19));
+    assert_eq!(grown, 4, "{}", grown);
+}
+
+#[test]
+fn empty_lists_and_zero_sized_elements_allocate_nothing() {
+    // The scenario "Empty lists and lists of zero-sized elements allocate nothing" of the
+    // `code-generation` delta of `collections`.
+    let program = compile(LISTS);
+    let markers: ToInt = function(&program, "main::markers");
+    let empty: ToInt = function(&program, "main::empty");
+    let made = checked(|| {
+        assert_eq!(markers(), 4);
+        assert_eq!(empty(), -1);
+    });
+    assert_eq!(made, 0);
+}

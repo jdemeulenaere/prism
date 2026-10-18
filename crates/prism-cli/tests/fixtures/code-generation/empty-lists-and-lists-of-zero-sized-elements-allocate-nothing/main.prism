@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Marker : Copy {}
+fun main() {
+    var a = listOf<Int>()
+    var b = listOf<Marker>()
+    for (i in 0..<3) b.add(Marker())
+    println(a.size + b.size)
+}

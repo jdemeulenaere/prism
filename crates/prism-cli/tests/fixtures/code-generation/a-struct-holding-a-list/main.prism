@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+struct Model { val todos: List<Int>, val count: Int }
+fun main() {
+    val m = Model(listOf(1), 1)
+    println(m.count)
+}

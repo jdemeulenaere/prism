@@ -220,7 +220,7 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
     /// equality glue for boxed contents. Asked only of types whose weight is small.
     fn calls(&self, ty: &Type) -> Result<bool, BackendError> {
         match ty {
-            Type::String => Ok(true),
+            Type::String | Type::List(_) => Ok(true),
             Type::Heap(inner) if needs_equality_glue(inner) => Ok(true),
             Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
                 self.calls(inner)
@@ -406,6 +406,8 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
         match ty {
             Type::Unit | Type::Nothing => Ok(true),
             Type::Heap(inner) if needs_equality_glue(inner) => Ok(count(weight, 1)),
+            // A list compares in its equality glue: one call.
+            Type::List(_) => Ok(count(weight, 1)),
             Type::Reference { inner, .. } | Type::Heap(inner) => {
                 self.add_weight(inner, limit, weight)
             }
@@ -546,6 +548,12 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
             // Strings compare their text, in the runtime (D11 of `runtime-strings-and-drops`).
             Type::String => {
                 let id = self.context.runtime_function("prism_rt_string_equals")?;
+                let (left, right) = (self.address(left)?, self.address(right)?);
+                self.call(id, &[left, right])?;
+            }
+            // Lists compare their elements in their equality glue (D15 of `collections`).
+            Type::List(_) => {
+                let id = self.context.equality_glue(ty)?;
                 let (left, right) = (self.address(left)?, self.address(right)?);
                 self.call(id, &[left, right])?;
             }
