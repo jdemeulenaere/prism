@@ -55,6 +55,9 @@ enum Storage {
     /// `Unit`, `Nothing`, or a type no use of which reaches the backend.
     Empty,
     Variable(Variable),
+    /// A scalar temporary assigned once and used only after that, in the block that assigns
+    /// it: its value is kept as is, with no variable for Cranelift's SSA construction to track.
+    Value(LocalId),
     /// A value in memory, or a borrowed scalar.
     Slot(ir::StackSlot),
     /// Memory whose address the function received: an argument in memory, or the result.
@@ -96,6 +99,8 @@ impl Lowered {
 enum Location {
     Empty,
     Variable(Variable),
+    /// A local of [`Storage::Value`].
+    Value(LocalId),
     /// In memory, at the address.
     Memory(Value),
 }
@@ -126,6 +131,10 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     /// The block a terminator just continued into, lowered next in the same Cranelift block.
     continuation: Option<prism_mir::BlockId>,
     locals: Vec<Storage>,
+    /// The value of each local of [`Storage::Value`], once assigned.
+    values: Vec<Option<Value>>,
+    /// The temporaries that can be of [`Storage::Value`] ([`block_local_temporaries`]).
+    block_local: Vec<bool>,
     /// The locals whose address is taken.
     borrowed: HashSet<LocalId>,
     runtime: HashMap<&'static str, ir::FuncRef>,
@@ -154,6 +163,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             continued: continued_blocks(body),
             continuation: None,
             locals: Vec::new(),
+            values: vec![None; body.locals.len()],
+            block_local: block_local_temporaries(body),
             borrowed: borrowed_locals(body),
             runtime: HashMap::new(),
             glue: HashMap::new(),
@@ -278,6 +289,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     let layout = self.layout(&declaration.ty)?;
                     Storage::Slot(self.slot(&layout))
                 }
+                Some(Representation::Scalar(_)) if self.block_local[local.0 as usize] => {
+                    Storage::Value(local)
+                }
                 Some(Representation::Scalar(machine)) => {
                     Storage::Variable(self.builder.declare_var(machine))
                 }
@@ -347,6 +361,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         let mut location = match self.locals[place.local.0 as usize] {
             Storage::Empty => Location::Empty,
             Storage::Variable(variable) => Location::Variable(variable),
+            Storage::Value(local) => Location::Value(local),
             Storage::Slot(slot) => {
                 Location::Memory(self.builder.ins().stack_addr(pointer, slot, 0))
             }
@@ -441,6 +456,11 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         Ok(match location {
             Location::Empty => Lowered::Empty,
             Location::Variable(variable) => Lowered::Scalar(self.builder.use_var(variable)),
+            Location::Value(local) => {
+                Lowered::Scalar(self.values[local.0 as usize].ok_or_else(|| {
+                    BackendError::new(format!("_{} is read before it is assigned", local.0))
+                })?)
+            }
             Location::Memory(address) => match self.representation(ty) {
                 Some(Representation::Scalar(machine)) => {
                     Lowered::Scalar(self.builder.ins().load(machine, aligned(), address, 0))
@@ -471,6 +491,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             (Location::Empty, _) | (_, Lowered::Empty) => {}
             (Location::Variable(variable), Lowered::Scalar(value)) => {
                 self.builder.def_var(variable, value)
+            }
+            (Location::Value(local), Lowered::Scalar(value)) => {
+                self.values[local.0 as usize] = Some(value)
             }
             (Location::Memory(address), Lowered::Scalar(value)) => {
                 self.builder.ins().store(aligned(), value, address, 0);
@@ -1488,6 +1511,109 @@ fn continued_blocks(body: &Body) -> Vec<bool> {
                 _ => false,
             };
             block != 0 && predecessor != block && reached[block] && only_exit
+        })
+        .collect()
+}
+
+/// The temporaries of `body` that are wholly assigned once, by a statement, and mentioned
+/// otherwise only after that assignment and in its block: their value never crosses a block, so
+/// they need no Cranelift variable. A temporary read by a later block, written by a call or
+/// assigned twice (a loop's) is not one.
+fn block_local_temporaries(body: &Body) -> Vec<bool> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Seen {
+        Never,
+        /// Assigned in this block, and maybe used after it there.
+        Assigned(usize),
+        Disqualified,
+    }
+    let mut seen = vec![Seen::Never; body.locals.len()];
+    fn mention(seen: &mut [Seen], local: LocalId, block: usize, whole_assignment: bool) {
+        let entry = &mut seen[local.0 as usize];
+        *entry = match *entry {
+            Seen::Never if whole_assignment => Seen::Assigned(block),
+            Seen::Assigned(assigned) if assigned == block && !whole_assignment => *entry,
+            _ => Seen::Disqualified,
+        };
+    }
+    fn operand_place(operand: &Operand) -> Option<&Place> {
+        match operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => Some(place),
+            Operand::Constant(_) => None,
+        }
+    }
+    for (block, data) in body.blocks.iter() {
+        let block = block.0 as usize;
+        for statement in &data.statements {
+            match &statement.kind {
+                StatementKind::Assign(destination, rvalue) => {
+                    let mut used: Vec<&Place> = Vec::new();
+                    match rvalue.as_ref() {
+                        Rvalue::Use(operand)
+                        | Rvalue::Unary(_, operand)
+                        | Rvalue::WrapNullable(operand)
+                        | Rvalue::Subtype(operand) => used.extend(operand_place(operand)),
+                        Rvalue::Binary(_, left, right) => {
+                            used.extend(operand_place(left));
+                            used.extend(operand_place(right));
+                        }
+                        Rvalue::Aggregate(_, operands) => {
+                            used.extend(operands.iter().filter_map(operand_place))
+                        }
+                        Rvalue::Borrow { place, .. } | Rvalue::Discriminant(place) => {
+                            used.push(place)
+                        }
+                        Rvalue::Closure { captures, .. } => used.extend(captures),
+                    }
+                    for place in used {
+                        mention(&mut seen, place.local, block, false);
+                    }
+                    mention(
+                        &mut seen,
+                        destination.local,
+                        block,
+                        destination.projections.is_empty(),
+                    );
+                }
+                StatementKind::Read(place) => mention(&mut seen, place.local, block, false),
+                StatementKind::Destructure { source, parts, .. } => {
+                    mention(&mut seen, *source, block, false);
+                    for (_, target) in parts {
+                        mention(&mut seen, *target, block, true);
+                    }
+                }
+                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+            }
+        }
+        match &data.terminator.kind {
+            TerminatorKind::SwitchInt { value, .. } => {
+                if let Some(place) = operand_place(value) {
+                    mention(&mut seen, place.local, block, false);
+                }
+            }
+            TerminatorKind::Call {
+                callee,
+                arguments,
+                destination,
+                ..
+            } => {
+                if let Callee::Value(place, _) = callee {
+                    mention(&mut seen, place.local, block, false);
+                }
+                for place in arguments.iter().filter_map(operand_place) {
+                    mention(&mut seen, place.local, block, false);
+                }
+                seen[destination.local.0 as usize] = Seen::Disqualified;
+            }
+            TerminatorKind::Drop { place, .. } => mention(&mut seen, place.local, block, false),
+            TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        }
+    }
+    body.locals
+        .iter()
+        .map(|(local, declaration)| {
+            declaration.kind == LocalKind::Temporary
+                && matches!(seen[local.0 as usize], Seen::Assigned(_))
         })
         .collect()
 }
