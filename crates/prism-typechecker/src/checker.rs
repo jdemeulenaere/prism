@@ -748,6 +748,11 @@ impl TypeChecker {
     /// and result through any step, except those of function type, which the adapter would
     /// have to convert as values. Values of other types are not this rule's.
     fn converts_function_value(&self, id: ExpressionId, found: &Type, expected: &Type) -> bool {
+        // Wrapping a value into a nullable keeps the value as it is, as the payload.
+        let expected = match (found, expected) {
+            (Type::Fn { .. }, Type::Nullable(inner)) => inner.as_ref(),
+            _ => expected,
+        };
         if !found.is_function_value() || found.converts_in_place(expected) {
             return true;
         }
@@ -757,10 +762,6 @@ impl TypeChecker {
         ) {
             return false;
         }
-        let expected = match (found, expected) {
-            (Type::Fn { .. }, Type::Nullable(inner)) => inner.as_ref(),
-            _ => expected,
-        };
         let (
             Type::Fn { params, ret, .. },
             Type::Fn {

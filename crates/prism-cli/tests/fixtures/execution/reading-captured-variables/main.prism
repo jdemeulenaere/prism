@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun run(f: () -> Int): Int = f()
+
+fun main() {
+    val a = 2
+    var b = 5
+    b = 6
+    println(run { a * 10 + b })
+}

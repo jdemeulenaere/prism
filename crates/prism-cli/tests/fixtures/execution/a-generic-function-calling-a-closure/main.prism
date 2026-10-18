@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun <T> apply(x: T, f: (T) -> T): T = f(x)
+
+fun main() {
+    println(apply(2) { n -> n + 1 })
+    println(apply("a") { s -> s + "b" })
+}

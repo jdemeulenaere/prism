@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun greet(name: &String, format: (&String) -> String = { n -> "Hi " + n }): String = format(name)
+
+fun main() {
+    println(greet("Ada"))
+    println(greet("Bo") { n -> n + "!" })
+}

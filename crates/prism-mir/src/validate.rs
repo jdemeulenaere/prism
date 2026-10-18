@@ -495,16 +495,24 @@ impl Validator<'_> {
                     }
                 }
             }
-            TerminatorKind::Drop { place, .. } => {
+            TerminatorKind::Drop { place, target } => {
                 if let Some(ty) = self.place_type(place, &at) {
                     if !needs_drop(&ty, self.types) {
                         self.report(format!("{} drops a {}, which needs no drop", at, ty));
                     }
                 }
-                // The captured binding itself is never dropped by the closure; the old value of
-                // a field of it is, when the closure assigns the field.
+                // The captured binding itself is never dropped by the closure, except for its old
+                // value when the closure assigns it, which the assignment at the drop's target
+                // then replaces; the old value of a field of it is, when the closure assigns the
+                // field.
                 let local = place.local;
+                let replaced = self.body.blocks.get(*target).is_some_and(|block| {
+                    matches!(block.statements.first(), Some(statement)
+                        if matches!(&statement.kind, StatementKind::Assign(assigned, _)
+                            if assigned == place))
+                });
                 if place.projections.is_empty()
+                    && !replaced
                     && self.body.locals.get(local).map(|l| l.kind) == Some(LocalKind::Capture)
                 {
                     self.report(format!("{} drops the capture _{}", at, local.0));

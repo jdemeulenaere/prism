@@ -1,13 +1,16 @@
 // The reference program of `prism run`: run it with `prism run examples/run/main.prism`, and
 // time it with `prism run --timings examples/run/main.prism`. It uses scalars, a struct, an enum
 // with payloads matched by patterns, a destructuring declaration, a nullable, strings and string
-// templates, an expression tree built from boxes, and generic functions and extensions.
+// templates, an expression tree built from boxes, generic functions and extensions, and closures
+// and function values.
 package run
 
 import /run/generic/labels
 import /run/geometry/shapes
 import /run/math/expressions
 import /run/math/numbers
+
+fun triple(n: Int): Int = n * 3
 
 fun main() {
     var primes = 0
@@ -51,4 +54,10 @@ fun main() {
     val name = labeled("name", "prism")
     println(name.value.length)
     println(firstOr(slope(Point(1, 0)), -1))
+
+    var steps = 0
+    repeat(4) { steps += primes }
+    println(steps)
+    println(twice(triple, 2))
+    println(twice({ n -> n - steps }, 100))
 }

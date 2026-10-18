@@ -9,10 +9,13 @@
 //! | initializer and accessor of top-level `val` `name` | `m::name#init`, `m::name#get` |
 //! | instance of a generic function or extension for type arguments `A, B` | `<symbol><A, B>` |
 //! | instance of a default generator | `<instance symbol>#default(p)` |
-//! | slot of any of these in the function table | `<symbol>#slot` |
+//! | closure `i` of a body | `<parent symbol>#closure<i>` |
+//! | descriptor of a closure | `<closure symbol>#descriptor` |
+//! | slot of any of these functions in the function table | `<symbol>#slot` |
 //! | storage of top-level `val` `name` | `m::name#storage`, `m::name#state` |
 //!
-//! A closure, which is never compiled yet, is named `<parent symbol>#closure<index>`. An
+//! A closure is named after the body it is lowered in and its index there, so a closure of an
+//! instance after the instance (`main::apply<Int>#closure0`, D4 and D11 of `closures`). An
 //! instance's type arguments are written as glue names types: every struct and enum qualified by
 //! its module (`lib/box::keep<lib/user::User>`, D4 of `monomorphization`).
 
@@ -87,6 +90,13 @@ pub fn state_symbol(path: &DeclarationPath) -> String {
 /// The symbol of the slot of the function table that holds the address of `symbol` (D4).
 pub fn slot_symbol(symbol: &str) -> String {
     format!("{}#slot", symbol)
+}
+
+/// The symbol of the descriptor of the closure whose code is `closure_symbol` (D3 of
+/// `closures`): static data holding the address of the closure's slot and its environment's
+/// drop entry.
+pub fn descriptor_symbol(closure_symbol: &str) -> String {
+    format!("{}#descriptor", closure_symbol)
 }
 
 /// The function symbol a slot symbol stands for, if `name` is one.
@@ -232,5 +242,32 @@ mod tests {
     fn closures_are_named_after_their_parent() {
         let file = lower_source("fun f(): Int { val g = { 1 }; return g() }\n");
         assert_eq!(symbols(&file), ["main::f", "main::f#closure0"]);
+        assert_eq!(
+            descriptor_symbol("main::f#closure0"),
+            "main::f#closure0#descriptor"
+        );
+    }
+
+    #[test]
+    fn symbols_of_nested_and_default_closures() {
+        // The names of the scenario "Symbols of nested and default closures" of the
+        // `code-generation` spec.
+        let file = lower_source(
+            "fun run(f: () -> Int): Int = f()\n\
+             fun pick(n: Int, f: () -> Int = { 3 }): Int = n + f()\n\
+             fun main() { println(run { run { 1 } }); println(pick(1)) }\n",
+        );
+        assert_eq!(
+            symbols(&file),
+            [
+                "main::run",
+                "main::pick",
+                "main::pick#default(f)",
+                "main::pick#default(f)#closure0",
+                "main::main",
+                "main::main#closure0",
+                "main::main#closure0#closure0",
+            ]
+        );
     }
 }

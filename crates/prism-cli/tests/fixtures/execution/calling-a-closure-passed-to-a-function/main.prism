@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun apply(f: (Int, Int) -> Int): Int = f(3, 4)
+
+fun main() {
+    println(apply { a, b -> a * b })
+}

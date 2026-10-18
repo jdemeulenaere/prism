@@ -1,0 +1,4 @@
+// expect: ok
+struct Task { val run: () -> Unit, val id: Int }
+
+fun later(f: (() -> Unit)?) {}

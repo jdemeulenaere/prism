@@ -1,3 +1,4 @@
 // expect: ok
 struct Task { val run: () -> Unit }
 struct Box<T>(val v: T)
+struct Odd { val w: Widget }

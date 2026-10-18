@@ -1,5 +1,5 @@
 package lib
 public fun <T> later(x: T): Int {
-    val f = { 1 }
+    val f: compose () -> Unit = {}
     return 1
 }

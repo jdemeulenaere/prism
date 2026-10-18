@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun run(g: () -> Int): Int = g()
+
+fun <T : Copy> both(x: T, f: (T, T) -> Int): Int = run { f(x, x) }
+
+fun main() {
+    println(both(4) { a, b -> a * b })
+}

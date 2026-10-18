@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Task { val run: () -> Int, val name: String }
+
+fun main() {
+    val t = Task({ 7 }, "a" + "b")
+    println(t.run())
+    println(t.name)
+}

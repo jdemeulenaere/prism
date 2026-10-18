@@ -1,4 +1,0 @@
-// expect: ok
-// run: 1
-enum Job { Run(() -> Int), Idle }
-fun main() { val j = Job.Idle }

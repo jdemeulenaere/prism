@@ -1,4 +1,0 @@
-// expect: ok
-// run: 1
-fun first(g: () -> Int): Int = 1
-fun main() {}

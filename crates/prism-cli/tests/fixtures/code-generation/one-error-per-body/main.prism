@@ -1,5 +1,5 @@
 // expect: ok
 // run: 1
-fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }
-fun g(): Int { val c = { 3 }; return 2 }
+fun f(a: Widget, b: Gadget): Int = 1
+fun g(c: Widget): Int = 2
 fun main() {}

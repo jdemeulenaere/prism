@@ -1,0 +1,5 @@
+struct main::Task (size 24, align 8)
+  run: () -> Unit at 0
+  id: Int at 16
+nullable (() -> Unit)? (size 24, align 8, tag u8 at 0)
+  payload () -> Unit at 8

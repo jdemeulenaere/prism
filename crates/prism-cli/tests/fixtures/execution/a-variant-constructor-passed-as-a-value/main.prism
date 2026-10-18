@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+enum Shape {
+    Circle(Int),
+    Dot,
+}
+
+fun build(f: (Int) -> Shape): Shape = f(3)
+
+fun main() {
+    println(build(Shape.Circle) == Shape.Circle(3))
+}

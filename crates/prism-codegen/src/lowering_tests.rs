@@ -929,3 +929,74 @@ fn instances_of_one_generic_run_from_one_program() {
     assert!(program.function_address("main::keep<String>").is_some());
     assert!(program.function_address("main::keep").is_none());
 }
+
+// Closures (D2 to D6 of `closures`).
+
+#[test]
+fn closures_read_and_write_every_kind_of_captured_place() {
+    let program = compile(
+        "struct Pair { var a: Int, var b: Int }\n\
+         fun run(f: () -> Int): Int = f()\n\
+         fun go(f: () -> Unit) { f() }\n\
+         fun local(n: Int): Int { var x = n; go { x += 1 }; return run { x * 10 } }\n\
+         fun aggregate(p: Pair): Int = run { p.a + p.b }\n\
+         fun mutable(n: Int): Int { var p = Pair(n, 0); go { p.b = p.a * 2 }; return p.b }\n\
+         fun scaled(n: Int, m: Int = run { n * 3 }): Int = m\n\
+         fun default_input(n: Int): Int = scaled(n)\n\
+         fun nested(n: Int): Int { var total = 0; go { go { total += n }; go { total += 1 } }; return total }\n",
+    );
+    let local: IntToInt = function(&program, "main::local");
+    assert_eq!(local(4), 50);
+    let mutable: IntToInt = function(&program, "main::mutable");
+    assert_eq!(mutable(6), 12);
+    let default_input: IntToInt = function(&program, "main::default_input");
+    assert_eq!(default_input(5), 15);
+    let nested: IntToInt = function(&program, "main::nested");
+    assert_eq!(nested(7), 8);
+    let aggregate: extern "C" fn(*const [i64; 2]) -> i64 = function(&program, "main::aggregate");
+    assert_eq!(aggregate(&[3, 4]), 7);
+}
+
+#[test]
+fn a_closure_built_in_an_earlier_iteration_still_runs() {
+    let program = compile(
+        "fun f(n: Int): Int {\n\
+             val a = n; var keep: () -> Int = { 0 }; var i = 0\n\
+             while (i < 3) { val g = { a + 1 }; if (i == 0) keep = g; i += 1 }\n\
+             return keep()\n\
+         }\n",
+    );
+    let f: IntToInt = function(&program, "main::f");
+    assert_eq!(f(10), 11);
+}
+
+#[test]
+fn building_and_calling_closures_allocates_nothing() {
+    let program = compile(
+        "fun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }\n\
+         fun double(n: Int): Int = n * 2\n\
+         fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))\n\
+         fun f(n: Int): Int { var count = 0; repeat(n) { count += twice(double, 1) }; return count }\n",
+    );
+    let f: IntToInt = function(&program, "main::f");
+    let allocations = checked(|| assert_eq!(f(3), 12));
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn a_repointed_closure_slot_is_followed() {
+    // The scenario "A repointed closure slot is followed" of the `code-generation` spec: the
+    // first closure's values call through its slot, so after the slot is pointed at the second
+    // closure's code, both calls run the second closure.
+    let program = compile(
+        "fun run(f: () -> Int): Int = f()\n\
+         fun f(): Int = run { 1 } * 10 + run { 2 }\n",
+    );
+    let f: extern "C" fn() -> i64 = function(&program, "main::f");
+    assert_eq!(f(), 12);
+    let second = program
+        .function_address("main::f#closure1")
+        .expect("the closure has a slot");
+    program.table().set("main::f#closure0", second);
+    assert_eq!(f(), 22);
+}

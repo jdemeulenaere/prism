@@ -37,3 +37,15 @@ public fun sumTo(n: Int, step: Int = 1): Int {
     }
     return sum
 }
+
+// Runs `action` `n` times.
+public fun repeat(n: Int, action: () -> Unit): Unit {
+    var i = 0
+    while (i < n) {
+        action()
+        i += 1
+    }
+}
+
+// `f` applied twice to `x`.
+public fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))

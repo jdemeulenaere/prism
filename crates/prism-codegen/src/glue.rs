@@ -15,6 +15,11 @@
 //!   copies the value bitwise and then replaces each owning part, in the same order, by a clone
 //!   of the source's; a box's clone glue allocates a new box and clones the contents into it.
 //!
+//! A function value's drop glue calls the drop entry of its descriptor with the value's
+//! environment when the entry is not null, and does nothing otherwise (D9 of `closures`); every
+//! function type's has the same code. Function types are neither `Copy` nor `Clone`, so they
+//! have no clone glue.
+//!
 //! Comparing the contents of two boxes of a struct, an enum or a nullable of one, or a struct,
 //! enum or nullable part beyond the inline budget of a comparison, calls the equality glue of
 //! its type, `<unit module>#equals(<type>)`, which takes the two values' addresses and returns a
@@ -31,7 +36,7 @@
 
 use crate::equality::Comparison;
 use crate::error::BackendError;
-use crate::layout::{Layout, Member, Shape};
+use crate::layout::{FunctionField, Layout, Member, Shape};
 use crate::unit::{data_global, LoweredFunction, UnitContext};
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, TrapCode,
@@ -159,6 +164,19 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
             qualified_name(inner)
         ),
         Type::Heap(inner) => format!("Heap<{}>", qualified_name(inner)),
+        Type::Fn {
+            is_compose,
+            params,
+            ret,
+        } => {
+            let params: Vec<String> = params.iter().map(qualified_name).collect();
+            format!(
+                "{}({}) -> {}",
+                if *is_compose { "compose " } else { "" },
+                params.join(", "),
+                qualified_name(ret)
+            )
+        }
         other => other.to_string(),
     }
 }
@@ -283,6 +301,14 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         let layout = lowering.layout(ty)?;
         match (kind, ty) {
             (GlueKind::Drop, Type::Heap(contents)) => lowering.drop_box(contents, parameters[0])?,
+            (GlueKind::Drop, Type::Fn { .. }) => lowering.drop_function_value(parameters[0])?,
+            (GlueKind::Clone | GlueKind::Equals, Type::Fn { .. }) => {
+                return Err(BackendError::new(format!(
+                    "{} glue for the function type {}",
+                    kind.name(),
+                    ty
+                )))
+            }
             (GlueKind::Clone, Type::Heap(contents)) => {
                 lowering.clone_box(contents, parameters[0], parameters[1])?
             }
@@ -382,6 +408,42 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         self.call_glue(GlueKind::Drop, contents, &[boxed])?;
         let layout = self.layout(contents)?;
         self.free(boxed, &layout)
+    }
+
+    /// The drop glue of a function value at `address` (D9 of `closures`): the drop entry of its
+    /// descriptor, when not null, is called with the value's environment.
+    fn drop_function_value(&mut self, address: Value) -> Result<(), BackendError> {
+        let pointer = self.context.pointer;
+        let flags = MemFlagsData::trusted();
+        let descriptor = self.builder.ins().load(
+            pointer,
+            flags,
+            address,
+            FunctionField::Descriptor.offset(pointer) as i32,
+        );
+        let entry = self
+            .builder
+            .ins()
+            .load(pointer, flags, descriptor, pointer.bytes() as i32);
+        let present = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.ins().brif(entry, present, &[], done, &[]);
+        self.builder.switch_to_block(present);
+        let environment = self.builder.ins().load(
+            pointer,
+            flags,
+            address,
+            FunctionField::Environment.offset(pointer) as i32,
+        );
+        let mut signature = ir::Signature::new(self.context.call_conv);
+        signature.params.push(AbiParam::new(pointer));
+        let signature = self.builder.import_signature(signature);
+        self.builder
+            .ins()
+            .call_indirect(signature, entry, &[environment]);
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(done);
+        Ok(())
     }
 
     /// The clone glue of a `Heap<contents>`: a new allocation holding a clone of the source's

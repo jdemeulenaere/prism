@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+fun pick(big: Bool): (Int) -> Int {
+    if (big) return { n -> n * 100 }
+    return { n -> n + 1 }
+}
+
+fun main() {
+    val f = pick(true)
+    val g = pick(false)
+    println(f(2))
+    println(g(2))
+}

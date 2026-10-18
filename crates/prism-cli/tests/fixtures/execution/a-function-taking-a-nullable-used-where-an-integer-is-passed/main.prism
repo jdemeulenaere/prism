@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+fun show(n: Int?) {
+    println(n ?: 0)
+}
+
+fun each(f: (Int) -> Unit) {
+    f(4)
+    f(5)
+}
+
+fun main() {
+    each(show)
+}

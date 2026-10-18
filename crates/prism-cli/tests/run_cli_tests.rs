@@ -132,13 +132,13 @@ fn dumping_a_file_s_ir() {
 
 #[test]
 fn dumping_a_file_the_backend_rejects() {
-    let directory = single_file("dump_rejected", "fun f(g: () -> Int): Int = 1\n");
+    let directory = single_file("dump_rejected", "compose fun Label() {}\n");
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "");
     assert!(
         stderr(&output).starts_with(
-            "error[E6001]: the Tier 1 backend does not support function values and closures yet\n  --> main.prism:1:1\n"
+            "error[E6001]: the Tier 1 backend does not support composable functions yet\n  --> main.prism:1:1\n"
         ),
         "{}",
         stderr(&output)
@@ -320,7 +320,7 @@ fn the_reference_program_runs() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n-3\ntrue\nfalse\n-2\n0\nquadrant 4\n-24\n15 primes up to 50\n15 primes up to 50, 18 characters\n20\n10\ntrue\nprimes: 15\n5\n-1\n"
+        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n-3\ntrue\nfalse\n-2\n0\nquadrant 4\n-24\n15 primes up to 50\n15 primes up to 50, 18 characters\n20\n10\ntrue\nprimes: 15\n5\n-1\n60\n18\n-20\n"
     );
     assert_eq!(stderr(&output), "");
 }
@@ -1091,4 +1091,177 @@ fn a_generic_body_calls_private_helpers() {
     );
     assert_eq!(stdout(&run), "2\n", "{}", stderr(&run));
     fs::remove_dir_all(&directory).ok();
+}
+
+/// The `prism dump-clif` output of `source`, which must succeed.
+fn clif_of(test_name: &str, arguments: &[&str], source: &str) -> String {
+    let directory = single_file(test_name, source);
+    let mut all = vec!["dump-clif"];
+    all.extend_from_slice(arguments);
+    all.push("main.prism");
+    let dump = prism(&all, &directory);
+    assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
+    fs::remove_dir_all(&directory).ok();
+    stdout(&dump)
+}
+
+/// The machine signature line of function `symbol` in `dump`.
+fn signature_line<'a>(dump: &'a str, symbol: &str) -> &'a str {
+    let ir = function_ir(dump, symbol);
+    ir.lines().next().unwrap_or_default()
+}
+
+/// code-generation: "Signature of a function taking a function value" (D2 of `closures`).
+#[test]
+fn signature_of_a_function_taking_a_function_value() {
+    let dump = clif_of(
+        "function_value_signature",
+        &[],
+        "fun call(f: () -> Int): Int = f()\n",
+    );
+    let line = signature_line(&dump, "main::call");
+    assert!(line.contains("\"main::call\"(i64) -> i64"), "{}", line);
+}
+
+/// code-generation: "Building a closure names its descriptor" and "Closure functions in the IR
+/// dump" (D3 and D4 of `closures`).
+#[test]
+fn closure_functions_and_descriptors_in_the_ir_dump() {
+    let dump = clif_of(
+        "closure_functions",
+        &[],
+        "fun run(f: () -> Int): Int = f()\nfun main() { val a = 1; println(run { a + 1 }) }\n",
+    );
+    assert_eq!(
+        function_headers(&dump),
+        [
+            "main::run",
+            "main::main",
+            "main::main#closure0",
+            "main#drop(() -> Int)"
+        ]
+    );
+    let main = function_ir(&dump, "main::main");
+    assert!(
+        main.contains("symbol %\"main::main#closure0#descriptor\""),
+        "{}",
+        main
+    );
+    // The closure takes its environment and returns an `Int`.
+    let line = signature_line(&dump, "main::main#closure0");
+    assert!(
+        line.contains("\"main::main#closure0\"(i64) -> i64"),
+        "{}",
+        line
+    );
+    // Descriptors are data, not printed.
+    assert!(!dump.contains("function main::main#closure0#descriptor"));
+}
+
+/// code-generation: "A call of a function value in the IR dump" (D6 of `closures`): three
+/// dependent loads, then an indirect call passing the environment.
+#[test]
+fn a_call_of_a_function_value_in_the_ir_dump() {
+    let dump = clif_of(
+        "function_value_call",
+        &[],
+        "fun call(f: () -> Int): Int = f()\n",
+    );
+    let ir = function_ir(&dump, "main::call");
+    let lines: Vec<&str> = ir.lines().map(str::trim).collect();
+    let call = lines
+        .iter()
+        .position(|line| line.contains("call_indirect"))
+        .unwrap_or_else(|| panic!("no indirect call in\n{}", ir));
+    // `v1 = load f`, `v2 = load f+8`, `v3 = load v1`, `v4 = load v3`, `call_indirect v4(v2)`.
+    let value = |line: &str| line.split(" = ").next().unwrap_or_default().to_string();
+    let loads = &lines[call - 4..call];
+    assert!(loads.iter().all(|line| line.contains("load.i64")), "{}", ir);
+    let (descriptor, environment, slot, code) = (
+        value(loads[0]),
+        value(loads[1]),
+        value(loads[2]),
+        value(loads[3]),
+    );
+    assert!(loads[1].ends_with("+8"), "{}", ir);
+    assert!(loads[2].ends_with(&format!(" {}", descriptor)), "{}", ir);
+    assert!(loads[3].ends_with(&format!(" {}", slot)), "{}", ir);
+    assert!(
+        lines[call].contains(&format!("{}({})", code, environment)),
+        "{}",
+        ir
+    );
+}
+
+/// code-generation: "A writing closure allocates nothing" (D5 of `closures`).
+#[test]
+fn a_writing_closure_allocates_nothing() {
+    let dump = clif_of(
+        "writing_closure",
+        &[],
+        "fun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }\n\
+         fun main() { var count = 0; repeat(3) { count += 1 }; println(count) }\n",
+    );
+    assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
+}
+
+/// code-generation: "Symbols of nested and default closures" (D4 of `closures`).
+#[test]
+fn symbols_of_nested_and_default_closures() {
+    let dump = clif_of(
+        "closure_symbols",
+        &[],
+        "fun run(f: () -> Int): Int = f()\n\
+         fun pick(n: Int, f: () -> Int = { 3 }): Int = n + f()\n\
+         fun main() { println(run { run { 1 } }); println(pick(1)) }\n",
+    );
+    let headers = function_headers(&dump);
+    for symbol in [
+        "main::main#closure0",
+        "main::main#closure0#closure0",
+        "main::pick#default(f)#closure0",
+    ] {
+        assert!(headers.contains(&symbol), "{:?}", headers);
+    }
+}
+
+/// code-generation: "Drop glue of a function type in the IR dump" (D9 of `closures`).
+#[test]
+fn drop_glue_of_a_function_type_in_the_ir_dump() {
+    let dump = clif_of(
+        "function_drop_glue",
+        &[],
+        "struct Task { val run: () -> Int, val name: String }\nfun f(t: Task) {}\n",
+    );
+    assert_eq!(
+        function_headers(&dump),
+        ["main::f", "main#drop(() -> Int)", "main#drop(main::Task)"]
+    );
+    let task = function_ir(&dump, "main#drop(main::Task)");
+    assert!(calls_directly(task, "main#drop(() -> Int)"), "{}", task);
+    // The function type's glue calls the drop entry only when it is not null.
+    let glue = function_ir(&dump, "main#drop(() -> Int)");
+    assert!(
+        glue.contains("brif") && glue.contains("call_indirect"),
+        "{}",
+        glue
+    );
+}
+
+/// code-generation: "A closure in an instance" (D11 of `closures`).
+#[test]
+fn a_closure_in_an_instance() {
+    let dump = clif_of(
+        "instance_closure",
+        &["--instances"],
+        "fun run(g: () -> Int): Int = g()\n\
+         fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }\n\
+         fun main() { println(count(2) { n -> n * 10 }) }\n",
+    );
+    let headers = function_headers(&dump);
+    let instance = headers.iter().position(|h| *h == "main::count<Int>");
+    let closure = headers
+        .iter()
+        .position(|h| *h == "main::count<Int>#closure0");
+    assert!(instance.is_some() && closure > instance, "{:?}", headers);
 }

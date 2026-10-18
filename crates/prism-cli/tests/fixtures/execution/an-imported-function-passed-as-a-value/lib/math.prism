@@ -1,0 +1,3 @@
+package lib
+
+public fun triple(n: Int): Int = n * 3

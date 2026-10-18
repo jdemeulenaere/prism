@@ -1,0 +1,12 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+
+import /lib/math
+
+fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))
+
+fun main() {
+    println(twice(triple, 1))
+}

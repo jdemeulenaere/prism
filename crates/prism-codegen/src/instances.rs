@@ -4,8 +4,9 @@
 //! the program's files, rejects polymorphic recursion through generics of several files
 //! (`E6004`), and then runs a worklist from the calls with type arguments in every compiled body:
 //! each request names an instance by its symbol, and an instance not yet built is substituted
-//! from its generic's record ([`prism_mir::instantiate`]) into a unit of its own, whose calls
-//! with type arguments become requests in turn. The work is linear in the program's distinct
+//! from its generic's record ([`prism_mir::GenericRecord::instantiate`]) into a unit of its own,
+//! with the closures lowered inside it (D11 of `closures`), whose calls with type arguments
+//! become requests in turn. The work is linear in the program's distinct
 //! instances and their sizes, plus a hash lookup per call site of a generic: a request for a
 //! symbol already built is dropped before its type definitions are gathered. The absence of a
 //! growing cycle bounds the depth of every type argument, so the worklist ends.
@@ -14,13 +15,13 @@ use crate::error::{CodegenError, CodegenErrorKind};
 use crate::supported::{check_file, is_compiled};
 use crate::symbols::callee_symbol;
 use prism_ast::Span;
-use prism_mir::{instantiate, Body, Callee, GenericRecord, MirFile, MirPhase, TerminatorKind};
+use prism_mir::{Body, Callee, GenericRecord, MirFile, MirPhase, TerminatorKind};
 use prism_typed_tree::instantiation::{cycle_generics, edges_of, generic_name, growing_cycles};
 use prism_typed_tree::{Arena, Type, TypeTable};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// The code unit of one instance: the generic's module, the instance body alone, and the
-/// definitions of the record's and the type arguments' types.
+/// The code unit of one instance: the generic's module, the instance body followed by its
+/// closures, and the definitions of the record's and the type arguments' types.
 #[derive(Debug, Clone)]
 pub struct InstanceUnit {
     /// The instance's symbol (`lib/box::keep<Int>`), which also names the unit.
@@ -72,25 +73,25 @@ pub fn collect_instances(files: &[&MirFile]) -> Result<Vec<InstanceUnit>, Vec<In
     let mut units = Vec::new();
     while let Some(request) = queue.pop_front() {
         let record = &records[&request.generic];
-        let Some(body) = record.body_for(&request.callee) else {
-            continue;
-        };
         let mut types = record.types.clone();
         types.extend_from(&request.types);
-        let instance = instantiate(body, &request.type_arguments, &types);
-        request_calls(&instance, &types, &records, &mut seen, &mut queue);
+        let Some(instances) = record.instantiate(&request.callee, &request.type_arguments, &types)
+        else {
+            continue;
+        };
         let mut bodies = Arena::new();
-        bodies.alloc(instance);
+        for instance in instances {
+            request_calls(&instance, &types, &records, &mut seen, &mut queue);
+            bodies.alloc(instance);
+        }
         let file = MirFile {
             module: record.path.module.clone(),
             phase: MirPhase::Elaborated,
             types,
             bodies,
         };
-        // An instance holding a closure is rejected (`E6001`) before it is compiled; its
-        // closure bodies are not part of the unit (D12).
         #[cfg(debug_assertions)]
-        if !holds_closure(&file.bodies) {
+        {
             let violations = file.validate();
             assert!(
                 violations.is_empty(),
@@ -153,19 +154,6 @@ fn request_calls(
             types: types.restricted_to(type_arguments),
         });
     }
-}
-
-/// Whether a body of `bodies` builds a closure.
-#[cfg(debug_assertions)]
-fn holds_closure(bodies: &Arena<prism_mir::BodyId, Body>) -> bool {
-    bodies.iter().any(|(_, body)| {
-        body.blocks.iter().any(|(_, block)| {
-            block.statements.iter().any(|statement| {
-                matches!(&statement.kind, prism_mir::StatementKind::Assign(_, rvalue)
-                    if matches!(rvalue.as_ref(), prism_mir::Rvalue::Closure { .. }))
-            })
-        })
-    })
 }
 
 /// Reports `E6004` for each growing cycle of the calls between the records' generics (D8): one
@@ -378,10 +366,37 @@ mod tests {
     }
 
     #[test]
+    fn an_instance_holds_its_closures() {
+        let files = lower_files(&[(
+            "main",
+            "fun run(g: () -> Int): Int = g()\n\
+             fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { run { f(x) } + 1 }\n\
+             fun main() { println(count(2) { n -> n * 10 }) }\n",
+        )]);
+        let units = collect(&files).unwrap();
+        assert_eq!(units.len(), 1);
+        let symbols: Vec<String> = units[0]
+            .file
+            .bodies
+            .iter()
+            .map(|(_, body)| crate::symbols::symbol_of(body, &units[0].file))
+            .collect();
+        assert_eq!(
+            symbols,
+            [
+                "main::count<Int>",
+                "main::count<Int>#closure0",
+                "main::count<Int>#closure0#closure0"
+            ]
+        );
+        assert!(check_instances(&units).is_ok());
+    }
+
+    #[test]
     fn an_unsupported_construct_is_reported_once_for_every_instance() {
         let files = lower_files(&[(
             "main",
-            "fun <T> later(x: T): Int { val f = { 1 }; return 1 }\n\
+            "fun <T> later(x: T): Int { val f: compose () -> Unit = {}; return 1 }\n\
              fun main() { println(later(1)); println(later(true)) }\n",
         )]);
         let units = collect(&files).unwrap();

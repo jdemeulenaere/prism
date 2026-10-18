@@ -1,5 +1,5 @@
-error[E6001]: the Tier 1 backend does not support function values and closures yet
-  --> lib/run.prism:3:13
-    3 |     val f = { 1 }
-      |             ^
-   = note: support for function values and closures is planned in the 'closures' change
+error[E6001]: the Tier 1 backend does not support composable functions yet
+  --> lib/run.prism:3:33
+    3 |     val f: compose () -> Unit = {}
+      |                                 ^
+   = note: support for composable functions is planned in the 'compose-transform' change

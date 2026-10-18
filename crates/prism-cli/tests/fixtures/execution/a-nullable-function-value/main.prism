@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+fun call(f: (() -> Int)?): Int {
+    val g = f ?: { 0 }
+    return g()
+}
+
+fun main() {
+    println(call(null))
+    val f: () -> Int = { 5 }
+    println(call(f))
+}

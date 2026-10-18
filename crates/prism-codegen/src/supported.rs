@@ -1,25 +1,24 @@
 //! What the Tier 1 backend compiles, and `E6001` for the rest (D9 of `codegen-core`, D19 of
 //! `codegen-aggregates`).
 //!
-//! [`check_file`] runs on a file's elaborated MIR before any code is generated. Generic bodies
-//! and closure bodies are never compiled ([`is_compiled`]); their uses are what it rejects. For
+//! [`check_file`] runs on a file's elaborated MIR before any code is generated. Generic bodies,
+//! and the closures inside them, are compiled only as their instances ([`is_compiled`]). For
 //! every other body it reports the first unsupported construct: an unsupported argument or
-//! return type at the declaration, a composable body at the declaration, then the first
-//! statement or terminator, in block order, that uses an unsupported type or operation. A body
-//! that passes is one [`crate::lower`] can lower.
+//! return type at the declaration, a composable body (a `compose fun` or a composable closure)
+//! at the declaration, then the first statement or terminator, in block order, that uses an
+//! unsupported type or operation. A body that passes is one [`crate::lower`] can lower.
 //!
-//! Scalars, `Unit`, strings, boxes, references, structs, enums and nullables are supported, unless a
-//! struct, enum or nullable holds something that is not: a type is named by the first construct
-//! its fields or payloads need, in declaration order, as a reference is named by its referent
-//! (D18 of `runtime-strings-and-drops`).
+//! Scalars, `Unit`, strings, boxes, references, function values, structs, enums and nullables
+//! are supported, unless a struct, enum or nullable holds something that is not: a type is named
+//! by the first construct its fields or payloads need, in declaration order, as a reference is
+//! named by its referent (D18 of `runtime-strings-and-drops`).
 
 use crate::error::{CodegenError, CodegenErrorKind};
 use crate::representation::{representation, Representation};
 use cranelift_codegen::ir::types;
 use prism_ast::Span;
 use prism_mir::{
-    Body, BodyOwner, Callee, Constant, MirFile, Operand, Place, Rvalue, StatementKind,
-    TerminatorKind,
+    Body, Callee, Constant, MirFile, Operand, Place, Rvalue, StatementKind, TerminatorKind,
 };
 use prism_typed_tree::{Type, TypeTable};
 use std::cell::RefCell;
@@ -33,7 +32,6 @@ const MAXIMUM_DEPTH: usize = 256;
 /// A construct the backend does not compile yet, as `E6001` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Construct {
-    FunctionValues,
     ComposableFunctions,
     /// A value of a type parameter's type in a compiled body: only generic bodies, which are
     /// compiled as their instances, have them, so this is an internal error that no program
@@ -54,7 +52,6 @@ impl Construct {
     /// How the diagnostic names the construct.
     pub fn description(&self) -> String {
         match self {
-            Construct::FunctionValues => "function values and closures".to_string(),
             Construct::TypeParameter(name) => {
                 format!("values of the uninstantiated type parameter '{}'", name)
             }
@@ -69,7 +66,6 @@ impl Construct {
     /// The planned change that will support the construct, if one is planned.
     pub fn change(&self) -> Option<&'static str> {
         match self {
-            Construct::FunctionValues => Some("closures"),
             Construct::ComposableFunctions => Some("compose-transform"),
             Construct::Conversion { .. }
             | Construct::UnknownType(_)
@@ -98,10 +94,10 @@ impl Construct {
 }
 
 /// Whether the backend compiles `body`: every body except generic bodies, which are compiled
-/// only as their instances (D3 of `monomorphization`), and closure bodies, which wait for
-/// closure conversion.
+/// only as their instances (D3 of `monomorphization`). The closures of a generic body have its
+/// type parameters, so they are compiled with its instances (D11 of `closures`).
 pub fn is_compiled(body: &Body) -> bool {
-    body.type_parameters.is_empty() && !matches!(body.owner, BodyOwner::Closure { .. })
+    body.type_parameters.is_empty()
 }
 
 /// Checks every compiled body of `file`, reporting one `E6001` per body with an unsupported
@@ -205,7 +201,9 @@ fn classify_at(
                 .find_map(|payload| classify_at(payload, types, boxed, depth + 1)),
             None => unknown(),
         },
-        Type::Fn { .. } => Some(Construct::FunctionValues),
+        // A function value is a descriptor and an environment (D2 of `closures`), whatever its
+        // parameters and result: they are the closure's concern.
+        Type::Fn { .. } => None,
         Type::Parameter(parameter) => Some(Construct::TypeParameter(parameter.name.clone())),
         Type::Opaque(name) => Some(Construct::UnknownType(name.clone())),
         Type::Error => Some(Construct::UnknownType("<error>".to_string())),
@@ -214,14 +212,16 @@ fn classify_at(
 
 /// Whether the backend lowers the `Subtype` step from `from` to `to` (D11 of
 /// `codegen-aggregates`): between two types of one machine representation (`&mut T` to `&T`,
-/// also inside a nullable), from `Nothing?` to any nullable (writing `null`), and from `Nothing`,
-/// which has no value.
+/// also inside a nullable), between function values, or nullables of them, that convert in
+/// place (a copy, D8 of `closures`), from `Nothing?` to any nullable (writing `null`), and from
+/// `Nothing`, which has no value.
 pub fn is_lowered_subtype(from: &Type, to: &Type) -> bool {
     // Pointer width does not matter to whether two types share a representation.
     let pointer = types::I64;
     match (from, to) {
         (Type::Nothing, _) => true,
         (Type::Nullable(inner), Type::Nullable(_)) if **inner == Type::Nothing => true,
+        _ if from.is_function_value() => to.is_function_value() && from.converts_in_place(to),
         _ => matches!(
             (representation(from, pointer), representation(to, pointer)),
             (Some(Representation::Scalar(a)), Some(Representation::Scalar(b))) if a == b
@@ -315,7 +315,11 @@ impl BodyChecker<'_> {
                     to: to.to_string(),
                 })
             }),
-            Rvalue::Closure { .. } => Some(Construct::FunctionValues),
+            // The captured places are the body's own; a composable closure is its own body's
+            // error (D10 of `closures`).
+            Rvalue::Closure { captures, .. } => {
+                captures.iter().find_map(|capture| self.place(capture))
+            }
             Rvalue::Template(_) => rvalue
                 .template_operands()
                 .find_map(|operand| self.operand(operand)),
@@ -341,13 +345,12 @@ impl BodyChecker<'_> {
                 if *is_compose {
                     return Some(Construct::ComposableFunctions);
                 }
-                match callee {
-                    Callee::Value(..) => return Some(Construct::FunctionValues),
-                    Callee::Builtin(_) | Callee::Function(_) | Callee::Default { .. } => {}
-                }
-                arguments
-                    .iter()
-                    .find_map(|argument| self.operand(argument))
+                let callee_place = match callee {
+                    Callee::Value(place, _) => self.place(place),
+                    Callee::Builtin(_) | Callee::Function(_) | Callee::Default { .. } => None,
+                };
+                callee_place
+                    .or_else(|| arguments.iter().find_map(|argument| self.operand(argument)))
                     .or_else(|| {
                         parameters
                             .iter()
@@ -417,48 +420,77 @@ mod tests {
 
     #[test]
     fn a_struct_is_rejected_at_its_construction() {
+        // The scenario "A struct is rejected": the composable closure is its own body's error.
         let (message, line, column) = single(
-            "struct P { val run: () -> Int }\nfun one(): Int = 1\nfun main() { val p = P(one); println(1) }\n",
+            "struct P { val content: compose () -> Unit }\n\
+             fun main() { val p = P({}); println(1) }\n",
         );
-        names(&message, "function values and closures");
-        assert_eq!(line, 3);
-        let _ = column;
+        names(&message, "composable functions");
+        assert_eq!((line, column), (2, 24));
     }
 
     #[test]
     fn every_row_of_the_table() {
         let cases: &[(&str, &str)] = &[
-            (
-                "struct P { val n: Int, val name: String?, val h: Heap<Int>, val f: () -> Int }\nfun f(p: &P): Int = 1\n",
-                "function values and closures",
-            ),
-            (
-                "struct P { val n: Int, val h: Heap<() -> Int>? }\nfun f(p: &P): Int = 1\n",
-                "function values and closures",
-            ),
-            (
-                "enum Job { Run(Heap<Job>, () -> Int), Idle }\nfun f() { val j = Job.Idle }\n",
-                "function values and closures",
-            ),
-            (
-                "fun f() { val g = { 1 } }\n",
-                "function values and closures",
-            ),
-            (
-                "fun g() {}\nfun f() { val h = g }\n",
-                "function values and closures",
-            ),
-            (
-                "struct C { val f: () -> Int }\nfun f(c: &C) {}\n",
-                "function values and closures",
-            ),
             ("compose fun Label() {}\n", "composable functions"),
+            (
+                "fun f() { val c: compose () -> Unit = {} }\n",
+                "composable functions",
+            ),
             ("fun f(x: File) {}\n", "values of unknown type 'File'"),
+            (
+                "struct P { val n: Int, val h: Heap<() -> Int>?, val w: Widget }\nfun f(p: &P): Int = 1\n",
+                "values of unknown type 'Widget'",
+            ),
         ];
         for (source, construct) in cases {
             let (message, _, _) = single(source);
             names(&message, construct);
         }
+    }
+
+    #[test]
+    fn function_values_convert_only_in_place() {
+        let function = |parameter: Type, result: Type| Type::Fn {
+            is_compose: false,
+            params: vec![parameter],
+            ret: Box::new(result),
+        };
+        let reference = |mutable| Type::Reference {
+            mutable,
+            inner: Box::new(Type::Int),
+        };
+        let shared = function(reference(false), Type::Int);
+        let mutable = function(reference(true), Type::Int);
+        assert!(is_lowered_subtype(&shared, &mutable));
+        assert!(is_lowered_subtype(
+            &shared.clone().nullable(),
+            &mutable.clone().nullable()
+        ));
+        assert!(!is_lowered_subtype(&mutable, &shared));
+        assert!(!is_lowered_subtype(
+            &function(Type::Int.nullable(), Type::Unit),
+            &function(Type::Int, Type::Unit)
+        ));
+        // Such a conversion is a copy of the value.
+        let source = "fun read(r: &Int): Int = r\n\
+             fun main() { val f: (&Int) -> Int = read; val g: (&mut Int) -> Int = f; var n = 1; println(g(&mut n)) }\n";
+        assert_eq!(errors(source), []);
+    }
+
+    #[test]
+    fn function_values_are_supported() {
+        let source =
+            "struct P { val n: Int, val name: String?, val h: Heap<Int>, val f: () -> Int }\n\
+             enum Job { Run(Heap<Job>, () -> Int), Idle }\n\
+             fun g() {}\n\
+             fun run(f: () -> Int): Int = f()\n\
+             fun later(f: (() -> Int)?): Int = 1\n\
+             fun main() {\n\
+                 val a = 1; val h = g; h(); val j = Job.Idle\n\
+                 println(run { a + 1 }); println(later(null))\n\
+             }\n";
+        assert_eq!(errors(source), []);
     }
 
     #[test]
@@ -504,10 +536,10 @@ mod tests {
 
     #[test]
     fn notes_name_the_change() {
-        let error = check_file(&lower_source("fun f() { val g = { 1 } }\n")).unwrap_err();
+        let error = check_file(&lower_source("compose fun Label() {}\n")).unwrap_err();
         assert_eq!(
             error[0].notes,
-            ["support for function values and closures is planned in the 'closures' change"]
+            ["support for composable functions is planned in the 'compose-transform' change"]
         );
     }
 
@@ -515,25 +547,26 @@ mod tests {
     fn one_error_per_body() {
         // The scenario "One error per body" of the `code-generation` spec.
         let errors = errors(
-            "fun f(): Int { val a = { 1 }; val b = { 2 }; return 1 }\n\
-             fun g(): Int { val c = { 3 }; return 2 }\n\
+            "fun f(a: Widget, b: Gadget): Int = 1\n\
+             fun g(c: Widget): Int = 2\n\
              fun main() {}\n",
         );
         let positions: Vec<(u32, u32)> = errors.iter().map(|e| (e.1, e.2)).collect();
-        assert_eq!(positions, [(1, 24), (2, 24)]);
+        assert_eq!(positions, [(1, 1), (2, 1)]);
+        names(&errors[0].0, "values of unknown type 'Widget'");
     }
 
     #[test]
     fn unsupported_signatures_are_reported_at_the_declaration() {
-        let (message, line, column) = single("fun main() {}\nfun first(g: () -> Int): Int = 1\n");
-        names(&message, "function values and closures");
+        let (message, line, column) = single("fun main() {}\nfun first(w: Widget): Int = 1\n");
+        names(&message, "values of unknown type 'Widget'");
         assert_eq!((line, column), (2, 1));
     }
 
     #[test]
-    fn generic_and_closure_bodies_are_not_checked() {
+    fn generic_bodies_and_their_closures_are_not_checked() {
         assert_eq!(
-            errors("fun <T> keep(x: T): T { val g = { 1 }; return x }\n"),
+            errors("fun <T> keep(x: T): T { val g: compose () -> Unit = {}; return x }\n"),
             []
         );
     }

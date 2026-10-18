@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun run(f: () -> Int): Int = f()
+
+fun main() {
+    val a = 1
+    println(run { a + 1 })
+}

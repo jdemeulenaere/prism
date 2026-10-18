@@ -56,11 +56,11 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
     closures.reverse();
     for id in closures {
         let body = &file.bodies[id];
+        let first_uses = first_mutable_uses(file, &result, id);
         let mut modes = Vec::with_capacity(body.capture_count);
         let mut deciding_uses = Vec::with_capacity(body.capture_count);
-        for index in 0..body.capture_count {
-            let capture = LocalId((body.argument_count + 1 + index) as u32);
-            match first_mutable_use(file, &result, id, capture) {
+        for (index, first_use) in first_uses.into_iter().enumerate() {
+            match first_use {
                 Some(span) => {
                     modes.push(CaptureMode::Mutable);
                     deciding_uses.push(span);
@@ -68,6 +68,7 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
                 None => {
                     modes.push(CaptureMode::Shared);
                     // The capture local's span is the binding's first use in the closure.
+                    let capture = LocalId((body.argument_count + 1 + index) as u32);
                     deciding_uses.push(body.locals[capture].span);
                 }
             }
@@ -78,52 +79,54 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
     result
 }
 
-/// The span of the first use, in source order, of `capture` in the closure `id` that needs a
-/// mutable borrow of it.
-fn first_mutable_use(
-    file: &MirFile,
-    known: &CaptureModes,
-    id: BodyId,
-    capture: LocalId,
-) -> Option<Span> {
+/// For each capture of the closure `id`, in capture order, the span of its first use in source
+/// order that needs a mutable borrow of it, found in one pass over the body, so that inference
+/// stays linear in the body however many bindings it captures.
+fn first_mutable_uses(file: &MirFile, known: &CaptureModes, id: BodyId) -> Vec<Option<Span>> {
     let body = &file.bodies[id];
-    let mut uses: Vec<Span> = Vec::new();
+    let first = body.argument_count + 1;
+    let mut uses: Vec<Option<Span>> = vec![None; body.capture_count];
+    let mut record = |local: LocalId, span: Span| {
+        let Some(index) = (local.0 as usize).checked_sub(first) else {
+            return;
+        };
+        if let Some(entry) = uses.get_mut(index) {
+            let key = |span: &Span| (span.line, span.column, span.start);
+            if entry.is_none_or(|current| key(&span) < key(&current)) {
+                *entry = Some(span);
+            }
+        }
+    };
     for (_, block) in body.blocks.iter() {
         for statement in &block.statements {
             let StatementKind::Assign(place, rvalue) = &statement.kind else {
                 continue;
             };
-            if place.local == capture {
-                uses.push(statement.span);
-            }
+            record(place.local, statement.span);
             match rvalue.as_ref() {
                 Rvalue::Borrow {
                     mutable: true,
                     place,
                     ..
-                } if place.local == capture => uses.push(statement.span),
+                } => record(place.local, statement.span),
                 Rvalue::Closure {
                     body: nested,
                     captures,
                 } => {
-                    let mutable = captures.iter().enumerate().any(|(index, place)| {
-                        place.local == capture && known.mode(*nested, index) == CaptureMode::Mutable
-                    });
-                    if mutable {
-                        uses.push(statement.span);
+                    for (index, place) in captures.iter().enumerate() {
+                        if known.mode(*nested, index) == CaptureMode::Mutable {
+                            record(place.local, statement.span);
+                        }
                     }
                 }
                 _ => {}
             }
         }
         if let TerminatorKind::Call { destination, .. } = &block.terminator.kind {
-            if destination.local == capture {
-                uses.push(block.terminator.span);
-            }
+            record(destination.local, block.terminator.span);
         }
     }
-    uses.into_iter()
-        .min_by_key(|span| (span.line, span.column, span.start))
+    uses
 }
 
 #[cfg(test)]

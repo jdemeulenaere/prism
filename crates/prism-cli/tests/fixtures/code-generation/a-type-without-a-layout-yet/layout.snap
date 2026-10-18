@@ -1,2 +1,4 @@
-struct main::Task (no layout yet: function values and closures)
+struct main::Task (size 16, align 8)
+  run: () -> Unit at 0
 struct main::Box<T> (generic: laid out per instance)
+struct main::Odd (no layout yet: values of unknown type 'Widget')

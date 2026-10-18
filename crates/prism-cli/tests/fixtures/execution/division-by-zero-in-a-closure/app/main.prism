@@ -1,0 +1,3 @@
+package app
+fun run(f: () -> Int): Int = f()
+fun main() { val zero = 0; println(1); println(run { 10 / zero }) }

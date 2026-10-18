@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+fun main() {
+    val a = 10
+    var keep: () -> Int = { 0 }
+    var i = 0
+    while (i < 3) {
+        val g = { a + 1 }
+        if (i == 0) keep = g
+        i += 1
+    }
+    println(keep())
+}

@@ -1,5 +1,0 @@
-// expect: ok
-// run: 1
-struct Task { val run: () -> Int }
-fun size(t: &Task): Int = 1
-fun main() { println(1) }

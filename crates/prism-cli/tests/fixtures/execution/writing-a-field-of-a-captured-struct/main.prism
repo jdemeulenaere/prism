@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+fun repeat(n: Int, f: () -> Unit) {
+    var i = 0
+    while (i < n) {
+        f()
+        i += 1
+    }
+}
+
+struct Counter { var n: Int }
+
+fun main() {
+    var c = Counter(0)
+    repeat(4) { c.n += 2 }
+    println(c.n)
+}

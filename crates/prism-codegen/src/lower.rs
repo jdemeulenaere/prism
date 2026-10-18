@@ -17,12 +17,23 @@
 //! its type's glue directly ([`crate::glue`], D9 and D10 of `runtime-strings-and-drops`); a drop
 //! of any other value does nothing (D14 of `codegen-aggregates`), and its clone is a copy. Strings
 //! are built inline from literals and otherwise by the runtime's string functions (D7).
+//!
+//! A closure's code receives its environment's address after the result address (D4 of
+//! `closures`), and reaches a capture through the environment's word for it, the address of the
+//! captured place, so it reads and writes the captured variable itself (D5). Building a closure
+//! value writes its descriptor's address and the address of an environment in a stack slot of
+//! the building function, one per closure body, holding the address of each captured place;
+//! every local a closure captures lives in memory. A call of a function value loads the slot
+//! address from its descriptor and the code from the slot, and calls it with the value's
+//! environment (D6).
 
 use crate::equality::{Compared, Comparison};
 use crate::error::BackendError;
 use crate::glue::{allocate_box, free_box, Glue, GlueKind};
-use crate::layout::{Layout, Member, Shape, StringField};
-use crate::representation::{is_pointer, representation, signature, Representation};
+use crate::layout::{FunctionField, Layout, Member, Shape, StringField};
+use crate::representation::{
+    function_value_signature, is_pointer, representation, signature, Representation,
+};
 use crate::symbols::{accessor_symbol, callee_symbol};
 use crate::unit::{data_global, UnitContext};
 use cranelift_codegen::ir::{
@@ -35,8 +46,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variab
 use cranelift_module::{DataId, FuncId, Module};
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, BasicBlock, Body, Callee, Constant, LocalId, LocalKind, Operand, Place,
-    Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
+    AggregateKind, BasicBlock, Body, BodyId, BodyOwner, Callee, CaptureMode, Constant, LocalId,
+    LocalKind, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
 };
 use prism_runtime::{
     PanicKind, TEMPLATE_BOOL, TEMPLATE_CHAR, TEMPLATE_DOUBLE, TEMPLATE_INT, TEMPLATE_STRING,
@@ -65,6 +76,9 @@ enum Storage {
     Slot(ir::StackSlot),
     /// Memory whose address the function received: an argument in memory, or the result.
     Address(Value),
+    /// The captured place whose address is word `index` of a closure's environment (D5 of
+    /// `closures`).
+    Capture(usize),
 }
 
 /// A value of some MIR type, lowered.
@@ -147,6 +161,11 @@ pub(crate) struct BodyLowering<'a, 'm, M: Module> {
     globals: HashMap<DataId, ir::GlobalValue>,
     /// The functions comparisons call: the runtime's string equality and equality glue.
     compared_functions: HashMap<FuncId, ir::FuncRef>,
+    /// A closure body's environment address, which its code receives (D4 of `closures`).
+    environment: Option<Value>,
+    /// The environment slot of each closure body this body builds a value of, with captures
+    /// (D5 of `closures`).
+    environments: HashMap<BodyId, ir::StackSlot>,
 }
 
 impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
@@ -173,6 +192,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             glue: HashMap::new(),
             globals: HashMap::new(),
             compared_functions: HashMap::new(),
+            environment: None,
+            environments: HashMap::new(),
         };
         lowering.lower_body()?;
         let config = lowering.context.module.target_config();
@@ -213,8 +234,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .map(|_| self.builder.create_block())
             .collect();
         self.builder.switch_to_block(entry);
-        // The parameters are the result's address when it is in memory, then the arguments in
-        // order, those without a representation left out (D10).
+        // The parameters are the result's address when it is in memory, then a closure's
+        // environment, then the arguments in order, those without a representation left out
+        // (D10, and D4 of `closures`).
         let parameters = self.builder.block_params(entry).to_vec();
         let mut parameters = parameters.into_iter();
         let mut next = || {
@@ -225,6 +247,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         let mut received = HashMap::new();
         if self.is_memory(self.body.return_type()) {
             received.insert(LocalId::RETURN, next()?);
+        }
+        if matches!(self.body.owner, BodyOwner::Closure { .. }) {
+            self.environment = Some(next()?);
         }
         let mut scalars = Vec::new();
         for local in self.body.arguments() {
@@ -275,6 +300,10 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         for (local, declaration) in self.body.locals.iter() {
             let storage = match self.representation(&declaration.ty) {
                 None | Some(Representation::Empty) => Storage::Empty,
+                // Capture locals follow the arguments, in capture order.
+                Some(_) if declaration.kind == LocalKind::Capture => {
+                    Storage::Capture(local.0 as usize - 1 - self.body.argument_count)
+                }
                 Some(Representation::Memory) => match received.get(&local) {
                     Some(address) => Storage::Address(*address),
                     None => {
@@ -369,6 +398,17 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 Location::Memory(self.builder.ins().stack_addr(pointer, slot, 0))
             }
             Storage::Address(address) => Location::Memory(address),
+            Storage::Capture(index) => {
+                let environment = self
+                    .environment
+                    .ok_or_else(|| BackendError::new("a capture outside a closure"))?;
+                let offset = (index as u32 * pointer.bytes()) as i32;
+                Location::Memory(
+                    self.builder
+                        .ins()
+                        .load(pointer, aligned(), environment, offset),
+                )
+            }
         };
         for projection in &place.projections {
             match projection {
@@ -733,6 +773,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 Ok(())
             }
             Rvalue::Template(parts) => self.template(place, parts, span),
+            Rvalue::Closure { body, captures } => self.closure(place, *body, captures),
             Rvalue::Subtype(operand) => match self.operand_type(operand) {
                 // `Nothing?` to any nullable is `null`.
                 Some(Type::Nullable(inner)) if *inner == Type::Nothing => {
@@ -833,6 +874,73 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         self.builder
             .ins()
             .call(function, &[destination, table, count]);
+        Ok(())
+    }
+
+    /// Builds the value of the closure `body` in `place` (D5 of `closures`): its descriptor's
+    /// address, and the address of its environment, or null without captures. The environment
+    /// is the stack slot of `body` in this function, written with the address of each captured
+    /// place in capture order. Every run of this rvalue writes the same addresses there, so a
+    /// value built in an earlier iteration of a loop still reads its captures correctly.
+    fn closure(
+        &mut self,
+        place: &Place,
+        body: BodyId,
+        captures: &[Place],
+    ) -> Result<(), BackendError> {
+        let pointer = self.pointer();
+        debug_assert!(
+            self.context.file.bodies[body]
+                .capture_modes
+                .iter()
+                .all(|mode| matches!(mode, CaptureMode::Shared | CaptureMode::Mutable)),
+            "a closure that captures by borrow"
+        );
+        let descriptor = self.context.descriptor(body)?;
+        let descriptor = self.data(descriptor);
+        let environment = if captures.is_empty() {
+            self.builder.ins().iconst(pointer, 0)
+        } else {
+            let slot = match self.environments.get(&body) {
+                Some(slot) => *slot,
+                None => {
+                    let size = u32::try_from(captures.len())
+                        .ok()
+                        .and_then(|count| count.checked_mul(pointer.bytes()))
+                        .ok_or_else(|| BackendError::new("a closure with too many captures"))?;
+                    let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        size,
+                        pointer.bytes().trailing_zeros() as u8,
+                    ));
+                    self.environments.insert(body, slot);
+                    slot
+                }
+            };
+            let environment = self.builder.ins().stack_addr(pointer, slot, 0);
+            for (index, capture) in captures.iter().enumerate() {
+                let ty = capture.ty(self.body, self.types());
+                // A capture without a representation (`Unit`) has nothing to point at.
+                let address = match self.representation(&ty) {
+                    Some(Representation::Empty) | None => self.builder.ins().iconst(pointer, 0),
+                    _ => self.address(capture)?,
+                };
+                let offset = (index as u32 * pointer.bytes()) as i32;
+                self.builder
+                    .ins()
+                    .store(aligned(), address, environment, offset);
+            }
+            environment
+        };
+        let destination = self.address(place)?;
+        let descriptor_offset = FunctionField::Descriptor.offset(pointer) as i32;
+        let environment_offset = FunctionField::Environment.offset(pointer) as i32;
+        self.builder
+            .ins()
+            .store(aligned(), descriptor, destination, descriptor_offset);
+        self.builder
+            .ins()
+            .store(aligned(), environment, destination, environment_offset);
         Ok(())
     }
 
@@ -1253,7 +1361,35 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .collect();
         let parameters = &parameters[..];
         match callee {
-            Callee::Function(_) | Callee::Default { .. } => {
+            Callee::Function(_) | Callee::Default { .. } | Callee::Value(..) => {
+                // A function value is read in place: its code is loaded from the slot its
+                // descriptor names, and its environment passed after the result address (D6 of
+                // `closures`).
+                let function_value = match callee {
+                    Callee::Value(place, _) => {
+                        let pointer = self.pointer();
+                        let value = self.address(place)?;
+                        let descriptor = self.builder.ins().load(
+                            pointer,
+                            aligned(),
+                            value,
+                            FunctionField::Descriptor.offset(pointer) as i32,
+                        );
+                        let environment = self.builder.ins().load(
+                            pointer,
+                            aligned(),
+                            value,
+                            FunctionField::Environment.offset(pointer) as i32,
+                        );
+                        let slot = self.builder.ins().load(pointer, aligned(), descriptor, 0);
+                        let code =
+                            self.builder
+                                .ins()
+                                .load(pointer, MemFlagsData::trusted(), slot, 0);
+                        Some((code, environment))
+                    }
+                    _ => None,
+                };
                 let mut values = Vec::new();
                 // A result in memory is written through an address passed first: the
                 // destination's own when the callee cannot reach it otherwise, else a temporary
@@ -1264,7 +1400,9 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         && !self.borrowed.contains(&destination.local)
                         && !arguments.iter().any(|argument| {
                             argument.place().map(|p| p.local) == Some(destination.local)
-                        });
+                        })
+                        && !matches!(callee, Callee::Value(place, _)
+                            if place.local == destination.local);
                     let address = if direct {
                         self.address(destination)?
                     } else {
@@ -1274,21 +1412,38 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     };
                     values.push(address);
                 }
+                if let Some((_, environment)) = function_value {
+                    values.push(environment);
+                }
                 for argument in arguments {
                     match self.argument(argument, span)? {
                         Lowered::Empty => {}
                         Lowered::Scalar(value) | Lowered::Memory(value) => values.push(value),
                     }
                 }
-                let symbol = callee_symbol(callee, type_arguments)
-                    .expect("a generated function has a symbol");
-                let target = self.slot_target(&symbol)?;
-                let signature = signature(
-                    parameters,
-                    &result_type,
-                    self.context.call_conv,
-                    self.pointer(),
-                );
+                let (target, signature) = match function_value {
+                    Some((code, _)) => (
+                        code,
+                        function_value_signature(
+                            parameters,
+                            &result_type,
+                            self.context.call_conv,
+                            self.pointer(),
+                        ),
+                    ),
+                    None => {
+                        let symbol = callee_symbol(callee, type_arguments)
+                            .expect("a generated function has a symbol");
+                        let target = self.slot_target(&symbol)?;
+                        let signature = signature(
+                            parameters,
+                            &result_type,
+                            self.context.call_conv,
+                            self.pointer(),
+                        );
+                        (target, signature)
+                    }
+                };
                 let signature = self.builder.import_signature(signature);
                 let call = self.builder.ins().call_indirect(signature, target, &values);
                 if let Some(result) = self.builder.inst_results(call).first().copied() {
@@ -1429,7 +1584,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let layout = self.layout(&result_type)?;
                 free_box(self.context, &mut self.builder, address, &layout)?;
             }
-            Callee::Value(..) => return Err(BackendError::new("a call of a function value")),
         }
         match target {
             Some(target) => self.go_to(target),
@@ -1723,16 +1877,22 @@ fn block_local_temporaries(body: &Body) -> Vec<bool> {
 }
 
 /// The locals whose address is taken: a borrow of the local itself, rather than of what it
-/// points at.
+/// points at, or a capture of it by a closure, whose environment holds its address (D5 of
+/// `closures`).
 fn borrowed_locals(body: &Body) -> HashSet<LocalId> {
     let mut borrowed = HashSet::new();
+    let mut take_address = |place: &Place| {
+        if place.projections.first() != Some(&Projection::Deref) {
+            borrowed.insert(place.local);
+        }
+    };
     for (_, block) in body.blocks.iter() {
         for statement in &block.statements {
             if let StatementKind::Assign(_, rvalue) = &statement.kind {
-                if let Rvalue::Borrow { place, .. } = rvalue.as_ref() {
-                    if place.projections.first() != Some(&Projection::Deref) {
-                        borrowed.insert(place.local);
-                    }
+                match rvalue.as_ref() {
+                    Rvalue::Borrow { place, .. } => take_address(place),
+                    Rvalue::Closure { captures, .. } => captures.iter().for_each(&mut take_address),
+                    _ => {}
                 }
             }
         }

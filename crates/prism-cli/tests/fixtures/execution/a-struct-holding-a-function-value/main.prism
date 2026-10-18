@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct Task { val name: String, val run: () -> Int }
+
+fun start(t: &Task): Int = t.run()
+
+fun main() {
+    val t = Task("a".clone(), { 42 })
+    println(start(t))
+    val u = t
+    println(u.run())
+}

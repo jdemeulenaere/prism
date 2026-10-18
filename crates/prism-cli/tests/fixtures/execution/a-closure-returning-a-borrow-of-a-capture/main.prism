@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct User { val name: String }
+
+fun size(f: () -> &String): Int = f().length
+
+fun main() {
+    val u = User("Ada")
+    println(size { &u.name })
+}

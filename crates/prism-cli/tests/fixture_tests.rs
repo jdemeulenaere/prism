@@ -360,6 +360,7 @@ const INSTANCE_SCENARIOS: &[&str] = &[
     "a-call-inside-an-instance-names-its-instance",
     "wrapping-and-unwrapping-a-nullable-argument",
     "dumping-the-instances-of-a-program",
+    "a-closure-inside-a-generic-body",
 ];
 
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of
@@ -377,6 +378,7 @@ const LAYOUT_SCENARIOS: &[&str] = &[
     "a-type-without-a-layout-yet",
     "a-struct-holding-a-string",
     "a-nullable-string",
+    "layout-of-a-struct-holding-a-function-value",
 ];
 
 const SNAPSHOTS: &[Snapshot] = &[
@@ -944,10 +946,7 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// The passing `loops` cases that use a construct the Tier 1 backend rejects, and the construct.
-const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[(
-    "loops/loop-inside-a-closure",
-    "function values and closures",
-)];
+const LOOPS_BEYOND_THE_BACKEND: &[(&str, &str)] = &[];
 
 /// code-generation: "Unsupported Constructs Are Rejected Before Code Generation". Every passing
 /// case of the `loops` spec that uses only scalars, strings, nullables and ranges passes the backend's

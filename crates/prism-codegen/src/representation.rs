@@ -3,12 +3,13 @@
 //!
 //! An `Int` is an `i64`, a `Double` an `f64`, a `Bool` an `i8` holding 0 or 1, a `Char` an
 //! `i32` holding a Unicode scalar value, and a reference, a `Heap<T>` and a nullable of either a
-//! pointer (0 for `null`). A `String`, a struct, an enum and any other nullable live in memory,
-//! laid out as
-//! [`crate::layout`] says. `Unit` and `Nothing` have no representation: they are left out of
+//! pointer (0 for `null`). A `String`, a struct, an enum, a function value (a descriptor address
+//! and an environment address, D2 of `closures`) and any other nullable live in memory, laid out
+//! as [`crate::layout`] says. `Unit` and `Nothing` have no representation: they are left out of
 //! signatures. A value in memory is passed as its address, and returned through an address the
-//! caller passes before the arguments, so a machine signature depends on no layout. Every
-//! function uses the host's C calling convention.
+//! caller passes before the arguments, so a machine signature depends on no layout. A closure's
+//! code takes its environment's address after the result address and before the arguments (D4
+//! of `closures`). Every function uses the host's C calling convention.
 
 use cranelift_codegen::ir::{types, AbiParam, Signature, Type as MachineType};
 use cranelift_codegen::isa::CallConv;
@@ -23,17 +24,19 @@ pub enum Representation {
     /// One machine value.
     Scalar(MachineType),
     /// Bytes in memory, laid out by the type's [`crate::layout::Layout`]: a `String`, a struct,
-    /// an enum, or a nullable that is not a nullable pointer.
+    /// an enum, a function value, or a nullable that is not a nullable pointer.
     Memory,
 }
 
-/// The representation of `ty`, or `None` for a type with none yet (function values, type
-/// parameters and unknown types). It follows from the type's form alone, never from a
+/// The representation of `ty`, or `None` for a type with none (type parameters and unknown
+/// types). It follows from the type's form alone, never from a
 /// layout, so callers and bodies agree on it.
 pub fn representation(ty: &Type, pointer: MachineType) -> Option<Representation> {
     match ty {
         Type::Unit | Type::Nothing => Some(Representation::Empty),
-        Type::String | Type::Struct { .. } | Type::Enum { .. } => Some(Representation::Memory),
+        Type::String | Type::Struct { .. } | Type::Enum { .. } | Type::Fn { .. } => {
+            Some(Representation::Memory)
+        }
         Type::Nullable(inner) if !is_pointer(inner) => Some(Representation::Memory),
         _ => machine_type(ty, pointer).map(Representation::Scalar),
     }
@@ -104,6 +107,32 @@ pub fn body_signature(body: &Body, call_conv: CallConv, pointer: MachineType) ->
     signature(&parameters, body.return_type(), call_conv, pointer)
 }
 
+/// The signature of the code of the closure `body`: its body's, with the environment's address
+/// after the result address, if any, and before the arguments (D4 of `closures`).
+pub fn closure_signature(body: &Body, call_conv: CallConv, pointer: MachineType) -> Signature {
+    let parameters: Vec<Type> = body
+        .arguments()
+        .map(|local| body.locals[local].ty.clone())
+        .collect();
+    function_value_signature(&parameters, body.return_type(), call_conv, pointer)
+}
+
+/// The signature with which a function value taking `parameters` and returning `result` is
+/// called: the closure signature of D4 of `closures`, built from the call's parameter types
+/// and destination, so that it agrees with [`closure_signature`] of every closure the value
+/// may hold.
+pub fn function_value_signature(
+    parameters: &[Type],
+    result: &Type,
+    call_conv: CallConv,
+    pointer: MachineType,
+) -> Signature {
+    let mut signature = signature(parameters, result, call_conv, pointer);
+    let position = usize::from(representation(result, pointer) == Some(Representation::Memory));
+    signature.params.insert(position, AbiParam::new(pointer));
+    signature
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +193,47 @@ mod tests {
             representation(&Type::String, pointer),
             Some(Representation::Memory)
         );
+        let function = Type::Fn {
+            is_compose: false,
+            params: vec![Type::Int],
+            ret: Box::new(Type::Unit),
+        };
+        assert_eq!(
+            representation(&function, pointer),
+            Some(Representation::Memory)
+        );
+        assert_eq!(
+            representation(&function.nullable(), pointer),
+            Some(Representation::Memory)
+        );
+    }
+
+    #[test]
+    fn signatures_of_closures_and_function_values() {
+        let files = lower_files(&[(
+            "main",
+            "fun run(f: () -> Int): Int = f()
+             fun point(f: (Int, Bool) -> String): Int = 1
+             fun main() { val a = 1; println(run { a + 1 }); point { n, b -> \"x\" } }
+",
+        )]);
+        let pointer = types::I64;
+        let closures: Vec<String> = files[0]
+            .bodies
+            .iter()
+            .filter(|(_, body)| matches!(body.owner, prism_mir::BodyOwner::Closure { .. }))
+            .map(|(_, body)| closure_signature(body, CALL_CONV, pointer).to_string())
+            .collect();
+        // The environment, then the arguments; a result in memory is written through an
+        // address passed before the environment.
+        assert_eq!(
+            closures,
+            ["(i64) -> i64 system_v", "(i64, i64, i64, i8 uext) system_v"]
+        );
+        let value = function_value_signature(&[Type::Int], &Type::Int, CALL_CONV, pointer);
+        assert_eq!(value.to_string(), "(i64, i64) -> i64 system_v");
+        let value = function_value_signature(&[], &Type::String, CALL_CONV, pointer);
+        assert_eq!(value.to_string(), "(i64, i64) system_v");
     }
 
     #[test]

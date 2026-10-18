@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+fun double(n: Int): Int = n * 2
+
+val TWICE: (Int) -> Int = double
+
+val SEVEN: () -> Int = { 7 }
+
+fun main() {
+    println(TWICE(4))
+    println(TWICE(5))
+    println(SEVEN())
+}

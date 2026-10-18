@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun main() {
+    val inc: (Int) -> Int = { n -> n + 1 }
+    println(inc(1))
+    println(inc(inc(5)))
+}

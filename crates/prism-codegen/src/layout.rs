@@ -7,7 +7,8 @@
 //! byte (0 for `null`) followed by `T`, except that a nullable reference or `Heap<T>` is one
 //! pointer whose `null` is 0. `Int`, `Double` and pointers take 8 bytes, `Char` 4, `Bool` 1,
 //! `Unit` and fieldless structs none. A `String` is four pointer-sized words (D2 of
-//! `runtime-strings-and-drops`). Function types have no layout yet.
+//! `runtime-strings-and-drops`), and a function value two: its closure's descriptor and its
+//! environment (D2 of `closures`).
 //!
 //! Layouts depend only on the type table of the file, which holds the definition of every type
 //! its bodies can hold a value of (D2 and D4), so a file lays out every value from its own
@@ -76,6 +77,24 @@ pub enum Shape {
     Nullable { payload: Member },
     /// A `String`: the runtime's `PrismString`, four pointer-sized words ([`StringField`]).
     String,
+    /// A function value: two pointer-sized words ([`FunctionField`]).
+    Function,
+}
+
+/// A word of a function value (D2 of `closures`), in layout order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionField {
+    /// The address of the descriptor of the closure that built the value, never null.
+    Descriptor = 0,
+    /// The address of the closure's environment, or null when it captures nothing.
+    Environment = 1,
+}
+
+impl FunctionField {
+    /// The field's offset in a function value on a target whose pointers are `pointer`.
+    pub fn offset(self, pointer: MachineType) -> u32 {
+        self as u32 * pointer.bytes()
+    }
 }
 
 /// A word of a `String` value (D2 of `runtime-strings-and-drops`), in layout order.
@@ -147,8 +166,8 @@ impl<'t> LayoutTable<'t> {
         self.types
     }
 
-    /// The layout of `ty`, or the construct it waits for: function values, a type parameter (only
-    /// generic bodies hold one) or an unknown type.
+    /// The layout of `ty`, or the construct it waits for: a type parameter (only generic bodies
+    /// hold one) or an unknown type.
     pub fn layout(&self, ty: &Type) -> Result<Rc<Layout>, Construct> {
         if let Some(layout) = self.layouts.borrow().get(ty) {
             return Ok(layout.clone());
@@ -205,7 +224,11 @@ impl<'t> LayoutTable<'t> {
                 align: pointer.bytes(),
                 shape: Shape::String,
             },
-            Type::Fn { .. } => return Err(Construct::FunctionValues),
+            Type::Fn { .. } => Layout {
+                size: 2 * pointer.bytes(),
+                align: pointer.bytes(),
+                shape: Shape::Function,
+            },
             Type::Parameter(parameter) => {
                 return Err(Construct::TypeParameter(parameter.name.clone()))
             }
@@ -505,7 +528,7 @@ fn write_entry(text: &mut String, layouts: &LayoutTable, ty: &Type) {
         }
         Shape::NullPointer => writeln!(text, "{} ({}, null pointer)", name, size).unwrap(),
         Shape::Uninhabited => writeln!(text, "{} ({}, uninhabited)", name, size).unwrap(),
-        Shape::Empty | Shape::Scalar(_) | Shape::String => {
+        Shape::Empty | Shape::Scalar(_) | Shape::String | Shape::Function => {
             writeln!(text, "{} ({})", name, size).unwrap()
         }
     }
@@ -689,12 +712,38 @@ mod tests {
     }
 
     #[test]
+    fn function_values_are_two_words() {
+        let source = "struct Task { val run: () -> Unit, val id: Int }\n";
+        let task = layout_in(source, &main_struct("Task"));
+        assert_eq!(
+            (task.size, task.align, offsets(&task)),
+            (24, 8, vec![0, 16])
+        );
+        let function = Type::Fn {
+            is_compose: false,
+            params: Vec::new(),
+            ret: Box::new(Type::Unit),
+        };
+        let layout = layout_in(source, &function);
+        assert_eq!(
+            (layout.size, layout.align, layout.shape),
+            (16, 8, Shape::Function)
+        );
+        let nullable = layout_in(source, &function.nullable());
+        assert_eq!((nullable.size, offsets(&nullable)), (24, vec![8]));
+        assert_eq!(
+            [FunctionField::Descriptor, FunctionField::Environment].map(|f| f.offset(POINTER)),
+            [0, 8]
+        );
+    }
+
+    #[test]
     fn types_without_a_layout_name_their_construct() {
-        let file = lower_source("struct Task { val run: () -> Unit }\nstruct Box<T>(val v: T)\n");
+        let file = lower_source("struct Odd { val w: Widget }\nstruct Box<T>(val v: T)\n");
         let layouts = LayoutTable::new(&file.types, POINTER);
         assert_eq!(
-            layouts.layout(&main_struct("Task")),
-            Err(Construct::FunctionValues)
+            layouts.layout(&main_struct("Odd")),
+            Err(Construct::UnknownType("Widget".to_string()))
         );
         let generic = Type::Struct {
             id: NominalId::new("main", "Box"),
@@ -732,7 +781,8 @@ mod tests {
              \x20 Add(Heap<Expr> at 8, Heap<Expr> at 16)\n\
              struct main::User (size 32, align 8)\n\
              \x20 name: String at 0\n\
-             struct main::Task (no layout yet: function values and closures)\n\
+             struct main::Task (size 16, align 8)\n\
+             \x20 run: () -> Unit at 0\n\
              struct main::Box<T> (generic: laid out per instance)\n\
              nullable (&Point)? (size 8, align 8, null pointer)\n\
              nullable Int? (size 16, align 8, tag u8 at 0)\n\

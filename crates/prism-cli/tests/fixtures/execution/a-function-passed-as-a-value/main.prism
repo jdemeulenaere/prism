@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun double(n: Int): Int = n * 2
+
+fun twice(f: (Int) -> Int, x: Int): Int = f(f(x))
+
+fun main() {
+    println(twice(double, 3))
+}

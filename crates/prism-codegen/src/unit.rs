@@ -5,16 +5,21 @@
 //! A unit refers to the functions and top-level values of other files, and to its own, only
 //! through the slots `<symbol>#slot`, imported as data symbols that the linker resolves. Its own
 //! data (the file name and the details of runtime errors, the storage and state of its top-level
-//! values) is named after its module, so the units of a program never collide.
+//! values) is named after its module, so the units of a program never collide. Each closure of
+//! the unit has a descriptor, `<closure symbol>#descriptor`, whose first word is relocated to
+//! the closure's slot (D3 of `closures`).
 
 use crate::error::BackendError;
 use crate::glue::{GlueKind, GlueTable};
 use crate::layout::LayoutTable;
 use crate::lower::BodyLowering;
-use crate::representation::{body_signature, representation, signature, Representation};
+use crate::representation::{
+    body_signature, closure_signature, representation, signature, Representation,
+};
 use crate::supported::is_compiled;
 use crate::symbols::{
-    accessor_symbol, initializer_symbol, slot_symbol, state_symbol, storage_symbol, symbol_of,
+    accessor_symbol, descriptor_symbol, initializer_symbol, slot_symbol, state_symbol,
+    storage_symbol, symbol_of,
 };
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, Function, InstBuilder, MemFlagsData, UserFuncName,
@@ -22,7 +27,7 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
-use prism_mir::{BodyOwner, MirFile};
+use prism_mir::{BodyId, BodyOwner, MirFile};
 use prism_runtime::{RuntimeType, RUNTIME_FUNCTIONS, STACK_LIMIT_SYMBOL};
 use prism_typed_tree::{DeclarationPath, Type};
 use std::collections::HashMap;
@@ -83,7 +88,12 @@ impl CodeUnit {
                 continue;
             }
             let symbol = symbol_of(body, file);
-            let signature = body_signature(body, context.call_conv, context.pointer);
+            let signature = match body.owner {
+                BodyOwner::Closure { .. } => {
+                    closure_signature(body, context.call_conv, context.pointer)
+                }
+                _ => body_signature(body, context.call_conv, context.pointer),
+            };
             let id = context.declare_function(&symbol, &signature)?;
             let mut function =
                 Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
@@ -126,6 +136,8 @@ pub(crate) struct UnitContext<'m, M: Module> {
     texts: HashMap<String, DataId>,
     runtime: HashMap<&'static str, FuncId>,
     slots: HashMap<String, DataId>,
+    /// The descriptor of each closure body the unit builds a value of.
+    descriptors: HashMap<BodyId, DataId>,
     stack_limit: Option<DataId>,
 }
 
@@ -146,6 +158,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             texts: HashMap::new(),
             runtime: HashMap::new(),
             slots: HashMap::new(),
+            descriptors: HashMap::new(),
             stack_limit: None,
         };
         let id = context.define_bytes(&format!("{}#file", unit_name), name.as_bytes())?;
@@ -259,6 +272,31 @@ impl<'m, M: Module> UnitContext<'m, M> {
             .module
             .declare_data(&slot_symbol(symbol), Linkage::Import, true, false)?;
         self.slots.insert(symbol.to_string(), id);
+        Ok(id)
+    }
+
+    /// The descriptor of the closure `body` of the unit's file, defined on first use (D3 of
+    /// `closures`): two pointer-sized words, the address of the closure's slot, written as a
+    /// relocation to the imported `<closure symbol>#slot` so that a repointed slot is followed
+    /// by every value built before, and the environment's drop entry, null since every closure
+    /// of today borrows its captures.
+    pub fn descriptor(&mut self, body: BodyId) -> Result<DataId, BackendError> {
+        if let Some(id) = self.descriptors.get(&body) {
+            return Ok(*id);
+        }
+        let symbol = symbol_of(&self.file.bodies[body], self.file);
+        let slot = self.slot(&symbol)?;
+        let id =
+            self.module
+                .declare_data(&descriptor_symbol(&symbol), Linkage::Local, false, false)?;
+        let mut description = DataDescription::new();
+        let word = self.pointer.bytes();
+        description.define(vec![0u8; 2 * word as usize].into_boxed_slice());
+        description.set_align(u64::from(word));
+        let slot_global = self.module.declare_data_in_data(slot, &mut description);
+        description.write_data_addr(0, slot_global, 0);
+        self.module.define_data(id, &description)?;
+        self.descriptors.insert(body, id);
         Ok(id)
     }
 

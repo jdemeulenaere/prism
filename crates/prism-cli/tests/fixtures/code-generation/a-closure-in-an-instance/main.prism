@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun run(g: () -> Int): Int = g()
+
+fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }
+
+fun main() {
+    println(count(2) { n -> n * 10 })
+}

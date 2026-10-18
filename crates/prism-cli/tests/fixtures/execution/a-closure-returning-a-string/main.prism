@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun make(f: () -> String): String = f()
+
+fun main() {
+    println(make { "a" + "b" })
+}

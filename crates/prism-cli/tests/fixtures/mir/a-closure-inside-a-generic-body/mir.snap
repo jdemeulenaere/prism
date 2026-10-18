@@ -1,0 +1,65 @@
+module main
+fun main::run(_1: () -> Int): Int @2:1
+  local _0: Int (return)
+  local _1 g: () -> Int (argument)
+  bb0:
+    _0 = call _1() -> bb1 @2:30
+  bb1:
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1
+fun <T : Copy> main::count(_1: T, _2: (T) -> Int): Int @4:1
+  local _0: Int (return)
+  local _1 x: T (argument)
+  local _2 f: (T) -> Int (argument)
+  local _3: () -> Int (temporary)
+  bb0:
+    storage_live _3 @4:54
+    _3 = closure main::count#closure0 [_2, _1] @4:54
+    _0 = call main::run(move _3) -> bb1 @4:50
+  bb1:
+    storage_dead _3 @4:50
+    drop _2 -> bb2 @4:1
+  bb2:
+    return @4:1
+closure <T : Copy> main::count#closure0(): Int @4:54
+  local _0: Int (return)
+  local _1 f: (T) -> Int (capture)
+  local _2 x: T (capture)
+  local _3: Int (temporary)
+  local _4: T (temporary)
+  bb0:
+    storage_live _3 @4:56
+    storage_live _4 @4:58
+    _4 = copy _2 @4:58
+    _3 = call _1(move _4) -> bb1 @4:56
+  bb1:
+    _0 = move _3 + const 1 @4:56
+    storage_dead _4 @4:56
+    storage_dead _3 @4:56
+    return @4:54
+fun main::main(): Unit @6:1
+  local _0: Unit (return)
+  local _1: Int (temporary)
+  local _2: (Int) -> Int (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _1 @7:13
+    storage_live _2 @7:22
+    _2 = closure main::main#closure0 [] @7:22
+    _1 = call main::count<Int>(const 2, move _2) -> bb1 @7:13
+  bb1:
+    storage_live _3 @7:5
+    _3 = call builtin println(move _1) -> bb2 @7:5
+  bb2:
+    storage_dead _3 @7:5
+    storage_dead _2 @7:5
+    storage_dead _1 @7:5
+    _0 = const () @6:12
+    return @6:1
+closure main::main#closure0(_1: Int): Int @7:22
+  local _0: Int (return)
+  local _1 n: Int (argument)
+  bb0:
+    _0 = copy _1 * const 10 @7:29
+    return @7:22

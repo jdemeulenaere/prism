@@ -17,9 +17,6 @@
 //!   of every instance unit;
 //! - `clif`: Cranelift's compilation of every function and glue function.
 //!
-//! Closures are not compiled by the Tier 1 backend (`E6001`), so the shapes that use them stop
-//! after `borrow`.
-//!
 //! It is ignored by default, since timings of a debug build or a busy machine vary. Run it with
 //!
 //! ```text
@@ -146,6 +143,54 @@ fn nested_closures(n: usize) -> String {
     write!(body, "c{}", n - 1).unwrap();
     body.push_str(&" }".repeat(n - 1));
     format!("fun main() {{ {body} }}\n")
+}
+
+/// `n` closures in one body, each capturing a local and the closure before it is called.
+fn many_closures(n: usize) -> String {
+    let mut body = String::from("var total = 0\n");
+    for i in 0..n {
+        writeln!(body, "val v{i} = {i}; run {{ total += v{i} }}").unwrap();
+    }
+    format!("fun run(f: () -> Unit) {{ f() }}\nfun main() {{\n{body}println(total)\n}}\n")
+}
+
+/// One closure capturing `n` locals.
+fn many_captures(n: usize) -> String {
+    format!(
+        "fun run(f: () -> Int): Int = f()\n\
+         fun main() {{\n{}\nprintln(run {{ var t = 0\n{}\nt }})\n}}\n",
+        join(n, "\n", |i| format!("val v{i} = {i}")),
+        join(n, "\n", |i| format!("t += v{i}")),
+    )
+}
+
+/// `n` uses of functions as values, each an adapter closure.
+fn many_adapters(n: usize) -> String {
+    format!(
+        "fun show(n: Int?): Int = n ?: 0\nfun apply(f: (Int) -> Int): Int = f(1)\n\
+         fun main() {{\nvar total = 0\n{}\nprintln(total)\n}}\n",
+        join(n, "\n", |_| "total += apply(show)".to_string()),
+    )
+}
+
+/// `n` instances of a generic whose body builds a closure.
+fn generic_closures(n: usize) -> String {
+    let mut source = String::from(
+        "fun run(f: () -> Int): Int = f()\n\
+         fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }\n",
+    );
+    for i in 0..n {
+        writeln!(source, "struct S{i} : Copy {{ val v: Int }}").unwrap();
+    }
+    writeln!(
+        source,
+        "fun main() {{\n{}\n}}",
+        join(n, "\n", |i| format!(
+            "println(count(S{i}({i})) {{ s -> s.v }})"
+        ))
+    )
+    .unwrap();
+    source
 }
 
 /// `n` functions, each calling the one before.
@@ -316,7 +361,7 @@ fn generic_call_sites(n: usize) -> String {
 fn many_instances(n: usize) -> String {
     let mut source = String::from("fun <T> keep(x: T): T = x\n");
     for i in 0..n {
-        writeln!(source, "struct S{i}(val v: Int)").unwrap();
+        writeln!(source, "struct S{i} : Copy {{ val v: Int }}").unwrap();
     }
     source.push_str("fun main() {\n    var x = 0\n");
     for i in 0..n {
@@ -387,7 +432,11 @@ fn shapes() -> Vec<Shape> {
         shape("sequential-ifs", true, SIZES, sequential_ifs),
         shape("when-branches", true, SIZES, when_branches),
         shape("nested-blocks", true, DEPTHS, nested_blocks),
-        shape("nested-closures", false, DEPTHS, nested_closures),
+        shape("nested-closures", true, DEPTHS, nested_closures),
+        shape("many-closures", true, SIZES, many_closures),
+        shape("many-captures", true, SIZES, many_captures),
+        shape("many-adapters", true, SIZES, many_adapters),
+        shape("generic-closures", true, SIZES, generic_closures),
         shape("many-functions", true, SIZES, many_functions),
         shape("public-functions", true, SIZES, public_functions),
         shape("struct-fields", true, SIZES, struct_fields),
