@@ -26,9 +26,10 @@ Prism has no collection type. A program cannot hold a variable number of values,
 ### Modified Capabilities
 - `loops`: "For Loops Over Ranges" also accepts a `List`, whose iteration `collections` specifies.
 - `typed-tree`: a `for` loop records how it iterates; assignments may target elements; list operations are built-in calls and elements are index places.
-- `mir`: index projections become valid on lists; a `for` loop over a list borrows it once and walks it by index.
-- `code-generation`: the representation of a list, its growth, its glue, bounds checks and the layout dump.
-- `execution`: the runtime meaning of building, reading, writing, growing, shrinking, iterating, comparing, cloning and dropping lists, and the two new runtime errors.
+- `mir`: index projections become valid on lists; a `for` loop over a list borrows it once and walks it by index ("Loops Become Cycles of Blocks" restricted to ranges).
+- `code-generation`: the representation of a list, its growth, its glue (the glue requirements gain index-of glue), bounds checks and the layout dump.
+- `generics`: "Non-Regular Generic Types Are Rejected" looks through `List` as through `Heap`, and its accepted example no longer declares a type named `List`.
+- `execution`: the runtime meaning of building, reading, writing, growing, shrinking, iterating, comparing, cloning and dropping lists, and the two new runtime errors; the generic linked list example is renamed `Chain`.
 
 ## Impact
 

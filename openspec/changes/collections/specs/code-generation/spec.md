@@ -1,5 +1,55 @@
 # Code Generation Specification Delta
 
+## MODIFIED Requirements
+
+### Requirement: Glue Has No Function Table Slot
+Drop, clone, equality and index-of glue MUST have no slot in the function table: each is local to the code unit that generates it and named `<unit>#drop(<type>)`, `<unit>#clone(<type>)`, `<unit>#equals(<type>)` or `<unit>#indexOf(<type>)` after that unit's name and the type it handles. A file's unit is named by its module, and an instance's unit by the instance's symbol.
+
+#### Scenario: Glue of one type in two files
+- **WHEN** `lib/user.prism` declares `public struct User { val name: String }` and `public fun drop(u: User): Unit {}`, and `app/main.prism` imports `/lib/user` and declares `fun keep(u: User) {}` and `fun main() { drop(User("a")); keep(User("b")) }`
+- **THEN** `prism run --check-allocations app/main.prism` exits with status 0, and `prism dump-clif` of each file prints its own drop glue of `lib/user::User`, `lib/user#drop(lib/user::User)` and `app/main#drop(lib/user::User)`
+
+#### Scenario: Glue of an instance
+- **WHEN** `struct User : Clone { val name: String }`, `fun <T> discard(x: T) {}` and `fun <T : Clone> copy(x: &T): T = x.clone()` are declared and `fun main() { discard(User("a")); val u = copy(&User("b")); println(1) }` runs
+- **THEN** `prism run --check-allocations main.prism` prints `1` and exits with status 0, and `prism dump-clif --instances main.prism` prints `main::discard<main::User>#drop(main::User)` after `main::discard<main::User>`, and `main::copy<main::User>#clone(main::User)` after `main::copy<main::User>`
+
+### Requirement: Layout Dump
+`prism dump-layout <file.prism>` MUST print, as deterministic text, the layout of each struct and enum the file declares, in declaration order, then of every other struct, enum, nullable and list type that a compiled body of the file holds, by rendered name: size, alignment, and the offset of every field, tag and payload. A type without a layout yet MUST be listed with the construct it waits for. With type or borrow errors it MUST report them, print nothing and exit with a failure status.
+
+#### Scenario: Dumping a file's layouts
+- **WHEN** `prism dump-layout main.prism` runs twice on a file that `prism check` accepts
+- **THEN** it prints the same text both times and exits with status 0
+
+#### Scenario: A type without a layout yet
+- **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Task { val run: () -> Unit }`, `struct Box<T>(val v: T)` and `struct Odd { val w: Widget }`, with no declaration of `Widget`
+- **THEN** it lists `Task` with size 16 and `run` at offset 0, `Box` as laid out per instance, and `Odd` as having no layout because of values of unknown type `Widget`, and exits with status 0
+
+#### Scenario: Dumping a file with errors
+- **WHEN** `prism dump-layout main.prism` runs on `struct P { val x: Int }` and `fun f(): Int = nope`
+- **THEN** it reports `E4001`, prints no layout, and exits with a failure status
+
+### Requirement: Glue Is Local to Its Code Unit
+Each code unit, a file's or an instance's, MUST generate the drop, clone and equality glue of the types its bodies drop, clone, or compare through boxes, as lists or beyond the inline budget of equality, and the index-of glue of the lists its bodies search, including types of other modules and the types those reach through boxes and lists, and call it directly, not through the function table, so that a unit's code depends only on its own MIR.
+
+#### Scenario: Drop glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User { val name: String }` and `fun f(u: User) {}`
+- **THEN** after the file's functions it prints the drop glue of `main::User`, headed `function main#drop(main::User)`, and `f` calls it on its argument directly
+
+#### Scenario: Clone glue in the IR dump
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User : Clone { val name: String, val id: Int }` and `fun f(u: &User): User = u.clone()`
+- **THEN** after the file's functions it prints the clone glue of `main::User`, headed `function main#clone(main::User)`, which `f` calls
+
+#### Scenario: Glue of an imported recursive type
+- **WHEN** `lib/tree.prism` declares `public enum Tree { Leaf, Node(Heap<Tree>, Int, Heap<Tree>) }` and `public fun leaf(): Tree = Tree.Leaf`, and `app/main.prism` imports `/lib/tree` and declares `fun main() { val t = Tree.Node(Heap(leaf()), 1, Heap(leaf())); println(t == t) }`
+- **THEN** `prism run --check-allocations app/main.prism` prints `true` and exits with status 0, and `prism dump-clif app/main.prism` prints `app/main#drop(lib/tree::Tree)`, `app/main#drop(Heap<lib/tree::Tree>)` and `app/main#equals(lib/tree::Tree)`
+
+### Requirement: Glue Checks the Stack
+Every drop, clone, equality and index-of glue function MUST check the stack on entry, as compiled bodies do, so that recursion through glue that exceeds the program's stack raises the runtime error "stack overflow".
+
+#### Scenario: Dropping a very deep list
+- **WHEN** `struct Node { val next: Heap<Node>? }` is declared and `fun main() { var list: Heap<Node>? = null; var i = 0; while (i < 1000000) { list = Heap(Node(list)); i += 1 }; println(i) }` runs
+- **THEN** stdout holds `1000000` and a newline, stderr holds exactly `panic: stack overflow` and a newline, and the exit status is 101
+
 ## ADDED Requirements
 
 ### Requirement: Lists Are a Pointer, a Size and a Capacity

@@ -1,5 +1,14 @@
 # Execution Specification Delta
 
+## MODIFIED Requirements
+
+### Requirement: Generic Recursive Data Runs
+Generic structs and enums that reach themselves through `Heap<T>` with the same type arguments MUST run through generic functions and extensions, with every box freed exactly once.
+
+#### Scenario: A generic linked list
+- **WHEN** `enum Chain<T> { Cons(T, Heap<Chain<T>>), Nil }`, `fun <T> Chain<T>.size(): Int = when (this) { Chain.Cons(_, val rest) -> 1 + rest.size(), Chain.Nil -> 0 }` and `fun <T> push(list: Chain<T>, x: T): Chain<T> = Chain.Cons(x, Heap(list))` are declared and `fun main() { val empty: Chain<String> = Chain.Nil; val names = push(push(empty, "a"), "b"); val none: Chain<Int> = Chain.Nil; val numbers = push(none, 1); println(names.size()); println(numbers.size()) }` runs under `prism run --check-allocations`
+- **THEN** the program prints `2` and `1`, reports no live allocation and exits with status 0
+
 ## ADDED Requirements
 
 ### Requirement: Lists Hold Their Elements in Order

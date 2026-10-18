@@ -1,15 +1,15 @@
 // expect: ok
 // run: 0
-enum List<T> { Cons(T, Heap<List<T>>), Nil }
-fun <T> List<T>.size(): Int = when (this) {
-    List.Cons(_, val rest) -> 1 + rest.size()
-    List.Nil -> 0
+enum Chain<T> { Cons(T, Heap<Chain<T>>), Nil }
+fun <T> Chain<T>.size(): Int = when (this) {
+    Chain.Cons(_, val rest) -> 1 + rest.size()
+    Chain.Nil -> 0
 }
-fun <T> push(list: List<T>, x: T): List<T> = List.Cons(x, Heap(list))
+fun <T> push(list: Chain<T>, x: T): Chain<T> = Chain.Cons(x, Heap(list))
 fun main() {
-    val empty: List<String> = List.Nil
+    val empty: Chain<String> = Chain.Nil
     val names = push(push(empty, "a"), "b")
-    val none: List<Int> = List.Nil
+    val none: Chain<Int> = Chain.Nil
     val numbers = push(none, 1)
     println(names.size())
     println(numbers.size())
