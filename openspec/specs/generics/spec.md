@@ -1,7 +1,7 @@
 # Generics Specification
 
 ## Purpose
-The generics specification defines type parameters on functions, extensions, structs and enums: their scope and bounds, what a generic body may do with a type parameter, explicit and inferred type arguments, the rule that type arguments are borrow-free, and generic types and extensions. A generic declaration is checked once, where it is declared; code generation for its instantiations is planned for `monomorphization`.
+The generics specification defines type parameters on functions, extensions, structs and enums: their scope and bounds, what a generic body may do with a type parameter, explicit and inferred type arguments, the rule that type arguments are borrow-free, and generic types and extensions. A generic declaration is checked once, where it is declared, and runs as an instance per list of concrete type arguments the program uses; generics that would need infinitely many instances (polymorphic recursion) are rejected.
 
 ## Requirements
 

@@ -1,9 +1,10 @@
 // The reference program of `prism run`: run it with `prism run examples/run/main.prism`, and
 // time it with `prism run --timings examples/run/main.prism`. It uses scalars, a struct, an enum
 // with payloads matched by patterns, a destructuring declaration, a nullable, strings and string
-// templates, and an expression tree built from boxes.
+// templates, an expression tree built from boxes, and generic functions and extensions.
 package run
 
+import /run/generic/labels
 import /run/geometry/shapes
 import /run/math/expressions
 import /run/math/numbers
@@ -44,4 +45,10 @@ fun main() {
     val copy = one.clone()
     println(eval(simplify(one)))
     println(simplify(copy) == sumTimes(1, 1, 5))
+
+    val count = labeled("primes", primes)
+    println("${count.label}: ${count.get()}")
+    val name = labeled("name", "prism")
+    println(name.value.length)
+    println(firstOr(slope(Point(1, 0)), -1))
 }

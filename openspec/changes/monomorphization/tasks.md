@@ -43,9 +43,9 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 7. Documents and integration
 
-- [ ] 7.1 In `openspec/specs/diagnostics/spec.md`, add `E4027` (`PolymorphicRecursion`) and `E6004` (`PolymorphicRecursionAcrossFiles`) and remove "calls of generic functions" from `E6001`, with a rationale line (D15). In `openspec/specs/generics/spec.md`, update the Purpose sentence that says code generation for instantiations is planned.
-- [ ] 7.2 Make `examples/run/main.prism` call a generic function and a generic extension, with its expected output updated.
-- [ ] 7.3 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run examples/run/main.prism`, and `openspec validate monomorphization --strict`. Verify all pass.
+- [x] 7.1 In `openspec/specs/diagnostics/spec.md`, add `E4027` (`PolymorphicRecursion`) and `E6004` (`PolymorphicRecursionAcrossFiles`) and remove "calls of generic functions" from `E6001`, with a rationale line (D15). In `openspec/specs/generics/spec.md`, update the Purpose sentence that says code generation for instantiations is planned.
+- [x] 7.2 Make `examples/run/main.prism` call a generic function and a generic extension, with its expected output updated.
+- [x] 7.3 Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run examples/run/main.prism`, and `openspec validate monomorphization --strict`. Verify all pass.
 
 ## Archive notes
 

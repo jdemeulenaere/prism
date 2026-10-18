@@ -1,0 +1,16 @@
+package run.generic
+
+// Generic helpers for the reference program of `prism run` (examples/run/main.prism): each
+// runs as one instance per type it is called with.
+
+// A value with a label.
+public struct Labeled<T>(val label: String, val value: T)
+
+// Labels `value`.
+public fun <T> labeled(label: String, value: T): Labeled<T> = Labeled(label, value)
+
+// The labeled value, copied out.
+public fun <T : Copy> Labeled<T>.get(): T = value
+
+// `a`, or `fallback` when it is null.
+public fun <T> firstOr(a: T?, fallback: T): T = a ?: fallback
