@@ -74,13 +74,15 @@ Planned autonomously on 2026-10-17, when the user asked for iteration up to Mile
 18. [ ] `string-templates`: Kotlin string templates (`"Count: $count"`, `"${a + b}"`, `\$`), each part a `String` or converted with `toString()` (built-in for scalars, an extension otherwise), lowered to one runtime call that sizes the result once (`runtime-strings-and-drops`, D20). Needed by UI text (`Text("Count: $count")`).
 19. [ ] `monomorphization`: instantiating generic MIR per type arguments (from `generics`): substitution, type-parameter drops resolved to drop glue or removed, flattened `T?` rewrites, rejecting polymorphic recursion, and cross-file instantiation, shipping each generic's elaborated polymorphic MIR, deciding where instances live and what the Monomorphization Hash covers, with re-monomorphization only where a generic body changed ([`docs/architecture.md`](docs/architecture.md) §1).
 20. [ ] `closures`: closure conversion in the backend, then escaping move-capturing closures (needed for `onClick`).
-21. [ ] `hot-reload`: `prism run --watch` defining a changed file's new code unit into a new JIT module and repointing its slots of the function table `codegen-core` built, and deciding what happens to the values of its top-level `val`s (`codegen-core`, D24).
-22. [ ] `compose-runtime` (Phase 4): slot table, group keys and memoization.
-23. [ ] `compose-transform`: the compiler transform of `compose fun` (composer parameter, group keys, change-tracking bitmasks, skipping).
-24. [ ] `state-handles`: `remember`, `mutableStateOf` and `Copy` `State<T>` handles with generational indices; invalidation and recomposition.
-25. [ ] `ui-toolkit`: a UI node tree with layout (`Column`, `Row`, `Text`, `Button`), a desktop renderer and a headless renderer for tests, and event dispatch.
-26. [ ] `compose-hot-reload`: hot reload of composable bodies that keeps slot-table state.
-27. [ ] `reactive-app-verification`: real reactive example apps (counter, todo list) running natively, with tests that no allocation outlives its owner.
+21. [ ] `payload-patterns`: `when` patterns binding enum payloads (`is Shape.Circle(r) ->` or Kotlin-like equivalent) and destructuring declarations (`val (name, email) = user`), the way to take ownership of a struct's non-`Copy` fields (the deferred item below). Added on 2026-10-18 for real apps (process row P6).
+22. [ ] `collections`: a built-in growable `List<T>` (construction, `add`, `size`, indexing, removal, iteration with `for (x in list)` through an iteration protocol, borrowing elements), with drop and clone glue; needed for UI children and the todo-list app. Added on 2026-10-18 (process row P6).
+23. [ ] `hot-reload`: `prism run --watch` defining a changed file's new code unit into a new JIT module and repointing its slots of the function table `codegen-core` built, and deciding what happens to the values of its top-level `val`s (`codegen-core`, D24).
+24. [ ] `compose-runtime` (Phase 4): slot table, group keys and memoization.
+25. [ ] `compose-transform`: the compiler transform of `compose fun` (composer parameter, group keys, change-tracking bitmasks, skipping).
+26. [ ] `state-handles`: `remember`, `mutableStateOf` and `Copy` `State<T>` handles with generational indices; invalidation and recomposition.
+27. [ ] `ui-toolkit`: a UI node tree with layout (`Column`, `Row`, `Text`, `Button`), a desktop renderer and a headless renderer for tests, and event dispatch.
+28. [ ] `compose-hot-reload`: hot reload of composable bodies that keeps slot-table state.
+29. [ ] `reactive-app-verification`: real reactive example apps (counter, todo list) running natively, with tests that no allocation outlives its owner.
 
 Deliberately left until after the borrow checker (from the same session):
 - [ ] `Heap<T>` construction and unboxing (planned as item 17, `heap-boxes`, from the proposal of `runtime-strings-and-drops`), including whether its contents can be moved out, whether `*h = v` writes a `Heap`'s contents, and whether `Heap<U>` to `Heap<T>` stays covariant, which changes the representation the way reference covariance did (from `reference-access`), and whether a `consuming` call may move its receiver out of a `Heap<T>`, `E4017` today (from `extension-methods`).

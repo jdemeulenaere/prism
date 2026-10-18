@@ -15,6 +15,7 @@ On 2026-10-17 the user asked for autonomous iteration up to Milestone 2, with qu
 | P3 | The order of changes after the agreed "road to the borrow checker" is set in `ROADMAP.md` under "Road to Milestone 2". | Other orders. | low |
 | P4 | (`generics`) Monomorphization is split from `generics` into its own change, `monomorphization`, after `runtime-strings-and-drops` (item 17); `codegen-core` and `codegen-aggregates` lower only non-generic bodies. | Instantiating in `generics` with `dump-mir` tests; folding it into `codegen-core`. | low |
 | P5 | (`runtime-strings-and-drops`, D1) `Heap<T>` (`heap-boxes`) and string templates (`string-templates`) are split from `runtime-strings-and-drops` into items 17 and 18, before `monomorphization`; later items are renumbered. | One change for all three; templates after `closures`. | low |
+| P6 | `payload-patterns` and `collections` were added to the road to Milestone 2 (items 21–22) by the orchestrator: a todo-list app needs a growable list and matching on enum payloads. | Building the apps with fixed-size data; a `List<T>` implemented in Prism once traits exist. | low |
 
 ## Language and compiler decisions
 
