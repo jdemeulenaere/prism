@@ -49,8 +49,8 @@ Before starting, check every function this file attributes to `monomorphization`
 
 ## 8. Documents and integration
 
-- [ ] 8.1 In `openspec/specs/diagnostics/spec.md`, make the `E6004` row say that `prism check` and `prism run` report it (D7). Update the Purpose of `compilation-and-abi` (one ABI hash, Monomorphization Hashes of records) and of `build-cache` (code entries, `prism run`).
-- [ ] 8.2 Log the decisions in `docs/decisions-for-review.md` (done at proposal time; update any decision that changed while implementing). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism` twice with `--explain-cache` (the second run reusing everything), the timing benchmark of group 7, and `openspec validate instance-cache --strict`. Verify that all pass.
+- [x] 8.1 In `openspec/specs/diagnostics/spec.md`, make the `E6004` row say that `prism check` and `prism run` report it (D7). Update the Purpose of `compilation-and-abi` (one ABI hash, Monomorphization Hashes of records) and of `build-cache` (code entries, `prism run`).
+- [x] 8.2 Log the decisions in `docs/decisions-for-review.md` (done at proposal time; update any decision that changed while implementing). Run the apply guidance in `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism` twice with `--explain-cache` (the second run reusing everything), the timing benchmark of group 7, and `openspec validate instance-cache --strict`. Verify that all pass.
 
 ## Archive notes
 

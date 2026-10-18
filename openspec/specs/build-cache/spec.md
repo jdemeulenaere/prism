@@ -1,7 +1,7 @@
 # Build Cache Specification
 
 ## Purpose
-The build cache is the content-addressed store that lets `prism check`, and later code generation, skip work whose inputs have not changed: where it lives, what its keys cover, how its entries are written and validated, and how a developer disables or inspects it.
+The build cache is the content-addressed store that lets `prism check` skip Phase 2 and `prism run` skip Phase 2, instantiation and code generation for work whose inputs have not changed: where it lives, what it stores (check entries with file summaries, generic records by their Monomorphization Hash, and relocatable code of file units and instances), what its keys cover, the target identity code keys name, how its entries are written and validated, and how a developer disables or inspects it.
 
 ## Requirements
 

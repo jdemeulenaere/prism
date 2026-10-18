@@ -178,6 +178,14 @@ An entry is a text header (`prism-cache 2`, `kind <kind>`, `key <hex>`, `length 
 
 The cache's stores, keys and explanation extend `build-cache`. The hashes, records, planning and keys extend `compilation-and-abi`. Artifacts extend `code-generation`, `E6004` in `prism check` extends `generics`, and the run options extend `execution`. Rejected: an `instance-cache` capability, which would split the cache's rules across two specs.
 
+## Implementation notes (2026-10-18)
+
+- **Encoding details** (D4). Unsigned lengths, indices and source positions are LEB128; `i64`, `f64` (as bits), `u32` and `char` are fixed-width little-endian. A decoded type table rejects ids out of order, so a table decodes to exactly what was encoded. Every sequence length is checked against the bytes left before anything is allocated, and every truncation and flipped byte of the fixture corpus decodes without a panic.
+- **Summaries keep each body's calls apart** (D5, D7). A generic's summary holds the calls of its function body and, separately, of each default generator, each with the closures lowered inside it, so that an instance of the function never requests what only its defaults call. A test checks over the fixture corpus that planning finds exactly the instances instantiating bodies finds.
+- **`collect_instances` over the union of the files' tables** (D13). The dumps and `Program::compile` plan from in-memory summaries and build instance units over the union of the elaborated files' type tables, which agrees with the program table that `prism run` builds from Phase 1a definitions (a library test compares them).
+- **One linker path** (D8). `CodeUnit::lower_named` is unchanged: `Linker::compile_unit` lowers through a module wrapper that forwards declarations to the JIT module and records the data the unit defines. The compiler identity is still the hash of the whole executable, read once per process; it is most of what a warm run of `examples/run` spends outside its stages (about 3 ms of 4.7 ms in a release build), which a follow-up can cache by the executable's path, size and modification time.
+- **Warm-run benchmark** (group 7) lives in `crates/prism-cli/tests/warm_run_timing.rs`. Its numbers are in the commit "Implement instance-cache: warm-run timing".
+
 ## Risks / Trade-offs
 
 - [A key misses an input, and a stale artifact runs] → keys are derived from the Phase 3 dependency rule that `monomorphization` made explicit (file code depends on its file and direct imports' ABIs, and an instance on its record and type-argument definitions), and the debug-build encode/decode round-trip runs on every definition. The fixture harness runs every executable fixture cold, then warm on the cache the cold run filled, and the warm run must match the snapshots and write no entry. `cache_tests.rs` tests each covered input with an edit (private type, callee signature, type argument field, helper body).

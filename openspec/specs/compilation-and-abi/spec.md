@@ -1,7 +1,7 @@
 # Prism Compilation Pipeline & ABI Extraction
 
 ## Purpose
-The compilation and ABI specification defines the two-phase pipeline as implemented: Phase 1 (`crates/prism-abi`) extracts each file's exported declaration surface and computes deterministic ABI and interface hashes that ignore private symbols and non-generic function bodies, Phase 2 checks each file against its direct imports' ABIs, and `prism check` skips Phase 2 for files whose inputs the build cache (the `build-cache` spec) already checked. Code generation, instantiation, cached `.abi` entries and the execution tiers are planned and described in [`docs/architecture.md`](../../../docs/architecture.md).
+The compilation and ABI specification defines the two-phase pipeline as implemented: Phase 1 (`crates/prism-abi`) extracts each file's exported declaration surface and computes one deterministic ABI hash that ignores private symbols and every function body, Phase 2 checks each file against its direct imports' ABIs and keeps a generic record for each generic, whose canonical encoding's hash is its Monomorphization Hash, instances are planned per program from file summaries and keyed by their record and type-argument definitions, and `prism check` and `prism run` skip Phase 2 (and `prism run` code generation) for files and instances whose inputs the build cache (the `build-cache` spec) already holds. Cached `.abi` entries and Tier 2 are planned and described in [`docs/architecture.md`](../../../docs/architecture.md).
 
 ## Requirements
 

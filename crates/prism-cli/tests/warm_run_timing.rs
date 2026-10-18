@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const SIZES: [usize; 3] = [64, 256, 1024];
+
+/// A shape's name and its generator for a size.
+type Shape = (&'static str, fn(usize) -> Generated);
 const RUNS: [&str; 4] = ["cold", "warm", "body edit", "generic edit"];
 
 /// A generated workspace: its files, the entry, and the two edits, each `(path, new source)`.
@@ -195,7 +198,7 @@ fn measure(name: &str, generated: &Generated) -> Vec<([Duration; 3], usize)> {
 #[ignore = "a benchmark: run it on a release build with --ignored --nocapture"]
 fn warm_runs_take_linear_time() {
     let assert = std::env::var_os("PRISM_ASSERT_TIMING").is_some();
-    let shapes: [(&str, fn(usize) -> Generated); 3] = [
+    let shapes: [Shape; 3] = [
         ("many_files", many_files),
         ("many_instances", many_instances),
         ("instance_chains", instance_chains),

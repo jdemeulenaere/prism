@@ -337,6 +337,39 @@ fn same_modulo_errors(a: &Type, b: &Type) -> bool {
     }
 }
 
+/// The type-table entry of a struct or enum definition an ABI records: its id, its definition
+/// and its marker, as an importer records them ([`crate::TypeChecker::ingest_file_abi`]) and as
+/// the program-wide table of instance units is built from Phase 1a definitions (D13 of
+/// `instance-cache`).
+pub fn type_definition_from_abi(
+    definition: &AbiTypeDefinition,
+) -> (NominalId, TypeDef, NominalMarker) {
+    let id = NominalId::new(definition.module.clone(), definition.name.clone());
+    let parameters = type_parameters_from_abi(&definition.type_parameters);
+    let convert = |ty: &AbiType| type_from_abi(ty, &parameters);
+    let type_definition = match &definition.members {
+        AbiTypeMembers::Fields(fields) => TypeDef::Struct {
+            parameters: parameters.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, is_var, ty)| (name.clone(), *is_var, convert(ty)))
+                .collect(),
+        },
+        AbiTypeMembers::Variants(variants) => TypeDef::Enum {
+            parameters: parameters.clone(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| (name.clone(), payloads.iter().map(convert).collect()))
+                .collect(),
+        },
+    };
+    let marker = NominalMarker {
+        marker: definition.marker,
+        parameters: definition.marker_parameters.clone(),
+    };
+    (id, type_definition, marker)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,37 +468,4 @@ mod tests {
         assert!(shared(Type::Error).is_assignable_to(&shared(Type::Int)));
         assert!(mutable(Type::Int).is_assignable_to(&mutable(Type::Error)));
     }
-}
-
-/// The type-table entry of a struct or enum definition an ABI records: its id, its definition
-/// and its marker, as an importer records them ([`crate::TypeChecker::ingest_file_abi`]) and as
-/// the program-wide table of instance units is built from Phase 1a definitions (D13 of
-/// `instance-cache`).
-pub fn type_definition_from_abi(
-    definition: &AbiTypeDefinition,
-) -> (NominalId, TypeDef, NominalMarker) {
-    let id = NominalId::new(definition.module.clone(), definition.name.clone());
-    let parameters = type_parameters_from_abi(&definition.type_parameters);
-    let convert = |ty: &AbiType| type_from_abi(ty, &parameters);
-    let type_definition = match &definition.members {
-        AbiTypeMembers::Fields(fields) => TypeDef::Struct {
-            parameters: parameters.clone(),
-            fields: fields
-                .iter()
-                .map(|(name, is_var, ty)| (name.clone(), *is_var, convert(ty)))
-                .collect(),
-        },
-        AbiTypeMembers::Variants(variants) => TypeDef::Enum {
-            parameters: parameters.clone(),
-            variants: variants
-                .iter()
-                .map(|(name, payloads)| (name.clone(), payloads.iter().map(convert).collect()))
-                .collect(),
-        },
-    };
-    let marker = NominalMarker {
-        marker: definition.marker,
-        parameters: definition.marker_parameters.clone(),
-    };
-    (id, type_definition, marker)
 }
