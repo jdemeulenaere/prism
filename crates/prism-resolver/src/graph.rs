@@ -260,6 +260,11 @@ impl SourceStore {
         self.parses
     }
 
+    /// Every path the store holds parsed content for, in no particular order.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.entries.keys().map(PathBuf::as_path)
+    }
+
     /// The content the store last read for `path`.
     pub fn content(&self, path: &Path) -> Option<&str> {
         self.entries.get(path).map(|entry| entry.content.as_str())
@@ -302,8 +307,10 @@ impl SourceStore {
         }
         self.parses += 1;
         let file = prism_parser::parse_source(&content).map_err(|e| {
-            // A file that does not parse is read again next time.
+            // A file that does not parse is read again next time, and its last good content is
+            // forgotten: whatever it reads as next, even that content again, is a change.
             self.stale.insert(path.to_path_buf());
+            self.entries.remove(path);
             ResolveError::Parse {
                 path: path.to_path_buf(),
                 error: e,

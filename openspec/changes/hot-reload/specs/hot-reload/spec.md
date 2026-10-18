@@ -13,6 +13,17 @@ Defines `prism run --watch`: a watch session that keeps a program running while 
 - **WHEN** `prism run --watch main.prism` runs `fun value(): Int = 1` and `fun main() { var n = 0; while (value() == 1) { n += 1 }; println(value()) }`, and `main.prism` is then saved on disk with `fun value(): Int = 2`
 - **THEN** the program prints `2` without being restarted, and stderr holds `reload: applied main.prism` and then `watch: main returned with status 0; waiting for changes`
 
+### Requirement: Only the Program's Files Are Watched
+A change of a file that is not one of the program's files, nor the target of one of its unresolved imports, MUST not reload the program. A file the program stops importing is no longer watched, so it MUST be read again when an import brings it back.
+
+#### Scenario: An edit to a file outside the program does nothing
+- **WHEN** `fun main() { println(1) }` runs under `after exit: edit notes.prism notes.prism.v2`, and no file of the program imports `notes.prism`
+- **THEN** stdout is exactly `1`, stderr is exactly `watch: main returned with status 0; waiting for changes`, and the session exits with status 0
+
+#### Scenario: A file imported again is read again
+- **WHEN** a Rust test of the watch session runs `main.prism`, which imports `helper.prism`, then edits `main.prism` to drop the import, then changes `helper.prism` on disk so that `value` divides by zero, and then edits `main.prism` to import it again
+- **THEN** the last run of `main` stops with `panic: division by zero` in `helper.prism`
+
 ### Requirement: Session Status Lines
 The program's output MUST go to stdout, and the session's status lines to stderr, each starting with `reload:` or `watch:`. An applied reload MUST print `reload: applied <files>`. `<files>` lists the files whose code units the reload defines, compiled or loaded from the build cache, relative to the workspace root, in topological order, separated by `, `. When the reload defines instance units, the list MUST be followed by ` (<n> instance)` or ` (<n> instances)`.
 
@@ -53,15 +64,18 @@ A frame that is already running when a reload is applied MUST continue in the co
 - **THEN** stdout holds `2` and `3`
 
 ### Requirement: Slots Record the Contract of Their Code
-Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted. It MUST depend on nothing else, such as the order in which a unit declares or uses its types.
-
-#### Scenario: Reordering declarations keeps their contracts
-- **WHEN** `struct P { val x: Int }`, `fun show(p: &P) { println(p.x) }`, `fun take(p: P): Int = p.x` and `fun main() { val p = P(1); var i = 0; while (i < 3) { show(p); i += 1 } }` run under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `take` before `show` and `show` prints `p.x * 10`
-- **THEN** stdout holds `1`, `10` and `10`, and stderr is exactly `reload: applied main.prism` and `watch: main returned with status 0; waiting for changes`
+Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted.
 
 #### Scenario: A changed field type keeps old values with old code
 - **WHEN** `struct P { val x: Int }`, `fun show(p: &P) { println(p.x) }` and `fun main() { val p = P(1); show(p); show(p) }` run under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `struct P { val x: Double }`, `fun show(p: &P) { println(p.x + 0.5) }` and `fun main() { val p = P(1.0); show(p); show(p) }`
 - **THEN** stdout holds `1` and `1`, and stderr notes that the signature of `main::show` changed
+
+### Requirement: Type Fingerprints Depend on the Type Alone
+A type's fingerprint MUST be the same in every unit and in every version of a unit that uses the type: it MUST not depend on the order in which a unit declares or uses its types.
+
+#### Scenario: Reordering declarations keeps their contracts
+- **WHEN** `struct P { val x: Int }`, `fun show(p: &P) { println(p.x) }`, `fun take(p: P): Int = p.x` and `fun main() { val p = P(1); var i = 0; while (i < 3) { show(p); i += 1 } }` run under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `take` before `show` and `show` prints `p.x * 10`
+- **THEN** stdout holds `1`, `10` and `10`, and stderr is exactly `reload: applied main.prism` and `watch: main returned with status 0; waiting for changes`
 
 ### Requirement: A Slot Is Repointed Only to Code With the Same Contract
 A reload MUST repoint a symbol's slot only to code with the same contract. Code with a different contract MUST get a new slot for the symbol, which code compiled from then on calls, while code compiled before keeps calling the old slot and its old code. No reload MUST be refused, and no live value MUST be converted, because a type's layout changed.
@@ -127,9 +141,15 @@ When a reload's files report errors, the session MUST print the diagnostics as `
 ### Requirement: A Program That Does Not Compile at Start Waits
 When the program does not compile as the session starts, the session MUST print its diagnostics and `watch: waiting for changes`, and wait for a change instead of exiting.
 
+The session MUST watch every file it reached while trying, the file in error included, so that fixing any of them is seen.
+
 #### Scenario: A program that does not compile at start waits for a change
 - **WHEN** `fun main() { val x: Int = true }` runs under `after exit: edit main.prism main.prism.v2`, where `main.prism.v2` declares `fun main() { println(1) }`
 - **THEN** stderr holds an `E4002` diagnostic and `watch: waiting for changes`, stdout holds `1`, and the session exits with status 0
+
+#### Scenario: A syntax error in an imported file at start
+- **WHEN** `prism run --watch app/main.prism` starts on `app/main.prism`, which imports `/lib/math`, while `lib/math.prism` declares `public fun twice(n: Int): Int = n *`, and `lib/math.prism` is then saved on disk with `n * 2`
+- **THEN** stderr holds an `E2001` diagnostic and `watch: waiting for changes`, and then the program runs and prints `4`
 
 ### Requirement: A Newer Change Replaces a Pending Reload
 When a file changes while a compiled reload has not been applied yet, the session MUST discard that reload and prepare a new one from the latest sources. The new reload is computed against the code the program is running.
@@ -160,11 +180,15 @@ Without an edit script, the session MUST detect changes from the platform's file
 - **THEN** the session reloads the program once
 
 ### Requirement: Unchanged Content Does Not Reload
-A file-system event for a file whose content is the same as when it was last read MUST not cause a reload.
+A file-system event for a file whose content is the same as when it was last read MUST not cause a reload. A file whose last content did not parse MUST count as changed at its next event, whatever it then holds.
 
 #### Scenario: Saving without changes does nothing
 - **WHEN** `prism run --watch main.prism` runs a program whose `main` loops calling a function, and `main.prism` is written again with the same content
 - **THEN** stderr holds no `reload:` line
+
+#### Scenario: Changing a file back after a syntax error
+- **WHEN** a Rust test of the watch session runs `fun main() { println(1) }` until `main` returns, then edits `main.prism` to `fun main() { println(1 }`, and then edits it back to `fun main() { println(1) }`
+- **THEN** the first edit does not compile, the second runs `main` again, and it prints `1`
 
 ### Requirement: Edit Scripts
 `prism run --watch --edits <script>` MUST replace file watching with the script's steps, one per line, ignoring blank lines and lines starting with `#`. A step is `<trigger>: edit <target> <replacement>`, both paths relative to the script's directory. It makes the session read `<target>` as the content of `<replacement>` without changing any file on disk, and a missing target becomes a new file. Another line, or `--edits` without `--watch`, MUST be a usage error with status 1.

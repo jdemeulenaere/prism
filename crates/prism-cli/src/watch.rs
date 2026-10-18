@@ -324,10 +324,12 @@ impl WatchSession {
             .filter(|path| self.store.has_changed(path))
             .cloned()
             .collect();
-        if changed.is_empty() {
+        self.store.invalidate(&changed);
+        // Only a change of a file the session watches reloads: an edit script may change any
+        // file, and a file outside the program is read again once it joins it.
+        if !changed.iter().any(|path| self.watched.contains(path)) {
             return ReloadOutcome::Unchanged;
         }
-        self.store.invalidate(&changed);
         if !self.running {
             return self.start();
         }
@@ -498,11 +500,20 @@ impl WatchSession {
         let graph = match DependencyGraph::from_entry_with(&self.entry, &mut self.store) {
             Ok(graph) => graph,
             Err(error) => {
-                if let ResolveError::FileNotFound { target_path, .. } = &error {
-                    if !self.watched.contains(target_path) {
-                        self.watched.push(target_path.clone());
+                // The files this attempt reached are watched too, so that fixing the file in
+                // error, or a file importing it, is seen even when no build succeeded before.
+                let reached = self
+                    .store
+                    .paths()
+                    .map(Path::to_path_buf)
+                    .chain(error_file(&error).map(Path::to_path_buf))
+                    .collect::<Vec<PathBuf>>();
+                for path in reached {
+                    if !self.watched.contains(&path) {
+                        self.watched.push(path);
                     }
                 }
+                self.watched.sort();
                 return Err(match error {
                     // The source shown is what the store read, which may be an overlay's.
                     ResolveError::Parse { path, error } => WorkspaceError::Parse {
@@ -517,6 +528,15 @@ impl WatchSession {
         assert_workspace_boundary(&graph)?;
         let mut watched: Vec<PathBuf> = graph.nodes.keys().cloned().collect();
         watched.sort();
+        // A file the program no longer imports is not watched, so the store reads it again if
+        // an import brings it back: it may have changed meanwhile.
+        let dropped: Vec<PathBuf> = self
+            .watched
+            .iter()
+            .filter(|path| !graph.nodes.contains_key(*path))
+            .cloned()
+            .collect();
+        self.store.invalidate(&dropped);
         self.watched = watched;
         self.workspace_root = graph.workspace_root.clone();
         Ok(graph)
@@ -671,6 +691,19 @@ impl WatchSession {
                 None => return self.exit_status(),
             }
         }
+    }
+}
+
+/// The file a resolution error is about, if it names one.
+fn error_file(error: &ResolveError) -> Option<&Path> {
+    match error {
+        ResolveError::PackagePathMismatch { file, .. }
+        | ResolveError::PackageHeterogeneity { file, .. }
+        | ResolveError::InconsistentWorkspaceRoot { file, .. } => Some(file),
+        ResolveError::FileNotFound { target_path, .. } => Some(target_path),
+        ResolveError::Io { path, .. } | ResolveError::Parse { path, .. } => Some(path),
+        ResolveError::WorkspaceBoundaryViolation { .. }
+        | ResolveError::InvalidImportPath { .. } => None,
     }
 }
 

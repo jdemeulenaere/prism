@@ -1661,3 +1661,24 @@ fn an_atomic_save_is_seen() {
         .count();
     assert_eq!(reloads, 1, "{:#?}", seen);
 }
+
+/// hot-reload: "A syntax error in an imported file at start": the session watches the file in
+/// error although no build succeeded, so saving it fixed runs the program.
+#[test]
+fn a_syntax_error_in_an_imported_file_at_start() {
+    let directory = two_files(
+        "watch_syntax_error_at_start",
+        "public fun twice(n: Int): Int = n *\n",
+        "fun main() { println(twice(2)) }\n",
+    );
+    let mut session = WatchedProgram::start(&directory, "app/main.prism");
+    session.wait_for(|line| line == "watch: waiting for changes");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    write(
+        &directory.join("lib/math.prism"),
+        "package lib\npublic fun twice(n: Int): Int = n * 2\n",
+    );
+    session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
+    let (stdout, _) = session.stop();
+    assert_eq!(stdout, "4\n");
+}
