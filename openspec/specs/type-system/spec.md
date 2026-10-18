@@ -228,6 +228,29 @@ The type checker MUST validate struct instantiations, field access expressions, 
 - **WHEN** an annotation names a type that is neither a primitive nor a declared or imported struct or enum
 - **THEN** the annotation is accepted as an opaque nominal type, and accessing a member on a value of that type emits `E4006`
 
+### Requirement: Infinitely Sized Types Are Rejected
+A struct or enum MUST NOT contain itself by value: through its fields or payloads, through nullables, and through other structs and enums, with type arguments substituted, but not through `Heap<T>`, references or function types. Each declaration of the file on such a cycle MUST be reported with `E4023` (`InfinitelySizedType`) at its name, with help suggesting a `Heap<...>` field.
+
+#### Scenario: An enum containing itself
+- **WHEN** `enum E { X(E), Y }` is checked
+- **THEN** the type checker emits `E4023` at `E`
+
+#### Scenario: A cycle through a nullable and another struct
+- **WHEN** `struct A { val b: B? }` and `struct B { val a: A }` are checked
+- **THEN** the type checker emits `E4023` at `A` and at `B`
+
+#### Scenario: A cycle through a generic instance
+- **WHEN** `struct Box<T>(val v: T)` and `struct A { val b: Box<A> }` are checked
+- **THEN** the type checker emits `E4023` at `A`, and not at `Box`
+
+#### Scenario: Heap breaks the cycle
+- **WHEN** `enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }`, `struct Node { val next: Heap<Node>? }` and `struct Pair<A, B>(val a: A, val b: B)` with `struct Q { val p: Pair<Pair<Int, Int>, Int> }` are checked
+- **THEN** the file typechecks
+
+#### Scenario: A cycle across modules
+- **WHEN** `a/one.prism` declares `public struct One { val two: Two? }` and imports `/b/two`, which declares `public struct Two { val one: One }` and imports `/a/one`
+- **THEN** checking `a/one.prism` reports `E4023` at `One` and checking `b/two.prism` reports it at `Two`, each file seeing the other's definition through its ABI, and `prism check`, which stops at the first file with errors, reports the first of them
+
 ### Requirement: Cross-Module Imported Symbol and Visibility Validation
 Phase 2 body checking MUST typecheck expressions against symbols exported in Phase 1 `FileAbi` from imported modules and enforce visibility boundaries.
 
@@ -573,3 +596,7 @@ Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refine
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **`print` and `println` are compiler built-ins, found last** (D15). Prism has no overloading, traits or prelude through which a library function could accept several types, so the type checker resolves a bare `print` or `println` callee as the built-in only when no local, top-level declaration or import of that name exists, like the built-in `Range` type; fixtures declaring their own `fun print(n: &Int)` keep their meaning. A `Copy` argument is copied out of references, a `String` borrowed like a `&String` argument, anything else is `E4004` with help listing the printable types, and a built-in named without a call is `E4001`. `String` arguments typecheck now and wait for `runtime-strings-and-drops` in the backend. Rejected: a Prism-written prelude (needs overloading or traits), string templates (need strings).
+
+Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Infinitely sized types are a type error** (D20). A struct or enum that contains itself by value, through fields, payloads, nullables and other structs and enums with their arguments substituted, but not through `Heap<T>`, references or function types, is `E4023` at its name, with a note naming the path and help suggesting a `Heap<...>` field. Each declaration is walked over its own type parameters; a cycle that does not lead back to the declaration is reported at the types on it, not at every type holding one, and a depth limit of 64 and a size limit of 256 type nodes only guard termination for generic types growing their own arguments (`struct W<T> { val w: W<Pair<T, T>>? }` is reported at once). A cycle across modules is visible because the ABI carries reachable definitions, and each file declaring one of its types reports it when checked. Rejected: rejecting it in the backend (it is wrong in every tier, and `prism check` should say so), a parse-time check, a user-visible recursion limit.

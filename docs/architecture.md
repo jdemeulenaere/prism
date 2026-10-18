@@ -88,25 +88,7 @@ Why the requirements above were chosen; each change's `design.md` repeats the de
 
 ## 4. Runtime Semantics Awaiting Code Generation
 
-The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs the backend to support them: the Tier 1 backend runs scalar programs today, and the runtime semantics of scalars, `when`, loops and ranges are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`). The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement), and its elaborated form which drops run, some under a drop flag; the scenarios below are what the backend must make observable at run time.
-
-### Requirement: Inline Value Struct Layout
-Struct instances MUST be stored inline by value without heap indirection, and recursive enums MUST have a finite layout through `Heap<T>`.
-
-#### Scenario: Value struct definition
-- **WHEN** a struct is declared with fields (`struct Point { val x: Double, val y: Double }`)
-- **THEN** instances of `Point` are stored inline by value without heap indirection
-
-#### Scenario: Recursive enum with Heap indirection
-- **WHEN** an enum variant contains recursive instances wrapped in `Heap<T>` (`enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }`)
-- **THEN** the enum layout is finite
-
-### Requirement: Expression Evaluation Semantics
-Null-safe operators MUST short-circuit at runtime.
-
-#### Scenario: Safe navigation and Elvis operator
-- **WHEN** code evaluates `val len = name?.length ?: 0` and `name` is null
-- **THEN** the expression evaluates to 0
+The parser and type checker already accept these constructs (see [`syntax`](../openspec/specs/syntax/spec.md) and [`type-system`](../openspec/specs/type-system/spec.md)). Their runtime behavior needs the backend to support them: the Tier 1 backend runs programs over scalars, structs, enums, nullables and references to them today, and their runtime semantics, with those of `when`, loops and ranges, are in [`execution`](../openspec/specs/execution/spec.md) and [`loops`](../openspec/specs/loops/spec.md) (`codegen-core`, `codegen-aggregates`); their layouts are in [`code-generation`](../openspec/specs/code-generation/spec.md). What remains below needs strings, `Heap<T>` values and drop glue (`runtime-strings-and-drops`). The MIR ([`mir`](../openspec/specs/mir/spec.md)) already fixes the order of evaluation and where each temporary is dropped (argument and receiver temporaries at the end of their statement, a `val r = &make()` temporary with its binding, a borrowed default's temporary in the caller's statement), and its elaborated form which drops run, some under a drop flag; the scenarios below are what the backend must make observable at run time.
 
 ### Requirement: Clone Evaluation Semantics
 `x.clone()` MUST produce a value that owns no storage shared with `x`, and MUST run no user code. A `Copy` value is copied bitwise. A `String` clone allocates a new buffer with the same contents. A `Heap<T>` clone allocates a new box holding a clone of its contents. A `T?` clone is `null` when `x` is, and otherwise a clone of its contents. A user struct or enum clones each field or payload in declaration order.
@@ -119,12 +101,8 @@ Null-safe operators MUST short-circuit at runtime.
 - **WHEN** `struct User : Clone { val name: String, val tags: Heap<Int> }` is cloned
 - **THEN** the clone holds a new `String` buffer and a new `Heap` box with equal contents
 
-#### Scenario: Copy value clone is a copy
-- **WHEN** `p.clone()` runs for `p: Point` where `struct Point : Copy { val x: Int }`
-- **THEN** the result is a bitwise copy of `p`, with no allocation
-
 ### Requirement: Reference Evaluation Semantics
-The type checker decides every implicit operation on a reference ([`references`](../openspec/specs/references/spec.md), from `reference-access`). At runtime, a borrow MUST point at the borrowed place itself, never at a copy of it. A temporary created for a borrow MUST be dropped at the end of the statement that created it. A copy-out MUST be a bitwise copy that runs no user code.
+The type checker decides every implicit operation on a reference ([`references`](../openspec/specs/references/spec.md), from `reference-access`). At runtime, a borrow MUST point at the borrowed place itself, never at a copy of it, and a copy-out MUST be a bitwise copy that runs no user code; both are implemented for every type the backend supports (the [`execution`](../openspec/specs/execution/spec.md) spec, "Borrows Refer to the Borrowed Place", from `codegen-aggregates`), and the scenarios below need strings and drop glue. A temporary created for a borrow MUST be dropped at the end of the statement that created it.
 
 #### Scenario: Implicitly borrowed place is not copied
 - **WHEN** `greet(u.name)` runs for `fun greet(n: &String)`
@@ -133,10 +111,6 @@ The type checker decides every implicit operation on a reference ([`references`]
 #### Scenario: Argument temporary dropped at the end of the statement
 - **WHEN** `greet(make())` runs for `fun greet(n: &String)` and `fun make(): String`
 - **THEN** the `String` returned by `make()` lives until `greet` returns and the statement ends, and is then dropped
-
-#### Scenario: Viewing a borrowed nullable
-- **WHEN** `&u.nick`, of type `&(String?)`, is read as a `(&String)?`
-- **THEN** the tag of `u.nick` is read once, giving `null` when it is `null` and otherwise a pointer to its `String` payload, without copying or allocating
 
 #### Scenario: Writing through a reference drops the old referent
 - **WHEN** `*r = v` runs for `r: &mut String`
@@ -167,10 +141,6 @@ The type checker decides how each extension call passes its receiver (the `exten
 #### Scenario: A consuming receiver is moved before the arguments
 - **WHEN** `s.into(next())` runs for `consuming fun Stack.into(n: Int): Int` and `fun next(): Int`
 - **THEN** `s` is moved before `next()` is called
-
-#### Scenario: A safe call on null evaluates no argument
-- **WHEN** `u?.greet(next())` runs with `u` equal to `null`
-- **THEN** `next()` is not called and the expression is `null`
 
 ---
 

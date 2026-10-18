@@ -14,14 +14,14 @@ The compiler MUST extract each source file's exported ABI surface (`public` and 
 
 #### Scenario: Private symbols excluded from the ABI
 - **WHEN** a source file declares functions, structs or enums without a visibility modifier
-- **THEN** those declarations are absent from the extracted ABI
+- **THEN** those declarations are absent from the extracted ABI's exported symbols, and a private struct or enum is recorded only as a reachable type definition, when an export reaches it
 
 #### Scenario: Exported function without explicit return type rejected
 - **WHEN** a `public` or `package` function omits its return type (`public fun add(a: Int, b: Int) = a + b`)
 - **THEN** ABI extraction fails with a missing explicit return type error naming the function and its visibility
 
 ### Requirement: Deterministic ABI Hash
-The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exported ABI that covers exported signatures, enum variant shapes and default parameter values, and excludes private symbols, non-generic function bodies and source positions.
+The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exported ABI that covers exported signatures, enum variant shapes, default parameter values and the definitions of reachable types, and excludes every other private declaration, non-generic function bodies and source positions.
 
 #### Scenario: Modifying non-generic function body
 - **WHEN** a developer modifies the internal implementation of a public function without changing its signature
@@ -141,6 +141,25 @@ Each nominal type in an exported signature MUST record the referenced struct's o
 - **WHEN** a file that neither declares nor imports a type named `Range` exports `public struct Span : Copy { val r: Range }`, and an importer reads `s.r` by value for `s: Span`
 - **THEN** the ABI records `r` as the built-in `Range` type, and the importer's read typechecks as a copy
 
+### Requirement: Definitions of Reachable Types in the ABI
+Each file's ABI MUST record the definition (kind, type parameters, marker, and fields or variants with their bound types) of every struct and enum that a value reached through its exports can hold, transitively through fields and payloads, other than its own exported structs and enums. Private types and types of modules the file does not import MUST be included when reached; each definition MUST come from its defining file's declarations alone. A definition an importer knows only this way MUST serve layout alone: its fields and variants MUST stay unknown to the importer's type checker, as if the definition were absent.
+
+#### Scenario: A private field type is recorded
+- **WHEN** `lib/a.prism` declares `struct Secret : Copy { val k: Int }`, `public struct Outer : Copy { val s: Secret, val n: Int }` and the private `struct Helper { val h: Int }`, and `prism abi lib/a.prism` runs
+- **THEN** it lists `Outer` among the exported symbols, and among the reachable types the definition of `Secret` from module `lib/a` with its field `k: Int`, and does not list `Helper`
+
+#### Scenario: A type of a module the importer does not import
+- **WHEN** `geo/core.prism` exports `public struct Vec : Copy { val x: Int }`, and `geo/shapes.prism` imports `/geo/core` and exports `public struct Circle : Copy { val center: Vec, val r: Int }`
+- **THEN** the ABI of `geo/shapes` records the definition of `Vec` from module `geo/core`, so a file importing only `/geo/shapes` can lay out a `Circle`
+
+#### Scenario: A reachable private type keeps its members hidden
+- **WHEN** `lib/a.prism` declares `struct Secret : Copy { val k: Int }`, `enum Mode : Copy { On, Off }`, `public struct Outer : Copy { val s: Secret, val m: Mode }` and `public fun make(): Outer = Outer(Secret(1), Mode.On)`, and `app/main.prism` imports `/lib/a` and prints `make().s.k`, or prints `when (make().m) { On -> 1; else -> 2 }`
+- **THEN** `prism check app/main.prism` reports `E4006` for the field `k`, or `E4001` for the variant name `On`, as it does for any type whose definition it does not know
+
+#### Scenario: Changing a reachable type changes the hashes
+- **WHEN** in that workspace `Vec` gains a field `val y: Int`, or the private `Secret` of `lib/a` gains a field
+- **THEN** the interface and ABI hashes of `geo/core` and `geo/shapes` change, or those of `lib/a`, while changing the private `Helper` changes no hash
+
 ### Requirement: Extension Functions in the ABI
 Phase 1 MUST record an exported extension as a function signature together with its receiver mode and its receiver type, bound like any signature type, and the ABI hash MUST cover both. Struct and enum records MUST NOT depend on extensions. The order of exported symbols MUST take the receiver into account, so that reordering declarations never changes the hash.
 
@@ -250,6 +269,17 @@ Each exported generic struct or enum, and each reference to a nominal type in an
 - **WHEN** a workspace is checked once with the cache disabled and once from a warm cache
 - **THEN** both runs print the same report and exit with the same status
 
+### Requirement: Reachable Type Changes Re-Check Importers
+A change to a struct or enum MUST re-check every file whose direct import's ABI records that type, as a symbol or as a reachable definition, through the existing interface-hash keys of the build cache, and no other file because of it.
+
+#### Scenario: A field added to a transitively reached type
+- **WHEN** `geo/core.prism` also exports `public fun origin(): Vec = Vec(0)`, `geo/shapes.prism` exports `public fun unit(): Circle = Circle(origin(), 1)`, `app/main.prism` imports only `/geo/shapes` and prints `unit().r`, all three have been checked, and then only `geo/core.prism` changes: `Vec` gains a field `val y: Int` and `origin` returns `Vec(0, 0)`
+- **THEN** the next `prism check --explain-cache app/main.prism` prints `  checked geo/core.prism`, `  checked geo/shapes.prism` and `  checked app/main.prism`, and `prism run app/main.prism` prints `1` before and after the change
+
+#### Scenario: A body change in the defining file
+- **WHEN** in that workspace only the body of a function of `geo/core` changes
+- **THEN** the next `prism check --explain-cache app/main.prism` checks `geo/core` again and reuses `geo/shapes` and `app/main`
+
 ### Requirement: Instantiation Records for Generic Body Changes
 When a file that passes Phase 2 calls an exported generic function or extension of a direct import with type arguments that mention no type parameter of the caller, `prism check` MUST record an instance for that generic, its signature, its Monomorphization Hash and those type arguments. An instance already recorded MUST be reported as reused, any other as one to instantiate.
 
@@ -304,3 +334,9 @@ Decisions from `abi-cache` (planned autonomously on 2026-10-17, reviewed on 2026
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Phase 3 is per file** (D3 and D20). Each file's code is generated from its own elaborated MIR, which names other files' functions only by symbol, so its code depends on the same inputs as its check (the file, its direct imports' ABIs, the compiler, and now the target) and can be cached per file later, keyed like a check entry plus the target triple. `prism run` does not use the build cache yet: a cached verdict carries no MIR.
+
+Decisions from `codegen-aggregates` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The ABI carries the definitions of reachable types** (D2, settling `codegen-core`'s D24). A file's ABI records, besides its exported symbols, the definition of every struct and enum a value reached through its exports can hold, transitively, private types and types of modules the importer does not import included (never the built-in `Range`), sorted by module and name and covered by the interface hash. A layout change therefore changes the interface hash of every file whose exports reach the type, and the build cache's existing keys re-check exactly the importers of those files, while a file's code still depends only on its direct imports' ABIs (the deterministic hermetic builds invariant). Rejected: per-program layout at link time (code would depend on files it does not import), resilient layouts queried at run time (not zero-cost), only a size and alignment per type (an importer reading a field of an imported struct needs the whole shape, and the ABI would depend on the target), layout functions called through the function table.
+- **Phase 1a reads every declared type; Phase 1b walks the closure** (D3). Each file's definitions, private ones included, are read from its AST and bound against its own declarations and its direct imports' headers, so all files' definitions are read in any order, import cycles included; `FileAbi::extract` then walks the closure over every file's definitions. Records keep field and variant names, so an importer's layout dump stays readable, at the cost of rebuilding importers when a reached private field is renamed. Rejected: anonymous records, computing the closure from the direct imports' ABIs in dependency order (a fixpoint for cycles).
+- **Reachable definitions serve layout only** (D4, tightened in review). The type checker inserts them into its type table so `MirFile::types` holds every type a body can hold, but defines no name, so a private type stays unnameable; members of a type from a module the file does not import are `E4014` as before, and the fields and variants of any other type that is neither the file's own, built in, nor exported by an import stay unknown (`E4006`, `E4001`), as they were before the ABI carried them. This keeps the type system's rule that using a type's members needs its module imported, and adds no visibility rule of its own.
