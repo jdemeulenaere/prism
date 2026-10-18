@@ -464,11 +464,15 @@ fn run_abi(path: &str) {
                 kind,
                 is_compose,
                 receiver,
+                context,
                 name,
                 type_parameters,
                 params,
                 return_type,
             } => {
+                let context = context
+                    .as_ref()
+                    .map_or_else(String::new, |c| format!("context({}) ", c));
                 let comp = match kind.as_str() {
                     "" if *is_compose => "compose ".to_string(),
                     "" => String::new(),
@@ -496,8 +500,16 @@ fn run_abi(path: &str) {
                     list => format!("{} ", list),
                 };
                 println!(
-                    "  {} {}{}fun {}{}{}({}): {}",
-                    visibility, comp, mode, type_parameters, receiver, name, param_str, return_type
+                    "  {}{} {}{}fun {}{}{}({}): {}",
+                    context,
+                    visibility,
+                    comp,
+                    mode,
+                    type_parameters,
+                    receiver,
+                    name,
+                    param_str,
+                    return_type
                 );
             }
             prism_abi::ExportedSymbol::ExtensionProperty { .. } => {

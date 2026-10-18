@@ -1,0 +1,3 @@
+// expect: E2001
+struct User {}
+fun f(a: User?.() -> Unit) { }

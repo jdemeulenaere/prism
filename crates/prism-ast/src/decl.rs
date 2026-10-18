@@ -118,6 +118,17 @@ pub struct Receiver {
     pub span: Span,
 }
 
+/// The context parameter of a function, `scope: RowScope` in
+/// `context(scope: RowScope) fun Modifier.weight()`: the function is callable only where a
+/// candidate of that type is in context, and `name` is a shared borrow of it in the body.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContextParameter {
+    pub name: String,
+    pub ty: Type,
+    /// From `context` to the closing `)`.
+    pub span: Span,
+}
+
 /// A type parameter of a function, struct or enum (`T` or `T : Copy` in `fun <T : Copy> f()`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeParameter {
@@ -158,6 +169,9 @@ pub struct LibraryModifier {
 /// Function declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
+    /// The context parameter written before the declaration's modifiers
+    /// (`context(scope: RowScope) fun Modifier.weight()`), at most one.
+    pub context: Option<ContextParameter>,
     pub visibility: Visibility,
     /// Native `compose` modifier (`compose fun`) per the first-class compose invariant.
     pub is_compose: bool,

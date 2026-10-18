@@ -1,0 +1,3 @@
+// expect: ok
+struct Builder { var lines: List<String> }
+fun later(f: escaping compose mut Builder.() -> Unit) { }

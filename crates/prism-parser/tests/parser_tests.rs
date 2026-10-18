@@ -1595,4 +1595,198 @@ mod tests {
             assert_parse_error(src, message);
         }
     }
+
+    /// The receiver of a function type, as `(mutable, receiver text, written parameter count)`.
+    #[track_caller]
+    fn receiver_of(ty: &Type) -> (bool, String, usize) {
+        match &ty.kind {
+            TypeKind::Function {
+                receiver: Some(receiver),
+                params,
+                ..
+            } => (receiver.mutable, receiver.ty.to_string(), params.len()),
+            other => panic!(
+                "Expected a function type with a receiver, found {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn function_types_with_a_receiver() {
+        let types = param_types(
+            "fun f(content: compose ColumnScope.() -> Unit, f: mut Builder.(String) -> Unit, later: escaping compose mut Builder.() -> Unit, h: Scope.() -> Scope.() -> Int) { }",
+        );
+        let shown: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+        assert_eq!(
+            shown,
+            [
+                "compose ColumnScope.() -> Unit",
+                "mut Builder.(String) -> Unit",
+                "compose mut Builder.() -> Unit",
+                "Scope.() -> Scope.() -> Int",
+            ]
+        );
+        assert_eq!(receiver_of(&types[0]), (false, "ColumnScope".into(), 0));
+        assert!(matches!(
+            types[0].kind,
+            TypeKind::Function {
+                is_compose: true,
+                ..
+            }
+        ));
+        assert_eq!(receiver_of(&types[1]), (true, "Builder".into(), 1));
+        assert_eq!(receiver_of(&types[2]), (true, "Builder".into(), 0));
+        let file =
+            parse_source("fun later(f: escaping compose mut Builder.() -> Unit) { }").unwrap();
+        let Declaration::Function(later) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        assert!(later.params[0].escaping);
+        let TypeKind::Function { return_type, .. } = &types[3].kind else {
+            panic!("Expected function type");
+        };
+        assert_eq!(receiver_of(return_type), (false, "Scope".into(), 0));
+    }
+
+    #[test]
+    fn receiver_forms() {
+        let types = param_types("fun <T> with(receiver: &T, block: T.() -> Unit) { }");
+        assert_eq!(receiver_of(&types[1]), (false, "T".into(), 0));
+        let types = param_types("fun f(a: List<Int>.(Int) -> Bool) { }");
+        assert_eq!(receiver_of(&types[0]), (false, "List<Int>".into(), 1));
+        let types = param_types("fun g(h: (ColumnScope.() -> Unit)?) { }");
+        let TypeKind::Nullable(inner) = &types[0].kind else {
+            panic!("Expected a nullable type");
+        };
+        assert_eq!(receiver_of(inner), (false, "ColumnScope".into(), 0));
+        assert_eq!(types[0].to_string(), "(ColumnScope.() -> Unit)?");
+    }
+
+    #[test]
+    fn unsupported_receivers_rejected() {
+        for (src, message) in [
+            ("fun f(a: User?.() -> Unit) { }", "cannot be nullable"),
+            ("fun g(a: &User.() -> Unit) { }", "cannot be a reference"),
+            (
+                "fun g(a: &mut User.() -> Unit) { }",
+                "cannot be a reference",
+            ),
+            (
+                "fun h(a: Heap<User>.() -> Unit) { }",
+                "cannot be a 'Heap<...>'",
+            ),
+            (
+                "fun k(a: consuming User.() -> Unit) { }",
+                "shared ('T.() -> R') or 'mut'",
+            ),
+            ("fun p(a: (User).() -> Unit) { }", "single type name"),
+            ("fun q(a: (() -> Unit).() -> Unit) { }", "single type name"),
+            ("fun r(a: mut () -> Unit) { }", "'mut' before a type"),
+            (
+                "fun s(a: mut User) { }",
+                "Expected a function type after 'mut'",
+            ),
+            (
+                "fun t(a: mut compose User.() -> Unit) { }",
+                "'compose' comes before 'mut'",
+            ),
+            ("fun u(a: User.(Int)) { }", "Expected '->'"),
+        ] {
+            assert_parse_error(src, message);
+        }
+    }
+
+    #[test]
+    fn context_parameter_declarations() {
+        let file = parse_source(
+            "context(scope: RowScope) public fun Modifier.weight(weight: Double, fill: Bool = true): Modifier = this\ncontext(scope: ColumnScope) compose fun Divider() { }\ncontext(s: RowScope) fun <T> Box<T>.cell(): Int = 1",
+        )
+        .unwrap();
+        let functions: Vec<&FunctionDecl> = file
+            .declarations
+            .iter()
+            .map(|d| match d {
+                Declaration::Function(f) => f,
+                other => panic!("Expected function, found {:?}", other),
+            })
+            .collect();
+        let contexts: Vec<(String, String)> = functions
+            .iter()
+            .map(|f| {
+                let context = f.context.as_ref().expect("a context parameter");
+                (context.name.clone(), context.ty.to_string())
+            })
+            .collect();
+        assert_eq!(
+            contexts,
+            [
+                ("scope".to_string(), "RowScope".to_string()),
+                ("scope".to_string(), "ColumnScope".to_string()),
+                ("s".to_string(), "RowScope".to_string()),
+            ]
+        );
+        assert_eq!(functions[0].visibility, Visibility::Public);
+        assert_eq!(
+            functions[0].receiver.as_ref().map(|r| r.ty.to_string()),
+            Some("Modifier".to_string())
+        );
+        assert_eq!(
+            functions[0].span.start, 0,
+            "the declaration starts at 'context'"
+        );
+        assert!(functions[1].is_compose && functions[1].receiver.is_none());
+        assert_eq!(functions[2].type_parameters.len(), 1);
+        assert_eq!(
+            functions[2].receiver.as_ref().map(|r| r.ty.to_string()),
+            Some("Box<T>".to_string())
+        );
+    }
+
+    #[test]
+    fn invalid_context_parameters_rejected() {
+        for (src, message) in [
+            (
+                "context(a: RowScope, b: ColumnScope) fun f() { }",
+                "one context parameter",
+            ),
+            ("context() fun g() { }", "needs a name and a type"),
+            ("context(RowScope) fun h() { }", "needs a name and a type"),
+            (
+                "context(s: RowScope) struct S { }",
+                "applies to a function declaration",
+            ),
+            (
+                "context(s: RowScope) val v = 1",
+                "applies to a function declaration",
+            ),
+            (
+                "context(s: RowScope) private external fun e(): Int",
+                "cannot have a context parameter",
+            ),
+            (
+                "public context(s: RowScope) fun m() { }",
+                "comes before every other modifier",
+            ),
+            ("context(s: Box<T>) fun <T> k() { }", "type parameter 'T'"),
+            ("context(s: RowScope?) fun n() { }", "cannot be nullable"),
+            ("context(s: &RowScope) fun n() { }", "cannot be a reference"),
+        ] {
+            assert_parse_error(src, message);
+        }
+    }
+
+    #[test]
+    fn context_as_an_identifier() {
+        let file = parse_source(
+            "fun context(context: Int): Int = context\nfun f() { val context = 1; g(context = context); context(context) }\nstruct context { val x: Int }\nfun h(x: Int) = x.context()",
+        )
+        .unwrap();
+        assert_eq!(file.declarations.len(), 4);
+        for declaration in &file.declarations {
+            if let Declaration::Function(f) = declaration {
+                assert!(f.context.is_none());
+            }
+        }
+    }
 }

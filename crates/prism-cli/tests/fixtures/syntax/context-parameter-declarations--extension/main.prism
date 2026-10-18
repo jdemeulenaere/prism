@@ -1,0 +1,5 @@
+// expect: ok
+struct Modifier : Copy {}
+struct RowScope : Copy {}
+context(scope: RowScope)
+public fun Modifier.weight(weight: Double, fill: Bool = true): Modifier = this

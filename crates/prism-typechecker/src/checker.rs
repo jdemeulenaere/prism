@@ -1205,15 +1205,30 @@ impl TypeChecker {
             TypeKind::Unit => Type::Unit,
             TypeKind::Function {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 return_type,
-            } => Type::Fn {
-                is_compose: *is_compose,
-                params: params.iter().map(|p| self.lower_type(p)).collect(),
-                escaping: escaping.clone(),
-                ret: Box::new(self.lower_type(return_type)),
-            },
+            } => {
+                // The receiver is the first parameter, a borrow of its type.
+                let mut lowered = Vec::with_capacity(params.len() + 1);
+                let mut flags = Vec::with_capacity(params.len() + 1);
+                if let Some(receiver) = receiver {
+                    lowered.push(Type::Reference {
+                        mutable: receiver.mutable,
+                        inner: Box::new(self.lower_type(&receiver.ty)),
+                    });
+                    flags.push(false);
+                }
+                lowered.extend(params.iter().map(|p| self.lower_type(p)));
+                flags.extend(escaping.iter().copied());
+                Type::Fn {
+                    is_compose: *is_compose,
+                    params: lowered,
+                    escaping: flags,
+                    ret: Box::new(self.lower_type(return_type)),
+                }
+            }
         }
     }
 
@@ -1482,10 +1497,14 @@ impl TypeChecker {
                 self.check_annotation_names(inner)
             }
             TypeKind::Function {
+                receiver,
                 params,
                 return_type,
                 ..
             } => {
+                if let Some(receiver) = receiver {
+                    self.check_annotation_names(&receiver.ty);
+                }
                 for param in params {
                     self.check_annotation_names(param);
                 }
@@ -1784,6 +1803,7 @@ impl TypeChecker {
                     kind,
                     is_compose,
                     receiver,
+                    context: _,
                     name,
                     type_parameters,
                     params,
@@ -10075,6 +10095,7 @@ mod tests {
                     kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
                     receiver: None,
+                    context: None,
                     name: "add".to_string(),
                     type_parameters: Vec::new(),
                     params: vec![
@@ -10098,6 +10119,7 @@ mod tests {
                     kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
                     receiver: None,
+                    context: None,
                     name: "internal_calc".to_string(),
                     type_parameters: Vec::new(),
                     params: Vec::new(),

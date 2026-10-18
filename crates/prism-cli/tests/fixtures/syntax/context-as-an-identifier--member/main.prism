@@ -1,0 +1,3 @@
+// expect: ok
+fun Int.context(): Int = this
+fun h(x: Int): Int = x.context()

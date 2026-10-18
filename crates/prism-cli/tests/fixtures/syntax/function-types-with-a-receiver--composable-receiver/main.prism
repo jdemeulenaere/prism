@@ -1,0 +1,3 @@
+// expect: ok
+struct ColumnScope : Copy {}
+fun Column(content: compose ColumnScope.() -> Unit) { }

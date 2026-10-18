@@ -1,0 +1,2 @@
+// expect: E2001
+context(a: RowScope, b: ColumnScope) fun f() { }

@@ -69,6 +69,10 @@ fn erase_declaration(declaration: &mut Declaration) {
     match declaration {
         Declaration::Function(function) => {
             erase(&mut function.span);
+            if let Some(context) = &mut function.context {
+                erase(&mut context.span);
+                erase_type(&mut context.ty);
+            }
             if let Some(receiver) = &mut function.receiver {
                 erase(&mut receiver.span);
                 erase_type(&mut receiver.ty);
@@ -147,10 +151,14 @@ fn erase_type(ty: &mut Type) {
         TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => erase_type(inner),
         TypeKind::Unit => {}
         TypeKind::Function {
+            receiver,
             params,
             return_type,
             ..
         } => {
+            if let Some(receiver) = receiver {
+                erase_type(&mut receiver.ty);
+            }
             for parameter in params {
                 erase_type(parameter);
             }

@@ -130,7 +130,22 @@ impl<'a> Printer<'a> {
     }
 
     fn function(&mut self, function: &FunctionDecl) -> Document {
-        let mut parts = vec![self.visibility(function.visibility, function.span)];
+        let mut parts = Vec::new();
+        // The context parameter goes on its own line above the rest of the declaration (D11 of
+        // `receiver-lambdas`); the visibility is read after it.
+        let mut modifiers = function.span;
+        if let Some(context) = &function.context {
+            parts.push(text(format!("context({}: ", context.name)));
+            parts.push(self.ty(&context.ty));
+            parts.push(text(")"));
+            parts.push(hard_line());
+            if let Some(token) = self.token_at(context.span.end) {
+                let start = token.span.start;
+                parts.push(self.comments_before(start));
+            }
+            modifiers.start = context.span.end;
+        }
+        parts.push(self.visibility(function.visibility, modifiers));
         if let Some(library) = function.library {
             parts.push(text(format!("{} ", library.kind.as_str())));
         }
@@ -391,6 +406,7 @@ impl<'a> Printer<'a> {
             TypeKind::Unit => text("()"),
             TypeKind::Function {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 return_type,
@@ -398,6 +414,13 @@ impl<'a> Printer<'a> {
                 let mut parts = Vec::new();
                 if *is_compose {
                     parts.push(text("compose "));
+                }
+                if let Some(receiver) = receiver {
+                    if receiver.mutable {
+                        parts.push(text("mut "));
+                    }
+                    parts.push(self.ty(&receiver.ty));
+                    parts.push(text("."));
                 }
                 parts.push(text("("));
                 for (index, parameter) in params.iter().enumerate() {

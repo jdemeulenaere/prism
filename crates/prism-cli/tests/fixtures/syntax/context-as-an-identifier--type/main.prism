@@ -1,0 +1,3 @@
+// expect: ok
+struct context { val x: Int }
+fun f(c: context): Int = c.x

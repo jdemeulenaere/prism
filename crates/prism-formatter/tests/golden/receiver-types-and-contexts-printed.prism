@@ -1,0 +1,7 @@
+fun f(a: ColumnScope . ()->Unit, b: escaping  compose  mut Builder.(Int)->Unit) {}
+
+// Weight.
+context( scope : RowScope ) public fun Modifier.weight(w: Double): Modifier = this
+
+// Private.
+context(s: RowScope)   private   fun Modifier.half(): Modifier = this

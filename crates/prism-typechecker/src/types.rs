@@ -237,6 +237,7 @@ pub fn type_from_abi(ty: &AbiType, parameters: &[TypeParameter]) -> Type {
         AbiType::List(inner) => Type::List(Box::new(convert(inner))),
         AbiType::Fn {
             compose,
+            receiver: _,
             params,
             escaping,
             ret,

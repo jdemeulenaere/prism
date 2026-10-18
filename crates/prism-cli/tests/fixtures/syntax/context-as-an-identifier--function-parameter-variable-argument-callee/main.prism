@@ -1,0 +1,8 @@
+// expect: ok
+fun context(context: Int): Int = context
+fun g(context: Int) { }
+fun f() {
+    val context = 1
+    g(context = context)
+}
+fun k(): Int = context(context(2))

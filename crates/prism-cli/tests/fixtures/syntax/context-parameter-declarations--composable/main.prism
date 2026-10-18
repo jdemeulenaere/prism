@@ -1,0 +1,4 @@
+// expect: ok
+struct ColumnScope : Copy {}
+context(scope: ColumnScope)
+compose fun Divider() { }

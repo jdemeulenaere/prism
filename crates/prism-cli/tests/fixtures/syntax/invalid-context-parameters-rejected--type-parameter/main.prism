@@ -1,0 +1,3 @@
+// expect: E2001
+struct Box<T> { val value: T }
+context(s: Box<T>) fun <T> k() { }

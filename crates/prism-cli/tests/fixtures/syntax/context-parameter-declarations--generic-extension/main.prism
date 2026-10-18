@@ -1,0 +1,5 @@
+// expect: ok
+struct RowScope : Copy {}
+struct Box<T> { val value: T }
+context(s: RowScope)
+fun <T> Box<T>.cell(): Int = 1

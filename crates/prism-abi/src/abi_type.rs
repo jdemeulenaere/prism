@@ -128,9 +128,12 @@ pub enum AbiType {
     Heap(Box<AbiType>),
     /// The built-in growable list `List<T>` (D2 of `collections`).
     List(Box<AbiType>),
-    /// A function type, possibly composable, with whether each parameter is `escaping`.
+    /// A function type, possibly composable, with whether each parameter is `escaping`. With
+    /// `receiver`, the first parameter is the receiver's borrow, `&T` for `T.() -> R` and
+    /// `&mut T` for `mut T.() -> R` (D9 of `receiver-lambdas`).
     Fn {
         compose: bool,
+        receiver: bool,
         params: Vec<AbiType>,
         escaping: Vec<bool>,
         ret: Box<AbiType>,
@@ -201,15 +204,30 @@ impl AbiType {
             TypeKind::Unit => AbiType::Unit,
             TypeKind::Function {
                 is_compose,
+                receiver,
                 params,
                 escaping,
                 return_type,
-            } => AbiType::Fn {
-                compose: *is_compose,
-                params: params.iter().map(lower).collect(),
-                escaping: escaping.clone(),
-                ret: Box::new(lower(return_type)),
-            },
+            } => {
+                let mut lowered = Vec::with_capacity(params.len() + 1);
+                let mut flags = Vec::with_capacity(params.len() + 1);
+                if let Some(receiver) = receiver {
+                    lowered.push(AbiType::Ref {
+                        mutable: receiver.mutable,
+                        inner: Box::new(lower(&receiver.ty)),
+                    });
+                    flags.push(false);
+                }
+                lowered.extend(params.iter().map(lower));
+                flags.extend(escaping.iter().copied());
+                AbiType::Fn {
+                    compose: *is_compose,
+                    receiver: receiver.is_some(),
+                    params: lowered,
+                    escaping: flags,
+                    ret: Box::new(lower(return_type)),
+                }
+            }
         }
     }
 
@@ -260,12 +278,17 @@ impl AbiType {
             }
             AbiType::Fn {
                 compose,
+                receiver,
                 params,
                 escaping,
                 ret,
             } => {
                 hasher.write_u8(8);
                 hasher.write_u8(u8::from(*compose));
+                // A plain function type keeps the bytes it always had.
+                if *receiver {
+                    hasher.write_u8(12);
+                }
                 Self::hash_list(params, hasher);
                 for flag in escaping {
                     hasher.write_u8(u8::from(*flag));
@@ -333,14 +356,25 @@ impl fmt::Display for AbiType {
             AbiType::List(inner) => write!(f, "List<{}>", inner),
             AbiType::Fn {
                 compose,
+                receiver,
                 params,
                 escaping,
                 ret,
             } => {
-                let params: Vec<String> = params
+                let mut receiver_text = String::new();
+                let mut written = &params[..];
+                if *receiver {
+                    if let Some((AbiType::Ref { mutable, inner }, rest)) = params.split_first() {
+                        receiver_text = format!("{}{}.", if *mutable { "mut " } else { "" }, inner);
+                        written = rest;
+                    }
+                }
+                let skipped = params.len() - written.len();
+                let params: Vec<String> = written
                     .iter()
                     .enumerate()
                     .map(|(index, param)| {
+                        let index = index + skipped;
                         if escaping.get(index).copied().unwrap_or(false) {
                             format!("escaping {}", param)
                         } else {
@@ -350,8 +384,9 @@ impl fmt::Display for AbiType {
                     .collect();
                 write!(
                     f,
-                    "{}({}) -> {}",
+                    "{}{}({}) -> {}",
                     if *compose { "compose " } else { "" },
+                    receiver_text,
                     params.join(", "),
                     ret
                 )

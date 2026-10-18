@@ -1,0 +1,2 @@
+// expect: E2001
+public context(s: RowScope) fun m() { }

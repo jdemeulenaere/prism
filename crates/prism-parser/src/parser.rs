@@ -33,6 +33,9 @@ pub const MAX_NESTING_DEPTH: usize = 256;
 /// `payload-patterns`).
 const NO_SUBJECT_PATTERN: &str = "A branch of a 'when' without a subject is a condition: '_', 'val' and 'var' bindings and 'if' guards need a subject (use '&&' to combine conditions)";
 
+/// The error for a reference written as a function type's receiver (`&User.() -> Unit`).
+const RECEIVER_REFERENCE: &str = "A function type's receiver cannot be a reference: write 'User.() -> Unit' for a shared receiver or 'mut User.() -> Unit' for a mutable one";
+
 /// The error for a prefix `*` anywhere but at the start of an assignment target.
 /// The message for `++` or `--` (`operator`) anywhere: Prism has no increment or decrement
 /// operators (D8 of `compound-assignment`).
@@ -393,6 +396,9 @@ impl Parser {
     // --- Declarations ---
 
     pub fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
+        // A context parameter, before every other modifier (D6 of `receiver-lambdas`).
+        let context = self.parse_context_parameter()?;
+
         // Parse visibility: default is Private (single-file compilation unit invariant)
         let mut visibility = Visibility::Private;
         let mut start_span = self.peek().span;
@@ -411,6 +417,15 @@ impl Parser {
                 visibility = Visibility::Private;
             }
             _ => {}
+        }
+        if self.at_context_parameter() {
+            return Err(ParseError::new(
+                "A context parameter comes before every other modifier, as in 'context(scope: RowScope) public fun Modifier.weight()'",
+                self.peek().span,
+            ));
+        }
+        if let Some(context) = &context {
+            start_span = context.span;
         }
 
         // Library modifier (`external fun`, `intrinsic fun`, `intrinsic val`), after the
@@ -452,6 +467,24 @@ impl Parser {
             mode = Some((receiver_mode, tok.span));
         }
 
+        if let Some(context) = &context {
+            if let Some(modifier) = library {
+                return Err(ParseError::new(
+                    format!(
+                        "An {} declaration cannot have a context parameter; declare a function with a body",
+                        modifier.kind.as_str()
+                    ),
+                    context.span,
+                ));
+            }
+            if self.peek_kind() != &TokenKind::Fun {
+                return Err(ParseError::new(
+                    "A context parameter applies to a function declaration, as in 'context(scope: RowScope) fun Modifier.weight()'",
+                    context.span,
+                ));
+            }
+        }
+
         if let Some(modifier) = library {
             if self.peek_kind() == &TokenKind::Val && !is_compose && mode.is_none() {
                 let property = self.parse_extension_property(visibility, modifier, start_span)?;
@@ -471,8 +504,12 @@ impl Parser {
 
         match self.peek_kind() {
             TokenKind::Fun => {
-                let func =
+                let mut func =
                     self.parse_function(visibility, is_compose, mode, library, start_span)?;
+                if let Some(context) = &context {
+                    Self::reject_context_type_parameters(context, &func.type_parameters)?;
+                }
+                func.context = context;
                 Ok(Declaration::Function(func))
             }
             TokenKind::Struct => {
@@ -680,6 +717,7 @@ impl Parser {
         }
 
         Ok(FunctionDecl {
+            context: None,
             visibility,
             is_compose,
             receiver,
@@ -691,6 +729,118 @@ impl Parser {
             library,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// Whether the next tokens are `context(`, the start of a context parameter: `context` is a
+    /// modifier only there, at a top-level declaration's start, and a name everywhere else.
+    fn at_context_parameter(&self) -> bool {
+        matches!(self.peek_kind(), TokenKind::Ident(word) if word == "context")
+            && self.peek_ahead(1) == &TokenKind::LParen
+    }
+
+    /// Reads a context parameter `context(name: Type)` at a declaration's start (D6 of
+    /// `receiver-lambdas`). The type follows the rules of an extension receiver.
+    fn parse_context_parameter(&mut self) -> Result<Option<ContextParameter>, ParseError> {
+        if !self.at_context_parameter() {
+            return Ok(None);
+        }
+        let start = self.bump().span; // 'context'
+        self.bump(); // '('
+        if self.peek_kind() == &TokenKind::RParen {
+            return Err(ParseError::new(
+                "A context parameter needs a name and a type, as in 'context(scope: RowScope)'",
+                start.merge(self.peek().span),
+            ));
+        }
+        let name_token = self.peek().clone();
+        let TokenKind::Ident(name) = name_token.kind else {
+            return Err(ParseError::new(
+                "A context parameter needs a name and a type, as in 'context(scope: RowScope)'",
+                name_token.span,
+            ));
+        };
+        if self.peek_ahead(1) != &TokenKind::Colon {
+            return Err(ParseError::new(
+                format!(
+                    "A context parameter needs a name and a type, as in 'context(scope: {})'",
+                    name
+                ),
+                name_token.span,
+            ));
+        }
+        self.bump(); // name
+        self.bump(); // ':'
+        let ty = self.parse_type()?;
+        let message = match &ty.kind {
+            TypeKind::Named { name, type_args } if name == "Heap" && !type_args.is_empty() => {
+                Some("A context parameter's type cannot be a 'Heap<...>'; use its contents' type")
+            }
+            TypeKind::Named { .. } => None,
+            TypeKind::Nullable(_) => Some("A context parameter's type cannot be nullable"),
+            TypeKind::Reference { .. } => Some(
+                "A context parameter's type cannot be a reference: the context is always passed as a shared borrow",
+            ),
+            TypeKind::Unit | TypeKind::Function { .. } => Some(
+                "A context parameter's type must be a single type name, not a parenthesized or function type",
+            ),
+        };
+        if let Some(message) = message {
+            return Err(ParseError::new(message, ty.span));
+        }
+        if self.peek_kind() == &TokenKind::Comma {
+            return Err(ParseError::new(
+                "A declaration takes one context parameter",
+                self.peek().span,
+            ));
+        }
+        let end = self.expect(TokenKind::RParen)?.span;
+        Ok(Some(ContextParameter {
+            name,
+            ty,
+            span: start.merge(end),
+        }))
+    }
+
+    /// Rejects a context type mentioning the declaration's own type parameters
+    /// (`context(s: Box<T>) fun <T> k()`): the context is found by its type alone.
+    fn reject_context_type_parameters(
+        context: &ContextParameter,
+        type_parameters: &[TypeParameter],
+    ) -> Result<(), ParseError> {
+        fn mentions(ty: &Type, type_parameters: &[TypeParameter]) -> Option<String> {
+            match &ty.kind {
+                TypeKind::Named { name, type_args } => {
+                    if type_args.is_empty() && type_parameters.iter().any(|p| &p.name == name) {
+                        return Some(name.clone());
+                    }
+                    type_args.iter().find_map(|a| mentions(a, type_parameters))
+                }
+                TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => {
+                    mentions(inner, type_parameters)
+                }
+                TypeKind::Unit => None,
+                TypeKind::Function {
+                    receiver,
+                    params,
+                    return_type,
+                    ..
+                } => receiver
+                    .as_ref()
+                    .and_then(|r| mentions(&r.ty, type_parameters))
+                    .or_else(|| params.iter().find_map(|p| mentions(p, type_parameters)))
+                    .or_else(|| mentions(return_type, type_parameters)),
+            }
+        }
+        match mentions(&context.ty, type_parameters) {
+            Some(name) => Err(ParseError::new(
+                format!(
+                    "A context parameter's type cannot mention the declaration's type parameter '{}': the context is found by its type alone",
+                    name
+                ),
+                context.ty.span,
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Reads an `external` or `intrinsic` modifier: the word directly before `compose`, `mut`,
@@ -1102,7 +1252,7 @@ impl Parser {
     // --- Type Parsing ---
 
     /// Whether the next tokens are `escaping` written before a type on the same line: the
-    /// modifier, directly before `(` or `compose`, or misplaced before a type that cannot take it
+    /// modifier, directly before `(`, `compose`, `mut` or a receiver's type name, or misplaced before a type that cannot take it
     /// (`escaping Int`, `escaping &T`). Before anything else `escaping` is a name, also a type
     /// name.
     fn at_escaping_before_type(&self) -> bool {
@@ -1111,6 +1261,7 @@ impl Parser {
                 kind,
                 TokenKind::LParen
                     | TokenKind::Compose
+                    | TokenKind::Mut
                     | TokenKind::Ident(_)
                     | TokenKind::Amp
                     | TokenKind::AmpAmp
@@ -1130,15 +1281,18 @@ impl Parser {
     }
 
     /// The type of a parameter of a declaration or a function type, with its `escaping`
-    /// modifier: `escaping () -> Unit`, `escaping compose () -> Unit` or
-    /// `escaping (() -> Unit)?`. The modifier is accepted only before a function type or a
+    /// modifier: `escaping () -> Unit`, `escaping compose () -> Unit`,
+    /// `escaping mut Builder.() -> Unit` or `escaping (() -> Unit)?`. The modifier is accepted only before a function type or a
     /// parenthesized nullable function type.
     fn parse_parameter_type(&mut self) -> Result<(bool, Type), ParseError> {
         if !self.at_escaping_before_type() {
             return Ok((false, self.parse_type()?));
         }
         let modifier = self.bump().span;
-        if !matches!(self.peek_kind(), TokenKind::LParen | TokenKind::Compose) {
+        if !matches!(
+            self.peek_kind(),
+            TokenKind::LParen | TokenKind::Compose | TokenKind::Mut | TokenKind::Ident(_)
+        ) {
             return Err(Self::escaping_misplaced(modifier));
         }
         let ty = self.parse_type()?;
@@ -1177,7 +1331,18 @@ impl Parser {
             } else {
                 false
             };
+            // `&User.() -> Unit` reads as a reference receiver, which a function type's receiver
+            // cannot be (D1 of `receiver-lambdas`); `&(User.() -> Unit)` is a reference to one.
+            let unparenthesized = !matches!(self.peek_kind(), TokenKind::LParen);
             let inner = self.parse_type()?;
+            if unparenthesized {
+                if let TypeKind::Function {
+                    receiver: Some(_), ..
+                } = &inner.kind
+                {
+                    return Err(ParseError::new(RECEIVER_REFERENCE, start_span));
+                }
+            }
             let span = start_span.merge(inner.span);
             return Ok(if is_mut {
                 Type::reference_mut(inner, span)
@@ -1186,18 +1351,54 @@ impl Parser {
             });
         }
 
-        // 2. Composable function type: compose (Int) -> Unit
-        if self.peek_kind() == &TokenKind::Compose && self.peek_ahead(1) == &TokenKind::LParen {
+        // 2. Composable function type: `compose (Int) -> Unit`, or with a receiver,
+        // `compose ColumnScope.() -> Unit` and `compose mut Builder.() -> Unit`.
+        let is_compose = self.peek_kind() == &TokenKind::Compose
+            && matches!(
+                self.peek_ahead(1),
+                TokenKind::LParen | TokenKind::Mut | TokenKind::Ident(_)
+            );
+        if is_compose {
             self.bump(); // 'compose'
-            return self.parse_paren_type(start_span, true);
+            if self.peek_kind() == &TokenKind::LParen {
+                return self.parse_paren_type(start_span, true, None);
+            }
         }
 
-        // 3. Unit, parenthesized type or function type: (), (Int), (Int, String) -> Bool
-        if self.peek_kind() == &TokenKind::LParen {
-            return self.parse_paren_type(start_span, false);
+        // 3. A mutable receiver: `mut Builder.(String) -> Unit`.
+        let mut mutable_receiver = false;
+        if self.peek_kind() == &TokenKind::Mut {
+            let mut_span = self.bump().span;
+            mutable_receiver = true;
+            if self.peek_kind() == &TokenKind::Compose {
+                return Err(ParseError::new(
+                    "'compose' comes before 'mut' in a function type, as in 'compose mut Builder.() -> Unit'",
+                    self.peek().span,
+                ));
+            }
+            if !matches!(self.peek_kind(), TokenKind::Ident(_)) {
+                return Err(ParseError::new(
+                    "'mut' before a type marks the receiver of a function type as mutable, as in 'mut Builder.(String) -> Unit'",
+                    mut_span,
+                ));
+            }
+        }
+        if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "consuming")
+            && matches!(self.peek_ahead(1), TokenKind::Ident(_))
+            && !self.tokens[(self.cursor + 1).min(self.tokens.len() - 1)].is_preceded_by_newline
+        {
+            return Err(ParseError::new(
+                "A function type's receiver is shared ('T.() -> R') or 'mut' ('mut T.() -> R'); 'consuming' receivers are not supported in function types",
+                self.peek().span,
+            ));
         }
 
-        // 4. Named type: Ident optionally followed by generic arguments <T, U>
+        // 4. Unit, parenthesized type or function type: (), (Int), (Int, String) -> Bool
+        if self.peek_kind() == &TokenKind::LParen && !is_compose && !mutable_receiver {
+            return self.parse_paren_type(start_span, false, None);
+        }
+
+        // 5. Named type: Ident optionally followed by generic arguments <T, U>
         let (name, span) = self.expect_ident()?;
         let mut type_args = Vec::new();
         let mut end_span = span;
@@ -1216,18 +1417,62 @@ impl Parser {
         }
 
         let base_ty = if type_args.is_empty() {
-            Type::named(name, start_span.merge(end_span))
+            Type::named(name, span.merge(end_span))
         } else {
-            Type::generic(name, type_args, start_span.merge(end_span))
+            Type::generic(name, type_args, span.merge(end_span))
         };
 
-        // 5. Suffix (e.g. nullable ?)
+        // 6. A function type with a receiver: the named type directly followed by `.(`.
+        if self.peek_kind() == &TokenKind::Dot && self.peek_ahead(1) == &TokenKind::LParen {
+            if let TypeKind::Named { name, type_args } = &base_ty.kind {
+                if name == "Heap" && !type_args.is_empty() {
+                    return Err(ParseError::new(
+                        "A function type's receiver cannot be a 'Heap<...>': calls look through 'Heap', so use its contents as the receiver, as in 'User.() -> Unit'",
+                        base_ty.span,
+                    ));
+                }
+            }
+            self.bump(); // '.'
+            let receiver = FunctionTypeReceiver {
+                mutable: mutable_receiver,
+                ty: Box::new(base_ty),
+            };
+            return self.parse_paren_type(start_span, is_compose, Some(receiver));
+        }
+        if self.peek_kind() == &TokenKind::QuestionDot && self.peek_ahead(1) == &TokenKind::LParen {
+            return Err(ParseError::new(
+                format!(
+                    "A function type's receiver cannot be nullable; use '{}' as the receiver and call the function with '?.'",
+                    base_ty
+                ),
+                base_ty.span.merge(self.peek().span),
+            ));
+        }
+        if is_compose || mutable_receiver {
+            return Err(ParseError::new(
+                format!(
+                    "Expected a function type after '{}': a parameter list, or a receiver followed by one, as in '{} {}.() -> Unit'",
+                    if mutable_receiver { "mut" } else { "compose" },
+                    if mutable_receiver { "mut" } else { "compose" },
+                    base_ty
+                ),
+                self.peek().span,
+            ));
+        }
+
+        // 7. Suffix (e.g. nullable ?)
         self.parse_type_suffix(base_ty)
     }
 
     /// A type starting with `(`: unit `()`, a parenthesized type `(Int)`, or a
-    /// function type `(A, B) -> R`, which is the only form allowed after `compose`.
-    fn parse_paren_type(&mut self, start_span: Span, is_compose: bool) -> Result<Type, ParseError> {
+    /// function type `(A, B) -> R`, which is the only form allowed after `compose` or a
+    /// `receiver`.
+    fn parse_paren_type(
+        &mut self,
+        start_span: Span,
+        is_compose: bool,
+        receiver: Option<FunctionTypeReceiver>,
+    ) -> Result<Type, ParseError> {
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
         let mut escaping = Vec::new();
@@ -1255,6 +1500,7 @@ impl Parser {
             return Ok(Type::new(
                 TypeKind::Function {
                     is_compose,
+                    receiver,
                     params,
                     escaping,
                     return_type: Box::new(ret),
@@ -1267,13 +1513,25 @@ impl Parser {
         if let Some(span) = first_escaping {
             return Err(Self::escaping_misplaced(span));
         }
-        if is_compose {
+        if is_compose || receiver.is_some() {
             return Err(ParseError::new(
                 format!(
-                    "Expected '->' after the parameter types of a 'compose' function type, found '{}'",
+                    "Expected '->' after the parameter types of a {} function type, found '{}'",
+                    if receiver.is_some() {
+                        "receiver's"
+                    } else {
+                        "'compose'"
+                    },
                     self.peek_kind()
                 ),
                 self.peek().span,
+            ));
+        }
+        // `(User).() -> Unit` or `(() -> Unit).() -> Unit`: a receiver is a single type name.
+        if self.peek_kind() == &TokenKind::Dot && self.peek_ahead(1) == &TokenKind::LParen {
+            return Err(ParseError::new(
+                "A function type's receiver must be a single type name, not a parenthesized or function type",
+                start_span.merge(rparen_span),
             ));
         }
         match params.len() {

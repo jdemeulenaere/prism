@@ -1,0 +1,3 @@
+// expect: ok
+struct Scope : Copy {}
+fun g(h: Scope.() -> Scope.() -> Int) { }

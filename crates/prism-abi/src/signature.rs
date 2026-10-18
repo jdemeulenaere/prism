@@ -75,6 +75,9 @@ pub enum ExportedSymbol {
         is_compose: bool,
         /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
         receiver: Option<AbiReceiver>,
+        /// The type of the context parameter (`context(scope: RowScope)`), bound like any
+        /// signature type (D9 of `receiver-lambdas`).
+        context: Option<AbiType>,
         name: String,
         type_parameters: Vec<AbiTypeParameter>,
         params: Vec<AbiParameter>,
@@ -125,6 +128,7 @@ impl ExportedSymbol {
                 kind,
                 is_compose,
                 receiver,
+                context,
                 name,
                 type_parameters,
                 params,
@@ -150,6 +154,11 @@ impl ExportedSymbol {
                         receiver.ty.hash_into(hasher);
                     }
                     None => hasher.write_u8(0),
+                }
+                // A function without a context keeps the bytes it always had.
+                if let Some(context) = context {
+                    hasher.write_str("context");
+                    context.hash_into(hasher);
                 }
                 hasher.write_str(name);
                 hash_type_parameters(type_parameters, hasher);
@@ -252,12 +261,17 @@ impl ExportedSymbol {
                 kind,
                 is_compose,
                 receiver,
+                context,
                 name,
                 type_parameters,
                 params,
                 return_type,
             } => {
-                let mut text = format!("{} ", visibility);
+                let mut text = String::new();
+                if let Some(context) = context {
+                    text.push_str(&format!("context({}) ", context));
+                }
+                text.push_str(&format!("{} ", visibility));
                 if *kind != FunctionKind::Prism {
                     text.push_str(kind.as_str());
                     text.push(' ');
@@ -310,22 +324,34 @@ impl ExportedSymbol {
     }
 
     /// The key symbols are sorted by: kind, name, then a function's receiver type, qualified by
-    /// its module (empty for a plain function), so extensions sharing a name keep a fixed order.
-    fn sort_key(&self) -> (u8, &str, String) {
+    /// its module (empty for a plain function), then its context type, qualified the same way
+    /// (empty without one), so extensions sharing a name keep a fixed order.
+    fn sort_key(&self) -> (u8, &str, String, String) {
         match self {
-            ExportedSymbol::Var { name, .. } => (0, name.as_str(), String::new()),
-            ExportedSymbol::Struct { name, .. } => (1, name.as_str(), String::new()),
-            ExportedSymbol::Enum { name, .. } => (2, name.as_str(), String::new()),
-            ExportedSymbol::Function { name, receiver, .. } => (
+            ExportedSymbol::Var { name, .. } => (0, name.as_str(), String::new(), String::new()),
+            ExportedSymbol::Struct { name, .. } => (1, name.as_str(), String::new(), String::new()),
+            ExportedSymbol::Enum { name, .. } => (2, name.as_str(), String::new(), String::new()),
+            ExportedSymbol::Function {
+                name,
+                receiver,
+                context,
+                ..
+            } => (
                 3,
                 name.as_str(),
                 receiver
                     .as_ref()
                     .map_or_else(String::new, |r| qualified_type_text(&r.ty)),
+                context
+                    .as_ref()
+                    .map_or_else(String::new, qualified_type_text),
             ),
-            ExportedSymbol::ExtensionProperty { name, receiver, .. } => {
-                (4, name.as_str(), qualified_type_text(receiver))
-            }
+            ExportedSymbol::ExtensionProperty { name, receiver, .. } => (
+                4,
+                name.as_str(),
+                qualified_type_text(receiver),
+                String::new(),
+            ),
         }
     }
 }
@@ -379,10 +405,15 @@ pub fn marker_parameters(type_parameters: &[TypeParameter], member_types: &[&Typ
             TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => mentions(inner, name),
             TypeKind::Unit => false,
             TypeKind::Function {
+                receiver,
                 params,
                 return_type,
                 ..
-            } => params.iter().any(|p| mentions(p, name)) || mentions(return_type, name),
+            } => {
+                receiver.as_ref().is_some_and(|r| mentions(&r.ty, name))
+                    || params.iter().any(|p| mentions(p, name))
+                    || mentions(return_type, name)
+            }
         }
     }
     type_parameters
@@ -637,12 +668,14 @@ fn symbol_types(symbol: &ExportedSymbol) -> Vec<&AbiType> {
     match symbol {
         ExportedSymbol::Function {
             receiver,
+            context,
             params,
             return_type,
             ..
         } => receiver
             .iter()
             .map(|r| &r.ty)
+            .chain(context.iter())
             .chain(params.iter().map(|parameter| &parameter.ty))
             .chain(std::iter::once(return_type))
             .collect(),
@@ -869,6 +902,7 @@ impl FileAbi {
                         kind: FunctionKind::of(f),
                         is_compose: f.is_compose,
                         receiver,
+                        context: f.context.as_ref().map(|c| lower(&c.ty)),
                         name: f.name.clone(),
                         type_parameters: abi_type_parameters(&f.type_parameters),
                         params,
