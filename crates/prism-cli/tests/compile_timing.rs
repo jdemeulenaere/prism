@@ -27,8 +27,9 @@
 //! names; `PRISM_TIMING_CRANELIFT=<name>=<value>,...` overrides Cranelift settings for the
 //! `clif` column (`opt_level=speed`, `regalloc_algorithm=single_pass`). It reports each stage's time and the growth of the slowest stage
 //! from one size to the next, skips the larger sizes of a shape once one size takes over 20 s,
-//! and fails when any stage of at least 5 ms grows more than twice as fast as the size, only
-//! when `PRISM_ASSERT_TIMING=1` is set.
+//! and fails when any stage of at least 5 ms grows more than twice as fast as the size, or when
+//! the `borrow` stage of a shape of [`LINEAR_BORROW`] grows on average faster than x4.6 per x4
+//! (`n^1.1`), only when `PRISM_ASSERT_TIMING=1` is set.
 
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -51,6 +52,22 @@ struct Shape {
 }
 
 const SIZES: [usize; 3] = [256, 1024, 4096];
+
+/// The shapes whose borrow check is held to near-linear growth: many loans live at once, or
+/// made one after the other over a body, each held by a local (the loan flow's states, and the
+/// conflict check's search among them). Their `borrow` time may grow at most `BORROW_GROWTH`
+/// per x4 on average from the smallest size to the largest, which leaves room for the slower
+/// memory accesses of larger programs, while a quadratic step grows x16.
+const LINEAR_BORROW: [&str; 7] = [
+    "handlers-kept-to-end",
+    "live-handlers",
+    "many-closures",
+    "closures-kept-past-blocks",
+    "live-borrows",
+    "template-computed-parts",
+    "when-patterns",
+];
+const BORROW_GROWTH: f64 = 4.6;
 const DEPTHS: [usize; 3] = [30, 60, 120];
 
 fn join(count: usize, separator: &str, item: impl Fn(usize) -> String) -> String {
@@ -671,12 +688,12 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
     times
 }
 
-/// The fastest time of each stage over three runs, or of one run when it takes over a second.
+/// The fastest time of each stage over five runs, or of one run when it takes over a second.
 fn best_of(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
     let mut best = compile(program, compiled);
     let total: Duration = best.iter().flatten().sum();
     if total < Duration::from_secs(1) {
-        for _ in 0..2 {
+        for _ in 0..4 {
             let times = compile(program, compiled);
             for (best, time) in best.iter_mut().zip(times) {
                 *best = best.zip(time).map(|(a, b)| a.min(b));
@@ -713,6 +730,8 @@ fn run_benchmark() {
             }
         }
         let mut previous: Option<(usize, [Option<Duration>; 9])> = None;
+        // The size and `borrow` time of each program.
+        let mut borrow_times: Vec<(usize, Duration)> = Vec::new();
         for size in shape.sizes {
             let program = Generated {
                 size,
@@ -746,11 +765,26 @@ fn run_benchmark() {
                 }
             }
             println!("{}", line);
+            borrow_times.extend(times[5].map(|time| (program.size, time)));
             let total: Duration = times.iter().flatten().sum();
             previous = Some((program.size, times));
             if total > Duration::from_secs(20) {
                 println!("  {:<28} larger sizes skipped", shape.name);
                 break;
+            }
+        }
+        if let (true, [(first_size, first), .., (last_size, last)]) =
+            (LINEAR_BORROW.contains(&shape.name), &borrow_times[..])
+        {
+            // The average growth per x4 of the size: the geometric mean of each step's.
+            let steps = (*last_size as f64 / *first_size as f64).log(4.0);
+            let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
+            println!(
+                "  {:<28} borrow x{:.2} per x4 on average",
+                shape.name, growth
+            );
+            if growth > BORROW_GROWTH && milliseconds(*last) >= 5.0 {
+                too_fast_growth.push(format!("{} (borrow x{:.2} per x4)", shape.name, growth));
             }
         }
     }
