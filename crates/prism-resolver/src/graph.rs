@@ -61,6 +61,25 @@ impl DependencyGraph {
     /// Relative entry paths are made absolute against the current directory first, so the root
     /// is discovered from the file's real location; every path in the graph is absolute.
     pub fn from_entries(entry_files: &[impl AsRef<Path>]) -> Result<Self, ResolveError> {
+        Self::build(entry_files, &mut SourceStore::new())
+    }
+
+    /// [`DependencyGraph::from_entry`], reading every file through `store` (D9 of
+    /// `hot-reload`): its overlay first, then the content it holds for a file not invalidated
+    /// since, then the disk. Only content that changed since the store last read it is parsed
+    /// again, so a watch session that rebuilds the graph after an edit parses the edited files
+    /// alone.
+    pub fn from_entry_with(
+        entry_file: &Path,
+        store: &mut SourceStore,
+    ) -> Result<Self, ResolveError> {
+        Self::build(&[entry_file], store)
+    }
+
+    fn build(
+        entry_files: &[impl AsRef<Path>],
+        store: &mut SourceStore,
+    ) -> Result<Self, ResolveError> {
         if entry_files.is_empty() {
             return Err(ResolveError::Io {
                 path: PathBuf::new(),
@@ -69,18 +88,9 @@ impl DependencyGraph {
         }
 
         let first_entry = absolute_path(entry_files[0].as_ref());
-        let first_content =
-            std::fs::read_to_string(&first_entry).map_err(|e| ResolveError::Io {
-                path: first_entry.clone(),
-                message: e.to_string(),
-            })?;
-        let first_ast =
-            prism_parser::parse_source(&first_content).map_err(|e| ResolveError::Parse {
-                path: first_entry.clone(),
-                error: e,
-            })?;
+        let (_, first_ast) = store.read(&first_entry)?;
         // Every directory the resolution looks into is read once (compile speed).
-        let mut listings = DirectoryListings::new();
+        let mut listings = DirectoryListings::with_virtual_files(store.overlay.keys().cloned());
         let authoritative_root =
             discover_root_with(&first_entry, first_ast.package.as_ref(), &mut listings)?;
 
@@ -98,15 +108,7 @@ impl DependencyGraph {
             }
             visited.insert(current_path.clone());
 
-            let content = std::fs::read_to_string(&current_path).map_err(|e| ResolveError::Io {
-                path: current_path.clone(),
-                message: e.to_string(),
-            })?;
-            let source_file =
-                prism_parser::parse_source(&content).map_err(|e| ResolveError::Parse {
-                    path: current_path.clone(),
-                    error: e,
-                })?;
+            let (content, source_file) = store.read(&current_path)?;
 
             let current_root =
                 discover_root_with(&current_path, source_file.package.as_ref(), &mut listings)?;
@@ -214,6 +216,107 @@ impl DependencyGraph {
     /// Returns true if the dependency graph contains no files.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+}
+
+/// The source text and syntax tree of every file a watch session read, so that rebuilding its
+/// dependency graph after an edit parses only the files whose content changed (D9 and D16 of
+/// `hot-reload`). An overlay maps paths to content that replaces what is on disk: an edit
+/// script's virtual edits, which leave every file on disk unchanged. Paths are absolute.
+#[derive(Debug, Default)]
+pub struct SourceStore {
+    entries: HashMap<PathBuf, StoredSource>,
+    overlay: HashMap<PathBuf, String>,
+    /// Paths to read again from the overlay or the disk.
+    stale: HashSet<PathBuf>,
+    /// The number of files parsed through the store.
+    parses: usize,
+}
+
+#[derive(Debug)]
+struct StoredSource {
+    content: String,
+    file: SourceFile,
+}
+
+impl SourceStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Makes `path` read as `content` from now on, whatever the disk holds.
+    pub fn set_overlay(&mut self, path: PathBuf, content: String) {
+        self.stale.insert(path.clone());
+        self.overlay.insert(path, content);
+    }
+
+    /// Marks `paths` to be read again at the next build.
+    pub fn invalidate(&mut self, paths: &[PathBuf]) {
+        self.stale.extend(paths.iter().cloned());
+    }
+
+    /// The number of files parsed through the store so far.
+    pub fn parses(&self) -> usize {
+        self.parses
+    }
+
+    /// The content the store last read for `path`.
+    pub fn content(&self, path: &Path) -> Option<&str> {
+        self.entries.get(path).map(|entry| entry.content.as_str())
+    }
+
+    /// What `path` reads as now: its overlay content, else the disk's.
+    pub fn current_content(&self, path: &Path) -> std::io::Result<String> {
+        match self.overlay.get(path) {
+            Some(content) => Ok(content.clone()),
+            None => std::fs::read_to_string(path),
+        }
+    }
+
+    /// Whether `path` reads differently now than when the store last read it: a file it never
+    /// read, or one that cannot be read any more, counts as changed.
+    pub fn has_changed(&self, path: &Path) -> bool {
+        match (self.current_content(path), self.content(path)) {
+            (Ok(now), Some(before)) => now != before,
+            _ => true,
+        }
+    }
+
+    /// The content and syntax tree of `path`: kept when the content is the one last read,
+    /// parsed otherwise.
+    fn read(&mut self, path: &Path) -> Result<(String, SourceFile), ResolveError> {
+        let is_stale = self.stale.remove(path);
+        if !is_stale {
+            if let Some(entry) = self.entries.get(path) {
+                return Ok((entry.content.clone(), entry.file.clone()));
+            }
+        }
+        let content = self.current_content(path).map_err(|e| ResolveError::Io {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+        if let Some(entry) = self.entries.get(path) {
+            if entry.content == content {
+                return Ok((content, entry.file.clone()));
+            }
+        }
+        self.parses += 1;
+        let file = prism_parser::parse_source(&content).map_err(|e| {
+            // A file that does not parse is read again next time.
+            self.stale.insert(path.to_path_buf());
+            ResolveError::Parse {
+                path: path.to_path_buf(),
+                error: e,
+            }
+        })?;
+        self.entries.insert(
+            path.to_path_buf(),
+            StoredSource {
+                content: content.clone(),
+                file: file.clone(),
+            },
+        );
+        Ok((content, file))
     }
 }
 

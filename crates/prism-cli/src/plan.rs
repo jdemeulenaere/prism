@@ -8,7 +8,7 @@
 //! an instance reaches ([`DefinitionsHasher`]) and the type table its unit is built over
 //! ([`program_types`]) need no file's MIR.
 
-use crate::cache::BuildCache;
+use crate::cache::CacheKeys;
 use prism_abi::{AbiTypeDefinition, ContentHash, DeterministicHasher};
 use prism_codegen::PlannedInstance;
 use prism_typed_tree::{DeclarationPath, NominalId, Type, TypeTable};
@@ -154,15 +154,15 @@ pub fn planned_display(instance: &PlannedInstance) -> String {
     )
 }
 
-/// The key of the code of `instance` in `cache` for the target `target` (D6 and D8 of
+/// The key of the code of `instance` under `keys` for the target `target` (D6 and D8 of
 /// `instance-cache`).
 pub fn instance_code_key(
-    cache: &BuildCache,
+    keys: &CacheKeys,
     instance: &PlannedInstance,
     definitions: &mut DefinitionsHasher,
     target: &str,
 ) -> ContentHash {
-    cache.instance_key(
+    keys.instance_key(
         &instance.symbol,
         &ContentHash(instance.record_hash),
         &definitions.hash(&instance.type_arguments),

@@ -12,29 +12,30 @@
 
 #![allow(clippy::result_large_err)]
 
-use crate::cache::{BuildCache, EntryKind};
+use crate::cache::{BuildCache, CacheKeys, EntryKind};
 use crate::plan::{
     instance_code_key, planned_display, program_types, BuildPlan, DefinitionsHasher,
-    PlannedInstanceKey, PlannedUnit,
+    PlannedInstanceKey, PlannedUnit, UnitId,
 };
 use crate::workspace::{
     assert_workspace_boundary, elaborate_and_summarize, elaborate_file, explain_cache,
-    extract_abis, file_check_key, instance_errors, module_path, validate_entry_file, CacheOutcome,
-    ElaboratedFile, InstanceOutcome, WorkspaceError,
+    extract_abis, file_check_key, instance_errors, module_path, source_of, validate_entry_file,
+    CacheOutcome, ElaboratedFile, InstanceOutcome, WorkspaceError,
 };
 use prism_abi::ContentHash;
 use prism_codegen::{
     build_instance_unit, check_file, check_instances, collect_instances, dump_file, dump_instances,
     dump_layouts, find_main, plan_instances, DumpError, InstanceDumpError, InstanceUnit, Linker,
-    PlannedInstance, Program, UnitArtifact,
+    PlannedInstance, Program, UnitArtifact, ValueKeys,
 };
 use prism_mir::{FileSummary, GenericRecord, MirFile};
-use prism_resolver::DependencyGraph;
+use prism_resolver::{DependencyGraph, SourceNode};
 use prism_typed_tree::instantiation::generic_name;
 use prism_typed_tree::{DeclarationPath, Item, NominalId, TypeTable};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// How `prism run` runs a program.
@@ -150,11 +151,15 @@ pub fn program_mir(entry: &Path) -> Result<Vec<MirFile>, WorkspaceError> {
         .collect())
 }
 
-/// The `E6xxx` errors `errors` of `path`.
-fn codegen_error(path: &Path, errors: Vec<prism_codegen::CodegenError>) -> WorkspaceError {
+/// The `E6xxx` errors `errors` of `path`, a file of `graph`.
+pub(crate) fn codegen_error(
+    graph: &DependencyGraph,
+    path: &Path,
+    errors: Vec<prism_codegen::CodegenError>,
+) -> WorkspaceError {
     WorkspaceError::Codegen {
         path: path.to_path_buf(),
-        source: fs::read_to_string(path).unwrap_or_default(),
+        source: source_of(graph, path),
         errors,
     }
 }
@@ -174,28 +179,338 @@ fn program_instances(
     Ok(instances)
 }
 
-/// One file of a program being compiled.
+/// What a watch session keeps of one file between builds (D9 and D14 of `hot-reload`): the
+/// check key its summary was computed for, the summary, and its MIR and records when Phase 2
+/// ran for it in the session.
+#[derive(Clone)]
+pub(crate) struct KeptFile {
+    pub check_key: ContentHash,
+    pub summary: FileSummary,
+    pub elaborated: Option<Rc<ElaboratedFile>>,
+}
+
+/// The front end's results a watch session keeps between builds, by file.
+#[derive(Clone, Default)]
+pub(crate) struct KeptFiles {
+    pub files: HashMap<PathBuf, KeptFile>,
+}
+
+/// What [`build_program`] builds.
+pub(crate) struct BuildRequest<'a> {
+    pub graph: &'a DependencyGraph,
+    /// The entry file's path as `graph` knows it.
+    pub entry: &'a Path,
+    pub cache: Option<&'a BuildCache>,
+    pub keys: &'a CacheKeys,
+    /// What earlier builds of the session kept: a file whose check key is unchanged is not
+    /// checked again.
+    pub kept: &'a KeptFiles,
+    /// The plan of the code that is running, or `None` to build every unit: only the units
+    /// whose code key is not in it are built (D9 of `hot-reload`).
+    pub running: Option<&'a BuildPlan>,
+}
+
+/// One unit a build defines, with its artifact.
+pub(crate) struct BuiltUnit {
+    pub id: UnitId,
+    pub artifact: UnitArtifact,
+}
+
+/// A program checked, planned, and with the artifacts of the units it needs, ready to define.
+pub(crate) struct Build {
+    pub main: DeclarationPath,
+    pub plan: BuildPlan,
+    /// What to keep of every file if the build is applied.
+    #[allow(dead_code)] // Read by the watch session (task 4.1 of `hot-reload`).
+    pub kept: KeptFiles,
+    /// The units to define, file units in check order, then instance units in symbol order.
+    pub units: Vec<BuiltUnit>,
+    /// Each file in check order, with whether it was checked, compiled or loaded.
+    pub files: Vec<(PathBuf, CacheOutcome)>,
+    /// Each instance built, in symbol order, with whether its code was loaded.
+    pub instances: Vec<InstanceOutcome>,
+    pub front_end: Duration,
+    pub code_generation: Duration,
+    /// The initializer hash of each top-level value of the file units built (D8 of
+    /// `hot-reload`).
+    pub value_keys: ValueKeys,
+}
+
+/// One file of a program being built.
 struct FileState {
     path: PathBuf,
     module: String,
     outcome: CacheOutcome,
     summary: FileSummary,
-    /// Its MIR and records, when Phase 2 ran for it in this run.
-    elaborated: Option<ElaboratedFile>,
-    /// Its cached artifact, when it was loaded.
-    artifact: Option<UnitArtifact>,
-    /// The key of its check entry and of its code entry, with a cache.
-    keys: Option<(ContentHash, ContentHash)>,
+    /// Its MIR and records, when Phase 2 ran for it in this build or the session kept them.
+    elaborated: Option<Rc<ElaboratedFile>>,
+    /// Whether Phase 2 ran for it in this build, so that its backend checks are still to run.
+    checked_now: bool,
+    check_key: ContentHash,
+    code_key: ContentHash,
 }
 
-/// One instance of a program being compiled: its plan, its code key, and its cached artifact
-/// when it was loaded.
+/// One instance of a program being built: its plan and its code key.
 struct InstanceState {
     planned: PlannedInstance,
-    key: Option<ContentHash>,
-    artifact: Option<UnitArtifact>,
-    /// Whether its code was loaded from the cache.
-    reused: bool,
+    key: ContentHash,
+}
+
+/// Builds the program of `request` into `linker`: Phase 2 of every file whose check key the
+/// session did not keep and the cache holds no verdict for, the entry's `main`, the backend's
+/// support check of every file checked, the plan of every unit with its code key, and the
+/// artifact of every unit the running plan lacks (all of them without one), taken from the
+/// cache or compiled and written back (D9 of `instance-cache`, D9 and D14 of `hot-reload`).
+/// The artifacts are not defined.
+pub(crate) fn build_program(
+    request: &BuildRequest,
+    linker: &mut Linker,
+) -> Result<Build, WorkspaceError> {
+    let start = Instant::now();
+    let BuildRequest {
+        graph,
+        entry,
+        cache,
+        keys,
+        kept,
+        running,
+    } = request;
+    let (graph, cache, running) = (*graph, *cache, *running);
+    let (abis, definitions) = extract_abis(graph)?;
+    let target = prism_codegen::isa::target_identity().map_err(WorkspaceError::Backend)?;
+
+    let mut files: Vec<FileState> = Vec::new();
+    for cluster in graph.topological_order() {
+        for path in &cluster.files {
+            let node = graph.get_node(path).expect("node must exist in graph");
+            let check_key = file_check_key(keys, graph, &abis, path);
+            let code_key = keys.unit_key(&check_key, &target);
+            let module = module_path(node);
+            let kept = kept
+                .files
+                .get(path)
+                .filter(|kept| kept.check_key == check_key);
+            let state = match kept {
+                Some(kept) => FileState {
+                    path: path.clone(),
+                    module,
+                    outcome: CacheOutcome::Reused,
+                    summary: kept.summary.clone(),
+                    elaborated: kept.elaborated.clone(),
+                    checked_now: false,
+                    check_key,
+                    code_key,
+                },
+                None => match cache.and_then(|cache| cache.read_check(&check_key)) {
+                    Some(summary) => FileState {
+                        path: path.clone(),
+                        module,
+                        outcome: CacheOutcome::Reused,
+                        summary,
+                        elaborated: None,
+                        checked_now: false,
+                        check_key,
+                        code_key,
+                    },
+                    None => {
+                        let file = elaborate_and_summarize(graph, &abis, path)?;
+                        if let Some(cache) = cache {
+                            file.record(cache, &check_key);
+                        }
+                        FileState {
+                            path: path.clone(),
+                            module,
+                            outcome: CacheOutcome::Checked,
+                            summary: file.summary.clone(),
+                            elaborated: Some(Rc::new(file)),
+                            checked_now: true,
+                            check_key,
+                            code_key,
+                        }
+                    }
+                },
+            };
+            files.push(state);
+        }
+    }
+    let front_end = start.elapsed();
+
+    let start = Instant::now();
+    let main = entry_main(graph, &abis, entry, &mut files)?;
+    for file in files.iter().filter(|file| file.checked_now) {
+        let elaborated = file
+            .elaborated
+            .as_ref()
+            .expect("a checked file was elaborated");
+        check_file(&elaborated.mir).map_err(|errors| codegen_error(graph, &file.path, errors))?;
+    }
+    let summaries: Vec<&FileSummary> = files.iter().map(|file| &file.summary).collect();
+    let planned = plan_instances(&summaries).map_err(|errors| instance_errors(graph, errors))?;
+    let mut hasher = DefinitionsHasher::new(&definitions);
+    let instances: Vec<InstanceState> = planned
+        .into_iter()
+        .map(|planned| {
+            let key = instance_code_key(keys, &planned, &mut hasher, &target);
+            InstanceState { planned, key }
+        })
+        .collect();
+    let plan = BuildPlan {
+        units: files
+            .iter()
+            .map(|file| PlannedUnit {
+                path: file.path.clone(),
+                module: file.module.clone(),
+                check_key: file.check_key,
+                code_key: file.code_key,
+            })
+            .collect(),
+        instances: instances
+            .iter()
+            .map(|instance| PlannedInstanceKey {
+                symbol: instance.planned.symbol.clone(),
+                display: planned_display(&instance.planned),
+                code_key: instance.key,
+            })
+            .collect(),
+    };
+    let needed: Option<HashSet<UnitId>> =
+        running.map(|running| plan.changed_since(running).into_iter().collect());
+    let is_needed = |id: UnitId| needed.as_ref().is_none_or(|needed| needed.contains(&id));
+
+    let mut units: Vec<BuiltUnit> = Vec::new();
+    let mut value_keys = ValueKeys::new();
+    for file in &mut files {
+        let id = UnitId::File(file.module.clone());
+        if !is_needed(id.clone()) {
+            continue;
+        }
+        let cached = match (cache, file.checked_now) {
+            (Some(cache), false) => cache
+                .read_code(EntryKind::Unit, &file.code_key)
+                .and_then(|bytes| UnitArtifact::decode(&bytes)),
+            _ => None,
+        };
+        let artifact = match cached {
+            Some(artifact) => artifact,
+            None => {
+                if file.elaborated.is_none() {
+                    let elaborated = elaborate_and_summarize(graph, &abis, &file.path)?;
+                    check_file(&elaborated.mir)
+                        .map_err(|errors| codegen_error(graph, &file.path, errors))?;
+                    file.elaborated = Some(Rc::new(elaborated));
+                }
+                if file.outcome == CacheOutcome::Reused {
+                    file.outcome = CacheOutcome::Compiled;
+                }
+                let mir = &file.elaborated.as_ref().expect("elaborated above").mir;
+                let artifact = linker
+                    .compile_unit(mir, &mir.module)
+                    .map_err(WorkspaceError::Backend)?;
+                write_code(cache, EntryKind::Unit, &file.code_key, &artifact);
+                artifact
+            }
+        };
+        let node = graph
+            .get_node(&file.path)
+            .expect("node must exist in graph");
+        value_keys.extend(initializer_hashes(&file.module, node));
+        units.push(BuiltUnit { id, artifact });
+    }
+
+    let needed_instances: Vec<&InstanceState> = instances
+        .iter()
+        .filter(|instance| is_needed(UnitId::Instance(instance.planned.symbol.clone())))
+        .collect();
+    let cached: Vec<Option<UnitArtifact>> = needed_instances
+        .iter()
+        .map(|instance| {
+            cache.and_then(|cache| {
+                UnitArtifact::decode(&cache.read_code(EntryKind::Instance, &instance.key)?)
+            })
+        })
+        .collect();
+    let missed_plans: Vec<&PlannedInstance> = needed_instances
+        .iter()
+        .zip(&cached)
+        .filter(|(_, artifact)| artifact.is_none())
+        .map(|(instance, _)| &instance.planned)
+        .collect();
+    let missed =
+        build_missed_instances(graph, &abis, cache, &definitions, &mut files, &missed_plans)?;
+    check_instances(&missed).map_err(|errors| instance_errors(graph, errors))?;
+    let mut missed = missed.into_iter();
+    let mut instance_outcomes = Vec::new();
+    for (instance, cached) in needed_instances.into_iter().zip(cached) {
+        let reused = cached.is_some();
+        let artifact = match cached {
+            Some(artifact) => artifact,
+            None => {
+                let unit = missed.next().expect("every missed instance was built");
+                let artifact = linker
+                    .compile_instance(&unit)
+                    .map_err(WorkspaceError::Backend)?;
+                write_code(cache, EntryKind::Instance, &instance.key, &artifact);
+                artifact
+            }
+        };
+        instance_outcomes.push(InstanceOutcome {
+            instance: planned_display(&instance.planned),
+            reused,
+        });
+        units.push(BuiltUnit {
+            id: UnitId::Instance(instance.planned.symbol.clone()),
+            artifact,
+        });
+    }
+    let code_generation = start.elapsed();
+
+    let kept = KeptFiles {
+        files: files
+            .iter()
+            .map(|file| {
+                (
+                    file.path.clone(),
+                    KeptFile {
+                        check_key: file.check_key,
+                        summary: file.summary.clone(),
+                        elaborated: file.elaborated.clone(),
+                    },
+                )
+            })
+            .collect(),
+    };
+    Ok(Build {
+        main,
+        plan,
+        kept,
+        units,
+        files: files
+            .iter()
+            .map(|file| (file.path.clone(), file.outcome))
+            .collect(),
+        instances: instance_outcomes,
+        front_end,
+        code_generation,
+        value_keys,
+    })
+}
+
+/// The initializer hash of each top-level value of the file `node` of module `module`, by the
+/// value's symbol (D8 of `hot-reload`).
+fn initializer_hashes<'a>(
+    module: &'a str,
+    node: &'a SourceNode,
+) -> impl Iterator<Item = (String, ContentHash)> + 'a {
+    node.source_file
+        .declarations
+        .iter()
+        .filter_map(move |declaration| match declaration {
+            prism_ast::Declaration::Var(value) => Some((
+                format!("{}::{}", module, value.name),
+                prism_abi::initializer_hash(value),
+            )),
+            _ => None,
+        })
 }
 
 /// Compiles the program whose entry file is `entry`: every file it transitively imports,
@@ -218,200 +533,57 @@ pub fn compile_program_with(
     validate_entry_file(entry)?;
     let graph = DependencyGraph::from_entry(entry)?;
     assert_workspace_boundary(&graph)?;
-    let (abis, definitions) = extract_abis(&graph)?;
     let entry_path = entry_in_graph(&graph, entry)?;
-    let cache = options.cache.as_ref();
-    let target = match cache {
-        Some(_) => Some(prism_codegen::isa::target_identity().map_err(WorkspaceError::Backend)?),
-        None => None,
-    };
-
-    let mut files: Vec<FileState> = Vec::new();
-    for cluster in graph.topological_order() {
-        for path in &cluster.files {
-            let node = graph.get_node(path).expect("node must exist in graph");
-            let keys = cache.zip(target.as_deref()).map(|(cache, target)| {
-                let check_key = file_check_key(cache, &graph, &abis, path);
-                (check_key, cache.unit_key(&check_key, target))
-            });
-            let summary = cache
-                .zip(keys.as_ref())
-                .and_then(|(cache, (check_key, _))| cache.read_check(check_key));
-            let artifact = match (&summary, cache, &keys) {
-                (Some(_), Some(cache), Some((_, code_key))) => cache
-                    .read_code(EntryKind::Unit, code_key)
-                    .and_then(|bytes| UnitArtifact::decode(&bytes)),
-                _ => None,
-            };
-            let state = match (summary, artifact) {
-                (Some(summary), Some(artifact)) => FileState {
-                    path: path.clone(),
-                    module: module_path(node),
-                    outcome: CacheOutcome::Reused,
-                    summary,
-                    elaborated: None,
-                    artifact: Some(artifact),
-                    keys,
-                },
-                (cached, _) => {
-                    let file = elaborate_and_summarize(&graph, &abis, path)?;
-                    let outcome = match cached {
-                        Some(_) => CacheOutcome::Compiled,
-                        None => {
-                            if let Some((cache, (check_key, _))) = cache.zip(keys.as_ref()) {
-                                file.record(cache, check_key);
-                            }
-                            CacheOutcome::Checked
-                        }
-                    };
-                    FileState {
-                        path: path.clone(),
-                        module: module_path(node),
-                        outcome,
-                        summary: file.summary.clone(),
-                        elaborated: Some(file),
-                        artifact: None,
-                        keys,
-                    }
-                }
-            };
-            files.push(state);
-        }
-    }
-    let front_end = start.elapsed();
-
-    let start = Instant::now();
-    let main = entry_main(&graph, &abis, &entry_path, &mut files)?;
-    for file in &files {
-        if let Some(elaborated) = &file.elaborated {
-            check_file(&elaborated.mir).map_err(|errors| codegen_error(&file.path, errors))?;
-        }
-    }
-    let summaries: Vec<&FileSummary> = files.iter().map(|file| &file.summary).collect();
-    let planned = plan_instances(&summaries).map_err(|errors| instance_errors(&graph, errors))?;
-    let mut hasher = DefinitionsHasher::new(&definitions);
-    let mut instances: Vec<InstanceState> = planned
-        .into_iter()
-        .map(|planned| {
-            let key = cache
-                .zip(target.as_deref())
-                .map(|(cache, target)| instance_code_key(cache, &planned, &mut hasher, target));
-            let artifact = cache.zip(key.as_ref()).and_then(|(cache, key)| {
-                UnitArtifact::decode(&cache.read_code(EntryKind::Instance, key)?)
-            });
-            InstanceState {
-                planned,
-                key,
-                artifact,
-                reused: false,
-            }
-        })
-        .collect();
-    let missed =
-        build_missed_instances(&graph, &abis, cache, &definitions, &mut files, &instances)?;
-    check_instances(&missed).map_err(|errors| instance_errors(&graph, errors))?;
-
+    let graph_time = start.elapsed();
+    let keys = options
+        .cache
+        .as_ref()
+        .map_or_else(CacheKeys::in_process, |cache| cache.keys().clone());
     let mut linker = Linker::new().map_err(WorkspaceError::Backend)?;
-    let mut artifacts: Vec<(String, UnitArtifact)> = Vec::new();
-    for file in &mut files {
-        let artifact = match file.artifact.take() {
-            Some(artifact) => artifact,
-            None => {
-                let mir = &file
-                    .elaborated
-                    .as_ref()
-                    .expect("an uncached file was elaborated")
-                    .mir;
-                let artifact = linker
-                    .compile_unit(mir, &mir.module)
-                    .map_err(WorkspaceError::Backend)?;
-                write_code(
-                    cache,
-                    EntryKind::Unit,
-                    file.keys.as_ref().map(|(_, code)| code),
-                    &artifact,
-                );
-                artifact
-            }
-        };
-        artifacts.push((file.module.clone(), artifact));
-    }
-    let mut missed = missed.into_iter();
-    for instance in &mut instances {
-        match instance.artifact.take() {
-            Some(artifact) => {
-                instance.reused = true;
-                artifacts.push((instance.planned.symbol.clone(), artifact));
-            }
-            None => {
-                let unit = missed.next().expect("every missed instance was built");
-                let artifact = linker
-                    .compile_instance(&unit)
-                    .map_err(WorkspaceError::Backend)?;
-                write_code(cache, EntryKind::Instance, instance.key.as_ref(), &artifact);
-                artifacts.push((instance.planned.symbol.clone(), artifact));
-            }
-        }
-    }
-    let code_generation = start.elapsed();
-
-    let start = Instant::now();
-    for (unit, artifact) in &artifacts {
-        linker
-            .define_artifact(unit, artifact)
-            .map_err(WorkspaceError::Backend)?;
-    }
-    let compiled_functions = linker.compiled_functions();
-    let program = linker.link().map_err(WorkspaceError::Backend)?;
-    let linking = start.elapsed();
-
-    let plan = cache.map(|_| BuildPlan {
-        units: files
-            .iter()
-            .filter_map(|file| {
-                let (check_key, code_key) = file.keys?;
-                Some(PlannedUnit {
-                    path: file.path.clone(),
-                    module: file.module.clone(),
-                    check_key,
-                    code_key,
-                })
-            })
-            .collect(),
-        instances: instances
-            .iter()
-            .filter_map(|instance| {
-                Some(PlannedInstanceKey {
-                    symbol: instance.planned.symbol.clone(),
-                    display: planned_display(&instance.planned),
-                    code_key: instance.key?,
-                })
-            })
-            .collect(),
-    });
+    let build = build_program(
+        &BuildRequest {
+            graph: &graph,
+            entry: &entry_path,
+            cache: options.cache.as_ref(),
+            keys: &keys,
+            kept: &KeptFiles::default(),
+            running: None,
+        },
+        &mut linker,
+    )?;
+    let (program, linking, compiled_functions) = link_build(linker, &build)?;
     Ok(CompiledProgram {
         program,
-        main,
+        main: build.main,
         timings: Timings {
-            front_end,
-            code_generation,
+            front_end: graph_time + build.front_end,
+            code_generation: build.code_generation,
             linking,
         },
         workspace_root: graph.workspace_root.clone(),
-        files: files
-            .iter()
-            .map(|file| (file.path.clone(), file.outcome))
-            .collect(),
-        instances: instances
-            .iter()
-            .map(|instance| InstanceOutcome {
-                instance: planned_display(&instance.planned),
-                reused: instance.reused,
-            })
-            .collect(),
+        files: build.files,
+        instances: build.instances,
         compiled_functions,
-        plan,
+        plan: Some(build.plan),
     })
+}
+
+/// Defines every unit of `build` into `linker` and links the program, with the time it took and
+/// the number of functions Cranelift compiled for it.
+pub(crate) fn link_build(
+    mut linker: Linker,
+    build: &Build,
+) -> Result<(Program, Duration, usize), WorkspaceError> {
+    let start = Instant::now();
+    linker.set_value_keys(build.value_keys.clone());
+    for unit in &build.units {
+        linker
+            .define_artifact(unit.id.name(), &unit.artifact)
+            .map_err(WorkspaceError::Backend)?;
+    }
+    let compiled = linker.compiled_functions();
+    let program = linker.link().map_err(WorkspaceError::Backend)?;
+    Ok((program, start.elapsed(), compiled))
 }
 
 /// Writes `artifact` as the code entry `key` of `kind`, unless there is no cache or the
@@ -419,10 +591,10 @@ pub fn compile_program_with(
 fn write_code(
     cache: Option<&BuildCache>,
     kind: EntryKind,
-    key: Option<&ContentHash>,
+    key: &ContentHash,
     artifact: &UnitArtifact,
 ) {
-    if let (Some(cache), Some(key), Some(bytes)) = (cache, key, artifact.encode()) {
+    if let (Some(cache), Some(bytes)) = (cache, artifact.encode()) {
         cache.write_code(kind, key, &bytes);
     }
 }
@@ -449,12 +621,12 @@ fn entry_main(
         Some(file) => &file.mir,
         None => &elaborate_file(graph, abis, entry_path)?,
     };
-    find_main(mir).map_err(|error| codegen_error(entry_path, vec![error]))
+    find_main(mir).map_err(|error| codegen_error(graph, entry_path, vec![error]))
 }
 
-/// The instance units of `instances` whose code is not cached, in order, each built from its
-/// generic's record: one elaborated in this run, else its record entry, else its generic's file
-/// elaborated again, which is then listed as checked (D5 and D9 of `instance-cache`). The
+/// The instance units of `missed`, in order, each built from its generic's record: one
+/// elaborated in this build or kept by the session, else its record entry, else its generic's
+/// file elaborated again, which is then listed as checked (D5 and D9 of `instance-cache`). The
 /// program-wide type table is built only when an instance misses (D13).
 fn build_missed_instances(
     graph: &DependencyGraph,
@@ -462,27 +634,24 @@ fn build_missed_instances(
     cache: Option<&BuildCache>,
     definitions: &crate::plan::ProgramDefinitions,
     files: &mut [FileState],
-    instances: &[InstanceState],
+    missed: &[&PlannedInstance],
 ) -> Result<Vec<InstanceUnit>, WorkspaceError> {
-    let mut missed = Vec::new();
+    let mut built = Vec::new();
     let mut types: Option<TypeTable> = None;
     let mut stored: HashMap<String, GenericRecord> = HashMap::new();
-    for instance in instances
-        .iter()
-        .filter(|instance| instance.artifact.is_none())
-    {
-        let name = generic_name(&instance.planned.path);
-        let record = record_of(graph, abis, cache, files, &mut stored, &instance.planned)?;
+    for planned in missed {
+        let name = generic_name(&planned.path);
+        let record = record_of(graph, abis, cache, files, &mut stored, planned)?;
         let types = types.get_or_insert_with(|| program_types(definitions));
-        let unit = build_instance_unit(record, &instance.planned, types).ok_or_else(|| {
+        let unit = build_instance_unit(record, planned, types).ok_or_else(|| {
             WorkspaceError::Backend(prism_codegen::BackendError::new(format!(
                 "the record of {} has no body for {}",
-                name, instance.planned.symbol
+                name, planned.symbol
             )))
         })?;
-        missed.push(unit);
+        built.push(unit);
     }
-    Ok(missed)
+    Ok(built)
 }
 
 /// The record of the generic of `planned`, found as [`build_missed_instances`] says.
@@ -516,11 +685,11 @@ fn record_of<'a>(
                 // rewrite its records.
                 let file = &mut files[position];
                 let elaborated = elaborate_and_summarize(graph, abis, &file.path)?;
-                if let (Some(cache), Some((check_key, _))) = (cache, file.keys.as_ref()) {
-                    elaborated.record(cache, check_key);
+                if let Some(cache) = cache {
+                    elaborated.record(cache, &file.check_key);
                 }
                 file.outcome = CacheOutcome::Checked;
-                file.elaborated = Some(elaborated);
+                file.elaborated = Some(Rc::new(elaborated));
             }
         }
     }
@@ -562,7 +731,7 @@ pub fn dump_instance_mir(entry: &Path) -> Result<String, WorkspaceError> {
 pub fn dump_instance_clif(entry: &Path) -> Result<String, WorkspaceError> {
     let (graph, files) = elaborate_program_graph(entry)?;
     for (path, mir) in &files {
-        check_file(mir).map_err(|errors| codegen_error(path, errors))?;
+        check_file(mir).map_err(|errors| codegen_error(&graph, path, errors))?;
     }
     let mirs: Vec<&MirFile> = files.iter().map(|(_, mir)| mir).collect();
     dump_instances(&mirs).map_err(|error| match error {

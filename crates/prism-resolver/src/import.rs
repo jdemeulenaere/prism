@@ -128,6 +128,11 @@ pub fn resolve_import_with(
         }
     }
 
+    // A file that exists only in a watch session's overlay resolves as if it were on disk.
+    if listings.is_virtual_file(&normalized_candidate) {
+        return Ok(normalized_candidate);
+    }
+
     // 4. Candidate existence and regular file check
     if !normalized_candidate.exists() || !normalized_candidate.is_file() {
         return Err(ResolveError::FileNotFound {

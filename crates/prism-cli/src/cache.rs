@@ -63,11 +63,97 @@ impl EntryKind {
     }
 }
 
+/// The keys of build cache entries for one compiler (D3 and D8 of `instance-cache`), apart from
+/// any cache directory: a watch session without a cache (`--no-cache`) decides what to check
+/// and compile again with the same keys (D9 of `hot-reload`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheKeys {
+    compiler: ContentHash,
+}
+
+impl CacheKeys {
+    /// The keys of the compiler whose identity is `compiler`.
+    pub fn new(compiler: ContentHash) -> Self {
+        Self { compiler }
+    }
+
+    /// Keys only compared within one process, which need no identity of the executable.
+    pub fn in_process() -> Self {
+        Self::new(identity_of(
+            env!("CARGO_PKG_VERSION"),
+            &ContentHash([0; 32]),
+        ))
+    }
+
+    /// The key of a file's check entry: the format version, the compiler, the file's module
+    /// path and exact source text, and its direct imports' ABI hashes in import order (D5 of
+    /// `abi-cache`, D3 of `instance-cache`).
+    pub fn check_key(
+        &self,
+        module: &str,
+        source: &str,
+        import_hashes: &[ContentHash],
+    ) -> ContentHash {
+        let mut hasher = self.hasher(EntryKind::Check);
+        hasher.write_str(module);
+        hasher.write_hash(&ContentHash::of(source.as_bytes()));
+        hasher.write_u64(import_hashes.len() as u64);
+        for hash in import_hashes {
+            hasher.write_hash(hash);
+        }
+        hasher.finish()
+    }
+
+    /// The key of the record entry of the generic record whose Monomorphization Hash is
+    /// `record_hash` (D5 of `instance-cache`).
+    pub fn record_key(&self, record_hash: &ContentHash) -> ContentHash {
+        let mut hasher = self.hasher(EntryKind::Record);
+        hasher.write_hash(record_hash);
+        hasher.finish()
+    }
+
+    /// The key of the code of a file's unit: its check key, which covers everything a file's
+    /// code depends on, and the target identity (D8 of `instance-cache`).
+    pub fn unit_key(&self, check_key: &ContentHash, target: &str) -> ContentHash {
+        let mut hasher = self.hasher(EntryKind::Unit);
+        hasher.write_str(target);
+        hasher.write_hash(check_key);
+        hasher.finish()
+    }
+
+    /// The key of the code of the instance `symbol`: its generic's Monomorphization Hash, the
+    /// hash of the definitions its type arguments reach, and the target identity (D6 and D8 of
+    /// `instance-cache`).
+    pub fn instance_key(
+        &self,
+        symbol: &str,
+        record_hash: &ContentHash,
+        definitions_hash: &ContentHash,
+        target: &str,
+    ) -> ContentHash {
+        let mut hasher = self.hasher(EntryKind::Instance);
+        hasher.write_str(target);
+        hasher.write_str(symbol);
+        hasher.write_hash(record_hash);
+        hasher.write_hash(definitions_hash);
+        hasher.finish()
+    }
+
+    fn hasher(&self, kind: EntryKind) -> DeterministicHasher {
+        let mut hasher = DeterministicHasher::new();
+        hasher.write_str(MAGIC);
+        hasher.write_str(kind.as_str());
+        hasher.write_u64(FORMAT_VERSION);
+        hasher.write_hash(&self.compiler);
+        hasher
+    }
+}
+
 /// An open build cache: a directory and the identity of the compiler using it.
 #[derive(Debug)]
 pub struct BuildCache {
     directory: PathBuf,
-    compiler: ContentHash,
+    keys: CacheKeys,
     tagged: Cell<bool>,
     /// The number of entries this cache wrote, for `--explain-cache` tests and benchmarks.
     writes: Cell<u64>,
@@ -79,7 +165,7 @@ impl BuildCache {
     pub fn open(directory: impl Into<PathBuf>, compiler: ContentHash) -> Self {
         Self {
             directory: directory.into(),
-            compiler,
+            keys: CacheKeys::new(compiler),
             tagged: Cell::new(false),
             writes: Cell::new(0),
         }
@@ -105,45 +191,32 @@ impl BuildCache {
         self.writes.get()
     }
 
-    /// The key of a file's check entry: the format version, the compiler, the file's module
-    /// path and exact source text, and its direct imports' ABI hashes in import order (D5 of
-    /// `abi-cache`, D3 of `instance-cache`).
+    /// The keys of this cache's entries, for its compiler.
+    pub fn keys(&self) -> &CacheKeys {
+        &self.keys
+    }
+
+    /// The key of a file's check entry ([`CacheKeys::check_key`]).
     pub fn check_key(
         &self,
         module: &str,
         source: &str,
         import_hashes: &[ContentHash],
     ) -> ContentHash {
-        let mut hasher = self.key_hasher(EntryKind::Check);
-        hasher.write_str(module);
-        hasher.write_hash(&ContentHash::of(source.as_bytes()));
-        hasher.write_u64(import_hashes.len() as u64);
-        for hash in import_hashes {
-            hasher.write_hash(hash);
-        }
-        hasher.finish()
+        self.keys.check_key(module, source, import_hashes)
     }
 
-    /// The key of the record entry of the generic record whose Monomorphization Hash is
-    /// `record_hash` (D5 of `instance-cache`).
+    /// The key of a record entry ([`CacheKeys::record_key`]).
     pub fn record_key(&self, record_hash: &ContentHash) -> ContentHash {
-        let mut hasher = self.key_hasher(EntryKind::Record);
-        hasher.write_hash(record_hash);
-        hasher.finish()
+        self.keys.record_key(record_hash)
     }
 
-    /// The key of the code of a file's unit: its check key, which covers everything a file's
-    /// code depends on, and the target identity (D8 of `instance-cache`).
+    /// The key of a file unit's code ([`CacheKeys::unit_key`]).
     pub fn unit_key(&self, check_key: &ContentHash, target: &str) -> ContentHash {
-        let mut hasher = self.key_hasher(EntryKind::Unit);
-        hasher.write_str(target);
-        hasher.write_hash(check_key);
-        hasher.finish()
+        self.keys.unit_key(check_key, target)
     }
 
-    /// The key of the code of the instance `symbol`: its generic's Monomorphization Hash, the
-    /// hash of the definitions its type arguments reach, and the target identity (D6 and D8 of
-    /// `instance-cache`).
+    /// The key of an instance unit's code ([`CacheKeys::instance_key`]).
     pub fn instance_key(
         &self,
         symbol: &str,
@@ -151,21 +224,8 @@ impl BuildCache {
         definitions_hash: &ContentHash,
         target: &str,
     ) -> ContentHash {
-        let mut hasher = self.key_hasher(EntryKind::Instance);
-        hasher.write_str(target);
-        hasher.write_str(symbol);
-        hasher.write_hash(record_hash);
-        hasher.write_hash(definitions_hash);
-        hasher.finish()
-    }
-
-    fn key_hasher(&self, kind: EntryKind) -> DeterministicHasher {
-        let mut hasher = DeterministicHasher::new();
-        hasher.write_str(MAGIC);
-        hasher.write_str(kind.as_str());
-        hasher.write_u64(FORMAT_VERSION);
-        hasher.write_hash(&self.compiler);
-        hasher
+        self.keys
+            .instance_key(symbol, record_hash, definitions_hash, target)
     }
 
     /// The summary in the check entry `key`, or `None` on a miss.

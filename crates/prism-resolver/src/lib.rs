@@ -13,7 +13,7 @@ pub mod root;
 pub mod scanner;
 
 pub use error::ResolveError;
-pub use graph::{DependencyGraph, SccCluster, SourceNode};
+pub use graph::{DependencyGraph, SccCluster, SourceNode, SourceStore};
 pub use import::{candidate_target_path, resolve_import, resolve_import_with};
 pub use root::{
     absolute_path, discover_root, discover_root_from_segments, discover_root_from_segments_with,

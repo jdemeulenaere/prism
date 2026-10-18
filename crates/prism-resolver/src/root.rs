@@ -144,6 +144,9 @@ pub fn verify_disk_casing_exists(parent: &Path, segment: &str) -> bool {
 #[derive(Debug, Default)]
 pub struct DirectoryListings {
     listings: HashMap<PathBuf, HashSet<OsString>>,
+    /// Files that exist only in a watch session's overlay (D16 of `hot-reload`), which
+    /// resolution treats as present.
+    virtual_files: HashSet<PathBuf>,
 }
 
 impl DirectoryListings {
@@ -151,9 +154,25 @@ impl DirectoryListings {
         Self::default()
     }
 
+    /// Listings in which each of `files` exists besides what is on disk.
+    pub fn with_virtual_files(files: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            listings: HashMap::new(),
+            virtual_files: files.into_iter().collect(),
+        }
+    }
+
+    /// Whether `path` exists only in the overlay these listings were given.
+    pub fn is_virtual_file(&self, path: &Path) -> bool {
+        self.virtual_files.contains(path)
+    }
+
     /// Whether an entry named exactly `segment`, with its exact case, exists inside `parent`, as
     /// [`verify_disk_casing_exists`] checks it.
     pub fn contains(&mut self, parent: &Path, segment: &str) -> bool {
+        if !self.virtual_files.is_empty() && self.virtual_files.contains(&parent.join(segment)) {
+            return true;
+        }
         self.listings
             .entry(parent.to_path_buf())
             .or_insert_with(|| match std::fs::read_dir(parent) {

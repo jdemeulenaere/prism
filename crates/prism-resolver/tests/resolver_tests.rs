@@ -651,3 +651,76 @@ fn test_adv_three_node_mutual_recursion_scc() {
     assert!(sccs[0].files.contains(&b));
     assert!(sccs[0].files.contains(&c));
 }
+
+// ---------------------------------------------------------------------------
+// The source store of a watch session (D9 and D16 of `hot-reload`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_source_store_parses_only_changed_files() {
+    let workspace = TestWorkspace::new("store_parses");
+    workspace.write_file(
+        "lib/math.prism",
+        "package lib\npublic fun twice(n: Int): Int = n * 2\n",
+    );
+    let entry = workspace.write_file(
+        "app/main.prism",
+        "package app\nimport /lib/math\nfun main() { println(twice(1)) }\n",
+    );
+    let mut store = prism_resolver::SourceStore::new();
+    let first = DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
+    assert_eq!(first.len(), 2);
+    assert_eq!(store.parses(), 2);
+    let again = DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
+    assert_eq!(again.len(), 2);
+    assert_eq!(store.parses(), 2, "an unchanged file is not parsed again");
+
+    let math = workspace.path().join("lib/math.prism");
+    std::fs::write(
+        &math,
+        "package lib\npublic fun twice(n: Int): Int = n * 3\n",
+    )
+    .unwrap();
+    assert!(store.has_changed(&math));
+    store.invalidate(std::slice::from_ref(&math));
+    DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
+    assert_eq!(store.parses(), 3, "only the edited file is parsed again");
+    assert!(!store.has_changed(&math));
+    // Rewriting the same content is no change.
+    std::fs::write(
+        &math,
+        "package lib\npublic fun twice(n: Int): Int = n * 3\n",
+    )
+    .unwrap();
+    assert!(!store.has_changed(&math));
+}
+
+#[test]
+fn an_overlay_hides_the_disk_and_can_add_a_file() {
+    let workspace = TestWorkspace::new("store_overlay");
+    let entry = workspace.write_file("main.prism", "fun main() { println(1) }\n");
+    let mut store = prism_resolver::SourceStore::new();
+    DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
+    let entry_path = prism_resolver::absolute_path(&entry);
+    // The overlay imports a file that exists only in the overlay.
+    store.set_overlay(
+        entry_path.clone(),
+        "import helper\nfun main() { println(two()) }\n".to_string(),
+    );
+    store.set_overlay(
+        workspace.path().join("helper.prism"),
+        "package\npublic fun two(): Int = 2\n".replace("package\n", ""),
+    );
+    let graph = DependencyGraph::from_entry_with(&entry, &mut store).unwrap();
+    assert_eq!(graph.len(), 2, "the new import adds a node");
+    assert!(graph
+        .get_node(&entry_path)
+        .unwrap()
+        .source
+        .contains("two()"));
+    assert_eq!(
+        std::fs::read_to_string(&entry).unwrap(),
+        "fun main() { println(1) }\n",
+        "the disk is unchanged"
+    );
+}

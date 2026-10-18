@@ -408,7 +408,7 @@ fn validate_and_extract_abi(
     for cluster in graph.topological_order() {
         for file_path in &cluster.files {
             let node = graph.get_node(file_path).expect("node must exist in graph");
-            let key = cache.map(|cache| file_check_key(cache, graph, &abis, file_path));
+            let key = cache.map(|cache| file_check_key(cache.keys(), graph, &abis, file_path));
             let cached = cache.zip(key.as_ref()).and_then(|(c, k)| c.read_check(k));
 
             let (outcome, summary) = match cached {
@@ -459,7 +459,7 @@ fn validate_and_extract_abi(
 /// The key of the check entry of the file at `file_path`: its module path, its source and its
 /// direct imports' ABI hashes, which cover no body (D3 of `instance-cache`).
 pub(crate) fn file_check_key(
-    cache: &BuildCache,
+    keys: &crate::cache::CacheKeys,
     graph: &DependencyGraph,
     abis: &HashMap<PathBuf, FileAbi>,
     file_path: &Path,
@@ -471,7 +471,16 @@ pub(crate) fn file_check_key(
         .filter_map(|dep| abis.get(dep))
         .map(|abi| abi.abi_hash)
         .collect();
-    cache.check_key(&module_path(node), &node.source, &import_hashes)
+    keys.check_key(&module_path(node), &node.source, &import_hashes)
+}
+
+/// The source of the file at `path` as `graph` read it, which diagnostics show: under a watch
+/// session's overlay it is not what the disk holds (D16 of `hot-reload`).
+pub(crate) fn source_of(graph: &DependencyGraph, path: &Path) -> String {
+    match graph.get_node(path) {
+        Some(node) => node.source.clone(),
+        None => fs::read_to_string(path).unwrap_or_default(),
+    }
 }
 
 /// A file that passed Phase 2: its elaborated MIR, its generic records with their encodings,
@@ -532,7 +541,7 @@ pub(crate) fn elaborate_file(
 ) -> Result<MirFile, WorkspaceError> {
     let (tree, errors) = typecheck_file(graph, abis, file_path);
     if !errors.is_empty() {
-        let source = fs::read_to_string(file_path).unwrap_or_default();
+        let source = source_of(graph, file_path);
         return Err(WorkspaceError::Type {
             path: file_path.to_path_buf(),
             source,
@@ -541,7 +550,7 @@ pub(crate) fn elaborate_file(
     }
     let mir = prism_mir::lower_file(&tree);
     prism_borrowck::check_file(&mir).map_err(|errors| {
-        let source = fs::read_to_string(file_path).unwrap_or_default();
+        let source = source_of(graph, file_path);
         WorkspaceError::Borrow {
             path: file_path.to_path_buf(),
             source,
@@ -569,7 +578,7 @@ pub(crate) fn instance_errors(
             if !in_file.is_empty() {
                 grouped.push(WorkspaceError::Codegen {
                     path: path.clone(),
-                    source: fs::read_to_string(path).unwrap_or_default(),
+                    source: source_of(graph, path),
                     errors: in_file,
                 });
             }
@@ -599,7 +608,7 @@ fn instance_outcomes(
         .map(|instance| InstanceOutcome {
             instance: planned_display(instance),
             reused: cache.zip(target.as_deref()).is_some_and(|(cache, target)| {
-                let key = instance_code_key(cache, instance, &mut hasher, target);
+                let key = instance_code_key(cache.keys(), instance, &mut hasher, target);
                 cache.has_code(EntryKind::Instance, &key)
             }),
         })
@@ -710,7 +719,7 @@ pub(crate) fn extract_abis(
             &definition,
         )
         .map_err(|err| {
-            let source = fs::read_to_string(file_path).unwrap_or_default();
+            let source = node.source.clone();
             WorkspaceError::Abi {
                 path: file_path.clone(),
                 source,
