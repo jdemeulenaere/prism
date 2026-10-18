@@ -249,6 +249,40 @@ fn closures_kept_past_blocks(n: usize) -> String {
     format!("fun main() {{\n{body}    println(total + count)\n}}\n")
 }
 
+/// `n` function-typed `var`s that stay in scope to the end of one body, each re-pointed at a
+/// closure that borrows a counter mutably, then called: `n` capture loans of one place, each
+/// held to the end by a dead local (the loan flow's **Priority** follow-up of
+/// `escaping-closures` in ROADMAP).
+fn handlers_kept_to_end(n: usize) -> String {
+    let mut body = String::from("    var count = 0\n    var total = 0\n");
+    for i in 0..n {
+        writeln!(
+            body,
+            "    var h{i}: () -> Int = {{ 0 }}\n    h{i} = {{ count += 1; 1 }}\n    total += h{i}()"
+        )
+        .unwrap();
+    }
+    format!("fun main() {{\n{body}    println(total + count)\n}}\n")
+}
+
+/// `n` handlers in `val`s, each borrowing a shared counter and a value of its own, all live
+/// until they are called at the end of the body, with a read of the counter after each: `n`
+/// live capture loans of one place, as a composable declaring many handlers holds them.
+fn live_handlers(n: usize) -> String {
+    let mut body = String::from("    var count = 0\n    var total = 0\n");
+    for i in 0..n {
+        writeln!(
+            body,
+            "    val v{i} = {i}\n    val h{i} = {{ count + v{i} }}\n    total += count"
+        )
+        .unwrap();
+    }
+    for i in 0..n {
+        writeln!(body, "    total += h{i}()").unwrap();
+    }
+    format!("fun main() {{\n{body}    println(total)\n}}\n")
+}
+
 /// `n` functions, each calling the one before.
 fn many_functions(n: usize) -> String {
     let mut source = String::from("fun f0(x: Int): Int = x\n");
@@ -501,6 +535,8 @@ fn shapes() -> Vec<Shape> {
             SIZES,
             closures_kept_past_blocks,
         ),
+        shape("handlers-kept-to-end", true, SIZES, handlers_kept_to_end),
+        shape("live-handlers", true, SIZES, live_handlers),
         shape("many-functions", true, SIZES, many_functions),
         shape("public-functions", true, SIZES, public_functions),
         shape("struct-fields", true, SIZES, struct_fields),
