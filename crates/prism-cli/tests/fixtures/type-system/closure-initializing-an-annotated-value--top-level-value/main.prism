@@ -1,0 +1,4 @@
+// expect: ok
+val TWICE: (Int) -> Int = { n -> n * 2 }
+public val LENGTH: (String) -> Int = { s -> s.length }
+fun f(): Int = TWICE(3) + LENGTH("ab")

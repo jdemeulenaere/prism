@@ -2166,27 +2166,18 @@ impl TypeChecker {
         self.file.items.entry(span).or_insert_with(|| item(body));
     }
 
-    /// Checks a top-level variable's initializer. An unannotated private variable takes the
-    /// initializer's type.
+    /// Checks a top-level variable's initializer: against its annotation, which is the
+    /// initializer's expected type (so a closure's parameters take their types from it), as for
+    /// a local `val`. An unannotated private variable takes the initializer's type.
     fn check_top_level_var(&mut self, v: &TopLevelVarDecl) {
         let previous = self.start_body(DeclarationPath::new(self.module_path.clone(), &v.name));
-        let initializer = self.with_consuming(true, |c| c.infer_expr(&v.initializer));
-        let inferred = self.ty(initializer);
         let (ty, value) = if let Some(annot) = &v.ty {
             let expected = self.lower_type(annot);
-            let value = if !inferred.is_assignable_to(&expected) {
-                self.errors.push(TypeError::TypeMismatch {
-                    expected: expected.clone(),
-                    found: inferred.clone(),
-                    span: v.span,
-                    help: None,
-                });
-                self.wrap_error(initializer)
-            } else {
-                self.coerce_to(initializer, &expected)
-            };
+            let value = self.with_consuming(true, |c| c.check_expr(&v.initializer, &expected));
             (expected, value)
         } else {
+            let initializer = self.with_consuming(true, |c| c.infer_expr(&v.initializer));
+            let inferred = self.ty(initializer);
             if v.visibility == Visibility::Private {
                 self.env.update_type(&v.name, inferred.clone());
             }

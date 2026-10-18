@@ -1,0 +1,5 @@
+// expect: ok
+fun f(): Int {
+    val g: (Int) -> Int = { x -> x + 1 }
+    return g(1)
+}

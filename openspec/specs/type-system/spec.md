@@ -387,6 +387,10 @@ A closure parameter MUST get its type from the expected function type, or from i
 - **WHEN** a closure `{ x -> x + 1 }` is passed to a parameter of type `(Int) -> Int`
 - **THEN** `x` has type `Int` and the closure typechecks successfully
 
+#### Scenario: Closure initializing an annotated value
+- **WHEN** a file declares the top-level `val TWICE: (Int) -> Int = { n -> n * 2 }`, or a body declares `val g: (Int) -> Int = { x -> x + 1 }`
+- **THEN** the annotation is the closure's expected type, so `n` and `x` have type `Int` and the file typechecks successfully
+
 ### Requirement: Order-Independent Inference of Private Declarations
 The inferred type of an unannotated private top-level function or variable MUST be the same wherever it is used in the file, regardless of declaration order. A declaration whose inferred type depends on itself MUST be rejected with a cannot-infer error (`E4013`) that asks for an explicit type.
 
