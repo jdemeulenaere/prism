@@ -28,6 +28,8 @@ struct OpenClosure {
     /// to an enclosing scope, so using it is a capture.
     first_local: usize,
     captures: Vec<Capture>,
+    /// The bindings in `captures`, so that recording a use does not cost the captures.
+    captured: HashSet<LocalId>,
 }
 
 /// The arenas of the body being checked, and its open closures and loops.
@@ -119,9 +121,7 @@ impl BodyBuilder {
     /// older than, once per closure, in first-use order (D11).
     pub(crate) fn use_local(&mut self, id: LocalId, span: Span) {
         for closure in &mut self.closures {
-            if (id.0 as usize) < closure.first_local
-                && !closure.captures.iter().any(|c| c.local == id)
-            {
+            if (id.0 as usize) < closure.first_local && closure.captured.insert(id) {
                 closure
                     .captures
                     .push(Capture::whole(id, span, CaptureMode::Borrowed));
@@ -147,6 +147,7 @@ impl BodyBuilder {
         self.closures.push(OpenClosure {
             first_local: self.body.locals.len(),
             captures: Vec::new(),
+            captured: HashSet::new(),
         });
     }
 

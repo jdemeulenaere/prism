@@ -9362,10 +9362,10 @@ impl TypeChecker {
                 Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
                     ty = inner
                 }
+                // By the type table's index of member names, so that a lookup does not cost
+                // the struct's fields.
                 Type::Struct { id, .. } => {
-                    return self
-                        .struct_fields(id)
-                        .is_some_and(|fields| fields.iter().any(|(f, _, _)| f == name))
+                    return !self.is_layout_only(id) && self.types.field_index(id, name).is_some()
                 }
                 // Intrinsic properties read like fields: `length` of a `String`, `size` and
                 // `indices` of a list (D7 of `standard-library`).
@@ -9660,15 +9660,14 @@ impl TypeChecker {
                 self.state_value_node(base, value, span)
             }
             Type::Struct { id, arguments } => {
-                let fields = self
+                let index = self
                     .types
-                    .instantiated_fields(id, arguments)
-                    .unwrap_or_default();
-                let index = fields
-                    .iter()
-                    .position(|(name, _, _)| name == member)
+                    .field_index(id, member)
                     .expect("member_type found the field");
-                let field_ty = fields[index].2.clone();
+                let field_ty = self
+                    .types
+                    .instantiated_field(id, arguments, index)
+                    .expect("member_type found the field");
                 let base = self.as_place(base);
                 let kind = ExpressionKind::Field {
                     base,
