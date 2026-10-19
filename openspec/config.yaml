@@ -31,9 +31,9 @@ context: |
 operations:
   apply:
     guidance:
-      - Before marking the change complete, run cargo fmt --all -- --check, cargo clippy --workspace --all-targets, cargo test --workspace, and prism check on every file under examples/ (only files needing an unbuilt subsystem, such as examples/demo/ui, may fail).
+      - Before marking the change complete, run cargo fmt --all -- --check, cargo clippy --workspace --all-targets, cargo test --workspace, and prism check on every file under examples/, with no exemption.
       - Keep examples/ formatted - run prism fmt --check examples/ (cargo run -q -p prism-cli -- fmt --check examples/) and, if it lists files, format them with prism fmt examples/ and read the diff before committing.
-      - Run the executable examples - prism run --check-allocations examples/run/main.prism (cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism) must exit with status 0, print what its source computes and report no leak or invalid free; prism run on any other file under examples/ must report a diagnostic (E6001 or E6002, or the errors prism check reports) rather than crash.
+      - Run the executable examples - prism run --check-allocations examples/run/main.prism (cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism) must exit with status 0, print what its source computes and report no leak or invalid free; prism run on any other file under examples/ must report a diagnostic (E6001 or E6002, or the errors prism check reports) rather than crash. Each UI entry (examples/apps/counter/main.prism, examples/apps/todo/main.prism, examples/apps/todo/large.prism and examples/demo/ui/ui.prism) must run with prism run --check-allocations --headless <entry> with status 0 and empty stderr, and their sessions (examples/**/sessions/*.events) run in cargo test as example_app_sessions; never run them without --headless, which would open a window.
       - Compile speed is a primary design criterion (user, 2026-10-19). When a change adds or alters a compiler stage or analysis, add its shapes to crates/prism-cli/tests/compile_timing.rs and run PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture; growth must stay roughly linear, and the design must state the stage's cost.
   archive:
     guidance:

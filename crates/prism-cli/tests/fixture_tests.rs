@@ -959,9 +959,9 @@ fn fixture_typed_trees_are_well_formed() {
     );
 }
 
-/// typed-tree: "Error-free trees", over `examples/`. Every example builds a well-formed typed
-/// tree; one that needs an unbuilt subsystem (`examples/demo/ui`) has type errors, so only the
-/// invariants of an erroneous tree are checked for it.
+/// typed-tree: "Error-free trees", over `examples/`. Every example, the UI apps and the tour
+/// included, builds a well-formed, error-free typed tree (`example-apps`, "Every Example Checks,
+/// Is Formatted and Runs").
 #[test]
 fn example_typed_trees_are_well_formed() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -974,10 +974,9 @@ fn example_typed_trees_are_well_formed() {
             Ok(dump) => dump,
             Err(err) => panic!("{}: no typed tree:\n{}", file.display(), err.render()),
         };
-        let needs_unbuilt_subsystem = file.components().any(|c| c.as_os_str() == "ui");
         let error_free = dump.type_errors.is_none();
         assert!(
-            error_free || needs_unbuilt_subsystem,
+            error_free,
             "{}: type errors:\n{}",
             file.display(),
             dump.type_errors.map(|e| e.render()).unwrap_or_default()
@@ -1035,8 +1034,7 @@ fn fixture_mir_is_well_formed() {
     );
 }
 
-/// mir: "Error-free MIR", over `examples/`: every example that typechecks lowers to well-formed
-/// MIR (`examples/demo/ui` needs an unbuilt subsystem).
+/// mir: "Error-free MIR", over `examples/`: every example lowers to well-formed MIR.
 #[test]
 fn example_mir_is_well_formed() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -1044,9 +1042,6 @@ fn example_mir_is_well_formed() {
     prism_files(&examples, &mut files);
     let mut violations = Vec::new();
     for file in &files {
-        if file.components().any(|c| c.as_os_str() == "ui") {
-            continue;
-        }
         let mir = match prism_cli::dump_mir(file) {
             Ok(dump) => dump.mir,
             Err(err) => panic!("{}: no MIR:\n{}", file.display(), err.render()),
@@ -1128,9 +1123,8 @@ fn fixture_elaborated_mir_is_well_formed() {
     );
 }
 
-/// mir: "Error-free MIR", after borrow checking, over `examples/`: every example except those
-/// needing an unbuilt subsystem (`examples/demo/ui`) elaborates to well-formed MIR whose drops
-/// verify.
+/// mir: "Error-free MIR", after borrow checking, over `examples/`: every example elaborates to
+/// well-formed MIR whose drops verify.
 #[test]
 fn example_elaborated_mir_is_well_formed() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -1138,9 +1132,6 @@ fn example_elaborated_mir_is_well_formed() {
     prism_files(&examples, &mut files);
     let mut violations = Vec::new();
     for file in &files {
-        if file.components().any(|c| c.as_os_str() == "ui") {
-            continue;
-        }
         let mir = match prism_cli::dump_elaborated_mir(file) {
             Ok(dump) => dump.mir,
             Err(err) => panic!("{}: no elaborated MIR:\n{}", file.display(), err.render()),

@@ -1,0 +1,91 @@
+// The todo app's model: its items, its filters, and a state holder of four state handles with
+// the operations the screen's handlers call, as Compose hoists state into a remembered holder.
+package apps.todo
+
+// One item: its identifier, which keys its row, its title and whether it is done.
+package struct Todo {
+    val id: Int
+    val title: String
+    var done: Bool
+}
+
+// Which items the list shows.
+package enum Filter : Copy {
+    All
+    Active
+    Done
+}
+
+// Whether this filter shows `todo`.
+package fun Filter.shows(todo: &Todo): Bool = when (this) {
+    Filter.All -> true
+    Filter.Active -> !todo.done
+    Filter.Done -> todo.done
+}
+
+// The app's state: the items, the text field's draft, the selected filter and the next
+// identifier. It holds handles only, so it is `Copy` and every composable and handler can take
+// it by value.
+package struct TodoState : Copy {
+    val todos: MutableState<List<Todo>>
+    val draft: MutableState<String>
+    val filter: MutableState<Filter>
+    val nextId: MutableState<Int>
+}
+
+// A state holding `items`, the next identifier after theirs, an empty draft and every item
+// shown.
+package fun todoState(items: List<Todo>): TodoState {
+    val nextId = items.size + 1
+    return TodoState(
+        todos = mutableStateOf(items),
+        draft = mutableStateOf(""),
+        filter = mutableStateOf(Filter.All),
+        nextId = mutableStateOf(nextId),
+    )
+}
+
+// Adds an item, not done, titled by the draft, and clears the draft; an empty draft adds
+// nothing.
+package fun TodoState.add(): Unit {
+    val title = draft.read { it.clone() }
+    if (title.length == 0) {
+        return
+    }
+    val id = nextId.value
+    nextId.value = id + 1
+    todos.edit { it.add(Todo(id, title.clone(), false)) }
+    draft.value = ""
+}
+
+// Marks the item `id` done or not.
+package fun TodoState.setDone(id: Int, done: Bool): Unit {
+    todos.edit { list ->
+        val index = list.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            list[index].done = done
+        }
+    }
+}
+
+// Removes the item `id`, keeping the others in order.
+package fun TodoState.remove(id: Int): Unit {
+    todos.edit { list ->
+        val index = list.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            list.removeAt(index)
+        }
+    }
+}
+
+// How many items are not done.
+package fun TodoState.activeCount(): Int = todos.read { list -> list.count { !it.done } }
+
+// `count` items titled `Item 1` to `Item <count>`, every third one done.
+package fun sampleTodos(count: Int): List<Todo> {
+    var todos: List<Todo> = listOf()
+    for (n in 1..count) {
+        todos.add(Todo(n, "Item $n", n % 3 == 0))
+    }
+    return todos
+}

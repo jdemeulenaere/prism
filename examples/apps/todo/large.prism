@@ -1,0 +1,18 @@
+// The todo app's screen over 1,000 sample items, every third one done, for measuring frames:
+// `prism run --frame-stats examples/apps/todo/large.prism` in a window, and the benchmark
+// `crates/prism-cli/tests/app_frame_timing.rs` headless.
+package apps.todo
+
+import model
+import screen
+import /prism/compose/ui
+
+// The screen over 1,000 items.
+compose fun LargeTodoApp() {
+    val state = remember { todoState(sampleTodos(1000)) }
+    TodoScreen(state)
+}
+
+fun main() {
+    runApp(title = "Todo: 1,000 items", width = 800, height = 600) { LargeTodoApp() }
+}

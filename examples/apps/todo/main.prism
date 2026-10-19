@@ -1,0 +1,12 @@
+// A todo list: type a title and press `Add`, check items off, remove them and filter them.
+// Run it in a window with `prism run examples/apps/todo/main.prism`, headless with
+// `prism run --headless --events <script> examples/apps/todo/main.prism`, and with hot reload
+// under `prism run --watch examples/apps/todo/main.prism`.
+package apps.todo
+
+import screen
+import /prism/compose/ui
+
+fun main() {
+    runApp(title = "Todo", width = 480, height = 640) { TodoApp() }
+}

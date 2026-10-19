@@ -1,0 +1,26 @@
+// A counter, as Jetpack Compose's own first sample: a button counts its clicks and a second
+// one resets the count, disabled while it is zero. Run it in a window with
+// `prism run examples/apps/counter/main.prism`, headless with
+// `prism run --headless --events <script> examples/apps/counter/main.prism`, and with hot
+// reload under `prism run --watch examples/apps/counter/main.prism`.
+package apps.counter
+
+import /prism/compose/ui
+import /prism/compose/layout
+import /prism/compose/material3
+
+compose fun Counter() {
+    val count = remember { mutableStateOf(0) }
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { count.value += 1 }) {
+            Text("Count: ${count.value}")
+        }
+        Button(onClick = { count.value = 0 }, enabled = count.value > 0) {
+            Text("Reset")
+        }
+    }
+}
+
+fun main() {
+    runApp(title = "Counter", width = 320, height = 200) { Counter() }
+}
