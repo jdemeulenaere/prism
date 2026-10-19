@@ -394,6 +394,8 @@ How they are measured:
 
 The spec's scenario "Rasterization benchmark" asks for the 1,000-node lists under 4 ms at scale 2, stricter than the 8 ms above, and the benchmark asserts the spec's target. Medians at apply time (release build, 2026-10-19, macOS 27 on arm64, warm glyph cache; cold in parentheses): the counter frame, rasterized and converted into a surface buffer, 0.085 ms (0.26) at scale 1 and 0.33 ms (1.06) at scale 2; the grid of 1,000 nodes 0.18 ms (0.30) at scale 1 and 0.43 ms (0.55) at scale 2, of 10,000 nodes 0.97 and 1.48 ms, growth ×5.3 and ×3.4; the todo column of 1,000 nodes 0.072 and 0.19 ms, of 10,000 nodes 0.49 and 0.60 ms, growth ×6.8 and ×3.1. The clear and the conversion of 1.9 million pixels at scale 2 take most of a frame, and every target is met by a factor of ten or more, so damage regions are not needed.
 
+**Integration (task 7.1, 2026-10-19, after the CLI was wired).** The smoke test, rerun with `PRISM_WINDOW_TESTS=1` now that `target/debug/deps` was cleaned (15,000 entries instead of 620,000): the first frame 204 ms after `try_open` with a median frame of 0.51 ms in debug, and 73 to 88 ms with a median frame of 0.13 to 0.15 ms in release. The startup benchmark's medians are in D4: total to `main` 10.40 ms cold and 2.00 ms warm, under the 15 ms target, and the wall time 0.4 ms above a build without the feature.
+
 Compile-time cost: no new compiler stage, analysis, MIR or backend work. Building `prism` cold compiles the crates of D2. An incremental rebuild after a compiler edit relinks a larger `prism`: task 1.3 measures both.
 
 ### D20. A new `desktop` capability, and how the change is tested
@@ -417,6 +419,23 @@ The window is a host of the toolkit, not a toolkit feature, so it gets its own c
   - drops the host and checks that the window closes and `serve` returns within 1 s.
 - **The CLI test** `crates/prism-cli/tests/screenshot.rs` covers the execution scenarios.
 - **The manual checklist** (tasks, group 8) covers what no test can: real clicks, typing, live resizing, moving between displays, closing shortcuts, and idle CPU.
+
+## Manual verification
+
+Task group 8, on 2026-10-19, on an Apple-silicon Mac (macOS 27, arm64) with one external 2560 × 1440 display at scale 1, using release builds of `prism`. The display was locked for the whole session (`CGSSessionScreenIsLocked`), with no person at the machine, so the screen could not be captured and no click, key or window drag could reach the window: posted input goes to the login window, and nothing was typed for that reason. What could be checked without a person:
+
+| Check | Result |
+|---|---|
+| 8.1 The counter program opens a window | Partly. `prism run --check-allocations` on the counter program (the `ui` spec's counter screen in `runApp(title = "Counter", width = 400, height = 300)`) opened an on-screen, layer-0 window owned by the process (`CGWindowListCopyWindowInfo`). Its title is not readable without the screen-recording permission; the smoke test checks the title and the inner size through `winit`. Clicks and Retina sharpness are not verified: no person, and no Retina display attached. |
+| 8.1 Screenshot | `prism run --check-allocations --headless=200x120 --events <click "+" twice> --screenshot counter.png` on the counter program exits with status 0 after printing `closed`, and the PNG shows `Count: 2` above the purple `+` button, with anti-aliased Inter glyphs and corners. A windowed `--screenshot` is written only when the window closes, so it could not be taken. |
+| 8.2 Closing by the close button, Cmd+W and Cmd+Q | Not verified: needs a person. The close path is covered by the protocol tests (`Close` ends the app) and the smoke test (dropping the host closes the window and `serve` returns). |
+| 8.3 Two apps in sequence | Not verified through the CLI, since the first window cannot be closed; the smoke test opens two windows one after the other through the host API, on one event loop. |
+| 8.4 Typing, live resizing, moving between displays | Not verified: needs a person and a second display at another scale. |
+| 8.5 An idle window uses no CPU | Verified. With the counter window open, the process's CPU time stayed at 0.11 s over 10 s (`ps`), `top` showed 0.0 % with its 5 threads sleeping. |
+| 8.6 `--watch` with a window, and a runtime error in a handler | Not verified: needs a click and a close. The watch session's tests pass through the new `watch-session` thread and server. |
+| 8.7 Linux | No Linux machine with X11 or Wayland was available. |
+
+The unchecked items of group 8 stay open until someone runs them at the machine.
 
 ## Risks / Trade-offs
 

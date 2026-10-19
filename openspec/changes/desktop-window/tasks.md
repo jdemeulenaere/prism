@@ -106,7 +106,7 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
 
 ## 7. Integration checks
 
-- [ ] 7.1 Run the integration checks:
+- [x] 7.1 Run the integration checks:
   - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings) and `cargo test --workspace`;
   - `cargo run -q -p prism-cli -- check` on every file under `examples/`, and `cargo run -q -p prism-cli -- fmt --check examples/`;
   - `cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism`, which must behave as before;
@@ -118,13 +118,13 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
 
 Each check runs a release build of `prism` and is recorded, with the date and the machine, in design.md under a new "Manual verification" section.
 
-- [ ] 8.1 `prism run --check-allocations` on the counter program (`ui-toolkit`'s counter screen in `runApp(title = "Counter")`) opens a window titled `Counter`. Clicking `+` counts up, a press on `+` released elsewhere does not, and the text stays sharp on a Retina display.
+- [ ] 8.1 `prism run --check-allocations` on the counter program (the `ui` spec's counter screen in `runApp(title = "Counter")`) opens a window titled `Counter`. Clicking `+` counts up, a press on `+` released elsewhere does not, and the text stays sharp on a Retina display.
 - [ ] 8.2 Closing that window by its close button, by Cmd+W and by Cmd+Q, each in a fresh run, ends `runApp`. A `println("closed")` after it prints, the status is 0, and the allocation check reports nothing ("Statements after runApp run").
 - [ ] 8.3 A program with two `runApp` calls opens the second window after the first closes ("Two apps in sequence").
 - [ ] 8.4 A `TextField` app accepts typed characters, Backspace and key repeat, and ignores Cmd+A and arrows. Live resizing relays out without the window showing stale or stretched content for more than a frame. Moving the window between a Retina display and a scale-1 display keeps the layout and redraws sharply ("Moving to another display").
-- [ ] 8.5 An idle window app uses 0% CPU in Activity Monitor, or `top`, over 10 s.
+- [x] 8.5 An idle window app uses 0% CPU in Activity Monitor, or `top`, over 10 s.
 - [ ] 8.6 `prism run --watch` on the counter program opens the window, and closing it prints `watch: main returned with status 0; waiting for changes` ("A watched window app"). A runtime error in a handler (`Button(onClick = { println(1 / zero()) })`) ends the run with status 101, its message on stderr, and the window gone.
-- [ ] 8.7 On a Linux machine with X11 or Wayland, if one is available, 8.1 and 8.2 behave alike, and without `DISPLAY` and `WAYLAND_DISPLAY` the program ends with `display error: cannot open a window (...)`. If none is available, record that.
+- [x] 8.7 On a Linux machine with X11 or Wayland, if one is available, 8.1 and 8.2 behave alike, and without `DISPLAY` and `WAYLAND_DISPLAY` the program ends with `display error: cannot open a window (...)`. If none is available, record that.
 
 ## Workflow follow-up
 
