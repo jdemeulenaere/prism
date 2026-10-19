@@ -1,0 +1,5 @@
+val Count: MutableState<Int> = mutableStateOf(1)
+fun main() { var i = 0; while (i < 3) { Count.value += 1; println(Count.value); i += 1 } }
+// expect: ok
+// run: 0
+// watch: edits

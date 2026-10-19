@@ -2,9 +2,9 @@
 //!
 //! A **type fingerprint** is a structural BLAKE3 hash of a type: scalars, `String` and `Range`
 //! by tag, references, nullables, boxes and lists by tag and contents, function types by their
-//! parameters, result and compose flag, and structs and enums by qualified name, marker, and
-//! their fields' or variants' names and fingerprints in declaration order, with type arguments
-//! substituted. A definition that reaches itself (through a box or a list) is hashed with a
+//! parameters, result and compose flag, and structs and enums by qualified name, marker, type
+//! arguments, and their fields' or variants' names and fingerprints in declaration order, with
+//! type arguments substituted. A definition that reaches itself (through a box or a list) is hashed with a
 //! back-reference to its position on the stack of definitions being hashed, so cycles end. Two
 //! types with the same fingerprint have the same layout and the same drop, clone and equality
 //! behaviour, and every [`prism_typed_tree::NominalId`] has one definition per program, so the
@@ -200,7 +200,14 @@ impl<'t> TypeFingerprints<'t> {
             Some(prism_ast::TypeMarker::Copy) => 1,
             Some(prism_ast::TypeMarker::Clone) => 2,
         });
+        // The type arguments are hashed whatever the definition says: a struct without fields,
+        // such as an intrinsic state handle, whose one word names a cell of its argument's
+        // type, is a different type for each argument (`State<Int>` is not `State<String>`).
         let mut lowest = usize::MAX;
+        inner.write_u64(arguments.len() as u64);
+        for argument in arguments {
+            lowest = lowest.min(self.hash_type(argument, stack, cycles, &mut inner));
+        }
         match self.types.definition(id) {
             Some(TypeDef::Struct { fields, .. }) => {
                 inner.write_u8(1);
@@ -224,13 +231,7 @@ impl<'t> TypeFingerprints<'t> {
                     }
                 }
             }
-            None => {
-                inner.write_u8(0);
-                inner.write_u64(arguments.len() as u64);
-                for argument in arguments {
-                    lowest = lowest.min(self.hash_type(argument, stack, cycles, &mut inner));
-                }
-            }
+            None => inner.write_u8(0),
         }
         stack.pop();
         let hash = inner.finish();
@@ -437,6 +438,23 @@ mod tests {
                 "P",
                 false
             )
+        );
+    }
+
+    /// `state-handles`: a handle's one word names a cell of its type argument, so handles of
+    /// two value types never share a fingerprint, nor do instances of a struct whose fields do
+    /// not mention its parameter.
+    #[test]
+    fn type_arguments_of_a_struct_without_fields_differ() {
+        let file = lower_source("struct Tag<T> { }\nfun f(a: Tag<Int>, b: Tag<Bool>) {}\n");
+        let tag = |argument: Type| Type::Struct {
+            id: NominalId::new(file.module.clone(), "Tag"),
+            arguments: vec![argument],
+        };
+        let mut fingerprints = TypeFingerprints::new(&file.types);
+        assert_ne!(
+            fingerprints.fingerprint(&tag(Type::Int)),
+            fingerprints.fingerprint(&tag(Type::Bool))
         );
     }
 

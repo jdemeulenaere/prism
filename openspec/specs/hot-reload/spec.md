@@ -63,11 +63,15 @@ A frame that is already running when a reload is applied MUST continue in the co
 - **THEN** stdout holds `2` and `3`
 
 ### Requirement: Slots Record the Contract of Their Code
-Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted.
+Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, type arguments, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted, so two instances of one generic struct differ even when no field mentions the argument, as for a state handle.
 
 #### Scenario: A changed field type keeps old values with old code
 - **WHEN** `struct P { val x: Int }`, `fun show(p: &P) { println(p.x) }` and `fun main() { val p = P(1); show(p); show(p) }` run under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `struct P { val x: Double }`, `fun show(p: &P) { println(p.x + 0.5) }` and `fun main() { val p = P(1.0); show(p); show(p) }`
 - **THEN** stdout holds `1` and `1`, and stderr notes that the signature of `main::show` changed
+
+#### Scenario: A changed state type keeps old handles with old code
+- **WHEN** `val Count: MutableState<Int> = mutableStateOf(1)` and `fun main() { var i = 0; while (i < 3) { Count.value += 1; println(Count.value); i += 1 } }` run with `--check-allocations` under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `val Count: MutableState<String> = mutableStateOf("a")` and a `main` that writes it
+- **THEN** stdout holds `2`, `3` and `4`, stderr notes that the signatures of `main::Count#init` and `main::Count#get` changed, and the session exits with status 0: the running `main` keeps the handle of its `MutableState<Int>` cell
 
 ### Requirement: Type Fingerprints Depend on the Type Alone
 A type's fingerprint MUST be the same in every unit and in every version of a unit that uses the type: it MUST not depend on the order in which a unit declares or uses its types.

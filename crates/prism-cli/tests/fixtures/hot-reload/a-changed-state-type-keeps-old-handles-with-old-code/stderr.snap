@@ -1,0 +1,4 @@
+reload: applied main.prism
+reload: the signature of main::Count#init changed; code already running keeps calling its previous version
+reload: the signature of main::Count#get changed; code already running keeps calling its previous version
+watch: main returned with status 0; waiting for changes
