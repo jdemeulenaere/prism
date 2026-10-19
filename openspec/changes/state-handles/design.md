@@ -40,6 +40,7 @@ What exists today, beyond those packets:
 - **Error codes.** `E4030` is `compose-transform`'s and `E4034` `receiver-lambdas`', which skipped `E4031` to `E4033` for this change, so they stay as planned.
 - **The prelude requirement.** compose's "The Compose Prelude" lists the module's names, so this change modifies it to add the state names.
 - **Returned borrows.** A body returns a borrow only when it writes one (`&u.name`; no implicit borrow converts a place to a returned `&T`), so "A composable returns a borrow of a state's value" writes `&s.value`. The borrow checker already lets it pass: the reference `state read` gives comes from a call with no input borrow and carries no loan, so `returns.rs` needs no case of its own (D18).
+- **Backend dumps.** `prism dump-layout` shows an intrinsic struct's one word as a hidden `handle: Int` field, which also gives handles word-copy clone and word-compare equality without glue of their own, so `layout.rs` and `glue.rs` needed no case for handles; `prism dump-clif` prints functions only, so "Records of a unit's cells" checks the records `main` refers to and the glue the unit defines. The support check accepts `MutableState<T>` to `State<T>` as a conversion that keeps the word.
 - **`ui-toolkit`.** Its `prism-ui/src/runtime.rs` stands in for `Composition::run_handler` with a plain call; this change makes it call the real one.
 
 ## Goals / Non-Goals

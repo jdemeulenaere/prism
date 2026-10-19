@@ -159,6 +159,93 @@ fn dumping_a_file_s_ir() {
     assert_eq!(stderr(&first), "");
 }
 
+/// code-generation: "A read in the IR dump" (`state-handles`): a read of a state calls its
+/// entry with the handle and the record of `Int`, tests the result for null, and on null calls
+/// `prism_compose_state_error` with the location of `s.value` from a cold block.
+#[test]
+fn a_read_in_the_ir_dump() {
+    let directory = single_file("state_read", "fun f(s: State<Int>): Int = s.value\n");
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let ir = function_ir(&dump, "main::f");
+    assert!(ir.contains("symbol %\"main#slot-type(Int)\""), "{}", ir);
+    let read = ir
+        .lines()
+        .find(|line| line.contains("= %\"prism_compose_state_read\""))
+        .and_then(|line| line.trim().split(' ').next())
+        .unwrap_or_else(|| panic!("no state read in\n{}", ir));
+    assert!(ir.contains(&format!("= call {}(", read)), "{}", ir);
+    assert!(ir.contains("icmp eq"), "the result is tested: {}", ir);
+    let error = ir
+        .lines()
+        .find(|line| line.contains("= %\"prism_compose_state_error\""))
+        .and_then(|line| line.trim().split(' ').next())
+        .unwrap_or_else(|| panic!("no state error in\n{}", ir));
+    let cold = ir
+        .split("cold:")
+        .skip(1)
+        .find(|block| block.contains(&format!("call {}(", error)))
+        .unwrap_or_else(|| panic!("no cold block calling the error in\n{}", ir));
+    // The location of `s.value`: line 1, column 29.
+    assert!(
+        cold.contains("iconst.i32 1\n") && cold.contains("iconst.i32 29\n"),
+        "{}",
+        cold
+    );
+}
+
+/// code-generation: "Records of a unit's cells" (`state-handles`): the unit has one slot type
+/// record for each cell type, and the equality and drop glue they name.
+#[test]
+fn records_of_a_unit_s_cells() {
+    let directory = single_file(
+        "state_records",
+        "fun main() { val s = mutableStateOf(\"a\"); val l = mutableStateOf(listOf(1)); s.value = \"b\"; l.value = listOf(2) }\n",
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let main = function_ir(&dump, "main::main");
+    for record in ["main#slot-type(String)", "main#slot-type(List<Int>)"] {
+        assert_eq!(
+            main.matches(&format!("symbol %\"{}\"", record)).count(),
+            1,
+            "{}",
+            main
+        );
+    }
+    for glue in [
+        "main#equals(String)",
+        "main#equals(List<Int>)",
+        "main#drop(List<Int>)",
+    ] {
+        assert!(
+            dump.contains(&format!("function {}\n", glue)),
+            "{} in\n{}",
+            glue,
+            dump
+        );
+    }
+}
+
+/// standard-library: "State handles need no import" (`state-handles`): the ABI writes the
+/// handle type of an exported signature by name.
+#[test]
+fn state_handles_need_no_import() {
+    let directory = single_file(
+        "state_abi",
+        "compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }\npublic fun counter(): MutableState<Int> = mutableStateOf(0)\n",
+    );
+    let output = prism(&["abi", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("  public fun counter(): MutableState<Int>\n"),
+        "{}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn dumping_a_file_the_backend_rejects() {
     let directory = single_file("dump_rejected", "fun first(w: Widget): Int = 1\n");

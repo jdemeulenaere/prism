@@ -1831,10 +1831,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 self.composer_call(operation, arguments, parameters, destination, span)?
             }
             Callee::State(operation) => {
-                return Err(BackendError::new(format!(
-                    "the state operation {} is not lowered yet",
-                    operation.name()
-                )))
+                self.state_call(*operation, arguments, type_arguments, destination, span)?
             }
         }
         self.finish_call(target)
@@ -1993,6 +1990,112 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Operation::Invalidate => {
                 let scope = handle(self, 0)?;
                 self.call_runtime("prism_compose_invalidate", &[scope])?;
+            }
+            Operation::BeginRemember | Operation::EndRemember => {
+                let composer = word(self, 0)?;
+                let name = match operation {
+                    Operation::BeginRemember => "prism_compose_begin_remember",
+                    _ => "prism_compose_end_remember",
+                };
+                self.call_runtime(name, &[composer])?;
+            }
+            Operation::SideEffect => {
+                let composer = word(self, 0)?;
+                let effect = self.slot_value(&arguments[1], &parameters[1], span)?;
+                self.call_runtime("prism_compose_side_effect", &[composer, effect])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A call of a state operation (D19 of `state-handles`): a direct call of the compose
+    /// runtime's state entry point with the handle word, the slot type record of the value
+    /// type and, for a value moving in or out, its address, followed by the failure test of
+    /// D14: on a failure result, a cold block calls `prism_compose_state_error` with the
+    /// operation's location.
+    fn state_call(
+        &mut self,
+        operation: prism_mir::StateOperation,
+        arguments: &[Operand],
+        type_arguments: &[Type],
+        destination: &Place,
+        span: Span,
+    ) -> Result<(), BackendError> {
+        use prism_mir::StateOperation as Operation;
+        let value_type = type_arguments
+            .first()
+            .ok_or_else(|| BackendError::new("a state operation without its value type"))?
+            .clone();
+        let record = self.context.slot_type(&value_type)?;
+        let record = self.data(record);
+        // The handle word of a handle operand, in memory or in a register.
+        let handle = |lowering: &mut Self| -> Result<Value, BackendError> {
+            let operand = arguments
+                .first()
+                .ok_or_else(|| BackendError::new("a state operation without its handle"))?;
+            Ok(match lowering.operand(operand, span)? {
+                Lowered::Memory(address) => {
+                    lowering
+                        .builder
+                        .ins()
+                        .load(types::I64, aligned(), address, 0)
+                }
+                Lowered::Scalar(word) => word,
+                Lowered::Empty => return Err(BackendError::new("a state handle without a word")),
+            })
+        };
+        let fail_on_zero = |lowering: &mut Self, result: Value| -> Result<(), BackendError> {
+            let failed = lowering.builder.ins().icmp_imm_s(IntCC::Equal, result, 0);
+            lowering.fail_if(failed, &[], span, |lowering, _, location| {
+                lowering.call_runtime("prism_compose_state_error", &location)?;
+                Ok(())
+            })
+        };
+        match operation {
+            Operation::Create => {
+                let value = self.slot_value(&arguments[0], &value_type, span)?;
+                let created = self.call_runtime("prism_compose_state_create", &[record, value])?[0];
+                fail_on_zero(self, created)?;
+                let destination = self.address(destination)?;
+                self.builder.ins().store(aligned(), created, destination, 0);
+            }
+            Operation::Read | Operation::BeginRead | Operation::BeginEdit => {
+                let handle = handle(self)?;
+                let name = match operation {
+                    Operation::Read => "prism_compose_state_read",
+                    Operation::BeginRead => "prism_compose_state_begin_read",
+                    _ => "prism_compose_state_begin_edit",
+                };
+                let address = self.call_runtime(name, &[handle, record])?[0];
+                fail_on_zero(self, address)?;
+                self.write_place(destination, Lowered::Scalar(address), false)?;
+            }
+            Operation::Write | Operation::Put => {
+                let handle = handle(self)?;
+                let value = self.slot_value(&arguments[1], &value_type, span)?;
+                let name = match operation {
+                    Operation::Write => "prism_compose_state_write",
+                    _ => "prism_compose_state_put",
+                };
+                let status = self.call_runtime(name, &[handle, record, value])?[0];
+                fail_on_zero(self, status)?;
+            }
+            Operation::Take => {
+                let handle = handle(self)?;
+                let temporary = self.temporary(&value_type)?;
+                let status =
+                    self.call_runtime("prism_compose_state_take", &[handle, record, temporary])?[0];
+                fail_on_zero(self, status)?;
+                let value = self.read_location(Location::Memory(temporary), &value_type)?;
+                self.write_place(destination, value, false)?;
+            }
+            Operation::EndRead | Operation::EndEdit => {
+                let handle = handle(self)?;
+                let name = match operation {
+                    Operation::EndRead => "prism_compose_state_end_read",
+                    _ => "prism_compose_state_end_edit",
+                };
+                self.call_runtime(name, &[handle, record])?;
             }
         }
         Ok(())

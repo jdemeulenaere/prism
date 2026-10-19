@@ -312,7 +312,11 @@ mod tests {
                 "composition misuse: group left open",
             ),
             (PanicKind::StaleStateHandle, "", "stale state handle"),
-            (PanicKind::StateBorrowed, "", "state accessed while borrowed"),
+            (
+                PanicKind::StateBorrowed,
+                "",
+                "state accessed while borrowed",
+            ),
             (
                 PanicKind::StateWrittenDuringComposition,
                 "",

@@ -773,6 +773,22 @@ impl<'a> Rewriter<'a> {
                 span,
             ),
             BuiltinFunction::Key => self.key(arguments, target, span),
+            // A side effect is moved to the composition's queue (D13 of `state-handles`).
+            BuiltinFunction::SideEffect => {
+                let composer = self.composer();
+                let mut arguments = arguments;
+                arguments.insert(0, composer);
+                let mut parameters = parameters;
+                parameters.insert(0, Type::Int);
+                self.operation(
+                    ComposerOperation::SideEffect,
+                    arguments,
+                    parameters,
+                    destination,
+                    span,
+                );
+                self.goto(target, span);
+            }
             BuiltinFunction::CurrentRecomposeScope => {
                 let composer = self.composer();
                 self.operation(
@@ -883,6 +899,17 @@ impl<'a> Rewriter<'a> {
             Type::Fn { params, .. } => params.clone(),
             _ => Vec::new(),
         };
+        // The window whose state cells belong to the slot written below (D11 of
+        // `state-handles`).
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::BeginRemember,
+            vec![composer],
+            vec![Type::Int],
+            unit,
+            span,
+        );
         self.call(
             Callee::Value(Place::local(calculation), span),
             Vec::new(),
@@ -900,6 +927,15 @@ impl<'a> Rewriter<'a> {
             ComposerOperation::SetSlot(value_type.clone()),
             vec![composer, self.copy(value)],
             vec![Type::Int, value_type],
+            unit,
+            span,
+        );
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::EndRemember,
+            vec![composer],
+            vec![Type::Int],
             unit,
             span,
         );

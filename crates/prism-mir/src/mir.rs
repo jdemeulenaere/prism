@@ -948,6 +948,15 @@ pub enum ComposerOperation {
     Dump,
     /// `(&RecomposeScope)`: invalidates a scope.
     Invalidate,
+    /// `(composer)`: before a `remember` calculation that runs, opens the window whose state
+    /// cells belong to the slot the result is stored in (D11 of `state-handles`).
+    BeginRemember,
+    /// `(composer)`: after the result's slot is written, closes the window and attaches its
+    /// cells to that slot.
+    EndRemember,
+    /// `(composer, effect moved)`: queues a side effect, a `() -> Unit` function value, to run
+    /// after the pass (D13 of `state-handles`).
+    SideEffect,
 }
 
 impl ComposerOperation {
@@ -973,6 +982,9 @@ impl ComposerOperation {
             ComposerOperation::Recompose => "recompose",
             ComposerOperation::Dump => "dump",
             ComposerOperation::Invalidate => "invalidate",
+            ComposerOperation::BeginRemember => "begin_remember",
+            ComposerOperation::EndRemember => "end_remember",
+            ComposerOperation::SideEffect => "side_effect",
         }
     }
 

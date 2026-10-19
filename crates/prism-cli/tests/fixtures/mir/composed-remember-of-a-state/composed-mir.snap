@@ -1,0 +1,94 @@
+module main
+phase composed
+compose composed skippable fun main::C(_1: Int, _2: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 $changed: Int (argument)
+  local _3 s: MutableState<Int> (user)
+  local _4: () -> MutableState<Int> (temporary)
+  local _5: Bool (temporary)
+  local _6: MutableState<Int> (temporary)
+  local _7: Unit (temporary)
+  local _8: Int (temporary)
+  local _9: Int (temporary)
+  local _10: Bool (temporary)
+  local _11: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _5 @2:1
+    storage_live _6 @2:1
+    storage_live _7 @2:1
+    storage_live _8 @2:1
+    storage_live _9 @2:1
+    storage_live _10 @2:1
+    storage_live _11 @2:1
+    _7 = call composer start_restart_group key 0x2e2eed955fc758e4 /* body main::C */(copy _1) -> bb10 @2:1
+  bb1:
+    storage_dead _4 @3:5
+    _0 = const () @2:17
+    storage_dead _3 @4:1
+    goto -> bb2 @2:1
+  bb2:
+    _11 = closure main::C#restart [] @2:1
+    _7 = call composer end_restart_group(copy _1, move _11) -> bb17 @2:1
+  bb3:
+    _3 = remembered<prism/compose/runtime::MutableState<Int>>(copy _1) -> [found: bb5, missing: bb4] @3:13
+  bb4:
+    _7 = call composer begin_remember(copy _1) -> bb6 @3:13
+  bb5:
+    drop _4 -> bb1 @3:13
+  bb6:
+    _6 = call _4() -> bb7 @3:13
+  bb7:
+    _3 = copy _6 @3:13
+    _7 = call composer set_slot<prism/compose/runtime::MutableState<Int>>(copy _1, copy _6) -> bb8 @3:13
+  bb8:
+    _7 = call composer end_remember(copy _1) -> bb9 @3:13
+  bb9:
+    goto -> bb5 @3:13
+  bb10:
+    _8 = const 0 @2:1
+    _8 = bits copy _8 & const 4 @2:1
+    _9 = bits copy _2 & const 1 @2:1
+    switch copy _9 [0 -> bb12, otherwise -> bb11] @2:1
+  bb11:
+    storage_live _3 @3:5
+    storage_live _4 @3:22
+    _4 = closure main::C#closure0 [] @3:22
+    _5 = const false @3:13
+    switch copy _5 [0 -> bb3, otherwise -> bb4] @2:1
+  bb12:
+    switch copy _8 [0 -> bb13, otherwise -> bb11] @2:1
+  bb13:
+    _10 = call composer skipping(copy _1) -> bb15 @2:1
+  bb14:
+    _7 = call composer skip_to_group_end(copy _1) -> bb16 @2:1
+  bb15:
+    switch copy _10 [0 -> bb11, otherwise -> bb14] @2:1
+  bb16:
+    goto -> bb2 @2:1
+  bb17:
+    storage_dead _11 @2:1
+    storage_dead _10 @2:1
+    storage_dead _9 @2:1
+    storage_dead _8 @2:1
+    storage_dead _7 @2:1
+    storage_dead _6 @2:1
+    storage_dead _5 @2:1
+    return @2:1
+closure main::C#closure0(): MutableState<Int> @3:22
+  local _0: MutableState<Int> (return)
+  local _1: Int (temporary)
+  bb0:
+    storage_live _1 @3:39
+    _1 = const 0 @3:39
+    _0 = call state create<Int>(move _1) -> bb1 @3:24
+  bb1:
+    storage_dead _1 @3:24
+    return @3:22
+closure main::C#restart(_1: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  bb0:
+    _0 = call compose main::C(copy _1, const 1) -> bb1 @2:1
+  bb1:
+    return @2:1

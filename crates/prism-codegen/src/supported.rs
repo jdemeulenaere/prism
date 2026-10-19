@@ -43,8 +43,6 @@ pub enum Construct {
     /// A value of an opaque type, which names no declaration, or of a struct or enum whose
     /// definition the file does not know.
     UnknownType(String),
-    /// A state operation, which the backend lowers from task group 7 of `state-handles` on.
-    StateOperation(String),
 }
 
 impl Construct {
@@ -58,7 +56,6 @@ impl Construct {
                 format!("conversions from '{}' to '{}'", from, to)
             }
             Construct::UnknownType(name) => format!("values of unknown type '{}'", name),
-            Construct::StateOperation(name) => format!("the state operation '{}'", name),
         }
     }
 
@@ -68,7 +65,6 @@ impl Construct {
             Construct::Conversion { .. }
             | Construct::UnknownType(_)
             | Construct::TypeParameter(_) => None,
-            Construct::StateOperation(_) => Some("state-handles"),
         }
     }
 
@@ -233,6 +229,13 @@ pub fn is_lowered_subtype(from: &Type, to: &Type) -> bool {
     match (from, to) {
         (Type::Nothing, _) => true,
         (Type::Nullable(inner), Type::Nullable(_)) if **inner == Type::Nothing => true,
+        // A `MutableState<T>` read as a `State<T>` keeps its one word (D3 of `state-handles`).
+        (Type::Struct { id: from_id, .. }, Type::Struct { id, .. })
+            if from_id.intrinsic().is_some_and(|i| i.is_state_handle())
+                && id.intrinsic().is_some_and(|i| i.is_state_handle()) =>
+        {
+            true
+        }
         _ if from.is_function_value() => to.is_function_value() && from.converts_in_place(to),
         _ => matches!(
             (representation(from, pointer), representation(to, pointer)),
@@ -362,14 +365,12 @@ impl BodyChecker<'_> {
             } => {
                 let callee_place = match callee {
                     Callee::Value(place, _) => self.place(place),
-                    Callee::State(operation) => {
-                        Some(Construct::StateOperation(operation.name().to_string()))
-                    }
                     Callee::Builtin(_)
                     | Callee::Function(_)
                     | Callee::External(_)
                     | Callee::Default { .. }
-                    | Callee::Composer(_) => None,
+                    | Callee::Composer(_)
+                    | Callee::State(_) => None,
                 };
                 callee_place
                     .or_else(|| arguments.iter().find_map(|argument| self.operand(argument)))

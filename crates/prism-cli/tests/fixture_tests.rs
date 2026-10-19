@@ -534,6 +534,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
     "a-skippable-body-and-its-restart-closure",
     "the-adapter-of-a-composition",
     "dumping-composed-mir",
+    "composed-remember-of-a-state",
 ];
 
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of
@@ -541,6 +542,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
 /// a layout yet".
 const LAYOUT_SCENARIOS: &[&str] = &[
     "layout-of-a-composition",
+    "layout-of-a-state-handle",
     "value-struct-definition",
     "fields-ordered-by-alignment",
     "payload-free-enum",

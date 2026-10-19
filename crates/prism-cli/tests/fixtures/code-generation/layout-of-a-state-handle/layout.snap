@@ -1,0 +1,4 @@
+struct main::Todo (size 32, align 8)
+  title: String at 0
+struct prism/compose/runtime::MutableState<List<Todo>> : Copy (size 8, align 8)
+  handle: Int at 0

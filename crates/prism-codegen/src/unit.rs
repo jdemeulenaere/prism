@@ -481,6 +481,8 @@ impl<'m, M: Module> UnitContext<'m, M> {
             Some(_) => Some(self.runtime_function("prism_rt_register_top_level_value")?),
             None => None,
         };
+        let begin_program = self.runtime_function("prism_compose_begin_program")?;
+        let end_program = self.runtime_function("prism_compose_end_program")?;
         {
             let pointer = self.pointer;
             let mut builder = FunctionBuilder::new(&mut function, builder_context);
@@ -519,6 +521,12 @@ impl<'m, M: Module> UnitContext<'m, M> {
             builder.switch_to_block(initialize);
             let marker = builder.ins().iconst(types::I8, state::INITIALIZING);
             builder.ins().store(flags, marker, state_address, 0);
+            // The initializer is program code: the state cells it creates belong to the
+            // program, even when it first runs during a pass (D11 of `state-handles`).
+            let begin_program = self
+                .module
+                .declare_func_in_func(begin_program, builder.func);
+            builder.ins().call(begin_program, &[]);
             let slot_address = data_address(&mut builder, initializer, pointer);
             let target = builder.ins().load(pointer, flags, slot_address, 0);
             let signature_ref = builder.import_signature(initializer_signature);
@@ -545,6 +553,8 @@ impl<'m, M: Module> UnitContext<'m, M> {
                     .ins()
                     .call(register, &[storage_address, glue_address]);
             }
+            let end_program = self.module.declare_func_in_func(end_program, builder.func);
+            builder.ins().call(end_program, &[]);
             let marker = builder.ins().iconst(types::I8, state::INITIALIZED);
             builder.ins().store(flags, marker, state_address, 0);
             builder.ins().jump(done, &[]);

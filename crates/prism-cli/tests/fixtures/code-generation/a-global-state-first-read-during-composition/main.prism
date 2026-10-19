@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+val Theme: MutableState<Int> = mutableStateOf(3)
+
+compose fun C() {
+    println(Theme.value)
+}
+
+fun main() {
+    val c = composition { C() }
+}

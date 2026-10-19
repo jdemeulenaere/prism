@@ -1122,3 +1122,34 @@ fn composed_bodies_run() {
     assert_eq!(passes(), 1);
     assert_eq!(prism_compose::live_compositions_report(), None);
 }
+
+/// state-handles, task 7.2: state operations run. A handle is created, read, written,
+/// compounded, read through `read`, replaced through `update` and changed in place through
+/// `edit`; an equal write keeps the value.
+#[test]
+fn state_operations_run() {
+    let program = compile(
+        "fun counter(): Int {\n\
+             val s = mutableStateOf(2)\n\
+             s.value = 3\n\
+             s.value += 4\n\
+             s.update { it * 2 }\n\
+             s.value = 14\n\
+             return s.read { it + 1 }\n\
+         }\n\
+         fun list(): Int {\n\
+             val l = mutableStateOf(listOf(1, 2))\n\
+             l.edit { it.add(3) }\n\
+             l.value = listOf(4, 5, 6, 7)\n\
+             return l.read { it.size * 10 + it[0] }\n\
+         }\n",
+    );
+    let counter: extern "C" fn() -> i64 = function(&program, "main::counter");
+    assert_eq!(counter(), 15);
+    let list: extern "C" fn() -> i64 = function(&program, "main::list");
+    assert_eq!(list(), 44);
+    // The cells belong to this thread's program until its finish report frees them.
+    assert!(prism_compose::States::live_cells() >= 2);
+    prism_compose::finish_report();
+    assert_eq!(prism_compose::States::live_cells(), 0);
+}
