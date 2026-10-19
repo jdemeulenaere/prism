@@ -1,0 +1,25 @@
+package run.compose
+
+// A counter for the reference program of `prism run` (examples/run/main.prism). Its label
+// reads a state that a click handler writes, so a click recomposes the label alone: running
+// the composition, clicking twice and recomposing prints `counter 1`, `count 0`, `count 2` and
+// `true`.
+
+// The title of a counter. Its parameter is `Copy`, so it is skippable and runs once.
+public compose fun CounterTitle(n: Int): Unit {
+    println("counter $n")
+}
+
+// The label of a counter: it reads `count`, so writing the state recomposes it.
+public compose fun CounterLabel(count: State<Int>): Unit {
+    println("count ${count.value}")
+}
+
+// A counter of clicks.
+public compose fun Counter(count: State<Int>): Unit {
+    CounterTitle(1)
+    CounterLabel(count)
+}
+
+// The click handler of a counter: it adds one to the count, outside composition.
+public fun clicker(count: MutableState<Int>): () -> Unit = { count.value += 1 }

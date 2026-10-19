@@ -326,6 +326,15 @@ State extends the `compose` capability, so one spec describes what a composable 
 
 Behavior is pinned by executable fixtures under `crates/prism-cli/tests/fixtures/compose/`, `references/`, `type-system/`, `code-generation/` and `execution/`, all under `--check-allocations`, driving compositions from `main` with `composition`, `setContent`, `recompose` and `dump`, `main` and plain closures playing the event handlers. What Prism cannot observe (release while borrowed, release order, deduplication, another thread) is pinned by Rust tests of `prism-compose`.
 
+### Apply notes
+
+Refinements made while implementing, none of which changes a scenario:
+
+- **Where `E4033` is reported.** A read of a non-`Copy` `s.value` outside composable contexts builds its state place and is reported when the body ends, unless a mutable use of the same `s.value` (a `mut fun` call, `&mut`, a part write) was reported first, so `todos.value.add(1)` gets one `E4033` with the help naming `edit` rather than two. Mutable uses are found at the one place every mutable borrow is built, plus the part writes of assignment targets; each costs a walk of the place's projections.
+- **Evaluation order of `s.value = v`.** The handle is evaluated first, then the value, then the write, as Kotlin evaluates `a.b = c`; a compound assignment holds the handle in a temporary once.
+- **Why a closure stored in a state owns its captures.** Its ownership reason is a kind of its own, `StoredInState` ("stored in a state here"), in the typed tree's labels and in `E5007`, rather than reusing "stored in a field".
+- **The receiver of a closure member.** `read`, `update` and `edit` take a shared receiver in the typed tree, as declared; MIR strips the borrow and the conversion and copies the handle word, since every state operation takes the handle by value.
+
 ## Risks / Trade-offs
 
 - **[Two representations of `s.value`]** A copy for `Copy` types and a place for others: a `Copy` struct state is copied whole to read a field. → `Copy` structs are small by construction, and the rule is one marker lookup that users can predict.

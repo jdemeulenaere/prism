@@ -7,9 +7,11 @@
 // cloned, and the bundled library: a struct printed through its `toString()` and the list
 // helpers `map` and `joinToString`. Last, it composes a screen of composables in a
 // composition: the first pass prints both rows, setting the same content again skips them,
-// and a larger step runs both rows again, each still remembering its first count.
+// and a larger step runs both rows again, each still remembering its first count. Then a
+// counter reads a state that its click handler writes twice: recomposing runs its label alone.
 package run
 
+import /run/compose/counter
 import /run/compose/screen
 import /run/generic/labels
 import /run/geometry/shapes
@@ -107,8 +109,15 @@ fun main() {
     println(p)
     println(kept.map { it * 2 }.joinToString { it.toString() })
 
-    val composition = composition(screen(1))
-    composition.setContent(screen(1))
-    composition.setContent(screen(2))
-    println(composition.recompose())
+    val screens = composition(screen(1))
+    screens.setContent(screen(1))
+    screens.setContent(screen(2))
+    println(screens.recompose())
+
+    val clicks = mutableStateOf(0)
+    val counter = composition { Counter(clicks) }
+    val click = clicker(clicks)
+    click()
+    click()
+    println(counter.recompose())
 }

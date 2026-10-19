@@ -464,7 +464,7 @@ fn the_reference_program_runs() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n-3\ntrue\nfalse\n-2\n0\nquadrant 4\n-24\n15 primes up to 50\n15 primes up to 50, 18 characters\n20\n10\ntrue\nprimes: 15\n5\n-1\n60\n18\n-20\n134\nok\nlimit = 50\n5 removed, 4 left, total 154, true\ntrue\n(6, -3)\n202, 20, 34, 52\nrow 1: 1 (first 1)\nrow 2: 2 (first 2)\nrow 1: 2 (first 1)\nrow 2: 4 (first 2)\nfalse\n"
+        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n12\n5050\n735\n0.3333333333333333\n-3\ntrue\nfalse\n-2\n0\nquadrant 4\n-24\n15 primes up to 50\n15 primes up to 50, 18 characters\n20\n10\ntrue\nprimes: 15\n5\n-1\n60\n18\n-20\n134\nok\nlimit = 50\n5 removed, 4 left, total 154, true\ntrue\n(6, -3)\n202, 20, 34, 52\nrow 1: 1 (first 1)\nrow 2: 2 (first 2)\nrow 1: 2 (first 1)\nrow 2: 4 (first 2)\nfalse\ncounter 1\ncount 0\ncount 2\ntrue\n"
     );
     assert_eq!(stderr(&output), "");
 }

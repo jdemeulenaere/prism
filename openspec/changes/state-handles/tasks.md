@@ -65,8 +65,8 @@ Apply note: the executable fixtures that groups 2 to 4 name run only once the ru
 ## 10. Documents and integration
 
 - [x] 10.1 In `openspec/specs/diagnostics/spec.md`, add `E4031` (`StateWriteInComposable`), `E4032` (`UnrememberedState`) and `E4033` (`StateValueOutsideComposable`), extend `E4003`'s meaning with the `value` of a `State<T>`, `E4017`'s with the value of a state and `E4029`'s with writable properties, and add a rationale line: one code per fix (D7).
-- [ ] 10.2 Add `examples/run/compose/counter.prism` with a counter whose label reads a state written from a closure called by `examples/run/main.prism`, recomposed and printed, with the expected output in its comment. Check that `examples/demo/ui` now fails only for names of the toolkit modules (`ui-toolkit` D21).
-- [ ] 10.3 Run the apply guidance of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism`, `prism fmt --check crates/prism-library/prism`, and `openspec validate state-handles --strict`.
+- [x] 10.2 Add `examples/run/compose/counter.prism` with a counter whose label reads a state written from a closure called by `examples/run/main.prism`, recomposed and printed, with the expected output in its comment. Check that `examples/demo/ui` now fails only for names of the toolkit modules (`ui-toolkit` D21).
+- [x] 10.3 Run the apply guidance of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism`, `prism fmt --check crates/prism-library/prism`, and `openspec validate state-handles --strict`.
 
 ## Workflow follow-up
 
