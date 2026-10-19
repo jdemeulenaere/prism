@@ -251,6 +251,7 @@ impl WindowApp {
             if let Some(stamp) = taken {
                 self.statistics
                     .frame_shown(start.elapsed(), stamp.map(|stamp| stamp.elapsed()));
+                self.statistics.frame_text_shown(&self.current.text);
             }
         }
     }

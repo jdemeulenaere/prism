@@ -11,8 +11,9 @@
 //!    is invalid, it runs a pass and then releases the handler entries no node claimed (D23);
 //!    while layout is dirty, it lays out; otherwise it takes the host's next event and
 //!    dispatches it, which a pass and a layout follow before the next event (D14). A frame
-//!    rebuilds the display list when it is stale and presents it; a dump prints; the end of
-//!    events stops. While the app runs, reloads are deferred to that reload point, so none
+//!    rebuilds the display list when it is stale and presents it; a dump prints; a wake-up
+//!    only returns to the top, so a reload that woke the loop is applied and recomposed before
+//!    the frame the host gives after it; the end of events stops. While the app runs, reloads are deferred to that reload point, so none
 //!    lands during a pass, a handler, layout or drawing.
 //! 4. It disposes of the composition, which removes and releases every node, then releases
 //!    the handler table's entries and the tree, and returns.
@@ -385,6 +386,9 @@ impl App {
             }
             HostEvent::Dump(kind) => self.unmeasured(|app| app.print_dump(kind)),
             HostEvent::Script(line) => return self.script(line),
+            // Back to the loop's top, whose reload point and passes run before the frame the
+            // host makes due after a wake-up, so that frame shows the new code.
+            HostEvent::Wake => {}
             input => self.input(input),
         }
         Ok(())
@@ -406,7 +410,9 @@ impl App {
             HostEvent::Resize(width, height) => {
                 with_state(|state| state.tree.resize(width, height))
             }
-            HostEvent::Frame | HostEvent::Dump(_) | HostEvent::Script(_) => return,
+            HostEvent::Frame | HostEvent::Dump(_) | HostEvent::Script(_) | HostEvent::Wake => {
+                return
+            }
         }
         self.record(Stage::Events, started);
         if let Some(statistics) = self.statistics.as_mut() {

@@ -39,6 +39,11 @@ pub enum HostEvent {
     Resize(i64, i64),
     /// A frame is due: rebuild the display list if it is stale, and present it.
     Frame,
+    /// Something outside the host's events wants the loop, such as a pending reload: the loop
+    /// returns to its top, whose reload point applies the reload and whose passes and layout
+    /// follow, before it takes the next event. A host that gives it makes a frame due after
+    /// it, so the frame shows what the wake-up changed without any input.
+    Wake,
     Dump(DumpKind),
     /// A line of an event script, whose text targets the loop resolves against the tree.
     Script(ScriptLine),
@@ -173,7 +178,8 @@ static WAIT_FOR_RELOAD_MILLISECONDS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(10_000);
 
 /// Sets what wakes the running app's host when a reload becomes pending, or removes it: a
-/// window's `WindowHost::wake`, which turns into a frame (`desktop-window` D17).
+/// window's `WindowHost::wake`, which turns into [`HostEvent::Wake`] and then a frame
+/// (`desktop-window` D17).
 pub fn set_reload_waker(waker: Option<fn()>) {
     *RELOAD_WAKER
         .lock()

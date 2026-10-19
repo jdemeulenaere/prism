@@ -58,6 +58,10 @@ pub struct WindowStatistics {
     presented: Mutex<PresentedFrames>,
     window_thread: Mutex<Option<ThreadId>>,
     last_window: Mutex<Option<WindowReport>>,
+    /// Whether the text of each new frame presented is kept, for tests; off, a presented
+    /// frame costs one load for it.
+    record_text: AtomicBool,
+    presented_text: Mutex<String>,
 }
 
 impl Default for WindowStatistics {
@@ -95,6 +99,8 @@ impl WindowStatistics {
             }),
             window_thread: Mutex::new(None),
             last_window: Mutex::new(None),
+            record_text: AtomicBool::new(false),
+            presented_text: Mutex::new(String::new()),
         }
     }
 
@@ -106,6 +112,28 @@ impl WindowStatistics {
         if let Some(input) = input {
             presented.input_to_present.record_duration(input);
         }
+    }
+
+    /// Makes the window keep the text runs of the last new frame of the program it presents
+    /// ([`WindowStatistics::presented_text`]), for tests that check what a window shows.
+    pub fn record_presented_text(&self) {
+        self.record_text.store(true, Ordering::Relaxed);
+    }
+
+    /// Records `text`, the text runs of a new frame of the program the window presented, when
+    /// tests asked for it.
+    pub fn frame_text_shown(&self, text: &str) {
+        if self.record_text.load(Ordering::Relaxed) {
+            let mut presented = lock(&self.presented_text);
+            presented.clear();
+            presented.push_str(text);
+        }
+    }
+
+    /// The text runs of the last new frame of the program presented since
+    /// [`WindowStatistics::record_presented_text`], concatenated.
+    pub fn presented_text(&self) -> String {
+        lock(&self.presented_text).clone()
     }
 
     /// Forgets the presented frames' samples: a new app's window starts its own.

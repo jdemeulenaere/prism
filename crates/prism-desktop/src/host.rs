@@ -18,10 +18,13 @@
 //!   the instant it took the frame's first input event, and the stamp travels with the list in
 //!   the mailbox, a newer frame's replacing it, so the main thread measures input to present for
 //!   the frames it presents.
-//! - **Reloads.** [`WindowHost::wake`] is a plain `fn()` that turns into a frame, so the frame
-//!   loop reaches its top, where it applies a pending reload: a window host registers it as
-//!   `prism-ui`'s reload waker, which `runApp`'s reload wake-up calls (D2 of
-//!   `compose-hot-reload`).
+//! - **Reloads.** [`WindowHost::wake`] is a plain `fn()` that turns into `HostEvent::Wake`,
+//!   so the frame loop returns to its top, where it applies a pending reload and recomposes,
+//!   and then into a frame, which presents the new code without any input: a window host
+//!   registers it as `prism-ui`'s reload waker, which `runApp`'s reload wake-up calls (D2 of
+//!   `compose-hot-reload`). The wake-up must not be a frame itself: that frame would be built
+//!   before the reload is applied and show the old code, and nothing would present the new
+//!   one until the next input.
 
 use crate::input::WindowInput;
 use crate::metrics::FontMetrics;
@@ -41,7 +44,8 @@ pub enum WindowMessage {
     Input(HostEvent),
     /// The window closed: the app ends.
     Close,
-    /// A frame is wanted although nothing was delivered: a reload is pending (D17).
+    /// The app's loop is wanted although nothing was delivered: a reload is pending (D17). It
+    /// gives the loop `HostEvent::Wake`, then a frame.
     Wake,
 }
 
@@ -271,8 +275,9 @@ impl WindowHost {
         }
     }
 
-    /// The event a message gives, or `None` for a wake-up, which only makes a frame due.
-    fn receive(&mut self, message: WindowMessage) -> Option<Option<HostEvent>> {
+    /// The event a message gives: a wake-up gives `HostEvent::Wake` and makes a frame due, so
+    /// the frame follows the loop's reload point.
+    fn receive(&mut self, message: WindowMessage) -> Option<HostEvent> {
         match message {
             WindowMessage::Input(event) => {
                 if let HostEvent::Resize(width, height) = event {
@@ -282,12 +287,12 @@ impl WindowHost {
                     self.first_input = Some(Instant::now());
                 }
                 self.frame_due = true;
-                Some(Some(event))
+                Some(event)
             }
-            WindowMessage::Close => Some(None),
+            WindowMessage::Close => None,
             WindowMessage::Wake => {
                 self.frame_due = true;
-                None
+                Some(HostEvent::Wake)
             }
         }
     }
@@ -299,23 +304,19 @@ impl Host for WindowHost {
     }
 
     fn next_event(&mut self) -> Option<HostEvent> {
-        loop {
-            let message = match self.input.try_recv() {
-                Ok(message) => message,
-                Err(TryRecvError::Disconnected) => return None,
-                Err(TryRecvError::Empty) if self.frame_due => {
-                    self.frame_due = false;
-                    return Some(HostEvent::Frame);
-                }
-                Err(TryRecvError::Empty) => match self.input.recv() {
-                    Ok(message) => message,
-                    Err(_) => return None,
-                },
-            };
-            if let Some(event) = self.receive(message) {
-                return event;
+        let message = match self.input.try_recv() {
+            Ok(message) => message,
+            Err(TryRecvError::Disconnected) => return None,
+            Err(TryRecvError::Empty) if self.frame_due => {
+                self.frame_due = false;
+                return Some(HostEvent::Frame);
             }
-        }
+            Err(TryRecvError::Empty) => match self.input.recv() {
+                Ok(message) => message,
+                Err(_) => return None,
+            },
+        };
+        self.receive(message)
     }
 
     fn present(&mut self, list: &DisplayList) {
@@ -431,7 +432,7 @@ pub(crate) mod tests {
     }
 
     /// compose-hot-reload, D2: a reload requested while the app defers reloads to its reload
-    /// points wakes the window's app with a frame.
+    /// points wakes the window's app, and a frame follows the wake-up.
     #[test]
     fn a_pending_reload_wakes_the_window_host() {
         let _lock = crate::test_lock();
@@ -439,17 +440,20 @@ pub(crate) mod tests {
         assert_eq!(host.next_event(), Some(HostEvent::Frame), "the first frame");
         prism_runtime::reload::defer_to_reload_points(prism_ui::host::wake_for_reload);
         prism_runtime::reload::request(prism_runtime::reload::PendingReload::new(Default::default));
+        assert_eq!(host.next_event(), Some(HostEvent::Wake));
         assert_eq!(host.next_event(), Some(HostEvent::Frame));
         assert!(prism_runtime::reload::withdraw().is_some());
         prism_runtime::reload::apply_at_next_call();
     }
 
+    /// A wake-up returns the loop to its top before the frame it makes due.
     #[test]
-    fn a_wake_gives_a_frame() {
+    fn a_wake_gives_a_wake_then_a_frame() {
         let _lock = crate::test_lock();
         let (mut host, endpoint, _) = host((400, 300));
         assert_eq!(host.next_event(), Some(HostEvent::Frame));
         WindowHost::wake();
+        assert_eq!(host.next_event(), Some(HostEvent::Wake));
         assert_eq!(host.next_event(), Some(HostEvent::Frame));
         drop(host);
         WindowHost::wake();

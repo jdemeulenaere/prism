@@ -16,7 +16,7 @@
 //! ```
 //!
 //! The `watch-reload` scenario covers `compose-hot-reload`: a saved edit wakes an idle window,
-//! which presents the reloaded app without input, and keeps its state.
+//! which presents the reloaded app's new text without input, and keeps its state.
 //!
 //! Each scenario runs in a child process (this executable, with `PRISM_WINDOW_INPUT_SCENARIO`
 //! set), whose main thread serves the windows and whose stdout, stderr and status the parent
@@ -350,11 +350,17 @@ fn watch_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
 /// the kept count. Closing the window then ends the run.
 fn reload_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
     Box::new(move |driver: Driver| {
+        let statistics = driver.statistics();
+        statistics.record_presented_text();
         let scale = driver.opened(1, "Counter", (400.0, 300.0));
         driver.click(PLUS, scale);
         driver.settle();
-        let statistics = driver.statistics();
-        let received = statistics.frames_received();
+        if !statistics.presented_text().contains("Count: 1") {
+            fail(&format!(
+                "the window shows {:?} after a click",
+                statistics.presented_text()
+            ));
+        }
         std::fs::write(
             directory.join("main.prism"),
             format!(
@@ -366,8 +372,11 @@ fn reload_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
             ),
         )
         .unwrap();
-        wait_until("the reloaded app presents a frame without input", || {
-            statistics.frames_received() > received
+        // No input reaches the window until the reloaded code is on screen: the reload's
+        // wake-up alone must present it (the `ui` scenario "A reload is presented without
+        // input").
+        wait_until("the window presents the reloaded app without input", || {
+            statistics.presented_text().contains("Clicks: 1")
         });
         driver.settle();
         driver.click(PLUS, scale);
