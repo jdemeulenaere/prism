@@ -356,7 +356,7 @@ impl TypeChecker {
                         };
                     }
                 }
-                if let Some(sym) = self.type_name_symbol(callee) {
+                if let Some(sym) = self.constructor_name_symbol(callee) {
                     if let SymbolKind::Struct { id, .. } = &sym.kind {
                         let id = id.clone();
                         self.check_visibility(&sym, callee.span);

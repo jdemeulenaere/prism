@@ -1,0 +1,3 @@
+// expect: E4002
+struct User { val name: String }
+fun f(): User = User

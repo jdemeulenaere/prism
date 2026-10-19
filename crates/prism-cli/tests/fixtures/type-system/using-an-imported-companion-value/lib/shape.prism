@@ -1,0 +1,4 @@
+package lib
+public struct Size : Copy { val w: Int }
+public struct Sizes : Copy { val Zero: Size }
+public val Size: Sizes = Sizes(Size(0))

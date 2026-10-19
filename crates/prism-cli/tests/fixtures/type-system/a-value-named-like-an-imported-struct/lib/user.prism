@@ -1,0 +1,2 @@
+package lib
+public struct User : Copy { val id: Int }

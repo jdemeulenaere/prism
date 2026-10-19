@@ -189,6 +189,13 @@ Kotlin reaches the same spellings with companion objects. Here a companion is ju
 
 Compile-time cost: one filtered lookup when a name in a value position finds a struct (the scope already filters types for `lookup_type`), and one kind comparison in the duplicate check. Nothing is inferred.
 
+**Apply notes (group 2).**
+- The pair is defined by `ScopeStack::define_companion`, which the checker calls for a top-level `val` (structs are collected before values, so the struct is always there first); the value is the name's innermost binding, so `lookup` and `resolve` find it unchanged, `lookup_type` skips it, and `lookup_constructor` finds the struct for a call's callee and a struct pattern. A payload-free enum variant is never a companion (it is defined through `define`), so a struct and a variant of one name stay `E4010`.
+- An import keeps both symbols of a module under the name, and counts that module once, as its value.
+- **A `val` and an extension of one name coexist (autonomous).** The proposal listed extensions among the pairs that stay `E4010`, but an extension is a member of its receiver type, found by `recv.name`, never by a bare name, and the checker always accepted `val Mode` beside `fun Int.Mode()`, as Kotlin does. Rejected: a new `E4010` for that pair, which would break programs for no ambiguity.
+- The prelude layer keeps one symbol per name, so a prelude module cannot give a struct a companion value; `library_tests.rs` now checks that no prelude module exports a name twice. The toolkit's companions are in non-prelude modules.
+- The ABI already exports both symbols, sorted by kind before name, so the order of the two declarations does not change the hash.
+
 Rejected:
 - `Modifier()` through default values on struct fields: a larger language feature (field defaults in the ABI, generators per field, constructor matching), and still not Compose's spelling.
 - Enum colours (`Color.Red`, `Color.Argb(...)`): two representations of one colour, which would compare unequal.

@@ -1,0 +1,6 @@
+// expect: ok
+struct User { val name: String }
+enum A { X, Y(Int) }
+fun f(): User = User("ann")
+fun g(): A = A.X
+fun h(): A = A.Y(1)

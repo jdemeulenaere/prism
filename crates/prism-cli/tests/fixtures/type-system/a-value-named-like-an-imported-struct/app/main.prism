@@ -1,0 +1,6 @@
+// expect: E4010
+// entry: app/main.prism
+package app
+import /lib/user
+val User: Int = 1
+fun main() { println(User) }

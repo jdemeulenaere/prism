@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Color : Copy { val argb: Int }
+struct Colors : Copy { val Red: Color }
+val Color: Colors = Colors(Red = Color(0xFFFF0000))
+fun pick(c: Color): Int = c.argb
+fun main() {
+    println(pick(Color.Red))
+    println(pick(Color(7)))
+}

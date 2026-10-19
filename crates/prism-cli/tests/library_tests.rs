@@ -98,7 +98,14 @@ fn the_prelude_modules_export_distinct_names() {
                 | prism_abi::ExportedSymbol::Enum { name, .. }
                 | prism_abi::ExportedSymbol::Var { name, .. } => name.clone(),
             };
-            names.insert(name);
+            // The prelude layer keeps one symbol per name, so no prelude module may give a
+            // struct a companion value (D4 of `ui-toolkit`), whose struct it would lose.
+            assert!(
+                names.insert(name.clone()),
+                "{} exports '{}' twice",
+                module,
+                name
+            );
         }
         for name in names {
             owners.entry(name).or_default().push(module);

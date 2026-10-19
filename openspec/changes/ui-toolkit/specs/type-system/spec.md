@@ -59,7 +59,7 @@ A top-level `val` MAY have the name of a struct declared in the same file, as th
 - **THEN** it prints `8`
 
 ### Requirement: Only a Same-File Struct and Value Share a Name
-Every other pair of top-level declarations with one name MUST still be rejected with `E4010`: two `val`s, a `val` and an enum, function or extension, and a `val` and a struct that are not declared in the same file, an imported one included.
+Every other pair of top-level declarations with one name MUST still be rejected with `E4010`: two `val`s, a `val` and an enum or a function, and a `val` and a struct that are not declared in the same file, an imported one included. An extension is a member of its receiver type, not a top-level name, so a `val` may share its name, as before.
 
 #### Scenario: A value named like an imported struct
 - **WHEN** a file imports a module exporting `public struct User` and declares `val User: Int = 1`

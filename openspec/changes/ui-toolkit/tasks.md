@@ -23,15 +23,15 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 2. Companion values (D4)
 
-- [ ] 2.1 In `crates/prism-typechecker/src/scope.rs`, make `define` accept a top-level value symbol when the only other binding of its name at that level is a struct declared in the same file, and the reverse. Keep `E4010` for every other pair. Add `lookup_value(name)`, which skips a struct symbol when a value symbol of the same name is visible at the same level, and `lookup_constructor(name)`, which finds the struct. Make the import lookup (`lookup_import`) keep both kinds of an imported name. Verify with unit tests of `define` and both lookups.
-- [ ] 2.2 In `crates/prism-typechecker/src/checker.rs`:
+- [x] 2.1 In `crates/prism-typechecker/src/scope.rs`, make `define` accept a top-level value symbol when the only other binding of its name at that level is a struct declared in the same file, and the reverse. Keep `E4010` for every other pair. Add `lookup_value(name)`, which skips a struct symbol when a value symbol of the same name is visible at the same level, and `lookup_constructor(name)`, which finds the struct. Make the import lookup (`lookup_import`) keep both kinds of an imported name. Verify with unit tests of `define` and both lookups.
+- [x] 2.2 In `crates/prism-typechecker/src/checker.rs`:
   - resolve a name in a value position (an identifier, a receiver, the base of a field access) through `lookup_value`;
   - resolve the callee of a call through `lookup_constructor` when it names a struct;
   - leave type positions on `lookup_type`.
 
-  Report `E4010` for a `val` named like an imported struct, an enum, a function or an extension. Verify with the `type-system` fixtures for every scenario of "A Struct May Have a Companion Value", "Only a Same-File Struct and Value Share a Name" and "Importing a Struct With Its Companion Value", and both forms of the modified "Type names are not values".
-- [ ] 2.3 In `crates/prism-abi/src/signature.rs`, check that `FileAbi::extract` exports both symbols and that the hash covers both, and fix the importer's symbol table if it is keyed by name alone. Verify with the `compilation-and-abi` fixtures for "A struct and its companion value are exported" and "Adding a companion value changes the ABI hash".
-- [ ] 2.4 Edit the `E4010` row of `openspec/specs/diagnostics/spec.md` to say that a struct and a top-level `val` of the same file may share a name. Verify with the catalog check of `fixture_tests.rs`.
+  Report `E4010` for a `val` named like an imported struct, an enum or a function (an extension is a member, apply note of D4). Verify with the `type-system` fixtures for every scenario of "A Struct May Have a Companion Value", "Only a Same-File Struct and Value Share a Name" and "Importing a Struct With Its Companion Value", and both forms of the modified "Type names are not values".
+- [x] 2.3 In `crates/prism-abi/src/signature.rs`, check that `FileAbi::extract` exports both symbols and that the hash covers both, and fix the importer's symbol table if it is keyed by name alone. Verify with tests in `crates/prism-abi/tests/abi_scenario_tests.rs`, where the hash scenarios of `compilation-and-abi` live, for "A struct and its companion value are exported" and "Adding a companion value changes the ABI hash".
+- [x] 2.4 Edit the `E4010` row of `openspec/specs/diagnostics/spec.md` to say that a struct and a top-level `val` of the same file may share a name. Verify with the catalog check of `fixture_tests.rs`.
 
 ## 3. Runtime support (D16, D17, D23)
 

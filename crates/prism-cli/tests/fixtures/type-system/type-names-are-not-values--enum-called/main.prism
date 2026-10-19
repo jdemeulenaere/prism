@@ -1,0 +1,3 @@
+// expect: E4004
+enum A { X, Y(Int) }
+fun f(): A = A()

@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+// entry: app/main.prism
+package app
+import /lib/shape
+fun main() {
+    val s: Size = Size.Zero
+    println(s.w + Size(2).w)
+}

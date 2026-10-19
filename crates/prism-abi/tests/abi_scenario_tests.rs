@@ -1118,3 +1118,58 @@ fn extensions_differing_by_context_in_the_abi() {
         ]
     );
 }
+
+// --- Companion values (D4 of `ui-toolkit`)
+
+const GAP_TYPES: &str = r#"
+    package lib
+
+    public struct Gap : Copy { val size: Int }
+
+    public struct Gaps : Copy { val None: Gap }
+"#;
+
+/// compilation-and-abi: "A struct and its companion value are exported".
+#[test]
+fn a_struct_and_its_companion_value_are_exported() {
+    let abi = extract(&format!(
+        "{GAP_TYPES}\npublic val Gap: Gaps = Gaps(Gap(0))\n"
+    ));
+    let text: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(ExportedSymbol::declaration_text)
+        .filter(|text| text.contains(" Gap"))
+        .collect();
+    assert!(
+        text.iter().any(|t| t == "public val Gap: Gaps"),
+        "{:?}",
+        text
+    );
+    assert!(
+        abi.symbols.iter().any(|symbol| matches!(
+            symbol,
+            ExportedSymbol::Struct { name, visibility: Visibility::Public, marker: Some(TypeMarker::Copy), .. }
+                if name == "Gap"
+        )),
+        "the struct is exported beside its value"
+    );
+}
+
+/// compilation-and-abi: "Adding a companion value changes the ABI hash".
+#[test]
+fn adding_a_companion_value_changes_the_abi_hash() {
+    assert_hash_differs(
+        GAP_TYPES,
+        &format!("{GAP_TYPES}\npublic val Gap: Gaps = Gaps(Gap(0))\n"),
+        "adding a companion value",
+    );
+    assert_hash_equal(
+        &format!("{GAP_TYPES}\npublic val Gap: Gaps = Gaps(Gap(0))\n"),
+        &format!(
+            "package lib\n\npublic val Gap: Gaps = Gaps(Gap(0))\n{}",
+            GAP_TYPES.replace("package lib", "")
+        ),
+        "the order of a struct and its companion value",
+    );
+}

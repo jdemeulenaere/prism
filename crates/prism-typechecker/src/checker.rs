@@ -1726,6 +1726,18 @@ impl TypeChecker {
         None
     }
 
+    /// The struct a call of `expr` constructs: a struct name, or the name of a companion value
+    /// as a callee (D4 of `ui-toolkit`); or the enum `expr` names, which a call reports.
+    fn constructor_name_symbol(&self, expr: &Expr) -> Option<Symbol> {
+        if let Some(symbol) = self.type_name_symbol(expr) {
+            return Some(symbol);
+        }
+        match &expr.kind {
+            ExprKind::Ident(name) => self.env.lookup_constructor(name).cloned(),
+            _ => None,
+        }
+    }
+
     /// Types `member` on `target` when `target` names a type: an enum name gives access to its
     /// variants, while a struct name has no members (`E4006`). Returns `None` when `target` is
     /// not a type name.
@@ -2517,7 +2529,7 @@ impl TypeChecker {
                         v.span,
                     )
                     .with_module(self.module_path.clone());
-                    self.define_top_level(sym);
+                    self.define_value(sym);
                 }
             }
         }
@@ -2768,6 +2780,37 @@ impl TypeChecker {
     /// imported symbol shadows the import: lookups check module scope before the import layer.
     fn define_top_level(&mut self, symbol: Symbol) {
         if let Err(err) = self.env.define(symbol) {
+            self.errors.push(err);
+        }
+    }
+
+    /// Defines the top-level `val` `symbol`: the companion value of the file's struct of its
+    /// name, if there is one (D4 of `ui-toolkit`). A value named like an imported struct is
+    /// `E4010`, since it would otherwise change what the imported name means.
+    fn define_value(&mut self, symbol: Symbol) {
+        let own_struct = self.env.resolves_at_module_level(&symbol.name)
+            && self
+                .env
+                .lookup_type(&symbol.name)
+                .is_some_and(|sym| matches!(sym.kind, SymbolKind::Struct { .. }));
+        if !own_struct
+            && !matches!(
+                self.env.lookup_import(&symbol.name, |sym| matches!(
+                    sym.kind,
+                    SymbolKind::Struct { .. }
+                )),
+                ImportLookup::None
+            )
+        {
+            self.errors.push(TypeError::DuplicateSymbol {
+                name: symbol.name.clone(),
+                span: symbol.span,
+            });
+            // Defined all the same, so that its uses do not report the struct as a value.
+            self.define_top_level(symbol);
+            return;
+        }
+        if let Err(err) = self.env.define_companion(symbol) {
             self.errors.push(err);
         }
     }
@@ -5991,7 +6034,7 @@ impl TypeChecker {
             }
         }
         // A struct name is its constructor; an enum name is only a namespace for its variants.
-        let type_name = self.type_name_symbol(callee);
+        let type_name = self.constructor_name_symbol(callee);
         let (callee_node, callee_ty) = match &type_name {
             Some(sym) if !self.check_visibility(sym, callee.span) => (None, Type::Error),
             Some(sym) => match sym.kind {

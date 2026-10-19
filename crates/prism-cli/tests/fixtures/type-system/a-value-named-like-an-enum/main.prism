@@ -1,0 +1,3 @@
+// expect: E4010
+enum Mode { On, Off }
+val Mode: Int = 1

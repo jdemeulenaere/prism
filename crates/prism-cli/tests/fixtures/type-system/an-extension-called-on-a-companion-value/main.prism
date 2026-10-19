@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+struct Gap : Copy { val size: Int }
+struct Gaps : Copy { val None: Gap }
+val Gap: Gaps = Gaps(Gap(0))
+fun Gaps.of(size: Int): Gap = Gap(size)
+fun main() { println(Gap.of(8).size) }

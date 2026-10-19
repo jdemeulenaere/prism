@@ -356,21 +356,37 @@ impl ScopeStack {
     }
 
     /// Adds a symbol exported by the imported module `module` to the import layer. A module
-    /// contributes at most one candidate per name.
+    /// contributes at most one candidate per name, except a struct and its companion value
+    /// (D4 of `ui-toolkit`), which it contributes both.
     pub fn define_import(&mut self, module: &str, symbol: Symbol) {
         let candidates = self.imports.entry(symbol.name.clone()).or_default();
-        if !candidates.iter().any(|(m, _)| m == module) {
+        let companion = |other: &Symbol| {
+            matches!(
+                (&other.kind, &symbol.kind),
+                (SymbolKind::Struct { .. }, SymbolKind::Variable { .. })
+                    | (SymbolKind::Variable { .. }, SymbolKind::Struct { .. })
+            )
+        };
+        if !candidates
+            .iter()
+            .any(|(m, other)| m == module && !companion(other))
+        {
             candidates.push((module.to_string(), symbol));
         }
     }
 
-    /// Looks `name` up among the imports, keeping only candidates accepted by `keep`.
+    /// Looks `name` up among the imports, keeping only candidates accepted by `keep`. A module
+    /// that exports a struct and its companion value under the name counts once, as its value:
+    /// the struct is what [`Self::lookup_type`] and [`Self::lookup_constructor`] find.
     pub fn lookup_import(&self, name: &str, keep: impl Fn(&Symbol) -> bool) -> ImportLookup<'_> {
-        let candidates: Vec<&(String, Symbol)> = self
+        let mut candidates: Vec<&(String, Symbol)> = self
             .imports
             .get(name)
             .map(|c| c.iter().filter(|(_, sym)| keep(sym)).collect())
             .unwrap_or_default();
+        if candidates.len() == 2 && candidates[0].0 == candidates[1].0 {
+            candidates.retain(|(_, symbol)| !is_type_symbol(symbol));
+        }
         match candidates.as_slice() {
             [] => ImportLookup::None,
             [(_, sym)] => ImportLookup::One(sym),
@@ -448,6 +464,68 @@ impl ScopeStack {
         self.levels[level].push(symbol.name.clone());
         bindings.push((level, symbol));
         Ok(())
+    }
+
+    /// Defines the top-level value `symbol` as the companion value of the struct of its name
+    /// that the module scope already declares (D4 of `ui-toolkit`): the name then means the
+    /// value in value positions, the struct in type positions, and its constructor as a callee.
+    /// Without such a struct it is [`Self::define`], so every other pair is still `E4010`.
+    #[allow(clippy::result_large_err)]
+    pub fn define_companion(&mut self, symbol: Symbol) -> Result<(), TypeError> {
+        let has_struct = self.current_level() == 0
+            && self.bindings.get(&symbol.name).is_some_and(|bindings| {
+                matches!(
+                    bindings.as_slice(),
+                    [(
+                        0,
+                        Symbol {
+                            kind: SymbolKind::Struct { .. },
+                            ..
+                        }
+                    )]
+                )
+            });
+        if !has_struct {
+            return self.define(symbol);
+        }
+        self.levels[0].push(symbol.name.clone());
+        self.bindings
+            .get_mut(&symbol.name)
+            .expect("the struct's binding")
+            .push((0, symbol));
+        Ok(())
+    }
+
+    /// The struct a call `name(...)` constructs: the innermost binding of `name` when it is a
+    /// struct, the struct of a companion value the name otherwise resolves to (D4 of
+    /// `ui-toolkit`), or `None`.
+    pub fn lookup_constructor(&self, name: &str) -> Option<&Symbol> {
+        let mut visible = self.visible(name);
+        if let Some((level, symbol)) = visible.next() {
+            return match &symbol.kind {
+                SymbolKind::Struct { .. } => Some(symbol),
+                SymbolKind::Variable { local: None, .. } if *level == 0 => visible
+                    .next()
+                    .filter(|(level, other)| {
+                        *level == 0 && matches!(other.kind, SymbolKind::Struct { .. })
+                    })
+                    .map(|(_, other)| other),
+                _ => None,
+            };
+        }
+        let candidates = self.imports.get(name);
+        match candidates.map(Vec::as_slice) {
+            Some([(_, symbol)]) => {
+                matches!(symbol.kind, SymbolKind::Struct { .. }).then_some(symbol)
+            }
+            Some([(first, a), (second, b)]) if first == second => [a, b]
+                .into_iter()
+                .find(|symbol| matches!(symbol.kind, SymbolKind::Struct { .. })),
+            Some(_) => None,
+            None => self
+                .lookup_prelude(name)
+                .filter(|symbol| matches!(symbol.kind, SymbolKind::Struct { .. })),
+        }
     }
 
     /// Looks up an identifier starting from the innermost scope outwards without emitting an error.
@@ -717,6 +795,109 @@ mod tests {
         env.exit_scope();
         assert_eq!(env.lookup("x").unwrap().ty(), Type::Int);
         assert!(env.lookup("y").is_none());
+    }
+
+    fn struct_symbol(name: &str) -> Symbol {
+        Symbol::struct_decl(
+            NominalId::new("<test>", name),
+            Visibility::Public,
+            None,
+            Span::dummy(),
+        )
+    }
+
+    fn top_level_value(name: &str, ty: Type) -> Symbol {
+        Symbol::top_level_variable(
+            name,
+            ty,
+            Mutability::Val,
+            Visibility::Public,
+            None,
+            Span::dummy(),
+        )
+        .with_module("<test>")
+    }
+
+    /// `ui-toolkit` D4: a struct and a top-level value of one file may share a name.
+    #[test]
+    fn a_struct_and_its_companion_value_share_a_name() {
+        let mut env = ScopeStack::new();
+        env.define(struct_symbol("Color")).unwrap();
+        env.define_companion(top_level_value("Color", Type::Int))
+            .unwrap();
+        assert_eq!(env.lookup("Color").unwrap().ty(), Type::Int, "the value");
+        assert!(matches!(
+            env.lookup_type("Color").unwrap().kind,
+            SymbolKind::Struct { .. }
+        ));
+        assert!(matches!(
+            env.lookup_constructor("Color").unwrap().kind,
+            SymbolKind::Struct { .. }
+        ));
+        // A third binding, or a second value, is still a duplicate.
+        let err = env
+            .define_companion(top_level_value("Color", Type::Int))
+            .unwrap_err();
+        assert_eq!(err.code(), "E4010");
+        // A value without a struct is defined as any value, and constructs nothing.
+        env.define_companion(top_level_value("Plain", Type::Int))
+            .unwrap();
+        assert!(env.lookup_constructor("Plain").is_none());
+        // A local shadows the pair: the call names the local.
+        env.enter_scope();
+        env.define(Symbol::variable(
+            "Color",
+            Type::Bool,
+            Mutability::Val,
+            Span::dummy(),
+        ))
+        .unwrap();
+        assert!(env.lookup_constructor("Color").is_none());
+        assert_eq!(env.lookup("Color").unwrap().ty(), Type::Bool);
+    }
+
+    #[test]
+    fn an_enum_or_a_second_struct_is_no_companion() {
+        let mut env = ScopeStack::new();
+        env.define(Symbol::enum_decl(
+            NominalId::new("<test>", "Mode"),
+            Visibility::Public,
+            None,
+            Span::dummy(),
+        ))
+        .unwrap();
+        let err = env
+            .define_companion(top_level_value("Mode", Type::Int))
+            .unwrap_err();
+        assert_eq!(err.code(), "E4010");
+        env.define(struct_symbol("User")).unwrap();
+        assert_eq!(
+            env.define(struct_symbol("User")).unwrap_err().code(),
+            "E4010"
+        );
+    }
+
+    #[test]
+    fn an_import_brings_a_struct_and_its_companion_value() {
+        let mut env = ScopeStack::new();
+        env.define_import("lib/shape", struct_symbol("Size"));
+        env.define_import("lib/shape", top_level_value("Size", Type::Int));
+        // A second struct of the module is still dropped.
+        env.define_import("lib/shape", struct_symbol("Size"));
+        assert_eq!(env.lookup("Size").unwrap().ty(), Type::Int);
+        assert_eq!(env.resolve("Size", Span::dummy()).unwrap().ty(), Type::Int);
+        assert!(matches!(
+            env.lookup_type("Size").unwrap().kind,
+            SymbolKind::Struct { .. }
+        ));
+        assert!(matches!(
+            env.lookup_constructor("Size").unwrap().kind,
+            SymbolKind::Struct { .. }
+        ));
+        // Another module exporting the name makes it ambiguous.
+        env.define_import("lib/other", top_level_value("Size", Type::Int));
+        assert!(env.lookup("Size").is_none());
+        assert!(env.lookup_constructor("Size").is_none());
     }
 
     #[test]
