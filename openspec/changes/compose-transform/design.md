@@ -369,7 +369,9 @@ Rejected: making its wrappers private or removing it (its fixtures would go, and
 - **Slot type records.** `UnitContext::slot_type(ty) -> DataId` defines `<unit>#slot-type(<type>)` once per type: the type's fingerprint from `TypeFingerprints`, its layout's size and alignment, its drop glue address or null, its equality glue address, and its name, written as glue names it, in the unit's data. Records of one type in two units are different records with the same fingerprint, which the runtime matches by fingerprint (`compose-runtime` D6).
 - **Equality glue for every kept type**, scalars included (`#equals(Int)` compares two loaded words), and for function types (D9). Strings never need it: they are not stable and not `Copy`.
 - **Intrinsic structs** are laid out as one pointer-sized word, `Composition`'s drop glue calls `prism_compose_dispose`, and `dump-layout` names them `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope`.
-- **Descriptors** of four words (D9), with the environment functions defined in the closure's unit.
+- **Descriptors** of four words (D9), with the environment functions defined in the closure's unit. Refined at apply time: `prism_runtime::Descriptor`, the Rust view, keeps its two fields, the prefix the compose runtime and `prism-ui` read to call and release function values; only generated code reads the last two words, and only from values generated code built.
+- **Intrinsic struct layouts.** An intrinsic struct is laid out as a struct with one hidden `Int` field, `handle`, so copies, `==` and equality glue compare the handle with no special case; `dump-layout` shows that field.
+- **The phase.** A unit of MIR that is not composed is an internal error, and so is a region marker reaching the lowering.
 - **`E6001`.** `supported.rs` stops reporting composable bodies, and a body that reaches the backend with region markers or in another phase than `Composed` is an internal error.
 
 Compile-time cost: one record per type a unit keeps or remembers, from fingerprints memoized per load, and the glue functions already memoized per unit and type.

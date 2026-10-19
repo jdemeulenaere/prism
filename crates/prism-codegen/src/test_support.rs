@@ -1,15 +1,15 @@
-//! Building elaborated MIR from source for the crate's tests, through the real front end: parse,
+//! Building composed MIR from source for the crate's tests, through the real front end: parse,
 //! Phase 1 ABIs of the earlier files, type checking, lowering and borrow checking.
 
 use prism_abi::{declared_types, FileAbi};
 use prism_mir::MirFile;
 
-/// The elaborated MIR of `source` as the root module `main`.
+/// The composed MIR of `source` as the root module `main`.
 pub fn lower_source(source: &str) -> MirFile {
     lower_files(&[("main", source)]).remove(0)
 }
 
-/// The elaborated MIR of each of `files`, given as `(module path, source)`. A file may import an
+/// The composed MIR of each of `files`, given as `(module path, source)`. A file may import an
 /// earlier file by its root-anchored path (`import /lib/math`); the files must be listed in
 /// dependency order, except that each file sees the ABI of every file of the list, so two files
 /// can import each other.
@@ -76,8 +76,10 @@ pub fn lower_files(files: &[(&str, &str)]) -> Vec<MirFile> {
                 checker.errors
             );
             let mir = prism_mir::lower_file(&tree);
-            prism_borrowck::check_file(&mir)
-                .unwrap_or_else(|errors| panic!("{} has borrow errors: {:?}", module, errors))
+            let elaborated = prism_borrowck::check_file(&mir)
+                .unwrap_or_else(|errors| panic!("{} has borrow errors: {:?}", module, errors));
+            // The backend compiles composed MIR (D2 of `compose-transform`).
+            prism_compose_transform::compose_file(&elaborated)
         })
         .collect()
 }

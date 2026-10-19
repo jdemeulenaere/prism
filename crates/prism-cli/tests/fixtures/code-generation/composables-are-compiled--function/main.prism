@@ -1,4 +1,4 @@
 // expect: ok
-// run: 1
+// run: 0
 compose fun Label() {}
-fun main() {}
+fun main() { println(1) }

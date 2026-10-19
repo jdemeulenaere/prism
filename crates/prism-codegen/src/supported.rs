@@ -1,12 +1,13 @@
 //! What the Tier 1 backend compiles, and `E6001` for the rest (D9 of `codegen-core`, D19 of
 //! `codegen-aggregates`).
 //!
-//! [`check_file`] runs on a file's elaborated MIR before any code is generated. Generic bodies,
+//! [`check_file`] runs on a file's composed MIR before any code is generated. Generic bodies,
 //! and the closures inside them, are compiled only as their instances ([`is_compiled`]). For
 //! every other body it reports the first unsupported construct: an unsupported argument or
-//! return type at the declaration, a composable body (a `compose fun` or a composable closure)
-//! at the declaration, then the first statement or terminator, in block order, that uses an
-//! unsupported type or operation. A body that passes is one [`crate::lower`] can lower.
+//! return type at the declaration, then the first statement or terminator, in block order, that
+//! uses an unsupported type or operation. A body that passes is one [`crate::lower`] can lower.
+//! Composable bodies are compiled (D17 of `compose-transform`); MIR that was not composed is an
+//! internal error of [`crate::lower`].
 //!
 //! Scalars, `Unit`, strings, boxes, references, function values, structs, enums and nullables
 //! are supported, unless a struct, enum or nullable holds something that is not: a type is named
@@ -32,17 +33,13 @@ const MAXIMUM_DEPTH: usize = 256;
 /// A construct the backend does not compile yet, as `E6001` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Construct {
-    ComposableFunctions,
     /// A value of a type parameter's type in a compiled body: only generic bodies, which are
     /// compiled as their instances, have them, so this is an internal error that no program
     /// gives (D10 of `monomorphization`).
     TypeParameter(String),
     /// A conversion between two types that are otherwise supported, which the backend does not
     /// lower; the type system produces none over supported types.
-    Conversion {
-        from: String,
-        to: String,
-    },
+    Conversion { from: String, to: String },
     /// A value of an opaque type, which names no declaration, or of a struct or enum whose
     /// definition the file does not know.
     UnknownType(String),
@@ -55,7 +52,6 @@ impl Construct {
             Construct::TypeParameter(name) => {
                 format!("values of the uninstantiated type parameter '{}'", name)
             }
-            Construct::ComposableFunctions => "composable functions".to_string(),
             Construct::Conversion { from, to } => {
                 format!("conversions from '{}' to '{}'", from, to)
             }
@@ -66,7 +62,6 @@ impl Construct {
     /// The planned change that will support the construct, if one is planned.
     pub fn change(&self) -> Option<&'static str> {
         match self {
-            Construct::ComposableFunctions => Some("compose-transform"),
             Construct::Conversion { .. }
             | Construct::UnknownType(_)
             | Construct::TypeParameter(_) => None,
@@ -107,13 +102,6 @@ pub fn check_file(file: &MirFile) -> Result<(), Vec<CodegenError>> {
         .bodies
         .iter()
         .filter(|(_, body)| is_compiled(body))
-        // A restart function and a root content adapter are reported with their composable.
-        .filter(|(_, body)| {
-            !matches!(
-                body.owner,
-                prism_mir::BodyOwner::Restart { .. } | prism_mir::BodyOwner::RootContent { .. }
-            )
-        })
         .filter_map(|(_, body)| {
             first_unsupported(body, &file.types).map(|(construct, span)| construct.error(span))
         })
@@ -137,9 +125,6 @@ pub fn first_unsupported(body: &Body, types: &TypeTable) -> Option<(Construct, S
         .find_map(|ty| classify(ty, types));
     if let Some(construct) = signature {
         return Some((construct, body.span));
-    }
-    if body.is_compose {
-        return Some((Construct::ComposableFunctions, body.span));
     }
     let checker = BodyChecker {
         body,
@@ -369,12 +354,8 @@ impl BodyChecker<'_> {
                 parameters,
                 type_arguments,
                 destination,
-                is_compose,
                 ..
             } => {
-                if *is_compose {
-                    return Some(Construct::ComposableFunctions);
-                }
                 let callee_place = match callee {
                     Callee::Value(place, _) => self.place(place),
                     Callee::Builtin(_)
@@ -453,24 +434,20 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_is_rejected_at_its_construction() {
-        // The scenario "A struct is rejected": the composable closure is its own body's error.
+    fn a_struct_is_rejected_at_the_declaration_using_it() {
+        // The scenario "A struct is rejected": a struct holding a value of unknown type.
         let (message, line, column) = single(
-            "struct P { val content: compose () -> Unit }\n\
-             fun main() { val p = P({}); println(1) }\n",
+            "struct P { val w: Widget }\n\
+             fun use(p: P): Int = 1\n\
+             fun main() { println(1) }\n",
         );
-        names(&message, "composable functions");
-        assert_eq!((line, column), (2, 24));
+        names(&message, "values of unknown type 'Widget'");
+        assert_eq!((line, column), (2, 1));
     }
 
     #[test]
     fn every_row_of_the_table() {
         let cases: &[(&str, &str)] = &[
-            ("compose fun Label() {}\n", "composable functions"),
-            (
-                "fun f() { val c: compose () -> Unit = {} }\n",
-                "composable functions",
-            ),
             ("fun f(x: File) {}\n", "values of unknown type 'File'"),
             (
                 "struct P { val n: Int, val h: Heap<() -> Int>?, val w: Widget }\nfun f(p: &P): Int = 1\n",
@@ -565,13 +542,19 @@ mod tests {
         assert_eq!(errors(source), []);
     }
 
+    /// The scenario "Composables are compiled": composable functions and closures pass the
+    /// check, and no construct names a planned change any more.
     #[test]
-    fn notes_name_the_change() {
-        let error = check_file(&lower_source("compose fun Label() {}\n")).unwrap_err();
+    fn composables_are_compiled() {
         assert_eq!(
-            error[0].notes,
-            ["support for composable functions is planned in the 'compose-transform' change"]
+            errors(
+                "compose fun Label() {}\n\
+                 fun f() { val c: compose () -> Unit = {} }\n"
+            ),
+            []
         );
+        let error = check_file(&lower_source("fun f(x: File) {}\n")).unwrap_err();
+        assert!(error[0].notes.is_empty());
     }
 
     #[test]

@@ -28,3 +28,4 @@ cranelift-native = "=0.136.2"
 prism-parser = { path = "../prism-parser" }
 prism-typechecker = { path = "../prism-typechecker", features = ["test-support"] }
 prism-borrowck = { path = "../prism-borrowck" }
+prism-compose-transform = { path = "../prism-compose-transform" }

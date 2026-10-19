@@ -1430,6 +1430,7 @@ dependencies = [
  "prism-ast",
  "prism-borrowck",
  "prism-compose",
+ "prism-compose-transform",
  "prism-mir",
  "prism-parser",
  "prism-runtime",

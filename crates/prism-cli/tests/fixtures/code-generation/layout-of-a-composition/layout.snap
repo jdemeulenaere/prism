@@ -1,0 +1,7 @@
+struct main::Screen (size 16, align 8)
+  c: Composition at 0
+  s: RecomposeScope at 8
+struct prism/compose/runtime::Composition (size 8, align 8)
+  handle: Int at 0
+struct prism/compose/runtime::RecomposeScope : Copy (size 8, align 8)
+  handle: Int at 0

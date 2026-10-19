@@ -1103,3 +1103,22 @@ fn compose_entry_points_resolve() {
     touch();
     assert!(program.function_address("prism/test::stale").is_some());
 }
+
+/// compose-transform, task 7.2: composed bodies run. A skippable composable invalidates its
+/// own scope once through a remembered calculation, so the first recomposition runs and the
+/// second has nothing to do; the composition is disposed when it is dropped.
+#[test]
+fn composed_bodies_run() {
+    let program = compile(
+        "compose fun Once() { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 } }\n\
+         fun passes(): Int {\n\
+             val c = composition { Once() }\n\
+             val first = c.recompose()\n\
+             val second = c.recompose()\n\
+             return if (first && !second) 1 else 0\n\
+         }\n",
+    );
+    let passes: extern "C" fn() -> i64 = function(&program, "main::passes");
+    assert_eq!(passes(), 1);
+    assert_eq!(prism_compose::live_compositions_report(), None);
+}

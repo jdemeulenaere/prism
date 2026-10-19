@@ -300,10 +300,19 @@ impl BodyKind {
 pub fn slot_contract(
     body: &Body,
     environment: Option<EnvironmentKind>,
+    restarted: Option<&Body>,
     fingerprints: &mut TypeFingerprints,
 ) -> ContentHash {
     let mut hasher = DeterministicHasher::new();
     hasher.write_str("contract");
+    // A restart function's own type never changes, so its contract covers the composable it
+    // restarts: the two split together when a kept parameter's type changes (D8 of
+    // `compose-hot-reload`, adopted by `compose-transform`).
+    if let Some(restarted) = restarted {
+        let restarted = slot_contract(restarted, None, None, fingerprints);
+        hasher.write_str("restarts");
+        hasher.write_hash(&restarted);
+    }
     hasher.write_u8(BodyKind::of(body).tag());
     hasher.write_u8(u8::from(body.is_compose));
     hasher.write_u64(body.argument_count as u64);
@@ -367,7 +376,7 @@ mod tests {
             .iter()
             .find(|(_, body)| matches!(&body.owner, BodyOwner::Function(path) if path.name == name))
             .unwrap_or_else(|| panic!("no body {}", name));
-        slot_contract(body, None, &mut TypeFingerprints::new(&file.types))
+        slot_contract(body, None, None, &mut TypeFingerprints::new(&file.types))
     }
 
     fn closure_contract(file: &MirFile) -> ContentHash {
@@ -376,7 +385,44 @@ mod tests {
             .iter()
             .find(|(_, body)| matches!(body.owner, BodyOwner::Closure { .. }))
             .expect("a closure");
-        slot_contract(body, None, &mut TypeFingerprints::new(&file.types))
+        slot_contract(body, None, None, &mut TypeFingerprints::new(&file.types))
+    }
+
+    /// The contract of the restart function of `name`, which covers its composable's.
+    fn restart_contract(file: &MirFile, name: &str) -> ContentHash {
+        let (function, _) = file
+            .bodies
+            .iter()
+            .find(|(_, body)| matches!(&body.owner, BodyOwner::Function(path) if path.name == name))
+            .unwrap_or_else(|| panic!("no body {}", name));
+        let (_, body) = file
+            .bodies
+            .iter()
+            .find(|(_, body)| matches!(body.owner, BodyOwner::Restart { function: f } if f == function))
+            .expect("a restart function");
+        slot_contract(
+            body,
+            None,
+            Some(&file.bodies[function]),
+            &mut TypeFingerprints::new(&file.types),
+        )
+    }
+
+    /// D8 of `compose-hot-reload`, adopted by `compose-transform`: a restart function splits
+    /// with its composable when a kept parameter's type changes, and not for a body edit.
+    #[test]
+    fn a_restart_contract_covers_its_composable() {
+        let int = lower_source("compose fun Badge(n: Int) { println(n) }\n");
+        let edited = lower_source("compose fun Badge(n: Int) { println(n + 1) }\n");
+        let bool = lower_source("compose fun Badge(n: Bool) { println(n) }\n");
+        assert_eq!(
+            restart_contract(&int, "Badge"),
+            restart_contract(&edited, "Badge")
+        );
+        assert_ne!(
+            restart_contract(&int, "Badge"),
+            restart_contract(&bool, "Badge")
+        );
     }
 
     #[test]

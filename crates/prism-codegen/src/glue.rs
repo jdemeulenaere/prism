@@ -58,7 +58,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Linkage, Module};
 use prism_mir::BodyId;
 use prism_runtime::PanicKind;
-use prism_typed_tree::{Type, TypeTable};
+use prism_typed_tree::{IntrinsicStruct, Type, TypeTable};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::rc::Rc;
@@ -82,6 +82,8 @@ fn owns_storage_at(ty: &Type, types: &TypeTable, depth: usize) -> bool {
         // A list owns its buffer, or may come to: an empty list grows (D13 of `collections`).
         Type::String | Type::Heap(_) | Type::List(_) | Type::Fn { .. } => true,
         Type::Nullable(inner) => owns_storage_at(inner, types, depth + 1),
+        // A composition is disposed by its drop (D16 of `compose-transform`).
+        Type::Struct { id, .. } if id.intrinsic() == Some(IntrinsicStruct::Composition) => true,
         Type::Struct { id, arguments } => types
             .instantiated_fields(id, arguments)
             .unwrap_or_default()
@@ -154,6 +156,19 @@ pub struct GlueTable {
     /// The drop function of each closure's allocated environment (D8 of `escaping-closures`).
     environment_drops: HashMap<BodyId, FuncId>,
     queued_environment_drops: Vec<(BodyId, String, FuncId)>,
+    /// The environment equality and duplicate functions of keepable closures (D9 of
+    /// `compose-transform`), by closure and kind.
+    environment_functions: HashMap<(BodyId, EnvironmentFunction), FuncId>,
+    queued_environment_functions: Vec<(BodyId, EnvironmentFunction, String, FuncId)>,
+}
+
+/// A function of a keepable closure's environment (D9 of `compose-transform`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EnvironmentFunction {
+    /// `<closure>#equals-environment(environment word, environment word) -> Bool`.
+    Equals,
+    /// `<closure>#duplicate-environment(environment word) -> environment word`.
+    Duplicate,
 }
 
 /// The symbol of the glue of `kind` for `ty` in the unit named `module` (a file's module or an
@@ -290,6 +305,59 @@ impl<M: Module> UnitContext<'_, M> {
         Ok(id)
     }
 
+    /// The environment function `function` of the keepable closure `body`, declared and queued
+    /// the first time it is asked for (D9 of `compose-transform`).
+    fn environment_function(
+        &mut self,
+        body: BodyId,
+        function: EnvironmentFunction,
+    ) -> Result<FuncId, BackendError> {
+        if let Some(id) = self.glue.environment_functions.get(&(body, function)) {
+            return Ok(*id);
+        }
+        let suffix = match function {
+            EnvironmentFunction::Equals => "equals-environment",
+            EnvironmentFunction::Duplicate => "duplicate-environment",
+        };
+        let symbol = format!("{}#{}", self.symbol(body), suffix);
+        let signature = self.environment_function_signature(function);
+        let id = self
+            .module
+            .declare_function(&symbol, Linkage::Local, &signature)?;
+        self.glue.environment_functions.insert((body, function), id);
+        self.glue
+            .queued_environment_functions
+            .push((body, function, symbol, id));
+        Ok(id)
+    }
+
+    /// `<closure>#equals-environment` of the keepable closure `body`.
+    pub fn environment_equality(&mut self, body: BodyId) -> Result<FuncId, BackendError> {
+        self.environment_function(body, EnvironmentFunction::Equals)
+    }
+
+    /// `<closure>#duplicate-environment` of the keepable closure `body`, whose environment is
+    /// allocated.
+    pub fn environment_duplicate(&mut self, body: BodyId) -> Result<FuncId, BackendError> {
+        self.environment_function(body, EnvironmentFunction::Duplicate)
+    }
+
+    fn environment_function_signature(&self, function: EnvironmentFunction) -> ir::Signature {
+        let mut signature = ir::Signature::new(self.call_conv);
+        match function {
+            EnvironmentFunction::Equals => {
+                signature.params.push(AbiParam::new(self.pointer));
+                signature.params.push(AbiParam::new(self.pointer));
+                signature.returns.push(AbiParam::new(types::I8));
+            }
+            EnvironmentFunction::Duplicate => {
+                signature.params.push(AbiParam::new(self.pointer));
+                signature.returns.push(AbiParam::new(self.pointer));
+            }
+        }
+        signature
+    }
+
     /// The signature of glue of `kind`: the value's address for a drop, the destination's and
     /// the source's for a clone, returning nothing; the two values' addresses for equality,
     /// returning a `Bool`; the list's and the element's addresses for index-of, returning an
@@ -345,6 +413,25 @@ impl<M: Module> UnitContext<'_, M> {
                     symbol,
                     id,
                     function,
+                    contract: None,
+                });
+            } else if let Some((body, function, symbol, id)) =
+                self.glue.queued_environment_functions.pop()
+            {
+                let signature = self.environment_function_signature(function);
+                let mut function_ir =
+                    Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
+                GlueLowering::lower_environment_function(
+                    self,
+                    body,
+                    function,
+                    &mut function_ir,
+                    builder_context,
+                )?;
+                lowered.push(LoweredFunction {
+                    symbol,
+                    id,
+                    function: function_ir,
                     contract: None,
                 });
             } else if let Some((body, symbol, id)) = self.glue.queued_environment_drops.pop() {
@@ -412,7 +499,54 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             }
             (GlueKind::Drop, Type::Heap(contents)) => lowering.drop_box(contents, parameters[0])?,
             (GlueKind::Drop, Type::Fn { .. }) => lowering.drop_function_value(parameters[0])?,
-            (GlueKind::Clone | GlueKind::Equals, Type::Fn { .. }) => {
+            // Two function values are equal when they have one descriptor whose environment
+            // equality entry finds their environments equal (D9 of `compose-transform`).
+            (GlueKind::Equals, Type::Fn { .. }) => {
+                lowering.function_equality(parameters[0], parameters[1])?
+            }
+            // A composition's drop disposes it.
+            (GlueKind::Drop, Type::Struct { id, .. })
+                if id.intrinsic() == Some(IntrinsicStruct::Composition) =>
+            {
+                let handle = lowering.builder.ins().load(
+                    types::I64,
+                    MemFlagsData::trusted(),
+                    parameters[0],
+                    0,
+                );
+                lowering.call_runtime("prism_compose_dispose", &[handle])?;
+            }
+            // A scalar's equality glue, which slot type records name, loads both values.
+            (GlueKind::Equals, _)
+                if !matches!(
+                    representation(ty, lowering.context.pointer),
+                    Some(Representation::Memory)
+                ) =>
+            {
+                let equal = match representation(ty, lowering.context.pointer) {
+                    Some(Representation::Scalar(machine)) => {
+                        let flags = MemFlagsData::trusted();
+                        let left = lowering
+                            .builder
+                            .ins()
+                            .load(machine, flags, parameters[0], 0);
+                        let right = lowering
+                            .builder
+                            .ins()
+                            .load(machine, flags, parameters[1], 0);
+                        let mut functions = HashMap::new();
+                        let mut comparison = Comparison::new(
+                            &mut lowering.builder,
+                            &mut *lowering.context,
+                            &mut functions,
+                        );
+                        comparison.equality(ty, Compared::Scalar(left), Compared::Scalar(right))?
+                    }
+                    _ => lowering.builder.ins().iconst(types::I8, 1),
+                };
+                lowering.builder.ins().return_(&[equal]);
+            }
+            (GlueKind::Clone, Type::Fn { .. }) => {
                 return Err(BackendError::new(format!(
                     "{} glue for the function type {}",
                     kind.name(),
@@ -496,6 +630,148 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         };
         lowering.free(environment, &allocation)?;
         lowering.builder.ins().return_(&[]);
+        let config = lowering.context.module.target_config();
+        lowering.builder.seal_all_blocks();
+        lowering.builder.finalize(config);
+        Ok(())
+    }
+
+    /// The equality glue of a function type, over the values at `left` and `right`: the same
+    /// descriptor, a non-null environment equality entry, and that entry finding the two
+    /// environments equal (D9 of `compose-transform`). Returns from every path.
+    fn function_equality(&mut self, left: Value, right: Value) -> Result<(), BackendError> {
+        let pointer = self.context.pointer;
+        let flags = MemFlagsData::trusted();
+        let descriptor = FunctionField::Descriptor.offset(pointer) as i32;
+        let environment = FunctionField::Environment.offset(pointer) as i32;
+        let left_descriptor = self.builder.ins().load(pointer, flags, left, descriptor);
+        let right_descriptor = self.builder.ins().load(pointer, flags, right, descriptor);
+        let same = self
+            .builder
+            .ins()
+            .icmp(IntCC::Equal, left_descriptor, right_descriptor);
+        let compare = self.builder.create_block();
+        let call = self.builder.create_block();
+        let unequal = self.builder.create_block();
+        self.builder.ins().brif(same, compare, &[], unequal, &[]);
+        self.builder.switch_to_block(compare);
+        let entry =
+            self.builder
+                .ins()
+                .load(pointer, flags, left_descriptor, 2 * pointer.bytes() as i32);
+        self.builder.ins().brif(entry, call, &[], unequal, &[]);
+        self.builder.switch_to_block(call);
+        let left_environment = self.builder.ins().load(pointer, flags, left, environment);
+        let right_environment = self.builder.ins().load(pointer, flags, right, environment);
+        let mut signature = ir::Signature::new(self.context.call_conv);
+        signature.params.push(AbiParam::new(pointer));
+        signature.params.push(AbiParam::new(pointer));
+        signature.returns.push(AbiParam::new(types::I8));
+        let signature = self.builder.import_signature(signature);
+        let result = self.builder.ins().call_indirect(
+            signature,
+            entry,
+            &[left_environment, right_environment],
+        );
+        let equal = self.builder.inst_results(result)[0];
+        self.builder.ins().return_(&[equal]);
+        self.builder.switch_to_block(unequal);
+        let no = self.builder.ins().iconst(types::I8, 0);
+        self.builder.ins().return_(&[no]);
+        Ok(())
+    }
+
+    /// The environment function `function` of the keepable closure `body` (D9 of
+    /// `compose-transform`). Its captures are all owned and `Copy`: equality compares each with
+    /// `==` of its type, in capture order, reading an inline environment from its word; a
+    /// duplicate is a new allocation holding a copy of the captures.
+    fn lower_environment_function(
+        context: &'c mut UnitContext<'m, M>,
+        body: BodyId,
+        function: EnvironmentFunction,
+        ir_function: &'a mut Function,
+        builder_context: &'a mut FunctionBuilderContext,
+    ) -> Result<(), BackendError> {
+        let builder = FunctionBuilder::new(ir_function, builder_context);
+        let mut lowering = GlueLowering { context, builder };
+        let entry = lowering.builder.create_block();
+        lowering
+            .builder
+            .append_block_params_for_function_params(entry);
+        lowering.builder.switch_to_block(entry);
+        let parameters = lowering.builder.block_params(entry).to_vec();
+        let file = lowering.context.file;
+        let layout = lowering
+            .context
+            .layouts
+            .environment_layout(&file.bodies[body])
+            .map_err(|construct| {
+                BackendError::new(format!(
+                    "no layout for a closure's environment: {}",
+                    construct.description()
+                ))
+            })?;
+        let pointer = lowering.context.pointer;
+        let flags = MemFlagsData::trusted();
+        match function {
+            EnvironmentFunction::Equals => {
+                // An inline environment arrives as the word itself, spilled to be read.
+                let addresses: Vec<Value> = parameters
+                    .iter()
+                    .map(|word| {
+                        if layout.kind == crate::layout::EnvironmentKind::Inline {
+                            let slot =
+                                lowering
+                                    .builder
+                                    .create_sized_stack_slot(ir::StackSlotData::new(
+                                        ir::StackSlotKind::ExplicitSlot,
+                                        pointer.bytes(),
+                                        pointer.bytes().trailing_zeros() as u8,
+                                    ));
+                            let address = lowering.builder.ins().stack_addr(pointer, slot, 0);
+                            lowering.builder.ins().store(flags, *word, address, 0);
+                            address
+                        } else {
+                            *word
+                        }
+                    })
+                    .collect();
+                let mut all = lowering.builder.ins().iconst(types::I8, 1);
+                for field in &layout.captures {
+                    let left = lowering.add(addresses[0], field.offset);
+                    let right = lowering.add(addresses[1], field.offset);
+                    let (left, right) = match representation(&field.ty, pointer) {
+                        Some(Representation::Scalar(machine)) => (
+                            Compared::Scalar(lowering.builder.ins().load(machine, flags, left, 0)),
+                            Compared::Scalar(lowering.builder.ins().load(machine, flags, right, 0)),
+                        ),
+                        Some(Representation::Memory) => {
+                            (Compared::Memory(left), Compared::Memory(right))
+                        }
+                        Some(Representation::Empty) | None => continue,
+                    };
+                    let mut functions = HashMap::new();
+                    let mut comparison = Comparison::new(
+                        &mut lowering.builder,
+                        &mut *lowering.context,
+                        &mut functions,
+                    );
+                    let equal = comparison.equality(&field.ty, left, right)?;
+                    all = lowering.builder.ins().band(all, equal);
+                }
+                lowering.builder.ins().return_(&[all]);
+            }
+            EnvironmentFunction::Duplicate => {
+                let allocation = Layout {
+                    size: layout.size,
+                    align: layout.align,
+                    shape: Shape::Empty,
+                };
+                let copy = lowering.allocate(&allocation)?;
+                lowering.copy(copy, parameters[0], &allocation);
+                lowering.builder.ins().return_(&[copy]);
+            }
+        }
         let config = lowering.context.module.target_config();
         lowering.builder.seal_all_blocks();
         lowering.builder.finalize(config);

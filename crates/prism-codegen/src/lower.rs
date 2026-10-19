@@ -50,8 +50,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variab
 use cranelift_module::{DataId, FuncId, Module};
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, BasicBlock, Body, BodyId, BodyOwner, Callee, Capture, Constant, LocalId,
-    LocalKind, Operand, Place, Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
+    AggregateKind, BasicBlock, Body, BodyId, Callee, Capture, Constant, LocalId, LocalKind,
+    Operand, Place, Projection, Rvalue, StatementKind, TemplatePart, TerminatorKind,
 };
 use prism_runtime::{
     PanicKind, TEMPLATE_BOOL, TEMPLATE_CHAR, TEMPLATE_DOUBLE, TEMPLATE_INT, TEMPLATE_STRING,
@@ -272,7 +272,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         if self.is_memory(self.body.return_type()) {
             received.insert(LocalId::RETURN, next()?);
         }
-        if matches!(self.body.owner, BodyOwner::Closure { .. }) {
+        if self.body.owner.is_closure() {
             let word = next()?;
             let layout = self.environment_layout(self.body)?;
             // An inline environment arrives as the word itself: it is spilled to a slot, from
@@ -1834,32 +1834,321 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         self.finish_call(target)
     }
 
-    /// A call of a composer operation (D20 of `compose-transform`).
+    /// A call of a composer operation (D20 of `compose-transform`): a direct call of the compose
+    /// runtime's entry point, slot values passed by address and moved into the runtime, the
+    /// handles of compositions and scopes loaded from their one word; `Keepable` and
+    /// `Duplicate` read the function value's descriptor inline.
     fn composer_call(
         &mut self,
         operation: &prism_mir::ComposerOperation,
-        _arguments: &[Operand],
-        _parameters: &[Type],
-        _destination: &Place,
-        _span: Span,
+        arguments: &[Operand],
+        parameters: &[Type],
+        destination: &Place,
+        span: Span,
     ) -> Result<(), BackendError> {
-        Err(BackendError::new(format!(
-            "the composer operation {} is not lowered yet",
-            operation.name()
-        )))
+        use prism_mir::ComposerOperation as Operation;
+        let word = |lowering: &mut Self, index: usize| -> Result<Value, BackendError> {
+            let operand = arguments
+                .get(index)
+                .ok_or_else(|| BackendError::new("a composer operation without its operand"))?;
+            lowering.operand(operand, span)?.scalar()
+        };
+        // The handle word of the composition or scope a reference operand points at.
+        let handle = |lowering: &mut Self, index: usize| -> Result<Value, BackendError> {
+            let address = word(lowering, index)?;
+            Ok(lowering
+                .builder
+                .ins()
+                .load(types::I64, aligned(), address, 0))
+        };
+        let key = |lowering: &mut Self, key: &prism_mir::GroupKey| {
+            lowering.builder.ins().iconst(types::I64, key.hash as i64)
+        };
+        match operation {
+            Operation::StartRestartGroup { key: group } | Operation::StartGroup { key: group } => {
+                let composer = word(self, 0)?;
+                let key = key(self, group);
+                let name = match operation {
+                    Operation::StartRestartGroup { .. } => "prism_compose_start_restart_group",
+                    _ => "prism_compose_start_group",
+                };
+                self.call_runtime(name, &[composer, key])?;
+            }
+            Operation::StartMovableGroup { key: group } => {
+                let composer = word(self, 0)?;
+                let key = key(self, group);
+                let data = word(self, 1)?;
+                self.call_runtime("prism_compose_start_movable_group", &[composer, key, data])?;
+            }
+            Operation::EndGroup => {
+                let composer = word(self, 0)?;
+                self.call_runtime("prism_compose_end_group", &[composer])?;
+            }
+            Operation::EndRestartGroup => {
+                let composer = word(self, 0)?;
+                let restart = self.slot_value(&arguments[1], &parameters[1], span)?;
+                self.call_runtime("prism_compose_end_restart_group", &[composer, restart])?;
+            }
+            Operation::Skipping => {
+                let composer = word(self, 0)?;
+                let result = self.call_runtime("prism_compose_skipping", &[composer])?;
+                self.write_place(destination, Lowered::Scalar(result[0]), false)?;
+            }
+            Operation::SkipToGroupEnd => {
+                let composer = word(self, 0)?;
+                self.call_runtime("prism_compose_skip_to_group_end", &[composer])?;
+            }
+            Operation::Changed(ty) | Operation::SetSlot(ty) => {
+                let composer = word(self, 0)?;
+                let record = self.context.slot_type(ty)?;
+                let record = self.data(record);
+                let value = self.slot_value(&arguments[1], ty, span)?;
+                if let Operation::Changed(_) = operation {
+                    let result =
+                        self.call_runtime("prism_compose_changed", &[composer, record, value])?;
+                    self.write_place(destination, Lowered::Scalar(result[0]), false)?;
+                } else {
+                    self.call_runtime("prism_compose_set_slot", &[composer, record, value])?;
+                }
+            }
+            Operation::KeptParameter { index, ty } => {
+                let composer = word(self, 0)?;
+                let record = self.context.slot_type(ty)?;
+                let record = self.data(record);
+                let index = self.builder.ins().iconst(types::I64, i64::from(*index));
+                let address =
+                    self.call_runtime("prism_compose_kept_slot", &[composer, index, record])?[0];
+                if crate::representation::is_function_type(ty) {
+                    // A kept function value is duplicated: the slot keeps the original.
+                    let destination = self.address(destination)?;
+                    self.duplicate_function(destination, address, ty)?;
+                } else {
+                    let value = self.read_location(Location::Memory(address), ty)?;
+                    self.write_place(destination, value, false)?;
+                }
+            }
+            Operation::Keepable => {
+                let value = word(self, 0)?;
+                let ty = match &parameters[0] {
+                    Type::Reference { inner, .. } => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                let keepable = self.keepable(value, &ty)?;
+                self.write_place(destination, Lowered::Scalar(keepable), false)?;
+            }
+            Operation::Duplicate => {
+                let value = word(self, 0)?;
+                let ty = match &parameters[0] {
+                    Type::Reference { inner, .. } => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                let destination = self.address(destination)?;
+                self.duplicate_function(destination, value, &ty)?;
+            }
+            Operation::CurrentScope => {
+                let composer = word(self, 0)?;
+                let scope = self.call_runtime("prism_compose_current_scope", &[composer])?[0];
+                let destination = self.address(destination)?;
+                self.builder.ins().store(aligned(), scope, destination, 0);
+            }
+            Operation::StartComposition => {
+                let content = self.slot_value(&arguments[0], &parameters[0], span)?;
+                let composition = self.call_runtime("prism_compose_start", &[content])?[0];
+                let destination = self.address(destination)?;
+                self.builder
+                    .ins()
+                    .store(aligned(), composition, destination, 0);
+            }
+            Operation::SetContent => {
+                let composition = handle(self, 0)?;
+                let content = self.slot_value(&arguments[1], &parameters[1], span)?;
+                self.call_runtime("prism_compose_set_content", &[composition, content])?;
+            }
+            Operation::Recompose => {
+                let composition = handle(self, 0)?;
+                let result = self.call_runtime("prism_compose_recompose", &[composition])?;
+                self.write_place(destination, Lowered::Scalar(result[0]), false)?;
+            }
+            Operation::Dump => {
+                let composition = handle(self, 0)?;
+                let destination = self.address(destination)?;
+                self.call_runtime("prism_compose_dump", &[destination, composition])?;
+            }
+            Operation::Invalidate => {
+                let scope = handle(self, 0)?;
+                self.call_runtime("prism_compose_invalidate", &[scope])?;
+            }
+        }
+        Ok(())
     }
 
-    /// A read of the slot at the composer's cursor (D19 of `compose-transform`).
+    /// The address of a value given to the runtime by address, moved into it: the memory of a
+    /// value in memory, or a stack slot a scalar is spilled to.
+    fn slot_value(
+        &mut self,
+        operand: &Operand,
+        ty: &Type,
+        span: Span,
+    ) -> Result<Value, BackendError> {
+        match self.operand(operand, span)? {
+            Lowered::Memory(address) => Ok(address),
+            Lowered::Scalar(value) => {
+                let temporary = self.temporary(ty)?;
+                self.builder.ins().store(aligned(), value, temporary, 0);
+                Ok(temporary)
+            }
+            Lowered::Empty => {
+                let pointer = self.pointer();
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    pointer.bytes(),
+                    pointer.bytes().trailing_zeros() as u8,
+                ));
+                Ok(self.builder.ins().stack_addr(pointer, slot, 0))
+            }
+        }
+    }
+
+    /// Whether the function value (or nullable of one) at `value` is keepable: `null`, or its
+    /// descriptor's environment equality entry is not null (D9 of `compose-transform`).
+    fn keepable(&mut self, value: Value, ty: &Type) -> Result<Value, BackendError> {
+        let pointer = self.pointer();
+        match ty {
+            Type::Nullable(inner) => {
+                let layout = self.layout(ty)?;
+                let Shape::Nullable { payload } = &layout.shape else {
+                    return Err(BackendError::new(format!("a keepable {}", ty)));
+                };
+                let offset = payload.offset;
+                let tag = self.builder.ins().load(types::I8, aligned(), value, 0);
+                let present = self.builder.create_block();
+                let done = self.builder.create_block();
+                self.builder.append_block_param(done, types::I8);
+                let yes = self.builder.ins().iconst(types::I8, 1);
+                self.builder
+                    .ins()
+                    .brif(tag, present, &[], done, &[yes.into()]);
+                self.builder.switch_to_block(present);
+                let payload = self.add(value, offset);
+                let keepable = self.keepable(payload, inner)?;
+                self.builder.ins().jump(done, &[keepable.into()]);
+                self.builder.switch_to_block(done);
+                Ok(self.builder.block_params(done)[0])
+            }
+            _ => {
+                let descriptor = self.builder.ins().load(
+                    pointer,
+                    aligned(),
+                    value,
+                    FunctionField::Descriptor.offset(pointer) as i32,
+                );
+                let entry = self.builder.ins().load(
+                    pointer,
+                    aligned(),
+                    descriptor,
+                    2 * pointer.bytes() as i32,
+                );
+                Ok(self.builder.ins().icmp_imm_s(IntCC::NotEqual, entry, 0))
+            }
+        }
+    }
+
+    /// Writes at `destination` a duplicate of the keepable function value (or nullable of one)
+    /// at `source`: its descriptor, and its environment word, or a copy of an allocated
+    /// environment made by the duplicate entry (D9 of `compose-transform`).
+    fn duplicate_function(
+        &mut self,
+        destination: Value,
+        source: Value,
+        ty: &Type,
+    ) -> Result<(), BackendError> {
+        let pointer = self.pointer();
+        if let Type::Nullable(inner) = ty {
+            let layout = self.layout(ty)?;
+            let Shape::Nullable { payload } = &layout.shape else {
+                return Err(BackendError::new(format!("a duplicate of {}", ty)));
+            };
+            let offset = payload.offset;
+            let tag = self.builder.ins().load(types::I8, aligned(), source, 0);
+            self.builder.ins().store(aligned(), tag, destination, 0);
+            let present = self.builder.create_block();
+            let done = self.builder.create_block();
+            self.builder.ins().brif(tag, present, &[], done, &[]);
+            self.builder.switch_to_block(present);
+            let to = self.add(destination, offset);
+            let from = self.add(source, offset);
+            self.duplicate_function(to, from, inner)?;
+            self.builder.ins().jump(done, &[]);
+            self.builder.switch_to_block(done);
+            return Ok(());
+        }
+        let descriptor_offset = FunctionField::Descriptor.offset(pointer) as i32;
+        let environment_offset = FunctionField::Environment.offset(pointer) as i32;
+        let descriptor = self
+            .builder
+            .ins()
+            .load(pointer, aligned(), source, descriptor_offset);
+        let environment = self
+            .builder
+            .ins()
+            .load(pointer, aligned(), source, environment_offset);
+        let entry =
+            self.builder
+                .ins()
+                .load(pointer, aligned(), descriptor, 3 * pointer.bytes() as i32);
+        let call = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.append_block_param(done, pointer);
+        self.builder
+            .ins()
+            .brif(entry, call, &[], done, &[environment.into()]);
+        self.builder.switch_to_block(call);
+        let mut signature = ir::Signature::new(self.context.call_conv);
+        signature.params.push(ir::AbiParam::new(pointer));
+        signature.returns.push(ir::AbiParam::new(pointer));
+        let signature = self.builder.import_signature(signature);
+        let copied = self
+            .builder
+            .ins()
+            .call_indirect(signature, entry, &[environment]);
+        let copied = self.builder.inst_results(copied)[0];
+        self.builder.ins().jump(done, &[copied.into()]);
+        self.builder.switch_to_block(done);
+        let environment = self.builder.block_params(done)[0];
+        self.builder
+            .ins()
+            .store(aligned(), descriptor, destination, descriptor_offset);
+        self.builder
+            .ins()
+            .store(aligned(), environment, destination, environment_offset);
+        Ok(())
+    }
+
+    /// A read of the slot at the composer's cursor (D19 of `compose-transform`): when it holds
+    /// a value of `slot_type`, its bytes are copied to `destination`, which only reads it, and
+    /// control goes to `found`; otherwise to `missing`.
     fn remembered(
         &mut self,
-        _composer: &Operand,
-        _slot_type: &Type,
-        _destination: &Place,
-        _found: prism_mir::BlockId,
-        _missing: prism_mir::BlockId,
-        _span: Span,
+        composer: &Operand,
+        slot_type: &Type,
+        destination: &Place,
+        found: prism_mir::BlockId,
+        missing: prism_mir::BlockId,
+        span: Span,
     ) -> Result<(), BackendError> {
-        Err(BackendError::new("slot reads are not lowered yet"))
+        let composer = self.operand(composer, span)?.scalar()?;
+        let record = self.context.slot_type(slot_type)?;
+        let record = self.data(record);
+        let address = self.call_runtime("prism_compose_slot", &[composer, record])?[0];
+        let present = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(address, present, &[], self.blocks[missing.0 as usize], &[]);
+        self.builder.switch_to_block(present);
+        let value = self.read_location(Location::Memory(address), slot_type)?;
+        self.write_place(destination, value, false)?;
+        self.builder.ins().jump(self.blocks[found.0 as usize], &[]);
+        Ok(())
     }
 
     /// Ends the block of a call: a jump to `target`, or a trap after a callee that returns

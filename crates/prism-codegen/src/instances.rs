@@ -433,7 +433,7 @@ mod tests {
     fn an_unsupported_construct_is_reported_once_for_every_instance() {
         let files = lower_files(&[(
             "main",
-            "fun <T> later(x: T): Int { val f: compose () -> Unit = {}; return 1 }\n\
+            "fun <T> later(x: T): Int { val g: Widget? = null; return 1 }\n\
              fun main() { println(later(1)); println(later(true)) }\n",
         )]);
         let units = collect(&files).unwrap();

@@ -540,6 +540,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
 /// the requirements on struct, enum, nullable and generic instance layouts, and "A type without
 /// a layout yet".
 const LAYOUT_SCENARIOS: &[&str] = &[
+    "layout-of-a-composition",
     "value-struct-definition",
     "fields-ordered-by-alignment",
     "payload-free-enum",

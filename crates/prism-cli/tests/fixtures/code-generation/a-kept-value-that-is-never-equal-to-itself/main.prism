@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+struct D : Copy { val v: Double }
+
+compose fun Show(d: D) {
+    println("show")
+}
+
+fun screen(v: Double): compose () -> Unit = { Show(D(v)) }
+
+fun main() {
+    val nan = 0.0 / 0.0
+    val c = composition(screen(nan))
+    c.setContent(screen(nan))
+    c.setContent(screen(1.0))
+    c.setContent(screen(1.0))
+}

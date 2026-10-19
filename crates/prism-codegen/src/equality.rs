@@ -220,7 +220,7 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
     /// equality glue for boxed contents. Asked only of types whose weight is small.
     fn calls(&self, ty: &Type) -> Result<bool, BackendError> {
         match ty {
-            Type::String | Type::List(_) => Ok(true),
+            Type::String | Type::List(_) | Type::Fn { .. } => Ok(true),
             Type::Heap(inner) if needs_equality_glue(inner) => Ok(true),
             Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
                 self.calls(inner)
@@ -606,6 +606,13 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
                 self.parts(fields, left, right)?;
             }
             Type::Enum { .. } => self.enum_equality(ty, left, right)?,
+            // Function values compare by descriptor and environment, in their equality glue
+            // (D9 of `compose-transform`).
+            Type::Fn { .. } => {
+                let id = self.context.equality_glue(ty)?;
+                let (left, right) = (self.address(left)?, self.address(right)?);
+                self.call(id, &[left, right])?;
+            }
             other => return Err(BackendError::new(format!("a comparison of {}", other))),
         }
         Ok(())

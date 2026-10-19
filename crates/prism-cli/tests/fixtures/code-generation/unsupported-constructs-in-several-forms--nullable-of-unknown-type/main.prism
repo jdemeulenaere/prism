@@ -1,0 +1,4 @@
+// expect: ok
+// run: 1
+fun second(): Int { val g: Gadget? = null; return 1 }
+fun main() {}

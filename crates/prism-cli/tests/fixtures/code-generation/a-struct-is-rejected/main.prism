@@ -1,4 +1,5 @@
 // expect: ok
 // run: 1
-struct P { val content: compose () -> Unit }
-fun main() { val p = P({}); println(1) }
+struct P { val w: Widget }
+fun use(p: P): Int = 1
+fun main() { println(1) }

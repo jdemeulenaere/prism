@@ -1,5 +1,0 @@
-error[E6001]: the Tier 1 backend does not support composable functions yet
-  --> main.prism:3:1
-    3 | compose fun Label() {}
-      | ^
-   = note: support for composable functions is planned in the 'compose-transform' change

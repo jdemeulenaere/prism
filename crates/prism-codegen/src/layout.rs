@@ -287,6 +287,11 @@ impl<'t> LayoutTable<'t> {
             return Err(unknown());
         }
         let result = match ty {
+            // An intrinsic struct is one word, a runtime handle, laid out as a hidden `Int`
+            // field so that copies and `==` compare the handle (D16 of `compose-transform`).
+            Type::Struct { id, .. } if id.intrinsic().is_some() => {
+                self.struct_layout(&[("handle".to_string(), false, Type::Int)])
+            }
             Type::Struct { id, arguments } => match self.types.instantiated_fields(id, arguments) {
                 Some(fields) => self.struct_layout(&fields),
                 None => Err(unknown()),

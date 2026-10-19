@@ -119,6 +119,15 @@ pub fn closure_signature(body: &Body, call_conv: CallConv, pointer: MachineType)
     function_value_signature(&parameters, body.return_type(), call_conv, pointer)
 }
 
+/// Whether `ty` is a function type or a nullable of one.
+pub fn is_function_type(ty: &Type) -> bool {
+    match ty {
+        Type::Fn { .. } => true,
+        Type::Nullable(inner) => matches!(**inner, Type::Fn { .. }),
+        _ => false,
+    }
+}
+
 /// The signature with which a function value taking `parameters` and returning `result` is
 /// called: the closure signature of D4 of `closures`, built from the call's parameter types
 /// and destination, so that it agrees with [`closure_signature`] of every closure the value

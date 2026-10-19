@@ -161,13 +161,13 @@ fn dumping_a_file_s_ir() {
 
 #[test]
 fn dumping_a_file_the_backend_rejects() {
-    let directory = single_file("dump_rejected", "compose fun Label() {}\n");
+    let directory = single_file("dump_rejected", "fun first(w: Widget): Int = 1\n");
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "");
     assert!(
         stderr(&output).starts_with(
-            "error[E6001]: the Tier 1 backend does not support composable functions yet\n  --> main.prism:1:1\n"
+            "error[E6001]: the Tier 1 backend does not support values of unknown type 'Widget' yet\n  --> main.prism:1:1\n"
         ),
         "{}",
         stderr(&output)
@@ -1709,4 +1709,100 @@ fn a_syntax_error_in_an_imported_file_at_start() {
     session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
     let (stdout, _) = session.stop();
     assert_eq!(stdout, "4\n");
+}
+
+/// The IR `prism dump-clif` prints for the function `symbol` of the file in `directory`.
+fn clif_function(directory: &Path, symbol: &str) -> String {
+    let output = prism(&["dump-clif", "main.prism"], directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let header = format!("function {}\n", symbol);
+    let start = dump
+        .find(&header)
+        .unwrap_or_else(|| panic!("no function {} in\n{}", symbol, dump));
+    let rest = &dump[start + header.len()..];
+    let end = rest.find("\nfunction ").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+/// code-generation: "Signature of a composable" and "A call of a composable function value"
+/// (`compose-transform`): a composable takes the composer and a change word after its
+/// parameters, and a call of a composable function value passes them after the environment.
+#[test]
+fn composable_signatures_and_calls() {
+    let directory = single_file(
+        "composable_signatures",
+        "compose fun Label(n: Int) {}\ncompose fun Column(content: compose () -> Unit) { content() }\n",
+    );
+    let label = clif_function(&directory, "main::Label");
+    assert!(
+        label.contains("function %\"main::Label\"(i64, i64, i64)"),
+        "{}",
+        label
+    );
+    let column = clif_function(&directory, "main::Column");
+    // The content's environment, then the composer and the change word.
+    assert!(
+        column.contains("call_indirect sig") && column.contains("(i64, i64, i64) "),
+        "{}",
+        column
+    );
+}
+
+/// code-generation: "A restart group in the IR dump" and "Records of a unit"
+/// (`compose-transform`).
+#[test]
+fn restart_groups_and_slot_type_records_in_the_ir_dump() {
+    let directory = single_file(
+        "restart_group_ir",
+        "struct Point : Copy { val x: Int }\n\
+         compose fun Badge(n: Int) { println(n) }\n\
+         compose fun P(n: Int) { val p = remember { Point(n) } }\n",
+    );
+    let badge = clif_function(&directory, "main::Badge");
+    let start = badge
+        .find("call fn2(")
+        .or_else(|| badge.find("prism_compose_start_restart_group"))
+        .expect("the start of the restart group");
+    assert!(
+        badge.contains("prism_compose_start_restart_group"),
+        "{}",
+        badge
+    );
+    assert!(
+        badge.contains("prism_compose_end_restart_group"),
+        "{}",
+        badge
+    );
+    assert!(start > 0);
+    assert!(
+        badge.contains("symbol %\"main#slot-type(Int)\""),
+        "{}",
+        badge
+    );
+    let p = clif_function(&directory, "main::P");
+    assert!(
+        p.contains("symbol %\"main#slot-type(main::Point)\""),
+        "{}",
+        p
+    );
+}
+
+/// code-generation: "Entries of closures" (`compose-transform`): a closure owning only `Copy`
+/// captures in an allocated environment has an environment equality and duplicate function,
+/// and one owning a `String` has neither.
+#[test]
+fn entries_of_closures() {
+    let directory = single_file(
+        "closure_entries",
+        "fun keep(f: escaping () -> Unit) {}\n\
+         fun main() { val a = 1; val b = 2; keep { println(a + b) }; val s = \"x\" + \"y\"; keep { println(s) } }\n",
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    assert!(dump.contains("function main::main#closure0#equals-environment\n"));
+    assert!(dump.contains("function main::main#closure0#duplicate-environment\n"));
+    assert!(!dump.contains("main::main#closure1#equals-environment"));
+    assert!(!dump.contains("main::main#closure1#duplicate-environment"));
 }

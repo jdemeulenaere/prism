@@ -1,0 +1,4 @@
+// expect: ok
+struct Screen { val c: Composition, val s: RecomposeScope }
+
+fun f(s: Screen) {}

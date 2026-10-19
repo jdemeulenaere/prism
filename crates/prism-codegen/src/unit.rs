@@ -94,6 +94,13 @@ impl CodeUnit {
         name: &str,
         module: &mut M,
     ) -> Result<CodeUnit, BackendError> {
+        // The backend compiles composed MIR alone (D20 of `compose-transform`).
+        if file.phase != prism_mir::MirPhase::Composed {
+            return Err(BackendError::new(format!(
+                "{} reached the backend without being composed",
+                file.module
+            )));
+        }
         let mut context = UnitContext::new(file, name, module)?;
         let mut builder_context = FunctionBuilderContext::new();
         let mut functions = Vec::new();
@@ -102,22 +109,30 @@ impl CodeUnit {
                 continue;
             }
             let symbol = context.symbol(body_id).to_string();
-            let signature = match body.owner {
-                BodyOwner::Closure { .. } => {
-                    closure_signature(body, context.call_conv, context.pointer)
-                }
-                _ => body_signature(body, context.call_conv, context.pointer),
+            // Restart functions and root content adapters are closures too (D19 of
+            // `compose-transform`).
+            let signature = if body.owner.is_closure() {
+                closure_signature(body, context.call_conv, context.pointer)
+            } else {
+                body_signature(body, context.call_conv, context.pointer)
             };
             let id = context.declare_function(&symbol, &signature)?;
-            let environment = match body.owner {
-                BodyOwner::Closure { .. } => context
+            let environment = if body.owner.is_closure() {
+                context
                     .layouts
                     .environment_layout(body)
                     .ok()
-                    .map(|layout| layout.kind),
+                    .map(|layout| layout.kind)
+            } else {
+                None
+            };
+            // A restart function's contract covers its composable's (D8 of
+            // `compose-hot-reload`, adopted by `compose-transform`).
+            let restarted = match body.owner {
+                BodyOwner::Restart { function } => Some(&file.bodies[function]),
                 _ => None,
             };
-            let contract = slot_contract(body, environment, &mut context.fingerprints);
+            let contract = slot_contract(body, environment, restarted, &mut context.fingerprints);
             let mut function =
                 Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
             BodyLowering::lower(&mut context, body, &mut function, &mut builder_context)?;
@@ -163,6 +178,9 @@ pub(crate) struct UnitContext<'m, M: Module> {
     slots: HashMap<String, DataId>,
     /// The descriptor of each closure body the unit builds a value of.
     descriptors: HashMap<BodyId, DataId>,
+    /// The slot type record of each type the unit keeps or remembers (D20 of
+    /// `compose-transform`).
+    slot_types: HashMap<Type, DataId>,
     /// The symbol of each body of the file, by id, built once ([`symbols_of`]).
     symbols: Vec<String>,
     stack_limit: Option<DataId>,
@@ -190,6 +208,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
             runtime: HashMap::new(),
             slots: HashMap::new(),
             descriptors: HashMap::new(),
+            slot_types: HashMap::new(),
             symbols: symbols_of(file),
             stack_limit: None,
             fingerprints: TypeFingerprints::new(&file.types),
@@ -308,11 +327,58 @@ impl<'m, M: Module> UnitContext<'m, M> {
         Ok(id)
     }
 
+    /// The slot type record of `ty`, `<unit>#slot-type(<type>)`, defined on first use (D20 of
+    /// `compose-transform`), laid out as `prism_compose::SlotType`: the type's fingerprint, its
+    /// size and alignment, its drop glue or null, its equality glue, and its name.
+    pub fn slot_type(&mut self, ty: &Type) -> Result<DataId, BackendError> {
+        if let Some(id) = self.slot_types.get(ty) {
+            return Ok(*id);
+        }
+        let layout = self.layouts.layout(ty).map_err(|construct| {
+            BackendError::new(format!("no layout for {}: {}", ty, construct.description()))
+        })?;
+        let name = crate::glue::qualified_name(ty);
+        let text = self.text(&name)?;
+        let fingerprint = self.fingerprints.fingerprint(ty);
+        let drop = match self.glue(GlueKind::Drop, ty)? {
+            Some(crate::glue::Glue::Runtime(function)) => Some(self.runtime_function(function)?),
+            Some(crate::glue::Glue::Generated(id)) => Some(id),
+            None => None,
+        };
+        let equals = self.equality_glue(ty)?;
+        let symbol = format!("{}#slot-type({})", self.name, name);
+        let id = self
+            .module
+            .declare_data(&symbol, Linkage::Local, false, false)?;
+        let word = self.pointer.bytes() as usize;
+        let mut bytes = vec![0u8; 32 + 6 * word];
+        bytes[..32].copy_from_slice(&fingerprint.0);
+        bytes[32..32 + word].copy_from_slice(&(layout.storage_size() as u64).to_le_bytes()[..word]);
+        bytes[32 + word..32 + 2 * word]
+            .copy_from_slice(&u64::from(layout.align).to_le_bytes()[..word]);
+        bytes[32 + 5 * word..32 + 6 * word]
+            .copy_from_slice(&(name.len() as u64).to_le_bytes()[..word]);
+        let mut description = DataDescription::new();
+        description.define(bytes.into_boxed_slice());
+        description.set_align(u64::from(self.pointer.bytes()));
+        if let Some(drop) = drop {
+            let drop = self.module.declare_func_in_data(drop, &mut description);
+            description.write_function_addr((32 + 2 * word) as u32, drop);
+        }
+        let equals = self.module.declare_func_in_data(equals, &mut description);
+        description.write_function_addr((32 + 3 * word) as u32, equals);
+        let text = self.module.declare_data_in_data(text, &mut description);
+        description.write_data_addr((32 + 4 * word) as u32, text, 0);
+        self.module.define_data(id, &description)?;
+        self.slot_types.insert(ty.clone(), id);
+        Ok(id)
+    }
+
     /// The descriptor of the closure `body` of the unit's file, defined on first use (D3 of
-    /// `closures`): two pointer-sized words, the address of the closure's slot, written as a
-    /// relocation to the imported `<closure symbol>#slot` so that a repointed slot is followed
-    /// by every value built before, and the environment's drop entry, null since every closure
-    /// of today borrows its captures.
+    /// `closures`, D9 of `compose-transform`): four pointer-sized words. The address of the
+    /// closure's slot, written as a relocation to the imported `<closure symbol>#slot` so that
+    /// a repointed slot is followed by every value built before; the environment's drop entry;
+    /// and the environment equality and duplicate entries of a keepable closure, or null.
     pub fn descriptor(&mut self, body: BodyId) -> Result<DataId, BackendError> {
         if let Some(id) = self.descriptors.get(&body) {
             return Ok(*id);
@@ -324,7 +390,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
                 .declare_data(&descriptor_symbol(&symbol), Linkage::Local, false, false)?;
         let mut description = DataDescription::new();
         let word = self.pointer.bytes();
-        description.define(vec![0u8; 2 * word as usize].into_boxed_slice());
+        description.define(vec![0u8; 4 * word as usize].into_boxed_slice());
         description.set_align(u64::from(word));
         let slot_global = self.module.declare_data_in_data(slot, &mut description);
         description.write_data_addr(0, slot_global, 0);
@@ -344,6 +410,31 @@ impl<'m, M: Module> UnitContext<'m, M> {
             let drop = self.environment_drop(body)?;
             let drop = self.module.declare_func_in_data(drop, &mut description);
             description.write_function_addr(word, drop);
+        }
+        // A closure capturing nothing, or owning only `Copy` captures, is keepable: its
+        // environments compare by their captures, and an allocated one is duplicated by
+        // copying them (D9 of `compose-transform`).
+        let capture_count = self.file.bodies[body].capture_count;
+        let keepable = environment.captures.iter().all(|field| field.owned)
+            && environment
+                .captures
+                .iter()
+                .all(|field| self.file.types.is_copy(&field.ty));
+        if environment.captures.is_empty() {
+            let equals = self.runtime_function("prism_rt_empty_environments_equal")?;
+            let equals = self.module.declare_func_in_data(equals, &mut description);
+            description.write_function_addr(2 * word, equals);
+        } else if keepable && capture_count > 0 {
+            let equals = self.environment_equality(body)?;
+            let equals = self.module.declare_func_in_data(equals, &mut description);
+            description.write_function_addr(2 * word, equals);
+            if environment.kind == EnvironmentKind::Allocated {
+                let duplicate = self.environment_duplicate(body)?;
+                let duplicate = self
+                    .module
+                    .declare_func_in_data(duplicate, &mut description);
+                description.write_function_addr(3 * word, duplicate);
+            }
         }
         self.module.define_data(id, &description)?;
         self.descriptors.insert(body, id);

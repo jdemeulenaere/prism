@@ -1,0 +1,4 @@
+error[E6001]: the Tier 1 backend does not support values of unknown type 'Gadget' yet
+  --> main.prism:3:38
+    3 | fun second(): Int { val g: Gadget? = null; return 1 }
+      |                                      ^
