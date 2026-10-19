@@ -24,6 +24,7 @@
 //!   pressed target, handler entries) lives in the node or the dispatcher, never in the
 //!   composition.
 
+pub mod app;
 pub mod applier;
 pub mod draw;
 pub mod dump;
@@ -31,20 +32,26 @@ pub mod error;
 pub mod geometry;
 pub mod handle;
 pub mod handlers;
+pub mod headless;
+pub mod host;
 pub mod input;
 pub mod layout;
 pub mod modifier;
 pub mod node;
 pub mod properties;
 pub mod runtime;
+pub mod script;
+pub mod setters;
 pub mod test_support;
 pub mod text;
 pub mod thread;
 pub mod tree;
 
+pub use app::{run_app, App};
 pub use applier::UiApplier;
 pub use error::{UiError, UiResult};
 pub use handle::{HandlerId, NodeId};
+pub use host::{configure, Host, HostConfiguration, HostEvent};
 pub use tree::UiTree;
 
 #[cfg(test)]

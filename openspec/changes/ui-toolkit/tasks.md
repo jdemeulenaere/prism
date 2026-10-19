@@ -92,21 +92,21 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 8. The app, the frame loop and hosts (D15, D16)
 
-- [ ] 8.1 Add `src/host.rs` with `Host`, `HostEvent`, `Key`, `DumpKind`, and `configure(HostConfiguration)`, a process-wide setting read by the program thread. The configurations are `None`, `Headless { size, commands }` and a window factory for `desktop-window`. Verify with a unit test that a configuration set on one thread is read on another.
-- [ ] 8.2 Add `src/script.rs`:
+- [x] 8.1 Add `src/host.rs` with `Host`, `HostEvent`, `Key`, `DumpKind`, and `configure(HostConfiguration)`, a process-wide setting read by the program thread. The configurations are `None`, `Headless { size, commands }` and a window factory for `desktop-window`. Verify with a unit test that a configuration set on one thread is read on another.
+- [x] 8.2 Add `src/script.rs`:
   - `parse_script(text) -> Result<Vec<ScriptLine>, ScriptError>`, with the grammar of D16 (strings with escapes, optional occurrences, `#` comments, blank lines);
   - `ScriptError { line, message }`, with messages such as `unknown command 'clik'`, `expected a string or two numbers after 'click'` and `unterminated string`.
 
   Verify with unit tests for every command and every error.
-- [ ] 8.3 Add `src/headless.rs`, a `Host` that yields the script's lines in order and resolves text targets against the tree at the time of the command: the n-th text or text field value in tree order, at its centre, rounded down. It raises `EventScriptFailed` for a missing target and for `type` or `key` without focus, and prints dumps through `prism_runtime::write_output`. Verify with Rust tests over a built tree: an occurrence index, rounding of the centre, and both errors in a child process.
-- [ ] 8.4 Add `src/app.rs`:
+- [x] 8.3 Add `src/headless.rs`, a `Host` that yields the script's lines in order and resolves text targets against the tree at the time of the command: the n-th text or text field value in tree order, at its centre, rounded down. It raises `EventScriptFailed` for a missing target and for `type` or `key` without focus, and prints dumps through `prism_runtime::write_output`. Verify with Rust tests over a built tree: an occurrence index, rounding of the centre, and both errors in a child process.
+- [x] 8.4 Add `src/app.rs`:
   - `App` (the composition handle, tree, handler table, dispatcher, measurer, display list and its stale flag);
   - `run_app(title, width, height, content)`, with the loop of D15: passes while invalid, each followed by the release of unclaimed handler entries, layout while dirty, otherwise the next event; one pass and layout after each dispatched event; frames, dumps, resizes, close;
   - disposal of the composition before the handler table and the tree are dropped;
   - the misuse errors for a running app and for no host.
 
   Verify with Rust tests through `test_support.rs`: an idle loop runs nothing (counters of passes, layouts and builds), an event is followed by exactly one pass, unclaimed handlers are released after their pass, and disposal releases every node and handler.
-- [ ] 8.5 Add `tests/allocations.rs`, with the scenario "Allocation-counting test", and `tests/ui_timing.rs`, `#[ignore]`d, with the measurements of design D19 and the assertions of "Layout timing benchmark" under `PRISM_ASSERT_TIMING=1`. Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-ui --test ui_timing -- --ignored --nocapture` and record the medians in design.md, D19.
+- [x] 8.5 Add `tests/allocations.rs`, with the scenario "Allocation-counting test", and `tests/ui_timing.rs`, `#[ignore]`d, with the measurements of design D19 and the assertions of "Layout timing benchmark" under `PRISM_ASSERT_TIMING=1`. Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-ui --test ui_timing -- --ignored --nocapture` and record the medians in design.md, D19.
 
 ## 9. Entry points, backend and CLI (D2, D15, D16, D17, D23)
 

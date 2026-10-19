@@ -15,6 +15,15 @@ pub enum UiError {
     Misuse(Cow<'static, str>),
     /// `event script line <line>: <detail>`.
     Script { line: usize, detail: String },
+    /// `composition misuse: <detail>`, which the composition runtime reports, as when an app
+    /// starts during a pass.
+    Composition(&'static str),
+}
+
+impl From<prism_compose::Misuse> for UiError {
+    fn from(misuse: prism_compose::Misuse) -> UiError {
+        UiError::Composition(misuse.0)
+    }
 }
 
 /// The result of a UI operation.
@@ -26,6 +35,7 @@ impl UiError {
         match self {
             UiError::Misuse(detail) => format!("ui misuse: {}", detail),
             UiError::Script { line, detail } => format!("event script line {}: {}", line, detail),
+            UiError::Composition(detail) => format!("composition misuse: {}", detail),
         }
     }
 }
@@ -58,8 +68,9 @@ pub fn unknown_kind(kind: i64) -> UiError {
 ///
 /// Until `ui-toolkit` task 3.1 gives `prism-runtime` the kinds `UiMisuse` and
 /// `EventScriptFailed`, this writes the report itself; that task makes it
-/// `panic_without_location`, which also flushes the program's output first and stops only the
-/// program's thread under a watch session.
+/// `panic_without_location` with `UiMisuse`, `EventScriptFailed` or `CompositionMisuse`, which
+/// also flushes the program's output first and stops only the program's thread under a watch
+/// session.
 pub fn raise(error: &UiError) -> ! {
     use std::io::Write;
     let mut stderr = std::io::stderr().lock();

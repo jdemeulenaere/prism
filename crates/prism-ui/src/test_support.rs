@@ -446,3 +446,18 @@ pub fn counter_screen(
         handler,
     }
 }
+
+/// Runs `child` in a child process running only the test `test` (its path in the crate, as
+/// `--exact` matches it), and gives the child's output: for the runtime errors that end the
+/// process.
+pub fn run_in_child(test: &str, child: fn() -> !) -> std::process::Output {
+    const VARIABLE: &str = "PRISM_UI_CHILD_TEST";
+    if std::env::var(VARIABLE).as_deref() == Ok(test) {
+        child()
+    }
+    std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(VARIABLE, test)
+        .output()
+        .unwrap()
+}

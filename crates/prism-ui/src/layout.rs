@@ -19,8 +19,12 @@
 //! subtree needs no placement.
 //!
 //! **The cache.** A node that is neither `needs_measure` nor `child_needs_measure` and is
-//! measured with its last constraints returns its last size without visiting its subtree, so
-//! a relayout is linear in the dirty nodes, their ancestors and those ancestors' children.
+//! measured with its last constraints returns its last size without visiting its subtree. A
+//! node that is only `child_needs_measure` re-measures its dirty children with their last
+//! constraints, and when each keeps its size, keeps its own size and its children's positions
+//! without running its policy; otherwise its policy runs. So a relayout is linear in the dirty
+//! nodes, their ancestors and those ancestors' children, and a change that keeps a node's size
+//! costs a flag check per sibling on its path.
 
 use crate::geometry::{Constraints, Rect, Size, UNBOUNDED};
 use crate::handle::NodeId;
@@ -52,14 +56,29 @@ impl Layout {
         }
         let root = tree.root();
         let window = tree.window_size();
+        let constraints = Constraints::up_to(window.width, window.height);
+        let root_node = tree.node(root).unwrap();
+        let from_root = root_node.needs_measure || root_node.last_constraints != Some(constraints);
+        let mut dirty = std::mem::take(&mut tree.dirty);
         let mut context = Context {
             tree,
             measurer,
             lines: &mut self.lines,
             measured: 0,
         };
-        context.measure(root, Constraints::up_to(window.width, window.height));
+        if from_root {
+            context.measure(root, constraints);
+        } else {
+            for &id in &dirty {
+                context.relayout_from(id);
+            }
+            for &id in &dirty {
+                context.clear_ancestors(id);
+            }
+        }
         self.measured = context.measured;
+        dirty.clear();
+        tree.dirty = dirty;
         tree.redraw = true;
         true
     }
@@ -128,11 +147,14 @@ impl Context<'_> {
     fn measure(&mut self, id: NodeId, constraints: Constraints) -> Size {
         let node = self.tree.node(id).unwrap();
         if !node.needs_measure
-            && !node.child_needs_measure
             && node.last_constraints == Some(constraints)
+            && (!node.child_needs_measure || self.remeasure_dirty_children(id))
         {
+            let node = self.tree.node_mut(id).unwrap();
+            node.child_needs_measure = false;
             return node.size;
         }
+        let node = self.tree.node(id).unwrap();
         self.measured += 1;
         let count = node.chain.len().min(CAPACITY);
         // The constraints each element receives and the offset of the rest at its position;
@@ -223,6 +245,69 @@ impl Context<'_> {
         node.needs_measure = false;
         node.child_needs_measure = false;
         size
+    }
+
+    /// A relayout from a node marked for measuring: re-measures it with its last
+    /// constraints, which stay its own while its siblings and ancestors are unchanged, and,
+    /// when its size changed, its parent with its policy, and so on up, stopping at the first
+    /// node whose size stays. A node never measured is measured by its parent's policy.
+    fn relayout_from(&mut self, id: NodeId) {
+        let mut current = id;
+        loop {
+            let Some(node) = self.tree.node(current) else {
+                return;
+            };
+            if !node.needs_measure && !node.child_needs_measure {
+                return;
+            }
+            let parent = node.parent;
+            let measured = match node.last_constraints {
+                Some(last) => {
+                    let old = node.size;
+                    self.measure(current, last) != old
+                }
+                None => true,
+            };
+            let Some(parent) = parent.filter(|_| measured) else {
+                return;
+            };
+            self.tree.node_mut(parent).unwrap().needs_measure = true;
+            current = parent;
+        }
+    }
+
+    /// Clears `child_needs_measure` on the ancestors of `id` once every dirty node has been
+    /// measured.
+    fn clear_ancestors(&mut self, id: NodeId) {
+        let mut parent = self.tree.node(id).and_then(|node| node.parent);
+        while let Some(ancestor) = parent {
+            let node = self.tree.node_mut(ancestor).unwrap();
+            node.child_needs_measure = false;
+            parent = node.parent;
+        }
+    }
+
+    /// For a node that is clean itself and measured with its last constraints: re-measures
+    /// its dirty children with their last constraints, which are still theirs while every
+    /// sibling keeps its size, and gives whether every one kept its size, in which case the
+    /// node's size and its children's positions stand. Otherwise the caller measures the node
+    /// again with its policy.
+    fn remeasure_dirty_children(&mut self, id: NodeId) -> bool {
+        let mut child = self.tree.node(id).unwrap().first_child;
+        while let Some(current) = child {
+            let node = self.tree.node(current).unwrap();
+            child = node.next;
+            if !node.needs_measure && !node.child_needs_measure {
+                continue;
+            }
+            let (Some(last), size) = (node.last_constraints, node.size) else {
+                return false;
+            };
+            if self.measure(current, last) != size {
+                return false;
+            }
+        }
+        true
     }
 
     /// Measures a node's content with its kind's policy, placing its children at
@@ -776,6 +861,148 @@ mod tests {
         b.tree.set_text(texts[50], "changed!");
         assert!(layout.run(&mut b.tree, &measurer));
         assert_eq!(measurer.0.get(), 8, "only the changed text's characters");
+        assert_eq!(
+            layout.measured, 1,
+            "the column and the root keep their sizes"
+        );
+        // A text that changes its size re-measures its column, whose other children are
+        // cached.
+        measurer.0.set(0);
+        b.tree.set_text(texts[20], "a longer text");
+        assert!(layout.run(&mut b.tree, &measurer));
+        assert_eq!(measurer.0.get(), 13);
         assert_eq!(layout.measured, 3, "the text, its column and the root");
+        assert_eq!(
+            crate::dump::bounds_text(&b.tree, column),
+            "0,0 104x2000",
+            "the column is as wide as the new text"
+        );
+        assert_eq!(crate::dump::bounds_text(&b.tree, texts[21]), "0,420 64x20");
+    }
+
+    /// Incremental relayouts give the layout a full one gives: random edits of texts,
+    /// chains and structure, each followed by a relayout whose dump is compared with the dump
+    /// after every node is marked and laid out again.
+    #[test]
+    fn incremental_relayouts_match_full_layouts() {
+        for seed in 0..20 {
+            incremental_relayouts_match_full_layouts_from(seed);
+        }
+    }
+
+    fn incremental_relayouts_match_full_layouts_from(mut seed: u64) {
+        let initial = seed;
+        let mut random = move |bound: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % bound
+        };
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let column = b.add(root, NodeKind::Column);
+        let mut nodes = vec![column];
+        for _ in 0..30 {
+            let parent = nodes[random(nodes.len() as u64) as usize];
+            let kind = [
+                NodeKind::Row,
+                NodeKind::Column,
+                NodeKind::Box,
+                NodeKind::Text,
+            ][random(4) as usize];
+            let parent = if b.tree.node(parent).unwrap().kind == NodeKind::Text {
+                column
+            } else {
+                parent
+            };
+            let node = b.add(parent, kind);
+            if kind == NodeKind::Text {
+                b.tree
+                    .set_text(node, &"word ".repeat(random(4) as usize + 1));
+            }
+            nodes.push(node);
+        }
+        let dump = |tree: &UiTree| {
+            let mut out = String::new();
+            crate::dump::dump_tree(tree, None, &mut out);
+            out
+        };
+        let mut layout = Layout::new();
+        layout.run(&mut b.tree, &FixedAdvanceMetrics);
+        for step in 0..300 {
+            let node = nodes[1 + random(nodes.len() as u64 - 1) as usize];
+            if b.tree.node(node).is_none() {
+                continue;
+            }
+            match random(7) {
+                5 => {
+                    // Remove and release a subtree.
+                    let parent = b.tree.node(node).unwrap().parent.unwrap();
+                    let mut drops = Vec::new();
+                    b.tree.remove(parent, node);
+                    b.tree.release(node, &mut b.handlers, &mut drops);
+                    crate::handlers::release_functions(&mut drops);
+                }
+                6 => {
+                    // Insert a text after the node.
+                    let parent = b.tree.node(node).unwrap().parent.unwrap();
+                    let text = b.tree.create_kind(NodeKind::Text);
+                    b.tree.set_text(text, "new");
+                    b.tree.place_after(parent, Some(node), text);
+                    nodes.push(text);
+                }
+                0 => {
+                    if b.tree.node(node).unwrap().kind == NodeKind::Text {
+                        let text = "ab ".repeat(random(6) as usize);
+                        b.tree.set_text(node, &text);
+                    }
+                }
+                1 => {
+                    let chains: [&[Element]; 5] = [
+                        &[],
+                        &[padding(random(10) as i64)],
+                        &[size(random(60) as i64, random(60) as i64)],
+                        &[weight(1.0 + random(3) as f64, random(2) == 0)],
+                        &[
+                            align(Alignment::from_code(random(15) as i64).unwrap()),
+                            width(50),
+                        ],
+                    ];
+                    b.chain(node, chains[random(5) as usize]);
+                }
+                2 => {
+                    // Move the node first among its parent's children.
+                    let parent = b.tree.node(node).unwrap().parent.unwrap();
+                    b.tree.place_after(parent, None, node);
+                }
+                3 => {
+                    let arrangement = crate::properties::Arrangement::from_words(
+                        random(9) as i64,
+                        random(10) as i64,
+                    )
+                    .unwrap();
+                    b.arrangement(node, arrangement);
+                }
+                _ => b
+                    .tree
+                    .resize(300 + random(200) as i64, 200 + random(200) as i64),
+            }
+            layout.run(&mut b.tree, &FixedAdvanceMetrics);
+            let incremental = dump(&b.tree);
+            let mut stack = vec![b.tree.root()];
+            while let Some(id) = stack.pop() {
+                stack.extend(b.tree.children(id));
+                b.tree.mark_needs_measure(id);
+            }
+            layout.run(&mut b.tree, &FixedAdvanceMetrics);
+            assert_eq!(
+                incremental,
+                dump(&b.tree),
+                "after step {} of seed {}",
+                step,
+                initial
+            );
+            assert!(!b.tree.needs_layout());
+        }
     }
 }

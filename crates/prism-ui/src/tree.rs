@@ -38,6 +38,8 @@ pub struct UiTree {
     pub redraw: bool,
     /// Scratch for releasing subtrees.
     release_stack: Vec<NodeId>,
+    /// The nodes marked `needs_measure` since the last layout, from which a relayout climbs.
+    pub(crate) dirty: Vec<NodeId>,
 }
 
 impl UiTree {
@@ -53,6 +55,7 @@ impl UiTree {
             numbers: 0,
             redraw: true,
             release_stack: Vec::new(),
+            dirty: Vec::new(),
         }
     }
 
@@ -118,13 +121,22 @@ impl UiTree {
     }
 
     /// Marks `id` for measuring and its ancestors as having a child to measure, stopping at
-    /// the first ancestor already marked either way.
+    /// the first ancestor already marked either way, and records it for the next relayout.
     pub fn mark_needs_measure(&mut self, id: NodeId) {
         let Some(node) = self.node_mut(id) else {
             return;
         };
-        node.needs_measure = true;
-        let mut parent = node.parent;
+        if !node.needs_measure {
+            node.needs_measure = true;
+            let parent = node.parent;
+            self.dirty.push(id);
+            self.mark_ancestors(parent);
+        }
+    }
+
+    /// Marks the ancestors from `parent` up as having a child to measure, stopping at the
+    /// first one already marked either way.
+    fn mark_ancestors(&mut self, mut parent: Option<NodeId>) {
         while let Some(ancestor) = parent {
             let node = self.node_mut(ancestor).unwrap();
             if node.needs_measure || node.child_needs_measure {
@@ -351,6 +363,7 @@ impl UiTree {
         let Some(node) = self.node(id) else {
             return Ok(None);
         };
+        let old_parent_data = (node.weight(), node.own_alignment());
         let old = &node.chain;
         let mut reused = [false; CAPACITY];
         let mut held: [Option<HandlerId>; CAPACITY] = [None; CAPACITY];
@@ -418,6 +431,12 @@ impl UiTree {
                     element,
                     bounds: Rect::ZERO,
                 });
+            }
+        }
+        // A weight or alignment is read by the parent, whose policy must run again.
+        if (node.weight(), node.own_alignment()) != old_parent_data {
+            if let Some(parent) = node.parent {
+                self.mark_needs_measure(parent);
             }
         }
         self.apply(
