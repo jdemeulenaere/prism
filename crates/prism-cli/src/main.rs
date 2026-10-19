@@ -292,10 +292,12 @@ fn run_program(args: &[String], started: std::time::Instant) {
     };
     #[cfg(feature = "window")]
     if options.headless.is_none() {
+        let (server, windows) = prism_desktop::MainThreadServer::new();
+        let file = std::path::Path::new(file);
         let status = if watch {
-            watch_with_windows(file, options, edits)
+            prism_cli::windows::watch_with_windows(file, options, edits, server, windows)
         } else {
-            run_with_windows(file, &options)
+            prism_cli::windows::run_with_windows(file, &options, server, windows)
         };
         process::exit(status);
     }
@@ -314,68 +316,6 @@ fn run_program(args: &[String], started: std::time::Instant) {
             process::exit(1);
         }
     }
-}
-
-/// `prism run` of a program that may open windows (D3 of `desktop-window`): the program is
-/// compiled here, its `main` runs on the program's thread, and the main thread serves its
-/// windows until it ends, since the platform's event loop must run on the main thread. A
-/// program that opens none costs a channel: the event loop and the font are created at the
-/// first window (D4). Returns the exit status.
-#[cfg(feature = "window")]
-fn run_with_windows(file: &str, options: &prism_cli::RunOptions) -> i32 {
-    let compiled = match prism_cli::prepare_run(std::path::Path::new(file), options) {
-        Ok(compiled) => compiled,
-        Err(err) => {
-            eprint!("{}", err.render());
-            return 1;
-        }
-    };
-    let (server, windows) = prism_desktop::MainThreadServer::new();
-    prism_ui::configure(prism_ui::HostConfiguration::Window(windows.factory()));
-    let running = match prism_cli::start_run(&compiled, options, move |_| windows.program_ended()) {
-        Ok(running) => running,
-        Err(err) => {
-            eprint!("{}", err.render());
-            return 1;
-        }
-    };
-    server.serve();
-    match running.join() {
-        Ok(status) => status,
-        Err(err) => {
-            eprint!("{}", prism_cli::WorkspaceError::Backend(err).render());
-            1
-        }
-    }
-}
-
-/// `prism run --watch` of a program that may open windows (D17 of `desktop-window`): the
-/// session runs on a `watch-session` thread, with the main thread's stack size, and the main
-/// thread serves the windows of every run of `main`. Each time the program stops, the session
-/// closes the window it left open, and when the session ends, the server stops. Returns the
-/// session's exit status.
-#[cfg(feature = "window")]
-fn watch_with_windows(file: &str, options: prism_cli::RunOptions, edits: Option<String>) -> i32 {
-    let (server, windows) = prism_desktop::MainThreadServer::new();
-    prism_ui::configure(prism_ui::HostConfiguration::Window(windows.factory()));
-    let entry = std::path::PathBuf::from(file);
-    let closer = windows.clone();
-    let session = std::thread::Builder::new()
-        .name("watch-session".to_string())
-        .stack_size(prism_codegen::PROGRAM_STACK_SIZE)
-        .spawn(move || {
-            let status = prism_cli::run_watch_with(
-                &entry,
-                options,
-                edits.as_deref().map(std::path::Path::new),
-                Some(std::sync::Arc::new(move || closer.close_all())),
-            );
-            windows.shut_down();
-            status
-        })
-        .expect("the watch session's thread starts");
-    server.serve();
-    session.join().unwrap_or(1)
 }
 
 /// Prints a dump, or reports its errors with a failure status.

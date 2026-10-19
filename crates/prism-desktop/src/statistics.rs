@@ -32,6 +32,7 @@ pub struct WindowReport {
 pub struct WindowStatistics {
     event_loops_created: AtomicU64,
     windows_opened: AtomicU64,
+    windows_closed: AtomicU64,
     font_loaded: AtomicBool,
     frames_received: AtomicU64,
     frames_rasterized: AtomicU64,
@@ -60,6 +61,7 @@ impl WindowStatistics {
         WindowStatistics {
             event_loops_created: AtomicU64::new(0),
             windows_opened: AtomicU64::new(0),
+            windows_closed: AtomicU64::new(0),
             font_loaded: AtomicBool::new(false),
             frames_received: AtomicU64::new(0),
             frames_rasterized: AtomicU64::new(0),
@@ -93,6 +95,15 @@ impl WindowStatistics {
 
     pub fn windows_opened(&self) -> u64 {
         self.windows_opened.load(Ordering::Relaxed)
+    }
+
+    /// Records that the main thread closed a window it had opened.
+    pub fn window_closed(&self) {
+        self.windows_closed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn windows_closed(&self) -> u64 {
+        self.windows_closed.load(Ordering::Relaxed)
     }
 
     /// The thread that created the last window, and so runs its event loop.

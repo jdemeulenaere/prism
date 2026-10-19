@@ -54,3 +54,11 @@ cranelift-codegen = "=0.136.2"
 cranelift-jit = "=0.136.2"
 cranelift-module = "=0.136.2"
 cranelift-native = "=0.136.2"
+
+# Drives real windows of Prism programs without a person (`desktop-window`, D13 and D14): it
+# opens windows, which `winit` requires on the process's main thread, so it has its own `main`,
+# and it runs only with `PRISM_WINDOW_TESTS=1`.
+[[test]]
+name = "window_input"
+harness = false
+required-features = ["window"]

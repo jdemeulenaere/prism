@@ -12,7 +12,7 @@ use crate::raster::Rasterizer;
 use prism_ui::draw::DisplayList;
 use prism_ui::host::FinalFrameSink;
 use std::path::{Path, PathBuf};
-use tiny_skia::Pixmap;
+pub use tiny_skia::Pixmap;
 
 /// The physical size of a logical size at `scale`.
 fn physical(size: (i64, i64), scale: f64) -> (u32, u32) {

@@ -5,6 +5,8 @@ pub mod diagnostics;
 pub mod plan;
 pub mod run;
 pub mod watch;
+#[cfg(feature = "window")]
+pub mod windows;
 pub mod workspace;
 
 pub use cache::BuildCache;

@@ -294,6 +294,8 @@ The same `Rasterizer` makes screenshots and golden images, without a window (D15
 - **`Resized(physical)`** resizes the surface and delivers `Resize(logical)` when the logical size changed (D9). A zero width or height resizes nothing and draws nothing.
 - **`ScaleFactorChanged`** redraws (D9). **`CloseRequested`** closes (D14). Focus, occlusion, IME, file drops and theme changes deliver nothing.
 
+**Review (2026-10-19).** The handler turns each `WindowEvent` into a `WindowInput` (`input.rs`, a plain enum tests can build) and acts on that, so `WindowSystem::deliver` can drive a real window through the same mapping, sending the input over the event loop's proxy. `WindowSystem::request_inner_size` asks the platform for a resize. Both exist for tests (`crates/prism-cli/tests/window_input.rs`); the alternative, posting the platform's synthetic events (`CGEventPost`), needs the accessibility permission and an unlocked display, and goes to whichever window is in front.
+
 IME stays off (`set_ime_allowed(false)`, `winit`'s default), so dead keys and Option-compositions arrive as `text` on macOS and Windows. Full IME is a follow-up with text selection.
 
 Rejected: delivering cursor moves (nothing uses hover yet, and each would cost a channel message); delivering `text` for key presses with Ctrl or Cmd held (`Cmd+A` would type `a`).
@@ -418,6 +420,7 @@ The window is a host of the toolkit, not a toolkit feature, so it gets its own c
   - presents a changed list and checks one more frame;
   - drops the host and checks that the window closes and `serve` returns within 1 s.
 - **The CLI test** `crates/prism-cli/tests/screenshot.rs` covers the execution scenarios.
+- **The window input test** `crates/prism-cli/tests/window_input.rs` (added at review, `harness = false`, opt-in like the smoke test) drives real windows of real programs with delivered input; see "Manual verification".
 - **The manual checklist** (tasks, group 8) covers what no test can: real clicks, typing, live resizing, moving between displays, closing shortcuts, and idle CPU.
 
 ## Manual verification
@@ -436,6 +439,42 @@ Task group 8, on 2026-10-19, on an Apple-silicon Mac (macOS 27, arm64) with one 
 | 8.7 Linux | No Linux machine with X11 or Wayland was available. |
 
 The unchecked items of group 8 stay open until someone runs them at the machine.
+
+**Automated without a person (review, 2026-10-19).** `crates/prism-cli/tests/window_input.rs` (`harness = false`, opt-in with `PRISM_WINDOW_TESTS=1`) runs real Prism programs through `prism_cli::windows::run_with_windows` and `watch_with_windows`, the functions `prism run` calls, each in a child process whose main thread serves a real window. A driver thread delivers input with `WindowSystem::deliver`, which sends a `WindowInput` through the event loop's proxy to the window's handler, so it takes the platform's path from `WindowInput::from_window_event` on: the same input mapping (D13), closing (D14) and channels. Resizes go through the platform (`Window::request_inner_size`, then its `Resized` event). With the display still locked, all of it passes here (about 5 s in debug):
+
+| Check | What the test does and checks |
+|---|---|
+| 8.1 | The counter program (`println` in the handler) under `--check-allocations` and `--screenshot`: the window is titled `Counter` at 400 × 300 logical; two clicks on `+` print `count 1` and `count 2`, and a press on `+` released at 300,250 prints nothing; a resize to 300 × 200 relays out; the final screenshot, at the window's scale, is 300 × 200 logical with the purple button and `Count: 2`'s glyphs; the allocation check is clean. |
+| 8.2 | Cmd+W (the counter run above), the close button (`CloseRequested`) and Cmd+Q each end `runApp`: `closed` prints, status 0, a clean allocation check; after Cmd+Q, `main` continues. |
+| 8.3 | Two `runApp` calls: `One` then `Two`, each closed in turn, on one event loop, status 0. |
+| 8.4 | A `TextField` program: after a click into the field, `a`, Shift+`B`, Backspace, Ctrl+C, Cmd+A, an arrow, Enter and three repeats of `x` give the values `a`, `aB`, `a`, `ax`, `axx`, `axxx`. |
+| 8.6 | Under `--watch`: closing the window prints `watch: main returned with status 0; waiting for changes`; an edit runs `main` again in a new window; a click on a handler that divides by zero prints `watch: the program stopped with a runtime error; waiting for changes` and the window closes. Without `--watch`, the same click ends the program with status 101 and `panic: division by zero`. |
+
+8.3 and 8.6 hold nothing the test does not do, apart from the source of a close, which 8.2 covers, so they are ticked. What is left needs real hardware.
+
+**For the user to run** (a person at the Mac; record the date and machine here). Build once with `cargo build --release -p prism-cli`, and write the counter program:
+
+```sh
+mkdir -p /tmp/prism-counter && cat > /tmp/prism-counter/main.prism <<'END'
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Counter() {
+    val c = remember { mutableStateOf(0) }
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Count: ${c.value}")
+        Button(onClick = { c.value += 1 }) { Text("+") }
+    }
+}
+fun main() { runApp(title = "Counter", width = 400, height = 300) { Counter() }; println("closed") }
+END
+```
+
+- **8.1, real clicks and sharpness:** `target/release/prism run --check-allocations /tmp/prism-counter/main.prism`. Click `+` a few times with the mouse or trackpad; press on `+`, drag off it and release (no count); on a Retina display the text and the button's edges are sharp.
+- **8.2, real closing:** the same command three times, closing with the red close button, then Cmd+W, then Cmd+Q. Each prints `closed`, exits with status 0 (`echo $?`) and prints nothing else.
+- **8.4, real typing, live resizing and displays:** replace `Counter()` by a `TextField` form (the `ui` spec's "Typing into a text field" program, with `runApp(title = "Form")`), run it, click into the field, type, hold a key for repeats, press Backspace, Cmd+A and the arrows. Drag a window corner and watch that the content follows within a frame, without stretching. With a second display at another scale, drag the window across: the layout keeps its size and redraws sharply.
+- **Optionally, the automated checks:** `PRISM_WINDOW_TESTS=1 cargo test -p prism-cli --test window_input` and `PRISM_WINDOW_TESTS=1 cargo test -p prism-desktop --test window_smoke`.
 
 ## Risks / Trade-offs
 

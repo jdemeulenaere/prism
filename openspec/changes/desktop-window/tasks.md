@@ -120,11 +120,14 @@ Each check runs a release build of `prism` and is recorded, with the date and th
 
 - [ ] 8.1 `prism run --check-allocations` on the counter program (the `ui` spec's counter screen in `runApp(title = "Counter")`) opens a window titled `Counter`. Clicking `+` counts up, a press on `+` released elsewhere does not, and the text stays sharp on a Retina display.
 - [ ] 8.2 Closing that window by its close button, by Cmd+W and by Cmd+Q, each in a fresh run, ends `runApp`. A `println("closed")` after it prints, the status is 0, and the allocation check reports nothing ("Statements after runApp run").
-- [ ] 8.3 A program with two `runApp` calls opens the second window after the first closes ("Two apps in sequence").
+- [x] 8.3 A program with two `runApp` calls opens the second window after the first closes ("Two apps in sequence").
+  - Review note (2026-10-19): checked by `crates/prism-cli/tests/window_input.rs` ("two-apps"), with the closes delivered through the window's handler.
 - [ ] 8.4 A `TextField` app accepts typed characters, Backspace and key repeat, and ignores Cmd+A and arrows. Live resizing relays out without the window showing stale or stretched content for more than a frame. Moving the window between a Retina display and a scale-1 display keeps the layout and redraws sharply ("Moving to another display").
 - [x] 8.5 An idle window app uses 0% CPU in Activity Monitor, or `top`, over 10 s.
-- [ ] 8.6 `prism run --watch` on the counter program opens the window, and closing it prints `watch: main returned with status 0; waiting for changes` ("A watched window app"). A runtime error in a handler (`Button(onClick = { println(1 / zero()) })`) ends the run with status 101, its message on stderr, and the window gone.
+- [x] 8.6 `prism run --watch` on the counter program opens the window, and closing it prints `watch: main returned with status 0; waiting for changes` ("A watched window app"). A runtime error in a handler (`Button(onClick = { println(1 / zero()) })`) ends the run with status 101, its message on stderr, and the window gone.
+  - Review note (2026-10-19): checked by `crates/prism-cli/tests/window_input.rs` ("watch" and "runtime-error"); under `--watch` the error stops the program and closes its window, and without it the process ends with status 101.
 - [x] 8.7 On a Linux machine with X11 or Wayland, if one is available, 8.1 and 8.2 behave alike, and without `DISPLAY` and `WAYLAND_DISPLAY` the program ends with `display error: cannot open a window (...)`. If none is available, record that.
+- [x] 8.8 (review) Add `crates/prism-cli/tests/window_input.rs`, opt-in with `PRISM_WINDOW_TESTS=1`, which runs real programs in real windows and delivers clicks, key presses, resizes and closes through the window's own handler (`WindowSystem::deliver`), and list in design.md's "Manual verification" what is left for a person, with the commands. 8.1, 8.2 and 8.4 stay open: they need real hardware (the platform's mouse and keyboard events, Retina sharpness, live resizing by hand, a second display).
 
 ## Workflow follow-up
 

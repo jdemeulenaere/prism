@@ -28,6 +28,7 @@
 use crate::error::{cannot_open_a_window, raise_display_error};
 use crate::font;
 use crate::host::{FrameSink, UserEvent, WindowHost};
+use crate::input::WindowInput;
 use crate::statistics::WindowStatistics;
 use crate::window::{WindowApp, WindowRequest};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -206,6 +207,22 @@ impl WindowSystem {
             .recv()
             .map_err(|_| "the window system stopped".to_string())??;
         Ok(WindowHost::new(connection))
+    }
+
+    /// Delivers `input` to the open window, which handles it as it handles the platform's
+    /// events, through the same input mapping (D13) and closing (D14); whether a window was
+    /// open. Tests drive real windows with it where no person can click or type.
+    pub fn deliver(&self, input: WindowInput) -> bool {
+        let sink = self.shared.open_window().clone();
+        sink.map(|sink| sink.deliver(input)).is_some()
+    }
+
+    /// Asks the platform to resize the open window to `width` × `height` logical pixels; the
+    /// window then gets the platform's `Resized` event. Whether a window was open.
+    pub fn request_inner_size(&self, width: u32, height: u32) -> bool {
+        let sink = self.shared.open_window().clone();
+        sink.map(|sink| sink.request_inner_size(width, height))
+            .is_some()
     }
 
     /// Closes the open window, if any.

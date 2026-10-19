@@ -16,7 +16,7 @@
 //!   `Close`, the surface and the window are dropped at once, and the event loop exits.
 
 use crate::host::{connect, FrameSink, UserEvent, WindowConnection, WindowEndpoint, WindowMessage};
-use crate::input::{typed_characters, InputState, KeyAction, Platform};
+use crate::input::{typed_characters, InputState, KeyAction, Platform, WindowInput};
 use crate::raster::Rasterizer;
 use crate::server::Shared;
 use crate::statistics::{WindowReport, WindowStatistics};
@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
@@ -55,6 +55,16 @@ impl FrameSink for ProxySink {
     fn close_window(&self) {
         let proxy = self.proxy.lock().unwrap_or_else(|p| p.into_inner());
         let _ = proxy.send_event(UserEvent::CloseWindow(self.number));
+    }
+
+    fn deliver(&self, input: WindowInput) {
+        let proxy = self.proxy.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = proxy.send_event(UserEvent::Input(self.number, input));
+    }
+
+    fn request_inner_size(&self, width: u32, height: u32) {
+        let proxy = self.proxy.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = proxy.send_event(UserEvent::RequestInnerSize(self.number, width, height));
     }
 }
 
@@ -192,7 +202,9 @@ impl WindowApp {
             let _ = endpoint.input.send(WindowMessage::Close);
         }
         self.shared.window_closed();
-        self.surface = None;
+        if self.surface.take().is_some() {
+            self.statistics.window_closed();
+        }
         event_loop.exit();
     }
 
@@ -249,44 +261,68 @@ impl ApplicationHandler<UserEvent> for WindowApp {
                 self.request_redraw();
             }
             UserEvent::CloseWindow(number) if number == self.number => self.close(event_loop),
+            UserEvent::Input(number, input) if number == self.number => {
+                self.handle(event_loop, input)
+            }
+            UserEvent::RequestInnerSize(number, width, height) if number == self.number => {
+                if let Some(surface) = &self.surface {
+                    // The platform reports the new size as a `Resized` event, now or later.
+                    if let Some(size) = surface
+                        .window
+                        .request_inner_size(LogicalSize::new(width as f64, height as f64))
+                    {
+                        self.handle(
+                            event_loop,
+                            WindowInput::Resized {
+                                width: size.width,
+                                height: size.height,
+                            },
+                        );
+                    }
+                }
+            }
             // An event meant for a window that has already closed.
             _ => {}
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => self.close(event_loop),
-            WindowEvent::Resized(size) => {
-                if let Some(resize) = self.input.resized(size.width, size.height) {
+        if let Some(input) = WindowInput::from_window_event(event) {
+            self.handle(event_loop, input);
+        }
+    }
+}
+
+impl WindowApp {
+    /// Acts on one window event, from the platform or delivered by a test (D13, D14).
+    fn handle(&mut self, event_loop: &ActiveEventLoop, input: WindowInput) {
+        match input {
+            WindowInput::CloseRequested => self.close(event_loop),
+            WindowInput::Resized { width, height } => {
+                if let Some(resize) = self.input.resized(width, height) {
                     self.send(WindowMessage::Input(resize));
                 }
                 self.request_redraw();
             }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+            WindowInput::ScaleFactorChanged(scale_factor) => {
                 self.input.scale_changed(scale_factor);
                 if let Some(endpoint) = &self.endpoint {
                     endpoint.mailbox.set_scale_factor(scale_factor);
                 }
                 self.request_redraw();
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.input.cursor_moved(position.x, position.y)
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
+            WindowInput::CursorMoved { x, y } => self.input.cursor_moved(x, y),
+            WindowInput::MouseButton { button, state } => {
                 if let Some(event) = self.input.pointer_button(button, state) {
                     self.send(WindowMessage::Input(event));
                 }
             }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.input.modifiers_changed(modifiers.state())
-            }
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                match self.input.key_pressed(
-                    event.logical_key.as_ref(),
-                    event.text.as_deref(),
-                    Platform::CURRENT,
-                ) {
+            WindowInput::ModifiersChanged(modifiers) => self.input.modifiers_changed(modifiers),
+            WindowInput::KeyPressed { key, text } => {
+                match self
+                    .input
+                    .key_pressed(key.as_ref(), text.as_deref(), Platform::CURRENT)
+                {
                     KeyAction::Close => self.close(event_loop),
                     KeyAction::Key(key) => {
                         self.send(WindowMessage::Input(prism_ui::HostEvent::Key(key)))
@@ -301,8 +337,7 @@ impl ApplicationHandler<UserEvent> for WindowApp {
                     KeyAction::Nothing => {}
                 }
             }
-            WindowEvent::RedrawRequested => self.draw(),
-            _ => {}
+            WindowInput::RedrawRequested => self.draw(),
         }
     }
 }

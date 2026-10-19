@@ -15,8 +15,75 @@
 //!   the main thread redraws from the last display list.
 
 use prism_ui::host::{HostEvent, Key};
-use winit::event::{ElementState, MouseButton};
-use winit::keyboard::{Key as KeyValue, ModifiersState, NamedKey};
+use winit::event::WindowEvent;
+// The `winit` types a [`WindowInput`] is made of, for callers that do not depend on `winit`.
+pub use winit::event::{ElementState, MouseButton};
+pub use winit::keyboard::{Key as KeyValue, ModifiersState, NamedKey, SmolStr};
+
+/// A window event the window routes, in a form that can be built outside `winit`: the window's
+/// handler turns each `WindowEvent` into one, and tests deliver them to a real window through
+/// [`crate::WindowSystem::deliver`], so both take the same path from here on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WindowInput {
+    /// The cursor moved to a physical position.
+    CursorMoved {
+        x: f64,
+        y: f64,
+    },
+    MouseButton {
+        button: MouseButton,
+        state: ElementState,
+    },
+    ModifiersChanged(ModifiersState),
+    /// A key press or a repeat, with the text it produces.
+    KeyPressed {
+        key: KeyValue,
+        text: Option<SmolStr>,
+    },
+    /// The physical inner size changed.
+    Resized {
+        width: u32,
+        height: u32,
+    },
+    ScaleFactorChanged(f64),
+    CloseRequested,
+    RedrawRequested,
+}
+
+impl WindowInput {
+    /// The input a `winit` window event is, if the window acts on it. Key releases, focus,
+    /// occlusion, IME, file drops and theme changes are not.
+    pub fn from_window_event(event: WindowEvent) -> Option<WindowInput> {
+        Some(match event {
+            WindowEvent::CloseRequested => WindowInput::CloseRequested,
+            WindowEvent::Resized(size) => WindowInput::Resized {
+                width: size.width,
+                height: size.height,
+            },
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                WindowInput::ScaleFactorChanged(scale_factor)
+            }
+            WindowEvent::CursorMoved { position, .. } => WindowInput::CursorMoved {
+                x: position.x,
+                y: position.y,
+            },
+            WindowEvent::MouseInput { state, button, .. } => {
+                WindowInput::MouseButton { button, state }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                WindowInput::ModifiersChanged(modifiers.state())
+            }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                WindowInput::KeyPressed {
+                    key: event.logical_key,
+                    text: event.text,
+                }
+            }
+            WindowEvent::RedrawRequested => WindowInput::RedrawRequested,
+            _ => return None,
+        })
+    }
+}
 
 /// The platform's conventions for closing shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,6 +379,57 @@ mod tests {
             state.key_pressed(KeyValue::Character("w"), Some("w"), Platform::MacOs),
             KeyAction::Nothing
         );
+    }
+
+    /// The window's events become the inputs tests deliver, so both take the same path.
+    #[test]
+    fn window_events_become_window_inputs() {
+        use winit::dpi::{PhysicalPosition, PhysicalSize};
+        use winit::event::{DeviceId, Modifiers};
+        let device_id = DeviceId::dummy();
+        let cases = [
+            (
+                WindowEvent::CloseRequested,
+                Some(WindowInput::CloseRequested),
+            ),
+            (
+                WindowEvent::Resized(PhysicalSize::new(601, 451)),
+                Some(WindowInput::Resized {
+                    width: 601,
+                    height: 451,
+                }),
+            ),
+            (
+                WindowEvent::CursorMoved {
+                    device_id,
+                    position: PhysicalPosition::new(101.0, 61.0),
+                },
+                Some(WindowInput::CursorMoved { x: 101.0, y: 61.0 }),
+            ),
+            (
+                WindowEvent::MouseInput {
+                    device_id,
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                },
+                Some(WindowInput::MouseButton {
+                    button: MouseButton::Left,
+                    state: ElementState::Pressed,
+                }),
+            ),
+            (
+                WindowEvent::ModifiersChanged(Modifiers::from(ModifiersState::SUPER)),
+                Some(WindowInput::ModifiersChanged(ModifiersState::SUPER)),
+            ),
+            (
+                WindowEvent::RedrawRequested,
+                Some(WindowInput::RedrawRequested),
+            ),
+            (WindowEvent::Focused(true), None),
+        ];
+        for (event, input) in cases {
+            assert_eq!(WindowInput::from_window_event(event), input);
+        }
     }
 
     /// The scenario "A resize at a fractional scale".

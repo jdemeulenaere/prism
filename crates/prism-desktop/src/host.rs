@@ -17,6 +17,7 @@
 //! - **Reloads.** [`WindowHost::wake`] is a plain `fn()` that turns into a frame, so the frame
 //!   loop reaches its top; `compose-hot-reload` registers it with `defer_to_reload_points`.
 
+use crate::input::WindowInput;
 use crate::metrics::FontMetrics;
 use prism_ui::draw::DisplayList;
 use prism_ui::host::{Host, HostEvent};
@@ -38,10 +39,14 @@ pub enum WindowMessage {
 
 /// The events the program thread sends the event loop, tagged with the window they are for,
 /// so that one meant for a window that has already closed is ignored by the next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UserEvent {
     FrameReady(u64),
     CloseWindow(u64),
+    /// A window event delivered by a test, which the window handles as the platform's.
+    Input(u64, WindowInput),
+    /// Asks the platform to resize the window to a logical inner size.
+    RequestInnerSize(u64, u32, u32),
 }
 
 /// How the program thread reaches the event loop: through its proxy in a window, and a fake in
@@ -51,6 +56,10 @@ pub trait FrameSink: Send + Sync {
     fn frame_ready(&self);
     /// The app has ended: close the window.
     fn close_window(&self);
+    /// Delivers `input` to the window as if the platform had ([`crate::WindowSystem::deliver`]).
+    fn deliver(&self, _input: WindowInput) {}
+    /// Asks the platform to resize the window ([`crate::WindowSystem::request_inner_size`]).
+    fn request_inner_size(&self, _width: u32, _height: u32) {}
 }
 
 #[derive(Debug, Default)]
