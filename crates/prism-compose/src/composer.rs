@@ -223,6 +223,35 @@ impl Composer {
         Ok(true)
     }
 
+    /// During a restart, before the restart function starts a group, the address of the value
+    /// of slot `index` of the restarted scope's group when that slot has `slot_type`: how a
+    /// restart function reads the arguments its composable kept (D10 of `compose-transform`).
+    /// Otherwise, and outside a restart, the misuse `no slot to read`. The address stays valid
+    /// until the pass ends.
+    ///
+    /// # Safety
+    ///
+    /// `slot_type` must point at a valid slot type record.
+    pub unsafe fn kept_slot(
+        self,
+        index: usize,
+        slot_type: *const SlotType,
+    ) -> ComposeResult<*const u8> {
+        with_state(|state| {
+            check(state, self)?;
+            let frame = state.frames.last().unwrap();
+            if frame.kind != FrameKind::Window {
+                return Err(NO_SLOT);
+            }
+            let slots = &state.groups.get(frame.window_scope).unwrap().slots;
+            slots
+                .get(index)
+                .and_then(|slot| slot.typed_match(slot_type))
+                .map(|value| value as *const u8)
+                .ok_or(NO_SLOT)
+        })
+    }
+
     /// Whether the slot at the cursor is a word slot of `tag`.
     pub fn has_word(self, tag: i64) -> ComposeResult<bool> {
         with_state(|state| {

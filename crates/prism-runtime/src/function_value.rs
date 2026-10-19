@@ -95,6 +95,13 @@ impl FunctionValue {
     }
 }
 
+/// The environment equality entry of every closure that captures nothing (D9 of
+/// `compose-transform`): two such environments are always equal.
+#[no_mangle]
+pub extern "C" fn prism_rt_empty_environments_equal(_: *const u8, _: *const u8) -> u8 {
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -205,3 +205,19 @@ pub unsafe extern "C" fn prism_compose_changed(
 ) -> u8 {
     or_misuse(Composer(composer).changed(slot_type, value)) as u8
 }
+
+/// During a restart, the address of kept slot `index` of the restarted scope's group when it
+/// has `slot_type`; the misuse `no slot to read` otherwise (D10 of `compose-transform`).
+///
+/// # Safety
+///
+/// `slot_type` must point at a valid slot type record.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_kept_slot(
+    composer: u64,
+    index: i64,
+    slot_type: *const SlotType,
+) -> *const u8 {
+    let index = usize::try_from(index).unwrap_or(usize::MAX);
+    or_misuse(Composer(composer).kept_slot(index, slot_type))
+}

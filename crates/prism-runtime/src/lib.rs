@@ -42,7 +42,7 @@ pub use allocation::{
     ALLOCATION_CHECK_EXIT_STATUS, INVALID_FREE_MESSAGE,
 };
 pub use double::format_double;
-pub use function_value::{Descriptor, FunctionValue};
+pub use function_value::{prism_rt_empty_environments_equal, Descriptor, FunctionValue};
 pub use functions::{
     runtime_function, RuntimeAddress, RuntimeFunction, RuntimeType, RUNTIME_FUNCTIONS,
 };

@@ -503,6 +503,58 @@ fn invalid_scopes_recompose_in_tree_order_parents_first_and_once() {
     Composition::dispose(c).unwrap();
 }
 
+/// compose: "A restart reads its kept slots" (`compose-transform`): during a restart and before
+/// the restart function starts a group, it reads the slots its scope's group kept.
+#[test]
+fn a_restart_reads_its_kept_slots() {
+    let word = slot_type::<i64>("Int");
+    let other = slot_type::<u8>("Byte");
+    let captured: Rc<Cell<Option<Handle>>> = Rc::default();
+    let read: Rc<RefCell<Vec<Result<i64, Misuse>>>> = Rc::default();
+    let cap = captured.clone();
+    let seen = read.clone();
+    let c = Composition::start(
+        tree(),
+        content(move |k| {
+            k.start_group(GroupKind::Restart, 7, 0).unwrap();
+            set(k, word, 10i64);
+            set(k, word, 20i64);
+            cap.set(Some(k.current_scope().unwrap()));
+            let seen = seen.clone();
+            k.end_restart_group(content(move |k| {
+                let reading = |index, slot_type| {
+                    let result = unsafe { k.kept_slot(index, slot_type) };
+                    seen.borrow_mut()
+                        .push(result.map(|address| unsafe { *(address as *const i64) }));
+                };
+                reading(1, word);
+                reading(0, word);
+                reading(2, word);
+                reading(0, other);
+                k.start_group(GroupKind::Restart, 7, 0).unwrap();
+                k.skip_to_group_end().unwrap();
+                k.end_restart_group(content(|_| {})).unwrap();
+            }))
+            .unwrap();
+        }),
+    )
+    .unwrap();
+    // Outside a restart there is no slot to read.
+    let outside = Rc::new(Cell::new(None));
+    let out = outside.clone();
+    let d = Composition::start(
+        tree(),
+        content(move |k| out.set(Some(unsafe { k.kept_slot(0, word) }.err()))),
+    )
+    .unwrap();
+    assert_eq!(outside.get(), Some(Some(NO_SLOT)));
+    invalidate(captured.get().unwrap());
+    assert!(Composition::recompose(c).unwrap());
+    assert_eq!(*read.borrow(), [Ok(20), Ok(10), Err(NO_SLOT), Err(NO_SLOT)]);
+    Composition::dispose(c).unwrap();
+    Composition::dispose(d).unwrap();
+}
+
 /// compose: "A restart function that starts another key".
 #[test]
 fn a_restart_function_that_starts_another_key() {

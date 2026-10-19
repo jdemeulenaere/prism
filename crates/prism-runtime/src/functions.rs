@@ -5,6 +5,7 @@
 use crate::allocation::{
     prism_rt_allocate, prism_rt_free, prism_rt_reallocate, prism_rt_register_top_level_value,
 };
+use crate::function_value::prism_rt_empty_environments_equal;
 use crate::list::{
     prism_rt_list_close_gap, prism_rt_list_empty, prism_rt_list_free, prism_rt_list_grow,
     prism_rt_list_index_out_of_range, prism_rt_list_open_gap, prism_rt_list_reverse,
@@ -214,6 +215,13 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
+        name: "prism_rt_empty_environments_equal",
+        address: RuntimeAddress(prism_rt_empty_environments_equal as *const u8),
+        parameters: &[Pointer, Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_rt_string_equals",
         address: RuntimeAddress(prism_rt_string_equals as *const u8),
         parameters: &[Pointer, Pointer],
@@ -345,6 +353,7 @@ mod tests {
             include_str!("list.rs"),
             include_str!("stack.rs"),
             include_str!("process.rs"),
+            include_str!("function_value.rs"),
         ];
         let mut names = HashSet::new();
         for source in sources {

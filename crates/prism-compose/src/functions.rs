@@ -175,6 +175,13 @@ pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
         result: Some(I8),
         never_returns: false,
     },
+    RuntimeFunction {
+        name: "prism_compose_kept_slot",
+        address: address(prism_compose_kept_slot as *const ()),
+        parameters: &[I64, I64, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
 ];
 
 /// The compose entry point named `name`.

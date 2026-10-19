@@ -41,8 +41,8 @@ Prerequisites (design, "Baseline"): `compose-runtime` archived, and with it `clo
 
 ## 6. Runtime entries (D9, D10)
 
-- [ ] 6.1 In `crates/prism-compose`, add `prism_compose_kept_slot(composer, index, slot_type) -> *const u8` to `entry.rs` and `COMPOSE_FUNCTIONS`, backed by the restart frame's scope group in `composer.rs` (D10), the misuse `no slot to read` otherwise. Verify with a Rust test for "A restart reads its kept slots" and the table test of `functions.rs`.
-- [ ] 6.2 In `crates/prism-runtime`, add `prism_rt_empty_environments_equal(a, b) -> u8`, returning 1, to `RUNTIME_FUNCTIONS`. Verify with the table test.
+- [x] 6.1 In `crates/prism-compose`, add `prism_compose_kept_slot(composer, index, slot_type) -> *const u8` to `entry.rs` and `COMPOSE_FUNCTIONS`, backed by the restart frame's scope group in `composer.rs` (D10), the misuse `no slot to read` otherwise. Verify with a Rust test for "A restart reads its kept slots" and the table test of `functions.rs`.
+- [x] 6.2 In `crates/prism-runtime`, add `prism_rt_empty_environments_equal(a, b) -> u8`, returning 1, to `RUNTIME_FUNCTIONS`. Verify with the table test.
 
 ## 7. Backend (D9, D16, D20)
 
