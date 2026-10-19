@@ -75,3 +75,16 @@ On a release build, saving a one-line edit of a composable body of the counter a
 #### Scenario: Timing a UI reload
 - **WHEN** `prism run --watch --timings --headless --events events main.prism` runs the counter app with an `edit` command
 - **THEN** stderr holds a `timing: reload` line and then a line starting with `timing: reload pass` that gives the pass's time in milliseconds and the number of scopes it recomposed
+
+## MODIFIED Requirements
+
+### Requirement: Headless Runs Follow an Event Script
+A headless run MUST read its event script's commands in order and end the app after the last one: `click`, `press` and `release` at a text target or at `<x> <y>`, `type "<text>"`, `key backspace`, `key enter`, `resize <width> <height>`, `frame`, `dump`, `dump tree` and `dump draw`, and, under `--watch`, `edit <target> <replacement>` and `wait reload`. Blank lines and `#` comments MUST be ignored.
+
+#### Scenario: Scripted counter session
+- **WHEN** the counter program runs headless with the script `# two clicks`, `click "+"`, `click "+"` and `dump`
+- **THEN** stdout holds a tree whose text node reads `Count: 2`, and the run passes the allocation check
+
+#### Scenario: Resizing the window
+- **WHEN** a headless app composes `Box(modifier = Modifier.fillMaxSize()) { }` and its script is `resize 200 100` then `dump`
+- **THEN** stdout is the lines `window 200x100` and `  box #1 0,0 200x100 fillMaxSize`

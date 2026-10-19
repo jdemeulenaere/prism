@@ -26,7 +26,7 @@
 ## Capabilities
 
 ### New Capabilities
-None. `compose`, `ui` and `hot-reload` are created by the packets this change builds on and are not in the main specs yet, so their deltas here are ADDED requirements.
+None.
 
 ### Modified Capabilities
 - `compose`: the requirements on what a reload recomposes, which state survives it, retired restart functions, and reloads that land during a pass.
