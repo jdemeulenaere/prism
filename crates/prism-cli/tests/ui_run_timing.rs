@@ -12,7 +12,9 @@
 //! Each run is a `prism run --headless` of the generated app from a warm build cache; the time
 //! per click is the difference between a run of 100 clicks and a run of none, divided by 100,
 //! so that compiling, linking and the first pass are left out. It reports the median over 10
-//! pairs of runs. The target for a release build is `reactive-app-verification`'s.
+//! pairs of runs. On a release build, the median must be under 1 ms (D9 of
+//! `reactive-app-verification`); the test fails on it only when `PRISM_ASSERT_TIMING=1` is
+//! set.
 
 use std::path::Path;
 use std::process::Command;
@@ -21,6 +23,7 @@ use std::time::Instant;
 const RUNS: usize = 10;
 const CLICKS: usize = 100;
 const TEXTS: usize = 1000;
+const TARGET_MILLISECONDS: f64 = 1.0;
 
 /// The app: a column of a counter's label and button, then `TEXTS` texts.
 fn app() -> String {
@@ -100,4 +103,18 @@ fn a_click_in_an_app_of_a_thousand_texts() {
         RUNS
     );
     std::fs::remove_dir_all(&directory).ok();
+    let median = per_click[RUNS / 2] * 1000.0;
+    let met = median < TARGET_MILLISECONDS;
+    println!(
+        "  target: median per click under {} ms: {}",
+        TARGET_MILLISECONDS,
+        if met { "met" } else { "MISSED" }
+    );
+    if std::env::var_os("PRISM_ASSERT_TIMING").is_some_and(|value| value == "1") {
+        assert!(
+            met,
+            "a click took {:.3} ms, over the {} ms target",
+            median, TARGET_MILLISECONDS
+        );
+    }
 }

@@ -409,3 +409,22 @@ No program changes meaning. `--check-allocations` can now fail on runtime bugs i
 
 - Should `--frame-stats` also report while an app runs, every second or on a key, for tuning windows by hand? The report at the end covers tests and the checklist (follow-up).
 - Should rows that take a borrowed item become skippable, by keeping a clone of `Clone` arguments or a hash, as `compose-architecture` D9 left open? It would change the todo toggle's cost from the list's size to one row (follow-up).
+
+## Measurements
+
+Release build, 2026-10-19, an Apple M4 Pro (14 cores, 24 GB) on macOS 27.0.1, from `cargo test --release -p prism-cli --test app_frame_timing -- --ignored --nocapture` with `PRISM_ASSERT_TIMING=1` (passing), medians of five runs' medians and the largest 99th percentile of the five:
+
+| App and action | Measure | Target | Measured |
+|---|---|---|---|
+| counter, `click button 1` then `frame`, 200 rounds | `frame` median, p99 | under 1 ms, under 2 ms | 0.003 ms, 0.004 ms |
+| `large.prism`, `click checkbox 2` then `frame`, 100 rounds | `recomposition` median | under 4 ms | 1.909 ms |
+| the same | `frame` p99 | under 4 ms | 2.277 ms (median 2.073 ms, max 6.394 ms) |
+| counter and `large.prism`, a click on empty space then `frame`, 50 rounds | frames without allocations | all but the first | 50 of 51, both |
+| counter clicks and todo toggles | live allocations after each frame | constant | 75 to 75; 45,140 to 45,140 |
+| todo app (`main.prism`) | first frame ready after start, cold and warm (median of 20) | under 50 ms, under 20 ms | 28.211 ms, 2.902 ms |
+
+- **A toggle of the 1,000-item list** recomposes every row, as D9 expected, since a `&Todo` parameter is never stable: about 3,000 allocations per toggle (two handler environments and a title per row), all freed in the same frame, so the live count stays at 45,140. The recomposition median of 1.9 ms meets the 4 ms target with room, so the app was not restructured and D9's targets stand. Layout is clean (0.000 ms median) and the display list takes 0.09 ms.
+- **The first composition** of the 1,000 items takes 4.1 ms of recomposition, 0.2 ms of layout and 0.1 ms of display list.
+- **A click on empty space** costs 0.06 ms of hit testing over the 1,000-row tree and allocates nothing.
+- `ui-toolkit`'s `ui_run_timing.rs` (a counter in an app of 1,000 `Text`s, 100 clicks): a median of 0.216 ms per click, under its new 1 ms target.
+- The counting allocator's cost when off, `run_timing.rs`: total to `main` 10.856 ms cold and 2.045 ms warm before it, 11.089 and 10.947 ms cold and 2.097 and 2.062 ms warm in two runs after, within the spread of those two runs.

@@ -50,9 +50,9 @@ Prerequisites (design, "Baseline"): `standard-library`, `compose-runtime`, `comp
 
 ## 6. Benchmarks (D9, D10)
 
-- [ ] 6.1 Add the ignored `crates/prism-cli/tests/app_frame_timing.rs` of design D10: generated scripts in a temporary directory, five runs per measurement, the cold and warm first-frame runs, the numbers of design D9 printed with the median of the runs' medians and the largest 99th percentile, and assertions only under `PRISM_ASSERT_TIMING=1`. Run it on a release build and record the numbers in a "Measurements" section of this design. Verify by its run (`cargo test --release -p prism-cli --test app_frame_timing -- --ignored --nocapture`), with `PRISM_ASSERT_TIMING=1` passing.
-- [ ] 6.2 In `crates/prism-cli/tests/ui_run_timing.rs`, assert the median per click under 1 ms under `PRISM_ASSERT_TIMING=1`. Run it on a release build and record the number. Verify by its run.
-- [ ] 6.3 If a target of design D9 is missed, profile the frame (recomposition, setters, layout, display list) and fix the runtime in commits of their own, rerunning the benchmark. Only a target shown unreachable by design is revised, in design D9 and in `docs/decisions-for-review.md`, with the measurements. Verify by the benchmark passing, or by the recorded revision.
+- [x] 6.1 Add the ignored `crates/prism-cli/tests/app_frame_timing.rs` of design D10: generated scripts in a temporary directory, five runs per measurement, the cold and warm first-frame runs, the numbers of design D9 printed with the median of the runs' medians and the largest 99th percentile, and assertions only under `PRISM_ASSERT_TIMING=1`. Run it on a release build and record the numbers in a "Measurements" section of this design. Verify by its run (`cargo test --release -p prism-cli --test app_frame_timing -- --ignored --nocapture`), with `PRISM_ASSERT_TIMING=1` passing.
+- [x] 6.2 In `crates/prism-cli/tests/ui_run_timing.rs`, assert the median per click under 1 ms under `PRISM_ASSERT_TIMING=1`. Run it on a release build and record the number. Verify by its run.
+- [x] 6.3 If a target of design D9 is missed, profile the frame (recomposition, setters, layout, display list) and fix the runtime in commits of their own, rerunning the benchmark. Only a target shown unreachable by design is revised, in design D9 and in `docs/decisions-for-review.md`, with the measurements. Verify by the benchmark passing, or by the recorded revision.
 
 ## 7. Integration checks
 
