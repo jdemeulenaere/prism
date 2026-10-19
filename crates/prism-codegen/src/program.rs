@@ -119,6 +119,11 @@ impl Program {
                 // (D13 of `compose-runtime`, D12 of `state-handles`). The report reads this
                 // thread's cells and compositions, and `finish` runs on this thread.
                 prism_runtime::set_finish_report(Some(prism_compose::finish_report));
+                // A reload applied on this thread invalidates the scopes of the compositions it
+                // affects (D3 of `compose-hot-reload`).
+                prism_runtime::reload::set_applied_hook(Some(
+                    prism_compose::reload::reload_applied,
+                ));
                 prism_runtime::start(arguments, check_allocations);
                 // The stack grows down from about here: generated code raises "stack overflow"
                 // before it reaches the end (D27).

@@ -25,12 +25,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 /// The pass a thread is running: its identifier, which is the composer generated code passes,
-/// the composition it composes, and whether it is forced (no restart group skips).
+/// and the composition it composes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActivePass {
     pub identifier: u64,
     pub composition: Handle,
-    pub forced: bool,
 }
 
 /// A composition: its root group, its applier and its invalid scopes.
@@ -182,6 +181,14 @@ pub struct State {
     pub state_error: Option<crate::state::StateError>,
     /// A spare effect queue, swapped with a composition's while its effects run.
     pub spare_effects: Vec<FunctionValue>,
+    /// The body keys and retired slots of the reloads applied during the current pass, handled
+    /// when it ends (D3 of `compose-hot-reload`).
+    pub queued_reloads: Vec<(Vec<u64>, Vec<usize>)>,
+    /// The walk of a reload's invalidation and the scopes it found, reused by every reload.
+    pub reload_walk: Vec<(Handle, Handle)>,
+    pub reload_targets: Vec<Handle>,
+    /// The scopes reloads invalidated since `--timings` last asked.
+    pub invalidated_by_reloads: usize,
 }
 
 impl State {
@@ -208,6 +215,10 @@ impl State {
             program_cells: Vec::new(),
             state_error: None,
             spare_effects: Vec::new(),
+            queued_reloads: Vec::new(),
+            reload_walk: Vec::new(),
+            reload_targets: Vec::new(),
+            invalidated_by_reloads: 0,
         }
     }
 }

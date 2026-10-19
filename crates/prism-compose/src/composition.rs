@@ -20,7 +20,6 @@ use crate::thread::{
     State,
 };
 use prism_runtime::FunctionValue;
-use std::sync::atomic::AtomicUsize;
 
 /// The lifecycle operations of compositions, which are named by their [`Handle`]s.
 pub struct Composition;
@@ -52,7 +51,7 @@ impl Composition {
             state.live_compositions += 1;
             Ok(handle)
         })?;
-        run_pass(handle, false)?;
+        run_pass(handle)?;
         Ok(handle)
     }
 
@@ -69,19 +68,13 @@ impl Composition {
             invalidate_in(state, root);
             Ok(())
         })?;
-        run_pass(composition, false).map(|_| ())
+        run_pass(composition).map(|_| ())
     }
 
     /// Runs a pass when a scope of the composition is invalid, giving `true`; otherwise runs
     /// nothing and gives `false`.
     pub fn recompose(composition: Handle) -> ComposeResult<bool> {
-        run_pass(composition, false)
-    }
-
-    /// Runs a pass as [`Composition::recompose`] does, in which no restart group skips:
-    /// `compose-hot-reload`'s forced pass (D15).
-    pub fn recompose_forced(composition: Handle) -> ComposeResult<bool> {
-        run_pass(composition, true)
+        run_pass(composition)
     }
 
     /// Removes every group of the composition and releases them as the end of a pass does,
@@ -138,40 +131,6 @@ impl Composition {
         })
     }
 
-    /// Invalidates every restart scope of the composition whose restart function's descriptor
-    /// names a code slot that `predicate` accepts, and gives how many: what `compose-hot-reload`
-    /// calls with the slots of reloaded units (D15). `predicate` runs outside the runtime's
-    /// state.
-    pub fn invalidate_where(
-        composition: Handle,
-        predicate: impl Fn(*const AtomicUsize) -> bool,
-    ) -> ComposeResult<usize> {
-        let scopes = with_state(
-            |state| -> ComposeResult<Vec<(Handle, *const AtomicUsize)>> {
-                let root = live_record(state, composition)?.root;
-                let mut scopes = Vec::new();
-                let mut walk = vec![root];
-                while let Some(group) = walk.pop() {
-                    let record = state.groups.get(group).unwrap();
-                    if let Some(restart) = &record.restart {
-                        // SAFETY: a kept restart function is a live function value.
-                        scopes.push((group, unsafe { restart.slot() }));
-                    }
-                    walk.extend_from_slice(&record.children);
-                }
-                Ok(scopes)
-            },
-        )?;
-        let mut count = 0;
-        for (scope, slot) in scopes {
-            if predicate(slot) {
-                with_state(|state| invalidate_in(state, scope));
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-
     /// Runs `f` with the composition's applier, outside any pass.
     pub fn with_applier<R>(
         composition: Handle,
@@ -205,7 +164,7 @@ fn borrowed(function: &FunctionValue) -> FunctionValue {
 }
 
 /// One pass over the composition's invalid scopes, or none when there is none.
-fn run_pass(composition: Handle, forced: bool) -> ComposeResult<bool> {
+fn run_pass(composition: Handle) -> ComposeResult<bool> {
     let identifier = with_state(|state| -> ComposeResult<Option<u64>> {
         live_record(state, composition)?;
         if !order_scopes(state, composition) {
@@ -215,7 +174,6 @@ fn run_pass(composition: Handle, forced: bool) -> ComposeResult<bool> {
         state.active = Some(ActivePass {
             identifier: state.pass_counter,
             composition,
-            forced,
         });
         Ok(Some(state.pass_counter))
     })?;
@@ -241,6 +199,9 @@ fn run_pass(composition: Handle, forced: bool) -> ComposeResult<bool> {
     }
     with_state(end_pass);
     process_releases();
+    // Reloads applied during the pass invalidate their scopes for the next one (D3 of
+    // `compose-hot-reload`).
+    crate::reload::handle_queued_reloads();
     run_effects(composition);
     Ok(true)
 }

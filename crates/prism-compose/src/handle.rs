@@ -120,6 +120,17 @@ impl<T> Arena<T> {
         Some(value)
     }
 
+    /// The live values with their handles, in index order.
+    pub fn iter(&self) -> impl Iterator<Item = (Handle, &T)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let value = entry.value.as_ref()?;
+                Some((Handle::new(index as u32, entry.generation), value))
+            })
+    }
+
     /// How many values are live.
     pub fn len(&self) -> usize {
         self.live

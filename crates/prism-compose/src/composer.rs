@@ -112,14 +112,12 @@ impl Composer {
     }
 
     /// Whether the innermost open group is a restart group that existed before the pass and
-    /// is not invalid, in a pass that is not forced.
+    /// is not invalid.
     pub fn skipping(self) -> ComposeResult<bool> {
         with_state(|state| {
-            let pass = check(state, self)?;
+            check(state, self)?;
             let frame = state.frames.last().unwrap();
-            Ok(frame.kind == FrameKind::Group(GroupKind::Restart)
-                && frame.skippable
-                && !pass.forced)
+            Ok(frame.kind == FrameKind::Group(GroupKind::Restart) && frame.skippable)
         })
     }
 
@@ -565,8 +563,15 @@ fn start(
     match kind {
         GroupKind::Restart => {
             frame.scope = group;
-            frame.skippable = reused && !record.invalid;
+            frame.skippable = reused && !record.invalid && !record.reset_slots;
             record.invalid = false;
+            // A scope whose restart function a reload retired starts afresh: its kept arguments
+            // and remembered values were laid out by the old code. Its children keep their
+            // state (D8 of `compose-hot-reload`).
+            if std::mem::take(&mut record.reset_slots) {
+                let slots = std::mem::take(&mut record.slots);
+                state.releases.extend(slots.into_iter().map(Release::Slot));
+            }
         }
         GroupKind::Node => {
             let (existing, existing_kind, old_parent) =

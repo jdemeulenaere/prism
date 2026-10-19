@@ -274,7 +274,7 @@ Saving real files under a waiting app is a `run_cli_tests.rs` test.
 | the reload's pass (D6) | the bodies of the invalidated scopes and their non-skipping children |
 | reset slots (D7, D8) | released at the end of the pass, as any forgotten slot |
 
-`crates/prism-compose/tests/runtime_timing.rs` gains the walk: compositions of 1,000, 10,000 and 100,000 groups with one affected body, asserting roughly linear growth under `PRISM_ASSERT_TIMING=1`. No compiler stage is added, so `compile_timing.rs` gains no shape. The summaries' growth is covered by its existing shapes.
+`crates/prism-compose/tests/runtime_timing.rs` gains the walk: compositions of 1,000, 10,000 and 100,000 groups with one affected body, asserting roughly linear growth under `PRISM_ASSERT_TIMING=1`. Measured on 2026-10-19 (release build, Apple silicon, `invalidating_after_a_reload`): a median of 16 ns, 13 ns and 8 ns per live group for 1,000, 10,000 and 100,000 groups, so 0.8 ms for the largest; the time per group does not grow. No compiler stage is added, so `compile_timing.rs` gains no shape. The summaries' growth is covered by its existing shapes.
 
 ## Risks / Trade-offs
 

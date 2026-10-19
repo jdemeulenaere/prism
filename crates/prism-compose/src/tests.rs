@@ -696,8 +696,11 @@ fn a_restart_function_reaches_its_closures_current_code() {
         CODE_RUNS.with(|runs| runs.borrow().clone()),
         ["first", "other"]
     );
-    // Hot reload's invalidation by code slot.
-    let count = Composition::invalidate_where(c, |slot| slot == restart.slot).unwrap();
+    // A reload naming the scope's key invalidates it (D4 of `compose-hot-reload`).
+    let count = crate::reload::invalidate_reloaded(
+        &std::collections::HashSet::from([5]),
+        &std::collections::HashSet::new(),
+    );
     assert_eq!(count, 1);
     assert!(Composition::recompose(c).unwrap());
     assert_eq!(CODE_RUNS.with(|runs| runs.borrow().len()), 3);
@@ -769,10 +772,6 @@ fn skipping_and_skipping_to_the_group_end() {
         Composition::dump(c).unwrap(),
         "root\n  restart 1\n    word 0 = 1\n    replaceable 2\nnodes\n"
     );
-    // A forced pass never skips.
-    invalidate(Composition::root_scope(c).unwrap());
-    Composition::recompose_forced(c).unwrap();
-    assert_eq!(log.borrow().last().unwrap(), "skipping false");
     Composition::dispose(c).unwrap();
 }
 

@@ -61,6 +61,9 @@ pub struct Group {
     pub pending: bool,
     /// Whether the group was removed in the current pass and waits for its release.
     pub removed: bool,
+    /// Whether a restart group's restart function was retired by a reload, so that the next
+    /// start of the group forgets its slots (D8 of `compose-hot-reload`).
+    pub reset_slots: bool,
     /// The pass that last visited the group, and the pass that created it.
     pub visited: u64,
     pub created: u64,
@@ -85,6 +88,7 @@ impl Group {
             invalid: false,
             pending: false,
             removed: false,
+            reset_slots: false,
             visited: 0,
             created: 0,
         }

@@ -20,6 +20,12 @@
 //! writes the state and recomposes, ten times: it reports the median time per read of those
 //! passes and checks that each scope is registered once. Under `PRISM_ASSERT_TIMING=1` it fails
 //! when that time grows by a factor of 2 or more from the smallest composition to the largest.
+//!
+//! `invalidating_after_a_reload` (`compose-hot-reload`, compose: "Invalidating after a reload
+//! in a large composition") applies reloads naming one affected body, the root's key, to the
+//! compositions of `runtime_timing`: it reports the median time per live group of finding and
+//! invalidating their scopes, and under `PRISM_ASSERT_TIMING=1` fails when that time grows by a
+//! factor of 2 or more from the smallest composition to the largest.
 
 use prism_compose::test_support::{descriptor, inline_function, inline_word, slot_type};
 use prism_compose::{
@@ -27,6 +33,7 @@ use prism_compose::{
 };
 use prism_runtime::Descriptor;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 const FAN_OUT: u64 = 10;
@@ -272,5 +279,52 @@ fn runtime_timing() {
             "the first composition per group grows x{:.2}",
             first_growth
         );
+    }
+}
+
+/// The median time per live group of a reload's invalidation over a composition of `size`
+/// groups, with the number of scopes the first invalidated.
+fn measure_reload(size: u64) -> (Duration, usize) {
+    SIZE.with(|s| s.set(size));
+    SCOPES.with(|scopes| *scopes.borrow_mut() = vec![0; size as usize]);
+    GROUP.with(|g| g.set(Some(descriptor(group_code))));
+    let root = descriptor(root_code);
+    let composition =
+        Composition::start(Box::new(NodeTree::new()), inline_function(root, 0)).unwrap();
+    // Every group of the tree is keyed 1, and the root 0: the root is the one affected body.
+    let bodies: HashSet<u64> = [0].into();
+    let retired: HashSet<usize> = HashSet::new();
+    let mut samples = Vec::new();
+    let mut first = None;
+    for _ in 0..21 {
+        let started = Instant::now();
+        let count = prism_compose::reload::invalidate_reloaded(&bodies, &retired);
+        samples.push(started.elapsed() / size as u32);
+        first.get_or_insert(count);
+        assert!(Composition::recompose(composition).unwrap());
+    }
+    Composition::dispose(composition).unwrap();
+    (median(samples), first.unwrap())
+}
+
+#[test]
+#[ignore]
+fn invalidating_after_a_reload() {
+    let results: Vec<(u64, Duration, usize)> = [1_000, 10_000, 100_000]
+        .into_iter()
+        .map(|size| {
+            let (time, scopes) = measure_reload(size);
+            (size, time, scopes)
+        })
+        .collect();
+    println!("{:>8} {:>16} {:>8}", "groups", "time per group", "scopes");
+    for (size, time, scopes) in &results {
+        println!("{:>8} {:>16?} {:>8}", size, time, scopes);
+        assert_eq!(*scopes, 1, "the root alone is invalidated");
+    }
+    if std::env::var("PRISM_ASSERT_TIMING").as_deref() == Ok("1") {
+        let growth = results[2].1.as_secs_f64() / results[0].1.as_secs_f64();
+        println!("time per group growth x{:.2}", growth);
+        assert!(growth < 2.0, "the time per group grows x{:.2}", growth);
     }
 }

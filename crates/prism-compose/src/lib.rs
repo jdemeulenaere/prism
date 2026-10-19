@@ -29,11 +29,14 @@ mod entry;
 mod functions;
 pub mod group;
 mod handle;
+pub mod reload;
 pub mod slot;
 pub mod state;
 pub mod test_support;
 pub mod thread;
 
+#[cfg(test)]
+mod reload_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]
