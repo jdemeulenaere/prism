@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct Todo { val id: Int, val count: Int }
+struct Button { val onClick: () -> Int }
+fun button(t: &Todo): Button = Button({ t.id * 2 })
+fun main() {
+    val t = Todo(21, 3)
+    val b = button(t)
+    println(b.onClick())
+}

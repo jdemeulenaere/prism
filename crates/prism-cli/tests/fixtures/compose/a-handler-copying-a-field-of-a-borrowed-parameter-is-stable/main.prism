@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+struct Item { val id: Int, val title: String }
+
+compose fun Plus(onClick: escaping () -> Unit) {
+    println("plus")
+}
+
+compose fun ItemRow(item: &Item, tick: State<Int>) {
+    println("row ${tick.value}")
+    Plus(onClick = { println(item.id) })
+}
+
+fun main() {
+    val item = Item(1, "a" + "b")
+    val tick = mutableStateOf(0)
+    val c = composition { ItemRow(item, tick) }
+    tick.value = 1
+    println(c.recompose())
+}

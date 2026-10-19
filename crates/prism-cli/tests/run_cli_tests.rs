@@ -1481,6 +1481,22 @@ fn a_handler_capturing_one_handle_allocates_nothing() {
     assert!(!dump.contains("drop-environment"), "{}", dump);
 }
 
+/// code-generation: "A handler copying a field through a borrow allocates nothing"
+/// (`path-captures`, D8): the handler owns a copy of `t.id`, held in its environment word.
+#[test]
+fn a_handler_copying_a_field_through_a_borrow_allocates_nothing() {
+    let dump = clif_of(
+        "inline_path_environment",
+        &[],
+        "struct Todo { val id: Int, val count: Int }\n\
+         struct Button { val onClick: () -> Int }\n\
+         fun button(t: &Todo): Button = Button({ t.id * 2 })\n\
+         fun main() { val t = Todo(21, 3); val b = button(t); println(b.onClick()) }\n",
+    );
+    assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
+    assert!(!dump.contains("drop-environment"), "{}", dump);
+}
+
 /// code-generation: "An escaping parameter is represented alike" (D3 of `escaping-closures`).
 #[test]
 fn an_escaping_parameter_is_represented_alike() {

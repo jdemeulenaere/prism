@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+// watch: edits
+// The new closure captures the path `p.y` too, so its contract changes and the value made
+// before the reload keeps its old code.
+struct P { val x: Int, val y: Int }
+fun main() { val p = P(1, 2); val f: (Int) -> Int = { n -> n + p.x + p.y }; println(f(1)); println(f(1)) }
