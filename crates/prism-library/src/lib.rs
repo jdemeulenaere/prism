@@ -32,6 +32,22 @@ pub const MODULES: &[(&str, &str)] = &[
         "prism/compose/runtime",
         include_str!("../prism/compose/runtime.prism"),
     ),
+    (
+        "prism/compose/ui",
+        include_str!("../prism/compose/ui.prism"),
+    ),
+    (
+        "prism/compose/foundation",
+        include_str!("../prism/compose/foundation.prism"),
+    ),
+    (
+        "prism/compose/layout",
+        include_str!("../prism/compose/layout.prism"),
+    ),
+    (
+        "prism/compose/material3",
+        include_str!("../prism/compose/material3.prism"),
+    ),
     ("prism/system", include_str!("../prism/system.prism")),
     ("prism/composer", include_str!("../prism/composer.prism")),
 ];

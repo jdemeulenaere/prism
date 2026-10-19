@@ -1,0 +1,345 @@
+// The UI toolkit's base, after Jetpack Compose's `compose-ui` artifact with `ui-graphics`,
+// `ui-unit` and `ui-text` (`androidx.compose.ui` and its `graphics`, `unit`, `text`,
+// `semantics` and `window` packages): modifiers, alignments, colours, shapes, units, text
+// styles, roles and `runApp`. With `package` visibility, it also holds the node layer that the
+// other toolkit modules of `prism.compose` are written over: `Node`, `LeafNode`, the node kinds
+// and the UI runtime's setters, whose nodes and handlers live in `prism-ui`. A modifier is
+// plain data, an ordered chain of elements that its node applies; no modifier composes.
+package prism.compose
+
+// A node of the UI tree: one word naming a node of the UI runtime, `Copy`.
+package intrinsic struct NodeId : Copy
+
+// A handler of the UI runtime's handler table, named by a modifier element: one word, `Copy`,
+// that no program constructs. Two ids are equal when they name handlers with the same code and
+// equal captures.
+public intrinsic struct HandlerId : Copy
+
+// A node group of `kind`: `update` receives its node on every pass, then `content` composes
+// its children.
+package intrinsic compose fun Node(
+    kind: Int,
+    update: (NodeId) -> Unit,
+    content: compose () -> Unit,
+): Unit
+
+// A node group of `kind` without children: `update` receives its node on every pass.
+package intrinsic compose fun LeafNode(kind: Int, update: (NodeId) -> Unit): Unit
+
+// The node kind of a column.
+package val columnKind: Int = 1
+
+// The node kind of a row.
+package val rowKind: Int = 2
+
+// The node kind of a box.
+package val boxKind: Int = 3
+
+// The node kind of a text.
+package val textKind: Int = 4
+
+// The node kind of a spacer.
+package val spacerKind: Int = 5
+
+// The node kind of a text field.
+package val textFieldKind: Int = 6
+
+// Sets the text of a text node, or the value of a text field.
+package external fun prism_ui_set_text(node: NodeId, text: &String): Unit
+
+// Sets a node's text colour (an `argb` word) and font size, either unspecified.
+package external fun prism_ui_set_text_style(node: NodeId, color: Int, fontSize: Int): Unit
+
+// Sets a node's modifier chain.
+package external fun prism_ui_set_modifier(node: NodeId, modifier: &Modifier): Unit
+
+// Sets a row's or column's arrangement: its code and spacing.
+package external fun prism_ui_set_arrangement(node: NodeId, code: Int, space: Int): Unit
+
+// Sets a box's content alignment, or the cross-axis alignment of a row or column.
+package external fun prism_ui_set_alignment(node: NodeId, code: Int): Unit
+
+// Sets the colour a node's texts take when their own is unspecified.
+package external fun prism_ui_set_content_color(node: NodeId, color: Int): Unit
+
+// Sets whether a text field takes input.
+package external fun prism_ui_set_enabled(node: NodeId, enabled: Bool): Unit
+
+// Gives a text field the handler its edits call.
+package external fun prism_ui_set_on_value_change(node: NodeId, handler: HandlerId): Unit
+
+// Moves a click handler into the handler table, until a node claims it.
+package external fun prism_ui_register_click(handler: escaping () -> Unit): HandlerId
+
+// Moves a toggle handler into the handler table, until a node claims it.
+package external fun prism_ui_register_toggle(handler: escaping (Bool) -> Unit): HandlerId
+
+// Moves a text field's edit handler into the handler table, until a node claims it.
+package external fun prism_ui_register_text(handler: escaping (String) -> Unit): HandlerId
+
+// Ends the program: a chain cannot hold a seventeenth element.
+package external fun prism_ui_modifier_overflow(): Nothing
+
+// A colour: an ARGB value in the low 32 bits, or unspecified outside them.
+public struct Color : Copy { val argb: Int }
+
+// Jetpack Compose's named colours.
+public struct Colors : Copy {
+    val Black: Color
+    val DarkGray: Color
+    val Gray: Color
+    val LightGray: Color
+    val White: Color
+    val Red: Color
+    val Green: Color
+    val Blue: Color
+    val Yellow: Color
+    val Cyan: Color
+    val Magenta: Color
+    val Transparent: Color
+    val Unspecified: Color
+}
+
+// The named colours, as `Color.Red`; `Color(0xFF336699)` builds any other.
+public val Color: Colors = Colors(
+    Black = Color(0xFF000000),
+    DarkGray = Color(0xFF444444),
+    Gray = Color(0xFF888888),
+    LightGray = Color(0xFFCCCCCC),
+    White = Color(0xFFFFFFFF),
+    Red = Color(0xFFFF0000),
+    Green = Color(0xFF00FF00),
+    Blue = Color(0xFF0000FF),
+    Yellow = Color(0xFFFFFF00),
+    Cyan = Color(0xFF00FFFF),
+    Magenta = Color(0xFFFF00FF),
+    Transparent = Color(0x00000000),
+    Unspecified = Color(0x1_0000_0000),
+)
+
+// A shape: a corner radius in logical pixels and a percentage of the smaller side; the larger
+// of the two is drawn.
+public struct Shape : Copy { val cornerRadius: Int, val cornerPercent: Int }
+
+// The shape without rounded corners.
+public val RectangleShape: Shape = Shape(0, 0)
+
+// An alignment of a child in the space left to it, by its code: the nine two-axis values, then
+// the horizontal and vertical ones.
+public struct Alignment : Copy { val code: Int }
+
+// Jetpack Compose's alignments.
+public struct Alignments : Copy {
+    val TopStart: Alignment
+    val TopCenter: Alignment
+    val TopEnd: Alignment
+    val CenterStart: Alignment
+    val Center: Alignment
+    val CenterEnd: Alignment
+    val BottomStart: Alignment
+    val BottomCenter: Alignment
+    val BottomEnd: Alignment
+    val Start: Alignment
+    val CenterHorizontally: Alignment
+    val End: Alignment
+    val Top: Alignment
+    val CenterVertically: Alignment
+    val Bottom: Alignment
+}
+
+// The alignments, as `Alignment.Center`.
+public val Alignment: Alignments = Alignments(
+    TopStart = Alignment(0),
+    TopCenter = Alignment(1),
+    TopEnd = Alignment(2),
+    CenterStart = Alignment(3),
+    Center = Alignment(4),
+    CenterEnd = Alignment(5),
+    BottomStart = Alignment(6),
+    BottomCenter = Alignment(7),
+    BottomEnd = Alignment(8),
+    Start = Alignment(9),
+    CenterHorizontally = Alignment(10),
+    End = Alignment(11),
+    Top = Alignment(12),
+    CenterVertically = Alignment(13),
+    Bottom = Alignment(14),
+)
+
+// The semantics role of a clickable or toggleable element, by its code.
+public struct Role : Copy { val code: Int }
+
+// Jetpack Compose's semantics roles.
+public struct Roles : Copy {
+    val Button: Role
+    val Checkbox: Role
+    val Switch: Role
+    val RadioButton: Role
+    val Tab: Role
+    val Image: Role
+    val DropdownList: Role
+}
+
+// The roles, as `Role.Button`.
+public val Role: Roles = Roles(
+    Button = Role(1),
+    Checkbox = Role(2),
+    Switch = Role(3),
+    RadioButton = Role(4),
+    Tab = Role(5),
+    Image = Role(6),
+    DropdownList = Role(7),
+)
+
+// A size in whole logical pixels; negative values are unspecified where a size may be.
+public struct Dp : Copy { val value: Int }
+
+// The size that is not given.
+public struct Dps : Copy { val Unspecified: Dp }
+
+// `Dp.Unspecified`.
+public val Dp: Dps = Dps(Unspecified = Dp(-1))
+
+// `n` logical pixels, as `16.dp`.
+public intrinsic val Int.dp: Dp
+
+// A font size in whole logical pixels; negative values are unspecified.
+public struct TextUnit : Copy { val value: Int }
+
+// The font size that is not given.
+public struct TextUnits : Copy { val Unspecified: TextUnit }
+
+// `TextUnit.Unspecified`.
+public val TextUnit: TextUnits = TextUnits(Unspecified = TextUnit(-1))
+
+// A font size of `n` logical pixels, as `14.sp`.
+public intrinsic val Int.sp: TextUnit
+
+// How a text is drawn: its colour and font size, either unspecified.
+public struct TextStyle : Copy { val color: Color, val fontSize: TextUnit }
+
+// The style that specifies nothing.
+public struct TextStyles : Copy { val Default: TextStyle }
+
+// `TextStyle.Default`.
+public val TextStyle: TextStyles = TextStyles(
+    Default = TextStyle(Color.Unspecified, TextUnit.Unspecified),
+)
+
+// One element of a modifier chain, with whole-pixel payloads and codes.
+public enum ModifierElement : Copy {
+    None
+    Padding(Int, Int, Int, Int)
+    Size(Int, Int)
+    DefaultMinSize(Int, Int)
+    FillMax(Bool, Bool, Double)
+    Weight(Double, Bool)
+    Align(Alignment)
+    Background(Color, Shape)
+    Border(Int, Color, Shape)
+    Clickable(HandlerId, Bool, Int)
+    Toggleable(HandlerId, Bool, Bool, Int)
+    TextFieldFrame(Color, Color)
+}
+
+// Eight elements of a chain.
+public struct ModifierElements : Copy {
+    val e0: ModifierElement
+    val e1: ModifierElement
+    val e2: ModifierElement
+    val e3: ModifierElement
+    val e4: ModifierElement
+    val e5: ModifierElement
+    val e6: ModifierElement
+    val e7: ModifierElement
+}
+
+// An ordered chain of at most 16 elements: each one applies to the layout of the elements after
+// it. Two chains are equal when they hold equal elements in the same order.
+public struct Modifier : Copy {
+    val count: Int
+    val first: ModifierElements
+    val second: ModifierElements
+}
+
+// Eight empty elements.
+private val emptyElements: ModifierElements = ModifierElements(
+    ModifierElement.None,
+    ModifierElement.None,
+    ModifierElement.None,
+    ModifierElement.None,
+    ModifierElement.None,
+    ModifierElement.None,
+    ModifierElement.None,
+    ModifierElement.None,
+)
+
+// The empty chain, which every chain starts from: `Modifier.padding(16.dp)`.
+public val Modifier: Modifier = Modifier(0, emptyElements, emptyElements)
+
+// The elements with `element` at `index`.
+private fun ModifierElements.with(
+    index: Int,
+    element: ModifierElement,
+): ModifierElements = when (index) {
+    0 -> ModifierElements(element, e1, e2, e3, e4, e5, e6, e7)
+    1 -> ModifierElements(e0, element, e2, e3, e4, e5, e6, e7)
+    2 -> ModifierElements(e0, e1, element, e3, e4, e5, e6, e7)
+    3 -> ModifierElements(e0, e1, e2, element, e4, e5, e6, e7)
+    4 -> ModifierElements(e0, e1, e2, e3, element, e5, e6, e7)
+    5 -> ModifierElements(e0, e1, e2, e3, e4, element, e6, e7)
+    6 -> ModifierElements(e0, e1, e2, e3, e4, e5, element, e7)
+    else -> ModifierElements(e0, e1, e2, e3, e4, e5, e6, element)
+}
+
+// The element at `index`.
+private fun ModifierElements.at(index: Int): ModifierElement = when (index) {
+    0 -> e0
+    1 -> e1
+    2 -> e2
+    3 -> e3
+    4 -> e4
+    5 -> e5
+    6 -> e6
+    else -> e7
+}
+
+// This chain followed by `element`; a seventeenth element ends the program.
+package fun Modifier.append(element: ModifierElement): Modifier {
+    if (count >= 16) {
+        prism_ui_modifier_overflow()
+    }
+    if (count < 8) {
+        return Modifier(count + 1, first.with(count, element), second)
+    }
+    return Modifier(count + 1, first, second.with(count - 8, element))
+}
+
+// The element at `index` of this chain.
+package fun Modifier.element(index: Int): ModifierElement =
+    if (index < 8) first.at(index) else second.at(index - 8)
+
+// This chain followed by the elements of `other`, in order.
+public fun Modifier.then(other: Modifier): Modifier {
+    var chain: Modifier = this
+    for (index in 0..<other.count) {
+        chain = chain.append(other.element(index))
+    }
+    return chain
+}
+
+// This chain followed by a text field's frame, drawn in `unfocused`, or `focused` when the
+// field has the focus.
+package fun Modifier.textFieldFrame(unfocused: Color, focused: Color): Modifier = append(
+    ModifierElement.TextFieldFrame(unfocused, focused),
+)
+
+// Runs an app composing `content` in a window titled `title` of `width` × `height` logical
+// pixels, until the window closes or a headless run's event script ends; then frees everything
+// the app holds and returns. Compose Desktop's `singleWindowApplication`.
+public intrinsic fun runApp(
+    title: &String = "Prism",
+    width: Int = 800,
+    height: Int = 600,
+    content: escaping compose () -> Unit,
+): Unit

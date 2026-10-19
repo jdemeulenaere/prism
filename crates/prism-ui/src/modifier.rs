@@ -6,12 +6,14 @@
 //! A `Modifier` is a `Copy` struct of a count and two blocks of eight elements, laid out as
 //! `code-generation` lays out structs and enums ("Structs Are Laid Out Inline", "Enums Are
 //! Laid Out as a Tag and Payloads"): an element is an 8-bit tag, its variant's index, followed
-//! by the variant's payload laid out like a struct's fields starting after the tag, so a
-//! `Bool` sits at the next byte and an `Int` at the next multiple of 8. Every variant fits in
-//! 40 bytes. The mirrors are byte arrays read at those offsets rather than Rust enums, because
-//! Rust's `#[repr(C, u8)]` starts every payload at the union's alignment instead.
+//! by the variant's payload laid out like a struct's fields after the tag, largest alignment
+//! first, so a variant's `Bool`s follow its 8-byte fields. Every variant fits in 40 bytes. The
+//! mirrors are byte arrays read at those offsets rather than Rust enums, because Rust's
+//! `#[repr(C, u8)]` starts every payload at the union's alignment instead.
 //!
-//! The layout this decoder reads, by variant (task 11.1 checks it against `prism dump-layout`):
+//! The layout this decoder reads, by variant, is [`PAYLOAD_OFFSETS`], in declaration order of
+//! each variant's payloads; a test of `prism-cli` compares it with `prism dump-layout` of
+//! `/prism/compose/ui`:
 //!
 //! | tag | variant | payload offsets |
 //! |---|---|---|
@@ -19,13 +21,13 @@
 //! | 1 | `Padding(Int, Int, Int, Int)` | 8, 16, 24, 32 |
 //! | 2 | `Size(Int, Int)` | 8, 16 |
 //! | 3 | `DefaultMinSize(Int, Int)` | 8, 16 |
-//! | 4 | `FillMax(Bool, Bool, Double)` | 1, 2, 8 |
+//! | 4 | `FillMax(Bool, Bool, Double)` | 16, 17, 8 |
 //! | 5 | `Weight(Double, Bool)` | 8, 16 |
 //! | 6 | `Align(Alignment)` | 8 (`Alignment` is `{ code: Int }`) |
 //! | 7 | `Background(Color, Shape)` | 8, 16 (`Shape` is `{ cornerRadius: Int, cornerPercent: Int }`) |
 //! | 8 | `Border(Int, Color, Shape)` | 8, 16, 24 |
-//! | 9 | `Clickable(HandlerId, Bool, Int)` | 8, 16, 24 |
-//! | 10 | `Toggleable(HandlerId, Bool, Bool, Int)` | 8, 16, 17, 24 |
+//! | 9 | `Clickable(HandlerId, Bool, Int)` | 8, 24, 16 |
+//! | 10 | `Toggleable(HandlerId, Bool, Bool, Int)` | 8, 24, 25, 16 |
 //! | 11 | `TextFieldFrame(Color, Color)` | 8, 16 |
 
 use crate::handle::HandlerId;
@@ -176,6 +178,30 @@ pub struct ModifierMirror {
     pub second: ElementsMirror,
 }
 
+/// The offset of each payload of each variant of `ModifierElement`, by tag, in declaration
+/// order, as `prism dump-layout` prints them.
+pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 12] = [
+    ("None", &[]),
+    ("Padding", &[8, 16, 24, 32]),
+    ("Size", &[8, 16]),
+    ("DefaultMinSize", &[8, 16]),
+    ("FillMax", &FILL_MAX),
+    ("Weight", &[8, 16]),
+    ("Align", &[8]),
+    ("Background", &[8, 16]),
+    ("Border", &[8, 16, 24]),
+    ("Clickable", &CLICKABLE),
+    ("Toggleable", &TOGGLEABLE),
+    ("TextFieldFrame", &[8, 16]),
+];
+
+/// `FillMax(width: Bool, height: Bool, fraction: Double)`.
+const FILL_MAX: [usize; 3] = [16, 17, 8];
+/// `Clickable(handler: HandlerId, enabled: Bool, role: Int)`.
+const CLICKABLE: [usize; 3] = [8, 24, 16];
+/// `Toggleable(handler: HandlerId, value: Bool, enabled: Bool, role: Int)`.
+const TOGGLEABLE: [usize; 4] = [8, 24, 25, 16];
+
 const TAG_NONE: u8 = 0;
 const TAG_PADDING: u8 = 1;
 const TAG_SIZE: u8 = 2;
@@ -240,9 +266,9 @@ impl ElementMirror {
                 height: minimum(self.int(16)),
             },
             TAG_FILL_MAX => Element::FillMax {
-                width: self.bool(1),
-                height: self.bool(2),
-                fraction: self.double(8),
+                width: self.bool(FILL_MAX[0]),
+                height: self.bool(FILL_MAX[1]),
+                fraction: self.double(FILL_MAX[2]),
             },
             TAG_WEIGHT => Element::Weight {
                 weight: self.double(8),
@@ -259,15 +285,15 @@ impl ElementMirror {
                 shape: Shape::new(self.int(24), self.int(32)),
             },
             TAG_CLICKABLE => Element::Clickable {
-                handler: HandlerId(self.int(8) as u64),
-                enabled: self.bool(16),
-                role: Role::from_code(self.int(24)),
+                handler: HandlerId(self.int(CLICKABLE[0]) as u64),
+                enabled: self.bool(CLICKABLE[1]),
+                role: Role::from_code(self.int(CLICKABLE[2])),
             },
             TAG_TOGGLEABLE => Element::Toggleable {
-                handler: HandlerId(self.int(8) as u64),
-                value: self.bool(16),
-                enabled: self.bool(17),
-                role: Role::from_code(self.int(24)),
+                handler: HandlerId(self.int(TOGGLEABLE[0]) as u64),
+                value: self.bool(TOGGLEABLE[1]),
+                enabled: self.bool(TOGGLEABLE[2]),
+                role: Role::from_code(self.int(TOGGLEABLE[3])),
             },
             TAG_TEXT_FIELD_FRAME => Element::TextFieldFrame {
                 unfocused: Color(self.int(8)),
@@ -311,9 +337,9 @@ impl ElementMirror {
                 fraction,
             } => {
                 mirror.bytes[0] = TAG_FILL_MAX;
-                mirror.set_bool(1, width);
-                mirror.set_bool(2, height);
-                mirror.set_double(8, fraction);
+                mirror.set_bool(FILL_MAX[0], width);
+                mirror.set_bool(FILL_MAX[1], height);
+                mirror.set_double(FILL_MAX[2], fraction);
             }
             Element::Weight { weight, fill } => {
                 mirror.bytes[0] = TAG_WEIGHT;
@@ -347,9 +373,9 @@ impl ElementMirror {
                 role,
             } => {
                 mirror.bytes[0] = TAG_CLICKABLE;
-                mirror.set_int(8, handler.0 as i64);
-                mirror.set_bool(16, enabled);
-                mirror.set_int(24, role.map_or(0, |role| role as i64));
+                mirror.set_int(CLICKABLE[0], handler.0 as i64);
+                mirror.set_bool(CLICKABLE[1], enabled);
+                mirror.set_int(CLICKABLE[2], role.map_or(0, |role| role as i64));
             }
             Element::Toggleable {
                 handler,
@@ -358,10 +384,10 @@ impl ElementMirror {
                 role,
             } => {
                 mirror.bytes[0] = TAG_TOGGLEABLE;
-                mirror.set_int(8, handler.0 as i64);
-                mirror.set_bool(16, value);
-                mirror.set_bool(17, enabled);
-                mirror.set_int(24, role.map_or(0, |role| role as i64));
+                mirror.set_int(TOGGLEABLE[0], handler.0 as i64);
+                mirror.set_bool(TOGGLEABLE[1], value);
+                mirror.set_bool(TOGGLEABLE[2], enabled);
+                mirror.set_int(TOGGLEABLE[3], role.map_or(0, |role| role as i64));
             }
             Element::TextFieldFrame { unfocused, focused } => {
                 mirror.bytes[0] = TAG_TEXT_FIELD_FRAME;
@@ -595,7 +621,8 @@ mod tests {
             height: true,
             fraction: 0.25,
         });
-        assert_eq!(&mirror.bytes[..3], &[4, 1, 1]);
+        assert_eq!(mirror.bytes[0], 4);
+        assert_eq!((mirror.bytes[16], mirror.bytes[17]), (1, 1));
         assert_eq!(mirror.bytes[8..16], 0.25f64.to_ne_bytes());
         let mirror = ElementMirror::encode(&Element::Toggleable {
             handler: HandlerId(5),
@@ -605,8 +632,8 @@ mod tests {
         });
         assert_eq!(mirror.bytes[0], 10);
         assert_eq!(mirror.bytes[8..16], 5i64.to_ne_bytes());
-        assert_eq!((mirror.bytes[16], mirror.bytes[17]), (0, 1));
-        assert_eq!(mirror.bytes[24..32], 0i64.to_ne_bytes());
+        assert_eq!((mirror.bytes[24], mirror.bytes[25]), (0, 1));
+        assert_eq!(mirror.bytes[16..24], 0i64.to_ne_bytes());
     }
 
     #[test]

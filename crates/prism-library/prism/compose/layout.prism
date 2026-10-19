@@ -1,0 +1,182 @@
+// The toolkit's layouts, after Jetpack Compose's `compose-foundation-layout` artifact
+// (`androidx.compose.foundation.layout`): boxes, columns, rows and spacers, their scopes and
+// arrangements, and the layout modifiers. `weight` and `align` are extensions with the scope of
+// a row, column or box as their context, so they resolve only in that scope's content.
+package prism.compose
+
+import ui
+
+// The receiver of a box's content, which gives it `Modifier.align`.
+public struct BoxScope : Copy {}
+
+// The receiver of a column's content, which gives it `Modifier.weight` and `Modifier.align`.
+public struct ColumnScope : Copy {}
+
+// The receiver of a row's content, which gives it `Modifier.weight` and `Modifier.align`.
+public struct RowScope : Copy {}
+
+// Where a row's or column's children go along its main axis, by its code and spacing.
+public struct Arrangement : Copy { val code: Int, val space: Int }
+
+// Jetpack Compose's arrangements.
+public struct Arrangements : Copy {
+    val Top: Arrangement
+    val Bottom: Arrangement
+    val Start: Arrangement
+    val End: Arrangement
+    val Center: Arrangement
+    val SpaceBetween: Arrangement
+    val SpaceAround: Arrangement
+    val SpaceEvenly: Arrangement
+}
+
+// The arrangements, as `Arrangement.Top`.
+public val Arrangement: Arrangements = Arrangements(
+    Top = Arrangement(0, 0),
+    Bottom = Arrangement(1, 0),
+    Start = Arrangement(2, 0),
+    End = Arrangement(3, 0),
+    Center = Arrangement(4, 0),
+    SpaceBetween = Arrangement(5, 0),
+    SpaceAround = Arrangement(6, 0),
+    SpaceEvenly = Arrangement(7, 0),
+)
+
+// The arrangement placing children from the start with `space` between them.
+public fun Arrangements.spacedBy(space: Dp): Arrangement = Arrangement(8, space.value)
+
+// This chain followed by padding around the rest of the chain: Compose's three `padding`
+// overloads in one, each side defaulting to its axis and each axis to `all`.
+public fun Modifier.padding(
+    all: Dp = 0.dp,
+    horizontal: Dp = all,
+    vertical: Dp = all,
+    start: Dp = horizontal,
+    top: Dp = vertical,
+    end: Dp = horizontal,
+    bottom: Dp = vertical,
+): Modifier = append(ModifierElement.Padding(start.value, top.value, end.value, bottom.value))
+
+// This chain followed by an exact width for the rest of the chain.
+public fun Modifier.width(width: Dp): Modifier = append(ModifierElement.Size(width.value, -1))
+
+// This chain followed by an exact height for the rest of the chain.
+public fun Modifier.height(height: Dp): Modifier = append(ModifierElement.Size(-1, height.value))
+
+// This chain followed by an exact size for the rest of the chain.
+public fun Modifier.size(width: Dp, height: Dp = width): Modifier = append(
+    ModifierElement.Size(width.value, height.value),
+)
+
+// This chain followed by minimum sizes for the rest of the chain, on each axis whose minimum is
+// otherwise 0.
+public fun Modifier.defaultMinSize(
+    minWidth: Dp = Dp.Unspecified,
+    minHeight: Dp = Dp.Unspecified,
+): Modifier = append(ModifierElement.DefaultMinSize(minWidth.value, minHeight.value))
+
+// This chain followed by `fraction` of the maximum width the constraints allow.
+public fun Modifier.fillMaxWidth(fraction: Double = 1.0): Modifier = append(
+    ModifierElement.FillMax(true, false, fraction),
+)
+
+// This chain followed by `fraction` of the maximum height the constraints allow.
+public fun Modifier.fillMaxHeight(fraction: Double = 1.0): Modifier = append(
+    ModifierElement.FillMax(false, true, fraction),
+)
+
+// This chain followed by `fraction` of the maximum size the constraints allow.
+public fun Modifier.fillMaxSize(fraction: Double = 1.0): Modifier = append(
+    ModifierElement.FillMax(true, true, fraction),
+)
+
+// In a row, a share by `weight` of the width the children without one leave, exactly with
+// `fill` and at most without it.
+context(scope: RowScope)
+public fun Modifier.weight(weight: Double, fill: Bool = true): Modifier = append(
+    ModifierElement.Weight(weight, fill),
+)
+
+// In a column, a share by `weight` of the height the children without one leave, exactly with
+// `fill` and at most without it.
+context(scope: ColumnScope)
+public fun Modifier.weight(weight: Double, fill: Bool = true): Modifier = append(
+    ModifierElement.Weight(weight, fill),
+)
+
+// In a box, where this child goes, instead of the box's content alignment.
+context(scope: BoxScope)
+public fun Modifier.align(alignment: Alignment): Modifier = append(ModifierElement.Align(alignment))
+
+// In a row, where this child goes vertically, instead of the row's alignment.
+context(scope: RowScope)
+public fun Modifier.align(alignment: Alignment): Modifier = append(ModifierElement.Align(alignment))
+
+// In a column, where this child goes horizontally, instead of the column's alignment.
+context(scope: ColumnScope)
+public fun Modifier.align(alignment: Alignment): Modifier = append(ModifierElement.Align(alignment))
+
+// Stacks its children over each other, each placed by its `align` or by `contentAlignment`, and
+// as large as the largest.
+public compose fun Box(
+    modifier: Modifier = Modifier,
+    contentAlignment: Alignment = Alignment.TopStart,
+    content: compose BoxScope.() -> Unit,
+): Unit {
+    Node(
+        boxKind,
+        { node ->
+            prism_ui_set_alignment(node, contentAlignment.code)
+            prism_ui_set_modifier(node, modifier)
+        },
+    ) {
+        content(BoxScope())
+    }
+}
+
+// Places its children one below the other, by `verticalArrangement`, each aligned by its
+// `align` or by the horizontal part of `horizontalAlignment`.
+public compose fun Column(
+    modifier: Modifier = Modifier,
+    verticalArrangement: Arrangement = Arrangement.Top,
+    horizontalAlignment: Alignment = Alignment.Start,
+    content: compose ColumnScope.() -> Unit,
+): Unit {
+    Node(
+        columnKind,
+        { node ->
+            prism_ui_set_arrangement(node, verticalArrangement.code, verticalArrangement.space)
+            prism_ui_set_alignment(node, horizontalAlignment.code)
+            prism_ui_set_modifier(node, modifier)
+        },
+    ) {
+        content(ColumnScope())
+    }
+}
+
+// Places its children one after the other, by `horizontalArrangement`, each aligned by its
+// `align` or by the vertical part of `verticalAlignment`.
+public compose fun Row(
+    modifier: Modifier = Modifier,
+    horizontalArrangement: Arrangement = Arrangement.Start,
+    verticalAlignment: Alignment = Alignment.Top,
+    content: compose RowScope.() -> Unit,
+): Unit {
+    Node(
+        rowKind,
+        { node ->
+            prism_ui_set_arrangement(node, horizontalArrangement.code, horizontalArrangement.space)
+            prism_ui_set_alignment(node, verticalAlignment.code)
+            prism_ui_set_modifier(node, modifier)
+        },
+    ) {
+        content(RowScope())
+    }
+}
+
+// An empty node whose size comes from its modifier and its constraints.
+public compose fun Spacer(modifier: Modifier): Unit {
+    LeafNode(spacerKind) { node ->
+        prism_ui_set_modifier(node, modifier)
+    }
+}

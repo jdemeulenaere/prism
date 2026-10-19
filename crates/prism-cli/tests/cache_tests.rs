@@ -949,6 +949,47 @@ fn the_composer_module_is_not_in_the_prelude() {
     fs::remove_dir_all(&base).ok();
 }
 
+/// standard-library: "The UI modules are not in the prelude" (`ui-toolkit`): a file without
+/// imports reaches no toolkit module, and one importing material3 reaches all four.
+#[test]
+fn the_ui_modules_are_not_in_the_prelude() {
+    let base = unique_temp_dir("ui_modules");
+    let explain = |source: &str| {
+        fs::write(base.join("main.prism"), source).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+            .current_dir(&base)
+            .env("PRISM_CACHE", base.join("cache"))
+            .args(["check", "--explain-cache", "main.prism"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        all_explanation_lines(&output)
+    };
+    let modules = |lines: &[String]| -> Vec<String> {
+        lines
+            .iter()
+            .filter_map(|line| line.split_once(' ').map(|(_, path)| path.to_string()))
+            .filter(|path| path.starts_with("prism/compose/"))
+            .collect()
+    };
+    let without = explain("fun main() {}\n");
+    assert_eq!(modules(&without), ["prism/compose/runtime.prism"]);
+    let with = explain("import /prism/compose/material3\n\nfun main() {}\n");
+    let mut reached = modules(&with);
+    reached.sort();
+    assert_eq!(
+        reached,
+        [
+            "prism/compose/foundation.prism",
+            "prism/compose/layout.prism",
+            "prism/compose/material3.prism",
+            "prism/compose/runtime.prism",
+            "prism/compose/ui.prism",
+        ]
+    );
+    fs::remove_dir_all(&base).ok();
+}
+
 /// build-cache: "Library entries are shared between workspaces".
 #[test]
 fn library_entries_are_shared_between_workspaces() {

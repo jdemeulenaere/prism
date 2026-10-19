@@ -53,6 +53,13 @@ fn every_declaration_says_what_it_does() {
             .iter()
             .any(|start| line.starts_with(start));
             if declares {
+                // A context parameter's line is part of the declaration below it (D10 of
+                // `receiver-lambdas`), so the comment is above it.
+                let index = if index > 0 && lines[index - 1].starts_with("context(") {
+                    index - 1
+                } else {
+                    index
+                };
                 assert!(
                     index > 0 && lines[index - 1].starts_with("//"),
                     "{}:{}: the declaration has no comment above it: {}",
@@ -318,4 +325,147 @@ fn signatures_of_the_compose_module() {
     }
     assert_eq!(texts.len(), 19, "{:?}", texts);
     assert!(PRELUDE.contains(&"prism/compose/runtime"));
+}
+
+/// `ui-toolkit` task 11.1: `prism-ui`'s mirrors of `Modifier`, `ModifierElements` and
+/// `ModifierElement` read the offsets `prism dump-layout` gives the declarations of
+/// `/prism/compose/ui`.
+#[test]
+fn the_modifier_mirrors_match_the_layout_of_the_ui_module() {
+    let directory =
+        std::env::temp_dir().join(format!("prism-modifier-layout-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let entry = directory.join("main.prism");
+    std::fs::write(
+        &entry,
+        "import /prism/compose/ui\nfun count(m: Modifier, e: ModifierElement): Int = m.count\n",
+    )
+    .unwrap();
+    let layout = prism_cli::dump_layout(&entry)
+        .unwrap_or_else(|error| panic!("no layout:\n{}", error.render()));
+    std::fs::remove_dir_all(&directory).unwrap();
+    for (line, expected) in [
+        ("struct prism/compose/ui::Modifier", "(size 648, align 8)"),
+        (
+            "struct prism/compose/ui::ModifierElements",
+            "(size 320, align 8)",
+        ),
+        (
+            "enum prism/compose/ui::ModifierElement",
+            "(size 40, align 8, tag u8 at 0)",
+        ),
+    ] {
+        assert!(
+            layout.contains(&format!("{} : Copy {}", line, expected)),
+            "{} {} in:\n{}",
+            line,
+            expected,
+            layout
+        );
+    }
+    assert!(layout.contains("  first: ModifierElements at 8\n  second: ModifierElements at 328\n"));
+    let element = layout
+        .split("enum prism/compose/ui::ModifierElement ")
+        .nth(1)
+        .expect("the element enum");
+    let variants: Vec<&str> = element
+        .lines()
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .map(str::trim)
+        .collect();
+    assert_eq!(variants.len(), prism_ui::modifier::PAYLOAD_OFFSETS.len());
+    for (variant, (name, offsets)) in variants.iter().zip(prism_ui::modifier::PAYLOAD_OFFSETS) {
+        let printed: Vec<usize> = variant
+            .split(" at ")
+            .skip(1)
+            .map(|rest| {
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().unwrap()
+            })
+            .collect();
+        assert!(variant.starts_with(name), "{} is {}", variant, name);
+        assert_eq!(printed, offsets, "the payloads of {}", variant);
+    }
+}
+
+/// standard-library: "The public signature of runApp" (`ui-toolkit`): the ABI of
+/// `/prism/compose/ui` exports `runApp` with a default for each of its first three parameters,
+/// `HandlerId` and the unit properties, and none of the `package` node layer.
+#[test]
+fn the_public_signature_of_run_app() {
+    use prism_abi::ExportedSymbol;
+    use prism_ast::Visibility;
+    let library = Library::bundled();
+    let source = &library
+        .module("prism/compose/ui")
+        .expect("the module")
+        .source;
+    let file = prism_parser::parse_source(source).expect("the module parses");
+    let no_definition = |_: &str, _: &str| None;
+    let abi = prism_abi::FileAbi::extract_with_origin(
+        &file,
+        "prism/compose/ui",
+        &prism_abi::no_imports,
+        &no_definition,
+        true,
+    )
+    .expect("the module's ABI");
+    let visibility = |symbol: &ExportedSymbol| match symbol {
+        ExportedSymbol::Function { visibility, .. }
+        | ExportedSymbol::Struct { visibility, .. }
+        | ExportedSymbol::Enum { visibility, .. }
+        | ExportedSymbol::Var { visibility, .. }
+        | ExportedSymbol::ExtensionProperty { visibility, .. } => *visibility,
+    };
+    let run_app = abi
+        .symbols
+        .iter()
+        .find_map(|symbol| match symbol {
+            ExportedSymbol::Function { name, params, .. } if name == "runApp" => {
+                Some((symbol, params))
+            }
+            _ => None,
+        })
+        .expect("runApp is exported");
+    assert_eq!(
+        run_app.0.declaration_text().unwrap(),
+        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: escaping compose () -> Unit): Unit"
+    );
+    let defaults: Vec<bool> = run_app.1.iter().map(|p| p.default.is_some()).collect();
+    assert_eq!(defaults, [true, true, true, false]);
+    let public: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter(|symbol| visibility(symbol) == Visibility::Public)
+        .filter_map(ExportedSymbol::declaration_text)
+        .collect();
+    for expected in [
+        "public intrinsic val Int.dp: Dp",
+        "public intrinsic val Int.sp: TextUnit",
+        "public intrinsic struct HandlerId : Copy",
+    ] {
+        assert!(
+            public.iter().any(|text| text == expected),
+            "{} in {:?}",
+            expected,
+            public
+        );
+    }
+    for hidden in ["NodeId", "Node", "LeafNode"] {
+        let named = |symbol: &&ExportedSymbol| match symbol {
+            ExportedSymbol::Struct { name, .. } | ExportedSymbol::Function { name, .. } => {
+                name == hidden
+            }
+            _ => false,
+        };
+        assert!(
+            abi.symbols
+                .iter()
+                .filter(named)
+                .all(|symbol| visibility(symbol) != Visibility::Public),
+            "{} is not public",
+            hidden
+        );
+    }
 }

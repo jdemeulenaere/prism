@@ -1,0 +1,91 @@
+// The toolkit's foundation, after Jetpack Compose's `compose-foundation` artifact
+// (`androidx.compose.foundation` and its `shape`, `text` and `selection` packages): drawing and
+// input modifiers, rounded shapes, and the basic text and text field composables that material
+// is written over. A handler given to `clickable`, `toggleable` or `BasicTextField` moves into
+// the UI runtime's handler table, owned by the node that uses it.
+package prism.compose
+
+import ui
+
+// The code of a role, 0 for none.
+private fun roleCode(role: Role?): Int = role?.code ?: 0
+
+// This chain followed by a background of `color` in `shape`, drawn over the bounds of the rest
+// of the chain.
+public fun Modifier.background(color: Color, shape: Shape = RectangleShape): Modifier = append(
+    ModifierElement.Background(color, shape),
+)
+
+// This chain followed by a border `width` pixels wide of `color` in `shape`, drawn over the
+// bounds of the rest of the chain.
+public fun Modifier.border(
+    width: Dp,
+    color: Color,
+    shape: Shape = RectangleShape,
+): Modifier = append(ModifierElement.Border(width.value, color, shape))
+
+// This chain followed by a click target over the bounds of the rest of the chain, calling
+// `onClick` when it is enabled; a disabled one absorbs clicks. Only while an app runs.
+public fun Modifier.clickable(
+    enabled: Bool = true,
+    role: Role? = null,
+    onClick: escaping () -> Unit,
+): Modifier = append(
+    ModifierElement.Clickable(prism_ui_register_click(onClick), enabled, roleCode(role)),
+)
+
+// This chain followed by a toggle target over the bounds of the rest of the chain, calling
+// `onValueChange` with the opposite of `value` when it is enabled. Only while an app runs.
+public fun Modifier.toggleable(
+    value: Bool,
+    enabled: Bool = true,
+    role: Role? = null,
+    onValueChange: escaping (Bool) -> Unit,
+): Modifier = append(
+    ModifierElement.Toggleable(
+        prism_ui_register_toggle(onValueChange),
+        value,
+        enabled,
+        roleCode(role),
+    ),
+)
+
+// A shape with corners rounded by `size`, or by `percent` of the smaller side, whichever is
+// larger: `RoundedCornerShape(4.dp)` or `RoundedCornerShape(percent = 50)`.
+public fun RoundedCornerShape(size: Dp = 0.dp, percent: Int = 0): Shape = Shape(size.value, percent)
+
+// The shape whose corners are rounded by half the smaller side.
+public val CircleShape: Shape = Shape(0, 50)
+
+// Shows `text` in `style`, an unspecified colour taking the content colour around it and an
+// unspecified size 16.
+public compose fun BasicText(
+    text: &String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = TextStyle.Default,
+): Unit {
+    LeafNode(textKind) { node ->
+        prism_ui_set_text(node, text)
+        prism_ui_set_text_style(node, style.color.argb, style.fontSize.value)
+        prism_ui_set_modifier(node, modifier)
+    }
+}
+
+// A one-line field showing `value`: clicking it takes the focus, and each edit calls
+// `onValueChange` with the new text, which the field shows once the program passes it back.
+public compose fun BasicTextField(
+    value: &String,
+    onValueChange: escaping (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Bool = true,
+    textStyle: TextStyle = TextStyle.Default,
+): Unit {
+    val handler = prism_ui_register_text(onValueChange)
+    LeafNode(textFieldKind) { node ->
+        prism_ui_set_text(node, value)
+        prism_ui_set_text_style(node, textStyle.color.argb, textStyle.fontSize.value)
+        prism_ui_set_enabled(node, enabled)
+        prism_ui_set_on_value_change(node, handler)
+        prism_ui_set_modifier(node, modifier)
+    }
+}

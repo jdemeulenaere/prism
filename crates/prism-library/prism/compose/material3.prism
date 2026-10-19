@@ -1,0 +1,190 @@
+// Material Design 3 components, after Jetpack Compose's `compose-material3` artifact
+// (`androidx.compose.material3`), written over foundation and layout as Compose writes them:
+// a surface is a box with a background and a content colour, a button a clickable surface
+// holding a row, a checkbox a toggleable box, a text field a framed basic text field. The theme
+// is Material 3's baseline light scheme, a value until composition locals exist.
+package prism.compose
+
+import ui
+import foundation
+import layout
+
+// The colours of the Material theme that the components use.
+public struct ColorScheme : Copy {
+    val primary: Color
+    val onPrimary: Color
+    val surface: Color
+    val onSurface: Color
+    val onSurfaceVariant: Color
+    val outline: Color
+}
+
+// The text styles of the Material theme that the components use.
+public struct Typography : Copy { val bodyLarge: TextStyle, val labelLarge: TextStyle }
+
+// What `MaterialTheme` holds: its colour scheme and its typography.
+public struct MaterialThemeValues : Copy {
+    val colorScheme: ColorScheme
+    val typography: Typography
+}
+
+// Material 3's baseline light theme, as `MaterialTheme.colorScheme.primary`.
+public val MaterialTheme: MaterialThemeValues = MaterialThemeValues(
+    colorScheme = ColorScheme(
+        primary = Color(0xFF6750A4),
+        onPrimary = Color(0xFFFFFFFF),
+        surface = Color(0xFFFEF7FF),
+        onSurface = Color(0xFF1D1B20),
+        onSurfaceVariant = Color(0xFF49454F),
+        outline = Color(0xFF79747E),
+    ),
+    typography = Typography(
+        bodyLarge = TextStyle(Color.Unspecified, 16.sp),
+        labelLarge = TextStyle(Color.Unspecified, 14.sp),
+    ),
+)
+
+// The colours of a button, enabled and disabled.
+public struct ButtonColors : Copy {
+    val containerColor: Color
+    val contentColor: Color
+    val disabledContainerColor: Color
+    val disabledContentColor: Color
+}
+
+// What `ButtonDefaults` holds: a button's shape and minimum size.
+public struct ButtonDefaultsValues : Copy { val shape: Shape, val MinWidth: Dp, val MinHeight: Dp }
+
+// A button's defaults, as `ButtonDefaults.shape`.
+public val ButtonDefaults: ButtonDefaultsValues = ButtonDefaultsValues(
+    shape = CircleShape,
+    MinWidth = 58.dp,
+    MinHeight = 40.dp,
+)
+
+// A button's colours: the theme's primary container and content, and when disabled `onSurface`
+// at 12 and 38 percent alpha.
+public fun ButtonDefaultsValues.buttonColors(
+    containerColor: Color = MaterialTheme.colorScheme.primary,
+    contentColor: Color = MaterialTheme.colorScheme.onPrimary,
+    disabledContainerColor: Color = Color(0x1F1D1B20),
+    disabledContentColor: Color = Color(0x611D1B20),
+): ButtonColors = ButtonColors(
+    containerColor,
+    contentColor,
+    disabledContainerColor,
+    disabledContentColor,
+)
+
+// A box node with `modifier` whose texts take `contentColor` when theirs is unspecified.
+package compose fun SurfaceBox(
+    modifier: Modifier,
+    contentColor: Color,
+    content: compose () -> Unit,
+): Unit {
+    Node(
+        boxKind,
+        { node ->
+            prism_ui_set_alignment(node, Alignment.TopStart.code)
+            prism_ui_set_content_color(node, contentColor.argb)
+            prism_ui_set_modifier(node, modifier)
+        },
+    ) {
+        content()
+    }
+}
+
+// A surface of `color` in `shape`, whose texts are drawn in `contentColor` unless they say
+// otherwise.
+public compose fun Surface(
+    modifier: Modifier = Modifier,
+    shape: Shape = RectangleShape,
+    color: Color = MaterialTheme.colorScheme.surface,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    content: compose () -> Unit,
+): Unit {
+    SurfaceBox(modifier.background(color, shape), contentColor, content)
+}
+
+// Shows `text`: in `color` and `fontSize` when they are specified, else in those of `style`.
+public compose fun Text(
+    text: &String,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    style: TextStyle = MaterialTheme.typography.bodyLarge,
+): Unit {
+    val specified = color.argb >= 0 && color.argb <= 0xFFFFFFFF
+    val drawn = if (specified) color else style.color
+    val size = if (fontSize.value >= 0) fontSize else style.fontSize
+    BasicText(text, modifier, TextStyle(drawn, size))
+}
+
+// A filled button calling `onClick`, its content in a row centred in at least 58 × 40 pixels
+// with 24 pixels of padding on the sides and 8 above and below.
+public compose fun Button(
+    onClick: escaping () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Bool = true,
+    shape: Shape = ButtonDefaults.shape,
+    colors: ButtonColors = ButtonDefaults.buttonColors(),
+    content: compose RowScope.() -> Unit,
+): Unit {
+    val container = if (enabled) colors.containerColor else colors.disabledContainerColor
+    val label = if (enabled) colors.contentColor else colors.disabledContentColor
+    val surface = modifier.background(container, shape).clickable(enabled, Role.Button, onClick)
+    SurfaceBox(surface, label) {
+        Row(
+            Modifier
+                .defaultMinSize(ButtonDefaults.MinWidth, ButtonDefaults.MinHeight)
+                .padding(horizontal = 24.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            content()
+        }
+    }
+}
+
+// A checkbox showing `checked`: a click calls `onCheckedChange` with the opposite, and the box
+// changes when the program passes it back.
+public compose fun Checkbox(
+    checked: Bool,
+    onCheckedChange: escaping (Bool) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Bool = true,
+): Unit {
+    val color = if (!enabled) {
+        Color(0x611D1B20)
+    } else if (checked) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val shape = RoundedCornerShape(2.dp)
+    val target = modifier.toggleable(checked, enabled, Role.Checkbox, onCheckedChange).size(20.dp)
+    val drawn =
+        if (checked)
+            target.background(color, shape).border(2.dp, color, shape)
+        else
+            target.border(2.dp, color, shape)
+    Box(drawn) {}
+}
+
+// A text field showing `value` in an outlined frame, at least 200 pixels wide, its text 8
+// pixels inside the frame.
+public compose fun TextField(
+    value: &String,
+    onValueChange: escaping (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Bool = true,
+    textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+): Unit {
+    val unfocused = if (enabled) MaterialTheme.colorScheme.outline else Color(0x1F1D1B20)
+    val focused = if (enabled) MaterialTheme.colorScheme.primary else Color(0x1F1D1B20)
+    val framed = modifier
+        .defaultMinSize(minWidth = 200.dp)
+        .textFieldFrame(unfocused, focused)
+        .padding(8.dp)
+    BasicTextField(value, onValueChange, framed, enabled, textStyle)
+}
