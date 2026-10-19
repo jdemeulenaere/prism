@@ -1,0 +1,5 @@
+click 100 18
+type "ab"
+edit main.prism main.prism.v2
+type "c"
+dump

@@ -1,0 +1,6 @@
+compose fun Show() { println("show 2") }
+fun main() {
+    val c = composition { Show() }
+    println("ready")
+    println(c.recompose())
+}

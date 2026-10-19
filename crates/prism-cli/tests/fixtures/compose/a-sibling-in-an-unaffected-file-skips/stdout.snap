@@ -1,0 +1,7 @@
+screen
+badge
+screen
+window 400x300
+  column #1 0,0 56x40
+    text #2 0,0 56x20 "Goodbye"
+    text #3 0,20 56x20 "badge 1"

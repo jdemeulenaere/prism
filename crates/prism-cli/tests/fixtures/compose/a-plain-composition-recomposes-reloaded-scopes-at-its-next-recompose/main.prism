@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+// watch: edits
+compose fun Show() { println("show 1") }
+fun main() {
+    val c = composition { Show() }
+    println("ready")
+    println(c.recompose())
+}

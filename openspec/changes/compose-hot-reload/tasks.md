@@ -54,7 +54,7 @@ Prerequisites (design, "Baseline"): `hot-reload`, `standard-library`, `compose-r
 
 ## 7. Fixtures
 
-- [ ] 7.1 `compose` fixtures, each with its `.prism.v2` replacements:
+- [x] 7.1 `compose` fixtures, each with its `.prism.v2` replacements:
   - "Editing a composable body recomposes it with its state";
   - "Editing a helper of another file recomposes its callers";
   - "A sibling in an unaffected file skips";
@@ -63,7 +63,7 @@ Prerequisites (design, "Baseline"): `hot-reload`, `standard-library`, `compose-r
   - "Adding a composable call";
   - "A composable whose parameters changed restarts with the new code";
   - "A plain composition recomposes reloaded scopes at its next recompose" (no UI, an `after line 2` step).
-- [ ] 7.2 `ui` fixtures:
+- [x] 7.2 `ui` fixtures:
   - "A handler whose captures changed";
   - "A handler body edit reaches the next click";
   - "A focused field keeps its focus and text across a reload";
@@ -71,7 +71,7 @@ Prerequisites (design, "Baseline"): `hot-reload`, `standard-library`, `compose-r
   - "Reloaded code divides by zero" (`// run: 101`);
   - "Two edits form one reload";
   - "Edit without watch" (task 5.3).
-- [ ] 7.3 `hot-reload` fixture: "A line printed during a pass" (an `after line 1` step under an app).
+- [x] 7.3 `hot-reload` fixture: "A line printed during a pass" (an `after line 1` step under an app).
 
 ## 8. Real files and the benchmark (D13)
 

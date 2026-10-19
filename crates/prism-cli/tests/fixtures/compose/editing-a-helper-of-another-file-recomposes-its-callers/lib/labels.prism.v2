@@ -1,0 +1,2 @@
+package lib
+public fun label(n: Int): String = "value $n"

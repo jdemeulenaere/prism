@@ -1,0 +1,4 @@
+window 400x300
+  text #1 0,0 40x20 "n = 2"
+window 400x300
+  text #1 0,0 56x20 "value 2"

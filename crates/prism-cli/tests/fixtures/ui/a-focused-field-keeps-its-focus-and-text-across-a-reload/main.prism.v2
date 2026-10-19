@@ -1,0 +1,12 @@
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Form() {
+    val name = remember { mutableStateOf("") }
+    Column {
+        TextField(value = name.value, onValueChange = { name.value = it })
+        Text("Hi ${name.value}")
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Form() } }

@@ -1,0 +1,4 @@
+reload: applied main.prism
+panic: division by zero
+  at main.prism:7:13
+watch: the program stopped with a runtime error; waiting for changes

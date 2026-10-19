@@ -1,0 +1,12 @@
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Counter() {
+    val c = remember { mutableStateOf(10) }
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Count: ${c.value}")
+        Button(onClick = { c.value += 1 }) { Text("+") }
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Counter() } }

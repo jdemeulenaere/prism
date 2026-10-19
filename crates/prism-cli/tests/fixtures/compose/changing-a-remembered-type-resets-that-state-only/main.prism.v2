@@ -1,0 +1,18 @@
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Counter() {
+    val c = remember { mutableStateOf("") }
+    Text("Name: ${c.value}")
+    Button(onClick = { c.value = "x" }) { Text("+") }
+}
+compose fun Likes() {
+    val likes = remember { mutableStateOf(0) }
+    Text("Likes: ${likes.value}")
+    Button(onClick = { likes.value += 1 }) { Text("like") }
+}
+compose fun Screen() {
+    Column { Counter(); Likes() }
+}
+fun main() { runApp(width = 400, height = 300) { Screen() } }

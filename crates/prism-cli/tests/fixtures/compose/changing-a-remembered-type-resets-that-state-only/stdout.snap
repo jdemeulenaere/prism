@@ -1,0 +1,10 @@
+window 400x300
+  column #1 0,0 80x120
+    text #2 0,0 48x20 "Name: "
+    box #3 0,20 58x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 0,20 58x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 25,30 8x20 "+"
+    text #6 0,60 64x20 "Likes: 1"
+    box #7 0,80 80x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #8 0,80 80x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #9 24,90 32x20 "like"
