@@ -1,12 +1,13 @@
-//! compose: "A steady-state pass allocates nothing" (D16 of `compose-runtime`). A counting
+//! compose: "A steady-state pass allocates nothing" (D16 of `compose-runtime`), and "Steady-state
+//! reads allocate nothing" (D9 of `state-handles`). A counting
 //! global allocator counts the allocations and frees of this thread while a composition of
 //! 1,000 restart groups, each holding a word slot, runs passes that recompose the root, with
 //! every child skipping, and one invalid leaf scope. Its content and restart functions have
 //! static descriptors and inline environments, as escaping closures over one `Int` have, so
 //! only the runtime's own allocations are counted.
 
-use prism_compose::test_support::{descriptor, inline_function, inline_word};
-use prism_compose::{invalidate, Composer, Composition, GroupKind, Handle, NodeTree};
+use prism_compose::test_support::{descriptor, inline_function, inline_word, slot_type};
+use prism_compose::{invalidate, Composer, Composition, GroupKind, Handle, NodeTree, States};
 use prism_runtime::Descriptor;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -18,6 +19,8 @@ thread_local! {
     static EVENTS: Cell<u64> = const { Cell::new(0) };
     static CHILD: Cell<Option<&'static Descriptor>> = const { Cell::new(None) };
     static LEAF: Cell<u64> = const { Cell::new(0) };
+    static READER: Cell<Option<&'static Descriptor>> = const { Cell::new(None) };
+    static STATE: Cell<(u64, usize)> = const { Cell::new((0, 0)) };
 }
 
 fn count() {
@@ -106,4 +109,58 @@ fn a_steady_state_pass_allocates_nothing() {
     COUNTING.with(|counting| counting.set(false));
     assert_eq!(EVENTS.with(Cell::get), 2);
     Composition::dispose(composition).unwrap();
+}
+
+/// One reader: a restart group that reads the state each time it is composed.
+fn reader(k: Composer, index: u64) {
+    k.start_group(GroupKind::Restart, 2, 0).unwrap();
+    let (handle, record) = STATE.with(Cell::get);
+    let record = record as *const prism_compose::SlotType;
+    let value = States::read(Handle(handle), record).unwrap();
+    std::hint::black_box(unsafe { *(value as *const i64) });
+    let restart = inline_function(READER.with(Cell::get).unwrap(), index);
+    k.end_restart_group(restart).unwrap();
+}
+
+unsafe extern "C" fn reader_code(environment: *mut u8, composer: u64) {
+    reader(Composer(composer), inline_word(environment));
+}
+
+unsafe extern "C" fn readers_code(_: *mut u8, composer: u64) {
+    for index in 0..CHILDREN {
+        reader(Composer(composer), index);
+    }
+}
+
+/// compose: "Steady-state reads allocate nothing": 1,000 restart scopes that each read one
+/// state are recomposed 100 times without a write; once each scope is registered, a read
+/// allocates nothing.
+#[test]
+fn steady_state_reads_allocate_nothing() {
+    READER.with(|reader| reader.set(Some(descriptor(reader_code))));
+    let record = slot_type::<i64>("Int");
+    let mut value = 7i64;
+    let handle = unsafe { States::create(record, (&mut value as *mut i64).cast()) }.unwrap();
+    STATE.with(|state| state.set((handle.word(), record as *const _ as usize)));
+    let root = descriptor(readers_code);
+    let composition =
+        Composition::start(Box::new(NodeTree::new()), inline_function(root, 0)).unwrap();
+    let root_scope = Composition::root_scope(composition).unwrap();
+    let mut counts = Vec::with_capacity(100);
+    for _ in 0..100 {
+        EVENTS.with(|events| events.set(0));
+        COUNTING.with(|counting| counting.set(true));
+        invalidate(root_scope);
+        let ran = Composition::recompose(composition).unwrap();
+        COUNTING.with(|counting| counting.set(false));
+        assert!(ran);
+        counts.push(EVENTS.with(Cell::get));
+    }
+    assert!(
+        counts[2..].iter().all(|count| *count == 0),
+        "allocations and frees per pass: {:?}",
+        counts
+    );
+    Composition::dispose(composition).unwrap();
+    States::release(&[handle]);
 }

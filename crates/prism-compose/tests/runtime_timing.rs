@@ -14,9 +14,17 @@
 //! composition's time per group, grows by a factor of 2 or more from the smallest composition
 //! to the largest (compose, "Recomposing one scope does not depend on the composition's
 //! size").
+//!
+//! `many_readers_of_one_state` (`state-handles`, compose: "Many readers of one state") composes
+//! 1,000, 10,000 and 100,000 restart scopes that each read one state ten times per pass, then
+//! writes the state and recomposes, ten times: it reports the median time per read of those
+//! passes and checks that each scope is registered once. Under `PRISM_ASSERT_TIMING=1` it fails
+//! when that time grows by a factor of 2 or more from the smallest composition to the largest.
 
-use prism_compose::test_support::{descriptor, inline_function, inline_word};
-use prism_compose::{invalidate, Composer, Composition, GroupKind, Handle, NodeTree};
+use prism_compose::test_support::{descriptor, inline_function, inline_word, slot_type};
+use prism_compose::{
+    invalidate, Composer, Composition, GroupKind, Handle, NodeTree, SlotType, States,
+};
 use prism_runtime::Descriptor;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
@@ -28,6 +36,99 @@ thread_local! {
     static GROUP: Cell<Option<&'static Descriptor>> = const { Cell::new(None) };
     static SCOPES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
     static REVERSED: Cell<bool> = const { Cell::new(false) };
+    static READER: Cell<Option<&'static Descriptor>> = const { Cell::new(None) };
+    static STATE: Cell<(u64, usize)> = const { Cell::new((0, 0)) };
+}
+
+/// How many times each scope of `many_readers_of_one_state` reads the state per pass.
+const READS: u64 = 10;
+
+/// The state of `many_readers_of_one_state` and its record.
+fn state() -> (Handle, *const SlotType) {
+    let (handle, record) = STATE.with(Cell::get);
+    (Handle(handle), record as *const SlotType)
+}
+
+/// The reader `id` and its subtree: a restart group reading the state ten times, skipping
+/// when it may, whose children are `10 id + 1` to `10 id + 10`.
+fn reader(k: Composer, id: u64) {
+    k.start_group(GroupKind::Restart, 2, 0).unwrap();
+    if k.skipping().unwrap() {
+        k.skip_to_group_end().unwrap();
+    } else {
+        let (handle, record) = state();
+        for _ in 0..READS {
+            let value = States::read(handle, record).unwrap();
+            std::hint::black_box(unsafe { *(value as *const i64) });
+        }
+        let size = SIZE.with(Cell::get);
+        for child in id * FAN_OUT + 1..=(id * FAN_OUT + FAN_OUT).min(size - 1) {
+            reader(k, child);
+        }
+    }
+    k.end_restart_group(inline_function(READER.with(Cell::get).unwrap(), id))
+        .unwrap();
+}
+
+unsafe extern "C" fn reader_code(environment: *mut u8, composer: u64) {
+    reader(Composer(composer), inline_word(environment));
+}
+
+unsafe extern "C" fn reader_root_code(_: *mut u8, composer: u64) {
+    reader(Composer(composer), 0);
+}
+
+/// The median time per read of passes that recompose `size` readers of one state after a
+/// write, with the number of readers the state registered.
+fn measure_readers(size: u64) -> (Duration, usize) {
+    SIZE.with(|s| s.set(size));
+    READER.with(|r| r.set(Some(descriptor(reader_code))));
+    let record = slot_type::<i64>("Int");
+    let mut value = 0i64;
+    let handle = unsafe { States::create(record, (&mut value as *mut i64).cast()) }.unwrap();
+    STATE.with(|s| s.set((handle.word(), record as *const SlotType as usize)));
+    let root = descriptor(reader_root_code);
+    let composition =
+        Composition::start(Box::new(NodeTree::new()), inline_function(root, 0)).unwrap();
+    let mut samples = Vec::new();
+    for pass in 1..=10i64 {
+        let mut next = pass;
+        unsafe { States::write(handle, record, (&mut next as *mut i64).cast()) }.unwrap();
+        let started = Instant::now();
+        assert!(Composition::recompose(composition).unwrap());
+        samples.push(started.elapsed() / (size * READS) as u32);
+    }
+    let readers = prism_compose::thread::with_state(|state| {
+        state.cells.get(handle).unwrap().readers.scopes().len()
+    });
+    Composition::dispose(composition).unwrap();
+    States::release(&[handle]);
+    (median(samples), readers)
+}
+
+#[test]
+#[ignore]
+fn many_readers_of_one_state() {
+    let results: Vec<(u64, Duration, usize)> = [1_000, 10_000, 100_000]
+        .into_iter()
+        .map(|size| {
+            let (read, readers) = measure_readers(size);
+            (size, read, readers)
+        })
+        .collect();
+    println!(
+        "{:>8} {:>14} {:>10}",
+        "readers", "time per read", "registered"
+    );
+    for (size, read, readers) in &results {
+        println!("{:>8} {:>14?} {:>10}", size, read, readers);
+        assert_eq!(*readers as u64, *size, "each scope is registered once");
+    }
+    if std::env::var("PRISM_ASSERT_TIMING").as_deref() == Ok("1") {
+        let growth = results[2].1.as_secs_f64() / results[0].1.as_secs_f64();
+        println!("time per read growth x{:.2}", growth);
+        assert!(growth < 2.0, "the time per read grows x{:.2}", growth);
+    }
 }
 
 /// The group `id` and its subtree: a restart group with a word slot, skipping when it may,

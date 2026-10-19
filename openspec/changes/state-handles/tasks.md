@@ -59,8 +59,8 @@ Apply note: the executable fixtures that groups 2 to 4 name run only once the ru
 
 ## 9. Costs (D21)
 
-- [ ] 9.1 Add the shape `state-accesses` to `crates/prism-cli/tests/compile_timing.rs` (one handler of `n` `s.value += 1` statements, one composable reading `n` states, `n` `edit` calls), compiled, and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record the medians in design.md, D21, and fix any growth that is not roughly linear. This verifies "State accesses scale linearly".
-- [ ] 9.2 Add the shape of "Many readers of one state" to `crates/prism-compose/tests/runtime_timing.rs` and the case of "Steady-state reads allocate nothing" to `crates/prism-compose/tests/allocations.rs`, with records and closures built in Rust as that file does. Run the benchmark with `PRISM_ASSERT_TIMING=1` and record its medians in design.md, D21.
+- [x] 9.1 Add the shape `state-accesses` to `crates/prism-cli/tests/compile_timing.rs` (one handler of `n` `s.value += 1` statements, one composable reading `n` states, `n` `edit` calls), compiled, and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record the medians in design.md, D21, and fix any growth that is not roughly linear. This verifies "State accesses scale linearly".
+- [x] 9.2 Add the shape of "Many readers of one state" to `crates/prism-compose/tests/runtime_timing.rs` and the case of "Steady-state reads allocate nothing" to `crates/prism-compose/tests/allocations.rs`, with records and closures built in Rust as that file does. Run the benchmark with `PRISM_ASSERT_TIMING=1` and record its medians in design.md, D21.
 
 ## 10. Documents and integration
 

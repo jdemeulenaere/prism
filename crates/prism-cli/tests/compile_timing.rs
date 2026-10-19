@@ -462,6 +462,27 @@ fn composable_lambdas(n: usize) -> String {
     )
 }
 
+/// `n` state accesses of each kind (D21 of `state-handles`): one handler of `n` compound
+/// assignments of a counter, one composable reading `n` states, and `n` `edit` calls.
+fn state_accesses(n: usize) -> String {
+    let parameters = join(n, ", ", |i| format!("s{i}: State<Int>"));
+    let reads = join(n, "\n", |i| format!("println(s{i}.value)"));
+    let arguments = join(n, ", ", |_| "count".to_string());
+    format!(
+        "compose fun Reads({parameters}) {{\n{reads}\n}}\n\
+         fun main() {{\n\
+         val count = mutableStateOf(0)\n\
+         val todos = mutableStateOf(listOf(0))\n\
+         val onClick = {{\n{}\n}}\n\
+         onClick()\n\
+         {}\n\
+         val c = composition {{ Reads({arguments}) }}\n\
+         }}\n",
+        join(n, "\n", |_| "count.value += 1".to_string()),
+        join(n, "\n", |i| format!("todos.edit {{ it.add({i}) }}")),
+    )
+}
+
 /// One closure capturing `n` locals.
 fn many_captures(n: usize) -> String {
     format!(
@@ -997,6 +1018,7 @@ fn shapes() -> Vec<Shape> {
         ),
         shape("many-composables", true, SIZES, many_composables),
         shape("composable-lambdas", true, SIZES, composable_lambdas),
+        shape("state-accesses", true, SIZES, state_accesses),
         shape("many-captures", true, SIZES, many_captures),
         shape("many-adapters", true, SIZES, many_adapters),
         shape("generic-closures", true, SIZES, generic_closures),

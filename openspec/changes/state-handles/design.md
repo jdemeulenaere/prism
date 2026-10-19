@@ -318,6 +318,8 @@ Nothing is per instance beyond the substitution every generic call gets, and not
 
 `crates/prism-compose/tests/runtime_timing.rs` gains a shape reading one state from 1,000, 10,000 and 100,000 restart scopes ten times per pass, and `crates/prism-compose/tests/allocations.rs` checks that steady-state reads allocate nothing.
 
+Measured at apply (release build, 2026-10-19). `state-accesses` at 256, 1,024 and 4,096: type checking 2.4, 10.1 and 43.6 ms, MIR 1.5, 6.5 and 30.0 ms, borrow checking 8.3, 35.1 and 148.7 ms, the compose transform 1.4, 5.9 and 26.9 ms, lowering 5.6, 22.9 and 94.6 ms and Cranelift 12.4, 50.8 and 259.2 ms: x4.0 to x5.1 per x4, roughly linear, the backend's growth slightly above as for the other shapes. "Many readers of one state": 13, 14 and 15 ns per read for 1,000, 10,000 and 100,000 readers (x1.15), each registered once; the composition runtime's own shapes are unchanged (83 ns for one invalid leaf scope, about 50 ns per group for a first composition).
+
 ### D22. Capabilities and tests
 
 State extends the `compose` capability, so one spec describes what a composable and its state do. The declarations extend `standard-library`, the property form `syntax` and `formatting`, the conversion `type-system`, the forms `typed-tree` and `mir`, the borrows `references`, the backend `code-generation`, and the errors and the release order `execution`. The diagnostics catalog is edited directly.
