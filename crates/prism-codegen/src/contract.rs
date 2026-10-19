@@ -426,6 +426,22 @@ mod tests {
         );
     }
 
+    /// compose-hot-reload, hot-reload: "A changed parameter type splits the restart function".
+    #[test]
+    fn a_changed_parameter_type_splits_the_restart_function() {
+        let int = lower_source("compose fun Label(n: Int) { println(\"a\") }\n");
+        let double = lower_source("compose fun Label(n: Double) { println(\"a\") }\n");
+        let edited = lower_source("compose fun Label(n: Int) { println(\"b\") }\n");
+        assert_ne!(
+            restart_contract(&int, "Label"),
+            restart_contract(&double, "Label")
+        );
+        assert_eq!(
+            restart_contract(&int, "Label"),
+            restart_contract(&edited, "Label")
+        );
+    }
+
     #[test]
     fn int_and_double_fields_differ() {
         let int = lower_source("struct P { val x: Int }\n");

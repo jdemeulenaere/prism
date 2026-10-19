@@ -26,6 +26,10 @@ pub struct FileSummary {
     pub roots: Vec<InstanceRequest>,
     /// The file's generic functions and extensions, private ones included, in body order.
     pub generics: Vec<GenericSummary>,
+    /// The body keys of the file's composable functions and closures that are not part of a
+    /// generic, in body order: what a reload of the file, or of a file it imports, names for
+    /// recomposition (D4 and D5 of `compose-hot-reload`).
+    pub composable_bodies: Vec<u64>,
 }
 
 /// A call of a generic function or of one of its default value generators, with its type
@@ -60,6 +64,9 @@ pub struct GenericSummary {
     pub calls: Vec<InstanceRequest>,
     /// Its default value generators, in parameter order, each with its own calls.
     pub defaults: Vec<DefaultSummary>,
+    /// The body keys of the generic, when it is composable, and of its composable closures, in
+    /// body order: what a reload of one of its instances names (D5 of `compose-hot-reload`).
+    pub composable_bodies: Vec<u64>,
 }
 
 /// One default value generator of a generic.
@@ -167,6 +174,7 @@ impl FileSummary {
         entry_point: Option<DeclarationPath>,
     ) -> FileSummary {
         let mut roots = Vec::new();
+        let mut composable_bodies = Vec::new();
         let mut seen: HashSet<(DeclarationPath, Option<DefaultParameter>, Vec<Type>)> =
             HashSet::new();
         for (_, body) in file.bodies.iter() {
@@ -174,6 +182,7 @@ impl FileSummary {
             if !body.type_parameters.is_empty() {
                 continue;
             }
+            composable_bodies.extend(body.body_key);
             for request in InstanceRequest::of_body(body) {
                 let key = (
                     request.callee.clone(),
@@ -194,6 +203,7 @@ impl FileSummary {
             entry_point,
             roots,
             generics,
+            composable_bodies,
         }
     }
 
@@ -244,12 +254,24 @@ fn generic_summary(record: &GenericRecord, record_hash: [u8; 32]) -> GenericSumm
         };
         target.extend(InstanceRequest::of_body(closure));
     }
+    let composable_bodies = record
+        .function
+        .body_key
+        .into_iter()
+        .chain(
+            record
+                .closures
+                .iter()
+                .filter_map(|closure| closure.body_key),
+        )
+        .collect();
     GenericSummary {
         path: record.path.clone(),
         type_parameters: record.function.type_parameters.clone(),
         record_hash,
         calls,
         defaults,
+        composable_bodies,
     }
 }
 
@@ -313,12 +335,14 @@ impl Codec for GenericSummary {
             record_hash,
             calls,
             defaults,
+            composable_bodies,
         } = self;
         path.encode(encoder);
         type_parameters.encode(encoder);
         record_hash.encode(encoder);
         calls.encode(encoder);
         defaults.encode(encoder);
+        composable_bodies.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(GenericSummary {
@@ -327,6 +351,7 @@ impl Codec for GenericSummary {
             record_hash: decoder.decode()?,
             calls: decoder.decode()?,
             defaults: decoder.decode()?,
+            composable_bodies: decoder.decode()?,
         })
     }
 }
@@ -337,16 +362,19 @@ impl Codec for FileSummary {
             entry_point,
             roots,
             generics,
+            composable_bodies,
         } = self;
         entry_point.encode(encoder);
         roots.encode(encoder);
         generics.encode(encoder);
+        composable_bodies.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(FileSummary {
             entry_point: decoder.decode()?,
             roots: decoder.decode()?,
             generics: decoder.decode()?,
+            composable_bodies: decoder.decode()?,
         })
     }
 }

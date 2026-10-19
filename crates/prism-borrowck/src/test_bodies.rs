@@ -56,6 +56,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         blocks,
         groups: Arena::new(),
         origin: None,
+        body_key: None,
         span: Span::dummy(),
     }
 }

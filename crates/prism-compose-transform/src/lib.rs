@@ -47,6 +47,15 @@ pub fn compose_file(file: &MirFile) -> MirFile {
         if body.is_compose || uses_composition_operations(body) {
             composed.bodies[id] = rewrite::compose_body(file, id, &keys, &mut appended);
         }
+        // The body key a reload names the body by (D5 of `compose-hot-reload`).
+        if body.is_compose
+            && matches!(
+                body.owner,
+                BodyOwner::Function(_) | BodyOwner::Closure { .. }
+            )
+        {
+            composed.bodies[id].body_key = Some(keys.body(id).0);
+        }
     }
     appended.bodies.sort_by_key(|(id, _)| id.index());
     for (id, body) in appended.bodies {

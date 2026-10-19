@@ -274,3 +274,27 @@ fn a_reload_pending_when_reload_points_end_is_applied_at_the_next_call() {
     // The first tick ran before the request, the second after `leave` applied it.
     assert_eq!(*TICKS.lock().unwrap(), [1, 2]);
 }
+
+/// compose-hot-reload, D8: a reload that changes a skippable composable's parameter type splits
+/// its slot and its restart function's, notes only the composable, and retires both old slots.
+#[test]
+fn a_changed_composable_signature_retires_its_restart_function_too() {
+    let _lock = prism_runtime::test_lock();
+    let program = compile("compose fun Label(n: Int) { println(n) }\nfun main() {}\n");
+    let old: std::collections::BTreeSet<usize> = ["main::Label", "main::Label#restart"]
+        .iter()
+        .map(|symbol| slot_address(&program, symbol))
+        .collect();
+    let file = lowered("compose fun Label(n: Double) { println(n) }\nfun main() {}\n");
+    let mut linker = program.live().linker().expect("a linker");
+    linker.add_file(&file).expect("the reload compiles");
+    let prepared = linker.prepare().expect("the reload is prepared");
+    let notes: Vec<&str> = prepared
+        .splits
+        .iter()
+        .map(|(symbol, _)| symbol.as_str())
+        .collect();
+    assert_eq!(notes, ["main::Label"]);
+    let retired: std::collections::BTreeSet<usize> = prepared.retired_slots().into_iter().collect();
+    assert_eq!(retired, old);
+}

@@ -486,6 +486,7 @@ impl<'a> Builder<'a> {
             blocks,
             groups: self.groups,
             origin: self.origin,
+            body_key: None,
             span: self.span,
         }
     }

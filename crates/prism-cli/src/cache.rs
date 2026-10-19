@@ -579,6 +579,7 @@ mod tests {
                 span: prism_ast::Span::new(1, 2, 3, 4),
             }],
             generics: Vec::new(),
+            composable_bodies: vec![0x1234_5678_9abc_def0, 7],
         }
     }
 

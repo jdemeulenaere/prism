@@ -178,6 +178,7 @@ pub(crate) fn restart_body(
         blocks,
         groups: Arena::new(),
         origin: None,
+        body_key: None,
         span,
     }
 }
@@ -235,6 +236,7 @@ pub(crate) fn root_content_body(
         blocks,
         groups: Arena::new(),
         origin: None,
+        body_key: None,
         span,
     }
 }

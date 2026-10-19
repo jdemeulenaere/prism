@@ -182,6 +182,10 @@ pub struct Body {
     /// its group's key is derived from (D5 of `compose-transform`). `None` for every other
     /// body.
     pub origin: Option<ClosureOrigin>,
+    /// The key of the body's own group, which the compose transform sets on every composable
+    /// function and closure it composes: what a reload's affected bodies are named by (D5 of
+    /// `compose-hot-reload`). `None` for every other body, and before composition.
+    pub body_key: Option<u64>,
     pub span: Span,
 }
 

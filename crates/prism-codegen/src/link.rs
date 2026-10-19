@@ -323,6 +323,9 @@ struct DefinedFunction {
     slot: *const AtomicUsize,
     contract: Option<ContentHash>,
     change: SlotChange,
+    /// For a split, the slot the symbol was mapped to before the load (D8 of
+    /// `compose-hot-reload`).
+    retired: Option<*const AtomicUsize>,
 }
 
 /// Builds one load of a program: the code units of its files, defined into one JIT module and
@@ -579,6 +582,9 @@ impl Linker {
                 })?;
             // Glue is called directly within its unit and has no slot.
             if function.has_slot {
+                // The mapping changes only when the load is applied, so the symbol's slot is
+                // still the one a split retires.
+                let previous = self.table.slot(&function.name);
                 let (slot, change) = self.table.slot_for(&function.name, function.contract);
                 if change == SlotChange::Split {
                     self.resolve(slot_symbol(&function.name), slot as usize);
@@ -589,6 +595,7 @@ impl Linker {
                     slot,
                     contract: function.contract,
                     change,
+                    retired: (change == SlotChange::Split).then_some(previous),
                 });
             }
         }
@@ -688,10 +695,16 @@ impl Linker {
     /// it gives is applied on the program thread ([`PreparedReload`]).
     pub fn prepare(mut self) -> Result<PreparedReload, BackendError> {
         let writes = self.finalize()?;
+        // A restart function or root content adapter splits only with its composable, whose
+        // own note says so (D8 of `compose-hot-reload`).
         let splits = self
             .defined
             .iter()
             .filter(|function| function.change == SlotChange::Split)
+            .filter(|function| {
+                !function.symbol.ends_with("#restart")
+                    && !function.symbol.ends_with("#root-content")
+            })
             .map(|function| {
                 let kind = if function.symbol.contains("#closure") {
                     SlotKind::Closure
@@ -701,7 +714,19 @@ impl Linker {
                 (function.symbol.clone(), kind)
             })
             .collect();
-        Ok(PreparedReload::new(writes, splits, self.module, self.units))
+        let retired = self
+            .defined
+            .iter()
+            .filter_map(|function| function.retired)
+            .map(|slot| slot as usize)
+            .collect();
+        Ok(PreparedReload::new(
+            writes,
+            splits,
+            retired,
+            self.module,
+            self.units,
+        ))
     }
 }
 

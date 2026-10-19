@@ -192,6 +192,7 @@ mod tests {
             blocks: Arena::new(),
             groups: Arena::new(),
             origin: None,
+            body_key: None,
             span: Span::dummy(),
         }
     }

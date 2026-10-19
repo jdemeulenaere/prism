@@ -104,8 +104,12 @@ impl ReloadWrites {
 /// A reload compiled and finalized into its own module, not applied yet.
 pub struct PreparedReload {
     writes: ReloadWrites,
-    /// The symbols whose slot the reload splits, in the order they were defined.
+    /// The symbols whose slot the reload splits and that get a note, in the order they were
+    /// defined: restart functions and root content adapters split only with their composable,
+    /// whose note covers them (D8 of `compose-hot-reload`).
     pub splits: Vec<(String, SlotKind)>,
+    /// The slot each split symbol, restart functions included, was mapped to before the reload.
+    retired: Vec<usize>,
     module: JITModule,
     /// The units of the reload, by name, with the symbols whose slots each refers to.
     units: Vec<(String, BTreeSet<String>)>,
@@ -115,12 +119,14 @@ impl PreparedReload {
     pub(crate) fn new(
         writes: ReloadWrites,
         splits: Vec<(String, SlotKind)>,
+        retired: Vec<usize>,
         module: JITModule,
         units: Vec<(String, BTreeSet<String>)>,
     ) -> Self {
         Self {
             writes,
             splits,
+            retired,
             module,
             units,
         }
@@ -129,6 +135,12 @@ impl PreparedReload {
     /// The names of the units the reload defines, in order.
     pub fn unit_names(&self) -> Vec<String> {
         self.units.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    /// The addresses of the slots the reload's splits retire: the slot each split symbol was
+    /// mapped to before it, in the order they were defined (D8 of `compose-hot-reload`).
+    pub fn retired_slots(&self) -> Vec<usize> {
+        self.retired.clone()
     }
 }
 
@@ -198,6 +210,7 @@ impl LiveProgram {
             splits,
             module,
             units,
+            ..
         } = reload;
         if cfg!(debug_assertions) {
             let reloaded: BTreeSet<&str> = units.iter().map(|(name, _)| name.as_str()).collect();

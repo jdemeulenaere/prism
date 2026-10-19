@@ -222,3 +222,78 @@ fn which_composables_are_skippable() {
         );
     }
 }
+
+/// The key the composed body named `name` starts its own group with: the key of the first
+/// restart or replaceable group its prologue starts, following the blocks from `bb0`.
+fn started_body_key(file: &MirFile, name: &str) -> u64 {
+    let (_, body) = file
+        .bodies
+        .iter()
+        .find(|(id, _)| file.body_name(*id) == name)
+        .unwrap_or_else(|| panic!("no body {}", name));
+    let mut queue = std::collections::VecDeque::from([prism_mir::BlockId(0)]);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(block) = queue.pop_front() {
+        if !seen.insert(block) {
+            continue;
+        }
+        let terminator = &body.blocks[block].terminator.kind;
+        if let TerminatorKind::Call {
+            callee:
+                Callee::Composer(
+                    ComposerOperation::StartGroup { key }
+                    | ComposerOperation::StartRestartGroup { key },
+                ),
+            ..
+        } = terminator
+        {
+            return key.hash;
+        }
+        queue.extend(terminator.successors());
+    }
+    panic!("{} starts no group", name)
+}
+
+/// compose-hot-reload, D5: the summary lists the body key of every composable function and
+/// closure, in body order, equal to the key each starts its own group with; a plain closure
+/// has none, and the keys of a generic composable go to its generic's summary. A codec round
+/// trip keeps them.
+#[test]
+fn summaries_list_the_body_keys_of_composable_bodies() {
+    let file = compose(
+        "compose fun Wrap(content: compose () -> Unit) { content() }\n\
+         compose fun Show() { val n = remember { 1 }; Wrap { println(n) } }\n\
+         compose fun <T : Copy> Each(x: T) { Wrap { println(\"each\") } }\n",
+    );
+    let records = GenericRecord::of_file(&file);
+    let hashes: Vec<[u8; 32]> = records.iter().map(|_| [0; 32]).collect();
+    let summary = prism_mir::FileSummary::of(&file, &records, &hashes, None);
+    let named: Vec<String> = file
+        .bodies
+        .iter()
+        .filter(|(_, body)| body.body_key.is_some() && body.type_parameters.is_empty())
+        .map(|(id, _)| file.body_name(id).to_string())
+        .collect();
+    assert_eq!(named.len(), 3, "{:?}", named);
+    let expected: Vec<u64> = named
+        .iter()
+        .map(|name| started_body_key(&file, name))
+        .collect();
+    assert_eq!(summary.composable_bodies, expected);
+    assert_eq!(
+        summary.composable_bodies[..2],
+        [
+            prism_compose_transform::keys::body_key("main::Wrap"),
+            prism_compose_transform::keys::body_key("main::Show")
+        ]
+    );
+    assert_eq!(summary.generics.len(), 1);
+    let generic = &summary.generics[0].composable_bodies;
+    assert_eq!(generic.len(), 2, "Each and its content lambda");
+    assert_eq!(
+        generic[0],
+        prism_compose_transform::keys::body_key("main::Each")
+    );
+    let decoded = prism_mir::FileSummary::decode(&summary.encode()).expect("it decodes");
+    assert_eq!(decoded, summary);
+}

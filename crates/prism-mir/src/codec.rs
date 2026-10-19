@@ -1828,6 +1828,7 @@ impl Codec for Body {
             blocks,
             groups,
             origin,
+            body_key,
             span,
         } = self;
         owner.encode(encoder);
@@ -1842,6 +1843,7 @@ impl Codec for Body {
         blocks.encode(encoder);
         groups.encode(encoder);
         origin.encode(encoder);
+        body_key.encode(encoder);
         span.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1858,6 +1860,7 @@ impl Codec for Body {
             blocks: decoder.decode()?,
             groups: decoder.decode()?,
             origin: decoder.decode()?,
+            body_key: decoder.decode()?,
             span: decoder.decode()?,
         })
     }
