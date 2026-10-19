@@ -6,7 +6,7 @@ Defines `prism run --watch`: a watch session that keeps a program running while 
 ## Requirements
 
 ### Requirement: Watching a Running Program
-`prism run --watch <file.prism>` MUST compile and run the program as `prism run` does, and keep the process running after `main` returns. It MUST watch every file of the program and the target path of every unresolved import. When one of them changes, it MUST reload the program, patching the running program without restarting it. The session MUST end only when interrupted, or when its edit script ends.
+`prism run --watch <file.prism>` MUST compile and run the program as `prism run` does, and keep the process running after `main` returns. It MUST watch every file of the program and the target path of every unresolved import. When one of them changes, it MUST reload the program, patching the running program without restarting it. The session MUST end only when interrupted, when its edit script ends, or when its workspace root is removed.
 
 #### Scenario: Saving an edited body while the program runs
 - **WHEN** `prism run --watch main.prism` runs `fun value(): Int = 1` and `fun main() { var n = 0; while (value() == 1) { n += 1 }; println(value()) }`, and `main.prism` is then saved on disk with `fun value(): Int = 2`
@@ -182,6 +182,13 @@ Without an edit script, the session MUST detect changes from the platform's file
 - **WHEN** an editor saves `main.prism` by writing `main.prism.tmp` and renaming it to `main.prism` while the program runs
 - **THEN** the session reloads the program once
 
+### Requirement: A Removed Workspace Root Ends the Session
+Without an edit script, when the workspace root of the program, or the entry file's directory before any graph was built, no longer exists, removed or renamed away, the session MUST print `watch: the workspace root <path> was removed; the session ends`, with the absolute path, and exit with status 1, ending a program that still runs. It MUST not report the program's files as missing first.
+
+#### Scenario: Removing the workspace root ends the session
+- **WHEN** `prism run --watch main.prism` runs `fun value(): Int = 1` and `fun main() { var n = 0; while (value() == 1) { n += 1 }; println(value()) }`, and the directory holding `main.prism` is then removed
+- **THEN** stderr holds `watch: the workspace root <path> was removed; the session ends` and no `reload:` line, stdout is empty, and the process exits with status 1
+
 ### Requirement: Unchanged Content Does Not Reload
 A file-system event for a file whose content is the same as when it was last read MUST not cause a reload. A file whose last content did not parse MUST count as changed at its next event, whatever it then holds.
 
@@ -245,4 +252,5 @@ Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and
 - **Edit scripts make reloads deterministic** (D16). `--edits` replaces the watcher with `after line <n>` and `after exit` steps over a virtual overlay, so fixtures stay read-only; the program blocks in the output layer at the step's line, which is set before the program can pass it. Rejected: writing files and sleeping in tests; a test-only built-in. Watch fixtures run cold and warm, which also checks that reloads write and reuse cache entries.
 - **A latency target** (D17). A median under 50 ms from the write on disk to `reload: applied` for a one-line body edit in a generated 100-file program, release build, measured by the ignored `reload_timing.rs`. Measured on 2026-10-18 (Apple silicon): a median of 31.0 ms, of which 12.5 ms detection with the debounce, 6.1 ms front end, 0.8 ms code generation, 0.03 ms linking, 0.002 ms application, and the rest FSEvents' delivery.
 - **The status line names what a reload defines** (D20). `reload: applied <files>` lists the files whose units a reload defines, compiled or loaded, so it reads the same on a warm cache as on a cold one.
+- **A removed workspace root ends the session** (plain fix, 2026-10-19). Orphaned `prism run --watch` processes of failed tests kept running their looping programs for hours in directories nobody watched any more. With its root gone, removed or renamed away, no file of the program can change and the watcher's directories are gone, so the session says so and exits with status 1 instead of waiting forever. It checks the root before each wait, since a root removed before the watcher registered has no event, and matches an event on a watched directory itself to the files in it. A session ending while its program runs keeps the program's code mapped until the process exits. Rejected: waiting for the root to come back (the watches are on directories that no longer exist); reporting the files as missing and waiting (the reported cause).
 - **A separate capability** (D18). The session gets this spec; `code-generation` changes where slots and storage live and what a stack check does, and `execution` lists the options. Reload failures keep their existing error codes.

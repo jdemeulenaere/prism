@@ -1724,6 +1724,18 @@ impl WatchedProgram {
         }
     }
 
+    /// Waits up to 60 seconds for the session to end by itself, and gives its exit status.
+    fn wait_for_exit(&mut self) -> Option<i32> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status.code();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the session did not end; stderr so far: {:#?}", self.seen);
+    }
+
     /// Ends the session and gives its stdout and the stderr lines read.
     fn stop(mut self) -> (String, Vec<String>) {
         use std::io::Read;
@@ -1825,6 +1837,30 @@ fn an_atomic_save_is_seen() {
         .filter(|line| line.starts_with("reload: applied"))
         .count();
     assert_eq!(reloads, 1, "{:#?}", seen);
+}
+
+/// hot-reload: "Removing the workspace root ends the session": a session whose program loops
+/// until it is edited ends, rather than run forever unseen.
+#[test]
+fn removing_the_workspace_root_ends_the_session() {
+    let directory = single_file("watch_root_removed", LOOPING);
+    let mut session = WatchedProgram::start_running(&directory, "main.prism");
+    let root = directory.canonicalize().unwrap();
+    fs::remove_dir_all(&directory).unwrap();
+    session.wait_for(|line| {
+        line == format!(
+            "watch: the workspace root {} was removed; the session ends",
+            root.display()
+        )
+    });
+    assert_eq!(session.wait_for_exit(), Some(1));
+    let (stdout, seen) = session.stop();
+    assert_eq!(stdout, "");
+    assert!(
+        !seen.iter().any(|line| line.starts_with("reload:")),
+        "{:#?}",
+        seen
+    );
 }
 
 /// A test that fails while its watch session runs leaves no process behind: dropping the

@@ -74,8 +74,8 @@ struct ReloadTimings {
 }
 
 /// Runs `prism run --watch` on `entry` with `options`, following the edit script `edits` when
-/// one is given, and returns the session's exit status. Without a script it returns only if the
-/// watcher fails; the session normally ends with the process (Ctrl-C).
+/// one is given, and returns the session's exit status. Without a script it returns only when the
+/// workspace root is removed; the session normally ends with the process (Ctrl-C).
 pub fn run_watch(entry: &Path, options: RunOptions, edits: Option<&Path>) -> i32 {
     run_watch_with(entry, options, edits, None)
 }
@@ -755,7 +755,27 @@ impl WatchSession {
         }
     }
 
-    /// Runs the session on file-system events (D15), until the process ends.
+    /// The directory whose removal ends the session: the workspace root of the last graph, or
+    /// the entry file's directory while no graph was built.
+    fn root(&self) -> PathBuf {
+        if self.workspace_root.as_os_str().is_empty() {
+            let entry = prism_resolver::absolute_path(&self.entry);
+            entry.parent().map(Path::to_path_buf).unwrap_or(entry)
+        } else {
+            self.workspace_root.clone()
+        }
+    }
+
+    /// Whether the session's root no longer exists, removed or renamed away: no file of the
+    /// program can change any more, and the watcher's directories are gone with it, so the
+    /// session ends rather than wait forever while its program keeps running.
+    fn root_removed(&self) -> Option<PathBuf> {
+        let root = self.root();
+        (!root.is_dir()).then_some(root)
+    }
+
+    /// Runs the session on file-system events (D15), until the process ends, or until the
+    /// workspace root is removed, which ends the session with status 1.
     pub fn run_watching(&mut self) -> i32 {
         self.install_stop_handler();
         let mut watcher = FileWatcher::start(self.sender());
@@ -763,7 +783,19 @@ impl WatchSession {
         watcher.watch(&self.watched);
         self.catch_up();
         loop {
+            // Checked before each wait: a root removed before the watcher registered its
+            // directories has no event.
+            if let Some(root) = self.root_removed() {
+                eprintln!(
+                    "watch: the workspace root {} was removed; the session ends",
+                    root.display()
+                );
+                return 1;
+            }
             match self.next_event() {
+                // A change that removed the root ends the session at the check above, rather
+                // than report the program's files as missing.
+                Some(SessionEvent::FilesChanged(..)) if self.root_removed().is_some() => {}
                 Some(SessionEvent::FilesChanged(paths, detected)) => {
                     self.reload(&paths, detected);
                     watcher.watch(&self.watched);
@@ -774,6 +806,17 @@ impl WatchSession {
                 Some(SessionEvent::LineWritten(_)) => self.resume(),
                 None => return self.exit_status(),
             }
+        }
+    }
+}
+
+impl Drop for WatchSession {
+    /// A session that ends while its program's thread still runs, as when its workspace root is
+    /// removed, keeps the program's code mapped: the thread runs in it until the process ends,
+    /// which follows the session's end.
+    fn drop(&mut self) {
+        if self.running {
+            std::mem::forget(self.program.take());
         }
     }
 }
@@ -1004,11 +1047,25 @@ fn debounce(
         let files = files
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        event
-            .paths
-            .iter()
-            .filter_map(|path| files.get(&canonical(path)?).cloned())
-            .collect()
+        let mut changed = Vec::new();
+        for path in &event.paths {
+            // A path whose directory is gone cannot be canonicalized; the platform reports
+            // canonical paths, so it is looked up as given.
+            let key = canonical(path).unwrap_or_else(|| path.clone());
+            if let Some(file) = files.get(&key) {
+                changed.push(file.clone());
+                continue;
+            }
+            // An event on a watched directory itself, as when it is removed or renamed: each
+            // watched file in it may have changed.
+            changed.extend(
+                files
+                    .iter()
+                    .filter(|(canonical, _)| canonical.parent() == Some(key.as_path()))
+                    .map(|(_, file)| file.clone()),
+            );
+        }
+        changed
     };
     while let Ok(event) = receiver.recv() {
         let mut changed: Vec<PathBuf> = relevant(event);
