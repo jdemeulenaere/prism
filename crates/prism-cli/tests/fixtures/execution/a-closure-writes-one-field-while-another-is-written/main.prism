@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+struct P { var x: Int, var y: Int }
+fun main() {
+    var p = P(1, 2)
+    val bump = { p.x += 10 }
+    p.y += 1
+    bump()
+    bump()
+    println(p.x)
+    println(p.y)
+}

@@ -1,0 +1,9 @@
+error[E5007]: a closure that captures the reference 'r' cannot escape
+  --> main.prism:4:32
+    4 | fun f(r: &String): () -> Int = { greet(r) }
+      |                                ^^^^^^^^^^^^ returned here
+  --> main.prism:4:40
+    4 | fun f(r: &String): () -> Int = { greet(r) }
+      |                                        ^ 'r' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = help: pass the value 'r' refers to instead of a reference

@@ -1,0 +1,5 @@
+// expect: ok
+struct Todo { val id: Int, val title: String }
+struct P { var x: Int, var y: Int }
+fun run(f: () -> Int): Int = f()
+fun f(t: &Todo, r: &Int, n: Int): () -> Int { var p = P(1, 2); run { p.x += n; p.x }; return { t.id + r + n } }

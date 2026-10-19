@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+struct P { val x: Int }
+fun make(p: &P): () -> Int = { p.x * 10 }
+fun main() {
+    var p = P(1)
+    val f = make(p)
+    p = P(2)
+    println(f())
+    println(p.x)
+}

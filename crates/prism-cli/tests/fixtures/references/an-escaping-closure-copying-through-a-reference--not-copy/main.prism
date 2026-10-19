@@ -1,0 +1,4 @@
+// expect: E5007
+// The closure owns the reference `t`, because `t.title` is not `Copy`.
+struct Todo { val id: Int, val title: String }
+fun h(t: &Todo): () -> Int = { t.title.length }

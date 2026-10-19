@@ -1,2 +1,2 @@
 // expect: E5007
-fun f(xs: &mut List<() -> Unit>, r: &Int) { xs.add { println(r) } }
+fun f(xs: &mut List<() -> Unit>, r: &String) { xs.add { println(r) } }

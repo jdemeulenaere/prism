@@ -1,0 +1,6 @@
+// expect: ok
+struct Todo { val id: Int, val title: String }
+struct P { var x: Int, var y: Int }
+struct Cell { val inner: Heap<P> }
+fun run(f: () -> Int): Int = f()
+fun f(t: &Todo, c: &Cell): Int = run { t.id + c.inner.x }

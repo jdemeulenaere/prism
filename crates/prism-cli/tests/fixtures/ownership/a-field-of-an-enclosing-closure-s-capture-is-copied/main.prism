@@ -1,0 +1,5 @@
+// expect: ok
+struct User { val id: Int, val name: String }
+fun store(f: escaping () -> Int): Int = 1
+fun run(f: () -> Int): Int = f()
+fun f(u: User): Int = run { store { u.id } }

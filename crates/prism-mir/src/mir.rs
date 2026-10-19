@@ -172,6 +172,10 @@ pub struct Body {
     /// For a closure that owns some of its captures, why it does, as the typed tree records it
     /// (D2 of `escaping-closures`), for diagnostics.
     pub ownership_reason: Option<OwnershipReason>,
+    /// For a closure, per capture local in capture order, the path an owned whole binding was
+    /// widened from, as the typed tree records it (D10 of `path-captures`), for diagnostics.
+    /// Empty when no capture was widened.
+    pub capture_widenings: Vec<Option<prism_typed_tree::Widening>>,
     /// The blocks; `bb0` is the entry.
     pub blocks: Arena<BlockId, BasicBlock>,
     /// The regions of a composable body that contain composable calls, each run in a group of

@@ -1,0 +1,4 @@
+// expect: ok
+struct P { var x: Int, var y: Int }
+fun run(f: () -> Int): Int = f()
+fun f(): Int { var p = P(1, 2); return run { p.x + p.y + p.x } }

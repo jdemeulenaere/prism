@@ -10,7 +10,7 @@ An owned capture of a whole binding that the closure uses only through paths it 
 ## MODIFIED Requirements
 
 ### Requirement: Closures Record Their Captures
-A closure MUST record its parameters as bindings, whether it is composable, and its captures: the paths its body uses of bindings of enclosing scopes (see `references`), each once, by binding in order of first use. Each capture MUST record whether the closure borrows, moves or copies it, and a closure owning a capture MUST record why: the position that makes it escape, or the assignment storing it outside a captured binding's block. Whether a borrow is shared or mutable is not recorded.
+A closure MUST record its parameters as bindings, whether it is composable, and its captures: the paths its body uses of bindings of enclosing scopes (see `references`), each once, by binding in order of first use, and a binding's paths in the order of their steps. Each capture MUST record whether the closure borrows, moves or copies it, and a closure owning a capture MUST record why: the position that makes it escape, or the assignment storing it outside a captured binding's block. Whether a borrow is shared or mutable is not recorded.
 
 #### Scenario: Captured bindings
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and a body of `fun g(a: Int, b: Int): Int` runs `return run { b + a + b }`

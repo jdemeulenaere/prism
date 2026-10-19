@@ -1,0 +1,53 @@
+module main
+struct main::P @2:1
+  field 0 var x: Int
+  field 1 var y: Int
+struct main::Q @3:1
+  field 0 val p: P
+  field 1 val n: Int
+fun main::size(p: &P): Int @4:1
+  local %0 p: &P (parameter)
+  copy: Int @4:24
+    field 0 x: Int @4:24
+      deref: P @4:24
+        local %0 p: &P @4:24
+fun main::run(f: () -> Int): Int @5:1
+  local %0 f: () -> Int (parameter)
+  call value: Int @5:30
+    callee: local %0 f: () -> Int @5:30
+fun main::f(q: Q): Int @6:1
+  local %0 q: Q (parameter)
+  call main::run: Int @6:20
+    argument f: closure () captures [borrow %0 q.p, borrow %0 q.n]: () -> Int @6:24
+      block: Int @6:26
+        tail: binary +: Int @6:26
+          binary +: Int @6:26
+            field 0 x: Int @6:26
+              field 0 p: P @6:26
+                local %0 q: Q @6:26
+            call main::size: Int @6:34
+              argument p: borrow (argument): &P @6:39
+                field 0 p: P @6:39
+                  local %0 q: Q @6:39
+          field 1 n: Int @6:46
+            local %0 q: Q @6:46
+fun main::g(q: Q): Int @7:1
+  local %0 q: Q (parameter)
+  call main::run: Int @7:20
+    argument f: closure () captures [borrow %0 q.p, borrow %0 q.n]: () -> Int @7:24
+      block: Int @7:26
+        tail: binary +: Int @7:26
+          binary +: Int @7:26
+            binary +: Int @7:26
+              field 1 n: Int @7:26
+                local %0 q: Q @7:26
+              call main::size: Int @7:32
+                argument p: borrow (argument): &P @7:37
+                  field 0 p: P @7:37
+                    local %0 q: Q @7:37
+            field 1 y: Int @7:44
+              field 0 p: P @7:44
+                local %0 q: Q @7:44
+          field 0 x: Int @7:52
+            field 0 p: P @7:52
+              local %0 q: Q @7:52

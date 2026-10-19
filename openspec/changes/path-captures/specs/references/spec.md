@@ -9,7 +9,7 @@ A closure MUST capture, for each use of a binding of an enclosing scope, the pat
 
 #### Scenario: A use of the whole binding subsumes its paths
 - **WHEN** `struct P { var x: Int, var y: Int }`, `struct Q { val p: P, val n: Int }`, `fun size(p: &P): Int = p.x` and `fun run(f: () -> Int): Int = f()` are declared and `prism dump-typed-tree` runs on `fun f(q: Q): Int = run { q.p.x + size(q.p) + q.n }` and `fun g(q: Q): Int = run { q.n + size(q.p) + q.p.y + q.p.x }`
-- **THEN** each closure captures the paths `q.p` and `q.n`, the closure of `f` in that order and the one of `g` in the order `q.n`, `q.p`
+- **THEN** each closure captures the paths `q.p` and `q.n`, in the order of the fields of `Q` whatever the order of the uses
 
 #### Scenario: Paths go through references and boxes
 - **WHEN** `struct Todo { val id: Int, val title: String }`, `struct P { var x: Int, var y: Int }`, `struct Cell { val inner: Heap<P> }` and `fun run(f: () -> Int): Int = f()` are declared and `prism dump-typed-tree` runs on `fun f(t: &Todo, c: &Cell): Int = run { t.id + c.inner.x }`
@@ -17,11 +17,18 @@ A closure MUST capture, for each use of a binding of an enclosing scope, the pat
 
 #### Scenario: Paths stop at indices, safe navigations and other references
 - **WHEN** `struct P { var x: Int, var y: Int }`, `struct Bag { val items: List<Int>, val tag: P? }` and `fun run(f: () -> Int): Int = f()` are declared and `prism dump-typed-tree` runs on `fun f(b: &Bag, i: Int, rr: &&P): Int = run { b.items[i] + (b.tag?.x ?: 0) + rr.x }`
-- **THEN** the closure captures the paths `b.items`, `i`, `b.tag` and `*rr`, which ends before the dereference of the reference `*rr` holds
+- **THEN** the closure captures the paths `b.items`, `b.tag`, `i` and `*rr`, which ends before the dereference of the reference `*rr` holds
 
 #### Scenario: A path does not go through a var reference
 - **WHEN** `struct Todo { val id: Int, val title: String }` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(a: &Todo, b: &Todo): Int { var r = a; val g = { r.id }; r = b; return run(g) }` is checked
 - **THEN** the borrow checker emits `E5004` at the assignment `r = b`, because the closure captures the binding `r`, whose later re-pointing it would see
+
+### Requirement: A Binding's Captured Paths Follow Its Fields
+A closure's captured paths of one binding MUST be ordered by their steps, fields in declaration order, whatever the order of their uses, so that reordering the uses of one binding inside a closure changes neither its captures nor its environment.
+
+#### Scenario: Reordered uses keep the captures
+- **WHEN** `struct P { var x: Int, var y: Int }` and `fun run(f: () -> Int): Int = f()` are declared and `prism dump-typed-tree` runs on `fun f(): Int { var p = P(1, 2); return run { p.y + p.x } }`
+- **THEN** the closure captures the paths `p.x` then `p.y`, both borrowed
 
 ## MODIFIED Requirements
 
@@ -97,6 +104,17 @@ A value whose type contains a function type MUST NOT escape when it may hold a b
 #### Scenario: Paths that a closure cannot copy keep the reference
 - **WHEN** `struct Todo { val id: Int, val title: String }` and `struct Counter { var n: Int }` are declared and `fun f(c: &Counter): () -> Int = { c.n }` and `fun g(t: &mut Todo): () -> Int = { t.id }` are checked
 - **THEN** the borrow checker emits `E5007` for each, because `n` is a `var` field read through a reference and `t` is a mutable reference, so each closure owns the reference itself
+
+### Requirement: Borrow Conflict Diagnostics Show the Borrow and Its Later Use
+A diagnostic of `E5003`, `E5004` or `E5005` MUST point at the conflicting access and name the place, and MUST list as related locations where the conflicting borrow was created and where it is used later, with ", in later iteration of loop" when that use is reached only through a loop's back edge. A borrow made by a closure MUST also label the use inside the closure that decided how it is captured, naming the path the closure captures.
+
+#### Scenario: Conflict points at the borrow and its later use
+- **WHEN** `fun print(n: &Int) {}` is declared and `prism check` runs on `fun f() { var x = 1; val r = &x; x = 2; print(r) }`
+- **THEN** it reports `error[E5004]: cannot assign to 'x' because it is borrowed` at `x` in `x = 2`, labelled "'x' is assigned here while borrowed", with a related location at `&x` labelled "'x' is borrowed here" and one at `r` in `print(r)` labelled "borrow later used here"
+
+#### Scenario: Closure borrow labels
+- **WHEN** `struct User { var name: String }`, `fun greet(s: &String): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared and `prism check` runs on `fun f() { var u = User("a"); val g = { u.name = "z"; 1 }; greet(u.name); run(g) }`
+- **THEN** it reports `error[E5003]: cannot borrow 'u.name' as shared because it is also borrowed as mutable` at `u.name` in `greet(u.name)`, labelled "shared borrow occurs here", with related locations at the closure labelled "closure borrows 'u.name' mutably here", at `u.name` inside the closure labelled "borrow occurs due to this use of 'u.name' in the closure", and at `g` in `run(g)` labelled "mutable borrow later used here"
 
 ### Requirement: Lifetime and Escape Diagnostics Show Where the Value Ends
 An `E5006` diagnostic MUST point at the borrow, with related locations where the borrowed value ends and where the borrow is used later. A parameter that ends when its body returns MUST be labelled at its declaration, and a later use by the caller, through a `&mut R` parameter, at that parameter. An `E5007` diagnostic MUST point at where the value escapes, with a related location at the capture or the parameter that holds a borrow, and its help MUST name the field path a closure reads through a reference it owns.

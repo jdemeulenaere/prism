@@ -1103,10 +1103,8 @@ impl Validator<'_> {
             for (i, a) in list.iter().enumerate() {
                 for b in &list[i + 1..] {
                     if a.starts_with(b) || b.starts_with(a) {
-                        let message = format!(
-                            "closure {} captures overlapping paths of {}",
-                            id.0, local
-                        );
+                        let message =
+                            format!("closure {} captures overlapping paths of {}", id.0, local);
                         self.report(message);
                     }
                 }

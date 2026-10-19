@@ -1,2 +1,5 @@
 // expect: E5007
-fun f(r: &Int): () -> Int = { r }
+// run: 1
+fun greet(s: &String): Int = 1
+fun f(r: &String): () -> Int = { greet(r) }
+fun main() {}

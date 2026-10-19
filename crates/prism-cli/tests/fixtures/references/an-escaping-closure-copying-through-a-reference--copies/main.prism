@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+// Each closure owns a copy of an `Int` read through the reference, so it holds no borrow.
+struct Todo { val id: Int, val title: String }
+struct Button { val onClick: () -> Int }
+fun f(r: &Int): () -> Int = { r }
+fun g(t: &Todo): Button = Button({ t.id + 1 })
+fun main() {
+    val n = 4
+    val a = f(n)
+    val t = Todo(6, "a" + "b")
+    val b = g(t)
+    println(a())
+    println(b.onClick())
+}

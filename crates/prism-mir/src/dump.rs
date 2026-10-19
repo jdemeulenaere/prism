@@ -643,6 +643,7 @@ pub(crate) mod tests {
             capture_count: 0,
             capture_modes: Vec::new(),
             ownership_reason: None,
+            capture_widenings: Vec::new(),
             blocks,
             groups: Arena::new(),
             origin: None,

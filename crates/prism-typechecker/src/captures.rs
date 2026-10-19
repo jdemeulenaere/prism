@@ -24,9 +24,10 @@
 use crate::error::{CaptureRefusal, TypeError};
 use prism_ast::Span;
 use prism_typed_tree::{
-    Argument, BindingMode, Body, BuiltinFunction, Callee, Capture, CaptureMode, ConstructKind,
-    ExpressionId, ExpressionKind, LocalId, LocalKind, OwnershipReason, OwnershipReasonKind,
-    Pattern, StatementId, StatementKind, TypeTable,
+    Argument, BindingMode, Body, BuiltinFunction, Callee, Capture, CaptureMode, CaptureProjection,
+    ConstructKind, ExpressionId, ExpressionKind, LocalId, LocalKind, OwnershipReason,
+    OwnershipReasonKind, Pattern, StatementId, StatementKind, Type, TypeTable, Widening,
+    WideningReason,
 };
 use std::collections::HashSet;
 
@@ -48,7 +49,8 @@ struct ClosureInfo<'a> {
     parent: Option<usize>,
     /// Whether the closure is written in a default value, outside any other closure.
     in_default: bool,
-    captures: &'a [Capture],
+    /// The bindings the closure captures, each once, in order of first use.
+    captures: std::borrow::Cow<'a, [Capture]>,
 }
 
 /// One block-like scope: its interval in a walk that numbers entries and exits, so that a scope
@@ -84,6 +86,7 @@ impl Extent {
 
 struct Graph<'a> {
     body: &'a Body,
+    types: &'a TypeTable,
     local_count: usize,
     /// The scope that declares each local; the function's own scope by default.
     local_scope: Vec<u32>,
@@ -103,6 +106,39 @@ struct Graph<'a> {
     /// The bindings each closure writes, assigning them or a field of them or borrowing them
     /// mutably, itself or in a nested closure: (closure index, binding).
     writes: HashSet<(usize, LocalId)>,
+    /// The closure each local is declared in, by index, `NONE` outside closures: a closure
+    /// captures exactly the bindings it uses that are declared outside it.
+    declared_in: Vec<u32>,
+    /// Per local, its position among the captures of the closure being decided, `NONE`
+    /// otherwise.
+    position: Vec<u32>,
+    /// Per local, the closure and the index in its `paths` of its last recorded whole use,
+    /// which later whole uses in the same closure only update.
+    whole_use: Vec<(u32, u32)>,
+    /// The paths each closure's own body reads of the bindings it captures, in walk order, by
+    /// closure index (D5 of `path-captures`).
+    paths: Vec<Vec<PathEntry>>,
+    /// A buffer for the nodes of a place chain.
+    chain: Vec<ExpressionId>,
+}
+
+/// A captured path, as recorded or as decided (D1 to D3 of `path-captures`).
+#[derive(Clone)]
+struct PathEntry {
+    local: LocalId,
+    projections: Vec<CaptureProjection>,
+    /// The first use of the path or of a path it covers.
+    span: Span,
+    /// The node the path ends at, whose type is the path's; `None` for a whole binding.
+    node: Option<ExpressionId>,
+    /// Whether the path dereferences a `&mut` reference.
+    mutable_reference: bool,
+    /// Whether the path reads a `var` field after dereferencing a reference.
+    variable_field: bool,
+    /// For a whole binding a nested closure owns, the path it was widened from.
+    widened: Option<Widening>,
+    /// How the closure takes the path, once decided.
+    mode: CaptureMode,
 }
 
 /// Decides the captures of every closure of `body`, recording each capture's mode and each
@@ -114,9 +150,9 @@ pub(crate) fn decide_captures(
     kind: BodyKind,
 ) -> Vec<TypeError> {
     let decisions = {
-        let mut graph = Graph::new(body);
+        let mut graph = Graph::new(body, types);
         graph.walk_body(kind);
-        graph.decide(types)
+        graph.decide()
     };
     let mut errors = Vec::new();
     for decision in decisions {
@@ -146,10 +182,11 @@ fn reason(span: Span, kind: OwnershipReasonKind) -> OwnershipReason {
 }
 
 impl<'a> Graph<'a> {
-    fn new(body: &'a Body) -> Self {
+    fn new(body: &'a Body, types: &'a TypeTable) -> Self {
         let local_count = body.locals.len();
         Self {
             body,
+            types,
             local_count,
             local_scope: vec![0; local_count],
             scopes: Vec::new(),
@@ -163,7 +200,126 @@ impl<'a> Graph<'a> {
             roots: Vec::new(),
             scratch: Vec::new(),
             writes: HashSet::new(),
+            declared_in: vec![NONE; local_count],
+            position: vec![NONE; local_count],
+            whole_use: vec![(NONE, NONE); local_count],
+            paths: Vec::new(),
+            chain: Vec::new(),
         }
+    }
+
+    /// Records, for the innermost closure being walked, the path that the place chain topped by
+    /// `id`, a field or dereference, reads (D1 and D5 of `path-captures`), when the chain bottoms
+    /// at a binding the closure captures, and returns whether it did; the chain's interior holds
+    /// nothing else to walk.
+    fn record_chain(&mut self, id: ExpressionId) -> bool {
+        let Some(&closure) = self.closure_stack.last() else {
+            return false;
+        };
+        let body = self.body;
+        let mut chain = std::mem::take(&mut self.chain);
+        chain.clear();
+        let mut current = id;
+        let local = loop {
+            match &body.expressions[current].kind {
+                ExpressionKind::Field { base, .. } => {
+                    chain.push(current);
+                    current = *base;
+                }
+                ExpressionKind::Deref { pointer } => {
+                    chain.push(current);
+                    current = *pointer;
+                }
+                ExpressionKind::Local(local) if self.captures(closure, *local) => {
+                    break Some(*local)
+                }
+                _ => break None,
+            }
+        };
+        let Some(local) = local else {
+            self.chain = chain;
+            return false;
+        };
+        let binding = &body.locals[local];
+        let mut entry = PathEntry {
+            local,
+            projections: Vec::with_capacity(chain.len()),
+            span: body.expressions[current].span,
+            node: None,
+            mutable_reference: false,
+            variable_field: false,
+            widened: None,
+            mode: CaptureMode::Borrowed,
+        };
+        let mut through_reference = false;
+        for &node in chain.iter().rev() {
+            let projection = match &body.expressions[node].kind {
+                ExpressionKind::Deref { pointer } => match &body.expressions[*pointer].ty {
+                    Type::Heap(_) => CaptureProjection::Deref,
+                    // Only the binding's own first dereference, of a `val` reference: any other
+                    // reference may be re-pointed while the closure lives (D1).
+                    Type::Reference { mutable, .. }
+                        if entry.projections.is_empty() && !binding.mutable =>
+                    {
+                        through_reference = true;
+                        entry.mutable_reference = *mutable;
+                        CaptureProjection::Deref
+                    }
+                    _ => break,
+                },
+                ExpressionKind::Field { base, index, .. } => {
+                    let Type::Struct { id: nominal, .. } = &body.expressions[*base].ty else {
+                        break;
+                    };
+                    if through_reference {
+                        let variable = self
+                            .types
+                            .struct_fields(nominal)
+                            .and_then(|fields| fields.get(*index))
+                            .is_some_and(|(_, variable, _)| *variable);
+                        entry.variable_field |= variable;
+                    }
+                    CaptureProjection::Field(*index)
+                }
+                _ => unreachable!("a place chain holds fields and dereferences"),
+            };
+            entry.projections.push(projection);
+            entry.span = body.expressions[node].span;
+            entry.node = Some(node);
+        }
+        self.paths[closure].push(entry);
+        self.chain = chain;
+        true
+    }
+
+    /// Records the innermost closure being walked as reading the whole binding `local`.
+    fn record_whole(&mut self, local: LocalId, span: Span) {
+        let Some(&closure) = self.closure_stack.last() else {
+            return;
+        };
+        if !self.captures(closure, local) {
+            return;
+        }
+        let (owner, last) = self.whole_use[local.0 as usize];
+        if owner == closure as u32 {
+            if let Some(entry) = self.paths[closure].get_mut(last as usize) {
+                if span.start < entry.span.start {
+                    entry.span = span;
+                }
+                return;
+            }
+        }
+        let paths = &mut self.paths[closure];
+        self.whole_use[local.0 as usize] = (closure as u32, paths.len() as u32);
+        paths.push(PathEntry::whole(local, span));
+    }
+
+    /// Whether closure `closure` captures `local`, which it uses: whether `local` is declared
+    /// outside it.
+    fn captures(&self, closure: usize, local: LocalId) -> bool {
+        self.declared_in
+            .get(local.0 as usize)
+            .is_some_and(|&declared| declared != closure as u32)
     }
 
     // --- Recording
@@ -204,6 +360,13 @@ impl<'a> Graph<'a> {
     }
 
     fn declare(&mut self, local: LocalId) {
+        let closure = self
+            .closure_stack
+            .last()
+            .map_or(NONE, |&closure| closure as u32);
+        if let Some(slot) = self.declared_in.get_mut(local.0 as usize) {
+            *slot = closure;
+        }
         if let Some(slot) = self.local_scope.get_mut(local.0 as usize) {
             *slot = *self.scope_stack.last().expect("an open scope");
         }
@@ -218,6 +381,21 @@ impl<'a> Graph<'a> {
                 unreachable!("a closure node")
             };
             let index = self.closures.len();
+            // The checker records whole bindings; a tree whose captures were already decided
+            // records paths, several per binding, which count once.
+            let captures = if captures.iter().all(|c| c.projections.is_empty()) {
+                std::borrow::Cow::Borrowed(captures.as_slice())
+            } else {
+                let mut seen = HashSet::new();
+                std::borrow::Cow::Owned(
+                    captures
+                        .iter()
+                        .filter(|c| seen.insert(c.local))
+                        .map(|c| Capture::whole(c.local, c.span, CaptureMode::Borrowed))
+                        .collect(),
+                )
+            };
+            self.paths.push(Vec::new());
             self.closures.push(ClosureInfo {
                 expression,
                 parent: self.closure_stack.last().copied(),
@@ -344,6 +522,12 @@ impl<'a> Graph<'a> {
     fn expression(&mut self, id: ExpressionId) {
         let body = self.body;
         match &body.expressions[id].kind {
+            ExpressionKind::Local(local) => {
+                let span = body.expressions[id].span;
+                self.record_whole(*local, span);
+            }
+            ExpressionKind::Field { .. } | ExpressionKind::Deref { .. }
+                if self.record_chain(id) => {}
             ExpressionKind::Block {
                 statements, tail, ..
             } => {
@@ -598,7 +782,7 @@ impl<'a> Graph<'a> {
 
     // --- Deciding
 
-    fn decide(mut self, types: &TypeTable) -> Vec<Decision> {
+    fn decide(mut self) -> Vec<Decision> {
         let node_count = self.local_count + self.closures.len();
         // Sources of each binding (backwards) and bindings of each source (forwards), as
         // compressed adjacency lists.
@@ -679,59 +863,61 @@ impl<'a> Graph<'a> {
             &sources,
         );
 
-        // Each closure's captures.
+        // Each closure's captures, innermost first, so that a closure's paths include its
+        // children's (D5 of `path-captures`): a closure's decided paths go to its parent's
+        // pending ones.
+        let mut recorded = std::mem::take(&mut self.paths);
+        let mut position = std::mem::take(&mut self.position);
+        let mut pending: Vec<Vec<PathEntry>> = vec![Vec::new(); self.closures.len()];
+        let mut entries: Vec<PathEntry> = Vec::new();
+        let mut merged: Vec<PathEntry> = Vec::new();
         let mut decisions = Vec::with_capacity(self.closures.len());
-        for (index, closure) in self.closures.iter().enumerate() {
+        for index in (0..self.closures.len()).rev() {
+            let closure = &self.closures[index];
             let node = self.local_count + index;
             let (owns_all, mut reason) = match escaping[node] {
                 NONE => (false, outlived_reasons[index].clone()),
                 found => (true, Some(reasons[found as usize].clone())),
             };
-            let mut captures = closure.captures.to_vec();
+            entries.clear();
+            entries.append(&mut recorded[index]);
+            entries.append(&mut pending[index]);
+            merged.clear();
+            merge_paths(&closure.captures, &mut entries, &mut merged, &mut position);
+            let mut captures = Vec::with_capacity(merged.len());
             let mut errors = Vec::new();
-            for (position, capture) in captures.iter_mut().enumerate() {
-                if !(owns_all || outlived[index][position]) {
-                    capture.mode = CaptureMode::Borrowed;
-                    continue;
-                }
-                let local = &self.body.locals[capture.local];
-                let copy = types.is_copy(&local.ty);
-                let refusal = if local.mutable {
-                    Some(CaptureRefusal::Variable)
-                } else if copy {
-                    None
-                } else if self.captured_by_parent(index, capture.local) {
-                    Some(CaptureRefusal::EnclosingClosure)
-                } else if closure.in_default
-                    && matches!(local.kind, LocalKind::Parameter | LocalKind::Receiver)
-                {
-                    Some(CaptureRefusal::DefaultValueInput)
-                } else {
-                    None
-                };
-                match refusal {
-                    Some(refusal) => {
-                        capture.mode = CaptureMode::Borrowed;
-                        let owning = reason.clone().expect("an owned capture has a reason");
-                        errors.push(TypeError::CannotCaptureByValue {
-                            name: local.name.clone(),
-                            refusal,
-                            help: capture_help(
-                                &local.name,
-                                refusal,
-                                types.is_clone(&local.ty),
-                                self.writes.contains(&(index, capture.local)),
-                            ),
-                            reason: owning,
-                            span: capture.span,
-                        });
+            let mut start = 0;
+            // The k-th run of `merged` holds the paths of the k-th capture of the checker.
+            for (ordinal, _) in closure.captures.iter().enumerate() {
+                let end = start
+                    + merged[start..]
+                        .iter()
+                        .take_while(|entry| entry.local == merged[start].local)
+                        .count();
+                let group = &mut merged[start..end];
+                start = end;
+                let local_id = group[0].local;
+                let owned = owns_all || outlived[index][ordinal];
+                let decided = if !owned {
+                    for entry in group.iter_mut() {
+                        entry.mode = CaptureMode::Borrowed;
                     }
-                    None => {
-                        capture.mode = if copy {
-                            CaptureMode::Copied
-                        } else {
-                            CaptureMode::Moved
-                        };
+                    None
+                } else {
+                    self.decide_owned(index, local_id, group, &reason, &mut errors)
+                };
+                let finals: &[PathEntry] = match &decided {
+                    Some(whole) => std::slice::from_ref(whole),
+                    None => group,
+                };
+                for entry in finals {
+                    captures.push(entry.capture());
+                    if let Some(parent) = closure.parent {
+                        if self.captures(parent, entry.local) {
+                            let mut entry = entry.clone();
+                            entry.mode = CaptureMode::Borrowed;
+                            pending[parent].push(entry);
+                        }
                     }
                 }
             }
@@ -746,6 +932,104 @@ impl<'a> Graph<'a> {
             });
         }
         decisions
+    }
+
+    /// Decides how closure `index`, which owns the binding `local_id`, takes the paths `group`
+    /// of it: copies each one, setting its mode, when it can (D3 of `path-captures`) and
+    /// returns `None`, or returns the whole binding, by today's rules, reporting `E4028` into
+    /// `errors` when it cannot take it.
+    fn decide_owned(
+        &self,
+        index: usize,
+        local_id: LocalId,
+        group: &mut [PathEntry],
+        reason: &Option<OwnershipReason>,
+        errors: &mut Vec<TypeError>,
+    ) -> Option<PathEntry> {
+        let types = self.types;
+        let closure = &self.closures[index];
+        let local = &self.body.locals[local_id];
+        let widening = if group.len() == 1 && group[0].projections.is_empty() {
+            None
+        } else {
+            group.iter().find_map(|entry| {
+                entry
+                    .refusal(local.mutable, self.body, types)
+                    .map(|reason| Widening {
+                        projections: entry.projections.clone(),
+                        reason,
+                    })
+            })
+        };
+        if !group[0].projections.is_empty() && widening.is_none() {
+            for entry in group.iter_mut() {
+                entry.mode = CaptureMode::Copied;
+            }
+            return None;
+        }
+        let span = group
+            .iter()
+            .map(|entry| entry.span)
+            .min_by_key(|span| span.start)
+            .expect("a group has a path");
+        let widened = widening.or_else(|| {
+            // A whole binding a nested closure took for a path keeps that path, when this
+            // closure reads nothing else of it.
+            (group.len() == 1)
+                .then(|| group[0].widened.clone())
+                .flatten()
+        });
+        let mut entry = PathEntry::whole(local_id, span);
+        entry.widened = widened;
+        let copy = types.is_copy(&local.ty);
+        let refusal = if local.mutable {
+            Some(CaptureRefusal::Variable)
+        } else if copy {
+            None
+        } else if self.captured_by_parent(index, local_id) {
+            Some(CaptureRefusal::EnclosingClosure)
+        } else if closure.in_default
+            && matches!(local.kind, LocalKind::Parameter | LocalKind::Receiver)
+        {
+            Some(CaptureRefusal::DefaultValueInput)
+        } else {
+            None
+        };
+        match refusal {
+            Some(refusal) => {
+                entry.mode = CaptureMode::Borrowed;
+                entry.widened = None;
+                let owning = reason.clone().expect("an owned capture has a reason");
+                // A `var` read through a path is copied by that path (D10).
+                let path = match (widened_path(group), refusal) {
+                    (Some(projections), CaptureRefusal::Variable) => Some(
+                        prism_typed_tree::path_text(&local.name, &local.ty, projections, types),
+                    ),
+                    _ => None,
+                };
+                errors.push(TypeError::CannotCaptureByValue {
+                    name: local.name.clone(),
+                    refusal,
+                    help: capture_help(
+                        &local.name,
+                        path.as_deref(),
+                        refusal,
+                        types.is_clone(&local.ty),
+                        self.writes.contains(&(index, local_id)),
+                    ),
+                    reason: owning,
+                    span,
+                });
+            }
+            None => {
+                entry.mode = if copy {
+                    CaptureMode::Copied
+                } else {
+                    CaptureMode::Moved
+                };
+            }
+        }
+        Some(entry)
     }
 
     /// Whether `local` is a capture of the closure enclosing closure `index`.
@@ -918,6 +1202,112 @@ fn whole_binding(pattern: &Pattern) -> Option<LocalId> {
     }
 }
 
+impl PathEntry {
+    fn whole(local: LocalId, span: Span) -> Self {
+        PathEntry {
+            local,
+            projections: Vec::new(),
+            span,
+            node: None,
+            mutable_reference: false,
+            variable_field: false,
+            widened: None,
+            mode: CaptureMode::Borrowed,
+        }
+    }
+
+    fn capture(&self) -> Capture {
+        Capture {
+            local: self.local,
+            projections: self.projections.clone(),
+            span: self.span,
+            mode: self.mode,
+            widened: self.widened.clone(),
+        }
+    }
+
+    /// Why an owning closure cannot copy this path, which has projections: its type is not
+    /// `Copy`, or a later write could change it (D3 of `path-captures`).
+    fn refusal(&self, variable: bool, body: &Body, types: &TypeTable) -> Option<WideningReason> {
+        let ty = match self.node {
+            Some(node) => &body.expressions[node].ty,
+            None => &body.locals[self.local].ty,
+        };
+        if variable {
+            Some(WideningReason::VariableBinding)
+        } else if self.node.is_none() || !types.is_copy(ty) {
+            Some(WideningReason::NotCopy)
+        } else if self.mutable_reference {
+            Some(WideningReason::MutableReference)
+        } else if self.variable_field {
+            Some(WideningReason::VariableField)
+        } else {
+            None
+        }
+    }
+}
+
+/// Merges the paths `entries` of a closure into `merged`, grouped by binding in the order of
+/// `captures` (the bindings in order of first use), each group with no path a prefix of another
+/// and in the order of the paths' steps, fields in declaration order (D2 of `path-captures`). A
+/// captured binding with no recorded path is captured whole. Sorting puts a path right before
+/// the paths it is a prefix of, so one scan merges them. `position` is all `NONE` before and
+/// after.
+fn merge_paths(
+    captures: &[Capture],
+    entries: &mut Vec<PathEntry>,
+    merged: &mut Vec<PathEntry>,
+    position: &mut [u32],
+) {
+    for (index, capture) in captures.iter().enumerate() {
+        position[capture.local.0 as usize] = index as u32;
+    }
+    let at = |position: &[u32], local: LocalId| position[local.0 as usize];
+    entries.retain(|entry| at(position, entry.local) != NONE);
+    entries.sort_by(|a, b| {
+        (at(position, a.local), &a.projections).cmp(&(at(position, b.local), &b.projections))
+    });
+    let mut next = 0;
+    for entry in entries.drain(..) {
+        let ordinal = at(position, entry.local) as usize;
+        while next < ordinal {
+            merged.push(PathEntry::whole(captures[next].local, captures[next].span));
+            next += 1;
+        }
+        if ordinal < next {
+            let last = merged.last_mut().expect("an earlier path of the binding");
+            if entry.projections.starts_with(&last.projections) {
+                if entry.span.start < last.span.start {
+                    last.span = entry.span;
+                }
+                // A prefix taken whole by a nested closure keeps its reason only when nothing
+                // longer was merged into it.
+                if entry.projections.len() > last.projections.len() {
+                    last.widened = None;
+                }
+                continue;
+            }
+        }
+        merged.push(entry);
+        next = ordinal + 1;
+    }
+    while next < captures.len() {
+        merged.push(PathEntry::whole(captures[next].local, captures[next].span));
+        next += 1;
+    }
+    for capture in captures {
+        position[capture.local.0 as usize] = NONE;
+    }
+}
+
+/// The first path of `group` with projections, which a whole capture was widened from.
+fn widened_path(group: &[PathEntry]) -> Option<&[CaptureProjection]> {
+    if group.iter().any(|entry| entry.projections.is_empty()) {
+        return None;
+    }
+    group.first().map(|entry| entry.projections.as_slice())
+}
+
 enum AssignTarget {
     Binding(LocalId),
     CapturedBinding,
@@ -929,9 +1319,24 @@ enum AssignTarget {
 
 /// The help of `E4028`: copy a `var` into a `val`, or clone what the closure cannot take. A
 /// `var` the closure writes cannot be copied into a `val`, which the closure could not write.
-fn capture_help(name: &str, refusal: CaptureRefusal, cloneable: bool, written: bool) -> String {
+fn capture_help(
+    name: &str,
+    path: Option<&str>,
+    refusal: CaptureRefusal,
+    cloneable: bool,
+    written: bool,
+) -> String {
     let fresh = if name == "m" { "k" } else { "m" };
     match refusal {
+        CaptureRefusal::Variable if !written && path.is_some() => {
+            let path = path.unwrap_or(name).trim_start_matches('*');
+            let field = path.rsplit('.').next().unwrap_or(fresh);
+            let fresh = if field == name { fresh } else { field };
+            format!(
+                "copy it into a 'val' before the closure and capture that instead: 'val {} = {}'",
+                fresh, path
+            )
+        }
         CaptureRefusal::Variable if written => format!(
             "the closure writes '{}', and a closure cannot write what it owns: keep it from escaping, so that it borrows '{}'",
             name, name
@@ -1151,6 +1556,199 @@ mod tests {
         assert_eq!(modes(&file, "f"), vec![vec![], vec![Moved], vec![Moved]]);
     }
 
+    /// The captures of every closure of function `name`, as their paths' text and modes.
+    fn paths(file: &TypedFile, name: &str) -> Vec<Vec<(String, CaptureMode)>> {
+        let body = file
+            .bodies
+            .iter()
+            .find(|(_, body)| body.owner.name == name)
+            .map(|(_, body)| body)
+            .unwrap_or_else(|| panic!("no body {}", name));
+        body.expressions
+            .iter()
+            .filter_map(|(_, e)| match &e.kind {
+                ExpressionKind::Closure { captures, .. } => Some(
+                    captures
+                        .iter()
+                        .map(|c| {
+                            let local = &body.locals[c.local];
+                            (c.path_text(&local.name, &local.ty, &file.types), c.mode)
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn path_list(found: &[(String, CaptureMode)]) -> Vec<(&str, CaptureMode)> {
+        found
+            .iter()
+            .map(|(path, mode)| (path.as_str(), *mode))
+            .collect()
+    }
+
+    const PATH_TYPES: &str = "struct P { var x: Int, var y: Int }\nstruct Q { val p: P, val n: Int }\nstruct Todo { val id: Int, val title: String }\nstruct Cell { val inner: Heap<P> }\nstruct Bag { val items: List<Int>, val tag: P? }\nstruct Counter { var n: Int, val label: String }\nfun size(p: &P): Int = p.x\n";
+
+    fn checked_paths(body: &str) -> TypedFile {
+        checked(&format!("{}{}", PATH_TYPES, body))
+    }
+
+    #[test]
+    fn a_closure_captures_the_fields_it_uses() {
+        let file =
+            checked_paths("fun f(): Int { var p = P(1, 2); return run { p.y + p.x + p.y } }\n");
+        assert_eq!(
+            path_list(&paths(&file, "f")[0]),
+            vec![("p.x", Borrowed), ("p.y", Borrowed)]
+        );
+    }
+
+    #[test]
+    fn a_use_of_the_whole_binding_subsumes_its_paths() {
+        let file = checked_paths(
+            "fun f(q: Q): Int = run { q.p.x + size(q.p) + q.n }\nfun g(q: Q): Int = run { q.n + size(q.p) + q.p.y + q.p.x }\nfun h(q: Q): Int = run { q.p.x + q.n + measure(q) }\nfun measure(q: &Q): Int = 1\n",
+        );
+        for name in ["f", "g"] {
+            assert_eq!(
+                path_list(&paths(&file, name)[0]),
+                vec![("q.p", Borrowed), ("q.n", Borrowed)],
+                "{}",
+                name
+            );
+        }
+        assert_eq!(path_list(&paths(&file, "h")[0]), vec![("q", Borrowed)]);
+    }
+
+    #[test]
+    fn paths_go_through_val_references_and_boxes() {
+        let file = checked_paths(
+            "fun f(t: &Todo, c: &Cell, r: &Int): Int = run { t.id + c.inner.x + r }\n",
+        );
+        assert_eq!(
+            path_list(&paths(&file, "f")[0]),
+            vec![
+                ("t.id", Borrowed),
+                ("c.inner.x", Borrowed),
+                ("*r", Borrowed)
+            ]
+        );
+    }
+
+    #[test]
+    fn paths_stop_at_indices_safe_navigations_states_and_other_references() {
+        let file = checked_paths(
+            "fun f(b: &Bag, i: Int, rr: &&P): Int = run { b.items[i] + (b.tag?.x ?: 0) + rr.x }\nfun g(a: &Todo): Int { var r = a; return run { r.id } }\nfun h(s: MutableState<Int>, t: &Todo): Int = run { s.value + t.id }\n",
+        );
+        assert_eq!(
+            path_list(&paths(&file, "f")[0]),
+            vec![
+                ("b.items", Borrowed),
+                ("b.tag", Borrowed),
+                ("i", Borrowed),
+                ("*rr", Borrowed)
+            ]
+        );
+        assert_eq!(path_list(&paths(&file, "g")[0]), vec![("r", Borrowed)]);
+        assert_eq!(
+            path_list(&paths(&file, "h")[0]),
+            vec![("s", Borrowed), ("t.id", Borrowed)]
+        );
+    }
+
+    #[test]
+    fn owning_closures_copy_the_paths_they_can() {
+        let file = checked_paths(
+            "fun a(t: &Todo): Button = Button({ t.id * 2 })\n\
+             fun b(r: &Int): () -> Int = { r }\n\
+             fun c(u: Todo): Button = Button({ u.id + 1 })\n\
+             fun d(c: Counter): Button = Button({ c.n })\n\
+             fun e(u: Todo): () -> Int = { u.title.length + u.id }\n\
+             fun g(c: &Counter): () -> Int = { c.n }\n\
+             fun h(t: &mut Todo): () -> Int = { t.id }\n",
+        );
+        assert_eq!(path_list(&paths(&file, "a")[0]), vec![("t.id", Copied)]);
+        assert_eq!(path_list(&paths(&file, "b")[0]), vec![("*r", Copied)]);
+        assert_eq!(path_list(&paths(&file, "c")[0]), vec![("u.id", Copied)]);
+        assert_eq!(path_list(&paths(&file, "d")[0]), vec![("c.n", Copied)]);
+        assert_eq!(path_list(&paths(&file, "e")[0]), vec![("u", Moved)]);
+        // References are `Copy`: the closure owns the reference itself, which the borrow
+        // checker rejects as it escapes.
+        assert_eq!(path_list(&paths(&file, "g")[0]), vec![("c", Copied)]);
+        assert_eq!(path_list(&paths(&file, "h")[0]), vec![("t", Moved)]);
+    }
+
+    #[test]
+    fn widened_captures_record_the_path_and_why() {
+        use prism_typed_tree::{CaptureProjection, WideningReason};
+        let file = checked_paths(
+            "fun e(u: Todo): () -> Int = { u.id + u.title.length }\n\
+             fun g(c: &Counter): () -> Int = { c.n }\n\
+             fun h(t: &mut Todo): () -> Int = { t.id }\n",
+        );
+        let widening = |name: &str| {
+            let (_, body) = file
+                .bodies
+                .iter()
+                .find(|(_, body)| body.owner.name == name)
+                .unwrap();
+            body.expressions
+                .iter()
+                .find_map(|(_, e)| match &e.kind {
+                    ExpressionKind::Closure { captures, .. } => captures[0].widened.clone(),
+                    _ => None,
+                })
+                .expect("a widened capture")
+        };
+        let found = widening("e");
+        assert_eq!(found.projections, vec![CaptureProjection::Field(1)]);
+        assert_eq!(found.reason, WideningReason::NotCopy);
+        assert_eq!(widening("g").reason, WideningReason::VariableField);
+        assert_eq!(widening("h").reason, WideningReason::MutableReference);
+    }
+
+    /// Closures are listed inner first, in the order their nodes were built.
+    #[test]
+    fn nested_closures_take_their_children_s_paths() {
+        let file = checked_paths(
+            "fun f(t: &Todo): Int = run { store { t.id } }\nfun g(u: Todo): Int = run { store { u.id } }\nfun h(t: &Todo): Int = run { t.title.length + store { t.id } }\n",
+        );
+        assert_eq!(
+            paths(&file, "f")
+                .iter()
+                .map(|c| path_list(c))
+                .collect::<Vec<_>>(),
+            vec![vec![("t.id", Copied)], vec![("t.id", Borrowed)]]
+        );
+        assert_eq!(
+            paths(&file, "g")
+                .iter()
+                .map(|c| path_list(c))
+                .collect::<Vec<_>>(),
+            vec![vec![("u.id", Copied)], vec![("u.id", Borrowed)]]
+        );
+        assert_eq!(
+            paths(&file, "h")
+                .iter()
+                .map(|c| path_list(c))
+                .collect::<Vec<_>>(),
+            vec![
+                vec![("t.id", Copied)],
+                vec![("t.id", Borrowed), ("t.title", Borrowed)]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_var_read_through_a_path_is_refused_naming_the_path() {
+        let (file, codes) = check(&format!(
+            "{}{}fun f(): Button {{ var p = P(1, 2); val b = Button({{ p.x }}); p = P(2, 3); return b }}\n",
+            PRELUDE, PATH_TYPES
+        ));
+        assert_eq!(codes, vec!["E4028"]);
+        assert_eq!(path_list(&paths(&file, "f")[0]), vec![("p", Borrowed)]);
+    }
+
     #[test]
     fn captures_that_cannot_be_taken_by_value() {
         let (_, codes) = check(&format!(
@@ -1175,7 +1773,8 @@ mod tests {
 
 /// The cost of deciding captures (D2 of `escaping-closures`) on generated bodies of growing
 /// size: thousands of closures, locals and reassigned `var`s in one function, some escaping,
-/// some kept past a block, some reassigned in cycles. It reports the pass's time against the
+/// some kept past a block, some reassigned in cycles, and field paths through references and
+/// boxes, borrowed, copied and taken from nested closures (`path-captures`). It reports the pass's time against the
 /// whole check of the file and the growth from one size to the next. It is ignored by default;
 /// run it on a release build with
 ///
@@ -1205,6 +1804,10 @@ mod timing {
             )
             .unwrap();
             writeln!(body, "    run {{ greet(s{i}) }}").unwrap();
+            // Field paths, through references and boxes, borrowed and copied (`path-captures`).
+            writeln!(body, "    val p{i} = P({i}, {i}, Heap(R({i})))").unwrap();
+            writeln!(body, "    run {{ p{i}.x + p{i}.inner.z + t.id }}").unwrap();
+            writeln!(body, "    store {{ p{i}.y + t.id + r + run {{ p{i}.x }} }}").unwrap();
             if i % 2 == 0 {
                 writeln!(body, "    val k{i} = {{ greet(s{i}) }}").unwrap();
                 writeln!(body, "    var a{i}: () -> Int = k{i}").unwrap();
@@ -1215,7 +1818,7 @@ mod timing {
             }
         }
         format!(
-            "fun greet(s: &String): Int = 1\nfun store(f: escaping () -> Int): Int = 1\nfun run(f: () -> Int): Int = f()\nfun f(c: Bool) {{\n{body}}}\n"
+            "struct R {{ val z: Int }}\nstruct P {{ val x: Int, val y: Int, val inner: Heap<R> }}\nstruct Todo {{ val id: Int }}\nfun greet(s: &String): Int = 1\nfun store(f: escaping () -> Int): Int = 1\nfun run(f: () -> Int): Int = f()\nfun f(c: Bool, t: &Todo, r: &Int) {{\n{body}}}\n"
         )
     }
 

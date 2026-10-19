@@ -31,7 +31,7 @@ use prism_typed_tree::{
     Arena, ExpressionId, FunctionItem, Item, StatementId, Type, TypeTable, TypedFile, ValueItem,
 };
 use scope::Scope;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Lowers the typed tree of a file without type errors to MIR: one body per function with a
 /// body, top-level `val`, parameter default and closure, in item order, each function followed
@@ -299,6 +299,13 @@ pub(crate) struct Builder<'a> {
     current: Option<BlockId>,
     /// The MIR place of each typed-tree binding lowered so far (D5).
     bindings: HashMap<prism_typed_tree::LocalId, Place>,
+    /// In a closure, the capture locals of the paths it captures of each binding it does not
+    /// capture whole, with each path's projections (D7 of `path-captures`).
+    path_bindings: HashMap<(prism_typed_tree::LocalId, Vec<Projection>), LocalId>,
+    /// The bindings with an entry in `path_bindings`.
+    path_captured: HashSet<prism_typed_tree::LocalId>,
+    /// Per capture local, the path its whole binding was widened from.
+    capture_widenings: Vec<Option<prism_typed_tree::Widening>>,
     scopes: Vec<Scope>,
     loops: Vec<LoopContext>,
     chains: Vec<ChainContext>,
@@ -347,6 +354,9 @@ impl<'a> Builder<'a> {
             blocks: Vec::new(),
             current: None,
             bindings: HashMap::new(),
+            path_bindings: HashMap::new(),
+            path_captured: HashSet::new(),
+            capture_widenings: Vec::new(),
             scopes: Vec::new(),
             loops: Vec::new(),
             chains: Vec::new(),
@@ -483,6 +493,7 @@ impl<'a> Builder<'a> {
             capture_count: self.capture_count,
             capture_modes: Vec::new(),
             ownership_reason: self.ownership_reason,
+            capture_widenings: self.capture_widenings,
             blocks,
             groups: self.groups,
             origin: self.origin,

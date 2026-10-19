@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+struct Todo { val id: Int, val done: MutableState<Bool> }
+struct Toggle { val onToggle: (Bool) -> Unit }
+fun toggle(todo: &Todo): Toggle = Toggle({ todo.done.value = it })
+fun main() {
+    val t = Todo(1, mutableStateOf(false))
+    val g = toggle(t)
+    g.onToggle(true)
+    println(t.done.value)
+}

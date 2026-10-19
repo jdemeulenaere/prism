@@ -1,0 +1,4 @@
+// expect: ok
+struct Counter { var n: Int, val label: String }
+struct Button { val onClick: () -> Int }
+fun f(c: Counter): Button { val b = Button({ c.n }); println(c.label); return b }

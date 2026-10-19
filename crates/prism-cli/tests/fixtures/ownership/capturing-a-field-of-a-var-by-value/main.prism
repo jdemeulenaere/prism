@@ -1,0 +1,6 @@
+// expect: E4028
+// run: 1
+struct P { val x: Int }
+struct Button { val onClick: () -> Int }
+fun f(): Button { var p = P(1); val b = Button({ p.x }); p = P(2); return b }
+fun main() {}

@@ -2,8 +2,9 @@
 // run: 1
 // The returned closure owns 'h', which holds the reference 'r' or the unmarked parameter 'p':
 // the diagnostic names 'h' where it is captured and the parameter where it is declared.
-fun f(r: &Int): () -> Int {
-    val h = { r + 1 }
+fun greet(s: &String): Int = 1
+fun f(r: &String): () -> Int {
+    val h = { greet(r) + 1 }
     return { h() }
 }
 fun g(p: () -> Int): () -> Int {

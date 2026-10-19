@@ -1,0 +1,4 @@
+// expect: E5007
+// `t` is a mutable reference, whose referent may be replaced: the closure owns `t` itself.
+struct Todo { val id: Int, val title: String }
+fun g(t: &mut Todo): () -> Int = { t.id }

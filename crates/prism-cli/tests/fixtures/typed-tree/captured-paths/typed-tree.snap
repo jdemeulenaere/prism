@@ -1,0 +1,44 @@
+module main
+struct main::Todo @2:1
+  field 0 val id: Int
+  field 1 val title: String
+struct main::P @3:1
+  field 0 var x: Int
+  field 1 var y: Int
+fun main::run(f: () -> Int): Int @4:1
+  local %0 f: () -> Int (parameter)
+  call value: Int @4:30
+    callee: local %0 f: () -> Int @4:30
+fun main::f(t: &Todo, r: &Int, n: Int): () -> Int @5:1
+  local %0 t: &Todo (parameter)
+  local %1 r: &Int (parameter)
+  local %2 n: Int (parameter)
+  local %3 p: P (var)
+  block: () -> Int @5:45
+    let %3 p @5:47
+      construct main::P: P @5:55
+        field x: literal 1: Int @5:57
+        field y: literal 2: Int @5:60
+    expression @5:64
+      call main::run: Int @5:64
+        argument f: closure () captures [borrow %3 p.x, borrow %2 n]: () -> Int @5:68
+          block: Int @5:70
+            compound-assign + @5:70
+              target: field 0 x: Int @5:70
+                local %3 p: P @5:70
+              value: local %2 n: Int @5:77
+            tail: copy: Int @5:80
+              field 0 x: Int @5:80
+                local %3 p: P @5:80
+    tail: coerce diverge: () -> Int @5:87
+      return: Nothing @5:87
+        closure () captures [copy %0 t.id, copy %1 *r, copy %2 n] (owning: returned here @5:94): () -> Int @5:94
+          block: Int @5:96
+            tail: binary +: Int @5:96
+              binary +: Int @5:96
+                field 0 id: Int @5:96
+                  deref: Todo @5:96
+                    local %0 t: &Todo @5:96
+                deref: Int @5:103
+                  local %1 r: &Int @5:103
+              local %2 n: Int @5:107

@@ -22,7 +22,7 @@ fn lower(source: &str) -> MirFile {
 }
 
 /// A generic of every kind of body and construct a record holds: defaults, nested closures,
-/// owned and borrowed captures, templates, lists, boxes, nullables, patterns and calls.
+/// owned and borrowed captures, copied, borrowed and widened paths, templates, lists, boxes, nullables, patterns and calls.
 const CORPUS: &str = "struct Pair<A, B>(val a: A, val b: B)\n\
      enum Shape<T> { Dot, Point(T, Int) }\n\
      fun helper(n: Int): Int = n + 1\n\
@@ -39,7 +39,11 @@ const CORPUS: &str = "struct Pair<A, B>(val a: A, val b: B)\n\
          val k = m ?: 3\n\
          val shape: Shape<Int> = Shape.Point(n, 2)\n\
          val r = when (shape) { Shape.Dot -> 0; Shape.Point(val a, val b) -> a + b }\n\
-         return run { run { total + hv + k + r + s.length } }\n\
+         val p = Pair(n, k)\n\
+         val q = Pair(n, s.clone())\n\
+         val copied = Heap({ p.a + 1 })\n\
+         val widened = Heap({ q.b.length + q.a })\n\
+         return run { run { total + hv + k + r + s.length + p.b } }\n\
      }\n\
      fun <T> Pair<T, T>.first(): &T = &a\n\
      fun main() { println(pad(1).a); println(many(&\"s\", 2)) }\n";

@@ -1,0 +1,9 @@
+error[E4028]: cannot capture the variable 'p' by value
+  --> main.prism:5:50
+    5 | fun f(): Button { var p = P(1); val b = Button({ p.x }); p = P(2); return b }
+      |                                                  ^
+  --> main.prism:5:48
+    5 | fun f(): Button { var p = P(1); val b = Button({ p.x }); p = P(2); return b }
+      |                                                ^^^^^^^ the closure owns its captures because it is stored in a field here
+   = note: a closure that owns its captures would keep the value 'p' had when it was built, and not see later writes to the 'var'
+   = help: copy it into a 'val' before the closure and capture that instead: 'val x = p.x'

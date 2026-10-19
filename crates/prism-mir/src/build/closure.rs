@@ -13,12 +13,21 @@
 use super::Builder;
 use crate::mir::{
     AggregateKind, BodyOwner, Callee, Capture as MirCapture, LocalDeclaration, LocalId, LocalKind,
-    Operand, Place, Rvalue,
+    Operand, Place, Projection, Rvalue,
 };
 use prism_ast::Span;
 use prism_typed_tree::{
-    CaptureMode as TreeCaptureMode, DeclarationPath, ExpressionId, ExpressionKind, NominalId, Type,
+    CaptureMode as TreeCaptureMode, CaptureProjection, DeclarationPath, ExpressionId,
+    ExpressionKind, NominalId, Type,
 };
+
+/// The MIR projection of a step of a captured path.
+fn projection(step: &CaptureProjection) -> Projection {
+    match step {
+        CaptureProjection::Field(index) => Projection::Field(*index),
+        CaptureProjection::Deref => Projection::Deref,
+    }
+}
 
 impl Builder<'_> {
     pub(super) fn lower_closure(&mut self, destination: Option<&Place>, id: ExpressionId) {
@@ -66,33 +75,55 @@ impl Builder<'_> {
         }
         for capture in captures {
             let binding = &self.tree.locals[capture.local];
+            // A captured path is a capture local of the path's type, named by the path, which
+            // stands for the path's place (D7 of `path-captures`).
+            let ty = match capture.path_type(&binding.ty, self.types) {
+                Some(ty) => ty,
+                None => panic!(
+                    "internal error: a capture of {} has no path type",
+                    capture.local
+                ),
+            };
+            let whole = capture.projections.is_empty();
+            // A captured path of reference type (`*slot` for `slot: &mut &T`) may be re-pointed
+            // as the place it stands for, as a `var` holding a reference is.
+            let mutable = binding.mutable || (!whole && matches!(ty, Type::Reference { .. }));
             let local = closure.add_local(LocalDeclaration {
-                ty: binding.ty.clone(),
+                ty,
                 kind: LocalKind::Capture,
-                mutable: binding.mutable,
-                name: Some(binding.name.clone()),
+                mutable,
+                name: Some(capture.path_text(&binding.name, &binding.ty, self.types)),
                 binding: Some(capture.local),
                 escaping: false,
                 span: capture.span,
             });
             closure.capture_count += 1;
-            closure.bindings.insert(capture.local, Place::local(local));
+            closure.capture_widenings.push(capture.widened.clone());
+            if whole {
+                closure.bindings.insert(capture.local, Place::local(local));
+            } else {
+                let projections = capture.projections.iter().map(projection).collect();
+                closure
+                    .path_bindings
+                    .insert((capture.local, projections), local);
+                closure.path_captured.insert(capture.local);
+            }
+        }
+        if closure.capture_widenings.iter().all(Option::is_none) {
+            closure.capture_widenings.clear();
         }
         closure.lower_value(*body);
         let lowered = closure.finish();
         self.bodies.fill(closure_id, lowered);
-        // A borrowed capture is its binding's place; an owned one moves or copies it out (D2 of
-        // `escaping-closures`), which the enclosing body then no longer drops.
+        // A borrowed capture is its path's place; an owned one moves or copies it out (D2 of
+        // `escaping-closures`), which the enclosing body then no longer drops when it moves a
+        // whole binding.
         let captures = captures
             .iter()
             .map(|capture| {
-                let place = match self.bindings.get(&capture.local) {
-                    Some(place) => place.clone(),
-                    None => panic!(
-                        "internal error: captured binding {} has no place",
-                        capture.local
-                    ),
-                };
+                let projections: Vec<Projection> =
+                    capture.projections.iter().map(projection).collect();
+                let place = self.captured_place(capture.local, &projections);
                 match capture.mode {
                     TreeCaptureMode::Borrowed => MirCapture::Borrowed(place),
                     TreeCaptureMode::Copied => {
@@ -112,6 +143,42 @@ impl Builder<'_> {
             captures,
         };
         self.assign(destination, rvalue, span);
+    }
+}
+
+impl Builder<'_> {
+    /// The place of the path `projections` of the typed-tree binding `binding` in this body:
+    /// the binding's place projected, or, in a closure capturing paths of it, the capture
+    /// local of the captured prefix projected by the rest (D7 of `path-captures`).
+    pub(super) fn captured_place(
+        &self,
+        binding: prism_typed_tree::LocalId,
+        projections: &[Projection],
+    ) -> Place {
+        if let Some(place) = self.bindings.get(&binding) {
+            let mut place = place.clone();
+            place.projections.extend_from_slice(projections);
+            return place;
+        }
+        // Captured paths do not overlap, so at most one prefix is captured: one lookup per
+        // prefix length.
+        let mut key = (binding, Vec::with_capacity(projections.len()));
+        let prefix = (0..=projections.len()).find_map(|length| {
+            key.1.clear();
+            key.1.extend_from_slice(&projections[..length]);
+            self.path_bindings.get(&key).map(|local| (length, *local))
+        });
+        match prefix {
+            Some((length, local)) => {
+                let mut place = Place::local(local);
+                place.projections.extend_from_slice(&projections[length..]);
+                place
+            }
+            None => panic!(
+                "internal error: no captured path of binding {} covers a use",
+                binding
+            ),
+        }
     }
 }
 

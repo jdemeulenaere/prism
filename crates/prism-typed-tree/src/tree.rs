@@ -1267,9 +1267,7 @@ pub fn path_type(
             (CaptureProjection::Field(index), Type::Struct { id, arguments }) => {
                 types.instantiated_field(&id, &arguments, *index)?
             }
-            (CaptureProjection::Deref, Type::Reference { inner, .. } | Type::Heap(inner)) => {
-                *inner
-            }
+            (CaptureProjection::Deref, Type::Reference { inner, .. } | Type::Heap(inner)) => *inner,
             _ => return None,
         };
     }

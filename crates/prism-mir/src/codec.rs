@@ -19,8 +19,9 @@ use crate::mir::{
 use crate::record::GenericRecord;
 use prism_ast::{Span, TypeMarker};
 use prism_typed_tree::{
-    Arena, ArenaId, BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, OwnershipReason,
-    OwnershipReasonKind, Type, TypeDef, TypeParameter, TypeTable, UnaryOperator,
+    Arena, ArenaId, BinaryOperator, BuiltinFunction, CaptureProjection, DeclarationPath, NominalId,
+    OwnershipReason, OwnershipReasonKind, Type, TypeDef, TypeParameter, TypeTable, UnaryOperator,
+    Widening, WideningReason,
 };
 
 /// Appends a value's encoding to a byte vector.
@@ -809,6 +810,55 @@ impl Codec for BuiltinFunction {
             38 => BuiltinFunction::DpOfInt,
             39 => BuiltinFunction::TextUnitOfInt,
             _ => return None,
+        })
+    }
+}
+
+impl Codec for CaptureProjection {
+    fn encode(&self, encoder: &mut Encoder) {
+        match self {
+            CaptureProjection::Field(index) => {
+                encoder.u8(0);
+                index.encode(encoder);
+            }
+            CaptureProjection::Deref => encoder.u8(1),
+        }
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(match decoder.u8()? {
+            0 => CaptureProjection::Field(decoder.decode()?),
+            1 => CaptureProjection::Deref,
+            _ => return None,
+        })
+    }
+}
+
+impl Codec for Widening {
+    fn encode(&self, encoder: &mut Encoder) {
+        let Widening {
+            projections,
+            reason,
+        } = self;
+        projections.encode(encoder);
+        encoder.u8(match reason {
+            WideningReason::NotCopy => 0,
+            WideningReason::VariableBinding => 1,
+            WideningReason::MutableReference => 2,
+            WideningReason::VariableField => 3,
+        });
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        let projections = decoder.decode()?;
+        let reason = match decoder.u8()? {
+            0 => WideningReason::NotCopy,
+            1 => WideningReason::VariableBinding,
+            2 => WideningReason::MutableReference,
+            3 => WideningReason::VariableField,
+            _ => return None,
+        };
+        Some(Widening {
+            projections,
+            reason,
         })
     }
 }
@@ -1825,6 +1875,7 @@ impl Codec for Body {
             capture_count,
             capture_modes,
             ownership_reason,
+            capture_widenings,
             blocks,
             groups,
             origin,
@@ -1840,6 +1891,7 @@ impl Codec for Body {
         capture_count.encode(encoder);
         capture_modes.encode(encoder);
         ownership_reason.encode(encoder);
+        capture_widenings.encode(encoder);
         blocks.encode(encoder);
         groups.encode(encoder);
         origin.encode(encoder);
@@ -1857,6 +1909,7 @@ impl Codec for Body {
             capture_count: decoder.decode()?,
             capture_modes: decoder.decode()?,
             ownership_reason: decoder.decode()?,
+            capture_widenings: decoder.decode()?,
             blocks: decoder.decode()?,
             groups: decoder.decode()?,
             origin: decoder.decode()?,

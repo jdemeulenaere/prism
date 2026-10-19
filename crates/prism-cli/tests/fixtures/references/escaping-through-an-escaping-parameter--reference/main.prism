@@ -1,3 +1,4 @@
 // expect: E5007
 fun store(f: escaping () -> Int): Int = 1
-fun f(r: &Int): Int = store { r }
+fun greet(s: &String): Int = 1
+fun f(r: &String): Int = store { greet(r) }

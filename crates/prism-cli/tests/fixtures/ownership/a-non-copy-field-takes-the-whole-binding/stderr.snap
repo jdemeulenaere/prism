@@ -1,0 +1,11 @@
+error[E5001]: use of moved value 'u'
+  --> main.prism:6:73
+    6 | fun f(u: User): Button { val b = Button({ u.name.length + u.id }); take(u); return b }
+      |                                                                         ^ value used here after move
+  --> main.prism:6:41
+    6 | fun f(u: User): Button { val b = Button({ u.name.length + u.id }); take(u); return b }
+      |                                         ^^^^^^^^^^^^^^^^^^^^^^^^ value moved into closure here
+  --> main.prism:6:41
+    6 | fun f(u: User): Button { val b = Button({ u.name.length + u.id }); take(u); return b }
+      |                                         ^^^^^^^^^^^^^^^^^^^^^^^^ the closure owns its captures because it is stored in a field here
+   = note: 'u' has type 'User', which is not 'Copy'

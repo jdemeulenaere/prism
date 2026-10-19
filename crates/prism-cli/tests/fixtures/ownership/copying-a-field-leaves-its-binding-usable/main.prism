@@ -1,0 +1,5 @@
+// expect: ok
+struct User { val id: Int, val name: String }
+struct Button { val onClick: () -> Int }
+fun take(u: User) {}
+fun f(u: User): Button { val b = Button({ u.id + 1 }); take(u); return b }

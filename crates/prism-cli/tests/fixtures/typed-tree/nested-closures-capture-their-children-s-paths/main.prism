@@ -1,0 +1,5 @@
+// expect: ok
+struct Todo { val id: Int, val title: String }
+fun store(f: escaping () -> Int): Int = 1
+fun run(f: () -> Int): Int = f()
+fun f(t: &Todo): Int = run { store { t.id } }

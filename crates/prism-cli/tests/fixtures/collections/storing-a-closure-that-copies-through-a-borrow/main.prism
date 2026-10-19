@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun main() {
+    var handlers = listOf<() -> Unit>()
+    val n = 7
+    val r = &n
+    handlers.add { println(r) }
+    handlers[0]()
+}

@@ -1,0 +1,27 @@
+module main
+fun main::f(_1: &Todo): () -> Int @3:1
+  local _0: () -> Int (return)
+  local _1 t: &Todo (argument)
+  bb0:
+    _0 = closure main::f#closure0 [copy (*_1).id] @3:30
+    return @3:1
+closure main::f#closure0(): Int @3:30
+  local _0: Int (return)
+  local _1 t.id: Int (capture)
+  bb0:
+    _0 = copy _1 @3:32
+    return @3:30
+fun main::g(_1: Todo): () -> Int @4:1
+  local _0: () -> Int (return)
+  local _1 u: Todo (argument)
+  bb0:
+    _0 = closure main::g#closure0 [copy _1.id] @4:29
+    drop _1 -> bb1 @4:1
+  bb1:
+    return @4:1
+closure main::g#closure0(): Int @4:29
+  local _0: Int (return)
+  local _1 u.id: Int (capture)
+  bb0:
+    _0 = copy _1 @4:31
+    return @4:29

@@ -1,0 +1,7 @@
+// expect: E5001
+// run: 1
+struct User { val id: Int, val name: String }
+struct Button { val onClick: () -> Int }
+fun take(u: User) {}
+fun f(u: User): Button { val b = Button({ u.name.length + u.id }); take(u); return b }
+fun main() {}

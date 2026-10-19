@@ -108,9 +108,9 @@ fn a_mutable_capture_conflicts_with_a_read() {
     assert_eq!(
         check("fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }\n"),
         "\
-E5003 cannot borrow 'u.name' as shared because 'u' is borrowed as mutable @14:65 shared borrow occurs here
-  related @14:38 closure borrows 'u' mutably here
-  related @14:40 borrow occurs due to this use of 'u' in the closure
+E5003 cannot borrow 'u.name' as shared because it is also borrowed as mutable @14:65 shared borrow occurs here
+  related @14:38 closure borrows 'u.name' mutably here
+  related @14:40 borrow occurs due to this use of 'u.name' in the closure
   related @14:78 mutable borrow later used here"
     );
 }
@@ -199,18 +199,22 @@ fn escaping_closures_own_their_captures_and_hold_no_borrows() {
     accept("fun g(s: String): Button = Button({ greet(s) })\n");
     accept("fun h(slot: &mut (() -> Int), s: String) { *slot = { greet(s) } }\n");
     accept("fun m(a: Int, p: () -> Int = { a }): Int = p()\n");
+    // A closure copying an `Int` read through a reference owns no reference
+    // (`path-captures`, D4).
+    accept("fun n(r: &Int): () -> Int = { r }\n");
+    accept("fun o(r: &Int): Button = Button({ r + 1 })\n");
     assert_eq!(
-        check("fun f(r: &Int): () -> Int = { r }\n"),
+        check("fun f(r: &String): () -> Int = { greet(r) }\n"),
         "\
-E5007 a closure that captures the reference 'r' cannot escape @14:29 returned here
-  related @14:31 'r' is captured here
+E5007 a closure that captures the reference 'r' cannot escape @14:32 returned here
+  related @14:40 'r' is captured here
   note: a closure that escapes owns what it captures, and a reference cannot be owned
   help: pass the value 'r' refers to instead of a reference"
     );
-    let stored = check("fun g(r: &Int): Button = Button({ r + 1 })\n");
+    let stored = check("fun g(r: &String): Button = Button({ greet(r) + 1 })\n");
     assert!(
         stored.starts_with(
-            "E5007 a closure that captures the reference 'r' cannot escape @14:33 stored in a field here"
+            "E5007 a closure that captures the reference 'r' cannot escape @14:36 stored in a field here"
         ),
         "{}",
         stored

@@ -1,0 +1,38 @@
+module main
+struct main::P @2:1
+  field 0 var x: Int
+  field 1 var y: Int
+struct main::Bag @3:1
+  field 0 val items: List<Int>
+  field 1 val tag: P?
+fun main::run(f: () -> Int): Int @4:1
+  local %0 f: () -> Int (parameter)
+  call value: Int @4:30
+    callee: local %0 f: () -> Int @4:30
+fun main::f(b: &Bag, i: Int, rr: &&P): Int @5:1
+  local %0 b: &Bag (parameter)
+  local %1 i: Int (parameter)
+  local %2 rr: &&P (parameter)
+  call main::run: Int @5:40
+    argument f: closure () captures [borrow %0 b.items, borrow %0 b.tag, borrow %1 i, borrow %2 *rr]: () -> Int @5:44
+      block: Int @5:46
+        tail: binary +: Int @5:46
+          binary +: Int @5:46
+            index: Int @5:46
+              base: field 0 items: List<Int> @5:46
+                deref: Bag @5:46
+                  local %0 b: &Bag @5:46
+              index: local %1 i: Int @5:54
+            elvis: Int @5:59
+              nullable: chain: Int? @5:60
+                copy: Int @5:60
+                  field 0 x: Int @5:60
+                    payload: P @5:60
+                      field 1 tag: P? @5:60
+                        deref: Bag @5:60
+                          local %0 b: &Bag @5:60
+              fallback: literal 0: Int @5:72
+          field 0 x: Int @5:77
+            deref: P @5:77
+              deref: &P @5:77
+                local %2 rr: &&P @5:77

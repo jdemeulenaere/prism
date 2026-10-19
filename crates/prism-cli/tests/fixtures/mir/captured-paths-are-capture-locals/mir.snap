@@ -1,0 +1,34 @@
+module main
+fun main::run(_1: () -> Int): Int @3:1
+  local _0: Int (return)
+  local _1 f: () -> Int (argument)
+  bb0:
+    _0 = call _1() -> bb1 @3:30
+  bb1:
+    drop _1 -> bb2 @3:1
+  bb2:
+    return @3:1
+fun main::f(): Int @4:1
+  local _0: Int (return)
+  local _1 p: P (user, var)
+  local _2: () -> Int (temporary)
+  bb0:
+    storage_live _1 @4:16
+    _1 = struct main::P(const 1, const 2) @4:24
+    storage_live _2 @4:44
+    _2 = closure main::f#closure0 [_1.x, _1.y] @4:44
+    _0 = call main::run(move _2) -> bb1 @4:40
+  bb1:
+    storage_dead _2 @4:33
+    drop _1 -> bb2 @4:33
+  bb2:
+    storage_dead _1 @4:33
+    return @4:1
+closure main::f#closure0(): Int @4:44
+  local _0: Int (return)
+  local _1 p.x: Int (capture, var)
+  local _2 p.y: Int (capture, var)
+  bb0:
+    _1 = copy _1 + const 1 @4:46
+    _0 = copy _1 + copy _2 @4:56
+    return @4:44

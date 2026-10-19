@@ -19,7 +19,7 @@ fun main::f(_1: Int): Unit @4:1
     storage_live _2 @5:5
     _2 = struct main::User(const "a") @5:13
     storage_live _3 @6:9
-    _3 = closure main::f#closure0 [&mut _2, &_1] @6:9
+    _3 = closure main::f#closure0 [&mut _2.name, &_1] @6:9
     storage_live _4 @6:5
     _4 = call main::run(move _3) -> bb1 @6:5
   bb1:
@@ -32,11 +32,11 @@ fun main::f(_1: Int): Unit @4:1
     return @4:1
 closure main::f#closure0(): Int @6:9
   local _0: Int (return)
-  local _1 u: User (capture, var)
+  local _1 u.name: String (capture, var)
   local _2 n: Int (capture)
   bb0:
-    drop _1.name -> bb1 @6:11
+    drop _1 -> bb1 @6:11
   bb1:
-    _1.name = const "z" @6:11
+    _1 = const "z" @6:11
     _0 = copy _2 @6:25
     return @6:9

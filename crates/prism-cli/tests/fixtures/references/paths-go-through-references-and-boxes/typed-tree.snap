@@ -1,0 +1,28 @@
+module main
+struct main::Todo @2:1
+  field 0 val id: Int
+  field 1 val title: String
+struct main::P @3:1
+  field 0 var x: Int
+  field 1 var y: Int
+struct main::Cell @4:1
+  field 0 val inner: Heap<P>
+fun main::run(f: () -> Int): Int @5:1
+  local %0 f: () -> Int (parameter)
+  call value: Int @5:30
+    callee: local %0 f: () -> Int @5:30
+fun main::f(t: &Todo, c: &Cell): Int @6:1
+  local %0 t: &Todo (parameter)
+  local %1 c: &Cell (parameter)
+  call main::run: Int @6:34
+    argument f: closure () captures [borrow %0 t.id, borrow %1 c.inner.x]: () -> Int @6:38
+      block: Int @6:40
+        tail: binary +: Int @6:40
+          field 0 id: Int @6:40
+            deref: Todo @6:40
+              local %0 t: &Todo @6:40
+          field 0 x: Int @6:47
+            deref: P @6:47
+              field 0 inner: Heap<P> @6:47
+                deref: Cell @6:47
+                  local %1 c: &Cell @6:47

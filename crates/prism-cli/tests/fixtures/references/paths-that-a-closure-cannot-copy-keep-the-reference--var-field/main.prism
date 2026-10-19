@@ -1,0 +1,4 @@
+// expect: E5007
+// `n` is a `var` field read through a reference: the closure owns the reference `c`.
+struct Counter { var n: Int }
+fun f(c: &Counter): () -> Int = { c.n }

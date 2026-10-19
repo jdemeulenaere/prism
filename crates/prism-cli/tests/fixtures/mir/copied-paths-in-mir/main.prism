@@ -1,0 +1,4 @@
+// expect: ok
+struct Todo { val id: Int, val title: String }
+fun f(t: &Todo): () -> Int = { t.id }
+fun g(u: Todo): () -> Int = { u.id }

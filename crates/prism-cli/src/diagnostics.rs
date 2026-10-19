@@ -1119,16 +1119,16 @@ error[E5004]: cannot assign to 'x' because it is borrowed
             "struct User { var name: String }\nfun greet(s: &String): Int = 1\nfun run(f: () -> Int): Int = f()\nfun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }\n",
         );
         let expected = "\
-error[E5003]: cannot borrow 'u.name' as shared because 'u' is borrowed as mutable
+error[E5003]: cannot borrow 'u.name' as shared because it is also borrowed as mutable
   --> main.prism:4:65
     4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
       |                                                                 ^^^^^^ shared borrow occurs here
   --> main.prism:4:38
     4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
-      |                                      ^^^^^^^^^^^^^^^^^^^ closure borrows 'u' mutably here
+      |                                      ^^^^^^^^^^^^^^^^^^^ closure borrows 'u.name' mutably here
   --> main.prism:4:40
     4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
-      |                                        ^^^^^^ borrow occurs due to this use of 'u' in the closure
+      |                                        ^^^^^^ borrow occurs due to this use of 'u.name' in the closure
   --> main.prism:4:78
     4 | fun f() { var u = User(\"a\"); val g = { u.name = \"z\"; 1 }; greet(u.name); run(g) }
       |                                                                              ^ mutable borrow later used here
@@ -1217,15 +1217,17 @@ error[E5009]: method 'other' cannot return a borrow derived from parameter 'o'
     /// references: "Escaping closure labels".
     #[test]
     fn test_escaping_closure_labels() {
-        let out = render_borrow_errors("fun f(r: &Int): () -> Int = { r }\n");
+        let out = render_borrow_errors(
+            "fun greet(s: &String): Int = 1\nfun f(r: &String): () -> Int = { greet(r) }\n",
+        );
         let expected = "\
 error[E5007]: a closure that captures the reference 'r' cannot escape
-  --> main.prism:1:29
-    1 | fun f(r: &Int): () -> Int = { r }
-      |                             ^^^^^ returned here
-  --> main.prism:1:31
-    1 | fun f(r: &Int): () -> Int = { r }
-      |                               ^ 'r' is captured here
+  --> main.prism:2:32
+    2 | fun f(r: &String): () -> Int = { greet(r) }
+      |                                ^^^^^^^^^^^^ returned here
+  --> main.prism:2:40
+    2 | fun f(r: &String): () -> Int = { greet(r) }
+      |                                        ^ 'r' is captured here
    = note: a closure that escapes owns what it captures, and a reference cannot be owned
    = help: pass the value 'r' refers to instead of a reference
 ";
@@ -1297,7 +1299,7 @@ error[E5007]: the parameter 'p' cannot escape
     #[test]
     fn test_escaping_closure_labels_through_a_closure() {
         let out = render_borrow_errors(
-            "fun f(r: &Int): () -> Int { val h = { r + 1 }; return { h() } }\n",
+            "fun greet(s: &String): Int = 1\nfun f(r: &String): () -> Int { val h = { greet(r) + 1 }; return { h() } }\n",
         );
         assert!(
             out.contains("error[E5007]: a closure that captures the reference 'r' cannot escape"),

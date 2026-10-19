@@ -1,0 +1,7 @@
+// expect: ok
+struct P { var x: Int, var y: Int }
+struct Q { val p: P, val n: Int }
+fun size(p: &P): Int = p.x
+fun run(f: () -> Int): Int = f()
+fun f(q: Q): Int = run { q.p.x + size(q.p) + q.n }
+fun g(q: Q): Int = run { q.n + size(q.p) + q.p.y + q.p.x }

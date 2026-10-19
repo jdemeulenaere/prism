@@ -1,0 +1,15 @@
+module main
+struct main::User @2:1
+  field 0 val id: Int
+  field 1 val name: String
+fun main::f(u: User): () -> Int @3:1
+  local %0 u: User (parameter)
+  closure () captures [move %0 u (widened from u.name: not Copy)] (owning: returned here @3:29): () -> Int @3:29
+    block: Int @3:31
+      tail: binary +: Int @3:31
+        call builtin length: Int @3:31
+          receiver: borrow (receiver): &String @3:31
+            field 1 name: String @3:31
+              local %0 u: User @3:31
+        field 0 id: Int @3:47
+          local %0 u: User @3:47

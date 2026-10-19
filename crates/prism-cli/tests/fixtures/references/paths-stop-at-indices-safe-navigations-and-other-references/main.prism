@@ -1,0 +1,5 @@
+// expect: ok
+struct P { var x: Int, var y: Int }
+struct Bag { val items: List<Int>, val tag: P? }
+fun run(f: () -> Int): Int = f()
+fun f(b: &Bag, i: Int, rr: &&P): Int = run { b.items[i] + (b.tag?.x ?: 0) + rr.x }

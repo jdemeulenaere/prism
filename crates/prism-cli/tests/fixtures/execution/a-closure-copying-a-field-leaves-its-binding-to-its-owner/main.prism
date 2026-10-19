@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+struct User { val id: Int, val name: String }
+struct Button { val onClick: () -> Int }
+fun main() {
+    val u = User(7, "a" + "b")
+    val b = Button({ u.id * 2 })
+    println(b.onClick())
+    println(u.name)
+}

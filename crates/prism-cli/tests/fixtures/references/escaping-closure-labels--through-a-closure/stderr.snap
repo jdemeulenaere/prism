@@ -1,24 +1,24 @@
 error[E5007]: a closure that captures the reference 'r' cannot escape
-  --> main.prism:7:12
-    7 |     return { h() }
+  --> main.prism:8:12
+    8 |     return { h() }
       |            ^^^^^^^ returned here
-  --> main.prism:7:14
-    7 |     return { h() }
+  --> main.prism:8:14
+    8 |     return { h() }
       |              ^ 'h', which holds 'r', is captured here
-  --> main.prism:5:7
-    5 | fun f(r: &Int): () -> Int {
-      |       ^^^^^^^ 'r' is a parameter here
+  --> main.prism:6:7
+    6 | fun f(r: &String): () -> Int {
+      |       ^^^^^^^^^^ 'r' is a parameter here
    = note: a closure that escapes owns what it captures, and a reference cannot be owned
    = help: pass the value 'r' refers to instead of a reference
 error[E5007]: a closure that captures the parameter 'p' cannot escape
-  --> main.prism:11:12
-   11 |     return { h() }
+  --> main.prism:12:12
+   12 |     return { h() }
       |            ^^^^^^^ returned here
-  --> main.prism:11:14
-   11 |     return { h() }
+  --> main.prism:12:14
+   12 |     return { h() }
       |              ^ 'h', which holds 'p', is captured here
-  --> main.prism:9:7
-    9 | fun g(p: () -> Int): () -> Int {
+  --> main.prism:10:7
+   10 | fun g(p: () -> Int): () -> Int {
       |       ^^^^^^^^^^^^ 'p' is a parameter here
    = note: a closure that escapes owns what it captures
    = note: an unmarked function-typed parameter may borrow its caller's variables

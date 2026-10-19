@@ -235,11 +235,7 @@ impl Builder<'_> {
                 );
                 Self::deref(Place::local(pointer))
             }
-            ExpressionKind::Field { base, index, .. } => {
-                let index = *index;
-                self.place(*base).project(Projection::Field(index))
-            }
-            ExpressionKind::Deref { pointer } => Self::deref(self.place(*pointer)),
+            ExpressionKind::Field { .. } | ExpressionKind::Deref { .. } => self.chain_place(id),
             ExpressionKind::Index { base, index } => {
                 let index = *index;
                 let base = self.place(*base);
@@ -274,6 +270,36 @@ impl Builder<'_> {
                 Place::local(local)
             }
         }
+    }
+
+    /// The place of the chain of fields and dereferences topped by `id`, lowered in one walk: its
+    /// bottom's place projected by each step, or, for a binding a closure captures paths of, the
+    /// captured prefix's capture local projected by the rest (D7 of `path-captures`).
+    fn chain_place(&mut self, id: ExpressionId) -> Place {
+        let mut projections = Vec::new();
+        let mut current = id;
+        loop {
+            match &self.expression(current).kind {
+                ExpressionKind::Field { base, index, .. } => {
+                    projections.push(Projection::Field(*index));
+                    current = *base;
+                }
+                ExpressionKind::Deref { pointer } => {
+                    projections.push(Projection::Deref);
+                    current = *pointer;
+                }
+                _ => break,
+            }
+        }
+        projections.reverse();
+        if let ExpressionKind::Local(binding) = self.expression(current).kind {
+            if !self.bindings.contains_key(&binding) && self.path_captured.contains(&binding) {
+                return self.captured_place(binding, &projections);
+            }
+        }
+        let mut place = self.place(current);
+        place.projections.extend(projections);
+        place
     }
 
     /// The operand of the expression `id` where its value is consumed or read: a constant for a

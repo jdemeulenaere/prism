@@ -1,0 +1,4 @@
+// expect: E5004
+struct Todo { val id: Int, val title: String }
+fun run(f: () -> Int): Int = f()
+fun f(a: &Todo, b: &Todo): Int { var r = a; val g = { r.id }; r = b; return run(g) }

@@ -1,0 +1,23 @@
+module main
+struct main::Todo @2:1
+  field 0 val id: Int
+  field 1 val title: String
+fun main::store(f: escaping () -> Int): Int @3:1
+  local %0 f: () -> Int (escaping parameter)
+  literal 1: Int @3:41
+fun main::run(f: () -> Int): Int @4:1
+  local %0 f: () -> Int (parameter)
+  call value: Int @4:30
+    callee: local %0 f: () -> Int @4:30
+fun main::f(t: &Todo): Int @5:1
+  local %0 t: &Todo (parameter)
+  call main::run: Int @5:24
+    argument f: closure () captures [borrow %0 t.id]: () -> Int @5:28
+      block: Int @5:30
+        tail: call main::store: Int @5:30
+          argument f: closure () captures [copy %0 t.id] (owning: passed to an escaping parameter here @5:36): () -> Int @5:36
+            block: Int @5:38
+              tail: copy: Int @5:38
+                field 0 id: Int @5:38
+                  deref: Todo @5:38
+                    local %0 t: &Todo @5:38
