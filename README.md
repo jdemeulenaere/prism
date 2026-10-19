@@ -55,6 +55,33 @@ See [`AGENTS.md`](AGENTS.md) for contributor and agent workflow guidelines.
 
 ---
 
+## What works today
+
+Milestones 1 and 2 are complete (2026-10-19). The bootstrap compiler, written in Rust, checks, formats and runs Prism programs, and runs reactive UI apps written as Jetpack Compose code, in a native window or headless, with hot reload that keeps their state:
+
+- **The language** of [`syntax`](openspec/specs/syntax/spec.md) and [`type-system`](openspec/specs/type-system/spec.md): structs, enums with payloads and `when` patterns, nullables, generics, extension functions, closures that own their captures, strings and templates, `Heap<T>` and `List<T>`, with value ownership checked by a borrow checker without lifetime annotations ([`ownership`](openspec/specs/ownership/spec.md), [`references`](openspec/specs/references/spec.md)).
+- **The tools:** `prism check` (with a per-user build cache), `prism fmt`, and `prism run`, which compiles a program with Cranelift in memory and reaches `main` in about 11 ms cold and 2 ms warm on a release build ([`execution`](openspec/specs/execution/spec.md), [`build-cache`](openspec/specs/build-cache/spec.md)); `--check-allocations` checks that every allocation, state cell, group and node is freed, and `--frame-stats` reports an app's frame times and allocations.
+- **Compose:** `compose fun`, `remember`, `key`, `mutableStateOf`, skipping of composables whose stable arguments did not change, and a toolkit after Compose's artifacts (`/prism/compose/ui`, `foundation`, `layout`, `material3`: `Column`, `Row`, `Box`, `Text`, `Button`, `Checkbox`, `TextField`, `Surface`, ordered `Modifier` chains, `16.dp`) ([`compose`](openspec/specs/compose/spec.md), [`ui`](openspec/specs/ui/spec.md), [`desktop`](openspec/specs/desktop/spec.md)).
+- **Hot reload:** `prism run --watch` applies an edit at the program's next call or the app's next frame; a composable edit keeps every remembered value whose type did not change ([`hot-reload`](openspec/specs/hot-reload/spec.md)).
+- **Example apps** under [`examples/apps`](examples/apps): a counter and a todo list, verified by scripted sessions under the allocation check, and a tour of the toolkit in [`examples/demo/ui`](examples/demo/ui/ui.prism). A click of the counter takes 0.003 ms and toggling an item of a 1,000-item list 2.3 ms at the 99th percentile, headless on a release build, with no allocation left behind after any frame ([`example-apps`](openspec/changes/reactive-app-verification/specs/example-apps/spec.md)).
+
+| Counter | Todo | Toolkit tour |
+|---|---|---|
+| ![The counter after three clicks](docs/images/counter.png) | ![The todo app with three items, the second checked](docs/images/todo.png) | ![The toolkit tour](docs/images/tour.png) |
+
+Run the apps with a `prism` built by `cargo build --release -p prism-cli` (or `cargo run -q -p prism-cli --`):
+
+```text
+prism run examples/apps/counter/main.prism                     # in a window
+prism run --watch examples/apps/todo/main.prism                # edit examples/apps/todo/screen.prism while it runs
+prism run --headless --events examples/apps/todo/sessions/adding-toggling-and-removing.events examples/apps/todo/main.prism
+prism run --frame-stats --headless --events examples/apps/todo/sessions/a-thousand-items-start-and-end-cleanly.events examples/apps/todo/large.prism
+```
+
+Known limits: no scrolling or lazy lists, no effects, timers or animation, one window at a time, CPU rendering without text shaping (no kerning or ligatures), Tier 1 (JIT) only with no `prism build`, and no traits yet. Rows that take a borrowed item recompose with their list. The follow-ups are in [`ROADMAP.md`](ROADMAP.md).
+
+---
+
 ## Specifications & Invariants
 
 Implemented behavior is specified in [`openspec/specs/`](openspec/specs). Planned subsystems (code generation, compilation avoidance, execution tiers, the memory model and the compose engine) are designed in [`docs/architecture.md`](docs/architecture.md). The tenets above are the vision; see [`ROADMAP.md`](ROADMAP.md) for what exists today.
@@ -70,6 +97,6 @@ Implemented behavior is specified in [`openspec/specs/`](openspec/specs). Planne
 ## Bootstrapping Roadmap
 
 Development progress is tracked in [`ROADMAP.md`](ROADMAP.md):
-- **Milestone 1**: Rust-based bootstrap compiler (`prismc`) and developer CLI (`prism`).
-- **Milestone 2**: First-class Jetpack Compose UI engine, reactive tree runtime, and native hot-reload framework.
-- **Milestone 3**: Self-hosting compiler written in Prism itself.
+- **Milestone 1** (complete): Rust-based bootstrap compiler (`prismc`) and developer CLI (`prism`).
+- **Milestone 2** (complete, 2026-10-19): First-class Jetpack Compose UI engine, reactive tree runtime, and native hot-reload framework.
+- **Milestone 3** (current): Self-hosting compiler written in Prism itself.
