@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+compose fun Leaf() { }
+
+compose fun C(s: State<String>) {
+    val r = &s.value
+    Leaf()
+    println(r)
+}
+
+fun main() {
+    val s = mutableStateOf("a" + "b")
+    val c = composition { C(s) }
+}

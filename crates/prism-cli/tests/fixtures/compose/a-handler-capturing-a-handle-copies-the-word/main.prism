@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun main() {
+    val count = mutableStateOf(1)
+    val onClick = { count.value += 1 }
+    onClick()
+    onClick()
+    println(count.value)
+}

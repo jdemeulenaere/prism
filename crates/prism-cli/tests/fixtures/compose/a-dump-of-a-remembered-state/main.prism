@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+compose fun Counter() {
+    val count = remember { mutableStateOf(0) }
+}
+
+fun main() {
+    val c = composition { Counter() }
+    print(c.dump())
+}

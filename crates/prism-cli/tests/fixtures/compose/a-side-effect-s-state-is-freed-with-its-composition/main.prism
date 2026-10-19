@@ -1,0 +1,12 @@
+// expect: ok
+// run: 101
+fun session(holder: MutableState<MutableState<String>>) {
+    val c = composition { SideEffect { holder.value = mutableStateOf("a" + "b") } }
+    holder.value.read { s -> println(s) }
+}
+
+fun main() {
+    val holder = mutableStateOf(mutableStateOf(""))
+    session(holder)
+    holder.value.read { s -> println(s) }
+}

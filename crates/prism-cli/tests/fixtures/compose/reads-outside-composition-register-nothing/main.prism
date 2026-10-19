@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+compose fun Quiet() {
+    println("quiet")
+}
+
+fun main() {
+    val count = mutableStateOf(0)
+    val c = composition { Quiet() }
+    println(count.value)
+    count.value = 5
+    println(c.recompose())
+}

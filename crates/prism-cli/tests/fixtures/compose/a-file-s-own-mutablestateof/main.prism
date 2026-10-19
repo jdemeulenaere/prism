@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun mutableStateOf(n: Int): Int = n + 1
+
+fun main() {
+    println(mutableStateOf(1))
+}

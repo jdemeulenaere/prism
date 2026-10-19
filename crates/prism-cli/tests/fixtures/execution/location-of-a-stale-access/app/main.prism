@@ -1,0 +1,15 @@
+package app
+
+// A handle whose cell its composition freed: reading it is a
+// runtime error at the read.
+
+fun main() {
+    val holder = mutableStateOf(mutableStateOf(0))
+    val kept = session(holder)
+    println(kept.value)
+}
+
+fun session(holder: MutableState<MutableState<Int>>): MutableState<Int> {
+    val c = composition { SideEffect { holder.value = mutableStateOf(1) } }
+    return holder.value
+}

@@ -1,0 +1,2 @@
+panic: stale state handle
+  at app/main.prism:9:13

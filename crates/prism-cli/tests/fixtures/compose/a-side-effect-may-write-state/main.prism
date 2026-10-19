@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+compose fun Mark(seen: MutableState<Int>, n: State<Int>) {
+    println("mark ${n.value}")
+    SideEffect { seen.value = 1 }
+}
+
+fun main() {
+    val seen = mutableStateOf(0)
+    val n = mutableStateOf(0)
+    val c = composition { Mark(seen, n) }
+    println(seen.value)
+    println(c.recompose())
+}

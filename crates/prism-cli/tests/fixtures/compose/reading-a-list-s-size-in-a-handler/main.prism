@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+fun main() {
+    val todos = mutableStateOf(listOf(1, 2, 3))
+    val n = todos.read { it.size * 10 }
+    println(n)
+}

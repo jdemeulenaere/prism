@@ -1,0 +1,11 @@
+// expect: ok
+// run: 101
+fun make(): MutableState<Int> = mutableStateOf(0)
+
+compose fun Bad() {
+    val s = make()
+}
+
+fun main() {
+    val c = composition { Bad() }
+}

@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+fun describe(s: State<Int>): String = "n = ${s.value}"
+
+compose fun Show(s: State<Int>) {
+    println(describe(s))
+}
+
+compose fun Root(s: State<Int>) {
+    println("root")
+    Show(s)
+}
+
+fun main() {
+    val count = mutableStateOf(0)
+    val c = composition { Root(count) }
+    count.value = 1
+    println(c.recompose())
+}

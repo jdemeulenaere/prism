@@ -1,0 +1,24 @@
+// expect: ok
+// run: 0
+compose fun Label(count: State<Int>) {
+    println("label ${count.value}")
+}
+
+compose fun Title(n: Int) {
+    println("title $n")
+}
+
+compose fun Screen(count: State<Int>) {
+    println("screen")
+    Title(1)
+    Label(count)
+}
+
+fun main() {
+    val count = mutableStateOf(0)
+    val c = composition { Screen(count) }
+    val onClick = { count.value += 1 }
+    onClick()
+    println(c.recompose())
+    println(c.recompose())
+}

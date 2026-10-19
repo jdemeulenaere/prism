@@ -1,0 +1,3 @@
+// expect: ok
+// entry: app/main.prism
+// run: 101

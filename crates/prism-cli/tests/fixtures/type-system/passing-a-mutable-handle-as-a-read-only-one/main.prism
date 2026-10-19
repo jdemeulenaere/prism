@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun show(s: State<Int>): Int = s.value
+
+fun main() {
+    val m = mutableStateOf(7)
+    println(show(m))
+}

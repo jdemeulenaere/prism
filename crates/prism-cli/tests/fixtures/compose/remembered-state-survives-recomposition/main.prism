@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+compose fun Counter(tick: State<Int>, holder: MutableState<MutableState<Int>>) {
+    val clicks = remember { mutableStateOf(0) }
+    println("tick ${tick.value} clicks ${clicks.value}")
+    SideEffect { holder.value = clicks }
+}
+
+fun main() {
+    val tick = mutableStateOf(0)
+    val holder = mutableStateOf(mutableStateOf(0))
+    val c = composition { Counter(tick, holder) }
+    holder.value.value += 1
+    tick.value += 1
+    println(c.recompose())
+}

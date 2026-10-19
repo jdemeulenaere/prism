@@ -1,0 +1,2 @@
+panic: state accessed while borrowed
+  at main.prism:5:25

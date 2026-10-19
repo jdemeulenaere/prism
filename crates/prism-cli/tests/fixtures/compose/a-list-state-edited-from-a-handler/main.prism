@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+struct Todo(val title: String)
+
+compose fun Todos(todos: State<List<Todo>>) {
+    println("count ${todos.value.size}")
+}
+
+fun main() {
+    val todos = mutableStateOf(listOf(Todo("a")))
+    val c = composition { Todos(todos) }
+    val onClick = { todos.edit { it.add(Todo("b")) } }
+    onClick()
+    println(c.recompose())
+}

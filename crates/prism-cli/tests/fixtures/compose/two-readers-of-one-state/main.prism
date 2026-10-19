@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+compose fun A(s: State<Int>) {
+    println("a ${s.value}")
+}
+
+compose fun B(s: State<Int>) {
+    println("b ${s.value}")
+}
+
+fun main() {
+    val s = mutableStateOf(0)
+    val c = composition {
+        A(s)
+        B(s)
+    }
+    s.value = 1
+    println(c.recompose())
+    s.value = 2
+    println(c.recompose())
+}

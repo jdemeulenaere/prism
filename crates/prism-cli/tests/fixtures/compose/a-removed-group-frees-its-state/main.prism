@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+compose fun Child() {
+    val s = remember { mutableStateOf("a" + "b") }
+    println(s.value)
+}
+
+compose fun Parent(show: State<Bool>) {
+    if (show.value) {
+        Child()
+    }
+}
+
+fun main() {
+    val show = mutableStateOf(true)
+    val c = composition { Parent(show) }
+    show.value = false
+    println(c.recompose())
+    print(c.dump())
+}

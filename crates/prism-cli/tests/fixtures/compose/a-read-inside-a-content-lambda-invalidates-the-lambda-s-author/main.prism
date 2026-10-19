@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+compose fun Column(content: compose () -> Unit) {
+    content()
+}
+
+compose fun Counter(c: State<Int>) {
+    println("counter")
+    Column { println("count ${c.value}") }
+}
+
+fun main() {
+    val n = mutableStateOf(0)
+    val c = composition { Counter(n) }
+    n.value = 1
+    println(c.recompose())
+}

@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun main() {
+    val count = mutableStateOf(1)
+    count.value += 2
+    count.value *= 5
+    println(count.value)
+}

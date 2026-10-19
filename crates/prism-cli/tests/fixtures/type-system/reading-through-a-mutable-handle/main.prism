@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun <T> State<T>.describe(): String = "state"
+
+fun main() {
+    val m = mutableStateOf(2)
+    println(m.read { n -> n + 1 })
+    println(m.describe())
+}

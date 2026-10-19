@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+fun main() {
+    val s = mutableStateOf(listOf("a" + "b"))
+    s.edit { v -> v.add("c" + "d") }
+}

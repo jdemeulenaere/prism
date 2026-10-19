@@ -1,0 +1,2 @@
+panic: state created during composition outside remember
+  at main.prism:3:33
