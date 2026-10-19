@@ -1,0 +1,2 @@
+clear 400x300 #FFFFFFFF
+border 0,0 40x40 width 2 #FF0000FF radius 20

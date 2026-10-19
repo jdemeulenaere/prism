@@ -1,0 +1,5 @@
+card
+window 400x300
+  column #1 0,0 40x60
+    text #2 0,0 8x20 "2"
+    box #3 0,20 40x40 size(40x40) clickable

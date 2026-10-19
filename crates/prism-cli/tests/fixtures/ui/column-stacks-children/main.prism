@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Screen() {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("a")
+        Text("b")
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Screen() } }

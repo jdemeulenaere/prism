@@ -1,0 +1,3 @@
+package prism
+
+private intrinsic compose fun LeafNode(kind: Int, update: (Int) -> Unit): Unit

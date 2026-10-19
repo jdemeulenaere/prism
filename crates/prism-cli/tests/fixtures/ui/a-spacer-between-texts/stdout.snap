@@ -1,0 +1,5 @@
+window 400x300
+  column #1 0,0 8x48
+    text #2 0,0 8x20 "a"
+    spacer #3 0,20 0x8 height(8)
+    text #4 0,28 8x20 "b"

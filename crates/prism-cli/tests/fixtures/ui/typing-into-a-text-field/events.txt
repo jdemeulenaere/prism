@@ -1,0 +1,5 @@
+click 100 18
+type "ab"
+key backspace
+type "c"
+dump

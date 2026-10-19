@@ -1,0 +1,3 @@
+window 400x300
+  box #1 0,0 400x300 alignment Center fillMaxSize
+    text #2 192,140 16x20 "ab"

@@ -1,0 +1,3 @@
+press "+"
+release 300 200
+dump

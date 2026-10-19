@@ -1,0 +1,4 @@
+window 400x300
+  column #1 0,0 8x48 arrangement spacedBy(8)
+    text #2 0,0 8x20 "a"
+    text #3 0,28 8x20 "b"

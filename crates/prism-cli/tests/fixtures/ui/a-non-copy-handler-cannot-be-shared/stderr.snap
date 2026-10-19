@@ -1,0 +1,1 @@
+panic: ui misuse: a handler that owns captures that are not Copy was given to two nodes

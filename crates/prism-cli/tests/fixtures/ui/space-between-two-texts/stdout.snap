@@ -1,0 +1,4 @@
+window 400x300
+  row #1 0,0 100x20 arrangement SpaceBetween width(100)
+    text #2 0,0 8x20 "a"
+    text #3 92,0 8x20 "b"

@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Greeter() {
+    val c = remember { mutableStateOf(0) }
+    val label = "clicked ${c.value}"
+    Button(onClick = { println(label); c.value += 1 }) { Text("greet") }
+}
+fun main() { runApp(width = 400, height = 300) { Greeter() } }

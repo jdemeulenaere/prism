@@ -1,0 +1,8 @@
+// expect: ok
+// run: 1
+// events: events.txt
+import /prism/compose/ui
+fun main() {
+    println("before")
+    runApp { }
+}

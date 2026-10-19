@@ -1,0 +1,4 @@
+window 400x300
+  row #1 0,0 200x20 width(200)
+    text #2 0,0 184x20 "a" weight(1.0)
+    text #3 184,0 16x20 "bb"

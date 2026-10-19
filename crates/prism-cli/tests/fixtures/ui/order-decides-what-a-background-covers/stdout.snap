@@ -1,0 +1,5 @@
+clear 400x300 #FFFFFFFF
+rect 8,8 8x20 #FFFF0000
+text 8,8 size 16 #FF000000 "a"
+rect 0,36 24x36 #FF0000FF
+text 8,44 size 16 #FF000000 "b"

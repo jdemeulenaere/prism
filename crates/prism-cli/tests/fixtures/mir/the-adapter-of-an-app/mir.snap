@@ -1,0 +1,57 @@
+module main
+fun main::main(): Unit @4:1
+  local _0: Unit (return)
+  local _1: compose () -> Unit (temporary)
+  local _2: String? (temporary)
+  local _3: &mut String? (temporary)
+  local _4: &String (temporary)
+  local _5: &&String (temporary)
+  local _6: Int (temporary)
+  local _7: &&String (temporary)
+  local _8: &Int (temporary)
+  local _9: Int (temporary)
+  local _10: Unit (temporary)
+  bb0:
+    storage_live _1 @4:21
+    _1 = closure main::main#closure0 [] @4:21
+    storage_live _2 @4:14
+    _2 = const null @4:14
+    storage_live _3 @4:14
+    _3 = &mut _2 (default) @4:14
+    storage_live _4 @4:14
+    _4 = call default prism/compose/ui::runApp title(move _3) -> bb1 @4:14
+  bb1:
+    storage_live _5 @4:14
+    _5 = &_4 (default) @4:14
+    storage_live _6 @4:14
+    _6 = call default prism/compose/ui::runApp width(move _5) -> bb2 @4:14
+  bb2:
+    storage_live _7 @4:14
+    _7 = &_4 (default) @4:14
+    storage_live _8 @4:14
+    _8 = &_6 (default) @4:14
+    storage_live _9 @4:14
+    _9 = call default prism/compose/ui::runApp height(move _7, move _8) -> bb3 @4:14
+  bb3:
+    storage_live _10 @4:14
+    _10 = call builtin runApp(move _4, move _6, move _9, move _1) -> bb4 @4:14
+  bb4:
+    storage_dead _10 @4:14
+    storage_dead _9 @4:14
+    storage_dead _8 @4:14
+    storage_dead _7 @4:14
+    storage_dead _6 @4:14
+    storage_dead _5 @4:14
+    storage_dead _4 @4:14
+    storage_dead _3 @4:14
+    drop _2 -> bb5 @4:14
+  bb5:
+    storage_dead _2 @4:14
+    storage_dead _1 @4:14
+    _0 = const () @4:12
+    return @4:1
+compose closure main::main#closure0(): Unit @4:21 /* argument 3 of runApp call 0 */
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @4:23
+    return @4:21

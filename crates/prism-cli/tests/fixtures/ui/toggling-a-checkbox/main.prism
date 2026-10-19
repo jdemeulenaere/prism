@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Task() {
+    val done = remember { mutableStateOf(false) }
+    Row {
+        Checkbox(checked = done.value, onCheckedChange = { done.value = it })
+        Text("milk")
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Task() } }

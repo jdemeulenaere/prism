@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+// headless: 320x200
+// events: events.txt
+import /prism/compose/ui
+fun main() { runApp(width = 800, height = 600) { } }

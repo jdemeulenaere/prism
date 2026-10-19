@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+// headless: 200x100
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+fun main() {
+    runApp(width = 200, height = 100) { Text("hi") }
+    println("after")
+}

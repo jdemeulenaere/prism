@@ -1,0 +1,22 @@
+module prism/compose/ui
+compose fun prism/compose/ui::T(_1: &String): Unit @7:1
+  local _0: Unit (return)
+  local _1 text: &String (argument)
+  local _2: (NodeId) -> Unit (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _2 @8:17
+    _2 = closure prism/compose/ui::T#closure0 [] @8:17
+    storage_live _3 @8:5
+    _3 = call compose builtin LeafNode(const 4, move _2) -> bb1 @8:5
+  bb1:
+    storage_dead _3 @8:5
+    storage_dead _2 @8:5
+    _0 = const () @7:30
+    return @7:1
+closure prism/compose/ui::T#closure0(_1: NodeId): Unit @8:17
+  local _0: Unit (return)
+  local _1 node: NodeId (argument)
+  bb0:
+    _0 = const () @8:24
+    return @8:17

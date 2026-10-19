@@ -1,0 +1,11 @@
+window 400x300
+  column #1 0,0 96x40
+    box #3 0,0 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 0,0 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 24,10 48x20 "toggle"
+window 400x300
+  column #1 0,0 96x60
+    text #6 0,0 40x20 "shown"
+    box #3 0,20 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 0,20 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 24,30 48x20 "toggle"

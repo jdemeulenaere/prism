@@ -1,0 +1,3 @@
+clear 400x300 #FFFFFFFF
+border 0,0 16x20 width 1 #FF000000
+text 0,0 size 16 #FF000000 "ab"

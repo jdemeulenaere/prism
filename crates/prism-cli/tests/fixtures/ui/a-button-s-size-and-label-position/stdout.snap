@@ -1,0 +1,4 @@
+window 400x300
+  box #1 0,0 58x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+    row #2 0,0 58x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+      text #3 25,10 8x20 "+"

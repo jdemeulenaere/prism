@@ -1,0 +1,4 @@
+window 400x300
+  row #1 0,0 52x20
+    box #2 0,0 20x20 toggleable(Checkbox on) size(20x20) background(#FF6750A4 RoundedCorner(2)) border(2 #FF6750A4 RoundedCorner(2))
+    text #3 20,0 32x20 "milk"

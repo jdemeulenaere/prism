@@ -1,0 +1,8 @@
+window 400x300
+  column #1 0,0 104x100
+    text #4 0,0 48x20 "item 3"
+    text #3 0,20 48x20 "item 2"
+    text #2 0,40 48x20 "item 1"
+    box #5 0,60 104x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #6 0,60 104x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #7 24,70 56x20 "reverse"

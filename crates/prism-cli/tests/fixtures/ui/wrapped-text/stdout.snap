@@ -1,0 +1,5 @@
+window 400x300
+  text #1 0,0 40x40 "aa bb cc" width(40)
+clear 400x300 #FFFFFFFF
+text 0,0 size 16 #FF000000 "aa bb"
+text 0,20 size 16 #FF000000 "cc"

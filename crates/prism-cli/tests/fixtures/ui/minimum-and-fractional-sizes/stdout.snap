@@ -1,0 +1,5 @@
+window 400x300
+  column #1 0,0 200x20
+    box #2 0,0 30x20 defaultMinSize(30x-)
+      text #3 0,0 8x20 "a"
+    box #4 0,20 200x0 fillMaxWidth(0.5)

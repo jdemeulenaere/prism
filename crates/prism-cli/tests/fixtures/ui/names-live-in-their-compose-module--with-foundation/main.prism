@@ -1,0 +1,5 @@
+// expect: ok
+import /prism/compose/ui
+import /prism/compose/layout
+import /prism/compose/foundation
+compose fun Screen() { Box(modifier = Modifier.background(Color.Red)) { } }

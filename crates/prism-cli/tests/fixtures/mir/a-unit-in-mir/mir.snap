@@ -1,0 +1,11 @@
+module main
+fun main::f(_1: Int): Dp @4:1
+  local _0: Dp (return)
+  local _1 n: Int (argument)
+  local _2: Int (temporary)
+  bb0:
+    storage_live _2 @4:21
+    _2 = copy _1 @4:21
+    _0 = struct prism/compose/ui::Dp(move _2) @4:21
+    storage_dead _2 @4:21
+    return @4:1

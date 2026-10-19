@@ -1,0 +1,2 @@
+click 5 5
+click 25 25

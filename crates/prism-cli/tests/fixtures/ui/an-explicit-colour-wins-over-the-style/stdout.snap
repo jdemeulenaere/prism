@@ -1,0 +1,2 @@
+window 400x300
+  text #1 0,0 12x30 "a" color #FF0000FF fontSize 24

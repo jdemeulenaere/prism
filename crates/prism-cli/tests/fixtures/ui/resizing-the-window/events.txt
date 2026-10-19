@@ -1,0 +1,2 @@
+resize 200 100
+dump

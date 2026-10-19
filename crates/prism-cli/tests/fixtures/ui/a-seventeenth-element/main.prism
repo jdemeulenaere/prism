@@ -1,0 +1,13 @@
+// expect: ok
+// run: 101
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+fun main() {
+    var m = Modifier
+    for (i in 1..17) {
+        m = m.padding(1.dp)
+    }
+    println("never")
+}

@@ -959,6 +959,27 @@ pub fn dump_library_module(
     ))
 }
 
+/// The composed MIR of the library module `module` of `library`, reached from the workspace
+/// entry `entry`, as `prism dump-mir --composed` prints a workspace file's: for the library
+/// cases of the fixtures (D13 of `standard-library`).
+pub fn dump_library_module_composed(
+    entry: &Path,
+    library: &Library,
+    module: &str,
+) -> Result<MirDump, WorkspaceError> {
+    validate_entry_file(entry)?;
+    let graph = DependencyGraph::from_entries_with_library(&[entry], library)?;
+    assert_workspace_boundary(&graph)?;
+    let (abis, _) = extract_abis(&graph)?;
+    let key = prism_resolver::library_key(module);
+    // The file's MIR through the borrow checker and the compose transform.
+    let composed = elaborate_file(&graph, &abis, &key)?;
+    Ok(MirDump {
+        text: composed.dump(),
+        mir: composed,
+    })
+}
+
 /// Checks every module of `library` as the compiler checks a program (D13 of
 /// `standard-library`): Phase 1 and Phase 2 of each, in dependency order, the backend's support
 /// check of each, which compares every external it declares with the runtime's entry point

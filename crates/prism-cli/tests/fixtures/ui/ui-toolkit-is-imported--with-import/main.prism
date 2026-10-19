@@ -1,0 +1,3 @@
+// expect: ok
+import /prism/compose/layout
+compose fun Screen() { Column { } }

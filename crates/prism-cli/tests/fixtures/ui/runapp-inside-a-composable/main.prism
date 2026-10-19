@@ -1,0 +1,3 @@
+// expect: E4030
+import /prism/compose/ui
+compose fun Screen() { runApp { } }

@@ -1,0 +1,4 @@
+// expect: ok
+import /prism/compose/ui
+
+fun f(n: Int): Dp = n.dp

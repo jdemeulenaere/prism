@@ -1,0 +1,9 @@
+package prism.compose
+
+package intrinsic struct NodeId : Copy
+
+package intrinsic compose fun LeafNode(kind: Int, update: (NodeId) -> Unit): Unit
+
+compose fun T(text: &String) {
+    LeafNode(4) { node -> }
+}

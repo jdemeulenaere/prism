@@ -1,0 +1,3 @@
+clear 400x300 #FFFFFFFF
+rect 0,0 8x20 #FF000000
+text 0,0 size 16 #FFFFFFFF "a"

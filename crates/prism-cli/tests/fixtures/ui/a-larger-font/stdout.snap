@@ -1,0 +1,2 @@
+window 400x300
+  text #1 0,0 36x30 "abc" fontSize 24

@@ -118,7 +118,7 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
   Each setter validates the node and that the active pass belongs to the running app (D10, D17), compares, claims handler entries, and marks the node dirty. Add `src/functions.rs` with `UI_FUNCTIONS`, and the source-reading test of `COMPOSE_FUNCTIONS`. Verify with the Rust child-process test of "A stale node handle", and tests for `unknown node kind`, `node property set outside composition` and registering with no app.
 - [x] 9.2 In `crates/prism-codegen`, depend on `prism-ui`, search `UI_FUNCTIONS` in the entry-point lookup, and register it in `link.rs::Linker::new`. Make one-word intrinsic structs travel as `i64` words in `representation.rs`, if task 1.1 found that they do not already, and make the equality glue of an intrinsic struct with a catalog equality entry call it. Verify with `lowering_tests.rs` tests over injected library modules for "A UI entry point declared with the wrong signature", "An external taking a node handle" and "Comparing handler ids", and a link test that every UI entry point resolves.
-- [ ] 9.3 In `crates/prism-cli/src/main.rs::run_program`, accept `--headless`, `--headless=<w>x<h>` and `--events <path>` before the file, with `--events` without `--headless` a usage error, and update the usage and help texts. In `run.rs`:
+- [x] 9.3 In `crates/prism-cli/src/main.rs::run_program`, accept `--headless`, `--headless=<w>x<h>` and `--events <path>` before the file, with `--events` without `--headless` a usage error, and update the usage and help texts. In `run.rs`:
   - add `headless: Option<HeadlessOptions>` to `RunOptions`;
   - read and parse the script before compiling, reporting `Error: <path>:<line>: <message>` with status 1;
   - call `prism_ui::configure` before `Program::run`.
@@ -127,37 +127,37 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 10. The compiler side of the toolkit (D3, D5, D7, D15, D23)
 
-- [ ] 10.1 In `crates/prism-typechecker/src/intrinsics.rs`, add the catalog entries of "The UI Intrinsics":
+- [x] 10.1 In `crates/prism-typechecker/src/intrinsics.rs`, add the catalog entries of "The UI Intrinsics":
   - `prism/compose/ui::NodeId` and `prism/compose/ui::HandlerId`, intrinsic structs of one word, `Copy`, the second with the equality entry `prism_ui_handlers_equal`;
   - `Node` and `LeafNode`, signature-typed intrinsic composables;
   - `runApp`, signature-typed;
   - `Int.dp` and `Int.sp`, intrinsic properties.
 
   Each function gets a `BuiltinFunction` (`UiNode`, `UiLeafNode`, `RunApp`, `DpOfInt`, `TextUnitOfInt`). Extend `E4030` to `runApp`, and edit the `E4030` row of the diagnostics catalog to name it. Verify with the `standard-library` fixtures "A UI intrinsic in another library module" (a `// library:` case) and "Unit properties are members of Int", and the `ui` fixture "runApp inside a composable" (`// expect: E4030`).
-- [ ] 10.2 In `crates/prism-mir`, add `ComposerOperation::StartNodeGroup { key }`, which takes a kind operand and returns the node word, to the composed MIR, its dump (`composer start node group`), validation, instantiation and the `instance-cache` codec, and lower `DpOfInt` and `TextUnitOfInt` reads as aggregate constructions. In `crates/prism-compose-transform/src/rewrite.rs` (`Rewriter::intrinsic`, task 1.1), lower `UiNode` and `UiLeafNode` as D3 says, with the key `H(parent, "node", ordinal)` from `keys.rs`. Extend the root content adapter of `composition` to `RunApp`'s content (`BodyOwner::RootContent`). Verify with the `mir` fixtures "A toolkit composable starts a node group" (a `// library:` case with `composed-mir.snap`), "The adapter of an app" and "A unit in MIR".
-- [ ] 10.3 In `crates/prism-codegen`, lower `StartNodeGroup` as a call of `prism_compose_start_node_group`, and `RunApp` as a call of `prism_ui_run_app` with the adapter moved by address. Verify with the fixtures of task 12.1.
+- [x] 10.2 In `crates/prism-mir`, add `ComposerOperation::StartNodeGroup { key }`, which takes a kind operand and returns the node word, to the composed MIR, its dump (`composer start node group`), validation, instantiation and the `instance-cache` codec, and lower `DpOfInt` and `TextUnitOfInt` reads as aggregate constructions. In `crates/prism-compose-transform/src/rewrite.rs` (`Rewriter::intrinsic`, task 1.1), lower `UiNode` and `UiLeafNode` as D3 says, with the key `H(parent, "node", ordinal)` from `keys.rs`. Extend the root content adapter of `composition` to `RunApp`'s content (`BodyOwner::RootContent`). Verify with the `mir` fixtures "A toolkit composable starts a node group" (a `// library:` case with `composed-mir.snap`), "The adapter of an app" and "A unit in MIR".
+- [x] 10.3 In `crates/prism-codegen`, lower `StartNodeGroup` as a call of `prism_compose_start_node_group`, and `RunApp` as a call of `prism_ui_run_app` with the adapter moved by address. Verify with the fixtures of task 12.1.
 
 ## 11. The toolkit modules (D3 to D9, D21 to D25)
 
 Each module is a file of `crates/prism-library/prism/compose/` with `package prism.compose`, a comment per declaration, sibling imports of the modules it uses, an entry in `MODULES` and none in `PRELUDE`. Verify each with `library_tests.rs` (check, format, compile and externals) and `cargo run -q -p prism-cli -- fmt --check crates/prism-library/prism`.
 
-- [ ] 11.1 Add `ui.prism`:
+- [x] 11.1 Add `ui.prism`:
   - `Color` with its companion `Colors`, `Shape` and `RectangleShape`, `Alignment`, `Role`;
   - `Dp` and `TextUnit` with their companions and the intrinsic properties `dp` and `sp`, and `TextStyle` with `TextStyle.Default`;
   - `HandlerId`, `ModifierElement`, `ModifierElements`, `Modifier`, its companion, `then`, and the `package` helpers `append` and `textFieldFrame`;
-  - with `package` visibility: `NodeId`, `Node`, `LeafNode`, the kinds, the setter, registration and overflow externals, and `applyModifier`;
+  - with `package` visibility: `NodeId`, `Node`, `LeafNode`, the kinds, the setter, registration and overflow externals;
   - `runApp`.
 
   Add a Rust test that compares the `#[repr(C)]` mirrors of task 4.4 with `prism dump-layout` of `Modifier`, `ModifierElements` and `ModifierElement`. Verify also with the `ui` fixtures "Modifier order matters", "A seventeenth element", "Building units" and "Named and constructed colours are equal".
-- [ ] 11.2 Add `foundation.prism` (imports `ui`): `background`, `border`, `clickable` and `toggleable` (registering their handlers, D23), `RoundedCornerShape` and `CircleShape`, `BasicText`, and `BasicTextField` (registering its handler before its node call). Verify also with the fixtures "Names live in their Compose module", "A rounded background around padding" and "A clickable box".
-- [ ] 11.3 Add `layout.prism` (imports `ui`): `BoxScope`, `ColumnScope` and `RowScope`; `Arrangement` with its companion `Arrangements` and `spacedBy`; `padding`, `width`, `height`, `size`, `defaultMinSize`, `fillMaxWidth`, `fillMaxHeight` and `fillMaxSize`; `weight` and `align` with their scope contexts (D22); `Box`, `Column`, `Row` and `Spacer`, calling their content with their scope. Verify also with the fixtures "UI toolkit is imported", "A weighted text fills a row" and "A scoped modifier outside its scope".
-- [ ] 11.4 Add `material3.prism` (imports `ui`, `foundation` and `layout`): `ColorScheme`, `Typography`, `MaterialThemeValues` and `MaterialTheme`; `ButtonColors`, `ButtonDefaultsValues`, `ButtonDefaults` and `buttonColors`; the `package` surface helper; `Surface`, `Text`, `Button`, `Checkbox` and `TextField`, built as D24 says. Verify with the CLI test of "The UI modules are not in the prelude" in `cli_workspace_tests.rs`, and with the fixtures "Counter screen" and "A button's size and label position".
+- [x] 11.2 Add `foundation.prism` (imports `ui`): `background`, `border`, `clickable` and `toggleable` (registering their handlers, D23), `RoundedCornerShape` and `CircleShape`, `BasicText`, and `BasicTextField` (registering its handler before its node call). Verify also with the fixtures "Names live in their Compose module", "A rounded background around padding" and "A clickable box".
+- [x] 11.3 Add `layout.prism` (imports `ui`): `BoxScope`, `ColumnScope` and `RowScope`; `Arrangement` with its companion `Arrangements` and `spacedBy`; `padding`, `width`, `height`, `size`, `defaultMinSize`, `fillMaxWidth`, `fillMaxHeight` and `fillMaxSize`; `weight` and `align` with their scope contexts (D22); `Box`, `Column`, `Row` and `Spacer`, calling their content with their scope. Verify also with the fixtures "UI toolkit is imported", "A weighted text fills a row" and "A scoped modifier outside its scope".
+- [x] 11.4 Add `material3.prism` (imports `ui`, `foundation` and `layout`): `ColorScheme`, `Typography`, `MaterialThemeValues` and `MaterialTheme`; `ButtonColors`, `ButtonDefaultsValues`, `ButtonDefaults` and `buttonColors`; the `package` surface helper; `Surface`, `Text`, `Button`, `Checkbox` and `TextField`, built as D24 says. Verify with the CLI test of "The UI modules are not in the prelude" in `cache_tests.rs` (beside its `/prism/composer` counterpart), and with the fixtures "Counter screen" and "A button's size and label position".
 
 ## 12. Fixtures
 
 Read each snapshot against its scenario's THEN. Verify each task with `cargo test -p prism-cli --test fixture_tests`.
 
-- [ ] 12.1 Add the `ui` fixtures for modules, running apps and their errors:
+- [x] 12.1 Add the `ui` fixtures for modules, running apps and their errors:
   - "Headless programs link no window code" is the Rust test of task 4.1, and needs no fixture;
   - "UI toolkit is imported", with the forms `--without-import` (`// expect: E4001`) and `--with-import`;
   - "Names live in their Compose module", with the forms `--without-foundation` (`// expect: E4006`) and `--with-foundation`;
@@ -169,7 +169,7 @@ Read each snapshot against its scenario's THEN. Verify each task with `cargo tes
   - "Counter screen";
   - "Text of a state's string";
   - "Calling runApp with its defaults", "The public signature of runApp" and "Unit properties are members of Int", under `standard-library`.
-- [ ] 12.2 Add the `ui` fixtures for the composables:
+- [x] 12.2 Add the `ui` fixtures for the composables:
   - "An explicit colour wins over the style";
   - "A button's size and label position" and "A button label is drawn in its content colour";
   - "Toggling a checkbox";
@@ -177,7 +177,7 @@ Read each snapshot against its scenario's THEN. Verify each task with `cargo tes
   - "A surface sets its content colour";
   - "A spacer between texts";
   - "Wrapped text" and "A larger font".
-- [ ] 12.3 Add the `ui` fixtures for modifiers, units, colours and layout:
+- [x] 12.3 Add the `ui` fixtures for modifiers, units, colours and layout:
   - "Modifier order matters" and "Order decides what a background covers";
   - "A seventeenth element" (`// run: 101`);
   - "A card with an equal modifier is skipped" and "A card with an equal clickable modifier is skipped";
@@ -191,7 +191,7 @@ Read each snapshot against its scenario's THEN. Verify each task with `cargo tes
   - "A button label is white";
   - "Column stacks children", "Space between two texts" and "Centred content in a box";
   - "Padding around a column".
-- [ ] 12.4 Add the `ui` fixtures for nodes, input, the loop, scripts and dumps:
+- [x] 12.4 Add the `ui` fixtures for nodes, input, the loop, scripts and dumps:
   - "Recomposition updates the node in place", "A removed text is recreated as a new node" and "Keyed items move their nodes";
   - "Replaced handlers are freed";
   - "Click increments a counter", "Releasing elsewhere does not click" and "The topmost button is clicked";

@@ -1,0 +1,4 @@
+clear 400x300 #FFFFFFFF
+text 16,16 size 16 #FF000000 "Count: 0"
+rect 16,44 58x40 #FF6750A4 radius 20
+text 41,54 size 16 #FFFFFFFF "+"

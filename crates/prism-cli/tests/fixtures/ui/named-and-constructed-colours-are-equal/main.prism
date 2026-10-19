@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+fun main() {
+    println(Color.Red == Color(0xFFFF0000))
+    println(Color.Unspecified.argb)
+}

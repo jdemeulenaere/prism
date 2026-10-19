@@ -1,0 +1,3 @@
+// expect: E4010
+import /prism/compose/ui
+fun Int.dp(): Int = 0

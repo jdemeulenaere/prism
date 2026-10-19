@@ -1,0 +1,6 @@
+window 400x300
+  column #1 0,0 56x96
+    box #2 0,0 56x56 padding(8) size(40x40)
+      text #3 8,8 8x20 "a"
+    box #4 0,56 40x40 size(40x40) padding(8)
+      text #5 8,64 8x20 "b"

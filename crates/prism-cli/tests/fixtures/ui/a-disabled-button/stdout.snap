@@ -1,0 +1,4 @@
+window 400x300
+  box #1 0,0 64x40 contentColor #611D1B20 background(#1F1D1B20 RoundedCorner(50%)) clickable(Button disabled)
+    row #2 0,0 64x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+      text #3 24,10 16x20 "Go"

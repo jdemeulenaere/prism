@@ -91,12 +91,20 @@
 //!
 //! A case whose header has a `// library: <dir>` line adds test modules to the bundled library
 //! (D13 of `standard-library`): each `<dir>/prism/<name>.prism` of the case becomes the library
-//! module `prism/<name>`, checked in-process with the library of `Library::with_modules`, so
-//! the diagnostics of library files (`E4029`, library imports, locations in library files) have
-//! real-source cases. The entry file is a workspace file reaching them, by an import of
-//! `/prism/<name>`. In such a case, `typed-tree.snap` and `mir.snap` hold the dumps of the
-//! injected modules, in name order, rather than the entry's. Library cases cannot be executable:
+//! module `prism/<name>`, `<name>` including its subdirectories (`compose/ui`), checked
+//! in-process with the library of `Library::with_modules`, so the diagnostics of library files
+//! (`E4029`, library imports, locations in library files) have real-source cases. The entry file is a workspace file reaching them, by an import of
+//! `/prism/<name>`. In such a case, `typed-tree.snap`, `mir.snap` and `composed-mir.snap` hold
+//! the dumps of the injected modules, in name order, rather than the entry's. Library cases cannot be executable:
 //! the `prism` command line never injects modules, so the runner rejects a `// run:` line.
+//!
+//! ## Headless cases
+//!
+//! An executable case whose header has a `// events: <script>` line, a `// headless:
+//! <width>x<height>` line or both runs its apps headless (D16 of `ui-toolkit`): either line adds
+//! `--headless`, the second with `=<width>x<height>`, and the first adds `--events <script>`,
+//! relative to the case directory, to the case's `prism run --check-allocations`. A script with a
+//! syntax error is a case with `// run: 1`.
 //!
 //! ## Watch cases
 //!
@@ -146,6 +154,10 @@ struct Case {
     watch_script: Option<String>,
     /// The directory of a library case's test modules, relative to the case directory.
     library: Option<String>,
+    /// The event script of a headless case, relative to the case directory.
+    events: Option<String>,
+    /// The window size of a headless case, `<width>x<height>`.
+    headless: Option<String>,
 }
 
 /// The scenarios of the `hot-reload` spec whose WHEN is a Rust test or a save on disk, tested in
@@ -229,7 +241,15 @@ fn load_cases() -> Vec<Case> {
             let mut run_status = None;
             let mut watch_script = None;
             let mut library = None;
+            let mut events = None;
+            let mut headless = None;
             for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("// events:") {
+                    events = Some(rest.trim().to_string());
+                }
+                if let Some(rest) = line.strip_prefix("// headless:") {
+                    headless = Some(rest.trim().to_string());
+                }
                 if let Some(rest) = line.strip_prefix("// library:") {
                     library = Some(rest.trim().to_string());
                 }
@@ -272,6 +292,11 @@ fn load_cases() -> Vec<Case> {
                 "{}: a `// watch:` case needs a `// run:` line for its status",
                 name
             );
+            assert!(
+                (events.is_none() && headless.is_none()) || run_status.is_some(),
+                "{}: an `// events:` or `// headless:` case needs a `// run:` line",
+                name
+            );
             if let Some(case) = name.strip_prefix("hot-reload/") {
                 assert!(
                     watch_script.is_some()
@@ -291,6 +316,8 @@ fn load_cases() -> Vec<Case> {
                 run_status,
                 watch_script,
                 library,
+                events,
+                headless,
             });
         }
     }
@@ -334,13 +361,22 @@ fn library_modules(case: &Case) -> Vec<(String, String)> {
     let Some(dir) = &case.library else {
         return Vec::new();
     };
+    let root = case.dir.join(dir).join("prism");
     let mut files = Vec::new();
-    prism_files(&case.dir.join(dir).join("prism"), &mut files);
+    prism_files(&root, &mut files);
     files
         .iter()
         .map(|file| {
-            let stem = file.file_stem().unwrap().to_string_lossy();
-            (format!("prism/{}", stem), fs::read_to_string(file).unwrap())
+            // `<dir>/prism/compose/ui.prism` is the module `prism/compose/ui`.
+            let relative = file.strip_prefix(&root).unwrap().with_extension("");
+            let segments: Vec<String> = relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy().to_string())
+                .collect();
+            (
+                format!("prism/{}", segments.join("/")),
+                fs::read_to_string(file).unwrap(),
+            )
         })
         .collect()
 }
@@ -401,6 +437,14 @@ fn check_run(case: &Case, entry: &Path) -> Result<(), String> {
         command.arg("run").arg("--check-allocations");
         if let Some(script) = &case.watch_script {
             command.arg("--watch").arg("--edits").arg(script);
+        }
+        match &case.headless {
+            Some(size) => command.arg(format!("--headless={}", size)),
+            None if case.events.is_some() => command.arg("--headless"),
+            None => &mut command,
+        };
+        if let Some(script) = &case.events {
+            command.arg("--events").arg(script);
         }
         command
             .arg(relative)
@@ -535,6 +579,8 @@ const COMPOSED_SCENARIOS: &[&str] = &[
     "the-adapter-of-a-composition",
     "dumping-composed-mir",
     "composed-remember-of-a-state",
+    "a-toolkit-composable-starts-a-node-group",
+    "the-adapter-of-an-app",
 ];
 
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of
@@ -663,6 +709,18 @@ fn library_dump(case: &Case, entry: &Path, mir: bool) -> Result<String, String> 
     Ok(text)
 }
 
+/// The composed MIR of the injected modules of a library case, in name order.
+fn library_composed_dump(case: &Case, entry: &Path) -> Result<String, String> {
+    let options = case_options(case);
+    let mut text = String::new();
+    for (module, _) in library_modules(case) {
+        let dump = prism_cli::dump_library_module_composed(entry, &options.library, &module)
+            .map_err(|err| err.render())?;
+        text.push_str(&dump.text);
+    }
+    Ok(text)
+}
+
 fn check_one_snapshot(case: &Case, entry: &Path, snapshot: &Snapshot) -> Result<(), String> {
     let path = case.dir.join(snapshot.file);
     if !path.exists() && !needs_snapshot(case, snapshot) {
@@ -671,6 +729,7 @@ fn check_one_snapshot(case: &Case, entry: &Path, snapshot: &Snapshot) -> Result<
     let dumped = match (&case.library, snapshot.file) {
         (Some(_), "typed-tree.snap") => library_dump(case, entry, false),
         (Some(_), "mir.snap") => library_dump(case, entry, true),
+        (Some(_), "composed-mir.snap") => library_composed_dump(case, entry),
         (Some(_), file) => Err(format!("a library case holds no {}", file)),
         (None, _) => (snapshot.dump)(entry),
     };

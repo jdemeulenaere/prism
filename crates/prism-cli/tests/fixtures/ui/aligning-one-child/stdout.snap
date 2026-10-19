@@ -1,0 +1,7 @@
+window 400x300
+  column #1 0,0 100x140
+    column #2 0,0 100x40 width(100)
+      text #3 0,0 8x20 "a"
+      text #4 92,20 8x20 "b" align(End)
+    box #5 0,40 100x100 size(100x100)
+      text #6 92,120 8x20 "c" align(BottomEnd)

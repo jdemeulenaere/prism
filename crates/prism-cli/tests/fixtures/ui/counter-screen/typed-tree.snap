@@ -1,0 +1,204 @@
+module main
+import struct prism/compose/layout::Arrangement : Copy
+  field 0 val code: Int
+  field 1 val space: Int
+import struct prism/compose/layout::Arrangements : Copy
+  field 0 val Top: Arrangement
+  field 1 val Bottom: Arrangement
+  field 2 val Start: Arrangement
+  field 3 val End: Arrangement
+  field 4 val Center: Arrangement
+  field 5 val SpaceBetween: Arrangement
+  field 6 val SpaceAround: Arrangement
+  field 7 val SpaceEvenly: Arrangement
+import struct prism/compose/layout::BoxScope : Copy
+import struct prism/compose/layout::ColumnScope : Copy
+import struct prism/compose/layout::RowScope : Copy
+import struct prism/compose/material3::ButtonColors : Copy
+  field 0 val containerColor: Color
+  field 1 val contentColor: Color
+  field 2 val disabledContainerColor: Color
+  field 3 val disabledContentColor: Color
+import struct prism/compose/material3::ButtonDefaultsValues : Copy
+  field 0 val shape: Shape
+  field 1 val MinWidth: Dp
+  field 2 val MinHeight: Dp
+import struct prism/compose/material3::ColorScheme : Copy
+  field 0 val primary: Color
+  field 1 val onPrimary: Color
+  field 2 val surface: Color
+  field 3 val onSurface: Color
+  field 4 val onSurfaceVariant: Color
+  field 5 val outline: Color
+import struct prism/compose/material3::MaterialThemeValues : Copy
+  field 0 val colorScheme: ColorScheme
+  field 1 val typography: Typography
+import struct prism/compose/material3::Typography : Copy
+  field 0 val bodyLarge: TextStyle
+  field 1 val labelLarge: TextStyle
+import struct prism/compose/ui::Alignment : Copy
+  field 0 val code: Int
+import struct prism/compose/ui::Alignments : Copy
+  field 0 val TopStart: Alignment
+  field 1 val TopCenter: Alignment
+  field 2 val TopEnd: Alignment
+  field 3 val CenterStart: Alignment
+  field 4 val Center: Alignment
+  field 5 val CenterEnd: Alignment
+  field 6 val BottomStart: Alignment
+  field 7 val BottomCenter: Alignment
+  field 8 val BottomEnd: Alignment
+  field 9 val Start: Alignment
+  field 10 val CenterHorizontally: Alignment
+  field 11 val End: Alignment
+  field 12 val Top: Alignment
+  field 13 val CenterVertically: Alignment
+  field 14 val Bottom: Alignment
+import struct prism/compose/ui::Color : Copy
+  field 0 val argb: Int
+import struct prism/compose/ui::Colors : Copy
+  field 0 val Black: Color
+  field 1 val DarkGray: Color
+  field 2 val Gray: Color
+  field 3 val LightGray: Color
+  field 4 val White: Color
+  field 5 val Red: Color
+  field 6 val Green: Color
+  field 7 val Blue: Color
+  field 8 val Yellow: Color
+  field 9 val Cyan: Color
+  field 10 val Magenta: Color
+  field 11 val Transparent: Color
+  field 12 val Unspecified: Color
+import struct prism/compose/ui::Dp : Copy
+  field 0 val value: Int
+import struct prism/compose/ui::Dps : Copy
+  field 0 val Unspecified: Dp
+import struct prism/compose/ui::Modifier : Copy
+  field 0 val count: Int
+  field 1 val first: ModifierElements
+  field 2 val second: ModifierElements
+import enum prism/compose/ui::ModifierElement : Copy
+  variant 0 None
+  variant 1 Padding(Int, Int, Int, Int)
+  variant 2 Size(Int, Int)
+  variant 3 DefaultMinSize(Int, Int)
+  variant 4 FillMax(Bool, Bool, Double)
+  variant 5 Weight(Double, Bool)
+  variant 6 Align(Alignment)
+  variant 7 Background(Color, Shape)
+  variant 8 Border(Int, Color, Shape)
+  variant 9 Clickable(HandlerId, Bool, Int)
+  variant 10 Toggleable(HandlerId, Bool, Bool, Int)
+  variant 11 TextFieldFrame(Color, Color)
+import struct prism/compose/ui::ModifierElements : Copy
+  field 0 val e0: ModifierElement
+  field 1 val e1: ModifierElement
+  field 2 val e2: ModifierElement
+  field 3 val e3: ModifierElement
+  field 4 val e4: ModifierElement
+  field 5 val e5: ModifierElement
+  field 6 val e6: ModifierElement
+  field 7 val e7: ModifierElement
+import struct prism/compose/ui::Role : Copy
+  field 0 val code: Int
+import struct prism/compose/ui::Roles : Copy
+  field 0 val Button: Role
+  field 1 val Checkbox: Role
+  field 2 val Switch: Role
+  field 3 val RadioButton: Role
+  field 4 val Tab: Role
+  field 5 val Image: Role
+  field 6 val DropdownList: Role
+import struct prism/compose/ui::Shape : Copy
+  field 0 val cornerRadius: Int
+  field 1 val cornerPercent: Int
+import struct prism/compose/ui::TextStyle : Copy
+  field 0 val color: Color
+  field 1 val fontSize: TextUnit
+import struct prism/compose/ui::TextStyles : Copy
+  field 0 val Default: TextStyle
+import struct prism/compose/ui::TextUnit : Copy
+  field 0 val value: Int
+import struct prism/compose/ui::TextUnits : Copy
+  field 0 val Unspecified: TextUnit
+compose fun main::Counter(): Unit @8:1
+  local %0 c: MutableState<Int> (val)
+  local %1 this: &ColumnScope (closure receiver)
+  local %2 this: &RowScope (closure receiver)
+  block: Unit @8:23
+    let %0 c @9:5
+      call compose builtin remember<MutableState<Int>>: MutableState<Int> @9:13
+        argument calculation: closure (): () -> MutableState<Int> @9:22
+          block: MutableState<Int> @9:24
+            tail: call builtin mutableStateOf<Int>: MutableState<Int> @9:24
+              argument value: literal 0: Int @9:39
+    expression @10:5
+      call compose prism/compose/layout::Column: Unit @10:5
+        argument modifier: call prism/compose/layout::Modifier.padding: Modifier @10:23
+          receiver: borrow (receiver): &Modifier @10:23
+            value prism/compose/ui::Modifier: Modifier @10:23
+          argument all: call builtin dp: Dp @10:40
+            receiver: literal 16: Int @10:40
+          argument horizontal: default
+          argument vertical: default
+          argument start: default
+          argument top: default
+          argument end: default
+          argument bottom: default
+        argument verticalArrangement: call prism/compose/layout::Arrangements.spacedBy: Arrangement @10:70
+          receiver: borrow (receiver): &Arrangements @10:70
+            value prism/compose/layout::Arrangement: Arrangements @10:70
+          argument space: call builtin dp: Dp @10:91
+            receiver: literal 8: Int @10:91
+        argument horizontalAlignment: default
+        argument content: closure compose (%1 this) captures [borrow %0 c]: compose ColumnScope.() -> Unit @10:98
+          block: Unit @11:9
+            expression @11:9
+              call compose prism/compose/material3::Text: Unit @11:9
+                argument text: borrow (argument): &String @11:14
+                  temporary: String @11:14
+                    template: String @11:14
+                      text "Count: "
+                      call builtin value<Int>: Int @11:24
+                        receiver: copy: MutableState<Int> @11:24
+                          local %0 c: MutableState<Int> @11:24
+                argument modifier: default
+                argument color: default
+                argument fontSize: default
+                argument style: default
+            expression @12:9
+              call compose prism/compose/material3::Button: Unit @12:9
+                argument onClick: closure () captures [copy %0 c] (owning: passed to an escaping parameter here @12:26): () -> Unit @12:26
+                  block: Unit @12:28
+                    compound-assign + @12:28
+                      target: state place: Int @12:28
+                        handle: copy: MutableState<Int> @12:28
+                          local %0 c: MutableState<Int> @12:28
+                      value: literal 1: Int @12:39
+                argument modifier: default
+                argument enabled: default
+                argument shape: default
+                argument colors: default
+                argument content: closure compose (%2 this): compose RowScope.() -> Unit @12:44
+                  block: Unit @12:46
+                    expression @12:46
+                      call compose prism/compose/material3::Text: Unit @12:46
+                        argument text: borrow (argument): &String @12:51
+                          temporary: String @12:51
+                            literal "+": String @12:51
+                        argument modifier: default
+                        argument color: default
+                        argument fontSize: default
+                        argument style: default
+fun main::main(): Unit @15:1
+  block: Unit @15:12
+    expression @15:14
+      call builtin runApp: Unit @15:14
+        argument title: default
+        argument width: literal 400: Int @15:29
+        argument height: literal 300: Int @15:43
+        argument content: closure compose (): compose () -> Unit @15:48
+          block: Unit @15:50
+            expression @15:50
+              call compose main::Counter: Unit @15:50

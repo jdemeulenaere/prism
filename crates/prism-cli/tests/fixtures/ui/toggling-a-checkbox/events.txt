@@ -1,0 +1,2 @@
+click 10 10
+dump

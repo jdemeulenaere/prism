@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Screen() {
+    Column {
+        Column(modifier = Modifier.width(100.dp)) {
+            Text("a")
+            Text("b", modifier = Modifier.align(Alignment.End))
+        }
+        Box(modifier = Modifier.size(100.dp)) { Text("c", modifier = Modifier.align(Alignment.BottomEnd)) }
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Screen() } }

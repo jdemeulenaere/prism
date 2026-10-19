@@ -1,0 +1,2 @@
+window 200x100
+  box #1 0,0 200x100 fillMaxSize
