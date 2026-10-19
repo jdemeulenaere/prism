@@ -740,6 +740,12 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::Key => 26,
             BuiltinFunction::CurrentRecomposeScope => 27,
             BuiltinFunction::InvalidateScope => 28,
+            BuiltinFunction::MutableStateOf => 29,
+            BuiltinFunction::StateValue => 30,
+            BuiltinFunction::StateRead => 31,
+            BuiltinFunction::StateUpdate => 32,
+            BuiltinFunction::StateEdit => 33,
+            BuiltinFunction::SideEffect => 34,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -773,6 +779,12 @@ impl Codec for BuiltinFunction {
             26 => BuiltinFunction::Key,
             27 => BuiltinFunction::CurrentRecomposeScope,
             28 => BuiltinFunction::InvalidateScope,
+            29 => BuiltinFunction::MutableStateOf,
+            30 => BuiltinFunction::StateValue,
+            31 => BuiltinFunction::StateRead,
+            32 => BuiltinFunction::StateUpdate,
+            33 => BuiltinFunction::StateEdit,
+            34 => BuiltinFunction::SideEffect,
             _ => return None,
         })
     }

@@ -1,0 +1,28 @@
+// The core of the bundled library: the functions and members every file uses without an
+// import. It is a prelude module, so a file's own declaration or import of a name shadows it.
+// Every declaration here is an intrinsic: the compiler types and lowers its calls itself.
+package prism
+
+// Writes the text form of `value` to the standard output: an `Int` in decimal, a `Double`, a
+// `Bool` as `true` or `false`, a `Char`, a `String` as its text, and any other value as the
+// text its `toString()` returns. It takes any argument a string template part takes.
+public intrinsic fun <T> print(value: &T): Unit
+
+// Writes the text form of `value`, as `print` does, then a newline. Without an argument it
+// writes the newline alone.
+public intrinsic fun <T> println(value: &T): Unit
+
+// The decimal text of this `Int`, with a leading `-` when it is negative.
+public intrinsic fun Int.toString(): String
+
+// The text of this `Double`, as `print` writes it.
+public intrinsic fun Double.toString(): String
+
+// `true` or `false`.
+public intrinsic fun Bool.toString(): String
+
+// The one-character text of this `Char`.
+public intrinsic fun Char.toString(): String
+
+// The number of characters of this `String`.
+public intrinsic var String.length: Int

@@ -166,6 +166,29 @@ fn a_wrong_external_fails_the_library_check() {
     assert!(rendered.contains("prism/test.prism"), "{}", rendered);
 }
 
+/// standard-library: "A writable property the catalog lists as read-only": the message says
+/// that the compiler provides `length` as a read-only property (D4 of `state-handles`).
+#[test]
+fn a_writable_property_the_catalog_lists_as_read_only() {
+    let core = Library::bundled()
+        .module("prism/core")
+        .expect("the core module")
+        .source
+        .replace(
+            "public intrinsic val String.length: Int",
+            "public intrinsic var String.length: Int",
+        );
+    let library = Library::with_modules(vec![("prism/core".to_string(), core)]);
+    let error = prism_cli::check_library(&library).expect_err("the property is not writable");
+    let rendered = error.render();
+    assert!(rendered.contains("error[E4029]"), "{}", rendered);
+    assert!(
+        rendered.contains("the compiler provides 'length' as a read-only property"),
+        "{}",
+        rendered
+    );
+}
+
 /// package-resolution: "A diagnostic in a library file".
 #[test]
 fn a_diagnostic_in_a_library_file_names_its_module_path() {
@@ -233,8 +256,8 @@ fn a_syntax_error_in_a_library_file_shows_its_source() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// standard-library: "Signatures of the compose module", and compilation-and-abi: "The ABI of
-/// the compose module".
+/// standard-library: "Signatures of the compose module" and "Signatures of the state
+/// declarations", and compilation-and-abi: "The ABI of the compose module".
 #[test]
 fn signatures_of_the_compose_module() {
     let library = Library::bundled();
@@ -268,6 +291,16 @@ fn signatures_of_the_compose_module() {
         "public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit",
         "public intrinsic compose fun currentRecomposeScope(): RecomposeScope",
         "public intrinsic fun RecomposeScope.invalidate(): Unit",
+        // standard-library: "Signatures of the state declarations" (`state-handles`).
+        "public intrinsic struct State<T> : Copy",
+        "public intrinsic struct MutableState<T> : Copy",
+        "public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>",
+        "public intrinsic val <T> State<T>.value: T",
+        "public intrinsic var <T> MutableState<T>.value: T",
+        "public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R",
+        "public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T): Unit",
+        "public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit): Unit",
+        "public intrinsic compose fun SideEffect(effect: escaping () -> Unit): Unit",
     ] {
         assert!(
             texts.contains(expected),
@@ -276,6 +309,6 @@ fn signatures_of_the_compose_module() {
             texts
         );
     }
-    assert_eq!(texts.len(), 10, "{:?}", texts);
+    assert_eq!(texts.len(), 19, "{:?}", texts);
     assert!(PRELUDE.contains(&"prism/compose/runtime"));
 }

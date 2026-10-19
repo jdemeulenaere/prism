@@ -672,6 +672,23 @@ pub enum BuiltinFunction {
     CurrentRecomposeScope,
     /// `s.invalidate()` of a `RecomposeScope`.
     InvalidateScope,
+    /// `mutableStateOf(value)`: creates a state cell holding `value`, moved in, and gives a
+    /// `MutableState<T>` of it (D2 of `state-handles`). Its type argument is the value type.
+    MutableStateOf,
+    /// `s.value` of a `State<T>` or `MutableState<T>` whose `T` is `Copy`: a copy of the
+    /// cell's value, called with the handle copied as its receiver (D5). Any other `s.value`
+    /// is an [`ExpressionKind::StatePlace`].
+    StateValue,
+    /// `s.read(reader)`: calls `reader` with a shared borrow of the cell's value and gives its
+    /// result (D6). Its type arguments are the value type and the result type.
+    StateRead,
+    /// `s.update(transform)`: moves the value out of the cell, calls `transform` with it and
+    /// moves the result back in.
+    StateUpdate,
+    /// `s.edit(editor)`: calls `editor` with a mutable borrow of the cell's value.
+    StateEdit,
+    /// `SideEffect(effect)`, a composable: queues `effect` to run after the pass (D13).
+    SideEffect,
 }
 
 /// The declared signature of a built-in list member (D5 of `collections`), written with the
@@ -718,7 +735,26 @@ impl BuiltinFunction {
             BuiltinFunction::Key => "key",
             BuiltinFunction::CurrentRecomposeScope => "currentRecomposeScope",
             BuiltinFunction::InvalidateScope => "invalidate",
+            BuiltinFunction::MutableStateOf => "mutableStateOf",
+            BuiltinFunction::StateValue => "value",
+            BuiltinFunction::StateRead => "read",
+            BuiltinFunction::StateUpdate => "update",
+            BuiltinFunction::StateEdit => "edit",
+            BuiltinFunction::SideEffect => "SideEffect",
         }
+    }
+
+    /// Whether the built-in is a state operation of `/prism/compose/runtime`, which MIR
+    /// lowering turns into state operations (D17 of `state-handles`).
+    pub fn is_state_operation(self) -> bool {
+        matches!(
+            self,
+            BuiltinFunction::MutableStateOf
+                | BuiltinFunction::StateValue
+                | BuiltinFunction::StateRead
+                | BuiltinFunction::StateUpdate
+                | BuiltinFunction::StateEdit
+        )
     }
 
     /// The built-in list members, in the order of D5 of `collections`.
@@ -822,8 +858,9 @@ impl BuiltinFunction {
 
     /// Whether the built-in's first argument is a receiver: that of every built-in member
     /// (`clone`, `length`, `get`, `toString`, `unbox`, the list members and the members of
-    /// `Composition` and `RecomposeScope`), not the arguments of `print`, `println`, `Heap`,
-    /// `listOf`, `composition`, `remember`, `key` and `currentRecomposeScope`.
+    /// `Composition`, `RecomposeScope` and the state handles), not the arguments of `print`,
+    /// `println`, `Heap`, `listOf`, `composition`, `remember`, `key`, `currentRecomposeScope`,
+    /// `mutableStateOf` and `SideEffect`.
     pub fn has_receiver(self) -> bool {
         !matches!(
             self,
@@ -835,6 +872,8 @@ impl BuiltinFunction {
                 | BuiltinFunction::Remember
                 | BuiltinFunction::Key
                 | BuiltinFunction::CurrentRecomposeScope
+                | BuiltinFunction::MutableStateOf
+                | BuiltinFunction::SideEffect
         )
     }
 
@@ -851,6 +890,7 @@ impl BuiltinFunction {
                 | BuiltinFunction::Key
                 | BuiltinFunction::CurrentRecomposeScope
                 | BuiltinFunction::InvalidateScope
+                | BuiltinFunction::SideEffect
         )
     }
 

@@ -536,6 +536,25 @@ fn the_abi_of_a_library_module() {
     assert_ne!(abi.abi_hash, retyped.abi_hash);
 }
 
+/// standard-library: "Writable Intrinsic Properties": `intrinsic var` is recorded, shown as
+/// `var` and part of the hash (D4 of `state-handles`).
+#[test]
+fn a_writable_property_in_the_abi() {
+    let abi = library_abi(LIBRARY);
+    let writable = library_abi(&LIBRARY.replace("intrinsic val", "intrinsic var"));
+    assert_ne!(abi.abi_hash, writable.abi_hash);
+    let texts: Vec<String> = writable
+        .symbols
+        .iter()
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    assert!(
+        texts.contains(&"public intrinsic var <T> List<T>.size: Int".to_string()),
+        "{:?}",
+        texts
+    );
+}
+
 /// standard-library: "External declarations outside the bundled library rejected".
 #[test]
 fn a_workspace_file_may_not_declare_library_forms() {

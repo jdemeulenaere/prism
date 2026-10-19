@@ -310,7 +310,21 @@ pub struct ExtensionPropertyDecl {
     pub receiver: Type,
     pub name: String,
     pub ty: Type,
+    /// Whether it is declared `intrinsic var`, which can also be assigned (D4 of
+    /// `state-handles`), rather than `intrinsic val`.
+    pub writable: bool,
     pub span: Span,
+}
+
+impl ExtensionPropertyDecl {
+    /// `var` for a writable property, `val` otherwise.
+    pub fn keyword(&self) -> &'static str {
+        if self.writable {
+            "var"
+        } else {
+            "val"
+        }
+    }
 }
 
 /// Top-level declarations in a Prism file.

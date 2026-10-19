@@ -37,3 +37,33 @@ public intrinsic compose fun currentRecomposeScope(): RecomposeScope
 
 // Marks this scope for recomposition by the next pass of its composition.
 public intrinsic fun RecomposeScope.invalidate(): Unit
+
+// A read-only handle of a state cell: one word naming a cell of the compose runtime, `Copy`
+// whatever its value type. A composable that reads `value` is recomposed when it is written.
+public intrinsic struct State<T> : Copy
+
+// A handle of a state cell that may be written; it converts to `State<T>`.
+public intrinsic struct MutableState<T> : Copy
+
+// Creates a state cell holding `value`. In a composable, create it in `remember`.
+public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>
+
+// The value of the state: a copy of a `Copy` value anywhere, and in a composable a borrow of
+// any other value. Elsewhere, read a value that is not `Copy` with `read`.
+public intrinsic val <T> State<T>.value: T
+
+// The value of the state, which an assignment outside composition replaces, recomposing its
+// readers unless the new value is equal to the old one.
+public intrinsic var <T> MutableState<T>.value: T
+
+// Calls `reader` with a borrow of the value and gives its result.
+public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R
+
+// Replaces the value with what `transform` makes of it, outside composition.
+public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T): Unit
+
+// Changes the value in place through `editor`, outside composition.
+public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit): Unit
+
+// Runs `effect` after the pass that composed this call, outside composition.
+public intrinsic compose fun SideEffect(effect: escaping () -> Unit): Unit

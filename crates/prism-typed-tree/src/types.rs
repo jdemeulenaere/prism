@@ -51,13 +51,20 @@ pub enum IntrinsicStruct {
     Composition,
     /// A `Copy` handle of a restart scope.
     RecomposeScope,
+    /// `State<T>`, a `Copy` handle of a state cell, read-only (D3 of `state-handles`).
+    State,
+    /// `MutableState<T>`, a `Copy` handle of a state cell that may be written; it converts
+    /// to `State<T>`.
+    MutableState,
 }
 
 impl IntrinsicStruct {
     /// Every intrinsic struct, in the order of the library's declarations.
-    pub const ALL: [IntrinsicStruct; 2] = [
+    pub const ALL: [IntrinsicStruct; 4] = [
         IntrinsicStruct::Composition,
         IntrinsicStruct::RecomposeScope,
+        IntrinsicStruct::State,
+        IntrinsicStruct::MutableState,
     ];
 
     /// The intrinsic struct `id` names, if any: by its defining module and name.
@@ -75,7 +82,22 @@ impl IntrinsicStruct {
         match self {
             IntrinsicStruct::Composition => "Composition",
             IntrinsicStruct::RecomposeScope => "RecomposeScope",
+            IntrinsicStruct::State => "State",
+            IntrinsicStruct::MutableState => "MutableState",
         }
+    }
+
+    /// The names of its type parameters: `T`, the value type, for the state handles.
+    pub fn type_parameters(self) -> &'static [&'static str] {
+        match self {
+            IntrinsicStruct::Composition | IntrinsicStruct::RecomposeScope => &[],
+            IntrinsicStruct::State | IntrinsicStruct::MutableState => &["T"],
+        }
+    }
+
+    /// Whether it is a state handle, `State<T>` or `MutableState<T>`.
+    pub fn is_state_handle(self) -> bool {
+        matches!(self, IntrinsicStruct::State | IntrinsicStruct::MutableState)
     }
 
     /// The library module declaring it.
@@ -92,19 +114,30 @@ impl IntrinsicStruct {
     pub fn marker(self) -> Option<TypeMarker> {
         match self {
             IntrinsicStruct::Composition => None,
-            IntrinsicStruct::RecomposeScope => Some(TypeMarker::Copy),
+            // The markers of an intrinsic struct hold for every type argument: a state handle
+            // is `Copy` whatever its value type (D3 of `state-handles`).
+            IntrinsicStruct::RecomposeScope
+            | IntrinsicStruct::State
+            | IntrinsicStruct::MutableState => Some(TypeMarker::Copy),
         }
     }
 
     /// The canonical text of its declaration, as `prism abi` shows it.
     pub fn declaration_text(self) -> String {
+        let parameters = self.type_parameters();
+        let parameters = if parameters.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", parameters.join(", "))
+        };
         match self.marker() {
             Some(marker) => format!(
-                "public intrinsic struct {} : {}",
+                "public intrinsic struct {}{} : {}",
                 self.name(),
+                parameters,
                 marker.as_str()
             ),
-            None => format!("public intrinsic struct {}", self.name()),
+            None => format!("public intrinsic struct {}{}", self.name(), parameters),
         }
     }
 }

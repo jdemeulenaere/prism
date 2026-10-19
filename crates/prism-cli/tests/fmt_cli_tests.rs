@@ -259,6 +259,20 @@ fn library_declarations_formatted() {
     );
 }
 
+/// formatting: "Writable intrinsic properties formatted".
+#[test]
+fn writable_intrinsic_properties_formatted() {
+    let output = prism_with_input(
+        &["fmt", "-"],
+        "public  intrinsic var<T>MutableState<T>.value:T\n",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "public intrinsic var <T> MutableState<T>.value: T\n"
+    );
+}
+
 /// formatting: "Intrinsic structs formatted".
 #[test]
 fn intrinsic_structs_formatted() {

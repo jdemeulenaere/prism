@@ -84,7 +84,11 @@ impl<'a> Printer<'a> {
             }
             Declaration::ExtensionProperty(property) => {
                 let mut parts = vec![self.visibility(property.visibility, property.span)];
-                parts.push(text(format!("{} val ", property.library.kind.as_str())));
+                parts.push(text(format!(
+                    "{} {} ",
+                    property.library.kind.as_str(),
+                    property.keyword()
+                )));
                 if !property.type_parameters.is_empty() {
                     parts.push(self.type_parameters(&property.type_parameters));
                     parts.push(text(" "));

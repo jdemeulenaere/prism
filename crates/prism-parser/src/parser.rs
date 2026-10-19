@@ -486,7 +486,10 @@ impl Parser {
         }
 
         if let Some(modifier) = library {
-            if self.peek_kind() == &TokenKind::Val && !is_compose && mode.is_none() {
+            if matches!(self.peek_kind(), TokenKind::Val | TokenKind::Var)
+                && !is_compose
+                && mode.is_none()
+            {
                 let property = self.parse_extension_property(visibility, modifier, start_span)?;
                 return Ok(Declaration::ExtensionProperty(property));
             }
@@ -860,6 +863,7 @@ impl Parser {
             | TokenKind::Mut
             | TokenKind::Fun
             | TokenKind::Val
+            | TokenKind::Var
             | TokenKind::Struct => true,
             TokenKind::Ident(word) => word == "consuming",
             _ => false,
@@ -880,15 +884,16 @@ impl Parser {
         Ok(Some(LibraryModifier { kind, span }))
     }
 
-    /// An intrinsic extension property from `val` on: `val <T> List<T>.size: Int`, with no
-    /// initializer (D6 of `standard-library`).
+    /// An intrinsic extension property from `val` or `var` on: `val <T> List<T>.size: Int`,
+    /// with no initializer (D6 of `standard-library`); `var` declares a writable one (D4 of
+    /// `state-handles`).
     fn parse_extension_property(
         &mut self,
         visibility: Visibility,
         library: LibraryModifier,
         start_span: Span,
     ) -> Result<ExtensionPropertyDecl, ParseError> {
-        self.expect(TokenKind::Val)?;
+        let writable = self.bump().kind == TokenKind::Var;
         if library.kind == LibraryKind::External {
             return Err(ParseError::new(
                 "An external declaration is a function: 'external fun name(...)'; properties are 'intrinsic val'",
@@ -948,6 +953,7 @@ impl Parser {
             receiver,
             name,
             ty,
+            writable,
             span: start_span.merge(end_span),
         })
     }

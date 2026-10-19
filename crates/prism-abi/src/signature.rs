@@ -112,13 +112,15 @@ pub enum ExportedSymbol {
         ty: AbiType,
     },
     /// An exported intrinsic extension property (`public intrinsic val <T> List<T>.size: Int`,
-    /// D6 of `standard-library`).
+    /// D6 of `standard-library`), writable when declared `intrinsic var` (D4 of
+    /// `state-handles`).
     ExtensionProperty {
         visibility: Visibility,
         type_parameters: Vec<AbiTypeParameter>,
         receiver: AbiType,
         name: String,
         ty: AbiType,
+        writable: bool,
     },
 }
 
@@ -248,8 +250,13 @@ impl ExportedSymbol {
                 receiver,
                 name,
                 ty,
+                writable,
             } => {
-                hasher.write_str("intrinsic val");
+                hasher.write_str(if *writable {
+                    "intrinsic var"
+                } else {
+                    "intrinsic val"
+                });
                 hasher.write_str(visibility.as_str());
                 hash_type_parameters(type_parameters, hasher);
                 receiver.hash_into(hasher);
@@ -317,9 +324,11 @@ impl ExportedSymbol {
                 receiver,
                 name,
                 ty,
+                writable,
             } => Some(format!(
-                "{} intrinsic val {}{}.{}: {}",
+                "{} intrinsic {} {}{}.{}: {}",
                 visibility,
+                if *writable { "var" } else { "val" },
                 type_parameter_text(type_parameters),
                 receiver,
                 name,
@@ -994,6 +1003,7 @@ impl FileAbi {
                         receiver: lower(&p.receiver),
                         name: p.name.clone(),
                         ty: lower(&p.ty),
+                        writable: p.writable,
                     });
                 }
             }

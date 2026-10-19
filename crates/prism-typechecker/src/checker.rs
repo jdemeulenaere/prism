@@ -316,6 +316,9 @@ pub(crate) struct Extension {
     pub(crate) builtin: Option<BuiltinFunction>,
     /// Whether the member is an intrinsic property, read without parentheses (`s.length`).
     pub(crate) property: bool,
+    /// Whether the intrinsic property is declared `intrinsic var`, so it can be assigned (D4
+    /// of `state-handles`).
+    pub(crate) writable: bool,
     /// The type of the extension's context parameter, if it has one (D8 of `receiver-lambdas`).
     pub(crate) context: Option<Type>,
 }
@@ -2034,6 +2037,7 @@ impl TypeChecker {
                                 symbol,
                                 builtin: Some(entry.builtin),
                                 property: false,
+                                writable: false,
                                 context: None,
                             });
                         }
@@ -2051,6 +2055,7 @@ impl TypeChecker {
                                 symbol: symbol.with_context(context_ty.clone()),
                                 builtin: None,
                                 property: false,
+                                writable: false,
                                 context: context_ty,
                             };
                             self.imported_extensions
@@ -2087,6 +2092,7 @@ impl TypeChecker {
                     name,
                     ty,
                     visibility,
+                    writable,
                 } => {
                     let constructor = abi_constructor_name(receiver);
                     let Some(entry) =
@@ -2116,6 +2122,7 @@ impl TypeChecker {
                         symbol,
                         builtin: Some(entry.builtin),
                         property: true,
+                        writable: *writable,
                         context: None,
                     });
                 }
@@ -2599,11 +2606,31 @@ impl TypeChecker {
             return None;
         };
         if entry.signature != text {
-            self.errors.push(TypeError::InvalidLibraryDeclaration {
-                message: format!(
+            // A property declared `var` that the catalog lists as read-only, or the reverse
+            // (D4 of `state-handles`).
+            let swapped = |text: &str| {
+                text.replacen(" intrinsic val ", " intrinsic \u{0}", 1)
+                    .replacen(" intrinsic var ", " intrinsic val ", 1)
+                    .replacen(" intrinsic \u{0}", " intrinsic var ", 1)
+            };
+            let message = if swapped(text) == entry.signature {
+                let provided = if entry.signature.contains(" intrinsic var ") {
+                    "a writable"
+                } else {
+                    "a read-only"
+                };
+                format!(
+                    "the compiler provides '{}' as {} property: declare it '{}'",
+                    name, provided, entry.signature
+                )
+            } else {
+                format!(
                     "the intrinsic '{}' is declared as '{}', but the compiler provides '{}'",
                     name, text, entry.signature
-                ),
+                )
+            };
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message,
                 help: Some(format!("declare it as '{}'", entry.signature)),
                 span,
             });
@@ -2689,6 +2716,7 @@ impl TypeChecker {
                 symbol,
                 builtin: Some(entry.builtin),
                 property: false,
+                writable: false,
                 context: None,
             },
         );
@@ -2729,6 +2757,7 @@ impl TypeChecker {
                 symbol,
                 builtin: Some(entry.builtin),
                 property: true,
+                writable: p.writable,
                 context: None,
             },
         );
@@ -2908,6 +2937,7 @@ impl TypeChecker {
             symbol,
             builtin: None,
             property: false,
+            writable: false,
             context,
         };
         let module = self.module_path.clone();

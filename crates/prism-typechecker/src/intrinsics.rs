@@ -285,6 +285,64 @@ pub const CATALOG: &[Intrinsic] = &[
         "public intrinsic fun RecomposeScope.invalidate(): Unit",
         false,
     ),
+    // State handles (D2 of `state-handles`). `value` is typed by its own rule: a copy for a
+    // `Copy` value type, a place otherwise, writable on `MutableState` only (D5).
+    entry(
+        COMPOSE_RUNTIME,
+        None,
+        "mutableStateOf",
+        BuiltinFunction::MutableStateOf,
+        "public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("State"),
+        "value",
+        BuiltinFunction::StateValue,
+        "public intrinsic val <T> State<T>.value: T",
+        true,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("MutableState"),
+        "value",
+        BuiltinFunction::StateValue,
+        "public intrinsic var <T> MutableState<T>.value: T",
+        true,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("State"),
+        "read",
+        BuiltinFunction::StateRead,
+        "public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("MutableState"),
+        "update",
+        BuiltinFunction::StateUpdate,
+        "public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("MutableState"),
+        "edit",
+        BuiltinFunction::StateEdit,
+        "public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        None,
+        "SideEffect",
+        BuiltinFunction::SideEffect,
+        "public intrinsic compose fun SideEffect(effect: escaping () -> Unit): Unit",
+        false,
+    ),
 ];
 
 /// The intrinsic of `module` named `name`, on the receiver type constructor `receiver` for an
@@ -369,8 +427,9 @@ pub fn declaration_text(f: &FunctionDecl) -> String {
 /// The canonical text of an intrinsic extension property declaration.
 pub fn property_text(p: &ExtensionPropertyDecl) -> String {
     format!(
-        "{} intrinsic val {}{}.{}: {}",
+        "{} intrinsic {} {}{}.{}: {}",
         p.visibility,
+        p.keyword(),
         type_parameter_text(&p.type_parameters),
         p.receiver,
         p.name,

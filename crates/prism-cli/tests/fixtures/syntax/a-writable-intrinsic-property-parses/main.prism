@@ -1,0 +1,2 @@
+// expect: E3002
+public intrinsic var <T> MutableState<T>.value: T

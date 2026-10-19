@@ -1607,6 +1607,48 @@ fn intrinsic_properties_parse() {
     );
 }
 
+/// syntax: "A writable intrinsic property parses".
+#[test]
+fn a_writable_intrinsic_property_parses() {
+    let file = parse("public intrinsic var <T> MutableState<T>.value: T\npublic intrinsic val String.length: Int\n");
+    let shapes: Vec<(bool, String, String, String, usize)> = file
+        .declarations
+        .iter()
+        .map(|d| match d {
+            Declaration::ExtensionProperty(p) => (
+                p.writable,
+                p.receiver.to_string(),
+                p.name.clone(),
+                p.ty.to_string(),
+                p.type_parameters.len(),
+            ),
+            _ => panic!("expected properties"),
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        vec![
+            (
+                true,
+                "MutableState<T>".into(),
+                "value".into(),
+                "T".into(),
+                1
+            ),
+            (false, "String".into(), "length".into(), "Int".into(), 0),
+        ]
+    );
+}
+
+/// syntax: "Writable extension properties need intrinsic".
+#[test]
+fn writable_extension_properties_need_intrinsic() {
+    for source in ["var Int.twice: Int\n", "intrinsic var Int.twice: Int = 2\n"] {
+        let error = prism_parser::parse_source(source).expect_err(source);
+        assert_eq!(error.code, "E2001", "{}", source);
+    }
+}
+
 /// syntax: "external and intrinsic as identifiers".
 #[test]
 fn external_and_intrinsic_as_identifiers() {
