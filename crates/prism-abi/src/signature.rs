@@ -17,14 +17,17 @@ pub struct AbiReceiver {
     pub ty: AbiType,
 }
 
-/// A parameter of an exported function: its name, type, whether it is `escaping`, and the
-/// span-free hash of its default value's syntax, if it has one.
+/// A parameter of an exported function: its name, type, whether it is `escaping`, the
+/// span-free hash of its default value's syntax, if it has one, and the inputs that default
+/// reads, which its generator takes (D26 of `ui-toolkit`). The inputs follow from the hashed
+/// syntax, so they are not hashed again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiParameter {
     pub name: String,
     pub ty: AbiType,
     pub escaping: bool,
     pub default: Option<String>,
+    pub default_inputs: prism_ast::DefaultInputs,
 }
 
 /// What provides an exported function's code (D5 and D6 of `standard-library`).
@@ -912,10 +915,13 @@ impl FileAbi {
                         }
                     };
 
+                    let earlier: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+                    let context_name = f.context.as_ref().map(|c| c.name.as_str());
                     let params: Vec<AbiParameter> = f
                         .params
                         .iter()
-                        .map(|p| {
+                        .enumerate()
+                        .map(|(index, p)| {
                             // The default's whole syntax, span-free: its `Display` text summarizes blocks
                             // and `when` branches, which would leave their contents unhashed.
                             let def_str = p.default_value.as_ref().map(|d| {
@@ -923,11 +929,23 @@ impl FileAbi {
                                 hash_expr_span_free(d, &mut h);
                                 h.finish().to_hex()
                             });
+                            let default_inputs = p.default_value.as_ref().map_or(
+                                prism_ast::DefaultInputs::ALL,
+                                |d| {
+                                    prism_ast::default_inputs(
+                                        d,
+                                        context_name,
+                                        f.receiver.is_some(),
+                                        &earlier[..index],
+                                    )
+                                },
+                            );
                             AbiParameter {
                                 name: p.name.clone(),
                                 ty: lower(&p.ty),
                                 escaping: p.escaping,
                                 default: def_str,
+                                default_inputs,
                             }
                         })
                         .collect();

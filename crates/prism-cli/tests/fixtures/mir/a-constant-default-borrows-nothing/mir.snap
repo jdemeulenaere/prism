@@ -1,0 +1,40 @@
+module main
+fun main::f(_1: Int, _2: Int, _3: Int): Int @2:1
+  local _0: Int (return)
+  local _1 a: Int (argument)
+  local _2 b: Int (argument)
+  local _3 c: Int (argument)
+  bb0:
+    _0 = copy _1 + copy _3 @2:46
+    return @2:1
+default main::f b(): Int @2:24
+  local _0: Int (return)
+  bb0:
+    _0 = const 2 @2:24
+    return @2:24
+default main::f c(_1: &Int): Int @2:36
+  local _0: Int (return)
+  local _1 b: &Int (argument)
+  bb0:
+    _0 = copy (*_1) @2:36
+    return @2:36
+fun main::g(): Int @3:1
+  local _0: Int (return)
+  local _1: Int (temporary)
+  local _2: &Int (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _1 @3:16
+    _1 = call default main::f b() -> bb1 @3:16
+  bb1:
+    storage_live _2 @3:16
+    _2 = &_1 (default) @3:16
+    storage_live _3 @3:16
+    _3 = call default main::f c(move _2) -> bb2 @3:16
+  bb2:
+    _0 = call main::f(const 1, move _1, move _3) -> bb3 @3:16
+  bb3:
+    storage_dead _3 @3:16
+    storage_dead _2 @3:16
+    storage_dead _1 @3:16
+    return @3:1

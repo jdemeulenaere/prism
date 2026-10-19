@@ -4,6 +4,7 @@
 //! and syntax specifications in `openspec/specs/syntax/spec.md`.
 
 pub mod decl;
+pub mod defaults;
 pub mod expr;
 pub mod module;
 pub mod span;
@@ -11,6 +12,7 @@ pub mod statement;
 pub mod types;
 
 pub use decl::*;
+pub use defaults::*;
 pub use expr::*;
 pub use module::*;
 pub use span::*;

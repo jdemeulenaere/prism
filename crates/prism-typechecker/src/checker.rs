@@ -2013,7 +2013,10 @@ impl TypeChecker {
                         .map(|parameter| type_from_abi(&parameter.ty, &type_parameters))
                         .collect();
                     let param_names = params.iter().map(|p| p.name.clone()).collect();
-                    let has_default = params.iter().map(|p| p.default.is_some()).collect();
+                    let defaults = params
+                        .iter()
+                        .map(|p| p.default.is_some().then_some(p.default_inputs))
+                        .collect();
                     let fn_ty = Type::Fn {
                         is_compose: *is_compose,
                         receiver: false,
@@ -2025,7 +2028,7 @@ impl TypeChecker {
                         name.clone(),
                         fn_ty,
                         param_names,
-                        has_default,
+                        defaults,
                         *visibility,
                         abi.package.clone(),
                         Span::dummy(),
@@ -2488,7 +2491,7 @@ impl TypeChecker {
                                 v_name.clone(),
                                 Type::function(false, f_types.clone(), enum_ty.clone()),
                                 vec![String::new(); f_types.len()],
-                                vec![false; f_types.len()],
+                                vec![None; f_types.len()],
                                 e.visibility,
                                 self.current_package.clone(),
                                 e.span,
@@ -2864,7 +2867,7 @@ impl TypeChecker {
             .filter(|ty| ty != &Type::Error);
         let params: Vec<Type> = f.params.iter().map(|p| self.lower_type(&p.ty)).collect();
         let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-        let has_default: Vec<bool> = f.params.iter().map(|p| p.default_value.is_some()).collect();
+        let defaults = declared_default_inputs(f);
 
         let ret = if let Some(annot) = &f.return_type {
             self.lower_type(annot)
@@ -2893,7 +2896,7 @@ impl TypeChecker {
             f.name.clone(),
             fn_ty,
             param_names,
-            has_default,
+            defaults,
             f.visibility,
             self.current_package.clone(),
             f.span,
@@ -3517,6 +3520,10 @@ impl TypeChecker {
                     .zip(context_ty)
                     .map(|(c, ty)| Box::new((c.name.clone(), ty))),
                 parameters,
+                default_inputs: declared_default_inputs(f)
+                    .into_iter()
+                    .map(|inputs| inputs.unwrap_or(prism_ast::DefaultInputs::ALL))
+                    .collect(),
                 return_type,
                 body,
                 span: f.span,
@@ -4543,15 +4550,15 @@ impl TypeChecker {
             match &extension.symbol.kind {
                 SymbolKind::Function {
                     fn_type: Type::Fn { params, ret, .. },
-                    has_default,
+                    defaults,
                     ..
-                } => (params.len(), has_default.clone(), (**ret).clone()),
+                } => (params.len(), defaults.clone(), (**ret).clone()),
                 _ => return None,
             }
         };
-        let (parameters, has_default, returned) = signature;
+        let (parameters, defaults, returned) = signature;
         let required =
-            (0..parameters).any(|index| !has_default.get(index).copied().unwrap_or(false));
+            (0..parameters).any(|index| !defaults.get(index).is_some_and(Option::is_some));
         if required {
             Some(NoTextFormReason::ToStringNeedsArguments)
         } else if returned != Type::String && returned != Type::Error {
@@ -6127,13 +6134,13 @@ impl TypeChecker {
             other => other,
         };
         let names: Vec<String> = (1..=args.len()).map(|i| format!("e{}", i)).collect();
-        let has_default = vec![false; args.len()];
+        let defaults = vec![None; args.len()];
         let checked = self.check_generic_call_arguments(
             &signature,
             type_arguments,
             expected,
             &names,
-            &has_default,
+            &defaults,
             args,
             span,
         );
@@ -6241,13 +6248,13 @@ impl TypeChecker {
             ret: value_parameter.as_type(),
             receiver: None,
         };
-        let has_default = vec![false; args.len()];
+        let defaults = vec![None; args.len()];
         let checked = self.check_generic_call_arguments(
             &signature,
             type_arguments,
             expected,
             &names,
-            &has_default,
+            &defaults,
             args,
             span,
         );
@@ -6384,7 +6391,7 @@ impl TypeChecker {
             type_arguments,
             expected,
             &names,
-            &[false],
+            &[None],
             args,
             span,
         );
@@ -6457,18 +6464,22 @@ impl TypeChecker {
         &self,
         callee: &Expr,
         callee_node: Option<ExpressionId>,
-    ) -> (Vec<String>, Vec<bool>, Vec<TypeParameter>) {
+    ) -> (
+        Vec<String>,
+        Vec<Option<prism_ast::DefaultInputs>>,
+        Vec<TypeParameter>,
+    ) {
         if let ExprKind::Ident(name) = &callee.kind {
             if let Some(SymbolKind::Function {
                 param_names,
-                has_default,
+                defaults,
                 type_parameters,
                 ..
             }) = self.env.lookup(name).map(|sym| &sym.kind)
             {
                 return (
                     param_names.clone(),
-                    has_default.clone(),
+                    defaults.clone(),
                     type_parameters.clone(),
                 );
             }
@@ -6553,7 +6564,7 @@ impl TypeChecker {
                     self.report_compose_context(callee_name, span);
                 }
 
-                let (param_names, has_default, type_parameters) =
+                let (param_names, defaults, type_parameters) =
                     self.callee_declaration(callee, callee_node);
                 let callee_node = callee_node.expect("a function type comes from a node");
                 // A value with a receiver called without it takes the innermost `this` (D5 of
@@ -6592,7 +6603,7 @@ impl TypeChecker {
                 if type_parameters.is_empty() {
                     self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
                     let checked =
-                        self.check_call_arguments(&params, &param_names, &has_default, args, span);
+                        self.check_call_arguments(&params, &param_names, &defaults, args, span);
                     return match checked {
                         Err(CheckedArguments(children)) => {
                             let mut all = vec![callee_node];
@@ -6641,7 +6652,7 @@ impl TypeChecker {
                     type_arguments,
                     expected,
                     &param_names,
-                    &has_default,
+                    &defaults,
                     args,
                     span,
                 );
@@ -6729,7 +6740,7 @@ impl TypeChecker {
         type_arguments: &[prism_ast::types::Type],
         expected: Option<&Type>,
         param_names: &[String],
-        has_default: &[bool],
+        defaults: &[Option<prism_ast::DefaultInputs>],
         args: &[CallArg],
         span: Span,
     ) -> Result<(NormalizedArguments, Vec<Type>), CheckedArguments> {
@@ -6737,7 +6748,7 @@ impl TypeChecker {
         let mut normalized = self.check_call_arguments_with(
             signature.params.len(),
             param_names,
-            has_default,
+            defaults,
             args,
             span,
             &mut |checker, index, value| checker.generic_argument(&mut state, index, value),
@@ -7099,7 +7110,7 @@ impl TypeChecker {
                             ty: ty.clone(),
                             value: *value,
                         }),
-                        Argument::Default => None,
+                        Argument::Default(_) => None,
                     })
                     .collect();
                 let kind = ExpressionKind::Construct {
@@ -8109,7 +8120,7 @@ impl TypeChecker {
                     ..
                 },
             param_names,
-            has_default,
+            defaults,
             type_parameters,
             ..
         } = &extension.symbol.kind
@@ -8138,11 +8149,11 @@ impl TypeChecker {
         let escaping: Vec<bool> = std::iter::once(false)
             .chain(escaping.iter().copied())
             .collect();
-        let (is_compose, params, param_names, has_default, ret) = (
+        let (is_compose, params, param_names, defaults, ret) = (
             *is_compose,
             params.clone(),
             param_names.clone(),
-            has_default.clone(),
+            defaults.clone(),
             (**ret).clone(),
         );
         // The declared type of `this`, which the call records like every declared parameter type.
@@ -8160,7 +8171,7 @@ impl TypeChecker {
         };
         let checked = if type_parameters.is_empty() {
             self.reject_type_arguments(&format!("extension '{}'", member), type_arguments);
-            self.check_call_arguments(&params, &param_names, &has_default, args, span)
+            self.check_call_arguments(&params, &param_names, &defaults, args, span)
                 .map(|normalized| (normalized, params, ret, Vec::new()))
         } else {
             let signature = GenericSignature {
@@ -8175,7 +8186,7 @@ impl TypeChecker {
                 type_arguments,
                 expected,
                 &param_names,
-                &has_default,
+                &defaults,
                 args,
                 span,
             )
@@ -8643,7 +8654,7 @@ impl TypeChecker {
     }
 
     /// Checks the arguments of a call against the parameters of a function, positional, named
-    /// or omitted for a parameter with a default. `param_names` and `has_default` are empty when
+    /// or omitted for a parameter with a default. `param_names` and `defaults` are empty when
     /// the callee is not a declared function (a function-typed value), which allows neither.
     ///
     /// Returns the arguments in parameter order with a default slot for each omitted one, and
@@ -8653,14 +8664,14 @@ impl TypeChecker {
         &mut self,
         params: &[Type],
         param_names: &[String],
-        has_default: &[bool],
+        defaults: &[Option<prism_ast::DefaultInputs>],
         args: &[CallArg],
         span: Span,
     ) -> Result<NormalizedArguments, CheckedArguments> {
         self.check_call_arguments_with(
             params.len(),
             param_names,
-            has_default,
+            defaults,
             args,
             span,
             &mut |checker, index, value| {
@@ -8676,19 +8687,24 @@ impl TypeChecker {
         &mut self,
         n_params: usize,
         param_names: &[String],
-        has_default: &[bool],
+        defaults: &[Option<prism_ast::DefaultInputs>],
         args: &'a [CallArg],
         span: Span,
         check: &mut ArgumentChecker<'a, '_>,
     ) -> Result<NormalizedArguments, CheckedArguments> {
-        let min_args = if has_default.len() == n_params {
-            has_default.iter().filter(|&&d| !d).count()
+        let min_args = if defaults.len() == n_params {
+            defaults.iter().filter(|d| d.is_none()).count()
         } else {
             n_params
         };
 
         let has_named_args = args.iter().any(|a| a.name.is_some());
-        let mut arguments = vec![Argument::Default; n_params];
+        let mut arguments: Vec<Argument> = (0..n_params)
+            .map(|index| {
+                let inputs = defaults.get(index).copied().flatten();
+                Argument::Default(inputs.unwrap_or(prism_ast::DefaultInputs::ALL))
+            })
+            .collect();
         let mut evaluation_order = Vec::new();
         let mut checked = Vec::new();
         // A trailing lambda binds to the last parameter, so positional binding gives the same
@@ -8836,7 +8852,7 @@ impl TypeChecker {
         }
 
         for (i, &assigned) in param_assigned.iter().enumerate().take(n_params) {
-            let has_def = has_default.get(i).copied().unwrap_or(false);
+            let has_def = defaults.get(i).is_some_and(Option::is_some);
             if !has_def && !assigned {
                 let p_name = param_names
                     .get(i)
@@ -10634,6 +10650,23 @@ fn contents_writable(mut ty: &Type, place_writable: bool) -> bool {
     }
 }
 
+/// For each parameter of `f`, what its default value reads of its generator's inputs, or
+/// `None` without a default: the same answer as the ABI's (D26 of `ui-toolkit`), so that a
+/// caller and the generator agree on what is passed.
+fn declared_default_inputs(f: &FunctionDecl) -> Vec<Option<prism_ast::DefaultInputs>> {
+    let names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+    let context = f.context.as_ref().map(|c| c.name.as_str());
+    f.params
+        .iter()
+        .enumerate()
+        .map(|(index, p)| {
+            p.default_value.as_ref().map(|default| {
+                prism_ast::default_inputs(default, context, f.receiver.is_some(), &names[..index])
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11342,12 +11375,14 @@ mod tests {
                             ty: AbiType::Prim(PrimKind::Int),
                             escaping: false,
                             default: None,
+                            default_inputs: prism_ast::DefaultInputs::ALL,
                         },
                         prism_abi::AbiParameter {
                             name: "b".to_string(),
                             ty: AbiType::Prim(PrimKind::Int),
                             escaping: false,
                             default: None,
+                            default_inputs: prism_ast::DefaultInputs::ALL,
                         },
                     ],
                     return_type: AbiType::Prim(PrimKind::Int),
@@ -11421,7 +11456,11 @@ mod tests {
             "greet",
             fn_ty,
             vec!["msg".to_string(), "count".to_string(), "prefix".to_string()],
-            vec![false, true, true],
+            vec![
+                None,
+                Some(prism_ast::DefaultInputs::ALL),
+                Some(prism_ast::DefaultInputs::ALL),
+            ],
             Visibility::Public,
             None,
             Span::dummy(),

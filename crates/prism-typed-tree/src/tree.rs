@@ -67,6 +67,9 @@ pub struct FunctionItem {
     pub context: Option<Box<(String, Type)>>,
     /// The declared parameters, without the context and the receiver.
     pub parameters: Vec<(String, Type)>,
+    /// For each declared parameter, what its default value reads of its generator's inputs
+    /// (D26 of `ui-toolkit`); [`prism_ast::DefaultInputs::ALL`] for one without a default.
+    pub default_inputs: Vec<prism_ast::DefaultInputs>,
     /// The declared or inferred return type.
     pub return_type: Type,
     pub body: BodyId,
@@ -483,7 +486,7 @@ impl ExpressionKind {
                     .into_iter()
                     .chain(call.arguments.iter().filter_map(|a| match a {
                         Argument::Written(value) => Some(*value),
-                        Argument::Default => None,
+                        Argument::Default(_) => None,
                     }))
                     .collect()
             }
@@ -953,8 +956,9 @@ impl BuiltinFunction {
 pub enum Argument {
     /// A written argument (or the receiver).
     Written(ExpressionId),
-    /// An omitted parameter, which takes its default value.
-    Default,
+    /// An omitted parameter, which takes its default value: a call of its generator with
+    /// borrows of the inputs the default reads (D26 of `ui-toolkit`).
+    Default(prism_ast::DefaultInputs),
 }
 
 /// Why a borrow exists.

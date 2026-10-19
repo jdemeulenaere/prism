@@ -5,7 +5,7 @@ use crate::mir::{
     AggregateKind, Body, BodyId, BodyOwner, BorrowOrigin, Callee, Constant, Operand, Place,
     Projection, Rvalue, TerminatorKind,
 };
-use prism_ast::Span;
+use prism_ast::{DefaultInputs, Span};
 use prism_typed_tree::{
     Argument, BorrowOrigin as TreeBorrowOrigin, BuiltinFunction, Call, Callee as TreeCallee,
     ExpressionId, ExpressionKind, FunctionItem, SafeNavigationOrigin, Type, TypeTable, TypedFile,
@@ -39,6 +39,39 @@ fn shared(ty: Type) -> Type {
     Type::Reference {
         mutable: false,
         inner: Box::new(ty),
+    }
+}
+
+/// Whether a value of type `ty` can hold no borrow: no reference, function value or type
+/// parameter, at any depth (struct and enum fields never hold borrows).
+fn holds_no_borrow(ty: &Type) -> bool {
+    match ty {
+        Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Char
+        | Type::String
+        | Type::Unit
+        | Type::Nothing
+        | Type::Opaque(_) => true,
+        Type::Nullable(inner) | Type::Heap(inner) | Type::List(inner) => holds_no_borrow(inner),
+        Type::Struct { arguments, .. } | Type::Enum { arguments, .. } => {
+            arguments.iter().all(holds_no_borrow)
+        }
+        Type::Reference { .. } | Type::Fn { .. } | Type::Parameter(_) | Type::Error => false,
+    }
+}
+
+/// The inputs the generator of a default of declared type `ty` takes, of the context, the
+/// receiver and the earlier parameters: those its default reads (D26 of `ui-toolkit`), or all
+/// of them for a parameter whose value may hold a borrow, since the elision rules tie such a
+/// result to the borrows its generator is given. The caller and the generator both ask this,
+/// from the same declared type and the same syntactic answer.
+pub(super) fn generator_inputs(ty: &Type, inputs: DefaultInputs) -> DefaultInputs {
+    if holds_no_borrow(ty) {
+        inputs
+    } else {
+        DefaultInputs::ALL
     }
 }
 
@@ -84,10 +117,18 @@ impl Builder<'_> {
             }
         };
         let count = call.arguments.len();
-        let last_default = call
+        // What each omitted argument's generator borrows of the arguments before it.
+        let generator_reads: Vec<(usize, DefaultInputs)> = call
             .arguments
             .iter()
-            .rposition(|argument| matches!(argument, Argument::Default));
+            .enumerate()
+            .filter_map(|(index, argument)| match argument {
+                Argument::Default(inputs) => {
+                    Some((index, generator_inputs(&call.parameters[index].1, *inputs)))
+                }
+                Argument::Written(_) => None,
+            })
+            .collect();
         let mut operands: Vec<Option<Operand>> = vec![None; count];
         let mut pending = None;
         let mut receiver_borrowed = false;
@@ -114,7 +155,9 @@ impl Builder<'_> {
             let Argument::Written(value) = call.arguments[index] else {
                 panic!("internal error: call evaluates an omitted argument");
             };
-            let borrowed_by_default = last_default.is_some_and(|last| last > index);
+            let borrowed_by_default = generator_reads
+                .iter()
+                .any(|&(default, inputs)| default > index && inputs.reads(index));
             // A composable closure written as an argument is keyed by its call (D5 of
             // `compose-transform`).
             let callee_name = match &call.callee {
@@ -128,11 +171,9 @@ impl Builder<'_> {
         if let Some(pending) = pending {
             operands[receiver_index] = Some(self.borrow_receiver(call, receiver_index, pending));
         }
-        for index in 0..count {
-            if matches!(call.arguments[index], Argument::Default) {
-                let operand = self.default_argument(call, index, &operands, span);
-                operands[index] = Some(operand);
-            }
+        for &(index, inputs) in &generator_reads {
+            let operand = self.default_argument(call, index, inputs, &operands, span);
+            operands[index] = Some(operand);
         }
         if self.current.is_none() {
             return;
@@ -250,13 +291,14 @@ impl Builder<'_> {
     }
 
     /// The value of the omitted argument `index` of `call`: a call of its generator with shared
-    /// borrows of the receiver and the earlier arguments, and, for a reference parameter, a
-    /// mutable borrow of a `null` slot that lives until the end of the caller's temporary scope
-    /// (D11).
+    /// borrows of the context, the receiver and the earlier arguments among `inputs`, and, for
+    /// a reference parameter, a mutable borrow of a `null` slot that lives until the end of the
+    /// caller's temporary scope (D11, and D26 of `ui-toolkit`).
     fn default_argument(
         &mut self,
         call: &Call,
         index: usize,
+        inputs: DefaultInputs,
         operands: &[Option<Operand>],
         span: Span,
     ) -> Operand {
@@ -275,6 +317,9 @@ impl Builder<'_> {
         let mut arguments = Vec::new();
         let mut parameters = Vec::new();
         for (earlier, operand) in operands.iter().enumerate().take(index) {
+            if !inputs.reads(earlier) {
+                continue;
+            }
             let declared_earlier = call.parameters[earlier].1.clone();
             let earlier_ty = declared_earlier.substitute(&call.type_arguments);
             let place = match operand {
@@ -396,9 +441,10 @@ impl Builder<'_> {
 
 impl<'a> Builder<'a> {
     /// The generator of the default value `default` of declared parameter `index` of
-    /// `function`: its arguments are shared borrows of `this` and of each earlier parameter,
-    /// whose bindings are their dereferences, plus the caller's slot for a reference parameter
-    /// (D11).
+    /// `function`: its arguments are shared borrows of the context, `this` and the earlier
+    /// parameters that the default reads ([`generator_inputs`]), whose bindings are their
+    /// dereferences, plus the caller's slot for a reference parameter (D11, and D26 of
+    /// `ui-toolkit`).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_default(
         file: &'a TypedFile,
@@ -421,7 +467,16 @@ impl<'a> Builder<'a> {
         let mut builder = Builder::new(file, types, bodies, tree, id, owner, span);
         builder.type_parameters = function.type_parameters.clone();
         builder.set_return_type(parameter_ty.clone(), span);
-        for &parameter in &tree.parameters[..receiver_count + index] {
+        let declared_inputs = function
+            .default_inputs
+            .get(index)
+            .copied()
+            .unwrap_or(DefaultInputs::ALL);
+        let inputs = generator_inputs(&parameter_ty, declared_inputs);
+        for (position, &parameter) in tree.parameters[..receiver_count + index].iter().enumerate() {
+            if !inputs.reads(position) {
+                continue;
+            }
             let local = &tree.locals[parameter];
             let argument = builder.add_argument(
                 shared(local.ty.clone()),

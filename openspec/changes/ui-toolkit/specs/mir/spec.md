@@ -22,3 +22,16 @@ A read of the intrinsic property `n.dp` or `n.sp` MUST lower to the construction
 #### Scenario: A unit in MIR
 - **WHEN** `prism dump-mir` runs on `fun f(n: Int): Dp = n.dp` with `import /prism/compose/ui`
 - **THEN** the body of `f` builds the aggregate `Dp` from `n` and calls nothing
+
+## MODIFIED Requirements
+
+### Requirement: Default Values Are Generator Bodies
+Each parameter's default value MUST be lowered to its own body, which returns the parameter's value and takes a shared borrow of each of the context, the receiver and the earlier arguments that the default may read: an earlier parameter or the context when its name appears in the default, the receiver and the context when `this` or any other name appears, and all of them when the default holds a block, a closure, a `when` or a jump, or when the parameter's type may hold a borrow (a reference, a function type or a type parameter). A call omitting that argument MUST call the generator with borrows of those same arguments of its own.
+
+#### Scenario: Default reading an earlier parameter
+- **WHEN** `fun f(a: Int, b: Int = a + 1): Int = b` is declared and `fun g(): Int = f(1)` is lowered
+- **THEN** the generator of `b` takes a `&Int` and returns its dereference plus `1`, and `g` holds `1` in a temporary, calls the generator with a shared borrow of it, and calls `f` with both values
+
+#### Scenario: A constant default borrows nothing
+- **WHEN** `fun f(a: Int, b: Int = 2, c: Int = b): Int = a + c` is declared and `fun g(): Int = f(1)` is lowered
+- **THEN** the generator of `b` takes no argument, the generator of `c` takes only a `&Int`, a borrow of `b`'s value, and `g` passes `1` to `f` as a constant

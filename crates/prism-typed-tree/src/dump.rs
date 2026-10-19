@@ -456,7 +456,7 @@ impl Printer<'_> {
                     };
                     match argument {
                         Argument::Written(value) => self.expression(*value, depth, &label),
-                        Argument::Default => self.line(depth, &label, "default"),
+                        Argument::Default(_) => self.line(depth, &label, "default"),
                     }
                 }
             }
@@ -848,6 +848,7 @@ pub(crate) mod tests {
                 receiver: None,
                 context: None,
                 parameters: vec![("a".to_string(), Type::Int)],
+                default_inputs: vec![prism_ast::DefaultInputs::ALL],
                 return_type: Type::Int,
                 body,
                 span: span(1, 1),
