@@ -483,7 +483,7 @@ Planned in [`docs/architecture.md`](docs/architecture.md) §5 (`compose-architec
 Agreed with the user in the post–Milestone 2 review ([`docs/milestone-2-review-notes.md`](docs/milestone-2-review-notes.md), "Agreed changes"); each item is one OpenSpec change or plain fix, in this order.
 
 1. [ ] A3, plain fix: hot reload refreshes a window without waiting for input (the wake-up must return to the frame loop's reload point before a frame is built).
-2. [ ] F3, investigation: why a window's recomposition is about 3.5 times slower than headless on the 1,000-item list.
+2. [x] F3, investigation: why a window's recomposition is about 3.5 times slower than headless on the 1,000-item list. The work is the same; the program thread idles between a person's clicks and runs each burst on a clocked-down, cache-cold core (review notes F4, which lists the options left to decide).
 3. [ ] `path-captures` (A2b): closures capture paths such as `todo.done`, not whole bindings.
 4. [ ] `owned-state` (A2′, A2‴, L5): `MutableState<T>` as an owning state object; `remember` keeps owned values; closures capture state through automatic generational handles only where the composition owns them, and through explicit nullable weak references elsewhere; deferred free and release order; system invariant 6 amended; the todo app's `Todo` holds `done: MutableState<Boolean>`.
 5. [ ] `strong-skipping` (A1): every restartable composable can skip; `Copy` parameters compare by value, borrowed ones by provenance identity; no inference, no deep comparison.
