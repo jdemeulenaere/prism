@@ -872,7 +872,7 @@ impl<'a> Graph<'a> {
             entries.append(&mut recorded[index]);
             entries.append(&mut pending[index]);
             merged.clear();
-            merge_paths(&closure.captures, &mut entries, &mut merged, &mut position);
+            merge_paths(closure.captures, &mut entries, &mut merged, &mut position);
             let mut captures = Vec::with_capacity(merged.len());
             let mut errors = Vec::new();
             let mut start = 0;
