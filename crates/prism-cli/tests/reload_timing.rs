@@ -120,21 +120,34 @@ fn wait_for(
     }
 }
 
+/// The watch session, killed and reaped when dropped, so that a benchmark that fails or panics
+/// leaves no session running its looping program.
+struct KilledOnDrop(std::process::Child);
+
+impl Drop for KilledOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 #[ignore = "a benchmark: run it on a release build with --ignored --nocapture"]
 fn reload_latency() {
     let root = workspace();
     let cache = root.join(".cache");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_prism"))
-        .env("PRISM_CACHE", &cache)
-        .args(["run", "--watch", "--timings", "app/main.prism"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to run prism");
+    let mut child = KilledOnDrop(
+        Command::new(env!("CARGO_BIN_EXE_prism"))
+            .env("PRISM_CACHE", &cache)
+            .args(["run", "--watch", "--timings", "app/main.prism"])
+            .current_dir(&root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to run prism"),
+    );
     let (sender, lines) = mpsc::channel();
-    let stderr = child.stderr.take().unwrap();
+    let stderr = child.0.stderr.take().unwrap();
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(stderr).lines() {
             let Ok(line) = line else { return };
@@ -166,8 +179,7 @@ fn reload_latency() {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child);
     let _ = std::fs::remove_dir_all(&root);
 
     let median = percentile(&mut totals, 0.5);

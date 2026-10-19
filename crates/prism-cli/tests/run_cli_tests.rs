@@ -1640,7 +1640,9 @@ fn timing_a_reload() {
     );
 }
 
-/// A `prism run --watch` session on a workspace, with its stderr read line by line.
+/// A `prism run --watch` session on a workspace, with its stderr read line by line. Dropping it
+/// kills and reaps the process, so a test that fails or panics leaves no session running: most
+/// of these programs loop until they are edited.
 struct WatchedProgram {
     child: std::process::Child,
     lines: std::sync::mpsc::Receiver<String>,
@@ -1722,12 +1724,47 @@ impl WatchedProgram {
         }
     }
 
-    /// Ends the session and gives its stdout.
+    /// Ends the session and gives its stdout and the stderr lines read.
     fn stop(mut self) -> (String, Vec<String>) {
+        use std::io::Read;
         let _ = self.child.kill();
-        let output = self.child.wait_with_output().unwrap();
-        (stdout(&output), self.seen)
+        let mut stdout = String::new();
+        if let Some(mut pipe) = self.child.stdout.take() {
+            let _ = pipe.read_to_string(&mut stdout);
+        }
+        let _ = self.child.wait();
+        (stdout, std::mem::take(&mut self.seen))
     }
+}
+
+impl Drop for WatchedProgram {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The `prism` processes running a watch session in `directory`, by their command line and
+/// working directory.
+fn watch_sessions_in(directory: &Path) -> Vec<u32> {
+    let output = Command::new("pgrep")
+        .args(["-f", "prism run --watch"])
+        .output()
+        .expect("pgrep runs");
+    let directory = directory.canonicalize().unwrap_or(directory.to_path_buf());
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .filter(|pid| {
+            let cwd = Command::new("lsof")
+                .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+                .unwrap_or_default();
+            cwd.lines()
+                .any(|line| line.strip_prefix('n') == Some(&*directory.to_string_lossy()))
+        })
+        .collect()
 }
 
 /// A program whose `main` loops calling `value` until it returns something else than 1.
@@ -1788,6 +1825,19 @@ fn an_atomic_save_is_seen() {
         .filter(|line| line.starts_with("reload: applied"))
         .count();
     assert_eq!(reloads, 1, "{:#?}", seen);
+}
+
+/// A test that fails while its watch session runs leaves no process behind: dropping the
+/// session, as unwinding does, kills and reaps it.
+#[test]
+fn a_failing_watch_test_leaves_no_session_running() {
+    let directory = single_file("watch_failing_test", LOOPING);
+    let result = std::panic::catch_unwind(|| {
+        let _session = WatchedProgram::start_running(&directory, "main.prism");
+        panic!("an induced failure");
+    });
+    assert!(result.is_err());
+    assert_eq!(watch_sessions_in(&directory), Vec::<u32>::new());
 }
 
 /// hot-reload: "A syntax error in an imported file at start": the session watches the file in
