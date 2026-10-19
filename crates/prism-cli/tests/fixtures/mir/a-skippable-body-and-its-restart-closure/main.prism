@@ -1,0 +1,4 @@
+// expect: ok
+compose fun Badge(n: Int) {
+    println(n)
+}

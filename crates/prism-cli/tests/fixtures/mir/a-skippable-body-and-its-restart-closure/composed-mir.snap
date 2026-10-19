@@ -1,0 +1,121 @@
+module main
+phase composed
+compose composed skippable fun main::Badge(_1: Int, _2: Int, _3: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Int (temporary)
+  local _5: Unit (temporary)
+  local _6: Int (temporary)
+  local _7: Unit (temporary)
+  local _8: Bool (temporary)
+  local _9: Int (temporary)
+  local _10: Bool (temporary)
+  local _11: Int (temporary)
+  local _12: Int (temporary)
+  local _13: Int (temporary)
+  local _14: Bool (temporary)
+  local _15: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _6 @2:1
+    storage_live _7 @2:1
+    storage_live _8 @2:1
+    storage_live _9 @2:1
+    storage_live _10 @2:1
+    storage_live _11 @2:1
+    storage_live _12 @2:1
+    storage_live _13 @2:1
+    storage_live _14 @2:1
+    storage_live _15 @2:1
+    _7 = call composer start_restart_group key 0x4276acfe29c1044c /* body main::Badge */(copy _2) -> bb3 @2:1
+  bb1:
+    storage_dead _5 @3:5
+    storage_dead _4 @3:5
+    _0 = const () @2:27
+    goto -> bb2 @2:1
+  bb2:
+    _15 = closure main::Badge#restart [] @2:1
+    _7 = call composer end_restart_group(copy _2, move _15) -> bb25 @2:1
+  bb3:
+    _8 = const false @2:1
+    _9 = bits copy _3 >>> const 1 @2:1
+    _9 = bits copy _9 & const 3 @2:1
+    switch copy _9 [0 -> bb4, 1 -> bb5, 2 -> bb6, otherwise -> bb7] @2:1
+  bb4:
+    _10 = call composer changed<Int>(copy _2, copy _1) -> bb9 @2:1
+  bb5:
+    _11 = remembered<Int>(copy _2) -> [found: bb13, missing: bb14] @2:1
+  bb6:
+    _7 = call composer set_slot<Int>(copy _2, copy _1) -> bb12 @2:1
+  bb7:
+    _12 = remembered<Int>(copy _2) -> [found: bb16, missing: bb17] @2:1
+  bb8:
+    _13 = bits copy _3 & const 1 @2:1
+    switch copy _13 [0 -> bb20, otherwise -> bb19] @2:1
+  bb9:
+    switch copy _10 [0 -> bb10, otherwise -> bb11] @2:1
+  bb10:
+    _6 = const 1 @2:1
+    goto -> bb8 @2:1
+  bb11:
+    _6 = const 2 @2:1
+    _8 = const true @2:1
+    goto -> bb8 @2:1
+  bb12:
+    _6 = const 2 @2:1
+    _8 = const true @2:1
+    goto -> bb8 @2:1
+  bb13:
+    _6 = const 1 @2:1
+    goto -> bb8 @2:1
+  bb14:
+    _7 = call composer set_slot<Int>(copy _2, copy _1) -> bb15 @2:1
+  bb15:
+    goto -> bb13 @2:1
+  bb16:
+    _6 = const 3 @2:1
+    goto -> bb8 @2:1
+  bb17:
+    _7 = call composer set_slot<Int>(copy _2, copy _1) -> bb18 @2:1
+  bb18:
+    goto -> bb16 @2:1
+  bb19:
+    storage_live _4 @3:13
+    _4 = copy _1 @3:13
+    storage_live _5 @3:5
+    _5 = call builtin println(move _4) -> bb1 @3:5
+  bb20:
+    switch copy _8 [0 -> bb21, otherwise -> bb19] @2:1
+  bb21:
+    _14 = call composer skipping(copy _2) -> bb23 @2:1
+  bb22:
+    _7 = call composer skip_to_group_end(copy _2) -> bb24 @2:1
+  bb23:
+    switch copy _14 [0 -> bb19, otherwise -> bb22] @2:1
+  bb24:
+    goto -> bb2 @2:1
+  bb25:
+    storage_dead _15 @2:1
+    storage_dead _14 @2:1
+    storage_dead _13 @2:1
+    storage_dead _12 @2:1
+    storage_dead _11 @2:1
+    storage_dead _10 @2:1
+    storage_dead _9 @2:1
+    storage_dead _8 @2:1
+    storage_dead _7 @2:1
+    storage_dead _6 @2:1
+    return @2:1
+closure main::Badge#restart(_1: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 n: Int (temporary)
+  bb0:
+    storage_live _2 @2:1
+    _2 = call composer kept_parameter 0<Int>(copy _1) -> bb1 @2:1
+  bb1:
+    _0 = call compose main::Badge(copy _2, copy _1, const 3) -> bb2 @2:1
+  bb2:
+    storage_dead _2 @2:1
+    return @2:1

@@ -807,9 +807,9 @@ pub(crate) fn print_load_timings(timings: Timings, options: &RunOptions) {
 }
 
 /// The Cranelift IR of the entry file `entry`, compiled alone against the ABIs of its direct
-/// imports as `prism dump-mir --elaborated` does, or its errors of any stage.
+/// imports as `prism dump-mir --composed` does, or its errors of any stage.
 pub fn dump_clif(entry: &Path) -> Result<String, WorkspaceError> {
-    let dump = crate::workspace::dump_elaborated_mir(entry)?;
+    let dump = crate::workspace::dump_composed_mir(entry)?;
     dump_file(&dump.mir).map_err(|error| match error {
         DumpError::Unsupported(errors) => WorkspaceError::Codegen {
             path: entry.to_path_buf(),
@@ -826,7 +826,7 @@ pub fn dump_clif(entry: &Path) -> Result<String, WorkspaceError> {
 /// the ABIs of its direct imports, as for `prism dump-clif`; a file with type or borrow errors
 /// returns them instead.
 pub fn dump_layout(entry: &Path) -> Result<String, WorkspaceError> {
-    let (tree, mir) = crate::workspace::elaborate_entry(entry)?;
+    let (tree, mir) = crate::workspace::compose_entry(entry)?;
     let declared: Vec<NominalId> = tree
         .items
         .iter()

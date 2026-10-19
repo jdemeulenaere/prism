@@ -1,0 +1,17 @@
+[package]
+name = "prism-compose-transform"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3 = "1.8"
+prism-ast = { path = "../prism-ast" }
+prism-mir = { path = "../prism-mir" }
+prism-typed-tree = { path = "../prism-typed-tree" }
+
+[dev-dependencies]
+prism-borrowck = { path = "../prism-borrowck" }
+prism-parser = { path = "../prism-parser" }
+prism-typechecker = { path = "../prism-typechecker", features = ["test-support"] }

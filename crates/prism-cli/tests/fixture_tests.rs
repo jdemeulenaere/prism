@@ -51,6 +51,12 @@
 //! Checking" (`ELABORATED_SCENARIOS`) must hold one. `PRISM_BLESS=1` writes every kind of
 //! snapshot.
 //!
+//! A case may also hold `composed-mir.snap`: the expected output of `prism dump-mir
+//! --composed` on its entry (`prism_cli::dump_composed_mir`), its elaborated MIR through the
+//! compose transform. Every `mir` case of the scenarios of "Composed MIR", "Skippable Bodies
+//! Keep, Compare and Skip", "Root Content Adapters" and "Composed MIR Dump"
+//! (`COMPOSED_SCENARIOS`) must hold one (D19 of `compose-transform`).
+//!
 //! A case may also hold `instances-mir.snap`: the expected output of `prism dump-mir
 //! --instances` on its entry (`prism_cli::dump_instance_mir`), the elaborated MIR of every
 //! instance of a generic the program from that entry needs, which needs a program without type
@@ -516,6 +522,18 @@ const INSTANCE_SCENARIOS: &[&str] = &[
     "wrapping-and-unwrapping-a-nullable-argument",
     "dumping-the-instances-of-a-program",
     "a-closure-inside-a-generic-body",
+    "instances-of-a-generic-composable",
+];
+
+/// The scenarios of the `mir` spec whose cases must hold a `composed-mir.snap`: those of
+/// "Composed MIR", "Skippable Bodies Keep, Compare and Skip", "Root Content Adapters" and
+/// "Composed MIR Dump" (D19 of `compose-transform`).
+const COMPOSED_SCENARIOS: &[&str] = &[
+    "composer-passed-to-composable-calls",
+    "a-composable-lambda-takes-the-composer",
+    "a-skippable-body-and-its-restart-closure",
+    "the-adapter-of-a-composition",
+    "dumping-composed-mir",
 ];
 
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of
@@ -566,6 +584,20 @@ const SNAPSHOTS: &[Snapshot] = &[
         },
         dump: |entry| {
             prism_cli::dump_elaborated_mir(entry)
+                .map(|dump| dump.text)
+                .map_err(|err| err.render())
+        },
+    },
+    Snapshot {
+        file: "composed-mir.snap",
+        required_for: |spec, dir| {
+            spec == "mir"
+                && COMPOSED_SCENARIOS
+                    .iter()
+                    .any(|scenario| dir.split("--").next() == Some(scenario))
+        },
+        dump: |entry| {
+            prism_cli::dump_composed_mir(entry)
                 .map(|dump| dump.text)
                 .map_err(|err| err.render())
         },
@@ -993,6 +1025,20 @@ fn fixture_elaborated_mir_is_well_formed() {
                 for violation in prism_borrowck::verify_elaborated(&mir) {
                     violations.push(format!("{}: {}", case.name, violation));
                 }
+                // Its composed MIR is well formed too (D19 of `compose-transform`).
+                let composed = std::panic::catch_unwind(|| prism_cli::compose_file(&mir));
+                match composed {
+                    Ok(composed) => {
+                        for violation in composed.validate() {
+                            violations.push(format!("{} (composed): {}", case.name, violation));
+                        }
+                    }
+                    Err(panic) => violations.push(format!(
+                        "{}: the compose transform panicked: {}",
+                        case.name,
+                        panic_message(&panic)
+                    )),
+                }
             }
             Ok(Err(rendered)) => {
                 violations.push(format!("{}: no elaborated MIR:\n{}", case.name, rendered))
@@ -1058,7 +1104,7 @@ fn fixture_symbols_are_distinct() {
         if !entry.is_file() {
             continue;
         }
-        let Ok(dump) = prism_cli::dump_elaborated_mir(&entry) else {
+        let Ok(dump) = prism_cli::dump_composed_mir(&entry) else {
             continue;
         };
         files += 1;
@@ -1092,7 +1138,7 @@ fn supported_fixtures_compile() {
         if !entry.is_file() {
             continue;
         }
-        let Ok(dump) = prism_cli::dump_elaborated_mir(&entry) else {
+        let Ok(dump) = prism_cli::dump_composed_mir(&entry) else {
             continue;
         };
         if prism_codegen::check_file(&dump.mir).is_err() {

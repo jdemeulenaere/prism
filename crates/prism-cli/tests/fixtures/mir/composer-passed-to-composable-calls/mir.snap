@@ -1,0 +1,17 @@
+module main
+compose fun main::Label(_1: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  bb0:
+    _0 = const () @2:27
+    return @2:1
+compose fun main::Screen(): Unit @4:1
+  local _0: Unit (return)
+  local _1: Unit (temporary)
+  bb0:
+    storage_live _1 @5:5
+    _1 = call compose main::Label(const 1) -> bb1 @5:5
+  bb1:
+    storage_dead _1 @5:5
+    _0 = const () @4:22
+    return @4:1

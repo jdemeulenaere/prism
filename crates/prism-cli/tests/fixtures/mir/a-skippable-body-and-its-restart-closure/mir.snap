@@ -1,0 +1,16 @@
+module main
+compose fun main::Badge(_1: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  local _2: Int (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _2 @3:13
+    _2 = copy _1 @3:13
+    storage_live _3 @3:5
+    _3 = call builtin println(move _2) -> bb1 @3:5
+  bb1:
+    storage_dead _3 @3:5
+    storage_dead _2 @3:5
+    _0 = const () @2:27
+    return @2:1

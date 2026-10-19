@@ -1,0 +1,9 @@
+// expect: ok
+compose fun <T : Copy> Show(x: T) { }
+
+fun main() {
+    val c = composition {
+        Show(1)
+        Show(true)
+    }
+}

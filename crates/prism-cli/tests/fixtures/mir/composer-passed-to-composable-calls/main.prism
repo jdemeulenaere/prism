@@ -1,0 +1,6 @@
+// expect: ok
+compose fun Label(n: Int) {}
+
+compose fun Screen() {
+    Label(1)
+}

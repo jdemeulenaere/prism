@@ -489,6 +489,7 @@ dependencies = [
  "prism-ast",
  "prism-borrowck",
  "prism-codegen",
+ "prism-compose-transform",
  "prism-formatter",
  "prism-lexer",
  "prism-library",
@@ -525,6 +526,19 @@ name = "prism-compose"
 version = "0.1.0"
 dependencies = [
  "prism-runtime",
+]
+
+[[package]]
+name = "prism-compose-transform"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "prism-ast",
+ "prism-borrowck",
+ "prism-mir",
+ "prism-parser",
+ "prism-typechecker",
+ "prism-typed-tree",
 ]
 
 [[package]]

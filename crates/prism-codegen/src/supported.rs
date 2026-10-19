@@ -107,6 +107,13 @@ pub fn check_file(file: &MirFile) -> Result<(), Vec<CodegenError>> {
         .bodies
         .iter()
         .filter(|(_, body)| is_compiled(body))
+        // A restart function and a root content adapter are reported with their composable.
+        .filter(|(_, body)| {
+            !matches!(
+                body.owner,
+                prism_mir::BodyOwner::Restart { .. } | prism_mir::BodyOwner::RootContent { .. }
+            )
+        })
         .filter_map(|(_, body)| {
             first_unsupported(body, &file.types).map(|(construct, span)| construct.error(span))
         })

@@ -523,6 +523,7 @@ impl Validator<'_> {
                 // In composed MIR a composable function value also takes the composer and its
                 // change words, `Int`s after its declared parameters (D19 of
                 // `compose-transform`).
+                let all_parameters = parameters;
                 let (parameters, escaping) = match callee {
                     Callee::Value(place, _) if self.file.phase == MirPhase::Composed => {
                         match place.try_ty(self.body, self.types) {
@@ -568,12 +569,12 @@ impl Validator<'_> {
                         Some(other) => self.report(format!("{} calls a {}", at, other)),
                     }
                 }
-                if arguments.len() != parameters.len() {
+                if arguments.len() != all_parameters.len() {
                     let message = format!(
                         "{} passes {} operands for {} parameters",
                         at,
                         arguments.len(),
-                        parameters.len()
+                        all_parameters.len()
                     );
                     self.report(message);
                 }
@@ -586,7 +587,9 @@ impl Validator<'_> {
                     }
                 }
                 // An operand has its parameter's declared type with the call's type arguments.
-                for (index, (argument, parameter)) in arguments.iter().zip(parameters).enumerate() {
+                for (index, (argument, parameter)) in
+                    arguments.iter().zip(all_parameters).enumerate()
+                {
                     let ty = self.operand_type(argument, &at);
                     let parameter = parameter.substitute(type_arguments);
                     self.expect(ty, &parameter, &format!("{} operand {}", at, index));
@@ -990,11 +993,26 @@ impl Validator<'_> {
                             );
                             self.report(message);
                         }
-                        if let Type::Fn { params, ret, .. } = ty {
-                            let arguments: Vec<Type> = closure
+                        if let Type::Fn {
+                            params,
+                            ret,
+                            is_compose,
+                            ..
+                        } = ty
+                        {
+                            let mut arguments: Vec<Type> = closure
                                 .arguments()
                                 .map(|l| closure.locals[l].ty.clone())
                                 .collect();
+                            // A composed composable closure also takes the composer and its
+                            // change words (D19 of `compose-transform`).
+                            if *is_compose
+                                && self.file.phase == MirPhase::Composed
+                                && arguments.len() > params.len()
+                                && arguments[params.len()..].iter().all(|ty| *ty == Type::Int)
+                            {
+                                arguments.truncate(params.len());
+                            }
                             if &arguments != params || closure.return_type() != ret.as_ref() {
                                 self.report(format!("{} builds a closure of another type", at));
                             }

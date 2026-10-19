@@ -1,0 +1,7 @@
+module main
+compose fun main::Label(_1: Int): Unit @2:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  bb0:
+    _0 = const () @2:27
+    return @2:1

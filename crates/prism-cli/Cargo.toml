@@ -20,6 +20,7 @@ prism-resolver = { path = "../prism-resolver" }
 prism-typechecker = { path = "../prism-typechecker" }
 prism-mir = { path = "../prism-mir" }
 prism-borrowck = { path = "../prism-borrowck" }
+prism-compose-transform = { path = "../prism-compose-transform" }
 prism-typed-tree = { path = "../prism-typed-tree" }
 prism-formatter = { path = "../prism-formatter" }
 prism-codegen = { path = "../prism-codegen" }

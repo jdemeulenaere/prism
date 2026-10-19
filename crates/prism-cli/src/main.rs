@@ -28,11 +28,12 @@ COMMANDS:
     dump-typed-tree <file.prism>
                            Print the typed tree of a source file, checked against the ABIs of
                            its imports
-    dump-mir [--elaborated | --instances] <file.prism>
+    dump-mir [--elaborated | --composed | --instances] <file.prism>
                            Print the MIR of a source file that typechecks; with
                            --elaborated, borrow-check it and print its elaborated MIR; with
+                           --composed, print that MIR through the compose transform; with
                            --instances, compile the program the file is the entry of and
-                           print the MIR of every instance of a generic it needs
+                           print the composed MIR of every instance of a generic it needs
     run [--timings] [--check-allocations] [--no-cache] [--explain-cache]
         [--watch [--edits <script>]] <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
@@ -120,15 +121,15 @@ fn main() {
             run_dump_typed_tree(&args[2]);
         }
         "dump-mir" => {
-            let flag = args
-                .get(2)
-                .filter(|arg| *arg == "--elaborated" || *arg == "--instances");
+            let flag = args.get(2).filter(|arg| {
+                *arg == "--elaborated" || *arg == "--composed" || *arg == "--instances"
+            });
             let path = args.get(if flag.is_some() { 3 } else { 2 });
             match path {
                 Some(path) if flag.is_some_and(|flag| flag == "--instances") => {
                     run_dump(prism_cli::dump_instance_mir(std::path::Path::new(path)))
                 }
-                Some(path) => run_dump_mir(path, flag.is_some()),
+                Some(path) => run_dump_mir(path, flag.map(String::as_str)),
                 None => {
                     eprintln!("Error: 'dump-mir' command requires a file path argument");
                     process::exit(1);
@@ -388,15 +389,16 @@ fn run_dump_typed_tree(path: &str) {
     }
 }
 
-/// Prints the MIR of `path`, or with `elaborated` its borrow-checked and elaborated MIR. A file
-/// with type errors, or with errors before type checking, is not lowered, and with `elaborated`
-/// a file with borrow errors prints no MIR: its errors are reported with a failure status.
-fn run_dump_mir(path: &str, elaborated: bool) {
+/// Prints the MIR of `path`, or with `--elaborated` its borrow-checked and elaborated MIR, or with
+/// `--composed` that MIR through the compose transform. A file with type errors, or with errors
+/// before type checking, is not lowered, and after `--elaborated` or `--composed` a file with
+/// borrow errors prints no MIR: its errors are reported with a failure status.
+fn run_dump_mir(path: &str, flag: Option<&str>) {
     let path = std::path::Path::new(path);
-    let dump = if elaborated {
-        prism_cli::dump_elaborated_mir(path)
-    } else {
-        prism_cli::dump_mir(path)
+    let dump = match flag {
+        Some("--elaborated") => prism_cli::dump_elaborated_mir(path),
+        Some("--composed") => prism_cli::dump_composed_mir(path),
+        _ => prism_cli::dump_mir(path),
     };
     match dump {
         Ok(dump) => print!("{}", dump.text),

@@ -1,0 +1,240 @@
+//! Restart functions and root content adapters (D10 and D15 of `compose-transform`).
+//!
+//! A skippable composable `F` gets `F#restart`, a closure capturing nothing of type
+//! `(Int) -> Unit`: it reads each kept argument from the slots of its scope's group, in
+//! parameter order, and calls `F` with them, the composer it was given and change words with
+//! the force bit and every parameter the same. Ending a restart group with it allocates
+//! nothing. A body calling `composition` or `setContent` gets `<symbol>#root-content`, a closure
+//! owning the content, which it calls with the composer and the force bit.
+
+use crate::rewrite::{bit_position, word_count, FORCE, SAME};
+use prism_ast::Span;
+use prism_mir::{
+    BasicBlock, Body, BodyId, BodyOwner, Callee, CaptureMode, ComposerOperation, Constant,
+    LocalDeclaration, LocalId, LocalKind, Operand, Place, Statement, StatementKind, Terminator,
+    TerminatorKind,
+};
+use prism_typed_tree::{Arena, Type};
+
+fn local(ty: Type, kind: LocalKind, name: Option<String>, span: Span) -> LocalDeclaration {
+    LocalDeclaration {
+        ty,
+        kind,
+        mutable: false,
+        name,
+        binding: None,
+        escaping: false,
+        span,
+    }
+}
+
+fn block(statements: Vec<Statement>, kind: TerminatorKind, span: Span) -> BasicBlock {
+    BasicBlock {
+        statements,
+        terminator: Terminator { kind, span },
+    }
+}
+
+/// The restart function of the skippable composable `function`, whose body is `original` as
+/// elaborated, with `declared` parameters.
+pub(crate) fn restart_body(
+    original: &Body,
+    function: BodyId,
+    composed: &Body,
+    declared: usize,
+    span: Span,
+) -> Body {
+    let BodyOwner::Function(path) = &original.owner else {
+        panic!("internal error: a restart function of a body that is not a function");
+    };
+    let mut locals = Arena::new();
+    locals.alloc(local(Type::Unit, LocalKind::Return, None, span));
+    let composer = locals.alloc(local(
+        Type::Int,
+        LocalKind::Argument,
+        Some("$composer".to_string()),
+        span,
+    ));
+    let parameter_types: Vec<Type> = (1..=declared)
+        .map(|index| composed.locals[LocalId(index as u32)].ty.clone())
+        .collect();
+    let kept: Vec<LocalId> = parameter_types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            let name = composed.locals[LocalId((index + 1) as u32)].name.clone();
+            locals.alloc(local(ty.clone(), LocalKind::Temporary, name, span))
+        })
+        .collect();
+    let copy = |local: LocalId| Operand::Copy(Place::local(local), span);
+    let mut blocks = Arena::new();
+    let lives: Vec<Statement> = kept
+        .iter()
+        .map(|local| Statement {
+            kind: StatementKind::StorageLive(*local),
+            span,
+        })
+        .collect();
+    // One block per kept argument, read in parameter order.
+    for (index, (local, ty)) in kept.iter().zip(&parameter_types).enumerate() {
+        let statements = if index == 0 {
+            lives.clone()
+        } else {
+            Vec::new()
+        };
+        blocks.alloc(block(
+            statements,
+            TerminatorKind::Call {
+                callee: Callee::Composer(ComposerOperation::KeptParameter {
+                    index: index as u32,
+                    ty: ty.clone(),
+                }),
+                arguments: vec![copy(composer)],
+                parameters: vec![Type::Int],
+                escaping: vec![false],
+                type_arguments: Vec::new(),
+                destination: Place::local(*local),
+                target: Some(prism_mir::BlockId((index + 1) as u32)),
+                is_compose: false,
+            },
+            span,
+        ));
+    }
+    // The call of the composable: the kept arguments, the composer, and the force bit with
+    // every parameter the same.
+    let words = word_count(declared);
+    let mut constants = vec![0i64; words];
+    constants[0] |= FORCE;
+    for index in 0..declared {
+        let (word, shift) = bit_position(index);
+        constants[word] |= SAME << shift;
+    }
+    let mut arguments: Vec<Operand> = kept
+        .iter()
+        .zip(&parameter_types)
+        .map(|(local, ty)| {
+            if crate::stability::is_function_parameter(ty) {
+                Operand::Move(Place::local(*local), span)
+            } else {
+                copy(*local)
+            }
+        })
+        .collect();
+    arguments.push(copy(composer));
+    arguments.extend(
+        constants
+            .into_iter()
+            .map(|word| Operand::Constant(Constant::Int(word))),
+    );
+    let mut parameters = original
+        .arguments()
+        .map(|local| original.locals[local].ty.clone())
+        .collect::<Vec<_>>();
+    parameters.extend(std::iter::repeat_n(Type::Int, 1 + words));
+    let escaping = original
+        .arguments()
+        .map(|local| original.locals[local].escaping)
+        .chain(std::iter::repeat_n(false, 1 + words))
+        .collect();
+    let type_arguments = original
+        .type_parameters
+        .iter()
+        .map(|parameter| parameter.as_type())
+        .collect();
+    let call_block = blocks.len();
+    blocks.alloc(block(
+        if declared == 0 { lives } else { Vec::new() },
+        TerminatorKind::Call {
+            callee: Callee::Function(path.clone()),
+            arguments,
+            parameters,
+            escaping,
+            type_arguments,
+            destination: Place::return_place(),
+            target: Some(prism_mir::BlockId((call_block + 1) as u32)),
+            is_compose: true,
+        },
+        span,
+    ));
+    let deads = kept
+        .iter()
+        .rev()
+        .map(|local| Statement {
+            kind: StatementKind::StorageDead(*local),
+            span,
+        })
+        .collect();
+    blocks.alloc(block(deads, TerminatorKind::Return, span));
+    Body {
+        owner: BodyOwner::Restart { function },
+        is_compose: false,
+        type_parameters: original.type_parameters.clone(),
+        type_arguments: Vec::new(),
+        locals,
+        argument_count: 1,
+        capture_count: 0,
+        capture_modes: Vec::new(),
+        ownership_reason: None,
+        blocks,
+        groups: Arena::new(),
+        origin: None,
+        span,
+    }
+}
+
+/// The root content adapter of the body `parent`, whose content has type `content_type`.
+pub(crate) fn root_content_body(
+    parent_body: &Body,
+    parent: BodyId,
+    content_type: Type,
+    span: Span,
+) -> Body {
+    let mut locals = Arena::new();
+    locals.alloc(local(Type::Unit, LocalKind::Return, None, span));
+    let composer = locals.alloc(local(
+        Type::Int,
+        LocalKind::Argument,
+        Some("$composer".to_string()),
+        span,
+    ));
+    let content = locals.alloc(local(
+        content_type,
+        LocalKind::Capture,
+        Some("content".to_string()),
+        span,
+    ));
+    let mut blocks = Arena::new();
+    blocks.alloc(block(
+        Vec::new(),
+        TerminatorKind::Call {
+            callee: Callee::Value(Place::local(content), span),
+            arguments: vec![
+                Operand::Copy(Place::local(composer), span),
+                Operand::Constant(Constant::Int(FORCE)),
+            ],
+            parameters: vec![Type::Int, Type::Int],
+            escaping: vec![false, false],
+            type_arguments: Vec::new(),
+            destination: Place::return_place(),
+            target: Some(prism_mir::BlockId(1)),
+            is_compose: true,
+        },
+        span,
+    ));
+    blocks.alloc(block(Vec::new(), TerminatorKind::Return, span));
+    Body {
+        owner: BodyOwner::RootContent { parent },
+        is_compose: false,
+        type_parameters: parent_body.type_parameters.clone(),
+        type_arguments: Vec::new(),
+        locals,
+        argument_count: 1,
+        capture_count: 1,
+        capture_modes: vec![CaptureMode::Owned],
+        ownership_reason: None,
+        blocks,
+        groups: Arena::new(),
+        origin: None,
+        span,
+    }
+}

@@ -1,0 +1,1463 @@
+//! Composing one body (D3 to D5, D8, D11 to D15 of `compose-transform`).
+//!
+//! The body's blocks are replayed in order into new blocks. A composable body first gets the
+//! composer and its change words as arguments after its declared ones, every later local
+//! renumbered. Then:
+//!
+//! - region markers become group starts and ends with their keys;
+//! - composable calls get the composer and change words, each argument's two bits computed from
+//!   a block-local map of what each local copies: a constant, or a parameter of the body, whose
+//!   own bits are forwarded (D4);
+//! - `remember`, `key` and `currentRecomposeScope` become slot reads and writes, movable groups
+//!   and the current scope; in any body, the composition operations become composer
+//!   operations, the content wrapped in a root content adapter (D12, D13, D15);
+//! - every return goes to one end block, which ends the body group.
+//!
+//! The prologue that starts the body group, and for a skippable body keeps and compares the
+//! arguments and decides whether to skip (D8, D11), is built last and becomes `bb0`. The new
+//! temporaries are live from `bb0` to the return. One walk of the body, with constant work per
+//! statement, argument and group.
+
+use crate::stability::{is_function_parameter, is_skippable};
+use crate::{Appended, BodyKeys};
+use prism_ast::Span;
+use prism_mir::{
+    BasicBlock, BitOperator, BlockId, Body, BodyId, BorrowOrigin, Callee, Capture,
+    ComposerOperation, Constant, GroupId, GroupKey, LocalDeclaration, LocalId, LocalKind, MirFile,
+    Operand, Place, Projection, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+};
+use prism_typed_tree::{Arena, ArenaId, BuiltinFunction, Type, TypeTable};
+use std::collections::HashMap;
+
+/// How many parameters one change word describes (D4).
+pub(crate) const PARAMETERS_PER_WORD: usize = 31;
+
+/// The change bits of a parameter.
+pub(crate) const UNCERTAIN: i64 = 0;
+pub(crate) const SAME: i64 = 1;
+pub(crate) const DIFFERENT: i64 = 2;
+pub(crate) const STATIC: i64 = 3;
+/// The force bit, bit 0 of the first change word.
+pub(crate) const FORCE: i64 = 1;
+
+/// The number of change words of a composable with `parameters` parameters.
+pub(crate) fn word_count(parameters: usize) -> usize {
+    parameters.div_ceil(PARAMETERS_PER_WORD).max(1)
+}
+
+/// The word and the shift of parameter `index`'s two bits.
+pub(crate) fn bit_position(index: usize) -> (usize, i64) {
+    (
+        index / PARAMETERS_PER_WORD,
+        1 + 2 * (index % PARAMETERS_PER_WORD) as i64,
+    )
+}
+
+/// Whether a call of `builtin` is a composition operation, which any body may call.
+pub(crate) fn is_composition_operation(builtin: BuiltinFunction) -> bool {
+    matches!(
+        builtin,
+        BuiltinFunction::Composition
+            | BuiltinFunction::SetContent
+            | BuiltinFunction::Recompose
+            | BuiltinFunction::DumpComposition
+            | BuiltinFunction::InvalidateScope
+    )
+}
+
+/// The `(Int) -> Unit` type of restart functions and root content adapters.
+pub(crate) fn word_function() -> Type {
+    Type::Fn {
+        is_compose: false,
+        receiver: false,
+        params: vec![Type::Int],
+        escaping: vec![false],
+        ret: Box::new(Type::Unit),
+    }
+}
+
+/// What a local holds a copy of, in the block being replayed (D4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// A constant or a value of a top-level `val`.
+    Static,
+    /// A shared borrow of a top-level `val`, whose referent copied out is static.
+    TopLevelReference,
+    /// Declared parameter `index` of the body (0-based), the receiver and context included.
+    Parameter(usize),
+}
+
+/// The composed form of body `id` of `file`.
+pub(crate) fn compose_body(
+    file: &MirFile,
+    id: BodyId,
+    keys: &BodyKeys,
+    appended: &mut Appended,
+) -> Body {
+    let original = &file.bodies[id];
+    let mut rewriter = Rewriter::new(file, id, keys, appended);
+    if original.is_compose {
+        rewriter.add_composer_arguments();
+    }
+    rewriter.replay();
+    rewriter.finish()
+}
+
+pub(crate) struct Rewriter<'a> {
+    file: &'a MirFile,
+    types: &'a TypeTable,
+    id: BodyId,
+    keys: &'a BodyKeys,
+    appended: &'a mut Appended,
+    body: Body,
+    /// The original blocks, as the borrow checker left them, their locals renumbered.
+    original: Vec<BasicBlock>,
+    blocks: Vec<BasicBlock>,
+    current: BlockId,
+    pending: Vec<Statement>,
+    /// The locals this rewrite adds, live from the entry to the return.
+    temporaries: Vec<LocalId>,
+    /// The number of declared parameters, the context and the receiver included.
+    declared: usize,
+    composer: Option<LocalId>,
+    changed: Vec<LocalId>,
+    /// Per declared parameter, the local holding what the body knows of it, once needed.
+    bits: Vec<Option<LocalId>>,
+    skippable: bool,
+    /// The block every return of a composable body goes to.
+    end: Option<BlockId>,
+    /// The block that starts the replayed entry block.
+    entry: BlockId,
+    span: Span,
+    /// What each local of the block being replayed copies.
+    sources: HashMap<LocalId, Source>,
+    /// The regions open in the block being replayed, innermost last.
+    regions: Vec<GroupId>,
+    /// The next ordinal of `key` calls, per region.
+    key_ordinals: HashMap<Option<GroupId>, u32>,
+    /// The root content adapter of the body, once one is needed.
+    adapter: Option<(BodyId, Type)>,
+    /// A `Unit` temporary that operations without a result write.
+    unit: Option<LocalId>,
+}
+
+impl<'a> Rewriter<'a> {
+    fn new(file: &'a MirFile, id: BodyId, keys: &'a BodyKeys, appended: &'a mut Appended) -> Self {
+        let body = file.bodies[id].clone();
+        let declared = body.argument_count;
+        let skippable = is_skippable(&body, &file.types);
+        Rewriter {
+            file,
+            types: &file.types,
+            id,
+            keys,
+            appended,
+            span: body.span,
+            original: Vec::new(),
+            blocks: Vec::new(),
+            current: BlockId(0),
+            pending: Vec::new(),
+            temporaries: Vec::new(),
+            declared,
+            composer: None,
+            changed: Vec::new(),
+            bits: vec![None; declared],
+            skippable,
+            end: None,
+            entry: BlockId(0),
+            body,
+            sources: HashMap::new(),
+            regions: Vec::new(),
+            key_ordinals: HashMap::new(),
+            adapter: None,
+            unit: None,
+        }
+    }
+
+    /// Inserts `$composer` and the change words after the declared arguments, renumbering
+    /// every later local (D19).
+    fn add_composer_arguments(&mut self) {
+        let words = word_count(self.declared);
+        let added = 1 + words;
+        let first = self.declared + 1;
+        renumber_locals(&mut self.body, first, added);
+        let old = std::mem::take(&mut self.body.locals).into_vec();
+        let mut locals = Arena::new();
+        let mut old = old.into_iter();
+        for _ in 0..first {
+            locals.alloc(old.next().expect("the return place and the arguments"));
+        }
+        let argument = |name: String| LocalDeclaration {
+            ty: Type::Int,
+            kind: LocalKind::Argument,
+            mutable: false,
+            name: Some(name),
+            binding: None,
+            escaping: false,
+            span: self.span,
+        };
+        self.composer = Some(locals.alloc(argument("$composer".to_string())));
+        for word in 0..words {
+            let name = if word == 0 {
+                "$changed".to_string()
+            } else {
+                format!("$changed{}", word)
+            };
+            self.changed.push(locals.alloc(argument(name)));
+        }
+        for local in old {
+            locals.alloc(local);
+        }
+        self.body.locals = locals;
+        self.body.argument_count += added;
+    }
+
+    // Blocks.
+
+    fn new_block(&mut self) -> BlockId {
+        self.blocks.push(BasicBlock {
+            statements: Vec::new(),
+            terminator: Terminator {
+                kind: TerminatorKind::Unreachable,
+                span: self.span,
+            },
+        });
+        BlockId((self.blocks.len() - 1) as u32)
+    }
+
+    /// Ends the current block with `kind`; the caller sets the next current block.
+    fn terminate(&mut self, kind: TerminatorKind, span: Span) {
+        let block = &mut self.blocks[self.current.index()];
+        block.statements = std::mem::take(&mut self.pending);
+        block.terminator = Terminator { kind, span };
+    }
+
+    fn push(&mut self, kind: StatementKind, span: Span) {
+        self.pending.push(Statement { kind, span });
+    }
+
+    fn assign(&mut self, local: LocalId, rvalue: Rvalue, span: Span) {
+        self.push(StatementKind::assign(Place::local(local), rvalue), span);
+    }
+
+    fn goto(&mut self, target: BlockId, span: Span) {
+        self.terminate(TerminatorKind::Goto(target), span);
+    }
+
+    /// Ends the current block with a switch on `value` and continues nowhere.
+    fn switch(&mut self, value: Operand, targets: Vec<(u64, BlockId)>, otherwise: BlockId) {
+        let span = self.span;
+        self.terminate(
+            TerminatorKind::SwitchInt {
+                value,
+                targets,
+                otherwise,
+            },
+            span,
+        );
+    }
+
+    /// Ends the current block with a call writing `destination`, and continues in a new block.
+    fn call(
+        &mut self,
+        callee: Callee,
+        arguments: Vec<Operand>,
+        parameters: Vec<Type>,
+        destination: Place,
+        span: Span,
+    ) {
+        let next = self.new_block();
+        let escaping = vec![false; parameters.len()];
+        self.terminate(
+            TerminatorKind::Call {
+                callee,
+                arguments,
+                parameters,
+                escaping,
+                type_arguments: Vec::new(),
+                destination,
+                target: Some(next),
+                is_compose: false,
+            },
+            span,
+        );
+        self.current = next;
+    }
+
+    /// A call of a composer operation.
+    fn operation(
+        &mut self,
+        operation: ComposerOperation,
+        arguments: Vec<Operand>,
+        parameters: Vec<Type>,
+        destination: Place,
+        span: Span,
+    ) {
+        self.call(
+            Callee::Composer(operation),
+            arguments,
+            parameters,
+            destination,
+            span,
+        );
+    }
+
+    // Locals.
+
+    fn temporary(&mut self, ty: Type) -> LocalId {
+        let local = self.body.locals.alloc(LocalDeclaration {
+            ty,
+            kind: LocalKind::Temporary,
+            mutable: false,
+            name: None,
+            binding: None,
+            escaping: false,
+            span: self.span,
+        });
+        self.temporaries.push(local);
+        local
+    }
+
+    fn unit(&mut self) -> Place {
+        let local = match self.unit {
+            Some(local) => local,
+            None => {
+                let local = self.temporary(Type::Unit);
+                self.unit = Some(local);
+                local
+            }
+        };
+        Place::local(local)
+    }
+
+    fn composer(&self) -> Operand {
+        Operand::Copy(
+            Place::local(self.composer.expect("a composable body has a composer")),
+            self.span,
+        )
+    }
+
+    fn copy(&self, local: LocalId) -> Operand {
+        Operand::Copy(Place::local(local), self.span)
+    }
+
+    fn int(value: i64) -> Operand {
+        Operand::Constant(Constant::Int(value))
+    }
+
+    fn declared_type(&self, index: usize) -> Type {
+        self.body.locals[LocalId((index + 1) as u32)].ty.clone()
+    }
+
+    /// The local holding what the body knows of declared parameter `index` (D4): the bits it
+    /// was passed, or in a skippable body same or different after its comparison.
+    fn parameter_bits(&mut self, index: usize) -> LocalId {
+        if let Some(local) = self.bits[index] {
+            return local;
+        }
+        let local = self.temporary(Type::Int);
+        self.bits[index] = Some(local);
+        local
+    }
+
+    // Replaying the body.
+
+    fn replay(&mut self) {
+        let original = &self.file.bodies[self.id];
+        // The regions open at each block's entry, whose nesting the validator checked.
+        let open = prism_mir::open_regions(original).unwrap_or_else(|message| {
+            panic!(
+                "internal error: the regions of {} are not nested: {}",
+                self.file.body_name(self.id),
+                message
+            )
+        });
+        self.original = std::mem::take(&mut self.body.blocks).into_vec();
+        for _ in 0..self.original.len() {
+            self.new_block();
+        }
+        if self.body.is_compose {
+            self.end = Some(self.new_block());
+        }
+        for (index, open) in open.into_iter().enumerate() {
+            self.current = BlockId(index as u32);
+            self.sources.clear();
+            self.regions = open.unwrap_or_default();
+            let block = std::mem::replace(
+                &mut self.original[index],
+                BasicBlock {
+                    statements: Vec::new(),
+                    terminator: Terminator {
+                        kind: TerminatorKind::Unreachable,
+                        span: self.span,
+                    },
+                },
+            );
+            for statement in block.statements {
+                self.statement(statement);
+            }
+            self.terminator(block.terminator);
+        }
+    }
+
+    fn statement(&mut self, statement: Statement) {
+        let span = statement.span;
+        match statement.kind {
+            StatementKind::GroupStart(group) => {
+                let key = GroupKey {
+                    hash: self.keys.region_or_body(self.id, Some(group)),
+                    label: self.file.bodies[self.id].groups[group].step.describe(),
+                };
+                let composer = self.composer();
+                let unit = self.unit();
+                self.operation(
+                    ComposerOperation::StartGroup { key },
+                    vec![composer],
+                    vec![Type::Int],
+                    unit,
+                    span,
+                );
+                self.regions.push(group);
+            }
+            StatementKind::GroupEnd(_) => {
+                let composer = self.composer();
+                let unit = self.unit();
+                self.operation(
+                    ComposerOperation::EndGroup,
+                    vec![composer],
+                    vec![Type::Int],
+                    unit,
+                    span,
+                );
+                self.regions.pop();
+            }
+            StatementKind::Assign(place, rvalue) => {
+                self.note_assignment(&place, &rvalue);
+                self.pending.push(Statement {
+                    kind: StatementKind::Assign(place, rvalue),
+                    span,
+                });
+            }
+            kind => self.pending.push(Statement { kind, span }),
+        }
+    }
+
+    /// Records what the assigned local copies, for the change bits of a later call (D4).
+    fn note_assignment(&mut self, place: &Place, rvalue: &Rvalue) {
+        let Some(local) = place.as_local() else {
+            self.sources.remove(&place.local);
+            return;
+        };
+        let source = match rvalue {
+            Rvalue::Use(Operand::Constant(Constant::TopLevelValue(_))) => {
+                Some(Source::TopLevelReference)
+            }
+            Rvalue::Use(Operand::Constant(_)) => Some(Source::Static),
+            Rvalue::Use(Operand::Copy(source, _) | Operand::Move(source, _)) => {
+                self.place_source(source)
+            }
+            _ => None,
+        };
+        match source {
+            Some(source) => {
+                self.sources.insert(local, source);
+            }
+            None => {
+                self.sources.remove(&local);
+            }
+        }
+    }
+
+    /// What reading `place` gives a copy of, when the transform knows it.
+    fn place_source(&self, place: &Place) -> Option<Source> {
+        match place.projections.as_slice() {
+            [] if place.local.index() >= 1 && place.local.index() <= self.declared => {
+                Some(Source::Parameter(place.local.index() - 1))
+            }
+            [] => self
+                .sources
+                .get(&place.local)
+                .copied()
+                .filter(|source| *source != Source::TopLevelReference),
+            [Projection::Deref] => (self.sources.get(&place.local)
+                == Some(&Source::TopLevelReference))
+            .then_some(Source::Static),
+            _ => None,
+        }
+    }
+
+    fn terminator(&mut self, terminator: Terminator) {
+        let span = terminator.span;
+        match terminator.kind {
+            TerminatorKind::Return => match self.end {
+                Some(end) => self.goto(end, span),
+                None => self.terminate(TerminatorKind::Return, span),
+            },
+            TerminatorKind::Call {
+                callee: Callee::Builtin(builtin),
+                arguments,
+                parameters,
+                escaping,
+                type_arguments,
+                destination,
+                target,
+                is_compose,
+            } if builtin.is_compose_runtime() => {
+                let call = IntrinsicCall {
+                    builtin,
+                    arguments,
+                    parameters,
+                    type_arguments,
+                    destination,
+                    target,
+                    span,
+                };
+                if is_composition_operation(builtin) || self.body.is_compose {
+                    self.intrinsic(call);
+                } else {
+                    // A composable intrinsic outside a composable body never type-checks.
+                    let IntrinsicCall {
+                        arguments,
+                        parameters,
+                        type_arguments,
+                        destination,
+                        target,
+                        ..
+                    } = call;
+                    self.terminate(
+                        TerminatorKind::Call {
+                            callee: Callee::Builtin(builtin),
+                            arguments,
+                            parameters,
+                            escaping,
+                            type_arguments,
+                            destination,
+                            target,
+                            is_compose,
+                        },
+                        span,
+                    );
+                }
+            }
+            TerminatorKind::Call {
+                callee,
+                mut arguments,
+                mut parameters,
+                mut escaping,
+                type_arguments,
+                destination,
+                target,
+                is_compose: true,
+            } if self.body.is_compose => {
+                let words = self.change_words(&arguments, span);
+                arguments.push(self.composer());
+                parameters.push(Type::Int);
+                escaping.push(false);
+                for word in words {
+                    arguments.push(word);
+                    parameters.push(Type::Int);
+                    escaping.push(false);
+                }
+                if let Some(local) = destination.as_local() {
+                    self.sources.remove(&local);
+                }
+                self.terminate(
+                    TerminatorKind::Call {
+                        callee,
+                        arguments,
+                        parameters,
+                        escaping,
+                        type_arguments,
+                        destination,
+                        target,
+                        is_compose: true,
+                    },
+                    span,
+                );
+            }
+            kind => {
+                if let TerminatorKind::Call { destination, .. } = &kind {
+                    if let Some(local) = destination.as_local() {
+                        self.sources.remove(&local);
+                    }
+                }
+                self.terminate(kind, span)
+            }
+        }
+    }
+
+    /// The change words of a composable call with `arguments`, in the callee's parameter order
+    /// (D4): static for a constant or a value of a top-level `val`, the caller's own bits for a
+    /// copy of its parameter, uncertain otherwise. A word with no forwarded bits is a constant.
+    fn change_words(&mut self, arguments: &[Operand], span: Span) -> Vec<Operand> {
+        let words = word_count(arguments.len());
+        let mut constants = vec![0i64; words];
+        let mut forwarded: Vec<Vec<(LocalId, i64)>> = vec![Vec::new(); words];
+        for (index, argument) in arguments.iter().enumerate() {
+            let (word, shift) = bit_position(index);
+            let source = match argument {
+                Operand::Constant(_) => Some(Source::Static),
+                Operand::Copy(place, _) | Operand::Move(place, _) => self.place_source(place),
+            };
+            match source {
+                Some(Source::Static) => constants[word] |= STATIC << shift,
+                Some(Source::Parameter(parameter)) => {
+                    let bits = self.parameter_bits(parameter);
+                    forwarded[word].push((bits, shift));
+                }
+                Some(Source::TopLevelReference) | None => {}
+            }
+        }
+        let mut operands = Vec::with_capacity(words);
+        for (constant, forwarded) in constants.into_iter().zip(forwarded) {
+            if forwarded.is_empty() {
+                operands.push(Self::int(constant));
+                continue;
+            }
+            let word = self.temporary(Type::Int);
+            self.assign(word, Rvalue::Use(Self::int(constant)), span);
+            for (bits, shift) in forwarded {
+                let part = self.temporary(Type::Int);
+                self.assign(
+                    part,
+                    Rvalue::Bits(BitOperator::ShiftLeft, self.copy(bits), Self::int(shift)),
+                    span,
+                );
+                self.assign(
+                    word,
+                    Rvalue::Bits(BitOperator::Or, self.copy(word), self.copy(part)),
+                    span,
+                );
+            }
+            operands.push(self.copy(word));
+        }
+        operands
+    }
+
+    // The intrinsics of `/prism/compose/runtime` (D12, D13, D15).
+
+    fn intrinsic(&mut self, call: IntrinsicCall) {
+        let IntrinsicCall {
+            builtin,
+            arguments,
+            parameters,
+            type_arguments,
+            destination,
+            target,
+            span,
+        } = call;
+        let target = target.expect("a compose intrinsic returns");
+        match builtin {
+            BuiltinFunction::Remember => self.remember(
+                arguments,
+                parameters,
+                type_arguments,
+                destination,
+                target,
+                span,
+            ),
+            BuiltinFunction::Key => self.key(arguments, target, span),
+            BuiltinFunction::CurrentRecomposeScope => {
+                let composer = self.composer();
+                self.operation(
+                    ComposerOperation::CurrentScope,
+                    vec![composer],
+                    vec![Type::Int],
+                    destination,
+                    span,
+                );
+                self.goto(target, span);
+            }
+            BuiltinFunction::Composition | BuiltinFunction::SetContent => {
+                let content_index = arguments.len() - 1;
+                let content_type = parameters[content_index].clone();
+                let mut arguments = arguments;
+                let content = arguments.pop().expect("the content");
+                let adapter = self.adapter_value(content, content_type, span);
+                arguments.push(Operand::Move(Place::local(adapter), span));
+                let mut parameters = parameters;
+                parameters[content_index] = word_function();
+                let operation = if builtin == BuiltinFunction::Composition {
+                    ComposerOperation::StartComposition
+                } else {
+                    ComposerOperation::SetContent
+                };
+                self.operation(operation, arguments, parameters, destination, span);
+                self.goto(target, span);
+            }
+            BuiltinFunction::Recompose
+            | BuiltinFunction::DumpComposition
+            | BuiltinFunction::InvalidateScope => {
+                let operation = match builtin {
+                    BuiltinFunction::Recompose => ComposerOperation::Recompose,
+                    BuiltinFunction::DumpComposition => ComposerOperation::Dump,
+                    _ => ComposerOperation::Invalidate,
+                };
+                self.operation(operation, arguments, parameters, destination, span);
+                self.goto(target, span);
+            }
+            other => panic!("internal error: {} is no compose intrinsic", other.name()),
+        }
+    }
+
+    /// `remember(keys..., calculation)` (D12): each key compared with its slot, which always
+    /// advances the cursor; when none changed, the slot of the value read; when it is missing
+    /// or a key changed, the calculation run and its result stored, forgetting the old value.
+    fn remember(
+        &mut self,
+        mut arguments: Vec<Operand>,
+        parameters: Vec<Type>,
+        type_arguments: Vec<Type>,
+        destination: Place,
+        target: BlockId,
+        span: Span,
+    ) {
+        let value_type = type_arguments[0].clone();
+        let calculation = arguments.pop().expect("a calculation");
+        let calculation = self.held_in_local(calculation, parameters.last().unwrap(), span);
+        let changed = self.temporary(Type::Bool);
+        self.assign(
+            changed,
+            Rvalue::Use(Operand::Constant(Constant::Bool(false))),
+            span,
+        );
+        for (index, key) in arguments.into_iter().enumerate() {
+            let key_type = parameters[index].substitute(&type_arguments);
+            let result = self.temporary(Type::Bool);
+            let composer = self.composer();
+            self.operation(
+                ComposerOperation::Changed(key_type.clone()),
+                vec![composer, key],
+                vec![Type::Int, key_type],
+                Place::local(result),
+                span,
+            );
+            let set = self.new_block();
+            let next = self.new_block();
+            self.switch(self.copy(result), vec![(0, next)], set);
+            self.current = set;
+            self.assign(
+                changed,
+                Rvalue::Use(Operand::Constant(Constant::Bool(true))),
+                span,
+            );
+            self.goto(next, span);
+            self.current = next;
+        }
+        let read = self.new_block();
+        let compute = self.new_block();
+        let done = self.new_block();
+        self.switch(self.copy(changed), vec![(0, read)], compute);
+        self.current = read;
+        let composer = self.composer();
+        self.terminate(
+            TerminatorKind::Remembered {
+                composer,
+                slot_type: value_type.clone(),
+                destination: destination.clone(),
+                found: done,
+                missing: compute,
+            },
+            span,
+        );
+        self.current = compute;
+        let value = self.temporary(value_type.clone());
+        let calculation_type = self.body.locals[calculation].ty.clone();
+        let calculation_parameters = match &calculation_type {
+            Type::Fn { params, .. } => params.clone(),
+            _ => Vec::new(),
+        };
+        self.call(
+            Callee::Value(Place::local(calculation), span),
+            Vec::new(),
+            calculation_parameters,
+            Place::local(value),
+            span,
+        );
+        self.push(
+            StatementKind::assign(destination, Rvalue::Use(self.copy(value))),
+            span,
+        );
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::SetSlot(value_type.clone()),
+            vec![composer, self.copy(value)],
+            vec![Type::Int, value_type],
+            unit,
+            span,
+        );
+        self.goto(done, span);
+        self.current = done;
+        // The calculation was moved into the call, which would have dropped it.
+        self.drop_then(Place::local(calculation), target, span);
+    }
+
+    /// `key(value) { content }` (D13): the content called in a movable group of the region's
+    /// next `key` key, whose data key is `value`.
+    fn key(&mut self, mut arguments: Vec<Operand>, target: BlockId, span: Span) {
+        let content_type = match &arguments[1] {
+            Operand::Copy(place, _) | Operand::Move(place, _) => place.ty(&self.body, self.types),
+            Operand::Constant(_) => panic!("internal error: a constant content"),
+        };
+        let content = arguments.pop().expect("the content");
+        let content = self.held_in_local(content, &content_type, span);
+        let value = arguments.pop().expect("the key's value");
+        let region = self.regions.last().copied();
+        let ordinal = self.key_ordinals.entry(region).or_insert(0);
+        let key = GroupKey {
+            hash: crate::keys::movable_key(self.keys.region_or_body(self.id, region), *ordinal),
+            label: format!("key {}", ordinal),
+        };
+        *ordinal += 1;
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::StartMovableGroup { key },
+            vec![composer, value],
+            vec![Type::Int, Type::Int],
+            unit.clone(),
+            span,
+        );
+        let words = self.change_words(&[], span);
+        let mut call_arguments = vec![self.composer()];
+        call_arguments.extend(words);
+        let call_parameters = vec![Type::Int; call_arguments.len()];
+        let calling = self.current;
+        self.call(
+            Callee::Value(Place::local(content), span),
+            call_arguments,
+            call_parameters,
+            unit.clone(),
+            span,
+        );
+        // The call of a composable function value is composable.
+        if let TerminatorKind::Call { is_compose, .. } =
+            &mut self.blocks[calling.index()].terminator.kind
+        {
+            *is_compose = true;
+        }
+        let composer = self.composer();
+        self.operation(
+            ComposerOperation::EndGroup,
+            vec![composer],
+            vec![Type::Int],
+            unit,
+            span,
+        );
+        self.drop_then(Place::local(content), target, span);
+    }
+
+    /// `operand`, of type `ty`, in a whole local: its own when it moves one, else a temporary.
+    fn held_in_local(&mut self, operand: Operand, ty: &Type, span: Span) -> LocalId {
+        match &operand {
+            Operand::Move(place, _) | Operand::Copy(place, _) if place.projections.is_empty() => {
+                place.local
+            }
+            _ => {
+                let local = self.temporary(ty.clone());
+                self.assign(local, Rvalue::Use(operand), span);
+                local
+            }
+        }
+    }
+
+    /// Drops `place` when its type needs a drop, then goes to `target`.
+    fn drop_then(&mut self, place: Place, target: BlockId, span: Span) {
+        let ty = place.ty(&self.body, self.types);
+        if prism_mir::needs_drop(&ty, self.types) {
+            self.terminate(TerminatorKind::Drop { place, target }, span);
+        } else {
+            self.goto(target, span);
+        }
+    }
+
+    /// The root content adapter value built from `content` (D15), in a new temporary.
+    fn adapter_value(&mut self, content: Operand, content_type: Type, span: Span) -> LocalId {
+        let adapter = match &self.adapter {
+            Some((adapter, _)) => *adapter,
+            None => {
+                let adapter = self.appended.reserve();
+                self.adapter = Some((adapter, content_type.clone()));
+                adapter
+            }
+        };
+        let value = self.temporary(word_function());
+        self.assign(
+            value,
+            Rvalue::Closure {
+                body: adapter,
+                captures: vec![Capture::Owned(content)],
+            },
+            span,
+        );
+        value
+    }
+
+    // The prologue and the end.
+
+    fn finish(mut self) -> Body {
+        if self.body.is_compose {
+            self.composable_prologue_and_end();
+        }
+        if let Some((adapter, content_type)) = self.adapter.take() {
+            let body =
+                crate::restart::root_content_body(&self.body, self.id, content_type, self.span);
+            self.appended.fill(adapter, body);
+        }
+        // Every new temporary is live from the entry to every return.
+        let lives: Vec<Statement> = self
+            .temporaries
+            .iter()
+            .map(|local| Statement {
+                kind: StatementKind::StorageLive(*local),
+                span: self.span,
+            })
+            .collect();
+        let deads: Vec<Statement> = self
+            .temporaries
+            .iter()
+            .rev()
+            .map(|local| Statement {
+                kind: StatementKind::StorageDead(*local),
+                span: self.span,
+            })
+            .collect();
+        for block in &mut self.blocks {
+            if matches!(block.terminator.kind, TerminatorKind::Return) {
+                block.statements.extend(deads.iter().cloned());
+            }
+        }
+        let entry = &mut self.blocks[0].statements;
+        let rest = std::mem::take(entry);
+        entry.extend(lives);
+        entry.extend(rest);
+        let mut arena = Arena::new();
+        for block in self.blocks {
+            arena.alloc(block);
+        }
+        self.body.blocks = arena;
+        self.body.groups = Arena::new();
+        prism_mir::merge_goto_blocks(&mut self.body);
+        self.body
+    }
+
+    /// Builds the entry and the end of a composable body: the replayed entry block moves out of
+    /// `bb0`, which becomes the prologue starting the body group (D11).
+    fn composable_prologue_and_end(&mut self) {
+        // The replayed entry moves to a block of its own; nothing jumps to `bb0`.
+        let moved = self.new_block();
+        self.blocks.swap(0, moved.index());
+        self.entry = moved;
+        for block in &mut self.blocks {
+            for successor in block.terminator.kind.successors_mut() {
+                if *successor == BlockId(0) {
+                    *successor = moved;
+                }
+            }
+        }
+        let (key, label) = self.keys.body(self.id);
+        let key = GroupKey {
+            hash: key,
+            label: label.to_string(),
+        };
+        self.current = BlockId(0);
+        let end = self.end.expect("a composable body has an end");
+        let ret = self.new_block();
+        if self.skippable {
+            let restarted = self.skippable_prologue(key.clone());
+            self.skippable_end(end, ret, restarted);
+        } else {
+            self.compute_passed_bits();
+            let composer = self.composer();
+            let unit = self.unit();
+            self.operation(
+                ComposerOperation::StartGroup { key },
+                vec![composer],
+                vec![Type::Int],
+                unit.clone(),
+                self.span,
+            );
+            self.goto(self.entry, self.span);
+            self.current = end;
+            let composer = self.composer();
+            self.operation(
+                ComposerOperation::EndGroup,
+                vec![composer],
+                vec![Type::Int],
+                unit,
+                self.span,
+            );
+            self.goto(ret, self.span);
+        }
+        self.current = ret;
+        self.terminate(TerminatorKind::Return, self.span);
+    }
+
+    /// Assigns, in the current block, each parameter's bits as the body was passed them, for
+    /// the parameters whose bits a call forwards.
+    fn compute_passed_bits(&mut self) {
+        for index in 0..self.declared {
+            let Some(bits) = self.bits[index] else {
+                continue;
+            };
+            let (word, shift) = bit_position(index);
+            let word = self.changed[word];
+            self.assign(
+                bits,
+                Rvalue::Bits(BitOperator::ShiftRight, self.copy(word), Self::int(shift)),
+                self.span,
+            );
+            self.assign(
+                bits,
+                Rvalue::Bits(BitOperator::And, self.copy(bits), Self::int(3)),
+                self.span,
+            );
+        }
+    }
+
+    /// The prologue of a skippable body (D7, D8, D11), from the current block: with function
+    /// parameters, a test that each is keepable, else the replaceable path; the restart group;
+    /// each argument kept by its bits; the skip decision. Returns the `Bool` recording whether
+    /// the restart group was started, when there is a replaceable path.
+    fn skippable_prologue(&mut self, key: GroupKey) -> Option<LocalId> {
+        let span = self.span;
+        let functions: Vec<usize> = (0..self.declared)
+            .filter(|index| is_function_parameter(&self.declared_type(*index)))
+            .collect();
+        for index in 0..self.declared {
+            self.parameter_bits(index);
+        }
+        let restarted = (!functions.is_empty()).then(|| self.temporary(Type::Bool));
+        let replaceable = restarted.map(|_| self.new_block());
+        if let Some(replaceable) = replaceable {
+            for &index in &functions {
+                let keepable = self.temporary(Type::Bool);
+                let borrow = self.parameter_borrow(index);
+                self.operation(
+                    ComposerOperation::Keepable,
+                    vec![Operand::Move(Place::local(borrow), span)],
+                    vec![self.body.locals[borrow].ty.clone()],
+                    Place::local(keepable),
+                    span,
+                );
+                let next = self.new_block();
+                self.switch(self.copy(keepable), vec![(0, replaceable)], next);
+                self.current = next;
+            }
+        }
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::StartRestartGroup { key: key.clone() },
+            vec![composer],
+            vec![Type::Int],
+            unit.clone(),
+            span,
+        );
+        if let Some(restarted) = restarted {
+            self.assign(
+                restarted,
+                Rvalue::Use(Operand::Constant(Constant::Bool(true))),
+                span,
+            );
+        }
+        let dirty = self.temporary(Type::Bool);
+        self.assign(
+            dirty,
+            Rvalue::Use(Operand::Constant(Constant::Bool(false))),
+            span,
+        );
+        for index in 0..self.declared {
+            self.keep_parameter(index, dirty);
+        }
+        // Skip when nothing forces the body, nothing changed and the scope is valid.
+        let body = self.new_block();
+        let check = self.new_block();
+        let ask = self.new_block();
+        let skip = self.new_block();
+        let force = self.temporary(Type::Int);
+        self.assign(
+            force,
+            Rvalue::Bits(
+                BitOperator::And,
+                self.copy(self.changed[0]),
+                Self::int(FORCE),
+            ),
+            span,
+        );
+        self.switch(self.copy(force), vec![(0, check)], body);
+        self.current = check;
+        self.switch(self.copy(dirty), vec![(0, ask)], body);
+        self.current = ask;
+        let skipping = self.temporary(Type::Bool);
+        let composer = self.composer();
+        self.operation(
+            ComposerOperation::Skipping,
+            vec![composer],
+            vec![Type::Int],
+            Place::local(skipping),
+            span,
+        );
+        self.switch(self.copy(skipping), vec![(0, body)], skip);
+        self.current = skip;
+        // The skip path drops the function values the body owns, which nothing moved yet.
+        for &index in &functions {
+            let next = self.new_block();
+            self.drop_then(Place::local(LocalId((index + 1) as u32)), next, span);
+            self.current = next;
+        }
+        let composer = self.composer();
+        self.operation(
+            ComposerOperation::SkipToGroupEnd,
+            vec![composer],
+            vec![Type::Int],
+            unit.clone(),
+            span,
+        );
+        let end = self.end.expect("an end");
+        self.goto(end, span);
+        self.current = body;
+        self.goto(self.entry, span);
+        if let (Some(replaceable), Some(restarted)) = (replaceable, restarted) {
+            // An unkeepable function argument runs the call in a replaceable group of the same
+            // key, which never matches the restart group (D7).
+            self.current = replaceable;
+            let composer = self.composer();
+            self.operation(
+                ComposerOperation::StartGroup { key },
+                vec![composer],
+                vec![Type::Int],
+                unit,
+                span,
+            );
+            self.assign(
+                restarted,
+                Rvalue::Use(Operand::Constant(Constant::Bool(false))),
+                span,
+            );
+            self.compute_passed_bits();
+            self.goto(self.entry, span);
+        }
+        restarted
+    }
+
+    /// A shared borrow of declared parameter `index`, in a new temporary.
+    fn parameter_borrow(&mut self, index: usize) -> LocalId {
+        let ty = self.declared_type(index);
+        let borrow = self.temporary(Type::Reference {
+            mutable: false,
+            inner: Box::new(ty),
+        });
+        self.assign(
+            borrow,
+            Rvalue::Borrow {
+                mutable: false,
+                origin: BorrowOrigin::Argument,
+                place: Place::local(LocalId((index + 1) as u32)),
+            },
+            self.span,
+        );
+        borrow
+    }
+
+    /// The value of declared parameter `index` to keep in a slot: a copy, or a duplicate of a
+    /// function value, which the body keeps (D8).
+    fn kept_value(&mut self, index: usize) -> Operand {
+        let ty = self.declared_type(index);
+        if !is_function_parameter(&ty) {
+            return self.copy(LocalId((index + 1) as u32));
+        }
+        let borrow = self.parameter_borrow(index);
+        let duplicate = self.temporary(ty.clone());
+        let borrow_type = self.body.locals[borrow].ty.clone();
+        self.operation(
+            ComposerOperation::Duplicate,
+            vec![Operand::Move(Place::local(borrow), self.span)],
+            vec![borrow_type],
+            Place::local(duplicate),
+            self.span,
+        );
+        Operand::Move(Place::local(duplicate), self.span)
+    }
+
+    /// Keeps declared parameter `index` in the next slot of the restart group by its bits
+    /// (D8): uncertain compares it, different stores it, same and static read past the kept
+    /// slot, storing it only when there is none. Sets its bits to what the body now knows, and
+    /// `dirty` when it changed.
+    fn keep_parameter(&mut self, index: usize, dirty: LocalId) {
+        let span = self.span;
+        let ty = self.declared_type(index);
+        let bits = self.parameter_bits(index);
+        let (word, shift) = bit_position(index);
+        let word = self.changed[word];
+        let passed = self.temporary(Type::Int);
+        self.assign(
+            passed,
+            Rvalue::Bits(BitOperator::ShiftRight, self.copy(word), Self::int(shift)),
+            span,
+        );
+        self.assign(
+            passed,
+            Rvalue::Bits(BitOperator::And, self.copy(passed), Self::int(3)),
+            span,
+        );
+        let uncertain = self.new_block();
+        let same = self.new_block();
+        let different = self.new_block();
+        let constant = self.new_block();
+        let next = self.new_block();
+        self.switch(
+            self.copy(passed),
+            vec![
+                (UNCERTAIN as u64, uncertain),
+                (SAME as u64, same),
+                (DIFFERENT as u64, different),
+            ],
+            constant,
+        );
+        let set_bits = |rewriter: &mut Self, value: i64, changed: bool| {
+            rewriter.assign(bits, Rvalue::Use(Self::int(value)), span);
+            if changed {
+                rewriter.assign(
+                    dirty,
+                    Rvalue::Use(Operand::Constant(Constant::Bool(true))),
+                    span,
+                );
+            }
+            rewriter.goto(next, span);
+        };
+        // Uncertain: compared through the slot type's equality.
+        self.current = uncertain;
+        let value = self.kept_value(index);
+        let result = self.temporary(Type::Bool);
+        let composer = self.composer();
+        self.operation(
+            ComposerOperation::Changed(ty.clone()),
+            vec![composer, value],
+            vec![Type::Int, ty.clone()],
+            Place::local(result),
+            span,
+        );
+        let equal = self.new_block();
+        let unequal = self.new_block();
+        self.switch(self.copy(result), vec![(0, equal)], unequal);
+        self.current = equal;
+        set_bits(self, SAME, false);
+        self.current = unequal;
+        set_bits(self, DIFFERENT, true);
+        // Different: stored.
+        self.current = different;
+        self.store_parameter(index);
+        set_bits(self, DIFFERENT, true);
+        // Same and static: read past the kept slot, stored when missing.
+        for (block, value) in [(same, SAME), (constant, STATIC)] {
+            self.current = block;
+            let scratch = self.temporary(ty.clone());
+            let found = self.new_block();
+            let missing = self.new_block();
+            let composer = self.composer();
+            self.terminate(
+                TerminatorKind::Remembered {
+                    composer,
+                    slot_type: ty.clone(),
+                    destination: Place::local(scratch),
+                    found,
+                    missing,
+                },
+                span,
+            );
+            self.current = missing;
+            self.store_parameter(index);
+            self.goto(found, span);
+            self.current = found;
+            set_bits(self, value, false);
+        }
+        self.current = next;
+    }
+
+    /// Stores declared parameter `index`'s value in the slot at the cursor.
+    fn store_parameter(&mut self, index: usize) {
+        let ty = self.declared_type(index);
+        let value = self.kept_value(index);
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::SetSlot(ty.clone()),
+            vec![composer, value],
+            vec![Type::Int, ty],
+            unit,
+            self.span,
+        );
+    }
+
+    /// The end of a skippable body: its restart group ended with its restart function, or,
+    /// after the replaceable path, its replaceable group ended.
+    fn skippable_end(&mut self, end: BlockId, ret: BlockId, restarted: Option<LocalId>) {
+        let span = self.span;
+        let restart = self.appended.reserve();
+        let restart_body = crate::restart::restart_body(
+            &self.file.bodies[self.id],
+            self.id,
+            &self.body,
+            self.declared,
+            span,
+        );
+        self.appended.fill(restart, restart_body);
+        let end_restart = self.new_block();
+        self.current = end;
+        match restarted {
+            Some(restarted) => {
+                let end_replaceable = self.new_block();
+                self.switch(
+                    self.copy(restarted),
+                    vec![(0, end_replaceable)],
+                    end_restart,
+                );
+                self.current = end_replaceable;
+                let composer = self.composer();
+                let unit = self.unit();
+                self.operation(
+                    ComposerOperation::EndGroup,
+                    vec![composer],
+                    vec![Type::Int],
+                    unit,
+                    span,
+                );
+                self.goto(ret, span);
+            }
+            None => self.goto(end_restart, span),
+        }
+        self.current = end_restart;
+        let function = self.temporary(word_function());
+        self.assign(
+            function,
+            Rvalue::Closure {
+                body: restart,
+                captures: Vec::new(),
+            },
+            span,
+        );
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::EndRestartGroup,
+            vec![composer, Operand::Move(Place::local(function), span)],
+            vec![Type::Int, word_function()],
+            unit,
+            span,
+        );
+        self.goto(ret, span);
+    }
+}
+
+/// A call of a compose intrinsic, taken apart.
+struct IntrinsicCall {
+    builtin: BuiltinFunction,
+    arguments: Vec<Operand>,
+    parameters: Vec<Type>,
+    type_arguments: Vec<Type>,
+    destination: Place,
+    target: Option<BlockId>,
+    span: Span,
+}
+
+/// Renumbers every local of `body` from `first` on by `by`, in its blocks: places, operands,
+/// indices, storage markers, destructurings and captures. Linear in the body.
+pub(crate) fn renumber_locals(body: &mut Body, first: usize, by: usize) {
+    let shift = |local: &mut LocalId| {
+        if local.index() >= first {
+            *local = LocalId((local.index() + by) as u32);
+        }
+    };
+    fn place(place: &mut Place, shift: &impl Fn(&mut LocalId)) {
+        shift(&mut place.local);
+        for projection in &mut place.projections {
+            if let Projection::Index(local) = projection {
+                shift(local);
+            }
+        }
+    }
+    fn operand(operand: &mut Operand, shift: &impl Fn(&mut LocalId)) {
+        match operand {
+            Operand::Copy(p, _) | Operand::Move(p, _) => place(p, shift),
+            Operand::Constant(_) => {}
+        }
+    }
+    for (_, block) in body.blocks.iter_mut() {
+        for statement in &mut block.statements {
+            match &mut statement.kind {
+                StatementKind::Assign(target, rvalue) => {
+                    place(target, &shift);
+                    match rvalue.as_mut() {
+                        Rvalue::Use(o)
+                        | Rvalue::Unary(_, o)
+                        | Rvalue::WrapNullable(o)
+                        | Rvalue::Subtype(o) => operand(o, &shift),
+                        Rvalue::Binary(_, a, b) | Rvalue::Bits(_, a, b) => {
+                            operand(a, &shift);
+                            operand(b, &shift);
+                        }
+                        Rvalue::Borrow { place: p, .. } | Rvalue::Discriminant(p) => {
+                            place(p, &shift)
+                        }
+                        Rvalue::Aggregate(_, operands) => {
+                            operands.iter_mut().for_each(|o| operand(o, &shift))
+                        }
+                        Rvalue::Closure { captures, .. } => {
+                            for capture in captures {
+                                match capture {
+                                    Capture::Borrowed(p) => place(p, &shift),
+                                    Capture::Owned(o) => operand(o, &shift),
+                                }
+                            }
+                        }
+                        Rvalue::Template(parts) => {
+                            for part in parts {
+                                if let prism_mir::TemplatePart::Value(o) = part {
+                                    operand(o, &shift);
+                                }
+                            }
+                        }
+                    }
+                }
+                StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
+                    shift(local)
+                }
+                StatementKind::Read(p) => place(p, &shift),
+                StatementKind::Destructure { source, parts, .. } => {
+                    shift(source);
+                    for (_, target) in parts {
+                        shift(target);
+                    }
+                }
+                StatementKind::GroupStart(_) | StatementKind::GroupEnd(_) => {}
+            }
+        }
+        match &mut block.terminator.kind {
+            TerminatorKind::SwitchInt { value, .. } => operand(value, &shift),
+            TerminatorKind::Call {
+                callee,
+                arguments,
+                destination,
+                ..
+            } => {
+                if let Callee::Value(p, _) = callee {
+                    place(p, &shift);
+                }
+                arguments.iter_mut().for_each(|o| operand(o, &shift));
+                place(destination, &shift);
+            }
+            TerminatorKind::Drop { place: p, .. } => place(p, &shift),
+            TerminatorKind::Remembered {
+                composer,
+                destination,
+                ..
+            } => {
+                operand(composer, &shift);
+                place(destination, &shift);
+            }
+            TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        }
+    }
+}

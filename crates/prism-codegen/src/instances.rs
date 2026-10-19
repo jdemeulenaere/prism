@@ -157,7 +157,7 @@ pub fn build_instance_unit(
     }
     let file = MirFile {
         module: record.path.module.clone(),
-        phase: MirPhase::Elaborated,
+        phase: MirPhase::Composed,
         types: table,
         bodies,
         externals: Vec::new(),

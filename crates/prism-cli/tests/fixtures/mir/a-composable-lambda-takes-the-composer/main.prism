@@ -1,0 +1,8 @@
+// expect: ok
+compose fun Column(content: compose () -> Unit) {
+    content()
+}
+
+compose fun Screen() {
+    Column { }
+}

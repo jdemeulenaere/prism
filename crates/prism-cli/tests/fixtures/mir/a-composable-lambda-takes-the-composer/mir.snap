@@ -1,0 +1,33 @@
+module main
+compose fun main::Column(_1: compose () -> Unit): Unit @2:1
+  local _0: Unit (return)
+  local _1 content: compose () -> Unit (argument)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _2 @3:5
+    _2 = call compose _1() -> bb1 @3:5
+  bb1:
+    storage_dead _2 @3:5
+    _0 = const () @2:49
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1
+compose fun main::Screen(): Unit @6:1
+  local _0: Unit (return)
+  local _1: compose () -> Unit (temporary)
+  local _2: Unit (temporary)
+  bb0:
+    storage_live _1 @7:12
+    _1 = closure main::Screen#closure0 [] @7:12
+    storage_live _2 @7:5
+    _2 = call compose main::Column(move _1) -> bb1 @7:5
+  bb1:
+    storage_dead _2 @7:5
+    storage_dead _1 @7:5
+    _0 = const () @6:22
+    return @6:1
+compose closure main::Screen#closure0(): Unit @7:12 /* argument 0 of main::Column call 0 */
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @7:14
+    return @7:12

@@ -606,14 +606,17 @@ pub(crate) fn elaborate_file(
         });
     }
     let mir = prism_mir::lower_file(&tree);
-    prism_borrowck::check_file(&mir).map_err(|errors| {
+    let elaborated = prism_borrowck::check_file(&mir).map_err(|errors| {
         let source = source_of(graph, file_path);
         WorkspaceError::Borrow {
             path: file_path.to_path_buf(),
             source,
             errors,
         }
-    })
+    })?;
+    // Records, instances and the backend read composed MIR, so `prism check` composes too (D2
+    // of `compose-transform`).
+    Ok(prism_compose_transform::compose_file(&elaborated))
 }
 
 /// The errors of a program's instances, each in the file of its generic's module, grouped by
@@ -1017,6 +1020,24 @@ pub fn dump_elaborated_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
         text: elaborated.dump(),
         mir: elaborated,
     })
+}
+
+/// Builds the composed MIR of the entry file `entry`, as `prism dump-mir --composed` prints it:
+/// the MIR of [`dump_elaborated_mir`] through the compose transform (D19 of
+/// `compose-transform`).
+pub fn dump_composed_mir(entry: &Path) -> Result<MirDump, WorkspaceError> {
+    let (_, composed) = compose_entry(entry)?;
+    Ok(MirDump {
+        text: composed.dump(),
+        mir: composed,
+    })
+}
+
+/// The typed tree of the entry file `entry` and its composed MIR, or its errors of any stage.
+pub(crate) fn compose_entry(entry: &Path) -> Result<(TypedFile, MirFile), WorkspaceError> {
+    let (tree, elaborated) = elaborate_entry(entry)?;
+    let composed = prism_compose_transform::compose_file(&elaborated);
+    Ok((tree, composed))
 }
 
 /// The typed tree of the entry file `entry` and its elaborated MIR, as [`dump_elaborated_mir`]

@@ -1,0 +1,6 @@
+// expect: ok
+compose fun Hello() {}
+
+fun main() {
+    val c = composition { Hello() }
+}
