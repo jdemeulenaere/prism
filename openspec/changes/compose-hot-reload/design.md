@@ -265,6 +265,14 @@ Behavior a program can observe is pinned by executable fixtures under `crates/pr
 
 Saving real files under a waiting app is a `run_cli_tests.rs` test.
 
+### D15. Body keys are recorded on composed MIR bodies (autonomous, apply time)
+
+D5 has the transform record body keys for the summaries, but summaries are computed in `prism-mir` from composed MIR, in which a rewritten body no longer holds its regions, so a closure's key, chained from its parent's region, cannot be computed again there. The transform sets `Body::body_key: Option<u64>` on each composable function and closure it composes, the body's codec writes it, and `FileSummary::of` and the generic summaries collect the keys. Records hold it, so instances inherit their generic's keys. Compile-time cost: one word per body in memory and in records, written by the transform that hashed it. Rejected: a side table returned by `compose_file` (every caller of `compose_file` would pass it on to the summary), and scanning composed bodies for their first group start (it ties summaries to the prologue's shape).
+
+### D16. `wait reload` writes out the program's output first (autonomous, apply time)
+
+Output to a pipe is buffered until 8 KiB or the end of the run unless a line hook is set, which only edit scripts set. A test or benchmark that saves a file once an app's dump is printed would never see the dump, so `wait reload` writes out what the program printed before it blocks. This also gives tests a synchronisation point: a dump before `wait reload` arrives exactly when the app starts waiting, so the scenario "Saving a file under a waiting headless app" starts its script with a dump, and the benchmark with one. Run-time cost: one write per `wait reload`. Rejected: line-buffering all output under `--watch` (a write per line of every watched program), and a fixed sleep before saving (flaky on a loaded machine).
+
 ## Costs
 
 | Stage | Compile-time cost |
