@@ -69,14 +69,42 @@ Milestones 1 and 2 are complete (2026-10-19). The bootstrap compiler, written in
 |---|---|---|
 | ![The counter after three clicks](docs/images/counter.png) | ![The todo app with three items, the second checked](docs/images/todo.png) | ![The toolkit tour](docs/images/tour.png) |
 
-Run the apps with a `prism` built by `cargo build --release -p prism-cli` (or `cargo run -q -p prism-cli --`):
+### Running the examples
 
-```text
-prism run examples/apps/counter/main.prism                     # in a window
-prism run --watch examples/apps/todo/main.prism                # edit examples/apps/todo/screen.prism while it runs
-prism run --headless --events examples/apps/todo/sessions/adding-toggling-and-removing.events examples/apps/todo/main.prism
-prism run --frame-stats --headless --events examples/apps/todo/sessions/a-thousand-items-start-and-end-cleanly.events examples/apps/todo/large.prism
+From the repository root, build the `prism` binary once (Rust stable; macOS for windows):
+
+```bash
+cargo build --release -p prism-cli
 ```
+
+Open an app in a window (close it, or press Cmd+W, to end the run):
+
+```bash
+./target/release/prism run examples/apps/counter/main.prism
+./target/release/prism run examples/apps/todo/main.prism
+./target/release/prism run examples/apps/todo/large.prism
+./target/release/prism run examples/demo/ui/ui.prism
+```
+
+Hot reload: run under `--watch`, then edit and save `examples/apps/counter/main.prism` (or `examples/apps/todo/screen.prism`); the window updates and keeps its state. Stop with Ctrl-C:
+
+```bash
+./target/release/prism run --watch examples/apps/counter/main.prism
+```
+
+Headless, driven by an event script, printing the UI tree and checking that nothing leaks:
+
+```bash
+./target/release/prism run --headless --check-allocations --events examples/apps/todo/sessions/adding-toggling-and-removing.events examples/apps/todo/main.prism
+```
+
+Frame times and allocations of the 1,000-item list:
+
+```bash
+./target/release/prism run --frame-stats --headless --events examples/apps/todo/sessions/a-thousand-items-start-and-end-cleanly.events examples/apps/todo/large.prism
+```
+
+Plain programs run the same way, for example `./target/release/prism run examples/run/main.prism`. The other commands are `prism check <path>` and `prism fmt <path>`; `prism help` lists them all.
 
 Known limits: no scrolling or lazy lists, no effects, timers or animation, one window at a time, CPU rendering without text shaping (no kerning or ligatures), Tier 1 (JIT) only with no `prism build`, and no traits yet. Rows that take a borrowed item recompose with their list, and a composable cannot yet hand one event lambda to several handlers, so the todo app passes state handles where Compose would pass `onSelect: (Filter) -> Unit`. The follow-ups are in [`ROADMAP.md`](ROADMAP.md).
 
