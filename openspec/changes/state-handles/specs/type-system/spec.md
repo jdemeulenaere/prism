@@ -9,6 +9,10 @@ A `MutableState<T>` MUST be assignable where a `State<T>` of the same `T` is exp
 - **WHEN** `fun show(s: State<Int>): Int = s.value` and `fun main() { val m = mutableStateOf(7); println(show(m)) }` run
 - **THEN** stdout is `7`
 
+#### Scenario: Type arguments inferred through the conversion
+- **WHEN** `fun <T : Copy> get(s: State<T>): T = s.value` and `fun main() { println(get(mutableStateOf(5))) }` run
+- **THEN** stdout is `5`: the `MutableState<Int>` argument solves `T` as `Int`
+
 #### Scenario: A read-only handle does not become mutable
 - **WHEN** `fun f(s: State<Int>): MutableState<Int> = s` is checked
 - **THEN** the type checker emits `E4005`

@@ -208,6 +208,22 @@ impl Unknowns {
             (Type::Heap(pattern), Type::Heap(found)) | (Type::List(pattern), Type::List(found)) => {
                 self.match_lower_inside(pattern, found, span)
             }
+            // A `MutableState<X>` passed for a `State<T>` converts, keeping `X` (D3 of
+            // `state-handles`).
+            (
+                Type::Struct {
+                    id: pattern_id,
+                    arguments: patterns,
+                },
+                Type::Struct { id, arguments },
+            ) if pattern_id.intrinsic() == Some(prism_typed_tree::IntrinsicStruct::State)
+                && id.intrinsic() == Some(prism_typed_tree::IntrinsicStruct::MutableState)
+                && patterns.len() == arguments.len() =>
+            {
+                for (pattern, found) in patterns.iter().zip(arguments) {
+                    self.match_lower_inside(pattern, found, span);
+                }
+            }
             (
                 Type::Struct {
                     id: pattern_id,
