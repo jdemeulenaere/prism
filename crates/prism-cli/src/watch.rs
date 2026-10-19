@@ -716,10 +716,12 @@ impl WatchSession {
             .watched
             .iter()
             .filter(|path| !self.store.is_stale(path))
-            .filter(|path| match (self.store.content(path), self.store.current_content(path)) {
-                (Some(before), Ok(now)) => before != now,
-                _ => false,
-            })
+            .filter(
+                |path| match (self.store.content(path), self.store.current_content(path)) {
+                    (Some(before), Ok(now)) => before != now,
+                    _ => false,
+                },
+            )
             .cloned()
             .collect();
         if !changed.is_empty() {
