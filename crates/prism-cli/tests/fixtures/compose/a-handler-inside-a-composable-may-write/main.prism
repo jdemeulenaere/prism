@@ -1,0 +1,6 @@
+// expect: ok
+fun later(f: () -> Unit) { }
+
+compose fun C(s: MutableState<Int>) {
+    later { s.value += 1 }
+}

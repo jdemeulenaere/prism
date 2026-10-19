@@ -1,0 +1,5 @@
+// expect: ok
+fun f(s: MutableState<Int>) {
+    val n = s.value
+    s.value = n + 1
+}

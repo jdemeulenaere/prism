@@ -1,0 +1,4 @@
+// expect: ok
+compose fun C(s: State<List<Int>>) {
+    for (x in s.value) { }
+}

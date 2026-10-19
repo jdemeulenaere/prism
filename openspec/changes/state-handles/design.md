@@ -39,6 +39,7 @@ What exists today, beyond those packets:
 - **The implicit `it`** exists now (`implicit-it`), and so do receiver lambdas. `read`, `update` and `edit` keep plain one-parameter function types, so `count.update { it + 1 }` and `todos.edit { it.add(Todo("x")) }` work as Kotlin users write them; the scenarios of "Updating a Counter" and "A list state edited from a handler" use `it`, and the follow-up of D2 is gone. A receiver lambda for `edit` (`todos.edit { add(Todo("x")) }`) was not taken: `it` reads like Kotlin's `MutableStateFlow.update { it + 1 }`, and the receiver's members would shadow the handler's own names.
 - **Error codes.** `E4030` is `compose-transform`'s and `E4034` `receiver-lambdas`', which skipped `E4031` to `E4033` for this change, so they stay as planned.
 - **The prelude requirement.** compose's "The Compose Prelude" lists the module's names, so this change modifies it to add the state names.
+- **Returned borrows.** A body returns a borrow only when it writes one (`&u.name`; no implicit borrow converts a place to a returned `&T`), so "A composable returns a borrow of a state's value" writes `&s.value`. The borrow checker already lets it pass: the reference `state read` gives comes from a call with no input borrow and carries no loan, so `returns.rs` needs no case of its own (D18).
 - **`ui-toolkit`.** Its `prism-ui/src/runtime.rs` stands in for `Composition::run_handler` with a plain call; this change makes it call the real one.
 
 ## Goals / Non-Goals

@@ -1,0 +1,29 @@
+module main
+fun main::f(_1: MutableState<Int>): Unit @2:1
+  local _0: Unit (return)
+  local _1 s: MutableState<Int> (argument)
+  local _2: MutableState<Int> (temporary)
+  local _3: &Int (temporary)
+  local _4: Int (temporary)
+  local _5: Int (temporary)
+  local _6: Unit (temporary)
+  bb0:
+    storage_live _2 @3:5
+    _2 = copy _1 @3:5
+    storage_live _3 @3:5
+    _3 = call state read<Int>(copy _2) -> bb1 @3:5
+  bb1:
+    storage_live _4 @3:5
+    _4 = copy (*_3) @3:5
+    storage_live _5 @3:5
+    _5 = copy _4 + const 1 @3:5
+    storage_live _6 @3:5
+    _6 = call state write<Int>(copy _2, move _5) -> bb2 @3:5
+  bb2:
+    storage_dead _6 @3:5
+    storage_dead _5 @3:5
+    storage_dead _4 @3:5
+    storage_dead _3 @3:5
+    storage_dead _2 @3:5
+    _0 = const () @2:29
+    return @2:1

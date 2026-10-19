@@ -1,0 +1,4 @@
+// expect: E4003
+fun f(s: State<Int>) {
+    s.value = 1
+}

@@ -612,6 +612,28 @@ impl Validator<'_> {
                     if let Callee::Builtin(builtin) = callee {
                         self.box_builtin(&at, *builtin, arguments, type_arguments, &ty);
                         self.list_builtin(&at, *builtin, parameters, type_arguments, &ty);
+                        if builtin.is_state_operation() {
+                            self.report(format!(
+                                "{} calls the state built-in {}, which lowers to state operations",
+                                at,
+                                builtin.name()
+                            ));
+                        }
+                    }
+                    // A state operation has one type argument, the value type, and its declared
+                    // result (D17 of `state-handles`).
+                    if let Callee::State(operation) = callee {
+                        if type_arguments.len() != 1 {
+                            self.report(format!(
+                                "{} calls state {} with {} type arguments",
+                                at,
+                                operation.name(),
+                                type_arguments.len()
+                            ));
+                        } else {
+                            let result = operation.result().substitute(type_arguments);
+                            self.expect(Some(ty.clone()), &result, &format!("{} destination", at));
+                        }
                     }
                 }
             }
@@ -1338,6 +1360,73 @@ mod tests {
             prism_ast::Span::default(),
         ))]);
         assert_reports(&moved, "inserts a String into a template");
+    }
+
+    /// A body by hand that reads a state: `_2 = call state read<Int>(copy _1)` for a
+    /// `MutableState<Int>` argument, with `_2` of type `destination`, then returns.
+    fn state_read_file(destination: Type) -> MirFile {
+        let mut file = small_file();
+        let id = prism_typed_tree::IntrinsicStruct::MutableState.id();
+        file.types
+            .insert_marker(id.clone(), Some(prism_ast::TypeMarker::Copy), Vec::new());
+        let handle = Type::Struct {
+            id,
+            arguments: vec![Type::Int],
+        };
+        let body = body(&mut file);
+        let mut locals = prism_typed_tree::Arena::new();
+        locals.alloc(local(Type::Unit, LocalKind::Return, None));
+        locals.alloc(local(handle, LocalKind::Argument, Some("s")));
+        locals.alloc(local(destination, LocalKind::Temporary, None));
+        body.locals = locals;
+        body.argument_count = 1;
+        let mut blocks = prism_typed_tree::Arena::new();
+        blocks.alloc(BasicBlock {
+            statements: vec![statement(StatementKind::StorageLive(LocalId(2)))],
+            terminator: terminator(TerminatorKind::Call {
+                callee: Callee::State(StateOperation::Read),
+                arguments: vec![Operand::Copy(
+                    Place::local(LocalId(1)),
+                    prism_ast::Span::default(),
+                )],
+                parameters: StateOperation::Read
+                    .parameters(prism_typed_tree::IntrinsicStruct::MutableState),
+                escaping: vec![false],
+                type_arguments: vec![Type::Int],
+                destination: Place::local(LocalId(2)),
+                target: Some(BlockId(1)),
+                is_compose: false,
+            }),
+        });
+        blocks.alloc(BasicBlock {
+            statements: vec![
+                statement(StatementKind::StorageDead(LocalId(2))),
+                statement(StatementKind::assign(
+                    Place::return_place(),
+                    Rvalue::Use(Operand::Constant(Constant::Unit)),
+                )),
+            ],
+            terminator: terminator(TerminatorKind::Return),
+        });
+        body.blocks = blocks;
+        file
+    }
+
+    #[test]
+    fn state_operations_are_checked_and_printed() {
+        let reference = Type::Reference {
+            mutable: false,
+            inner: Box::new(Type::Int),
+        };
+        let file = state_read_file(reference);
+        assert_eq!(violations(&file), "");
+        let dump = file.dump();
+        assert!(
+            dump.contains("_2 = call state read<Int>(copy _1) -> bb1"),
+            "{}",
+            dump
+        );
+        assert_reports(&state_read_file(Type::Int), "destination");
     }
 
     #[test]

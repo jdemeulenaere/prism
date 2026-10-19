@@ -135,6 +135,9 @@ impl Builder<'_> {
     ) {
         let target_expression = self.expression(target);
         let (ty, target_span) = (target_expression.ty.clone(), target_expression.span);
+        if let ExpressionKind::StatePlace { handle } = target_expression.kind {
+            return self.lower_state_compound_assign(operator, handle, value, target_span, span);
+        }
         let mut place = self.place(target);
         if self.may_repoint(target, value) {
             place = self.pin_referent(target, place, target_span);

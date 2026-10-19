@@ -1,0 +1,4 @@
+// expect: E4033
+fun add(todos: MutableState<List<Int>>) {
+    todos.value.add(1)
+}

@@ -10,7 +10,7 @@ A borrow of a state place, taken in a composable context, MUST hold no loan of a
 - **THEN** stdout is `ab`, and the exit status is 0
 
 #### Scenario: A composable returns a borrow of a state's value
-- **WHEN** `compose fun items(s: State<List<Int>>): &List<Int> = s.value` and `compose fun C(s: State<List<Int>>) { println(items(s).size) }` are checked
+- **WHEN** `compose fun items(s: State<List<Int>>): &List<Int> = &s.value` and `compose fun C(s: State<List<Int>>) { println(items(s).size) }` are checked
 - **THEN** the file typechecks and passes the borrow checker
 
 ### Requirement: Values Written Into a State Escape

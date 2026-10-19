@@ -770,6 +770,125 @@ pub enum Callee {
     /// An operation of the composition protocol, a call of a compose runtime entry point (D19
     /// of `compose-transform`). Only in composed MIR.
     Composer(ComposerOperation),
+    /// An operation of a state cell, a call of a compose runtime entry point (D17 of
+    /// `state-handles`), with the value type as its one type argument. The handle is a plain
+    /// operand, copied.
+    State(StateOperation),
+}
+
+/// An operation of a state cell (D6 and D17 of `state-handles`). Each is called with the value
+/// type `T` as its type argument; its declared parameters and result mention `T` as the type
+/// parameter of index 0 ([`StateOperation::value_parameter`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StateOperation {
+    /// `(value: T moved) -> MutableState<T>`: creates a cell.
+    Create,
+    /// `(handle) -> &T`: a shared reference to the cell's value, which a read copies out of
+    /// or a composable context borrows.
+    Read,
+    /// `(handle: MutableState<T>, value: T moved)`: replaces the value.
+    Write,
+    /// `(handle) -> &T`: borrows the cell shared for a `read` closure.
+    BeginRead,
+    /// `(handle)`: ends the borrow of [`StateOperation::BeginRead`].
+    EndRead,
+    /// `(handle: MutableState<T>) -> T`: moves the value out for an `update` closure.
+    Take,
+    /// `(handle: MutableState<T>, value: T moved)`: moves the result of `update` back in.
+    Put,
+    /// `(handle: MutableState<T>) -> &mut T`: borrows the cell mutably for an `edit` closure.
+    BeginEdit,
+    /// `(handle: MutableState<T>)`: ends the borrow of [`StateOperation::BeginEdit`].
+    EndEdit,
+}
+
+impl StateOperation {
+    /// Every operation, in code order.
+    pub const ALL: [StateOperation; 9] = [
+        StateOperation::Create,
+        StateOperation::Read,
+        StateOperation::Write,
+        StateOperation::BeginRead,
+        StateOperation::EndRead,
+        StateOperation::Take,
+        StateOperation::Put,
+        StateOperation::BeginEdit,
+        StateOperation::EndEdit,
+    ];
+
+    /// The operation's name in dumps: `state read<Int>`.
+    pub fn name(self) -> &'static str {
+        match self {
+            StateOperation::Create => "create",
+            StateOperation::Read => "read",
+            StateOperation::Write => "write",
+            StateOperation::BeginRead => "begin_read",
+            StateOperation::EndRead => "end_read",
+            StateOperation::Take => "take",
+            StateOperation::Put => "put",
+            StateOperation::BeginEdit => "begin_edit",
+            StateOperation::EndEdit => "end_edit",
+        }
+    }
+
+    /// The value type parameter `T` its declared types mention.
+    pub fn value_parameter() -> Type {
+        Type::Parameter(prism_typed_tree::TypeParameter {
+            index: 0,
+            name: "T".to_string(),
+            bound: None,
+        })
+    }
+
+    /// Whether the operation needs a `MutableState<T>` handle; the reads take either kind.
+    pub fn writes(self) -> bool {
+        !matches!(
+            self,
+            StateOperation::Create
+                | StateOperation::Read
+                | StateOperation::BeginRead
+                | StateOperation::EndRead
+        )
+    }
+
+    /// The declared parameter types, with a handle of kind `handle` (`State` or
+    /// `MutableState`).
+    pub fn parameters(self, handle: prism_typed_tree::IntrinsicStruct) -> Vec<Type> {
+        let value = Self::value_parameter();
+        let handle = Type::Struct {
+            id: handle.id(),
+            arguments: vec![value.clone()],
+        };
+        match self {
+            StateOperation::Create => vec![value],
+            StateOperation::Write | StateOperation::Put => vec![handle, value],
+            _ => vec![handle],
+        }
+    }
+
+    /// The declared result type.
+    pub fn result(self) -> Type {
+        let value = Self::value_parameter();
+        match self {
+            StateOperation::Create => Type::Struct {
+                id: prism_typed_tree::IntrinsicStruct::MutableState.id(),
+                arguments: vec![value],
+            },
+            StateOperation::Read | StateOperation::BeginRead => Type::Reference {
+                mutable: false,
+                inner: Box::new(value),
+            },
+            StateOperation::BeginEdit => Type::Reference {
+                mutable: true,
+                inner: Box::new(value),
+            },
+            StateOperation::Take => value,
+            StateOperation::Write
+            | StateOperation::EndRead
+            | StateOperation::Put
+            | StateOperation::EndEdit => Type::Unit,
+        }
+    }
 }
 
 /// A group key: its 64-bit hash, and what it is the key of, for dumps (D5 of
@@ -900,7 +1019,8 @@ impl Callee {
             Callee::External(_)
             | Callee::Value(..)
             | Callee::Default { .. }
-            | Callee::Composer(_) => false,
+            | Callee::Composer(_)
+            | Callee::State(_) => false,
         }
     }
 

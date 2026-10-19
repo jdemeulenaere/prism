@@ -524,6 +524,7 @@ impl<'a> Graph<'a> {
                     AssignTarget::ThroughReference => {
                         self.own(*value, OwnershipReasonKind::WrittenThroughReference)
                     }
+                    AssignTarget::State => self.own(*value, OwnershipReasonKind::StoredInState),
                 }
                 self.expression(*target);
                 self.expression(*value);
@@ -578,6 +579,8 @@ impl<'a> Graph<'a> {
                 }
             }
             ExpressionKind::Deref { .. } => AssignTarget::ThroughReference,
+            // A state keeps its value beyond any block (D18 of `state-handles`).
+            ExpressionKind::StatePlace { .. } => AssignTarget::State,
             ExpressionKind::Field { base, .. } => {
                 // A field reached through a reference is written through it.
                 let mut base = *base;
@@ -920,6 +923,8 @@ enum AssignTarget {
     CapturedBinding,
     Field,
     ThroughReference,
+    /// The value of a state.
+    State,
 }
 
 /// The help of `E4028`: copy a `var` into a `val`, or clone what the closure cannot take. A

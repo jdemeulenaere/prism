@@ -35,6 +35,7 @@ use prism_typed_tree::{
 use std::collections::{HashMap, HashSet};
 
 mod patterns;
+mod state;
 
 /// The help of a type argument that cannot be inferred (`E4013`, D8 of `generics`).
 const TYPE_ARGUMENTS_HELP: &str =
@@ -3085,6 +3086,7 @@ impl TypeChecker {
         span: Span,
         item: impl FnOnce(prism_typed_tree::BodyId) -> Item,
     ) {
+        self.report_pending_state_reads();
         let built = std::mem::replace(&mut self.builder, previous);
         let has_closures = built.has_closures();
         let mut built = built.finish();
@@ -4750,6 +4752,17 @@ impl TypeChecker {
 
     /// A borrow of `id`, held in a temporary when it is not a place (D5 of `typed-tree`).
     fn borrow(&mut self, mutable: bool, origin: BorrowOrigin, id: ExpressionId) -> ExpressionId {
+        if mutable && origin != BorrowOrigin::Written {
+            // A `mut fun` receiver, a `&mut` argument or a mutable iteration of a state's value
+            // (D5 of `state-handles`); a written `&mut` is reported where it is checked.
+            let span = self.builder.span_of(id);
+            let what = match origin {
+                BorrowOrigin::Receiver => "a 'mut fun' call",
+                BorrowOrigin::Iteration => "a mutable iteration",
+                _ => "a mutable borrow",
+            };
+            self.reject_state_mutation(id, what, span);
+        }
         let place = self.as_place(id);
         let (ty, span) = (self.ty(place), self.builder.span_of(place));
         let kind = ExpressionKind::Borrow {
@@ -4825,6 +4838,9 @@ impl TypeChecker {
                     return self.error_node(vec![value], span);
                 }
                 if self.reject_guard_mutation(inner, span) {
+                    return self.error_node(vec![value], span);
+                }
+                if self.reject_state_mutation(value, "a mutable borrow", span) {
                     return self.error_node(vec![value], span);
                 }
                 match (binding_name(inner), &inner.kind) {
@@ -4924,12 +4940,23 @@ impl TypeChecker {
                         Some((node, is_var)) => (node, self.ty(node), false, is_var),
                         None => {
                             let (base_id, base_writable) = self.infer_place(base);
+                            // `s.value = v` writes the state through a runtime call (D5 of
+                            // `state-handles`).
+                            if let Some(state_target) =
+                                self.state_value_target(base_id, member, span, target.span)
+                            {
+                                return state_target;
+                            }
                             let base_ty = self.ty(base_id);
                             let (field_id, is_var) =
                                 self.build_member_access(base_id, member, false, target.span);
                             (field_id, base_ty, base_writable, is_var)
                         }
                     };
+                // A part of a state's value is changed only through `edit`.
+                if self.reject_state_mutation(field_id, "a write of a part", span) {
+                    return (self.wrap_error(field_id), Type::Error, false);
+                }
                 let field_ty = self.ty(field_id);
                 match is_var {
                     Some(false) => {
@@ -4984,6 +5011,9 @@ impl TypeChecker {
             }
             (ExprKind::Index { .. }, _) => {
                 let (node, writable) = self.with_origin(Origin::Value, |c| c.infer_place(target));
+                if self.reject_state_mutation(node, "a write of an element", span) {
+                    return (self.wrap_error(node), Type::Error, false);
+                }
                 if matches!(self.builder.kind(node), ExpressionKind::Index { .. }) {
                     // An element of a list (D7 of `collections`).
                     let element_ty = self.ty(node);
@@ -5038,6 +5068,7 @@ impl TypeChecker {
             return self.check_assignment(&field, value, span);
         }
         let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
+        self.check_state_write(target_id, false, span);
 
         if let (Some(name), Type::Reference { mutable, inner }) = (binding_name(target), &target_ty)
         {
@@ -5103,6 +5134,7 @@ impl TypeChecker {
             return self.check_compound_assignment(operator, &field, value, span);
         }
         let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
+        self.check_state_write(target_id, true, span);
         let value_id = self.with_consuming(false, |c| c.infer_operand(value));
         let value_ty = self.ty(value_id);
         let compound = format!("{}=", operator.as_str());
@@ -5919,6 +5951,9 @@ impl TypeChecker {
             }
             Some(BuiltinFunction::Remember) => {
                 return self.infer_remember(type_arguments, args, expected.as_ref(), span);
+            }
+            Some(BuiltinFunction::MutableStateOf) => {
+                self.reject_unremembered_state(callee, args, span);
             }
             _ => {}
         }
@@ -7550,6 +7585,23 @@ impl TypeChecker {
                 );
                 let (joined, receiver_argument) =
                     self.apply_receiver_adjustment(receiver, adjustment, &reached);
+                // A `MutableState<T>` receiver of a member of `State<T>` converts (D3 of
+                // `state-handles`).
+                let receiver_argument = match self.ty(receiver_argument) {
+                    Type::Reference { mutable, inner }
+                        if *inner != reached && state::state_handle(&inner).is_some() =>
+                    {
+                        let expected = Type::Reference {
+                            mutable,
+                            inner: Box::new(reached.clone()),
+                        };
+                        self.coerce_to(receiver_argument, &expected)
+                    }
+                    found if found != reached && state::state_handle(&found).is_some() => {
+                        self.coerce_to(receiver_argument, &reached)
+                    }
+                    _ => receiver_argument,
+                };
                 let call = self.call_extension(
                     MethodCall {
                         callee,
@@ -8131,6 +8183,7 @@ impl TypeChecker {
                 let callee = match extension.builtin {
                     Some(builtin) => {
                         self.reject_composition_in_composable(builtin, span);
+                        self.reject_state_member_in_composable(builtin, span);
                         Callee::Builtin(builtin)
                     }
                     None => Callee::Function(extension.path(member)),
@@ -8303,6 +8356,21 @@ impl TypeChecker {
             match self.find_extension(&reached, member) {
                 ExtensionLookup::None => {}
                 found => return (found, reached),
+            }
+            // The members and extensions of `State<T>` apply to a `MutableState<T>`, whose
+            // receiver converts (D3 of `state-handles`).
+            if let Some(read_only) = state::read_only_handle(&reached) {
+                if let Some(extension) = self.member(&read_only, member).filter(|m| !m.property) {
+                    let found = ExtensionLookup::Found {
+                        extension: Box::new(extension.clone()),
+                        own: false,
+                    };
+                    return (found, read_only);
+                }
+                match self.find_extension(&read_only, member) {
+                    ExtensionLookup::None => {}
+                    found => return (found, read_only),
+                }
             }
             match reached {
                 Type::Reference { mutable, inner } => {
@@ -9068,8 +9136,20 @@ impl TypeChecker {
                 return;
             }
         }
+        // The value of a state is a place of the cell, which is never moved out (D5 of
+        // `state-handles`); outside composable contexts its read is `E4033` already.
+        let state_value = self.builder.state_value_spans.get(&expr.span).copied();
+        if state_value == Some(false) {
+            return;
+        }
         let Some((source, borrowed)) = self.move_source(expr) else {
             return;
+        };
+        let source = match (&expr.kind, state_value) {
+            (ExprKind::MemberAccess { target, .. }, Some(true)) => {
+                format!("the value of the state '{}'", target)
+            }
+            _ => source,
         };
         let clone = self.is_clone(ty).then(|| match ty {
             Type::Nullable(_) => format!("{}?.clone()", expr),
@@ -9088,6 +9168,7 @@ impl TypeChecker {
         // A field of a whole owned struct local can be taken out by destructuring it (D7 of
         // `payload-patterns`).
         let destructure = match &expr.kind {
+            ExprKind::MemberAccess { .. } if state_value.is_some() => None,
             ExprKind::MemberAccess {
                 target,
                 member,
@@ -9481,6 +9562,11 @@ impl TypeChecker {
         };
         let base = self.peel_indirection_nodes(base);
         let body = match &reached {
+            // The value of a state handle (D5 of `state-handles`).
+            Type::Struct { .. } if state::state_handle(&reached).is_some() => {
+                let value = state::state_handle(&reached).expect("a handle").1.clone();
+                self.state_value_node(base, value, span)
+            }
             Type::Struct { id, arguments } => {
                 let fields = self
                     .types
@@ -9640,6 +9726,10 @@ impl TypeChecker {
         let peeled_ty = peel_indirection(base_ty).clone();
         if self.reject_unimported_members(&peeled_ty, span) {
             return (Type::Error, None);
+        }
+        // The value of a state handle, typed by its own rule (D5 of `state-handles`).
+        if let Some((value, _)) = self.state_value_member(&peeled_ty, member) {
+            return (wrap(value), Some(true));
         }
         match &peeled_ty {
             Type::Struct { id, arguments } if self.members_visible(id) => {
@@ -9817,8 +9907,10 @@ impl TypeChecker {
                 let base_ty = self.ty(base);
                 let (node, is_var) =
                     self.build_member_access(base, member, *is_safe_nav, expr.span);
-                // An enum variant is a fresh temporary rather than a field.
+                // An enum variant is a fresh temporary rather than a field. Whether a state's
+                // value may be changed is the state rules' (D5 of `state-handles`).
                 let writable = match is_var {
+                    _ if self.state_value_root(node).is_some() => true,
                     Some(is_var) => is_var && contents_writable(&base_ty, base_writable),
                     None => true,
                 };

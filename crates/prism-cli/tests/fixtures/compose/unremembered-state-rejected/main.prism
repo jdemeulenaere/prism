@@ -1,0 +1,4 @@
+// expect: E4032
+compose fun C() {
+    val s = mutableStateOf(0)
+}

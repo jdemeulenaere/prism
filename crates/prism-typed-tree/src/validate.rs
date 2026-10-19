@@ -101,6 +101,8 @@ impl TypedFile {
                 type_parameters,
                 types: &self.types,
                 violations: Vec::new(),
+                composable: Vec::new(),
+                state_targets: std::collections::HashSet::new(),
             };
             validator.body_roots(item);
             violations.extend(validator.violations);
@@ -130,6 +132,11 @@ struct Validator<'a> {
     /// The file's type table, against which patterns are checked.
     types: &'a TypeTable,
     violations: Vec<String>,
+    /// Whether each enclosing body or closure is a composable context, innermost last.
+    composable: Vec<bool>,
+    /// The state places that are assignment targets, which any context may write (D17 of
+    /// `state-handles`).
+    state_targets: std::collections::HashSet<ExpressionId>,
 }
 
 impl Validator<'_> {
@@ -189,16 +196,21 @@ impl Validator<'_> {
                     );
                     self.report(message);
                 }
+                // A default value is never a composable context (D17 of `compose-transform`).
+                self.composable.push(false);
                 for ((name, ty), default) in f.parameters.iter().zip(&self.body.defaults) {
                     if let Some(default) = default {
                         self.expression(*default);
                         self.expect_type(*default, ty, &format!("default of '{}'", name));
                     }
                 }
+                self.composable.pop();
                 if let Some(value) = self.body.value {
+                    self.composable.push(f.is_compose);
                     self.returns.push(f.return_type.clone());
                     self.expression(value);
                     self.returns.pop();
+                    self.composable.pop();
                     self.expect_type(value, &f.return_type, "function body");
                 }
             }
@@ -228,6 +240,15 @@ impl Validator<'_> {
                     ));
                 }
             }
+        }
+    }
+
+    /// Records `target` when it is a state place: the target of an assignment.
+    fn note_state_target(&mut self, target: ExpressionId) {
+        if let Some(ExpressionKind::StatePlace { .. }) =
+            self.body.expressions.get(target).map(|e| &e.kind)
+        {
+            self.state_targets.insert(target);
         }
     }
 
@@ -314,6 +335,7 @@ impl Validator<'_> {
                 }
             }
             StatementKind::Assign { target, value } => {
+                self.note_state_target(*target);
                 self.expression(*target);
                 self.expression(*value);
                 self.expect_place(*target, "assignment target");
@@ -326,6 +348,7 @@ impl Validator<'_> {
                 target,
                 value,
             } => {
+                self.note_state_target(*target);
                 self.expression(*target);
                 self.expression(*value);
                 self.expect_place(*target, "compound assignment target");
@@ -541,7 +564,43 @@ impl Validator<'_> {
                 self.expression(*value);
                 self.expect_type(*value, &ty, "temporary value");
             }
+            ExpressionKind::StatePlace { handle } => {
+                self.expression(*handle);
+                match self.type_of(*handle).cloned() {
+                    Some(Type::Struct {
+                        id: handle_id,
+                        arguments,
+                    }) if handle_id.intrinsic().is_some_and(|i| i.is_state_handle()) => {
+                        if let [value] = &arguments[..] {
+                            self.expect_type_of_node(id, value, "state place");
+                        }
+                    }
+                    Some(Type::Error) | None => {}
+                    Some(other) => self.report(format!(
+                        "state place {} over a {}, which is not a state handle",
+                        id.0, other
+                    )),
+                }
+                // Outside composable contexts a state's value is only assigned (D5 of
+                // `state-handles`).
+                let composable = self.composable.last().copied().unwrap_or(false);
+                if self.error_free && !composable && !self.state_targets.contains(&id) {
+                    self.report(format!(
+                        "state place {} outside a composable context is not an assignment target",
+                        id.0
+                    ));
+                }
+            }
             ExpressionKind::Move { place } | ExpressionKind::Copy { place } => {
+                if matches!(&expression.kind, ExpressionKind::Move { .. })
+                    && self.error_free
+                    && matches!(
+                        self.body.expressions.get(*place).map(|e| &e.kind),
+                        Some(ExpressionKind::StatePlace { .. })
+                    )
+                {
+                    self.report(format!("move {} out of a state place", id.0));
+                }
                 self.expression(*place);
                 self.expect_place(*place, "moved or copied operand");
                 self.expect_type(*place, &ty, "moved or copied place");
@@ -944,7 +1003,16 @@ impl Validator<'_> {
                 let loops = std::mem::take(&mut self.loops);
                 let chain_depth = std::mem::replace(&mut self.chain_depth, 0);
                 self.returns.extend(ret.clone());
+                let is_compose = matches!(
+                    &ty,
+                    Type::Fn {
+                        is_compose: true,
+                        ..
+                    }
+                );
+                self.composable.push(is_compose);
                 self.expression(*body);
+                self.composable.pop();
                 if let Some(ret) = ret {
                     self.returns.pop();
                     self.expect_type(*body, &ret, "closure body");

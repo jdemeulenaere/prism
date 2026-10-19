@@ -114,9 +114,11 @@ impl InstanceRequest {
                     name: name.clone(),
                 }),
             ),
-            Callee::External(_) | Callee::Builtin(_) | Callee::Value(..) | Callee::Composer(_) => {
-                return None
-            }
+            Callee::External(_)
+            | Callee::Builtin(_)
+            | Callee::Value(..)
+            | Callee::Composer(_)
+            | Callee::State(_) => return None,
         };
         Some(Self {
             callee,

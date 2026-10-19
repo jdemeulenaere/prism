@@ -66,8 +66,10 @@ impl Signature {
             },
             Callee::Value(..) => Signature::FunctionValue,
             Callee::Default { .. } => Signature::Default,
-            // Composed MIR is never borrow-checked; a composer operation is a plain function.
-            Callee::Composer(_) => Signature::Function {
+            // Composed MIR is never borrow-checked; a composer operation is a plain function. A
+            // state operation takes the handle by value, so a reference it gives borrows no
+            // input (D18 of `state-handles`).
+            Callee::Composer(_) | Callee::State(_) => Signature::Function {
                 has_receiver: false,
                 has_context: false,
             },

@@ -443,6 +443,19 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 ));
             }
         }
+        TypeError::StateWriteInComposable { .. } => {
+            out.push_str("   = note: state is read-only during composition\n");
+            out.push_str("   = help: write it in an event handler or a 'SideEffect'\n");
+        }
+        TypeError::UnrememberedState { remembered, .. } => {
+            out.push_str(&format!(
+                "   = help: keep the state across passes with '{}'\n",
+                remembered
+            ));
+        }
+        TypeError::StateValueOutsideComposable { help, .. } => {
+            out.push_str(&format!("   = help: {}\n", help));
+        }
         TypeError::MissingContext { .. } => {
             if let Some(help) = err.missing_context_help() {
                 out.push_str(&format!("   = help: {}\n", help));

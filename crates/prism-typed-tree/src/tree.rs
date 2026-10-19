@@ -306,6 +306,11 @@ pub enum ExpressionKind {
     NonNullPayload { nullable: ExpressionId },
     /// `value` evaluated into storage that lives until the end of the enclosing statement.
     Temporary { value: ExpressionId },
+    /// The value of the state cell `handle` names, a `State<T>` or `MutableState<T>` read
+    /// out of its place (D17 of `state-handles`): the target of an assignment of `s.value`,
+    /// or, in a composable context, a place read in place, borrowed or projected. The node's
+    /// type is the value's.
+    StatePlace { handle: ExpressionId },
 
     // Uses of places.
     /// The value of the place, moved out of it.
@@ -441,6 +446,7 @@ impl ExpressionKind {
                 | ExpressionKind::Index { .. }
                 | ExpressionKind::NonNullPayload { .. }
                 | ExpressionKind::Temporary { .. }
+                | ExpressionKind::StatePlace { .. }
                 | ExpressionKind::Error { .. }
         )
     }
@@ -461,6 +467,7 @@ impl ExpressionKind {
             ExpressionKind::Index { base, index } => vec![*base, *index],
             ExpressionKind::NonNullPayload { nullable } => vec![*nullable],
             ExpressionKind::Temporary { value }
+            | ExpressionKind::StatePlace { handle: value }
             | ExpressionKind::Coerce { value, .. }
             | ExpressionKind::Move { place: value }
             | ExpressionKind::Copy { place: value }
@@ -1188,6 +1195,8 @@ pub enum OwnershipReasonKind {
     /// A store into a binding declared outside the block of the captured binding `name`; the
     /// closure owns only the captures it outlives this way.
     StoredOutsideBlock { name: String },
+    /// The value assigned to a state's `value` (D18 of `state-handles`), which the cell keeps.
+    StoredInState,
 }
 
 impl OwnershipReason {
@@ -1206,6 +1215,7 @@ impl OwnershipReason {
             OwnershipReasonKind::StoredInField => "stored in a field here",
             OwnershipReasonKind::StoredInPayload => "stored in an enum payload here",
             OwnershipReasonKind::StoredInBox => "stored in a box here",
+            OwnershipReasonKind::StoredInState => "stored in a state here",
             OwnershipReasonKind::WrittenThroughReference => "written through a reference here",
             OwnershipReasonKind::AssignedToCapturedVariable => {
                 "assigned to a captured variable here"

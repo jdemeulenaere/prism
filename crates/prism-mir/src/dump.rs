@@ -449,6 +449,11 @@ impl Printer<'_> {
                         name
                     ),
                     Callee::Composer(operation) => composer_operation(operation),
+                    Callee::State(operation) => format!(
+                        "state {}{}",
+                        operation.name(),
+                        render_type_arguments(type_arguments)
+                    ),
                 };
                 let target = match target {
                     Some(target) => format!(" -> bb{}", target.0),

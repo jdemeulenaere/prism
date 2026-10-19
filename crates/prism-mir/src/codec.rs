@@ -13,8 +13,8 @@
 
 use crate::mir::{
     AggregateKind, BasicBlock, Body, BodyId, BodyOwner, BorrowOrigin, Callee, Capture, CaptureMode,
-    Constant, LocalDeclaration, LocalId, LocalKind, Operand, Place, Projection, Rvalue, Statement,
-    StatementKind, TemplatePart, Terminator, TerminatorKind,
+    Constant, LocalDeclaration, LocalId, LocalKind, Operand, Place, Projection, Rvalue,
+    StateOperation, Statement, StatementKind, TemplatePart, Terminator, TerminatorKind,
 };
 use crate::record::GenericRecord;
 use prism_ast::{Span, TypeMarker};
@@ -708,6 +708,19 @@ impl Codec for UnaryOperator {
     }
 }
 
+impl Codec for StateOperation {
+    fn encode(&self, encoder: &mut Encoder) {
+        let code = StateOperation::ALL
+            .iter()
+            .position(|operation| operation == self)
+            .expect("every operation is listed");
+        encoder.u8(code as u8);
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        StateOperation::ALL.get(decoder.u8()? as usize).copied()
+    }
+}
+
 impl Codec for BuiltinFunction {
     fn encode(&self, encoder: &mut Encoder) {
         encoder.u8(match self {
@@ -809,6 +822,7 @@ impl Codec for OwnershipReason {
                 encoder.u8(10);
                 name.encode(encoder);
             }
+            OwnershipReasonKind::StoredInState => encoder.u8(11),
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -827,6 +841,7 @@ impl Codec for OwnershipReason {
             10 => OwnershipReasonKind::StoredOutsideBlock {
                 name: decoder.decode()?,
             },
+            11 => OwnershipReasonKind::StoredInState,
             _ => return None,
         };
         Some(OwnershipReason { span, kind })
@@ -1624,6 +1639,10 @@ impl Codec for Callee {
                 encoder.u8(5);
                 operation.encode(encoder);
             }
+            Callee::State(operation) => {
+                encoder.u8(6);
+                operation.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1638,6 +1657,7 @@ impl Codec for Callee {
             },
             4 => Callee::External(decoder.decode()?),
             5 => Callee::Composer(decoder.decode()?),
+            6 => Callee::State(decoder.decode()?),
             _ => return None,
         })
     }

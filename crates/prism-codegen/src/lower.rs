@@ -1830,6 +1830,12 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Callee::Composer(operation) => {
                 self.composer_call(operation, arguments, parameters, destination, span)?
             }
+            Callee::State(operation) => {
+                return Err(BackendError::new(format!(
+                    "the state operation {} is not lowered yet",
+                    operation.name()
+                )))
+            }
         }
         self.finish_call(target)
     }

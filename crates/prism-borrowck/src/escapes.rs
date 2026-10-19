@@ -71,6 +71,11 @@ pub(crate) fn check_escapes(
                     "stored in a box here"
                 } else if escaping.get(index).copied().unwrap_or(false) {
                     "passed to an escaping parameter here"
+                } else if matches!(callee, Callee::State(_))
+                    && parameter.mentions_parameter_outside_functions()
+                {
+                    // A state keeps the value it is given (D18 of `state-handles`).
+                    "stored in a state here"
                 } else if parameter.mentions_parameter_outside_functions() {
                     "passed to a generic parameter here"
                 } else {

@@ -263,6 +263,7 @@ impl Printer<'_> {
             ExpressionKind::Index { .. } => "index".to_string(),
             ExpressionKind::NonNullPayload { .. } => "payload".to_string(),
             ExpressionKind::Temporary { .. } => "temporary".to_string(),
+            ExpressionKind::StatePlace { .. } => "state place".to_string(),
             ExpressionKind::Move { .. } => "move".to_string(),
             ExpressionKind::Copy { .. } => "copy".to_string(),
             ExpressionKind::Borrow {
@@ -433,6 +434,7 @@ impl Printer<'_> {
             }
             ExpressionKind::NonNullPayload { nullable } => self.expression(*nullable, depth, ""),
             ExpressionKind::Temporary { value } => self.expression(*value, depth, ""),
+            ExpressionKind::StatePlace { handle } => self.expression(*handle, depth, "handle"),
             ExpressionKind::Move { place } | ExpressionKind::Copy { place } => {
                 self.expression(*place, depth, "")
             }

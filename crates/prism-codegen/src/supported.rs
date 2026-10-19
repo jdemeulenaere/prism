@@ -43,6 +43,8 @@ pub enum Construct {
     /// A value of an opaque type, which names no declaration, or of a struct or enum whose
     /// definition the file does not know.
     UnknownType(String),
+    /// A state operation, which the backend lowers from task group 7 of `state-handles` on.
+    StateOperation(String),
 }
 
 impl Construct {
@@ -56,6 +58,7 @@ impl Construct {
                 format!("conversions from '{}' to '{}'", from, to)
             }
             Construct::UnknownType(name) => format!("values of unknown type '{}'", name),
+            Construct::StateOperation(name) => format!("the state operation '{}'", name),
         }
     }
 
@@ -65,6 +68,7 @@ impl Construct {
             Construct::Conversion { .. }
             | Construct::UnknownType(_)
             | Construct::TypeParameter(_) => None,
+            Construct::StateOperation(_) => Some("state-handles"),
         }
     }
 
@@ -358,6 +362,9 @@ impl BodyChecker<'_> {
             } => {
                 let callee_place = match callee {
                     Callee::Value(place, _) => self.place(place),
+                    Callee::State(operation) => {
+                        Some(Construct::StateOperation(operation.name().to_string()))
+                    }
                     Callee::Builtin(_)
                     | Callee::Function(_)
                     | Callee::External(_)

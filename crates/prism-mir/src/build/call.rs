@@ -56,6 +56,9 @@ impl Builder<'_> {
         ty: &Type,
         span: Span,
     ) {
+        if matches!(&call.callee, TreeCallee::Builtin(builtin) if builtin.is_state_operation()) {
+            return self.lower_state_call(destination, call, ty, span);
+        }
         let callee = match &call.callee {
             TreeCallee::Function(path) => Callee::Function(path.clone()),
             TreeCallee::External(path) => Callee::External(path.clone()),

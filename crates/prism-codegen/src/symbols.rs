@@ -197,7 +197,11 @@ pub fn callee_symbol(callee: &Callee, type_arguments: &[Type]) -> Option<String>
         Callee::Default { function, name, .. } => {
             Some(default_instance_symbol(function, type_arguments, name))
         }
-        Callee::Builtin(_) | Callee::External(_) | Callee::Value(..) | Callee::Composer(_) => None,
+        Callee::Builtin(_)
+        | Callee::External(_)
+        | Callee::Value(..)
+        | Callee::Composer(_)
+        | Callee::State(_) => None,
     }
 }
 

@@ -18,6 +18,7 @@ mod groups;
 mod pattern;
 mod place;
 mod scope;
+mod state;
 
 use crate::mir::{
     BasicBlock, BlockId, Body, BodyId, BodyOwner, ClosureOrigin, ExternalDeclaration, GroupId,

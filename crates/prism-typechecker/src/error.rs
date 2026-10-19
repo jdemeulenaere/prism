@@ -367,6 +367,26 @@ pub enum TypeError {
         found: String,
         span: Span,
     },
+
+    /// E4031: A write of a state in a composable context, which runs during a pass, when
+    /// state is read-only (D7 of `state-handles`): an assignment or compound assignment of
+    /// `s.value`, a call of `update` or `edit`, or a mutable use of `s.value`. `what`
+    /// describes the write.
+    StateWriteInComposable { what: String, span: Span },
+
+    /// E4032: A call of `mutableStateOf` in a composable context, which would create a new cell
+    /// on every pass (D7 of `state-handles`). `remembered` is the call wrapped in `remember`.
+    UnrememberedState { remembered: String, span: Span },
+
+    /// E4033: Outside composable contexts, a use of `s.value` that needs a borrow of the
+    /// cell's value: a read of a value that is not `Copy`, or a mutable borrow, `mut fun`
+    /// receiver or part write of any value (D7 of `state-handles`). `help` names the closure
+    /// member that does it.
+    StateValueOutsideComposable {
+        message: String,
+        help: String,
+        span: Span,
+    },
 }
 
 /// The types `types`, quoted and joined: `'A'`, `'A' and 'B'`, `'A', 'B' and 'C'`.
@@ -593,6 +613,9 @@ impl TypeError {
             TypeError::PolymorphicRecursion { .. } => "E4027",
             TypeError::CannotCaptureByValue { .. } => "E4028",
             TypeError::MissingContext { .. } => "E4034",
+            TypeError::StateWriteInComposable { .. } => "E4031",
+            TypeError::UnrememberedState { .. } => "E4032",
+            TypeError::StateValueOutsideComposable { .. } => "E4033",
         }
     }
 
@@ -645,6 +668,9 @@ impl TypeError {
             TypeError::PolymorphicRecursion { span, .. } => *span,
             TypeError::CannotCaptureByValue { span, .. } => *span,
             TypeError::MissingContext { span, .. } => *span,
+            TypeError::StateWriteInComposable { span, .. } => *span,
+            TypeError::UnrememberedState { span, .. } => *span,
+            TypeError::StateValueOutsideComposable { span, .. } => *span,
         }
     }
 
@@ -676,6 +702,14 @@ impl TypeError {
                     )
                 }
             }
+            TypeError::StateWriteInComposable { what, .. } => {
+                format!("{} in a composable context", what)
+            }
+            TypeError::UnrememberedState { .. } => {
+                "'mutableStateOf' in a composable context creates a new state on every pass"
+                    .to_string()
+            }
+            TypeError::StateValueOutsideComposable { message, .. } => message.clone(),
             TypeError::OuterReceiverName { name, .. } => format!(
                 "unresolved symbol '{}': only the innermost receiver is implicit",
                 name

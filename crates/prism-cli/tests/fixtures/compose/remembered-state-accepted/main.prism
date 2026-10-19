@@ -1,0 +1,4 @@
+// expect: ok
+compose fun C() {
+    val s = remember { mutableStateOf(0) }
+}

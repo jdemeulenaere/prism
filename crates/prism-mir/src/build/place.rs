@@ -192,7 +192,8 @@ impl Builder<'_> {
             | ExpressionKind::Deref { .. }
             | ExpressionKind::Index { .. }
             | ExpressionKind::NonNullPayload { .. }
-            | ExpressionKind::Temporary { .. } => unreachable!("places are handled above"),
+            | ExpressionKind::Temporary { .. }
+            | ExpressionKind::StatePlace { .. } => unreachable!("places are handled above"),
         }
     }
 
@@ -248,6 +249,7 @@ impl Builder<'_> {
                 base.project(Projection::Index(local))
             }
             ExpressionKind::NonNullPayload { nullable } => self.lower_payload(*nullable, span),
+            ExpressionKind::StatePlace { handle } => self.state_place(*handle, span),
             ExpressionKind::Temporary { value } => {
                 let value = *value;
                 match self.preallocated.get(&id).cloned() {
@@ -391,6 +393,7 @@ impl Builder<'_> {
             | ExpressionKind::Deref { pointer: value }
             | ExpressionKind::NonNullPayload { nullable: value }
             | ExpressionKind::Temporary { value }
+            | ExpressionKind::StatePlace { handle: value }
             | ExpressionKind::Move { place: value }
             | ExpressionKind::Copy { place: value }
             | ExpressionKind::Borrow { place: value, .. }
@@ -863,6 +866,9 @@ impl Builder<'_> {
     /// or operator, that write is at the target's span too, so a write while borrowed points at
     /// the variable (D6 of `borrowck-exclusivity`).
     fn lower_assign(&mut self, target: ExpressionId, value: ExpressionId, span: Span) {
+        if let ExpressionKind::StatePlace { handle } = self.expression(target).kind {
+            return self.lower_state_assign(handle, value, span);
+        }
         let target_expression = self.expression(target);
         let (target_ty, target_span) = (target_expression.ty.clone(), target_expression.span);
         if !self.needs_drop(&target_ty) && self.is_binding(target) {

@@ -19,6 +19,29 @@ pub trait TypeRelations {
     fn join(&self, other: &Type) -> Option<Type>;
 }
 
+/// Whether `found` is a `MutableState<T>` and `expected` the `State<T>` of the same `T`.
+fn is_mutable_to_read_only_handle(found: &Type, expected: &Type) -> bool {
+    use prism_typed_tree::IntrinsicStruct;
+    match (found, expected) {
+        (
+            Type::Struct {
+                id: found_id,
+                arguments: found_arguments,
+            },
+            Type::Struct { id, arguments },
+        ) => {
+            found_id.intrinsic() == Some(IntrinsicStruct::MutableState)
+                && id.intrinsic() == Some(IntrinsicStruct::State)
+                && found_arguments.len() == arguments.len()
+                && found_arguments
+                    .iter()
+                    .zip(arguments)
+                    .all(|(found, expected)| same_modulo_errors(found, expected))
+        }
+        _ => false,
+    }
+}
+
 impl TypeRelations for Type {
     /// Checks whether `self` is assignable to `expected` according to Prism's subtyping lattice:
     /// - `Error` unifies with any type (suppresses cascade errors)
@@ -68,6 +91,12 @@ impl TypeRelations for Type {
             {
                 return true;
             }
+        }
+
+        // `MutableState<T>` <= `State<T>`: a mutable state handle is read as a read-only one,
+        // keeping its word (D3 of `state-handles`).
+        if is_mutable_to_read_only_handle(self, expected) {
+            return true;
         }
 
         // T <= T?
@@ -161,6 +190,9 @@ impl TypeRelations for Type {
     /// the same type, except that a reference inside `self` may be `&mut` where `target` has `&`.
     fn is_shared_view_of(&self, target: &Type) -> bool {
         if self == target || is_error_pair(self, target) {
+            return true;
+        }
+        if is_mutable_to_read_only_handle(self, target) {
             return true;
         }
         match (self, target) {
