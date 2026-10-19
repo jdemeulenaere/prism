@@ -239,8 +239,12 @@ A value given to `listOf`, `add` or `insert`, or assigned to an element, MUST be
 - **THEN** the file typechecks and borrow-checks successfully
 
 #### Scenario: Storing a borrowing closure rejected
-- **WHEN** `fun f(xs: &mut List<() -> Unit>, r: &Int) { xs.add { println(r) } }` is checked
+- **WHEN** `fun f(xs: &mut List<() -> Unit>, r: &String) { xs.add { println(r) } }` is checked
 - **THEN** the borrow checker emits `E5007`, because the closure holds the borrow `r`
+
+#### Scenario: Storing a closure that copies through a borrow
+- **WHEN** `fun main() { var handlers = listOf<() -> Unit>(); val n = 7; val r = &n; handlers.add { println(r) }; handlers[0]() }` runs with `--check-allocations`
+- **THEN** stdout is `7`, and the exit status is 0: the stored closure owns a copy of the `Int` that `r` refers to
 
 ### Requirement: Higher-Order Helpers
 `/prism/collections` MUST declare public extensions on `List<T>` written in Prism over the members, found as prelude extensions (`standard-library`, "Prelude Extensions Are Found After Imported Ones"). Their function arguments MUST NOT be composable contexts and MUST NOT escape. Each MUST borrow its list, except `filter`, which consumes it.

@@ -480,7 +480,7 @@ A closure that owns a capture (see `references`) MUST copy a `Copy` binding and 
 - **THEN** the borrow checker emits `E5001` at `h` in `h()` of `f` and at the second `h` of `g`, and accepts `k`, whose closures borrow `h`
 
 ### Requirement: Captures by Value Are Values the Closure Can Take
-A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected by the type checker with `CannotCaptureByValue` (`E4028`), labelling the capture and why the closure owns it, with help suggesting a fix that applies (a `val` copy or clone, or, for a written `var`, not escaping).
+A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` binding, only one its builder owns. Capturing by value a `var`, or a non-`Copy` capture of an enclosing closure or earlier parameter read in a default value, MUST be rejected by the type checker with `CannotCaptureByValue` (`E4028`), labelling the capture and why the closure owns it, with help suggesting a fix that applies (a `val` copy or clone of the path the closure reads, or, for a written `var`, not escaping).
 
 #### Scenario: Capturing a var by value
 - **WHEN** `struct Button { val onClick: () -> Int }` is declared and `fun f(): Button { var n = 1; val b = Button({ n }); n = 2; return b }` is checked
@@ -497,6 +497,29 @@ A closure that owns a capture MUST capture only a `val`, and, for a non-`Copy` b
 #### Scenario: A borrowed var capture is unaffected
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun f(): Int { var n = 1; run { n += 1; n }; return n }` is checked
 - **THEN** the file passes `prism check`, because the closure borrows `n`
+
+#### Scenario: Capturing a field of a var by value
+- **WHEN** `struct P { val x: Int }` and `struct Button { val onClick: () -> Int }` are declared and `fun f(): Button { var p = P(1); val b = Button({ p.x }); p = P(2); return b }` is checked
+- **THEN** the type checker emits `E4028` at `p.x` in the closure, saying that the variable `p` cannot be captured by value, with help suggesting `val x = p.x` before the closure
+
+#### Scenario: A field of an enclosing closure's capture is copied
+- **WHEN** `struct User { val id: Int, val name: String }`, `fun store(f: escaping () -> Int): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(u: User): Int = run { store { u.id } }` is checked
+- **THEN** the file passes `prism check`: the inner closure copies `u.id` from the outer closure's borrow of it, and gives nothing of `u` away
+
+### Requirement: Owning Closures Copy the Paths They Can
+A closure that owns its captures MUST copy each captured path that has projections, where the closure is built, when the path's type is `Copy`, its binding is a `val`, it dereferences no `&mut` reference, and every field it reads after dereferencing a reference is a `val` field. Otherwise the closure MUST own the path's whole binding, merged with the binding's other paths, by the rules for capturing a binding by value.
+
+#### Scenario: Copying a field leaves its binding usable
+- **WHEN** `struct User { val id: Int, val name: String }`, `struct Button { val onClick: () -> Int }` and `fun take(u: User) {}` are declared and `fun f(u: User): Button { val b = Button({ u.id + 1 }); take(u); return b }` is checked
+- **THEN** the file passes `prism check`: the closure copies `u.id`, and `u` is moved only by `take(u)`
+
+#### Scenario: A non-Copy field takes the whole binding
+- **WHEN** `struct User { val id: Int, val name: String }`, `struct Button { val onClick: () -> Int }` and `fun take(u: User) {}` are declared and `fun f(u: User): Button { val b = Button({ u.name.length + u.id }); take(u); return b }` is checked
+- **THEN** the borrow checker emits `E5001` at `u` in `take(u)`, with a related location at the closure labelled "value moved into closure here", because the closure owns the whole binding `u` for its path `u.name`, and `u.id` with it
+
+#### Scenario: A var field of a val binding is copied
+- **WHEN** `struct Counter { var n: Int, val label: String }` and `struct Button { val onClick: () -> Int }` are declared and `fun f(c: Counter): Button { val b = Button({ c.n }); println(c.label); return b }` is checked
+- **THEN** the file passes `prism check`: no write can reach a field of the `val` binding `c`, so the closure copies `c.n` and `c` stays usable
 
 ## Design Rationale
 Decisions from `value-semantics` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change):
@@ -561,3 +584,8 @@ Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised 
 - **Owned captures are `val`s the closure can take: `E4028`** (D5, revised for compile speed). A `var` captured by value would silently stop seeing later writes, which Kotlin closures see; a non-`Copy` capture of an enclosing closure, which may be called again, or an earlier parameter read in a default value, which only borrows it, cannot be given away. Both get one type-checker code, since both are fixed by giving the closure a value it can own; the first design's borrow-checker code `E5010` moved to the type checker's range with the decision. Rejected: capturing `var`s by value, Java's effectively final rule for every closure, and boxing captured `var`s to share them (hidden reference counting).
 - **Each help names a fix that applies** (D15, D20): `val m = n` for a `var`, `val m = s.clone()` for a capture of the enclosing closure, passing an earlier parameter to the closure as a parameter (a default value cannot declare a `val`), and, for a `var` the closure writes, keeping the closure from escaping (review).
 - **A closure still never moves its capture** (D15): `E4017` names "captured variable 's'" with a note that a closure may be called more than once, whether it borrows or owns its captures, which the type checker's message cannot tell.
+
+Decisions from `path-captures` (review item A2b, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: closures capture paths such as `todo.done`, like Rust 2021's disjoint captures, decided syntactically at no inference cost; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Owning closures copy a path only when no later write could change it** (D3): its type is `Copy`, its binding a `val`, it dereferences no `&mut` and reads only `val` fields past a reference. Kotlin captures the object `todo` refers to, whose `val` fields never change, so the copy reads what a Kotlin closure would; a `var` field of a by-value `val` cannot be written either, so it is copied too. Any other path makes the closure own the whole binding by the rules above (moved, copied, `E4028` for a `var`, `E5007` for a reference), so no valid program is newly rejected. Rejected: Rust 2021's partial move of a non-`Copy` field (partial moves are out of the language, D7 of `payload-patterns`); a new error for a path that cannot be copied; copying `var` fields read through references or paths through a `&mut` (the copy would silently go stale); cloning `Clone` paths implicitly (a hidden allocation per closure built).
+- **A binding no closure takes is dropped by its owner** (D9). When a closure copies `u.id` instead of moving `u`, `u` is dropped at the end of its own scope, not with the closure's environment. Nothing observes the difference while drops run no user code; `drop-and-clone-hooks` must state that a closure keeps exactly the values it captures by value, as Rust 2021 did. Rejected: moving the whole binding whenever an owning closure reads any of its paths (`u` would be unusable after `Button({ u.id })`).

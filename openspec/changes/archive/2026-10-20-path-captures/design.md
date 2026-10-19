@@ -185,3 +185,13 @@ Unreleased language: no migration. Every accepted program keeps its meaning exce
 ## Open Questions
 
 - The exact wording of the new notes and helps (D10) may be tuned during implementation.
+
+## Review (2026-10-20)
+
+Probed with scratch programs: path shapes (fields, boxes, `val` references, the stops at indices, `?.`, state values, `&&T` and `var` references), merging, disjoint and overlapping closure borrows, owning closures copying or widening (also through loops, receivers, defaults, lambdas with a receiver and generic instances), drops under `--check-allocations`, compose skipping with copied paths, and closures with borrowed parameters returning borrows of captured paths. That last case, the implementer's flagged risk, is `E5009` as "Function Types Elide by the Same Rules" requires for a closure whose type takes a borrowed input, with or without a path (`app { k -> &t.lead }` as `app { k -> lead(t) }`), so it is not a regression. Fixed:
+
+- `E5007` for a handler stored in a field that owns a `&mut` reference (`Button({ t.id })` for `t: &mut Todo`) labelled the parameter and gave the generic help: the moved reference no longer held its input where the closure escapes, so the escape check did not find the capture. It now names the path and the `&mut` note (fixture `references/escaping-closure-help-names-the-path--stored-in-a-field`).
+- The capture benchmark timed a second run of the pass on already decided captures, which took a deduplicating copy the checker's run never takes; with the checker's input the pass is 8% to 15% of `prism check` (D5's review measurement), and the copy is gone.
+- Closure parameters were declared in the enclosing closure, so the pass recorded their uses as captured paths and then dropped them; no capture changed.
+
+Left as a ROADMAP follow-up: a slot contract fingerprints a captured path by its type only, so a reload swapping `{ t.id }` for `{ t.count }` keeps the slot and an old closure value runs the new code with the old path's copy.

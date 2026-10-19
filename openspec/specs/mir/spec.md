@@ -306,7 +306,7 @@ Where a `(&mut T)?` place is lent as a `(&mut T)?`, the MIR MUST read its tag an
 - **THEN** before each call the tag of `m` is read, and `edit` receives either `null` or a wrapped mutable argument borrow of the dereference of `m`'s payload; `m` is never moved
 
 ### Requirement: Closures Are Separate Bodies
-Each closure MUST be lowered to its own body whose captured bindings are capture locals following its arguments, and the enclosing body MUST build the closure value from them in capture order: a move or copy of each one the typed tree records as owned, the place of each other one. MIR as lowered MUST record no capture mode; the borrow checker infers how a borrowed one is borrowed, and elaborated MIR MUST record one mode per capture local, shared, mutable or owned (see `references`).
+Each closure MUST be lowered to its own body with a capture local per captured path, of the path's type, after its arguments, which a use of the path or of a place within it reads. The enclosing body MUST build the closure value from the paths in capture order: a move or copy of each owned one, the place of each other one. MIR as lowered MUST record no capture mode; elaborated MIR MUST record one per capture local, shared, mutable or owned, as the borrow checker infers it (see `references`).
 
 #### Scenario: Captured bindings
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and `fun g(a: Int, b: Int): Int = run { b + a + b }` is lowered
@@ -314,11 +314,15 @@ Each closure MUST be lowered to its own body whose captured bindings are capture
 
 #### Scenario: Capture modes in elaborated MIR
 - **WHEN** `struct User { var name: String }` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(n: Int) { var u = User("a"); run { u.name = "z"; n } }` passes the borrow checker
-- **THEN** the elaborated MIR of `f` builds the closure value from a mutable borrow of `u` and a shared borrow of `n`, while the MIR as lowered records no mode
+- **THEN** the elaborated MIR of `f` builds the closure value from a mutable borrow of `u.name` and a shared borrow of `n`, while the MIR as lowered records no mode
 
 #### Scenario: Mixed capture modes in elaborated MIR
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(): Int { var count = 0; var h: () -> Int = { 0 }; if (count == 0) { val s = "a"; h = { count += 1; greet(s) } }; h(); return count }` passes the borrow checker
 - **THEN** the elaborated MIR of `f` builds the closure `{ count += 1; greet(s) }` from a mutable borrow of `count` and a move of `s`, and its body records the modes mutable and owned
+
+#### Scenario: Captured paths are capture locals
+- **WHEN** `struct P { var x: Int, var y: Int }` and `fun run(f: () -> Int): Int = f()` are declared and `fun f(): Int { var p = P(1, 2); return run { p.x += 1; p.x + p.y } }` passes the borrow checker
+- **THEN** the closure's body has the capture locals `p.x` and `p.y`, each of type `Int`, and the elaborated MIR of `f` builds the closure value from a mutable borrow of the place `p.x` and a shared borrow of the place `p.y`
 
 ### Requirement: Comparisons Borrow Non-Copy Operands
 `==` and `!=` over a type that is not `Copy` MUST compare shared borrows of their operands, nullable operands as optional borrows, without moving or copying them. Any other operator over a type that is not `Copy` (string concatenation) MUST likewise read shared borrows of its operands. A comparison with `null` MUST read the tag.
@@ -522,11 +526,15 @@ An instance of a generic body MUST include every closure lowered inside that bod
 - **THEN** it prints the body `main::count<Int>`, which builds the closure value `main::count<Int>#closure0` from its arguments `f` and `x`, and the body `main::count<Int>#closure0`, which has the capture locals `f` of type `(Int) -> Int` and `x` of type `Int`
 
 ### Requirement: Owned Captures Are Operands of the Closure Value
-A closure value MUST be built from a move of each non-`Copy` capture it owns and a copy of each `Copy` capture it owns, as the typed tree records them, already in MIR as lowered, and, in elaborated MIR, a borrow of each capture it borrows, in capture order. The enclosing body MUST NOT drop a binding a closure moved, and `prism dump-mir` MUST print owned captures as operands (`[move _1, copy _2, _3]` as lowered, `[move _1, copy _2, &_3]` elaborated).
+A closure value MUST be built from a move of each non-`Copy` capture it owns and a copy of each `Copy` capture it owns, a copied path read from its place, as the typed tree records them, already in MIR as lowered, and, in elaborated MIR, a borrow of each capture it borrows, in capture order. The enclosing body MUST NOT drop a binding a closure moved, and `prism dump-mir` MUST print owned captures as operands (`[move _1, copy _2, _3]` as lowered, `[move _1, copy _2, &_3]` elaborated).
 
 #### Scenario: Owned captures in elaborated MIR
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `fun f(s: String, n: Int): () -> Int = { greet(s) + n }` passes the borrow checker
 - **THEN** the MIR of `f`, as lowered and elaborated, builds the closure value from a move of `s` and a copy of `n`, and the elaborated MIR has no drop of `s`
+
+#### Scenario: Copied paths in MIR
+- **WHEN** `struct Todo { val id: Int, val title: String }` is declared and `prism dump-mir` runs on `fun f(t: &Todo): () -> Int = { t.id }` and `fun g(u: Todo): () -> Int = { u.id }`
+- **THEN** it prints the closure value of `f` as built from `[copy (*_1).id]` and that of `g` from `[copy _1.id]`, and the body of `g` still drops `u`
 
 ### Requirement: Elements Are Index Projections of Their List
 An element `xs[i]` MUST be the place of the list with an index projection by an `Int` local, into which the index is evaluated before the place is used. The projection MUST be valid only on a `List<T>` place, giving a place of type `T`, and, as for a dereference, the validator MUST reject a move out of a place that has one. Assigning to an element MUST drop the old element first, as every assignment drops the old value of its place.
@@ -774,3 +782,4 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 - **`runApp` gets a root content adapter** (D15), built from the content where it is called, as `composition` does.
 - **Unit properties are constructions** (D7). `n.dp` and `n.sp` lower to the aggregates `Dp(n)` and `TextUnit(n)`, so a unit costs a constructor and no call.
 - **Default generators borrow only what their default reads** (D26, review). A generator used to borrow the context, the receiver and every earlier argument, so `Modifier.padding(16.dp)` borrowed 27 arguments for its six defaults and the borrow check of a screen of toolkit calls cost about 0.17 ms per call. Its inputs are now decided syntactically (`prism_ast::default_inputs`): an earlier parameter or the context when its name appears, the receiver and the context when `this` or another name appears (a member of the implicit receiver, or a call needing the context), and every input for blocks, closures, `when` and jumps, which bind names or hold statements; a parameter whose type may hold a borrow (a reference, a function type, a type parameter) still takes every input, so the elision rules tie its result as before. Phase 1 stores the answer in the ABI and the checker computes it for the file's own functions, so both sides of a call agree. No program is accepted or rejected differently and no diagnostic changes; the borrow check fell to 0.07 ms per call. Rejected: resolving reads from the typed tree (another file sees only the ABI), skipping loans in the borrow checker alone (every later stage would keep the arguments), inlining constant defaults (a default may call the callee's private declarations).
+- **One capture local per captured path** (D7 of `path-captures`). A closure's capture local has the path's type and is named by its path (`p.x`), a place chain in its body maps onto the captured prefix's local and the rest of the chain in one walk, and the enclosing body builds the closure value from each path's place: a borrow of a borrowed path, a copy of a copied one, a move only of a whole binding. The borrow checker needs no new rule, since loans, overlap and capture-mode inference already work on places. Rejected: one capture local per binding with a partial environment, which MIR's types cannot express.

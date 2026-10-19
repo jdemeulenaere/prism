@@ -227,7 +227,7 @@ An assignment MUST be a statement whose target is a place: a binding (re-pointin
 - **THEN** the assignment's target is the index node of the binding `xs` by the binding `i`, and its value the literal `2`
 
 ### Requirement: Closures Record Their Captures
-A closure MUST record its parameters as bindings, whether it is composable, and its captures: the bindings of enclosing scopes that its body uses, each once, in order of first use. Each capture MUST record whether the closure borrows, moves or copies it (see `references`), and a closure owning a capture MUST record why: the position that makes it escape, or the assignment storing it outside a captured binding's block. Whether a borrow is shared or mutable is not recorded.
+A closure MUST record its parameters as bindings, whether it is composable, and its captures: the paths its body uses of bindings of enclosing scopes (see `references`), each once, by binding in order of first use, each binding's in step order. Each capture MUST record whether the closure borrows, moves or copies it, and a closure owning a capture MUST record why: the position that makes it escape, or the assignment storing it outside a captured binding's block. A borrow's kind is not recorded.
 
 #### Scenario: Captured bindings
 - **WHEN** `fun run(f: () -> Int): Int = f()` is declared and a body of `fun g(a: Int, b: Int): Int` runs `return run { b + a + b }`
@@ -240,6 +240,21 @@ A closure MUST record its parameters as bindings, whether it is composable, and 
 #### Scenario: Captures taken by value
 - **WHEN** `fun greet(s: &String): Int = 1` is declared and `prism dump-typed-tree` runs on `fun f(s: String, n: Int): () -> Int { var count = 0; val h = { count += 1; greet(s) + n }; h(); return { greet(s) + n } }`
 - **THEN** the closure `h` captures `count`, `s` and `n` borrowed, and the returned closure captures `s` moved and `n` copied, with the reason "returned here"
+
+#### Scenario: Captured paths
+- **WHEN** `struct Todo { val id: Int, val title: String }`, `struct P { var x: Int, var y: Int }` and `fun run(f: () -> Int): Int = f()` are declared and `prism dump-typed-tree` runs on `fun f(t: &Todo, r: &Int, n: Int): () -> Int { var p = P(1, 2); run { p.x += n; p.x }; return { t.id + r + n } }`
+- **THEN** the first closure prints its captures as `borrow p.x` and `borrow n`, and the returned closure as `copy t.id`, `copy *r` and `copy n`, with the reason "returned here"
+
+#### Scenario: Nested closures capture their children's paths
+- **WHEN** `struct Todo { val id: Int, val title: String }`, `fun store(f: escaping () -> Int): Int = 1` and `fun run(f: () -> Int): Int = f()` are declared and `prism dump-typed-tree` runs on `fun f(t: &Todo): Int = run { store { t.id } }`
+- **THEN** the outer closure captures the path `t.id` borrowed, and the inner one captures `t.id` copied, with the reason "passed to an escaping parameter here"
+
+### Requirement: Widened Captures Record the Path They Widened
+An owned capture of a whole binding that the closure uses only through paths it cannot copy (see `ownership`, "Owning Closures Copy the Paths They Can") MUST record the first such path and why it was not copied: its type is not `Copy`, its binding is a `var`, it dereferences a `&mut` reference, or it reads a `var` field through a reference. `prism dump-typed-tree` MUST print it after the capture.
+
+#### Scenario: A capture widened for a non-Copy field
+- **WHEN** `struct User { val id: Int, val name: String }` is declared and `prism dump-typed-tree` runs on `fun f(u: User): () -> Int = { u.name.length + u.id }`
+- **THEN** the closure captures `u` moved, widened from the path `u.name`, whose type is not `Copy`, with the reason "returned here"
 
 ### Requirement: The Typed Tree Records Its File's Types
 The typed tree MUST record every struct and enum known to its file (its own declarations, those its direct imports export, and the built-in `Range`) with its `Copy` or `Clone` marker and, when the file knows them, its fields or variants in declaration order. The text dump MUST list the imported ones.
@@ -466,3 +481,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **State places and state built-ins** (D17). `ExpressionKind::StatePlace { handle }` is the place of a non-`Copy` `s.value` in a composable context, and the target of an assignment of any `s.value`; `BuiltinFunction::{MutableStateOf, StateValue, StateRead, StateUpdate, StateEdit, SideEffect}` carry the value type as their first type argument. Validation checks that a state place is an assignment target or sits in a composable body and is never moved; a value written into a state is an owning position, labelled "stored in a state here".
+
+Decisions from `path-captures` (review item A2b, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: closures capture paths such as `todo.done`, like Rust 2021's disjoint captures, decided syntactically at no inference cost; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Captures record projections and why one was widened** (D6). `Capture` holds `projections` (`CaptureProjection::{Field, Deref}`, empty for a whole binding) and `widened` (the first path an owned whole binding could not copy and why), printed as source writes them (`borrow p.x`, `copy todo.done`, `copy *r`, `move u (widened from u.name: not Copy)`); uses inside the closure stay ordinary place nodes. The validator checks each path against its binding's type, that no capture of a closure is a prefix of another, and that each use has a captured prefix. Rejected: a new expression kind for uses of a captured path (it would rewrite every consumer of `Field`); paths as expression ids (several uses share one).
