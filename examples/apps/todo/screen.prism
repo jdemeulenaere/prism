@@ -41,7 +41,10 @@ package compose fun TodoScreen(state: TodoState): Unit {
     }
 }
 
-// The three filters, the selected one disabled.
+// The three filters, the selected one disabled. Compose would pass `selected: Filter` and
+// `onSelect: (Filter) -> Unit`, but a handler owns its captures and a function value can be
+// neither copied nor cloned, so three buttons cannot share one `onSelect`: the composables
+// take state handles instead (a follow-up of `reactive-app-verification` in `ROADMAP.md`).
 package compose fun FilterRow(filter: MutableState<Filter>): Unit {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { filter.value = Filter.All }, enabled = filter.value != Filter.All) {
