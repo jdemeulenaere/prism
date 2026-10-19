@@ -304,6 +304,7 @@ impl WatchSession {
     /// as a change does once `main` returned or stopped (D13). A program that does not compile
     /// prints its diagnostics and `watch: waiting for changes`.
     pub fn start(&mut self) -> ReloadOutcome {
+        let run_started = Instant::now();
         let first = !self.attempted;
         self.attempted = true;
         let (graph, build, program, graph_time, linking) = match self.build_fresh() {
@@ -346,6 +347,11 @@ impl WatchSession {
         }
         if !first {
             eprintln!("watch: running main again");
+            // A later run's first frame is timed from this run's start (D7 of
+            // `reactive-app-verification`).
+            if self.options.frame_stats {
+                prism_ui::host::set_frame_statistics(Some(run_started));
+            }
         }
         // The old program's modules are freed: its `main` returned, or its thread is parked.
         self.program = None;

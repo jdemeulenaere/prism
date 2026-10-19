@@ -24,6 +24,7 @@
 //! Cranelift (D1).
 
 mod allocation;
+pub mod allocation_counter;
 mod double;
 mod function_value;
 mod functions;

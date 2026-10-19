@@ -206,7 +206,7 @@ impl WindowSystem {
         let connection = replies
             .recv()
             .map_err(|_| "the window system stopped".to_string())??;
-        Ok(WindowHost::new(connection))
+        Ok(WindowHost::new(connection).with_statistics(self.statistics.clone()))
     }
 
     /// Delivers `input` to the open window, which handles it as it handles the platform's

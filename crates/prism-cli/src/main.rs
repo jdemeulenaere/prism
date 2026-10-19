@@ -11,6 +11,13 @@ use std::process;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The `prism` binary's allocator: the system's, counting each thread's allocations once
+/// `--frame-stats` enables it, and costing one relaxed atomic load per allocation otherwise
+/// (D7 of `reactive-app-verification`). Library tests and other embedders keep their own.
+#[global_allocator]
+static ALLOCATOR: prism_runtime::allocation_counter::CountingAllocator =
+    prism_runtime::allocation_counter::CountingAllocator;
+
 fn print_usage() {
     eprintln!(
         r#"Prism Compiler CLI (prism) v{}
@@ -34,7 +41,7 @@ COMMANDS:
                            --composed, print that MIR through the compose transform; with
                            --instances, compile the program the file is the entry of and
                            print the composed MIR of every instance of a generic it needs
-    run [--timings] [--check-allocations] [--no-cache] [--explain-cache]
+    run [--timings] [--check-allocations] [--frame-stats] [--no-cache] [--explain-cache]
         [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]]
         [--screenshot <file.png>] <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
@@ -51,8 +58,10 @@ COMMANDS:
                            events; runApp opens a window, unless --headless runs it without
                            one, in a window of the given size if one is given, and --events
                            drives it from an event script, read before the program compiles;
-                           --screenshot writes each app's final frame to a PNG file; the
-                           arguments after '--' are the program's
+                           --screenshot writes each app's final frame to a PNG file;
+                           --frame-stats makes each app report its frames' times and
+                           allocations on stderr when it returns; the arguments after '--'
+                           are the program's
     dump-clif [--instances] <file.prism>
                            Print the Cranelift IR the backend generates for a source file;
                            with --instances, compile the program the file is the entry of
@@ -187,7 +196,7 @@ fn main() {
     }
 }
 
-/// `prism run [--timings] [--check-allocations] [--watch [--edits <script>]]
+/// `prism run [--timings] [--check-allocations] [--frame-stats] [--watch [--edits <script>]]
 /// [--headless[=<w>x<h>] [--events <script>]] [--screenshot <file.png>] <file.prism>
 /// [-- <argument>...]` (D14 of `codegen-core`, D13 of `runtime-strings-and-drops`): options
 /// before the file, and everything after `--` for the program. The build cache the environment
@@ -200,7 +209,7 @@ fn main() {
 fn run_program(args: &[String], started: std::time::Instant) {
     let usage = || -> ! {
         eprintln!(
-            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]] [--screenshot <file.png>] <file.prism> [-- <argument>...]"
+            "Error: usage: prism run [--timings] [--check-allocations] [--frame-stats] [--no-cache] [--explain-cache] [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]] [--screenshot <file.png>] <file.prism> [-- <argument>...]"
         );
         process::exit(1);
     };
@@ -208,6 +217,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
     let mut events: Option<String> = None;
     let mut timings = false;
     let mut check_allocations = false;
+    let mut frame_stats = false;
     let mut no_cache = false;
     let mut explain_cache = false;
     let mut watch = false;
@@ -223,6 +233,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
                 None => usage(),
             },
             Some("--check-allocations") => check_allocations = true,
+            Some("--frame-stats") => frame_stats = true,
             Some("--no-cache") => no_cache = true,
             Some("--explain-cache") => explain_cache = true,
             Some("--headless") => headless = Some(None),
@@ -275,9 +286,15 @@ fn run_program(args: &[String], started: std::time::Instant) {
         };
         prism_cli::HeadlessOptions { size, commands }
     });
+    // The program thread's allocations are counted from its start (D7 of
+    // `reactive-app-verification`).
+    if frame_stats {
+        prism_runtime::allocation_counter::enable();
+    }
     let options = prism_cli::RunOptions {
         timings,
         check_allocations,
+        frame_stats,
         arguments,
         started,
         cache: if no_cache {

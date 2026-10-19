@@ -17,9 +17,16 @@
 //! changed frame is drawn once, that dropping the host closes the window, that a second window
 //! opens after it on the same event loop, and that the server returns within 1 s of the
 //! program's end. It reports the time to the first frame and the median frame time.
+//!
+//! The second window checks the scenario "A window app's frame statistics" of
+//! `reactive-app-verification`: it presents two different display lists, each after one press
+//! delivered through the window, and its report lines then count two presented frames with a
+//! raster sample and an input-to-present sample each.
 
+use prism_desktop::input::{ElementState, MouseButton, WindowInput};
 use prism_desktop::{FontMetrics, MainThreadServer, WindowHost, WindowSystem};
 use prism_ui::draw::DisplayList;
+use prism_ui::host::HostEvent;
 use prism_ui::layout::Layout;
 use prism_ui::test_support::{counter_screen, inline_handler, TreeBuilder};
 use prism_ui::Host;
@@ -147,15 +154,49 @@ fn program(system: WindowSystem) -> Result<Report, String> {
         statistics.frames_rasterized() - rasterized
     );
     drop(host);
-    // A second window, on the same event loop.
+    // A second window, on the same event loop, whose two frames each follow one press.
     let mut second = system.try_open("Two", 200, 100)?;
-    let shown = statistics.new_frames_presented();
-    second.present(&counter(second.size(), 2));
+    for count in [2, 3] {
+        system.deliver(WindowInput::CursorMoved { x: 10.0, y: 10.0 });
+        system.deliver(WindowInput::MouseButton {
+            button: MouseButton::Left,
+            state: ElementState::Pressed,
+        });
+        let event = second.next_event();
+        let event = if event == Some(HostEvent::Frame) {
+            second.next_event()
+        } else {
+            event
+        };
+        check!(
+            matches!(event, Some(HostEvent::Press(_, _))),
+            "the press arrived as {:?}",
+            event
+        );
+        let shown = statistics.new_frames_presented();
+        second.present(&counter(second.size(), count));
+        check!(
+            wait_for(Duration::from_secs(5), || statistics.new_frames_presented()
+                > shown),
+            "the second window did not present frame {}",
+            count
+        );
+    }
+    let lines = second.frame_statistics_lines();
     check!(
-        wait_for(Duration::from_secs(5), || statistics.new_frames_presented()
-            > shown),
-        "the second window presented nothing"
+        lines.len() == 2
+            && lines[0].starts_with("frame stats: raster median ")
+            && lines[0].ends_with(" (2 frames presented)")
+            && lines[1].starts_with("frame stats: input to present median "),
+        "the window's report lines are {:?}",
+        lines
     );
+    check!(
+        statistics.presented_samples() == (2, 2),
+        "the second window's samples are {:?}",
+        statistics.presented_samples()
+    );
+    println!("window smoke test: {}", lines.join("; "));
     check!(
         statistics.last_window().map(|window| window.title) == Some("Two".to_string()),
         "the second window is not titled Two"

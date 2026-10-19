@@ -8,6 +8,11 @@
 //! the root scope so that a pass follows, which registers the button's clickable handler again,
 //! finds it equal to the one the node holds and releases it at the end of the pass, then lays
 //! out (a clean tree) and rebuilds the display list.
+//!
+//! The scenario "The statistics allocate nothing" of `reactive-app-verification`'s `ui` delta
+//! drives an app through 100 frames of `App::run` with frame statistics on: a press and a
+//! release whose handler writes nothing, then a frame, which builds and presents the display
+//! list and ends a measured frame. Nothing is allocated after the first frame.
 
 use prism_compose::test_support::content;
 use prism_compose::{invalidate, Composition};
@@ -74,9 +79,15 @@ impl Host for NoEvents {
     fn present(&mut self, _list: &prism_ui::draw::DisplayList) {}
 }
 
-#[test]
-fn steady_state_iterations_allocate_nothing() {
-    let content = content(|k| {
+/// The tests switch the process-wide frame statistics, one at a time.
+fn lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The counter screen, whose button's handler writes nothing.
+fn counter_screen() -> prism_runtime::FunctionValue {
+    content(|k| {
         let column = NodeId(k.start_node_group(1, 1).unwrap().0);
         setters::set_modifier(column, &ModifierMirror::encode(&[padding(16)])).unwrap();
         setters::set_arrangement(column, 8, 8).unwrap();
@@ -100,7 +111,14 @@ fn steady_state_iterations_allocate_nothing() {
         k.end_group().unwrap();
         k.end_group().unwrap();
         k.end_group().unwrap();
-    });
+    })
+}
+
+#[test]
+fn steady_state_iterations_allocate_nothing() {
+    let _lock = lock();
+    prism_ui::host::set_frame_statistics(None);
+    let content = counter_screen();
     let mut app = App::start(Box::new(NoEvents), Box::new(FixedAdvanceMetrics), content).unwrap();
     app.settle().unwrap();
     let root_scope = Composition::root_scope(app.composition()).unwrap();
@@ -134,6 +152,73 @@ fn steady_state_iterations_allocate_nothing() {
         counts[99],
         counts[0],
         "allocations after the first iteration: {:?}",
+        &counts[..10]
+    );
+    app.finish();
+}
+
+/// A host giving 100 frames of a press, a release and a frame, which records this thread's
+/// allocation count at each present into a buffer allocated beforehand.
+struct Frames {
+    events: std::vec::IntoIter<HostEvent>,
+    counts: std::rc::Rc<std::cell::RefCell<Vec<u64>>>,
+}
+
+impl Host for Frames {
+    fn size(&self) -> (i64, i64) {
+        (400, 300)
+    }
+
+    fn next_event(&mut self) -> Option<HostEvent> {
+        self.events.next()
+    }
+
+    fn present(&mut self, _list: &prism_ui::draw::DisplayList) {
+        let count = ALLOCATIONS.with(Cell::get);
+        self.counts.borrow_mut().push(count);
+    }
+}
+
+#[test]
+fn the_statistics_allocate_nothing() {
+    let _lock = lock();
+    let mut events = Vec::with_capacity(300);
+    for _ in 0..100 {
+        events.extend([
+            HostEvent::Press(45, 64),
+            HostEvent::Release(45, 64),
+            HostEvent::Frame,
+        ]);
+    }
+    let counts = std::rc::Rc::new(std::cell::RefCell::new(Vec::with_capacity(100)));
+    let host = Frames {
+        events: events.into_iter(),
+        counts: counts.clone(),
+    };
+    prism_ui::host::set_frame_statistics(Some(std::time::Instant::now()));
+    COUNTING.with(|counting| counting.set(true));
+    let mut app = App::start(
+        Box::new(host),
+        Box::new(FixedAdvanceMetrics),
+        counter_screen(),
+    )
+    .unwrap();
+    app.run().unwrap();
+    COUNTING.with(|counting| counting.set(false));
+    prism_ui::host::set_frame_statistics(None);
+    let statistics = app.frame_statistics().expect("frame statistics are on");
+    let report = statistics.report(&[]);
+    assert!(
+        report.starts_with("frame stats: frames 100, events 200, passes 1, "),
+        "{}",
+        report
+    );
+    let counts = counts.borrow();
+    assert_eq!(counts.len(), 100);
+    assert_eq!(
+        counts[99],
+        counts[0],
+        "allocations after the first frame: {:?}",
         &counts[..10]
     );
     app.finish();

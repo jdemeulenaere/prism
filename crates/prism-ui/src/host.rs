@@ -14,6 +14,10 @@
 //! request wakes the loop through [`wake_for_reload`]: it notifies the condition variable that
 //! `wait reload` waits on, and calls the waker a window host registers with
 //! [`set_reload_waker`] (D2 and D12 of `compose-hot-reload`).
+//!
+//! `--frame-stats` switches frame statistics on for every later app with
+//! [`set_frame_statistics`], and a host may add lines of its own to the report
+//! ([`Host::frame_statistics_lines`], D7 of `reactive-app-verification`).
 
 use crate::draw::DisplayList;
 use crate::headless::HeadlessHost;
@@ -57,6 +61,12 @@ pub trait Host {
     /// fractional: 1 unless the host draws on a scaled display.
     fn scale_factor(&self) -> f64 {
         1.0
+    }
+    /// The host's own lines of the frame statistics report, read when the app ends: a
+    /// window's raster and input-to-present times (D7 of `reactive-app-verification`). None
+    /// unless the host presents frames somewhere.
+    fn frame_statistics_lines(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -216,6 +226,24 @@ pub fn wait_for_reload() -> bool {
 /// Shortens the wait of `wait reload`, for tests.
 pub fn set_wait_for_reload(limit: Duration) {
     WAIT_FOR_RELOAD_MILLISECONDS.store(limit.as_millis() as u64, Ordering::SeqCst);
+}
+
+static FRAME_STATISTICS: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Makes every later app measure its frames and report them on stderr when it returns, with
+/// `start` as the start of the run its first frame is timed from, or stops it
+/// (`prism run --frame-stats`, D7 of `reactive-app-verification`).
+pub fn set_frame_statistics(start: Option<Instant>) {
+    *FRAME_STATISTICS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = start;
+}
+
+/// The start of the run when apps measure their frames.
+pub fn frame_statistics() -> Option<Instant> {
+    *FRAME_STATISTICS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Makes the frame loop print `timing: reload pass <ms> (<n> scopes)` after the passes that

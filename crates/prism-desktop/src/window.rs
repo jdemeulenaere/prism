@@ -222,7 +222,10 @@ impl WindowApp {
         };
         let start = Instant::now();
         let scale = self.input.scale();
-        let new_frame = endpoint.mailbox.take(&mut self.current, &mut self.seen);
+        let taken = endpoint
+            .mailbox
+            .take_stamped(&mut self.current, &mut self.seen);
+        let new_frame = taken.is_some();
         let target = (width.get(), height.get(), scale);
         if new_frame || self.drawn != Some(target) {
             self.rasterizer
@@ -243,6 +246,12 @@ impl WindowApp {
         surface.window.pre_present_notify();
         if buffer.present().is_ok() {
             self.statistics.frame_presented(start.elapsed(), new_frame);
+            // A new frame of the program: its raster and input-to-present samples (D7 of
+            // `reactive-app-verification`).
+            if let Some(stamp) = taken {
+                self.statistics
+                    .frame_shown(start.elapsed(), stamp.map(|stamp| stamp.elapsed()));
+            }
         }
     }
 }

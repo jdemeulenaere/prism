@@ -44,6 +44,7 @@ pub mod properties;
 pub mod runtime;
 pub mod script;
 pub mod setters;
+pub mod statistics;
 pub mod test_support;
 pub mod text;
 pub mod thread;

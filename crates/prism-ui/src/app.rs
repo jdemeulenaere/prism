@@ -17,6 +17,11 @@
 //! 4. It disposes of the composition, which removes and releases every node, then releases
 //!    the handler table's entries and the tree, and returns.
 //!
+//! With frame statistics on (`--frame-stats`, D7 of `reactive-app-verification`), the loop
+//! times each stage and accumulates its iterations into frames, a present ending each, and
+//! `runApp` prints the report when it returns ([`crate::statistics`]). Off, each stage costs
+//! one branch.
+//!
 //! An idle app blocks in the host and runs no pass, layout or display list build. The app's
 //! own fields (host, measurer, dispatcher, layout buffers, display list) are this loop's; what
 //! the setters and the applier reach (the tree, the handler table, the app's composition) is
@@ -38,12 +43,14 @@ use crate::input::{Action, Dispatcher};
 use crate::layout::Layout;
 use crate::runtime;
 use crate::script::{ScriptCommand, ScriptLine, ScriptTarget};
+use crate::statistics::{FrameStatistics, Stage};
 use crate::text::TextMeasurer;
 use crate::thread::{install_tree, release_dropped, with_state, RunningApp, State};
 use prism_compose::{Composition, Handle};
+use prism_runtime::allocation_counter::thread_counts;
 use prism_runtime::reload;
 use prism_runtime::FunctionValue;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// What an app did, for tests of idling.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -68,11 +75,22 @@ pub struct App {
     dump: String,
     output: Output,
     pub counters: Counters,
+    /// The frame statistics, when they are on.
+    statistics: Option<Box<FrameStatistics>>,
+    /// When `runApp` was called, and when the run started, for the first frame's times.
+    called: Instant,
+    run_started: Instant,
+    /// Set by a present, which ends the frame at the end of its iteration.
+    frame_presented: bool,
+    /// The time of the current iteration spent in what is not measured: dumps, edits and
+    /// waits for reloads.
+    excluded: Duration,
 }
 
 /// Runs an app titled `title` of `width` × `height` with the configured host, composing
 /// `content`, which it owns, until the host's events end.
 pub fn run_app(title: &str, width: i64, height: i64, content: FunctionValue) -> UiResult<()> {
+    let called = Instant::now();
     if with_state(|state| state.app.is_some()) {
         release_functions(&mut vec![content]);
         return Err(APP_RUNNING);
@@ -82,7 +100,7 @@ pub fn run_app(title: &str, width: i64, height: i64, content: FunctionValue) -> 
         return Err(NO_WINDOW_SYSTEM);
     };
     let measurer = host.measurer();
-    run_app_with(host, measurer, content).map(|_| ())
+    run_app_from(host, measurer, content, called).map(|_| ())
 }
 
 /// Runs an app against `host`, measuring text with `measurer`, and gives what it did. When the
@@ -92,11 +110,21 @@ pub fn run_app_with(
     measurer: Box<dyn TextMeasurer>,
     content: FunctionValue,
 ) -> UiResult<Counters> {
+    run_app_from(host, measurer, content, Instant::now())
+}
+
+/// [`run_app_with`] of an app whose `runApp` was called at `called`.
+fn run_app_from(
+    host: Box<dyn Host>,
+    measurer: Box<dyn TextMeasurer>,
+    content: FunctionValue,
+    called: Instant,
+) -> UiResult<Counters> {
     // Reloads wait for the frame loop's reload point while the app runs, and apply at the
     // program's next call again once it ends, a pending one included (D2 of
     // `compose-hot-reload`).
     reload::defer_to_reload_points(wake_for_reload);
-    let result = run_deferring(host, measurer, content);
+    let result = run_deferring(host, measurer, content, called);
     reload::apply_at_next_call();
     result
 }
@@ -105,14 +133,27 @@ fn run_deferring(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
     content: FunctionValue,
+    called: Instant,
 ) -> UiResult<Counters> {
-    let mut app = App::start(host, measurer, content)?;
+    let mut app = App::start_at(host, measurer, content, called)?;
     let result = app.run();
+    // The final frame is not measured.
+    let statistics = app.statistics.take();
     if result.is_ok() {
         app.present_final_frame();
     }
+    let window = match &statistics {
+        Some(_) => app.host.frame_statistics_lines(),
+        None => Vec::new(),
+    };
     let counters = app.counters;
     app.finish();
+    // The report comes after the composition is dropped, and only for an app that ended
+    // normally: a runtime error ends the program instead.
+    if let (Some(statistics), Ok(())) = (statistics, &result) {
+        prism_runtime::flush_output();
+        eprint!("{}", statistics.report(&window));
+    }
     result.map(|()| counters)
 }
 
@@ -123,10 +164,25 @@ impl App {
         measurer: Box<dyn TextMeasurer>,
         content: FunctionValue,
     ) -> UiResult<App> {
+        Self::start_at(host, measurer, content, Instant::now())
+    }
+
+    /// Starts an app whose `runApp` was called at `called`, measuring its frames when frame
+    /// statistics are on: the first frame holds the first composition.
+    fn start_at(
+        host: Box<dyn Host>,
+        measurer: Box<dyn TextMeasurer>,
+        content: FunctionValue,
+        called: Instant,
+    ) -> UiResult<App> {
         if with_state(|state| state.app.is_some()) {
             release_functions(&mut vec![content]);
             return Err(APP_RUNNING);
         }
+        let run_started = crate::host::frame_statistics();
+        // Allocated before anything is measured, so it is not counted in the first frame.
+        let mut statistics = run_started.map(|_| FrameStatistics::new(thread_counts().0));
+        let composed = statistics.as_ref().map(|_| Instant::now());
         let (width, height) = host.size();
         install_tree(width, height);
         with_state(|state| state.app = Some(RunningApp { composition: None }));
@@ -152,9 +208,62 @@ impl App {
             dump: String::new(),
             output: Box::new(runtime::write_output),
             counters: Counters::default(),
+            statistics: None,
+            called,
+            run_started: run_started.unwrap_or(called),
+            frame_presented: false,
+            excluded: Duration::ZERO,
         };
         app.end_of_pass();
+        if let (Some(statistics), Some(composed)) = (statistics.as_mut(), composed) {
+            let elapsed = composed.elapsed();
+            statistics.passes(1);
+            statistics.stage(Stage::Recomposition, elapsed);
+            statistics.busy(elapsed);
+        }
+        app.statistics = statistics;
         Ok(app)
+    }
+
+    /// The current instant, when frames are measured.
+    fn now(&self) -> Option<Instant> {
+        self.statistics.as_ref().map(|_| Instant::now())
+    }
+
+    /// Adds the time since `started` to the current frame's stage, when frames are measured.
+    fn record(&mut self, stage: Stage, started: Option<Instant>) {
+        if let (Some(statistics), Some(started)) = (self.statistics.as_mut(), started) {
+            statistics.stage(stage, started.elapsed());
+        }
+    }
+
+    /// Ends the current frame with the program thread's allocation counts.
+    fn end_frame(&mut self) {
+        if let Some(statistics) = self.statistics.as_mut() {
+            let (allocations, frees) = thread_counts();
+            statistics.end_frame(allocations, frees);
+        }
+    }
+
+    /// Runs `f`, which the statistics do not measure: neither its time nor its allocations
+    /// count in the frame (dumps, edits and waits for reloads).
+    fn unmeasured<R>(&mut self, f: impl FnOnce(&mut App) -> R) -> R {
+        let Some(statistics) = self.statistics.take() else {
+            return f(self);
+        };
+        let started = Instant::now();
+        let before = thread_counts().0;
+        let result = f(self);
+        let mut statistics = statistics;
+        statistics.exclude_allocations(thread_counts().0 - before);
+        self.excluded += started.elapsed();
+        self.statistics = Some(statistics);
+        result
+    }
+
+    /// The frame statistics, when they are on.
+    pub fn frame_statistics(&self) -> Option<&FrameStatistics> {
+        self.statistics.as_deref()
     }
 
     /// Sends dumps to `output` instead of the program's output.
@@ -187,13 +296,24 @@ impl App {
 
     /// Runs passes while a scope is invalid, then lays out if anything is dirty.
     pub fn settle(&mut self) -> UiResult<()> {
+        let started = self.now();
+        let passes = self.counters.passes;
         while Composition::recompose(self.composition)? {
             self.end_of_pass();
         }
+        let passes = self.counters.passes - passes;
+        if passes > 0 {
+            self.record(Stage::Recomposition, started);
+            if let Some(statistics) = self.statistics.as_mut() {
+                statistics.passes(passes);
+            }
+        }
+        let started = self.now();
         let measurer = &*self.measurer;
         let layout = &mut self.layout;
         if with_state(|state| layout.run(&mut state.tree, measurer)) {
             self.counters.layouts += 1;
+            self.record(Stage::Layout, started);
         }
         Ok(())
     }
@@ -202,12 +322,30 @@ impl App {
     /// events end.
     pub fn run(&mut self) -> UiResult<()> {
         loop {
+            let iteration = self.now();
             self.reload_point()?;
             self.settle()?;
+            if let (Some(statistics), Some(iteration)) = (self.statistics.as_mut(), iteration) {
+                statistics.first_frame_ready(self.called.elapsed(), self.run_started.elapsed());
+                statistics.busy(iteration.elapsed());
+            }
+            // Waiting for the next event is not busy time.
             let Some(event) = self.host.next_event() else {
+                // Work after the last present forms a last frame.
+                if self.statistics.as_ref().is_some_and(|s| s.has_work()) {
+                    self.end_frame();
+                }
                 return Ok(());
             };
+            let handled = self.now();
+            self.excluded = Duration::ZERO;
             self.handle(event)?;
+            if let (Some(statistics), Some(handled)) = (self.statistics.as_mut(), handled) {
+                statistics.busy(handled.elapsed().saturating_sub(self.excluded));
+            }
+            if std::mem::take(&mut self.frame_presented) {
+                self.end_frame();
+            }
         }
     }
 
@@ -215,8 +353,13 @@ impl App {
     /// pending reload, if any, whose hook invalidates the scopes it affects, and runs the
     /// passes that follow it, timed under `--timings`.
     pub fn reload_point(&mut self) -> UiResult<()> {
+        let applying = self.now();
         if reload::reload_point().is_none() {
             return Ok(());
+        }
+        self.record(Stage::Reload, applying);
+        if let Some(statistics) = self.statistics.as_mut() {
+            statistics.reload();
         }
         let started = Instant::now();
         self.settle()?;
@@ -235,6 +378,23 @@ impl App {
     pub fn handle(&mut self, event: HostEvent) -> UiResult<()> {
         self.counters.events += 1;
         match event {
+            HostEvent::Frame => {
+                self.build_display_list(false);
+                self.host.present(&self.list);
+                self.frame_presented = self.statistics.is_some();
+            }
+            HostEvent::Dump(kind) => self.unmeasured(|app| app.print_dump(kind)),
+            HostEvent::Script(line) => return self.script(line),
+            input => self.input(input),
+        }
+        Ok(())
+    }
+
+    /// Dispatches a press, release, character, key or resize: an input event of the frame
+    /// statistics, timed as their `events` stage.
+    fn input(&mut self, event: HostEvent) {
+        let started = self.now();
+        match event {
             HostEvent::Press(x, y) => self.press(x, y),
             HostEvent::Release(x, y) => self.release(x, y),
             HostEvent::Character(character) => {
@@ -246,14 +406,12 @@ impl App {
             HostEvent::Resize(width, height) => {
                 with_state(|state| state.tree.resize(width, height))
             }
-            HostEvent::Frame => {
-                self.build_display_list(false);
-                self.host.present(&self.list);
-            }
-            HostEvent::Dump(kind) => self.print_dump(kind),
-            HostEvent::Script(line) => return self.script(line),
+            HostEvent::Frame | HostEvent::Dump(_) | HostEvent::Script(_) => return,
         }
-        Ok(())
+        self.record(Stage::Events, started);
+        if let Some(statistics) = self.statistics.as_mut() {
+            statistics.input_event();
+        }
     }
 
     fn press(&mut self, x: i64, y: i64) {
@@ -299,6 +457,7 @@ impl App {
 
     /// Rebuilds the display list when it is stale, or always when `force` is set.
     pub fn build_display_list(&mut self, force: bool) {
+        let started = self.now();
         let measurer = &*self.measurer;
         let list = &mut self.list;
         let dispatcher = &mut self.dispatcher;
@@ -313,6 +472,7 @@ impl App {
         });
         if built {
             self.counters.builds += 1;
+            self.record(Stage::DisplayList, started);
         }
     }
 
@@ -376,17 +536,17 @@ impl App {
         match line.command {
             ScriptCommand::Click(target) => {
                 let (x, y) = self.point(number, &target)?;
-                self.press(x, y);
+                self.input(HostEvent::Press(x, y));
                 self.settle()?;
-                self.release(x, y);
+                self.input(HostEvent::Release(x, y));
             }
             ScriptCommand::Press(target) => {
                 let (x, y) = self.point(number, &target)?;
-                self.press(x, y);
+                self.input(HostEvent::Press(x, y));
             }
             ScriptCommand::Release(target) => {
                 let (x, y) = self.point(number, &target)?;
-                self.release(x, y);
+                self.input(HostEvent::Release(x, y));
             }
             ScriptCommand::Type(text) => {
                 for (index, character) in text.chars().enumerate() {
@@ -399,20 +559,18 @@ impl App {
             }
             ScriptCommand::Key(key) => {
                 self.require_focus(number)?;
-                self.key(key);
+                self.input(HostEvent::Key(key));
             }
-            ScriptCommand::Resize(width, height) => {
-                with_state(|state| state.tree.resize(width, height))
-            }
+            ScriptCommand::Resize(width, height) => self.input(HostEvent::Resize(width, height)),
             ScriptCommand::Frame => self.handle(HostEvent::Frame)?,
-            ScriptCommand::Dump(kind) => self.print_dump(kind),
+            ScriptCommand::Dump(kind) => self.unmeasured(|app| app.print_dump(kind)),
             // The session requests the reload, which the loop's reload point applies next
-            // (D12 of `compose-hot-reload`).
-            ScriptCommand::Edit(edits) => reload::request_scripted_edit(edits),
+            // (D12 of `compose-hot-reload`). The session's work is not the app's.
+            ScriptCommand::Edit(edits) => self.unmeasured(|_| reload::request_scripted_edit(edits)),
             ScriptCommand::WaitReload => {
                 // What the program printed so far is seen before the loop blocks.
                 prism_runtime::flush_output();
-                if !wait_for_reload() {
+                if !self.unmeasured(|_| wait_for_reload()) {
                     return Err(crate::error::UiError::Script {
                         line: number,
                         detail: "no reload arrived within 10 seconds".to_string(),

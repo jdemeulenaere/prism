@@ -1,7 +1,15 @@
 //! What the window system did (D19 of `desktop-window`), shared by both threads: atomic
 //! counters, the frame times of the main thread, and what tests check about threads and
-//! windows. `reactive-app-verification`'s `--frame-stats` will read the frame times.
+//! windows.
+//!
+//! For `--frame-stats` (D7 of `reactive-app-verification`), each frame of the program that the
+//! main thread presents adds a raster sample (its time to rasterize and present) and, when the
+//! program thread stamped it with the instant it took the frame's first event, an
+//! input-to-present sample, to fixed histograms that allocate nothing. A frame the mailbox
+//! replaced before it was drawn was never presented and has no sample. The app's report reads
+//! them when its window has closed ([`WindowStatistics::frame_statistics_lines`]).
 
+use prism_ui::statistics::{stage_line, Histogram};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread::ThreadId;
@@ -16,6 +24,13 @@ struct FrameTimes {
     ring: [u64; SAMPLES],
     len: usize,
     next: usize,
+}
+
+/// The histograms of the frames of the program the window presented.
+#[derive(Debug)]
+struct PresentedFrames {
+    raster: Histogram,
+    input_to_present: Histogram,
 }
 
 /// A window as the main thread created it.
@@ -40,6 +55,7 @@ pub struct WindowStatistics {
     new_frames_presented: AtomicU64,
     last_frame: AtomicU64,
     times: Mutex<FrameTimes>,
+    presented: Mutex<PresentedFrames>,
     window_thread: Mutex<Option<ThreadId>>,
     last_window: Mutex<Option<WindowReport>>,
 }
@@ -73,9 +89,49 @@ impl WindowStatistics {
                 len: 0,
                 next: 0,
             }),
+            presented: Mutex::new(PresentedFrames {
+                raster: Histogram::new(),
+                input_to_present: Histogram::new(),
+            }),
             window_thread: Mutex::new(None),
             last_window: Mutex::new(None),
         }
+    }
+
+    /// Records a new frame of the program, presented after `raster` of rasterizing and
+    /// presenting, `input` after the program thread took its first event when it had one.
+    pub fn frame_shown(&self, raster: Duration, input: Option<Duration>) {
+        let mut presented = lock(&self.presented);
+        presented.raster.record_duration(raster);
+        if let Some(input) = input {
+            presented.input_to_present.record_duration(input);
+        }
+    }
+
+    /// Forgets the presented frames' samples: a new app's window starts its own.
+    pub fn reset_presented_frames(&self) {
+        let mut presented = lock(&self.presented);
+        presented.raster.clear();
+        presented.input_to_present.clear();
+    }
+
+    /// The frames of the program presented since the last reset, and their input-to-present
+    /// samples.
+    pub fn presented_samples(&self) -> (u64, u64) {
+        let presented = lock(&self.presented);
+        (presented.raster.count(), presented.input_to_present.count())
+    }
+
+    /// The window's lines of the frame statistics report: `frame stats: raster median ...
+    /// (<k> frames presented)` and `frame stats: input to present median ...`.
+    pub fn frame_statistics_lines(&self) -> Vec<String> {
+        let presented = lock(&self.presented);
+        let mut raster = String::new();
+        stage_line(&mut raster, "raster", &presented.raster);
+        raster.push_str(&format!(" ({} frames presented)", presented.raster.count()));
+        let mut input = String::new();
+        stage_line(&mut input, "input to present", &presented.input_to_present);
+        vec![raster, input]
     }
 
     pub fn event_loop_created(&self) {
@@ -214,5 +270,33 @@ mod tests {
             Some(std::thread::current().id())
         );
         assert_eq!(statistics.last_window().unwrap().title, "Counter");
+    }
+
+    #[test]
+    fn presented_frames_and_their_lines() {
+        let statistics = WindowStatistics::new();
+        assert_eq!(
+            statistics.frame_statistics_lines(),
+            [
+                "frame stats: raster none (0 frames presented)",
+                "frame stats: input to present none"
+            ]
+        );
+        statistics.frame_shown(Duration::from_micros(400), None);
+        statistics.frame_shown(Duration::from_micros(500), Some(Duration::from_millis(3)));
+        assert_eq!(statistics.presented_samples(), (2, 1));
+        let lines = statistics.frame_statistics_lines();
+        assert!(
+            lines[0].starts_with("frame stats: raster median 0.399 ms, p99 0.500 ms, max 0.500 ms"),
+            "{:?}",
+            lines
+        );
+        assert!(lines[0].ends_with(" (2 frames presented)"), "{:?}", lines);
+        assert_eq!(
+            lines[1],
+            "frame stats: input to present median 2.998 ms, p99 2.998 ms, max 3.000 ms"
+        );
+        statistics.reset_presented_frames();
+        assert_eq!(statistics.presented_samples(), (0, 0));
     }
 }

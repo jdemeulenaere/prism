@@ -2141,3 +2141,217 @@ fn timing_a_ui_reload() {
     assert!(scopes.parse::<usize>().unwrap() >= 1, "{}", seen[pass]);
     fs::remove_dir_all(&directory).ok();
 }
+
+/// The counter screen of `ui`'s "Counter screen", in a 400 × 300 app.
+const COUNTER_SCREEN: &str = "import /prism/compose/ui
+import /prism/compose/layout
+import /prism/compose/material3
+compose fun Counter() {
+    val c = remember { mutableStateOf(0) }
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(\"Count: ${c.value}\")
+        Button(onClick = { c.value += 1 }) { Text(\"+\") }
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Counter() } }
+";
+
+/// Runs the counter screen headless with `--frame-stats` and the event script `script`, and
+/// gives its stderr after checking that it succeeded with empty stdout.
+fn counter_frame_stats(test_name: &str, script: &str) -> String {
+    let directory = single_file(test_name, COUNTER_SCREEN);
+    write(&directory.join("events"), script);
+    let output = prism(
+        &[
+            "run",
+            "--frame-stats",
+            "--headless",
+            "--events",
+            "events",
+            "main.prism",
+        ],
+        &directory,
+    );
+    let _ = fs::remove_dir_all(&directory);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    stderr(&output)
+}
+
+/// The report's lines, each without its `frame stats: ` prefix.
+fn report_lines(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .map(|line| {
+            line.strip_prefix("frame stats: ")
+                .unwrap_or_else(|| panic!("not a report line: {}", line))
+                .to_string()
+        })
+        .collect()
+}
+
+/// execution: "Frame statistics without an app".
+#[test]
+fn frame_statistics_without_an_app() {
+    let directory = single_file("frame_stats_no_app", "fun main() { println(1) }\n");
+    let output = prism(&["run", "--frame-stats", "main.prism"], &directory);
+    let _ = fs::remove_dir_all(&directory);
+    assert_eq!(stdout(&output), "1\n");
+    assert_eq!(stderr(&output), "");
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// execution: "Frame statistics of a headless app".
+#[test]
+fn frame_statistics_of_a_headless_app() {
+    let stderr = counter_frame_stats("frame_stats_headless", "click \"+\"\nframe\n");
+    assert!(
+        stderr.starts_with("frame stats: frames 1, events 2, passes 2, reloads 0, "),
+        "{}",
+        stderr
+    );
+    assert_eq!(report_lines(&stderr).len(), 8, "{}", stderr);
+}
+
+/// ui: "Two clicks and one frame".
+#[test]
+fn two_clicks_and_one_frame() {
+    let stderr = counter_frame_stats(
+        "frame_stats_two_clicks",
+        "click \"+\"\nclick \"+\"\nframe\n",
+    );
+    assert!(
+        stderr.starts_with("frame stats: frames 1, events 4, passes 3, reloads 0, "),
+        "{}",
+        stderr
+    );
+}
+
+/// ui: "Dumps are not measured".
+#[test]
+fn dumps_are_not_measured() {
+    let dumps = counter_frame_stats("frame_stats_dumps", "frame\ndump\ndump\n");
+    let alone = counter_frame_stats("frame_stats_frame_alone", "frame\n");
+    for stderr in [&dumps, &alone] {
+        assert!(
+            stderr.starts_with("frame stats: frames 1, events 0, passes 1, "),
+            "{}",
+            stderr
+        );
+    }
+    let allocations = |stderr: &str| {
+        report_lines(stderr)
+            .into_iter()
+            .find(|line| line.starts_with("allocations per frame"))
+            .unwrap()
+    };
+    assert_eq!(allocations(&dumps), allocations(&alone));
+}
+
+/// ui: "The lines of a report".
+#[test]
+fn the_lines_of_a_report() {
+    let script = "click \"+\"\nframe\n".repeat(10);
+    let stderr = counter_frame_stats("frame_stats_lines", &script);
+    let lines = report_lines(&stderr);
+    let prefixes = [
+        "frames 10, ",
+        "events median ",
+        "recomposition median ",
+        "layout median ",
+        "display list median ",
+        "frame median ",
+        "allocations per frame median ",
+        "live allocations after each frame from ",
+    ];
+    assert_eq!(lines.len(), prefixes.len(), "{}", stderr);
+    for (line, prefix) in lines.iter().zip(prefixes) {
+        assert!(
+            line.starts_with(prefix),
+            "{:?} does not start with {:?}",
+            line,
+            prefix
+        );
+    }
+    assert!(
+        !lines.iter().any(|line| line.starts_with("reload ")),
+        "{}",
+        stderr
+    );
+}
+
+/// ui: "Allocations of a counter".
+#[test]
+fn allocations_of_a_counter() {
+    let stderr = counter_frame_stats("frame_stats_allocations", "frame\nclick \"+\"\nframe\n");
+    let lines = report_lines(&stderr);
+    let last_two = &lines[lines.len() - 2..];
+    assert!(
+        last_two[0].starts_with("allocations per frame median "),
+        "{}",
+        stderr
+    );
+    assert!(
+        last_two[1].starts_with("live allocations after each frame from "),
+        "{}",
+        stderr
+    );
+}
+
+/// The live allocations of a report's last line, smallest and largest.
+fn live_allocations(stderr: &str) -> (u64, u64) {
+    let line = report_lines(stderr).pop().unwrap();
+    let rest = line
+        .strip_prefix("live allocations after each frame from ")
+        .unwrap();
+    let (smallest, largest) = rest.split_once(" to ").unwrap();
+    (smallest.parse().unwrap(), largest.parse().unwrap())
+}
+
+/// Runs the counter app of `examples/` headless with `--frame-stats` and `script`, from the
+/// examples' workspace.
+fn example_counter_frame_stats(test_name: &str, script: &str) -> String {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let directory = temporary_directory(test_name);
+    write(&directory.join("events"), script);
+    let events = directory.join("events");
+    let output = prism(
+        &[
+            "run",
+            "--frame-stats",
+            "--headless",
+            "--events",
+            events.to_str().unwrap(),
+            "apps/counter/main.prism",
+        ],
+        &examples,
+    );
+    let _ = fs::remove_dir_all(&directory);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    stderr(&output)
+}
+
+/// example-apps: "Repeated clicks keep the live allocations constant".
+#[test]
+fn repeated_clicks_keep_the_live_allocations_constant() {
+    let stderr = example_counter_frame_stats(
+        "frame_stats_repeated_clicks",
+        &"click button 1\nframe\n".repeat(10),
+    );
+    let (smallest, largest) = live_allocations(&stderr);
+    assert!(smallest > 0, "{}", stderr);
+    assert_eq!(smallest, largest, "{}", stderr);
+}
+
+/// example-apps: "Clicking empty space".
+#[test]
+fn clicking_empty_space() {
+    let script = format!("frame\n{}", "click 300 190\nframe\n".repeat(10));
+    let stderr = example_counter_frame_stats("frame_stats_empty_space", &script);
+    assert!(
+        stderr.contains("frame stats: allocations per frame median 0, "),
+        "{}",
+        stderr
+    );
+    assert!(stderr.contains("none in 10 of 11 frames"), "{}", stderr);
+}

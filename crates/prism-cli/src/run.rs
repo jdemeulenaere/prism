@@ -67,6 +67,10 @@ pub struct RunOptions {
     /// (D15 of `desktop-window`). It needs the `window` feature, which holds the rasterizer;
     /// without it the command line rejects the option and the library ignores it.
     pub screenshot: Option<PathBuf>,
+    /// `--frame-stats`: every app measures its frames and reports them on stderr when it
+    /// returns (D7 of `reactive-app-verification`). The command line also switches on the
+    /// counting allocator of the `prism` binary, before the program's thread starts.
+    pub frame_stats: bool,
 }
 
 /// How a headless run's apps run: the window size that overrides `runApp`'s, and the event
@@ -133,13 +137,15 @@ impl Default for RunOptions {
             library: prism_library::Library::shared(),
             headless: None,
             screenshot: None,
+            frame_stats: false,
         }
     }
 }
 
 impl RunOptions {
     /// Installs what these options ask of the UI runtime before a program runs: the headless
-    /// host of `--headless`, and the screenshot writer of `--screenshot` as the final-frame
+    /// host of `--headless`, frame statistics timed from the process's start, and the
+    /// screenshot writer of `--screenshot` as the final-frame
     /// sink. A run without `--headless` keeps the host configured before, which the CLI sets to
     /// its window system (D3 of `desktop-window`) and the library leaves empty.
     pub fn configure_ui(&self) {
@@ -147,6 +153,7 @@ impl RunOptions {
             headless.configure();
         }
         prism_ui::host::set_reload_timings(self.timings);
+        prism_ui::host::set_frame_statistics(self.frame_stats.then_some(self.started));
         #[cfg(feature = "window")]
         if let Some(path) = &self.screenshot {
             prism_ui::host::set_final_frame_sink(Some(prism_desktop::screenshot::writer(

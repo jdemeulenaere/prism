@@ -14,6 +14,10 @@
 //! - **Closing.** A `Close` message ends the app (`None`). Frames presented after the window
 //!   closed are dropped. Dropping the host, when `runApp` returns for any reason, asks the
 //!   main thread to close the window, so no window outlives its app.
+//! - **Frame statistics** (D7 of `reactive-app-verification`). The host stamps each frame with
+//!   the instant it took the frame's first input event, and the stamp travels with the list in
+//!   the mailbox, a newer frame's replacing it, so the main thread measures input to present for
+//!   the frames it presents.
 //! - **Reloads.** [`WindowHost::wake`] is a plain `fn()` that turns into a frame, so the frame
 //!   loop reaches its top, where it applies a pending reload: a window host registers it as
 //!   `prism-ui`'s reload waker, which `runApp`'s reload wake-up calls (D2 of
@@ -21,12 +25,14 @@
 
 use crate::input::WindowInput;
 use crate::metrics::FontMetrics;
+use crate::statistics::WindowStatistics;
 use prism_ui::draw::DisplayList;
 use prism_ui::host::{Host, HostEvent};
 use prism_ui::text::TextMeasurer;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// What the main thread sends the program thread.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +73,8 @@ pub trait FrameSink: Send + Sync {
 #[derive(Debug, Default)]
 struct MailboxState {
     list: DisplayList,
+    /// When the program thread took the first event of the frame `list` shows, if it had one.
+    stamp: Option<Instant>,
     sequence: u64,
     closed: bool,
 }
@@ -94,12 +102,19 @@ impl FrameMailbox {
 
     /// Copies `list` in as the latest frame, unless the window has closed; whether it did.
     pub fn put(&self, list: &DisplayList) -> bool {
+        self.put_stamped(list, None)
+    }
+
+    /// [`FrameMailbox::put`] of a frame whose first event the program thread took at `stamp`,
+    /// which replaces the stamp of a frame not taken yet.
+    pub fn put_stamped(&self, list: &DisplayList, stamp: Option<Instant>) -> bool {
         let mut state = self.state();
         if state.closed {
             return false;
         }
         state.list.commands.clone_from(&list.commands);
         state.list.text.clone_from(&list.text);
+        state.stamp = stamp;
         state.sequence += 1;
         true
     }
@@ -108,13 +123,23 @@ impl FrameMailbox {
     /// frame taken last, and gives whether it was; otherwise the last pixels can be presented
     /// again.
     pub fn take(&self, current: &mut DisplayList, seen: &mut u64) -> bool {
+        self.take_stamped(current, seen).is_some()
+    }
+
+    /// [`FrameMailbox::take`], giving the taken frame's stamp: `None` when no frame was newer,
+    /// `Some(None)` for a frame without one.
+    pub fn take_stamped(
+        &self,
+        current: &mut DisplayList,
+        seen: &mut u64,
+    ) -> Option<Option<Instant>> {
         let mut state = self.state();
         if state.sequence == *seen {
-            return false;
+            return None;
         }
         *seen = state.sequence;
         std::mem::swap(&mut state.list, current);
-        true
+        Some(state.stamp.take())
     }
 
     /// Marks the window closed: later frames are dropped.
@@ -201,6 +226,9 @@ pub struct WindowHost {
     mailbox: Arc<FrameMailbox>,
     sink: Arc<dyn FrameSink>,
     frame_due: bool,
+    /// When the first input event of the frame being built was taken.
+    first_input: Option<Instant>,
+    statistics: Option<Arc<WindowStatistics>>,
 }
 
 impl std::fmt::Debug for WindowHost {
@@ -222,7 +250,17 @@ impl WindowHost {
             mailbox: connection.mailbox,
             sink: connection.sink,
             frame_due: true,
+            first_input: None,
+            statistics: None,
         }
+    }
+
+    /// Gives the host the window system's statistics, whose presented frames it resets, so the
+    /// app's report reads its window's frames ([`Host::frame_statistics_lines`]).
+    pub fn with_statistics(mut self, statistics: Arc<WindowStatistics>) -> WindowHost {
+        statistics.reset_presented_frames();
+        self.statistics = Some(statistics);
+        self
     }
 
     /// Asks the open window's app for a frame; nothing when no window is open. A plain `fn()`,
@@ -239,6 +277,9 @@ impl WindowHost {
             WindowMessage::Input(event) => {
                 if let HostEvent::Resize(width, height) = event {
                     self.size = (width, height);
+                }
+                if self.first_input.is_none() {
+                    self.first_input = Some(Instant::now());
                 }
                 self.frame_due = true;
                 Some(Some(event))
@@ -278,7 +319,7 @@ impl Host for WindowHost {
     }
 
     fn present(&mut self, list: &DisplayList) {
-        if self.mailbox.put(list) {
+        if self.mailbox.put_stamped(list, self.first_input.take()) {
             self.sink.frame_ready();
         }
     }
@@ -289,6 +330,13 @@ impl Host for WindowHost {
 
     fn scale_factor(&self) -> f64 {
         self.mailbox.scale_factor()
+    }
+
+    fn frame_statistics_lines(&self) -> Vec<String> {
+        self.statistics
+            .as_ref()
+            .map(|statistics| statistics.frame_statistics_lines())
+            .unwrap_or_default()
     }
 }
 
@@ -427,6 +475,59 @@ pub(crate) mod tests {
         assert!(!endpoint.mailbox.take(&mut current, &mut seen));
         drop(host);
         assert_eq!(sink.closes.load(Ordering::SeqCst), 1, "dropping closes");
+    }
+
+    /// The scenario "A replaced frame has no sample" (D7 of `reactive-app-verification`):
+    /// three stamped lists before one take give one presented frame, measured from the last
+    /// list's stamp.
+    #[test]
+    fn a_replaced_frame_has_no_sample() {
+        let mailbox = FrameMailbox::new(1.0);
+        let statistics = WindowStatistics::new();
+        let list = ListBuilder::new().clear(40, 30, 0xFFFF_FFFF).build();
+        let first = Instant::now();
+        for _ in 0..3 {
+            mailbox.put_stamped(&list, Some(Instant::now()));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (mut current, mut seen) = (DisplayList::new(), 0);
+        let stamp = mailbox.take_stamped(&mut current, &mut seen).unwrap();
+        // The drawing side presents it and records it, as `WindowApp::draw` does.
+        let input = stamp.map(|stamp| stamp.elapsed());
+        statistics.frame_shown(std::time::Duration::from_micros(300), input);
+        assert_eq!(statistics.presented_samples(), (1, 1));
+        let input = input.unwrap();
+        assert!(
+            input < first.elapsed() - std::time::Duration::from_millis(30),
+            "measured from the last stamp: {:?}",
+            input
+        );
+        assert_eq!(mailbox.take_stamped(&mut current, &mut seen), None);
+    }
+
+    /// The host stamps a frame with its first input event, and a frame without input, the
+    /// first one or a wake-up's, has no stamp.
+    #[test]
+    fn frames_are_stamped_with_their_first_input() {
+        let _lock = crate::test_lock();
+        let (mut host, endpoint, _) = host((40, 30));
+        let list = ListBuilder::new().clear(40, 30, 0xFFFF_FFFF).build();
+        assert_eq!(host.next_event(), Some(HostEvent::Frame));
+        host.present(&list);
+        let (mut current, mut seen) = (DisplayList::new(), 0);
+        assert_eq!(
+            endpoint.mailbox.take_stamped(&mut current, &mut seen),
+            Some(None)
+        );
+        let before = Instant::now();
+        input(&endpoint, HostEvent::Press(1, 1));
+        input(&endpoint, HostEvent::Release(1, 1));
+        assert_eq!(host.next_event(), Some(HostEvent::Press(1, 1)));
+        assert_eq!(host.next_event(), Some(HostEvent::Release(1, 1)));
+        assert_eq!(host.next_event(), Some(HostEvent::Frame));
+        host.present(&list);
+        let stamp = endpoint.mailbox.take_stamped(&mut current, &mut seen);
+        assert!(stamp.unwrap().unwrap() >= before);
     }
 
     /// The scenario "Frames faster than redraws": three presents before one take give the
