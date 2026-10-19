@@ -200,6 +200,8 @@ Rejected:
 
 Compile-time cost: one more hash per restart body. Reload-time cost: one lookup per restart group in D4's walk, in a set of the reload's splits.
 
+**Review note (2026-10-19).** A reload applied during a pass (a plain composition under the next-call policy) queues its walk until the pass ends (D3), but the rest of that pass may already run new code, which would start a retired scope's group without the reset mark and read the old code's slots by its new layout. So the hook also records the reload's retired slots for the rest of the pass, and a reused restart group whose restart function names one is reset when it starts, as the walk would have marked it. A restart group start checks this only while the list is not empty, so passes without a reload do no extra work (scenario "A scope whose signature changed during a pass is reset").
+
 ### D9. Handlers in nodes are replaced by the reload's pass, before the next event (autonomous)
 
 A node owns its handler function values through `prism-ui`'s handler table (`ui-toolkit` D10, D23), which call their code through their descriptors' slots (`closures` D3):
@@ -273,6 +275,19 @@ D5 has the transform record body keys for the summaries, but summaries are compu
 
 Output to a pipe is buffered until 8 KiB or the end of the run unless a line hook is set, which only edit scripts set. A test or benchmark that saves a file once an app's dump is printed would never see the dump, so `wait reload` writes out what the program printed before it blocks. This also gives tests a synchronisation point: a dump before `wait reload` arrives exactly when the app starts waiting, so the scenario "Saving a file under a waiting headless app" starts its script with a dump, and the benchmark with one. Run-time cost: one write per `wait reload`. Rejected: line-buffering all output under `--watch` (a write per line of every watched program), and a fixed sleep before saving (flaky on a loaded machine).
 
+### D17. The pass after a reload compares every kept argument (autonomous, review time)
+
+A skippable composable's caller passes two change bits per argument (`compose-transform` D4): `static` for a constant or a top-level value, the caller's own bits for a forwarded parameter, `uncertain` otherwise. `keep` compares only uncertain arguments; `same` and `static` ones read past the kept slot. That assumes the call site's code is the code that kept the value, which a reload breaks: an edit of `Label(5)` to `Label(6)` passes a static `6`, and an edit of `Inner(a, b)` to `Inner(b, a)` forwards `same` bits for swapped values. A composable in an unaffected file then skipped with its old arguments, and a later restart read them back from its kept slots, so the edit never showed.
+
+So applying a reload marks every live composition, and its next pass compares every kept argument as an uncertain one, keeping the caller's bits when the value is equal. A reload applied during a pass also sets this for the rest of that pass (D3). Every call site of an affected body runs in that pass, since its scope is invalidated (D4), so afterwards every kept argument was written by current code and the bits are trusted again.
+
+Rejected:
+- **Clearing the static bit at compile time:** a comparison per argument on every pass of every app, for a case that only reloads create.
+- **Comparing only at call sites in affected bodies:** the composer does not know which code a call comes from without a word per call (D5's rejected unit word), and forwarded bits reach callees in unaffected files.
+- **Invalidating every callee's scope:** reruns skippable subtrees whose arguments did not change, which D6 avoids.
+
+Compile-time cost: none. Run-time cost: one flag read per kept `same` or `static` argument, in the thread-state access `keep` already makes; in the pass after a reload, one equality call per such argument.
+
 ## Costs
 
 | Stage | Compile-time cost |
@@ -287,6 +302,7 @@ Output to a pipe is buffered until 8 KiB or the end of the run unless a line hoo
 | affected bodies (D4) | O(files + imports) in the session, from kept summaries |
 | finding scopes (D4, D8) | O(live groups + affected bodies), one walk per composition on the program thread |
 | the reload's pass (D6) | the bodies of the invalidated scopes and their non-skipping children |
+| kept arguments in the reload's pass (D17) | one equality call per `same` or `static` argument kept |
 | reset slots (D7, D8) | released at the end of the pass, as any forgotten slot |
 
 `crates/prism-compose/tests/runtime_timing.rs` gains the walk: compositions of 1,000, 10,000 and 100,000 groups with one affected body, asserting roughly linear growth under `PRISM_ASSERT_TIMING=1`. Measured on 2026-10-19 (release build, Apple silicon, `invalidating_after_a_reload`): a median of 16 ns, 13 ns and 8 ns per live group for 1,000, 10,000 and 100,000 groups, so 0.8 ms for the largest; the time per group does not grow. No compiler stage is added, so `compile_timing.rs` gains no shape. The summaries' growth is covered by its existing shapes.

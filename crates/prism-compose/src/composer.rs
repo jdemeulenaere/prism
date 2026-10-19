@@ -234,7 +234,9 @@ impl Composer {
     /// Keeps the value at `value`, an argument of a skippable composable, in the slot at the
     /// cursor by the two change bits `passed` its caller gave it (D8 of `compose-transform`):
     /// uncertain compares it as [`Composer::changed`] does, different stores it, and same or
-    /// static read past the kept slot, storing the value only when there is none. Returns the
+    /// static read past the kept slot, storing the value only when there is none, except in the
+    /// pass after a reload, which compares them as uncertain ones (the caller's code may have
+    /// changed since the value was kept, `compose-hot-reload`). Returns the
     /// bits the body now knows (same, different or static), with [`KEEP_CHANGED`] added when
     /// the value differs from the kept one. The caller gives the value up either way.
     ///
@@ -258,12 +260,36 @@ impl Composer {
                 Ok(DIFFERENT | KEEP_CHANGED)
             }
             known => {
-                if self.slot(slot_type)?.is_null() {
-                    self.set_slot(slot_type, value)?;
-                } else if let Some(drop) = (*slot_type).drop {
-                    drop(value);
+                // In the pass after a reload, the call site that computed the bits may be new
+                // code passing another value than the one kept, so the value is compared.
+                let kept = with_state(|state| -> ComposeResult<Option<bool>> {
+                    if check(state, self)?.compare_kept_arguments {
+                        return Ok(None);
+                    }
+                    let (group, cursor) = slot_position(state, self)?;
+                    let slots = &state.groups.get(group).unwrap().slots;
+                    let present = slots
+                        .get(cursor)
+                        .and_then(|slot| slot.typed_match(slot_type))
+                        .is_some();
+                    if present {
+                        advance(state);
+                    } else {
+                        store(state, slot_type, value);
+                    }
+                    Ok(Some(present))
+                })?;
+                match kept {
+                    None if self.changed(slot_type, value)? => Ok(DIFFERENT | KEEP_CHANGED),
+                    None => Ok(known),
+                    Some(true) => {
+                        if let Some(drop) = (*slot_type).drop {
+                            drop(value);
+                        }
+                        Ok(known)
+                    }
+                    Some(false) => Ok(known),
                 }
-                Ok(known)
             }
         }
     }
@@ -563,6 +589,19 @@ fn start(
     match kind {
         GroupKind::Restart => {
             frame.scope = group;
+            // A reload applied during this pass has not walked the tree yet: a restart group
+            // whose restart function it retired is reset as the walk would mark it.
+            if reused && !state.retired_in_pass.is_empty() {
+                // SAFETY: a kept restart function is a live function value, whose descriptor
+                // is static data of the program.
+                let slot = record
+                    .restart
+                    .as_ref()
+                    .map(|restart| unsafe { restart.slot() } as usize);
+                if slot.is_some_and(|slot| state.retired_in_pass.contains(&slot)) {
+                    record.reset_slots = true;
+                }
+            }
             frame.skippable = reused && !record.invalid && !record.reset_slots;
             record.invalid = false;
             // A scope whose restart function a reload retired starts afresh: its kept arguments

@@ -1,0 +1,22 @@
+// expect: ok
+// run: 0
+// watch: edits
+compose fun Label(n: Int) {
+    val a = remember { 1 }
+    val b = remember { 2 }
+    println("label $n $a $b")
+}
+compose fun Wrapper(s: String) {
+    println("wrapper 1 $s")
+    Label(5)
+}
+fun main() {
+    val state = mutableStateOf(0)
+    val c = composition {
+        println("root ${state.value}")
+        Wrapper("w")
+    }
+    state.value = 1
+    println(c.recompose())
+    println(c.recompose())
+}

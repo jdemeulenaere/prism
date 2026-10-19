@@ -40,6 +40,7 @@ impl Composition {
                 disposed: false,
                 cells: Vec::new(),
                 effects: Vec::new(),
+                reloaded: false,
             });
             let mut root = Group::new(GroupKind::Restart, 0, 0, handle);
             root.restart = Some(content);
@@ -171,9 +172,12 @@ fn run_pass(composition: Handle) -> ComposeResult<bool> {
             return Ok(None);
         }
         state.pass_counter += 1;
+        let record = state.compositions.get_mut(composition).unwrap();
+        let compare_kept_arguments = std::mem::take(&mut record.reloaded);
         state.active = Some(ActivePass {
             identifier: state.pass_counter,
             composition,
+            compare_kept_arguments,
         });
         Ok(Some(state.pass_counter))
     })?;
@@ -367,6 +371,7 @@ fn inside_removed_group(state: &State, group: Handle) -> bool {
 /// Ends the active pass: the scopes invalidated during it go to their compositions' queues.
 fn end_pass(state: &mut State) {
     state.active = None;
+    state.retired_in_pass.clear();
     for index in 0..state.deferred.len() {
         let scope = state.deferred[index];
         if let Some(group) = state.groups.get_mut(scope) {

@@ -1,0 +1,11 @@
+root 0
+wrapper 1 w
+label 5 1 2
+root 1
+wrapper 2 w
+label 2: 5 2 10 20
+true
+root 1
+wrapper 2 w
+label 2: 5 2 10 20
+true

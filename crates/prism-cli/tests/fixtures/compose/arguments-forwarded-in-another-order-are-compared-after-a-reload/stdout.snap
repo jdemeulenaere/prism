@@ -1,0 +1,18 @@
+window 400x300
+  column #1 0,0 88x60
+    text #2 0,0 88x20 "a = 1 b = 2"
+    box #3 0,20 58x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 0,20 58x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 25,30 8x20 "+"
+window 400x300
+  column #1 0,0 88x60
+    text #2 0,0 88x20 "a = 2 b = 1"
+    box #3 0,20 58x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 0,20 58x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 25,30 8x20 "+"
+window 400x300
+  column #1 0,0 96x60
+    text #2 0,0 96x20 "a = 2 b = 11"
+    box #3 0,20 58x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 0,20 58x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 25,30 8x20 "+"

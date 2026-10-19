@@ -17,11 +17,19 @@ Applying a reload MUST mark invalid, in every live composition of the program th
 - **THEN** the dump holds a text node reading `value 2`, although no composable's code was compiled again
 
 ### Requirement: Recomposition After a Reload Skips Unchanged Children
-The pass after a reload MUST run each invalidated scope's body. A skippable composable it calls whose arguments did not change and whose own scope is not invalid MUST skip, as in any pass.
+The pass after a reload MUST run each invalidated scope's body. A skippable composable it calls whose arguments did not change and whose own scope is not invalid MUST skip, as in any pass. In that pass, every argument a skippable composable keeps MUST be compared with the kept one, even when its call site's change bits call it same or static, since the call site may be new code passing another value: one whose argument changed MUST run its body with the new arguments and keep them.
 
 #### Scenario: A sibling in an unaffected file skips
 - **WHEN** a headless app run under `--watch` has a `Screen` in `app/main.prism` that calls `Badge(1)`, a skippable composable of `lib/badge.prism` that prints `badge`, and the script edits `app/main.prism` to change another text of `Screen`
 - **THEN** `badge` is printed once, on the first composition, and not after the reload
+
+#### Scenario: An edited argument reaches a skippable composable of another file
+- **WHEN** a headless app run under `--watch` has a `Screen` in `app/main.prism` that calls `Label(5)`, a skippable composable of `lib/label.prism` showing `n = $n`, and the script dumps, edits the call to `Label(6)` and dumps again
+- **THEN** the second dump holds the text node reading `n = 6`, although the constant's change bits are static
+
+#### Scenario: Arguments forwarded in another order are compared after a reload
+- **WHEN** a headless app run under `--watch` has `compose fun Outer(a: Int, b: Int) { Inner(a, b) }` in `app/main.prism`, `Inner` a skippable composable of `lib/inner.prism` showing `a = $a b = $b`, called as `Outer(c.value, 2)` with `c` at `1`, and the script edits the body of `Outer` to `Inner(b, a)`, dumps, clicks a button adding 10 to `c` and dumps
+- **THEN** the dumps read `a = 2 b = 1` and then `a = 2 b = 11`
 
 ### Requirement: State Whose Type Is Unchanged Survives a Reload
 A group whose key matches after a reload MUST keep its slots. A remembered value or state cell whose type fingerprint is unchanged MUST keep its value, even when its calculation was edited.
@@ -45,11 +53,15 @@ After a reload that adds a composable call, the new call MUST create its groups,
 - **THEN** the dump shows `Count: 3` as node `#2`, then a new text node reading `Tip: press +`, then the button as node `#3`
 
 ### Requirement: A Scope Whose Composable's Signature Changed Recomposes From Its Parent
-When a reload changes the parameter types of a skippable composable, the restart scopes of its old code MUST not be restarted by their old restart functions. Each MUST be recomposed by the nearest enclosing scope whose restart function is current, and its own kept arguments and remembered values MUST be reset, while its child groups keep their state.
+When a reload changes the parameter types of a skippable composable, the restart scopes of its old code MUST not be restarted by their old restart functions. Each MUST be recomposed by the nearest enclosing scope whose restart function is current, and its own kept arguments and remembered values MUST be reset, while its child groups keep their state. A retired scope whose group is started during the pass in which the reload was applied MUST be reset when it starts.
 
 #### Scenario: A composable whose parameters changed restarts with the new code
 - **WHEN** a headless app run under `--watch` shows `Label(c)`, where `compose fun Label(count: State<Int>) { Text("n = ${count.value}") }` reads the state itself, the script clicks `+` three times, edits `Label` to `compose fun Label(count: State<Int>, times: Int)` showing `count.value * times` and the call to `Label(c, 10)`, dumps, clicks `+` and dumps again
 - **THEN** the first dump shows `n = 30` and the second `n = 40`: the scope restarted by the click runs the new `Label` with its new arguments
+
+#### Scenario: A scope whose signature changed during a pass is reset
+- **WHEN** a plain composition's root reads a state and calls `Wrapper("w")`, a non-skippable composable that calls `Label(5)`, where `compose fun Label(n: Int)` remembers `1` and `2` and prints them, and the program, run under `--watch` with `after line 4: edit main.prism main.prism.v2`, writes the state and recomposes twice; the edit makes `Label(n: Int, times: Int)` remember `10` and `20` and print `label 2: $n $times $a $b`, and `Wrapper` call `Label(5, 2)`; line 4 is printed by the root during the first recompose
+- **THEN** that recompose prints `label 2: 5 2 10 20`: the new `Label` started the old scope's group during the pass in which the reload was applied, reset its slots, and read no slot the old code wrote
 
 ### Requirement: A Reload During a Pass Is Handled When the Pass Ends
 A reload applied while a pass runs, as one applied at a function entry inside a plain composition can be, MUST invalidate its scopes when that pass ends, so that they recompose in the next pass.

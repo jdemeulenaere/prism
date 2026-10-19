@@ -15,9 +15,12 @@
 //!   composable's new version, and when that version starts the group again it forgets the
 //!   old slots and keeps its children (D8).
 //!
-//! The invalidated scopes then recompose in an ordinary pass: no pass is forced (D6). A reload
+//! The invalidated scopes then recompose in an ordinary pass: no pass is forced (D6), but that
+//! pass compares every argument a skippable composable keeps, since a reloaded call site's
+//! change bits describe its new code rather than the kept values (D17). A reload
 //! applied during a pass, at a function entry of a plain composition's body, is queued and
-//! handled once the pass's releases are done, so the walk never sees a tree being updated (D3).
+//! handled once the pass's releases are done, so the walk never sees a tree being updated (D3);
+//! the rest of that pass resets the retired scopes it starts (D8).
 //! The walk is linear in the live groups, and a pass without a reload does no work for it.
 
 use crate::group::GroupKind;
@@ -31,15 +34,20 @@ use std::collections::HashSet;
 /// or after the pass when one is running.
 pub fn reload_applied(applied: &AppliedReload) {
     let queued = with_state(|state| {
-        if state.active.is_some() {
-            state.queued_reloads.push((
-                applied.composable_bodies.clone(),
-                applied.retired_slots.clone(),
-            ));
-            true
-        } else {
-            false
-        }
+        let Some(pass) = state.active.as_mut() else {
+            return false;
+        };
+        // The rest of the pass may run new code: it compares kept arguments, and resets the
+        // retired scopes it starts, as the next pass will after the walk.
+        pass.compare_kept_arguments = true;
+        state
+            .retired_in_pass
+            .extend(applied.retired_slots.iter().copied());
+        state.queued_reloads.push((
+            applied.composable_bodies.clone(),
+            applied.retired_slots.clone(),
+        ));
+        true
     });
     if !queued {
         let bodies: HashSet<u64> = applied.composable_bodies.iter().copied().collect();
@@ -75,6 +83,14 @@ pub fn invalidate_reloaded(bodies: &HashSet<u64>, retired: &HashSet<usize>) -> u
         let mut stack = std::mem::take(&mut state.reload_walk);
         targets.clear();
         stack.clear();
+        // The next pass of every composition compares the arguments it keeps: a call site
+        // the reload changed passes change bits that describe its new code, not the kept
+        // values (`same` or `static` for an edited constant).
+        for record in state.compositions.values_mut() {
+            if !record.disposed {
+                record.reloaded = true;
+            }
+        }
         for root in live_roots(state) {
             stack.push((root, root));
             while let Some((group, scope)) = stack.pop() {

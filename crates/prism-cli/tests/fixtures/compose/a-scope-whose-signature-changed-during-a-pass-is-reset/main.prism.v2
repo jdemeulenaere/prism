@@ -1,0 +1,19 @@
+compose fun Label(n: Int, times: Int) {
+    val a = remember { 10 }
+    val b = remember { 20 }
+    println("label 2: $n $times $a $b")
+}
+compose fun Wrapper(s: String) {
+    println("wrapper 2 $s")
+    Label(5, 2)
+}
+fun main() {
+    val state = mutableStateOf(0)
+    val c = composition {
+        println("root ${state.value}")
+        Wrapper("w")
+    }
+    state.value = 1
+    println(c.recompose())
+    println(c.recompose())
+}

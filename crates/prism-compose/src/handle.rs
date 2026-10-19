@@ -131,6 +131,13 @@ impl<T> Arena<T> {
             })
     }
 
+    /// The live values, mutably, in index order.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.entries
+            .iter_mut()
+            .filter_map(|entry| entry.value.as_mut())
+    }
+
     /// How many values are live.
     pub fn len(&self) -> usize {
         self.live

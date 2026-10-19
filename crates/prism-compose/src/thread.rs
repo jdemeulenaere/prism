@@ -25,11 +25,15 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 /// The pass a thread is running: its identifier, which is the composer generated code passes,
-/// and the composition it composes.
+/// the composition it composes, and whether it compares every kept argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActivePass {
     pub identifier: u64,
     pub composition: Handle,
+    /// Set for the pass after a reload: a call site's change bits were computed by code that
+    /// may differ from the code that kept the arguments, so `same` and `static` arguments are
+    /// compared as uncertain ones (`compose-hot-reload`).
+    pub compare_kept_arguments: bool,
 }
 
 /// A composition: its root group, its applier and its invalid scopes.
@@ -46,6 +50,9 @@ pub struct CompositionRecord {
     pub cells: Vec<Handle>,
     /// The side effects its passes queued, run after each pass (D13 of `state-handles`).
     pub effects: Vec<FunctionValue>,
+    /// Whether a reload was applied since its last pass, whose next pass then compares every
+    /// kept argument (`compose-hot-reload`).
+    pub reloaded: bool,
 }
 
 /// What kind of frame of the composer's stack.
@@ -184,6 +191,10 @@ pub struct State {
     /// The body keys and retired slots of the reloads applied during the current pass, handled
     /// when it ends (D3 of `compose-hot-reload`).
     pub queued_reloads: Vec<(Vec<u64>, Vec<usize>)>,
+    /// The slots retired by the reloads applied during the current pass: a restart group whose
+    /// restart function names one forgets its slots when it starts in that pass (D8 of
+    /// `compose-hot-reload`). Cleared when the pass ends; a reload retires few slots.
+    pub retired_in_pass: Vec<usize>,
     /// The walk of a reload's invalidation and the scopes it found, reused by every reload.
     pub reload_walk: Vec<(Handle, Handle)>,
     pub reload_targets: Vec<Handle>,
@@ -216,6 +227,7 @@ impl State {
             state_error: None,
             spare_effects: Vec::new(),
             queued_reloads: Vec::new(),
+            retired_in_pass: Vec::new(),
             reload_walk: Vec::new(),
             reload_targets: Vec::new(),
             invalidated_by_reloads: 0,
