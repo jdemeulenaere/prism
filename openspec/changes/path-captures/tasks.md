@@ -32,7 +32,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 7. Examples (D12)
 
-- [ ] 7.1 In `examples/apps/todo/screen.prism` and `examples/apps/todo/sessions/editing-the-row-layout-keeps-the-list.screen.prism.v2`, remove `val id = todo.id` and capture `todo.id` in the handlers. Run `prism check` on every file under `examples/`, `prism fmt --check examples/`, `prism run --check-allocations examples/run/main.prism`, and `prism run --check-allocations --headless` on each UI entry (`examples/apps/counter/main.prism`, `examples/apps/todo/main.prism`, `examples/apps/todo/large.prism`, `examples/demo/ui/ui.prism`) with status 0 and empty stderr; `example_app_sessions` passes in `cargo test`.
+- [x] 7.1 In `examples/apps/todo/screen.prism` and `examples/apps/todo/sessions/editing-the-row-layout-keeps-the-list.screen.prism.v2`, remove `val id = todo.id` and capture `todo.id` in the handlers. Run `prism check` on every file under `examples/`, `prism fmt --check examples/`, `prism run --check-allocations examples/run/main.prism`, and `prism run --check-allocations --headless` on each UI entry (`examples/apps/counter/main.prism`, `examples/apps/todo/main.prism`, `examples/apps/todo/large.prism`, `examples/demo/ui/ui.prism`) with status 0 and empty stderr; `example_app_sessions` passes in `cargo test`.
 
 ## 8. Compile time and catalog
 

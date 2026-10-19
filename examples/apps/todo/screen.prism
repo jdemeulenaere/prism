@@ -64,12 +64,11 @@ package compose fun FilterRow(filter: MutableState<Filter>): Unit {
 
 // One item: a checkbox showing whether it is done, its title and a button removing it.
 package compose fun TodoRow(todo: &Todo, state: TodoState): Unit {
-    val id = todo.id
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = todo.done, onCheckedChange = { state.setDone(id, it) })
+        Checkbox(checked = todo.done, onCheckedChange = { state.setDone(todo.id, it) })
         Spacer(Modifier.width(8.dp))
         Text(todo.title, modifier = Modifier.weight(1.0))
-        Button(onClick = { state.remove(id) }) {
+        Button(onClick = { state.remove(todo.id) }) {
             Text("Remove")
         }
     }
