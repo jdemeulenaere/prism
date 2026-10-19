@@ -235,6 +235,27 @@ Reloading a one-line body edit of one file in a 100-file program SHOULD take und
 - **WHEN** `prism run --watch --timings --edits edits main.prism` applies one reload
 - **THEN** stderr holds one line starting with `timing: reload` giving the reload's total and per-stage times in milliseconds, and one line giving the number of live modules
 
+### Requirement: Edit Steps Wait for the Reload Point of a Frame Loop
+While a frame loop defers reloads to its reload points, an `after line <n>` step MUST still stop the program at its newline and let the session prepare the reload, but the reload MUST be applied at the loop's next reload point rather than at that output call.
+
+#### Scenario: A line printed during a pass
+- **WHEN** a headless counter app whose `Counter` prints `composing` runs under `--watch` with the edit script `after line 1: edit main.prism main.prism.v2`, which changes the label, and the event script `click "+"` and `dump`
+- **THEN** the pass that printed `composing` finishes on the old code, and the dump holds the new label with the count `1`
+
+### Requirement: A Restart Function's Contract Covers Its Composable's
+The contract of a restart function's slot MUST include the contract of the composable it restarts, so that a reload that changes that composable's parameter types gives the restart function a new slot too. Such a split MUST be reported only by the composable's own note, `reload: the signature of <symbol> changed; ...`.
+
+#### Scenario: A changed parameter type splits the restart function
+- **WHEN** a Rust test of `prism-codegen` computes the contracts of `compose fun Label(n: Int)`'s restart function and of `compose fun Label(n: Double)`'s
+- **THEN** the two contracts differ, while the contracts of the restart functions of `compose fun Label(n: Int) { Text("a") }` and `compose fun Label(n: Int) { Text("b") }` are equal
+
+### Requirement: Leaving Reload Points Applies a Pending Reload at the Next Call
+When a frame loop stops deferring reloads to its reload points, a reload that is still pending MUST be applied at the program's next call, as if it had been requested then.
+
+#### Scenario: A reload pending when runApp returns
+- **WHEN** a Rust test requests a reload while a program defers reloads to reload points, and the program then stops deferring them and calls a function
+- **THEN** the reload is applied at that call
+
 ## Design Rationale
 
 Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`). How slots, stack checks and top-level storage work is in the Design Rationale of `code-generation`.
@@ -254,3 +275,9 @@ Decisions from `hot-reload` (planned autonomously on 2026-10-17, implemented and
 - **The status line names what a reload defines** (D20). `reload: applied <files>` lists the files whose units a reload defines, compiled or loaded, so it reads the same on a warm cache as on a cold one.
 - **A removed workspace root ends the session** (plain fix, 2026-10-19). Orphaned `prism run --watch` processes of failed tests kept running their looping programs for hours in directories nobody watched any more. With its root gone, removed or renamed away, no file of the program can change and the watcher's directories are gone, so the session says so and exits with status 1 instead of waiting forever. It checks the root before each wait, since a root removed before the watcher registered has no event, and matches an event on a watched directory itself to the files in it. A session ending while its program runs keeps the program's code mapped until the process exits. Rejected: waiting for the root to come back (the watches are on directories that no longer exist); reporting the files as missing and waiting (the reported cause).
 - **A separate capability** (D18). The session gets this spec; `code-generation` changes where slots and storage live and what a stack check does, and `execution` lists the options. Reload failures keep their existing error codes.
+
+Decisions from `compose-hot-reload` (planned autonomously on 2026-10-18, implemented on 2026-10-19, and logged in `docs/decisions-for-review.md`), on the mechanism this capability gives compositions; what they recompose is in the `compose` and `ui` Design Rationales.
+
+- **A restart function's contract covers its composable's** (D8). `slot_contract` hashes a `BodyKind::Restart` body with its composable's contract, so changing the composable's parameter types splits `F#restart` with `F` and no old restart function is repointed to new code that would read the old scope's kept slots by its new parameter list. Restart and root-content splits get no note of their own, and `PreparedReload::retired_slots` reports the old slots of every split for the runtime. Cost: one more hash per restart body.
+- **Reload points and the next call** (D2, D12). `apply_at_next_call` raises the stack-limit interrupt when a reload is pending, so a reload requested during the last frame of an app is applied at the program's next call rather than at the next `runApp`. Under reload points, `apply_now` leaves the reload pending, so an `after line` step during a pass never applies it mid-pass, and `reload_point` reads an atomic requested flag before taking the pending reload's lock. A scripted-edit hook, `set_edit_hook`, lets an app's event script send edits to the session as `SessionEvent::ScriptedEdit`.
+- **`AppliedReload` names what compositions need** (D4, D5). Besides its units and message, it carries the body keys of the composable bodies the reload affects, computed by the session from the import graph reversed and the kept summaries (and the generic of each instance unit), and the retired slots.

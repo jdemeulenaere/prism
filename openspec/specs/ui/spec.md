@@ -390,7 +390,7 @@ After layout, when anything drawn or laid out changed, the toolkit MUST build a 
 - **THEN** stdout is the lines `clear 400x300 #FFFFFFFF`, `border 0,0 16x20 width 1 #FF000000` and `text 0,0 size 16 #FF000000 "ab"`
 
 ### Requirement: Headless Runs Follow an Event Script
-A headless run MUST read its event script's commands in order and end the app after the last one: `click`, `press` and `release` at a text target or at `<x> <y>`, `type "<text>"`, `key backspace`, `key enter`, `resize <width> <height>`, `frame`, `dump`, `dump tree` and `dump draw`. Blank lines and `#` comments MUST be ignored.
+A headless run MUST read its event script's commands in order and end the app after the last one: `click`, `press` and `release` at a text target or at `<x> <y>`, `type "<text>"`, `key backspace`, `key enter`, `resize <width> <height>`, `frame`, `dump`, `dump tree` and `dump draw`, and, under `--watch`, `edit <target> <replacement>` and `wait reload`. Blank lines and `#` comments MUST be ignored.
 
 #### Scenario: Scripted counter session
 - **WHEN** the counter program runs headless with the script `# two clicks`, `click "+"`, `click "+"` and `dump`
@@ -467,6 +467,77 @@ Checking and lowering calls of toolkit composables MUST take time linear in the 
 - **WHEN** `compile_timing.rs` runs its `ui-calls` shape, one composable calling `n` toolkit composables with modifier chains inside a `Column`, with `PRISM_ASSERT_TIMING=1`
 - **THEN** each doubling of `n` at most roughly doubles the front end and code generation times
 
+### Requirement: The Frame Loop Applies Reloads Between Events
+While `runApp` runs, a reload MUST be applied only at the top of an iteration of its frame loop: after the handlers of the previous event have returned and before the loop recomposes, never during a pass, a handler, layout or drawing. The pass that follows MUST recompose the scopes the reload invalidated.
+
+#### Scenario: A reload waits for the running handler
+- **WHEN** a Rust test of `prism-ui` requests a reload from inside a click handler of a running app
+- **THEN** the handler finishes in its old code, the reload is applied before the next pass, and that pass runs the new code
+
+### Requirement: A Pending Reload Wakes an Idle App
+A reload that becomes pending while the app waits for events MUST wake the frame loop, which then applies it, recomposes and presents a frame without any input. When `runApp` returns, reloads MUST again be applied at the program's next call, a reload still pending included.
+
+#### Scenario: Saving a file under a waiting headless app
+- **WHEN** a headless counter app runs under `prism run --watch --headless --events` with the script `dump`, `wait reload` and `dump`, and a test saves `main.prism` on disk with the label `Clicks:` once the first dump is printed
+- **THEN** stdout holds a second dump with a text node reading `Clicks: 0`
+
+### Requirement: Handlers Written by Reloaded Code Are Replaced Before the Next Event
+A handler whose closure's captures did not change MUST run its new body at its next call. A handler whose captures changed MUST keep its old code until its node is given a new handler; the pass after the reload MUST give a new handler to every node whose handler an affected composable body writes, before the next event is dispatched.
+
+#### Scenario: A handler whose captures changed
+- **WHEN** the counter screen, run headless under `--watch`, gets the script `click "+"` three times, an edit that declares `val step = 2` in `Counter` and makes the handler `{ c.value += step }`, then `click "+"` and `dump`
+- **THEN** the dump holds the text node reading `Count: 5`, and stderr notes that the handler's captures changed
+
+#### Scenario: A handler body edit reaches the next click
+- **WHEN** the counter screen, run headless under `--watch`, gets the script `click "+"`, an edit of the handler to `{ c.value += 10 }`, `click "+"` and `dump`
+- **THEN** the dump holds the text node reading `Count: 11`
+
+### Requirement: Layout and Drawing After a Reload
+After the pass that follows a reload, the frame loop MUST lay out and build the display list as after any pass: only nodes whose properties changed are marked dirty, matched nodes keep their numbers, focus and measurements, and no frame is presented when nothing visible changed.
+
+#### Scenario: A focused field keeps its focus and text across a reload
+- **WHEN** the typing app, run headless under `--watch`, gets the script `click 100 18`, `type "ab"`, an edit of `Text("Hello ${name.value}")` to `Text("Hi ${name.value}")`, then `type "c"` and `dump`
+- **THEN** the dump holds `textfield #2 0,0 200x36 "abc" focused defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)` and `text #3 0,36 48x20 "Hi abc"`: both nodes kept their numbers, and the field its focus
+
+### Requirement: A Reload With Errors Keeps the Running UI
+When a reload does not compile, the app MUST keep running its previous code, its composition and its nodes unchanged, and keep handling events, while the session prints the diagnostics and `reload: not applied; the program keeps running its previous code` on stderr.
+
+#### Scenario: A type error in a composable
+- **WHEN** the counter screen, run headless under `--watch`, gets the script `click "+"`, an edit whose `Text` call passes an `Int`, `click "+"` and `dump`
+- **THEN** stderr holds a type error and `reload: not applied; the program keeps running its previous code`, and the dump holds the text node reading `Count: 2`
+
+### Requirement: A Runtime Error in Reloaded Code Ends the Program
+A runtime error raised by reloaded code, during the pass after the reload or later, MUST end the program as every runtime error does. Under `--watch`, that stops the program and not the session.
+
+#### Scenario: Reloaded code divides by zero
+- **WHEN** the counter screen, run headless under `--watch`, gets the script `click "+"`, then an edit whose `Counter` body prints `10 / (c.value - 1)`, then `dump`
+- **THEN** stderr holds `panic: division by zero` with its location and `watch: the program stopped with a runtime error; waiting for changes`, no dump is printed, and the session exits with status 101
+
+### Requirement: Event Scripts Can Edit Files Under Watch
+Under `prism run --watch`, the event script command `edit <target> <replacement>` MUST make the session read `<target>` as the content of `<replacement>`, both relative to the script's directory, as an edit script's `edit` does. Consecutive `edit` commands MUST form one reload, applied before the next command runs. Without `--watch`, `edit` MUST be a script error with status 1.
+
+#### Scenario: Edit without watch
+- **WHEN** `prism run --headless --events events main.prism` runs a script whose first line is `edit main.prism main.prism.v2`
+- **THEN** stderr is `Error: events:1: the edit command needs --watch` and a newline, nothing runs, and the exit status is 1
+
+#### Scenario: Two edits form one reload
+- **WHEN** a headless app run under `--watch` gets the script `edit lib/labels.prism lib/labels.prism.v2`, `edit app/main.prism app/main.prism.v2` and `dump`
+- **THEN** stderr holds one line `reload: applied lib/labels.prism, app/main.prism`
+
+### Requirement: Event Scripts Can Wait for a Reload
+Under `prism run --watch`, the event script command `wait reload` MUST write out what the program printed so far and block the frame loop until a reload from the session's file watcher is pending, which the loop applies before the next command. When none is applied within 10 seconds, it MUST end the program with `event script line <n>: no reload arrived within 10 seconds`. Without `--watch`, it MUST be a script error with status 1.
+
+#### Scenario: Waiting for a reload that never comes
+- **WHEN** a Rust test of `prism-ui` runs a headless app whose script is `wait reload`, with the wait shortened to 10 milliseconds and no reload requested
+- **THEN** the runtime error `event script line 1: no reload arrived within 10 seconds` ends the test's child process with status 101
+
+### Requirement: UI Reload Latency
+On a release build, saving a one-line edit of a composable body of the counter app SHOULD reach the frame that shows it in a median under 50 ms, debounce included, measured from the write on disk to the display list of that frame. A benchmark MUST measure and report it. With `--watch`, `--timings` MUST print `timing: reload pass <ms> (<n> scopes)` after the pass of each reload.
+
+#### Scenario: Timing a UI reload
+- **WHEN** `prism run --watch --timings --headless --events events main.prism` runs the counter app with an `edit` command
+- **THEN** stderr holds a `timing: reload` line and then a line starting with `timing: reload pass` that gives the pass's time in milliseconds and the number of scopes it recomposed
+
 ## Design Rationale
 
 
@@ -485,3 +556,12 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 - **Input** (D14). Hit testing walks in reverse drawing order for `clickable` and `toggleable` elements at their chain bounds and text fields; a release over the pressed target clicks it, a disabled target absorbs input, and a press that hits no text field clears the focus. A text field shows only its `value` and calls `onValueChange` with each edit. One pass and layout follow every event, so `type "ab"` appends to the value the first character's pass produced (revising §5's batched pass). Rejected: batched passes, press-time clicks, hit testing by kind, a field-owned buffer.
 - **`runApp`, hosts and headless scripts** (D15, D16, D17). `runApp` is an intrinsic, so `E4030` sees it and its content gets a root content adapter; its loop blocks on a `Host` only when nothing is invalid or dirty, so idle apps do no work, and `desktop-window` supplies a window host. `prism run --headless[=WxH] --events <script>` parses the script before compiling, names targets by their text so scripts survive layout changes, and prints dumps through the program's output buffer, in order with `println`. UI errors have no location (`ui misuse`, `event script line <n>`): their detail names the construct. Rejected: a Prism frame loop, headless by default, PNG goldens, parsing scripts at `runApp`, ignoring missing targets.
 - **Costs** (D19, D26). A toolkit composable costs a node group and a few comparing setters per pass, a steady-state frame allocates nothing (a counting-allocator test), layout and display list builds are linear (about 0.44 and 0.25 ms for 10,000 nodes, release build) and a click of a 1,000-text app costs about 0.19 ms headless. The compiler pays constant work per companion lookup, `.dp`, node call and `runApp` call; `ui-calls` checks and compiles linearly, about 0.07 ms per call in the borrow check once default generators borrow only what they read (`mir`).
+
+Decisions from `compose-hot-reload` (planned autonomously on 2026-10-18, implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`). Which scopes a reload recomposes and which state survives are in the `compose` Design Rationale.
+
+- **Reloads land at the top of the frame loop** (D2). `runApp` calls `reload::defer_to_reload_points(host::wake_for_reload)` before its composition and `reload::apply_at_next_call()` after it, and each iteration starts with `reload::reload_point()`: after the previous event's handlers, before the pass that shows their effect, so no pass, handler, layout or drawing sees half a reload, and a running handler finishes in its old code. A request notifies `wait reload`'s condition variable and calls the waker a host registered (`WindowHost::wake`, which becomes a frame), so an idle window reaches the reload point at once; the headless host registers none. An iteration without a reload costs one atomic load. Rejected: next-call reloads inside apps (half a pass in old code); a reload point after recomposition (a second pass); deferring only under `--watch`.
+- **Handlers are replaced before the next event** (D9). A handler whose captures did not change runs its new body through its repointed slot at once; one whose captures changed keeps its old code until its author's pass registers a new entry, which never compares equal to the node's since new code has new descriptors, and that pass runs before the next event. Handlers kept in state or received from unaffected files follow `hot-reload`'s rule, and `runApp`'s own content closure keeps its captures until `main` runs again. Rejected: repointing changed-capture handlers (new code over an old environment); dropping every handler at reload.
+- **Layout and drawing as after any pass** (D10). Setters mark dirty only what changed, matched nodes keep their numbers, focus and measurements, and a window presents a frame only when the display list changed; the toolkit is bundled and never reloaded. Rejected: relaying out everything.
+- **Errors** (D11). A reload with errors is never requested, so the app keeps its code, composition, nodes and handlers and keeps handling events; a runtime error in reloaded code ends the program, and under `--watch` stops it, not the session. Rejected: rolling back after a panic (no unwinding, and a partial pass is not known to be consistent); per-composable error boundaries (later).
+- **`edit` and `wait reload` in event scripts** (D12, D16). Under `--watch` only: consecutive `edit <target> <replacement>` lines form one reload, requested through the runtime's scripted-edit hook, which blocks while the session overlays the edits and builds, and applied at the next reload point; `wait reload` writes out the program's output, then waits up to 10 seconds for a request from the file watcher. `after line` steps stop the program as before but leave the reload pending for the reload point. Fixtures combine `// watch:` (an edit script of comments) with `// events:`. Rejected: `after line` triggers only (fixtures would count dump lines); a second script; `edit` implying a session; line-buffering all output under `--watch`.
+- **A latency target** (D13). A median under 50 ms on a release build from the write of a one-line edit of the counter's body to the display list that shows it, debounce included, measured by the ignored `ui_reload_timing.rs`: 30.0 ms and 29.8 ms in two runs of twenty edits on 2026-10-19 (Apple silicon), of which about 10 ms of FSEvents delivery, 20 ms of debounce, front end and code generation, and 0.02 ms for the reload's pass and layout. `--timings` prints `timing: reload pass <ms> (<n> scopes)`, layout included. A window adds rasterization, which the target leaves out. Rejected: timing from the `edit` command (skips file events and debounce); per-stage targets.

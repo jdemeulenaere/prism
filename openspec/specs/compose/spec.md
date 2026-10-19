@@ -815,6 +815,78 @@ Checking and lowering state accesses MUST cost constant work per access: a membe
 - **WHEN** `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` runs the `state-accesses` shape at its three sizes
 - **THEN** its time grows roughly linearly with its size
 
+### Requirement: A Reload Recomposes the Scopes of Affected Composables
+Applying a reload MUST mark invalid, in every live composition of the program thread, the nearest restart scope enclosing each group of an affected composable body, or the composition's root when no restart scope encloses it. A composable body, function or closure, MUST be affected when its code is in a unit the reload defines, or when its file imports a reloaded file, directly or through other files.
+
+#### Scenario: Editing a composable body recomposes it with its state
+- **WHEN** the counter screen, run headless under `--watch` with `--check-allocations`, gets the script `click "+"` three times, `edit main.prism main.prism.v2`, where `main.prism.v2` changes `Text("Count: ${c.value}")` to `Text("Clicks: ${c.value}")`, and `dump`
+- **THEN** the dump holds `text #2 16,16 72x20 "Clicks: 3"`: the scope reran the new body, the count survived, and the text node is the one created first
+
+#### Scenario: Editing a helper of another file recomposes its callers
+- **WHEN** a headless app run under `--watch` has a `Screen` composable in `app/main.prism` that shows `Text(label(2))`, where `lib/labels.prism` declares `public fun label(n: Int): String = "n = $n"`, and the script is `edit lib/labels.prism lib/labels.prism.v2`, which makes it return `"value $n"`, then `dump`
+- **THEN** the dump holds a text node reading `value 2`, although no composable's code was compiled again
+
+### Requirement: Recomposition After a Reload Skips Unchanged Children
+The pass after a reload MUST run each invalidated scope's body. A skippable composable it calls whose arguments did not change and whose own scope is not invalid MUST skip, as in any pass. In that pass, every argument a skippable composable keeps MUST be compared with the kept one, even when its call site's change bits call it same or static, since the call site may be new code passing another value: one whose argument changed MUST run its body with the new arguments and keep them.
+
+#### Scenario: A sibling in an unaffected file skips
+- **WHEN** a headless app run under `--watch` has a `Screen` in `app/main.prism` that calls `Badge(1)`, a skippable composable of `lib/badge.prism` that prints `badge`, and the script edits `app/main.prism` to change another text of `Screen`
+- **THEN** `badge` is printed once, on the first composition, and not after the reload
+
+#### Scenario: An edited argument reaches a skippable composable of another file
+- **WHEN** a headless app run under `--watch` has a `Screen` in `app/main.prism` that calls `Label(5)`, a skippable composable of `lib/label.prism` showing `n = $n`, and the script dumps, edits the call to `Label(6)` and dumps again
+- **THEN** the second dump holds the text node reading `n = 6`, although the constant's change bits are static
+
+#### Scenario: Arguments forwarded in another order are compared after a reload
+- **WHEN** a headless app run under `--watch` has `compose fun Outer(a: Int, b: Int) { Inner(a, b) }` in `app/main.prism`, `Inner` a skippable composable of `lib/inner.prism` showing `a = $a b = $b`, called as `Outer(c.value, 2)` with `c` at `1`, and the script edits the body of `Outer` to `Inner(b, a)`, dumps, clicks a button adding 10 to `c` and dumps
+- **THEN** the dumps read `a = 2 b = 1` and then `a = 2 b = 11`
+
+### Requirement: State Whose Type Is Unchanged Survives a Reload
+A group whose key matches after a reload MUST keep its slots. A remembered value or state cell whose type fingerprint is unchanged MUST keep its value, even when its calculation was edited.
+
+#### Scenario: Editing a remember calculation keeps the value
+- **WHEN** the counter screen, run headless under `--watch`, gets the script `click "+"` twice, then an edit of `remember { mutableStateOf(0) }` to `remember { mutableStateOf(10) }`, then `dump`
+- **THEN** the dump holds the text node reading `Count: 2`
+
+### Requirement: State Whose Type Changed Is Reset
+After a reload, a slot whose type fingerprint differs from the type the new code reads MUST be discarded at the end of the pass, dropping its value and freeing the state cells it owns, and the new code MUST compute its value again. Every other slot MUST keep its value.
+
+#### Scenario: Changing a remembered type resets that state only
+- **WHEN** `compose fun Screen() { Column { Counter(); Likes() } }` runs headless under `--watch` and `--check-allocations`, `Likes` remembering its own `mutableStateOf(0)` shown as `Likes: <n>` with a `like` button, the script clicks `+` twice and `like` once, edits `Counter`'s state to `remember { mutableStateOf("") }` shown as `Name: ${c.value}`, and dumps
+- **THEN** the dump shows `Name: ` and `Likes: 1`, and the session exits with status 0: the old cell was freed
+
+### Requirement: Inserted Composable Calls Keep Their Siblings' State
+After a reload that adds a composable call, the new call MUST create its groups, and its siblings MUST keep their groups, slots and nodes wherever their keys match.
+
+#### Scenario: Adding a composable call
+- **WHEN** the counter screen, run headless under `--watch`, gets the script `click "+"` three times, then an edit that declares `compose fun Hint() { Text("Tip: press +") }` and calls `Hint()` between the `Text` and the `Button`, then `dump`
+- **THEN** the dump shows `Count: 3` as node `#2`, then a new text node reading `Tip: press +`, then the button as node `#3`
+
+### Requirement: A Scope Whose Composable's Signature Changed Recomposes From Its Parent
+When a reload changes the parameter types of a skippable composable, the restart scopes of its old code MUST not be restarted by their old restart functions. Each MUST be recomposed by the nearest enclosing scope whose restart function is current, and its own kept arguments and remembered values MUST be reset, while its child groups keep their state. A retired scope whose group is started during the pass in which the reload was applied MUST be reset when it starts.
+
+#### Scenario: A composable whose parameters changed restarts with the new code
+- **WHEN** a headless app run under `--watch` shows `Label(c)`, where `compose fun Label(count: State<Int>) { Text("n = ${count.value}") }` reads the state itself, the script clicks `+` three times, edits `Label` to `compose fun Label(count: State<Int>, times: Int)` showing `count.value * times` and the call to `Label(c, 10)`, dumps, clicks `+` and dumps again
+- **THEN** the first dump shows `n = 30` and the second `n = 40`: the scope restarted by the click runs the new `Label` with its new arguments
+
+#### Scenario: A scope whose signature changed during a pass is reset
+- **WHEN** a plain composition's root reads a state and calls `Wrapper("w")`, a non-skippable composable that calls `Label(5)`, where `compose fun Label(n: Int)` remembers `1` and `2` and prints them, and the program, run under `--watch` with `after line 4: edit main.prism main.prism.v2`, writes the state and recomposes twice; the edit makes `Label(n: Int, times: Int)` remember `10` and `20` and print `label 2: $n $times $a $b`, and `Wrapper` call `Label(5, 2)`; line 4 is printed by the root during the first recompose
+- **THEN** that recompose prints `label 2: 5 2 10 20`: the new `Label` started the old scope's group during the pass in which the reload was applied, reset its slots, and read no slot the old code wrote
+
+### Requirement: A Reload During a Pass Is Handled When the Pass Ends
+A reload applied while a pass runs, as one applied at a function entry inside a plain composition can be, MUST invalidate its scopes when that pass ends, so that they recompose in the next pass.
+
+#### Scenario: A plain composition recomposes reloaded scopes at its next recompose
+- **WHEN** `compose fun Show() { println("show 1") }` and `fun main() { val c = composition { Show() }; println("ready"); println(c.recompose()) }` run under `--watch` with the edit script `after line 2: edit main.prism main.prism.v2`, where `Show` prints `show 2`
+- **THEN** stdout holds `show 1`, `ready`, `show 2` and `true`
+
+### Requirement: Finding the Scopes of a Reload Takes Linear Time
+Finding the scopes a reload invalidates MUST take time linear in the live groups of the program thread's compositions plus the affected bodies, and MUST add no work to passes without a reload.
+
+#### Scenario: Invalidating after a reload in a large composition
+- **WHEN** a Rust test of `prism-compose` applies reloads naming one affected body to compositions of 1,000, 10,000 and 100,000 groups
+- **THEN** the time to find and invalidate their scopes grows roughly linearly with the groups
+
 ## Design Rationale
 
 Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-18 and 2026-10-19, and logged in `docs/decisions-for-review.md`). It implements the runtime side of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D1, D6, D7, D10, D11 and D23).
@@ -830,7 +902,7 @@ Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemente
 - **Node groups through an applier** (D9, implementing `compose-architecture` D7, refined at apply time). The `Applier` creates, places relative to the previous sibling, removes at the end of the pass and releases nodes, and numbers them for dumps; placement is relative because removals are deferred, so indexes would be ambiguous during a pass. A node context stays *in order* while matches only skip unvisited siblings, so a reused node is not placed again; after a reorder, a kind change or a skip behind a placed node, every node is placed again. A kind change creates a new node and releases the old one. `NodeTree` is the built-in applier for compositions started through the entry points. A model-checked randomized test edits whole trees and compares the node tree after every pass. Rejected: index-based placement, no node groups before `ui-toolkit`, and compositions without an applier.
 - **`/prism/composer`, a protocol module outside the prelude** (D10). Private externals and public wrappers over `Int` words, exactly the machine form generated code passes, so executable fixtures write composables as the transform will lower them and pin the runtime from real `.prism` source before the transform exists. Rejected: library test modules in executable fixtures (`standard-library` D13), testing from Rust only, creating `/prism/compose/runtime` here, and wrapper structs (passed by address).
 - **Compositions are `Copy` handles disposed explicitly** (D11); the owned `Composition` with drop glue is `compose-transform`'s. **Misuse is one runtime error kind** (D12), `composition misuse: <detail>` without a location, since an entry point has none; invalidating a stale scope is not misuse, because a state's readers may have left the composition. **The allocation check counts undisposed compositions** (D13) through a finish report that `prism-runtime` calls before its leak report. **Dumps** (D14) show keys, kinds, tags, values and node numbers, never addresses or generations.
-- **Hot reload interplay** (D15). Keys only decide which slots a group may reuse; slot types and node kinds are checked on every read and start. The runtime holds no code address, so a restart function reaches reloaded code through its descriptor's slot. `Composition::invalidate_where` invalidates the scopes whose restart functions name given slots, and `Composition::recompose_forced` runs a pass in which nothing skips; whether `compose-hot-reload` keeps it is that change's decision (its D6 relies on the force bit instead).
+- **Hot reload interplay** (D15). Keys only decide which slots a group may reuse; slot types and node kinds are checked on every read and start. The runtime holds no code address, so a restart function reaches reloaded code through its descriptor's slot. `Composition::invalidate_where` and `Composition::recompose_forced`, a pass in which nothing skips, were planned for reloads and removed by `compose-hot-reload` (its D6): a reload finds its scopes by body keys and reruns them through the force bit.
 - **Costs** (D16). Protocol operations are amortized O(1), a pass costs its bodies, the groups and slots it visits and releases, and the ordering; the runtime's buffers belong to the thread and are reused, so a steady-state pass allocates nothing (`tests/allocations.rs`). The benchmark `tests/runtime_timing.rs` measured about 54 ns per group for a first composition and 83 ns for one invalid leaf scope, flat from 1,000 to 100,000 groups. Startup is unchanged for programs that do not use the runtime. No compiler stage is added.
 
 Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`). It implements the compiler half of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D3 to D5 and D8 to D11) on this capability's runtime.
@@ -869,3 +941,13 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 - **One program thread** (D16). Cells live in the per-thread state; a handle used on another thread, which only Rust tests can do, fails as stale. Snapshots wait for threads.
 - **Cells in dumps** (D20). A slot's cells follow it one level deeper as `cell <type name>`, in creation order; program and composition cells are not dumped.
 - **Costs** (D21). Per access, a member lookup, a marker lookup and a flag test in the type checker and one to three calls in MIR; nothing per instance or across files. At apply, `state-accesses` at 256, 1,024 and 4,096 grew x4.0 to x5.1 per x4 in every stage, and a read cost 13 to 15 ns with 1,000 to 100,000 readers of one state, each registered once; steady-state reads allocate nothing.
+
+Decisions from `compose-hot-reload` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`). It implements `compose-architecture` D23 ("Hot Reload of Composables Keeps State") of `docs/architecture.md` §5; the frame loop's side is in the `ui` Design Rationale, restart contracts in `hot-reload`'s.
+
+- **A hook, and reloads during a pass wait for its end** (D3). `prism_runtime::reload::set_applied_hook`, installed by `Program::start`, calls `prism_compose::reload::reload_applied` on the program thread after the slot writes and before the message. With no pass active it walks at once; during a pass, which only the next-call policy of a plain composition allows, it queues the walk until the pass's releases are done, so the walk never sees a tree being updated, and the scopes recompose in the next pass. Rejected: the frame loop calling compose itself (plain compositions would never learn of reloads); walking mid-pass.
+- **The scopes above affected bodies** (D4, refining `compose-architecture` D23). A reload names the composable bodies, functions and closures, of the units it defines (an instance's generic's for an instance unit) and of every file importing a reloaded file, directly or not; one pre-order walk over each live composition invalidates the nearest current restart scope above each of their groups, the root counting as one. That covers non-skippable composables, content lambdas (whose author reruns) and callers of an edited helper. It misses code reached only through a function value from a file that does not import the reloaded one, which updates at its next recomposition. Rejected: the restart scopes of reloaded files only (the three cases above); recomposing everything; a call graph per reload; per-body hashes now (a follow-up). Cost: O(files + imports) in the session, O(live groups) for the walk (16, 13 and 8 ns per group for 1,000 to 100,000 groups, release build).
+- **Body keys in summaries** (D5, D15). The transform records each composable body's key (`H("body", path)`, or the closure key) on the composed MIR body, `Body::body_key`, in the codec, and `FileSummary::composable_bodies` and `GenericSummary::composable_bodies` collect them, so a session that loaded a file from the cache has them without MIR. A 64-bit collision only recomposes one scope more. Rejected: a unit word on every group start; `invalidate_where` over restart descriptors (restart scopes only); a side table returned by `compose_file`.
+- **No forced pass** (D6, revising `compose-runtime` D15). An invalidated scope reruns through its restart function with the force bit, an invalid group never skips, and every other skippable composable with unchanged arguments skips, so the reload's pass is an ordinary pass.
+- **The pass after a reload compares every kept argument** (D17, review). A call site's `same` and `static` change bits describe the code that computed them, which a reload may have changed (`Label(5)` edited to `Label(6)`, `Inner(a, b)` to `Inner(b, a)`), so applying a reload marks every live composition and its next pass compares those arguments as uncertain ones; afterwards every kept argument was written by current code. Rejected: clearing static bits at compile time (a comparison per argument on every pass); comparing only at affected call sites (needs a word per call); invalidating every callee (reruns unchanged subtrees). Cost: one flag test per kept `same` or `static` argument, and in the reload's pass one equality call each.
+- **State survives when its key and type match** (D7). Matched groups keep their slots and every read checks the slot's fingerprint, so a remembered value or cell of an unchanged type is kept, one of another type is recomputed and the old one released at the end of the pass with its cells and its old glue, and an edited `remember` calculation of the same type keeps its value, as in Compose and Flutter. Handles held elsewhere reach a freed cell only as `stale state handle`. Slots stay positional within their group, as in Compose. Rejected: resetting on an edited calculation (a hash per `remember` site, and it loses state on tuning edits; a possible opt-in); migrating values (`hot-reload` D7).
+- **Retired scopes recompose from their parent and reset their own slots** (D8, correcting `compose-transform` D22). A restart function's contract covers its composable's, so changing a skippable composable's parameter types splits both, and `AppliedReload::retired_slots` names their old slots. The walk marks a restart group whose restart function names one `reset_slots` and moves its invalidation to the nearest current scope; when the new code starts the group, it forgets all its slots onto the pass's release list and keeps its children. A reload applied during a pass records its retired slots for the rest of that pass, so a retired group new code starts there is reset too (review). A new version that is not skippable starts a replaceable group, which does not match, so the old one is removed. Rejected: leaving restart contracts alone (new restart code reads old slots by its new layout); recreating the whole group (loses the children's state); a version word per restart group.
