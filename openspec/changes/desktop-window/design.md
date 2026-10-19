@@ -306,6 +306,11 @@ These are small additions to `ui-toolkit`'s code, so that the window host is a `
 
 None of them is reachable from Prism, and `prism-ui` still has no window dependency. Rejected: a window host inside `prism-ui` behind a feature (the crate would build `winit` in some configurations, against `ui-toolkit` D2).
 
+**Apply note (task 4.1, 2026-10-19).** The code `ui-toolkit` left differs in two places, and the hooks follow the code:
+- **`Host::measurer` returns `Box<dyn TextMeasurer>`,** not `&'static dyn TextMeasurer`. `App` already owns its measurer as a box (`run_app_with(host, measurer, content)`), and `FontMetrics` caches advances in a `RefCell`, so it is not `Sync` and cannot be a `static`. `run_app` calls it once, before the first pass.
+- **`WindowFactory` stays the type `ui-toolkit` defined,** `Arc<dyn Fn(&str, i64, i64) -> Box<dyn Host> + Send + Sync>`, rather than a trait with an `open` method: a closure needs no extra type, and `HostConfiguration::Window(WindowFactory)` already exists.
+- **The final-frame sink** is `host::set_final_frame_sink(Option<FinalFrameSink>)`. `run_app_with` calls `App::present_final_frame` when the app ends normally, which rebuilds a stale list and passes the tree's window size, so a `resize` script command counts, and `Host::scale_factor`. An app that ends with an error calls nothing, since the error ends the program.
+
 ### D19. Costs, targets and how they are measured
 
 | Run-time operation | Cost |

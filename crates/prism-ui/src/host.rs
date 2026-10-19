@@ -4,12 +4,18 @@
 //! The CLI configures the host before the program runs, on its own thread; the program thread
 //! reads the configuration when `runApp` starts. `desktop-window` adds a window host through a
 //! [`WindowFactory`]; until then a run without `--headless` has none.
+//!
+//! A host also says how the app measures text ([`Host::measurer`]) and how many physical
+//! pixels a logical one covers ([`Host::scale_factor`]), and the CLI may set a
+//! [final-frame sink](set_final_frame_sink) that sees each app's last display list
+//! (`desktop-window` D15 and D18).
 
 use crate::draw::DisplayList;
 use crate::headless::HeadlessHost;
 pub use crate::input::Key;
 pub use crate::script::DumpKind;
 use crate::script::ScriptLine;
+use crate::text::{FixedAdvanceMetrics, TextMeasurer};
 use std::sync::{Arc, Mutex};
 
 /// An event a host gives the frame loop.
@@ -35,6 +41,40 @@ pub trait Host {
     fn next_event(&mut self) -> Option<HostEvent>;
     /// Shows a frame.
     fn present(&mut self, list: &DisplayList);
+    /// How the app measures text, taken once when the app starts (D12): the fixed-advance
+    /// metric unless the host lays text out with a font of its own, as a window does.
+    fn measurer(&self) -> Box<dyn TextMeasurer> {
+        Box::new(FixedAdvanceMetrics)
+    }
+    /// How many physical pixels one logical pixel covers on each axis, which may be
+    /// fractional: 1 unless the host draws on a scaled display.
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+}
+
+/// What sees each app's final display list, with the window's logical size and the host's
+/// scale factor: `prism run --screenshot` (`desktop-window` D15).
+pub type FinalFrameSink = Box<dyn FnMut(&DisplayList, (i64, i64), f64) + Send>;
+
+static FINAL_FRAME_SINK: Mutex<Option<FinalFrameSink>> = Mutex::new(None);
+
+/// Sets the sink every later app of the process calls when it ends, after its last event and
+/// before its composition is dropped, or removes it.
+pub fn set_final_frame_sink(sink: Option<FinalFrameSink>) {
+    *FINAL_FRAME_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = sink;
+}
+
+/// Calls the final-frame sink, if one is set.
+pub(crate) fn call_final_frame_sink(list: &DisplayList, size: (i64, i64), scale_factor: f64) {
+    let mut sink = FINAL_FRAME_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(sink) = sink.as_mut() {
+        sink(list, size, scale_factor);
+    }
 }
 
 /// Makes the window host of an app, from its title and size.

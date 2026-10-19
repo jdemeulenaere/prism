@@ -25,12 +25,12 @@ use crate::dump::{dump_display_list, dump_tree};
 use crate::error::{UiResult, APP_RUNNING, NO_WINDOW_SYSTEM};
 use crate::handlers::release_functions;
 use crate::headless::{missing_target, no_focus, resolve_text_target};
-use crate::host::{configured_host, DumpKind, Host, HostEvent, Key};
+use crate::host::{call_final_frame_sink, configured_host, DumpKind, Host, HostEvent, Key};
 use crate::input::{Action, Dispatcher};
 use crate::layout::Layout;
 use crate::runtime;
 use crate::script::{ScriptCommand, ScriptLine, ScriptTarget};
-use crate::text::{FixedAdvanceMetrics, TextMeasurer};
+use crate::text::TextMeasurer;
 use crate::thread::{install_tree, release_dropped, with_state, RunningApp, State};
 use prism_compose::{Composition, Handle};
 use prism_runtime::FunctionValue;
@@ -71,10 +71,12 @@ pub fn run_app(title: &str, width: i64, height: i64, content: FunctionValue) -> 
         release_functions(&mut vec![content]);
         return Err(NO_WINDOW_SYSTEM);
     };
-    run_app_with(host, Box::new(FixedAdvanceMetrics), content).map(|_| ())
+    let measurer = host.measurer();
+    run_app_with(host, measurer, content).map(|_| ())
 }
 
-/// Runs an app against `host`, measuring text with `measurer`, and gives what it did.
+/// Runs an app against `host`, measuring text with `measurer`, and gives what it did. When the
+/// app ends normally, the final-frame sink sees its last display list.
 pub fn run_app_with(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
@@ -82,6 +84,9 @@ pub fn run_app_with(
 ) -> UiResult<Counters> {
     let mut app = App::start(host, measurer, content)?;
     let result = app.run();
+    if result.is_ok() {
+        app.present_final_frame();
+    }
     let counters = app.counters;
     app.finish();
     result.map(|()| counters)
@@ -265,6 +270,18 @@ impl App {
         }
     }
 
+    /// Gives the final-frame sink the display list as the app ends, rebuilt if stale, with the
+    /// window's size and the host's scale factor (`desktop-window` D15).
+    pub fn present_final_frame(&mut self) {
+        self.build_display_list(false);
+        let size = with_state(|state| state.tree.window_size());
+        call_final_frame_sink(
+            &self.list,
+            (size.width, size.height),
+            self.host.scale_factor(),
+        );
+    }
+
     fn print_dump(&mut self, kind: DumpKind) {
         self.dump.clear();
         match kind {
@@ -381,6 +398,7 @@ mod tests {
     use crate::script::parse_script;
     use crate::setters;
     use crate::test_support::*;
+    use crate::text::FixedAdvanceMetrics;
     use prism_compose::test_support::content;
     use prism_compose::{invalidate, Composer};
     use std::cell::{Cell, RefCell};
@@ -878,5 +896,93 @@ mod tests {
         .unwrap();
         assert_eq!(seen.borrow_mut().take(), Some(Err(OUTSIDE_COMPOSITION)));
         let _ = node;
+    }
+
+    /// Wide metrics: every character advances 10 and a line is 30 high.
+    struct WideMetrics;
+
+    impl TextMeasurer for WideMetrics {
+        fn advance(&self, _character: char, _font_size: i64) -> i64 {
+            10
+        }
+
+        fn line_height(&self, _font_size: i64) -> i64 {
+            30
+        }
+    }
+
+    /// A host with its own measurer and scale factor, which dumps what it presents.
+    struct MeasuringHost {
+        events: std::vec::IntoIter<HostEvent>,
+        presented: std::sync::Arc<std::sync::Mutex<String>>,
+    }
+
+    impl Host for MeasuringHost {
+        fn size(&self) -> (i64, i64) {
+            (400, 300)
+        }
+
+        fn next_event(&mut self) -> Option<HostEvent> {
+            self.events.next()
+        }
+
+        fn present(&mut self, list: &DisplayList) {
+            dump_display_list(list, &mut self.presented.lock().unwrap());
+        }
+
+        fn measurer(&self) -> Box<dyn TextMeasurer> {
+            Box::new(WideMetrics)
+        }
+
+        fn scale_factor(&self) -> f64 {
+            1.5
+        }
+    }
+
+    /// `desktop-window` D18: `runApp` lays out with the host's measurer, and the final-frame
+    /// sink sees each app's last display list once, with the window's size and the host's
+    /// scale factor.
+    #[test]
+    fn a_host_with_its_own_measurer_and_the_final_frame_sink() {
+        let _lock = crate::host::test_lock();
+        let presented = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let shown = presented.clone();
+        let factory: crate::host::WindowFactory = std::sync::Arc::new(move |_, _, _| {
+            Box::new(MeasuringHost {
+                events: vec![HostEvent::Frame, HostEvent::Resize(200, 100)].into_iter(),
+                presented: shown.clone(),
+            })
+        });
+        configure(HostConfiguration::Window(factory));
+        // The sink is process-wide, so it records only the apps of this test's thread.
+        let thread = std::thread::current().id();
+        let sunk = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = sunk.clone();
+        crate::host::set_final_frame_sink(Some(Box::new(move |list, size, scale| {
+            if std::thread::current().id() == thread {
+                let mut dump = String::new();
+                dump_display_list(list, &mut dump);
+                record.lock().unwrap().push((dump, size, scale));
+            }
+        })));
+        let count = Rc::new(Cell::new(0));
+        run_app("Prism", 1, 1, counter(count.clone(), log())).unwrap();
+        run_app("Prism", 1, 1, counter(count, log())).unwrap();
+        crate::host::set_final_frame_sink(None);
+        configure(HostConfiguration::None);
+        // Lines are 30 high: the button starts at 16 + 30 + 8, and its row is 30 + 16 high.
+        let first = "clear 400x300 #FFFFFFFF\n\
+                     text 16,16 size 16 #FF000000 \"Count: 0\"\n\
+                     rect 16,54 58x46 #FF6750A4 radius 23\n\
+                     text 40,62 size 16 #FFFFFFFF \"+\"\n";
+        assert_eq!(*presented.lock().unwrap(), first.repeat(2));
+        let sunk = sunk.lock().unwrap();
+        assert_eq!(sunk.len(), 2, "once per app");
+        // The resize to 200 x 100 leaves the button 100 - 16 - 54 high.
+        let last = first
+            .replace("clear 400x300", "clear 200x100")
+            .replace("58x46 #FF6750A4 radius 23", "58x30 #FF6750A4 radius 15");
+        assert_eq!(sunk[0], (last.clone(), (200, 100), 1.5));
+        assert_eq!(sunk[1], (last, (200, 100), 1.5));
     }
 }

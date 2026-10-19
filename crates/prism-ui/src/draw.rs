@@ -62,7 +62,7 @@ struct Pending {
 }
 
 /// The commands of a frame, and the text their runs show.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DisplayList {
     pub commands: Vec<DrawCommand>,
     pub text: String,
