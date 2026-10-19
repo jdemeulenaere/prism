@@ -15,6 +15,9 @@
 //! PRISM_WINDOW_TESTS=1 cargo test -p prism-cli --test window_input
 //! ```
 //!
+//! The `watch-reload` scenario covers `compose-hot-reload`: a saved edit wakes an idle window,
+//! which presents the reloaded app without input, and keeps its state.
+//!
 //! Each scenario runs in a child process (this executable, with `PRISM_WINDOW_INPUT_SCENARIO`
 //! set), whose main thread serves the windows and whose stdout, stderr and status the parent
 //! checks; a child that hangs is killed after 60 seconds.
@@ -341,15 +344,51 @@ fn watch_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
     })
 }
 
+/// The hot reload scenario (`compose-hot-reload` D2 and D9): the counter under `prism run
+/// --watch`; after a click, saving an edit of its label and handler wakes the idle window,
+/// which presents the new label without any input, and the next click runs the new handler on
+/// the kept count. Closing the window then ends the run.
+fn reload_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
+    Box::new(move |driver: Driver| {
+        let scale = driver.opened(1, "Counter", (400.0, 300.0));
+        driver.click(PLUS, scale);
+        driver.settle();
+        let statistics = driver.statistics();
+        let received = statistics.frames_received();
+        std::fs::write(
+            directory.join("main.prism"),
+            format!(
+                "{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n",
+                IMPORTS,
+                COUNTER
+                    .replace("Count: ", "Clicks: ")
+                    .replace("println(\"count ", "println(\"new count ")
+            ),
+        )
+        .unwrap();
+        wait_until("the reloaded app presents a frame without input", || {
+            statistics.frames_received() > received
+        });
+        driver.settle();
+        driver.click(PLUS, scale);
+        driver.settle();
+        driver.close();
+        eprintln!("window input driver: done");
+    })
+}
+
 fn child(name: &str, directory: &Path) -> i32 {
     let entry = directory.join("main.prism");
     let (server, windows) = MainThreadServer::new();
     let driver = Driver {
         windows: windows.clone(),
     };
-    if name == "watch" {
+    if name == "watch" || name == "watch-reload" {
         std::fs::write(&entry, format!("{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n", IMPORTS, COUNTER)).unwrap();
-        let drive = watch_driver(directory.to_path_buf());
+        let drive = match name {
+            "watch" => watch_driver(directory.to_path_buf()),
+            _ => reload_driver(directory.to_path_buf()),
+        };
         std::thread::spawn(move || drive(driver));
         let options = prism_cli::RunOptions {
             check_allocations: true,
@@ -654,6 +693,30 @@ fn parent() -> Vec<String> {
         outcome,
         outcome.stdout == "count 1\nclosed\n",
         "the first run counts and returns"
+    );
+
+    let name = "watch-reload";
+    let (mut scenario, directory) = Scenario::start(name);
+    // The run's output is written when its `main` returns, which may come before or after the
+    // driver's last line.
+    let returned = "watch: main returned with status 0; waiting for changes";
+    let done = scenario.wait_for_line(|line| line == "window input driver: done")
+        && (scenario.stderr.iter().any(|line| line == returned)
+            || scenario.wait_for_line(|line| line == returned));
+    let outcome = scenario.finish(directory, true);
+    check!(
+        failures,
+        name,
+        outcome,
+        done && outcome.stderr.contains("reload: applied main.prism"),
+        "a saved edit reloads the running app, whose idle window presents it"
+    );
+    check!(
+        failures,
+        name,
+        outcome,
+        outcome.stdout == "count 1\nnew count 2\nclosed\n",
+        "the next click runs the new handler on the kept count"
     );
     failures
 }

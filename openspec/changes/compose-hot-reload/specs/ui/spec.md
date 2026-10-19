@@ -16,8 +16,8 @@ While `runApp` runs, a reload MUST be applied only at the top of an iteration of
 A reload that becomes pending while the app waits for events MUST wake the frame loop, which then applies it, recomposes and presents a frame without any input. When `runApp` returns, reloads MUST again be applied at the program's next call, a reload still pending included.
 
 #### Scenario: Saving a file under a waiting headless app
-- **WHEN** a headless counter app runs under `prism run --watch --events` with the script `wait reload` then `dump`, and a test saves `main.prism` on disk with the label `Clicks:`
-- **THEN** stdout holds a dump with a text node reading `Clicks: 0`
+- **WHEN** a headless counter app runs under `prism run --watch --headless --events` with the script `dump`, `wait reload` and `dump`, and a test saves `main.prism` on disk with the label `Clicks:` once the first dump is printed
+- **THEN** stdout holds a second dump with a text node reading `Clicks: 0`
 
 ### Requirement: Handlers Written by Reloaded Code Are Replaced Before the Next Event
 A handler whose closure's captures did not change MUST run its new body at its next call. A handler whose captures changed MUST keep its old code until its node is given a new handler; the pass after the reload MUST give a new handler to every node whose handler an affected composable body writes, before the next event is dispatched.
@@ -63,7 +63,7 @@ Under `prism run --watch`, the event script command `edit <target> <replacement>
 - **THEN** stderr holds one line `reload: applied lib/labels.prism, app/main.prism`
 
 ### Requirement: Event Scripts Can Wait for a Reload
-Under `prism run --watch`, the event script command `wait reload` MUST block the frame loop until a reload from the session's file watcher is applied, and then continue. When none is applied within 10 seconds, it MUST end the program with `event script line <n>: no reload arrived within 10 seconds`. Without `--watch`, it MUST be a script error with status 1.
+Under `prism run --watch`, the event script command `wait reload` MUST write out what the program printed so far and block the frame loop until a reload from the session's file watcher is pending, which the loop applies before the next command. When none is applied within 10 seconds, it MUST end the program with `event script line <n>: no reload arrived within 10 seconds`. Without `--watch`, it MUST be a script error with status 1.
 
 #### Scenario: Waiting for a reload that never comes
 - **WHEN** a Rust test of `prism-ui` runs a headless app whose script is `wait reload`, with the wait shortened to 10 milliseconds and no reload requested

@@ -1647,6 +1647,24 @@ struct WatchedProgram {
     child: std::process::Child,
     lines: std::sync::mpsc::Receiver<String>,
     seen: Vec<String>,
+    /// The program's stdout line by line, when the session was started to read it.
+    output: Option<std::sync::mpsc::Receiver<String>>,
+    printed: Vec<String>,
+}
+
+/// Sends each line `pipe` gives to a new channel, read by a thread of its own.
+fn line_channel(pipe: impl std::io::Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
+    let (sender, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(pipe).lines() {
+            let Ok(line) = line else { return };
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    lines
 }
 
 impl WatchedProgram {
@@ -1677,21 +1695,46 @@ impl WatchedProgram {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("failed to run prism");
-        let (sender, lines) = std::sync::mpsc::channel();
-        let stderr = child.stderr.take().unwrap();
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::BufReader::new(stderr).lines() {
-                let Ok(line) = line else { return };
-                if sender.send(line).is_err() {
-                    return;
-                }
-            }
-        });
+        let lines = line_channel(child.stderr.take().unwrap());
         Self {
             child,
             lines,
             seen: Vec::new(),
+            output: None,
+            printed: Vec::new(),
+        }
+    }
+
+    /// [`WatchedProgram::spawn`], reading the program's stdout line by line as it is written.
+    fn spawn_reading_output(directory: &Path, arguments: &[&str]) -> Self {
+        let mut session = Self::spawn(directory, arguments);
+        session.output = Some(line_channel(session.child.stdout.take().unwrap()));
+        session
+    }
+
+    /// Waits up to `limit` for a stdout line satisfying `wanted`, of a session started by
+    /// [`WatchedProgram::spawn_reading_output`].
+    fn wait_for_output(
+        &mut self,
+        limit: std::time::Duration,
+        wanted: impl Fn(&str) -> bool,
+    ) -> String {
+        let deadline = std::time::Instant::now() + limit;
+        let output = self.output.as_ref().expect("the session's stdout is read");
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match output.recv_timeout(left) {
+                Ok(line) => {
+                    self.printed.push(line.clone());
+                    if wanted(&line) {
+                        return line;
+                    }
+                }
+                Err(_) => panic!(
+                    "timed out; stdout so far: {:#?}\nstderr so far: {:#?}",
+                    self.printed, self.seen
+                ),
+            }
         }
     }
 
@@ -2011,5 +2054,90 @@ fn events_without_headless_mode() {
     assert_eq!(stdout(&output), "");
     let output = prism(&["run", "--headless=wide", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(1), "a size is two numbers");
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// The counter screen of `ui-toolkit`, with `label` before its count.
+fn counter_app(label: &str) -> String {
+    format!(
+        "import /prism/compose/ui\nimport /prism/compose/foundation\nimport /prism/compose/layout\nimport /prism/compose/material3\n\
+         compose fun Counter() {{\n    val c = remember {{ mutableStateOf(0) }}\n    \
+         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {{\n        \
+         Text(\"{}${{c.value}}\")\n        Button(onClick = {{ c.value += 1 }}) {{ Text(\"+\") }}\n    }}\n}}\n\
+         fun main() {{ runApp(width = 400, height = 300) {{ Counter() }} }}\n",
+        label
+    )
+}
+
+/// compose-hot-reload, ui: "Saving a file under a waiting headless app". The app dumps its
+/// tree, which `wait reload` flushes as it starts waiting, so the save comes once the app waits.
+#[test]
+fn saving_a_file_under_a_waiting_headless_app() {
+    let directory = single_file("watch_headless_save", &counter_app("Count: "));
+    write(&directory.join("events"), "dump\nwait reload\ndump\n");
+    let mut session = WatchedProgram::spawn_reading_output(
+        &directory,
+        &[
+            "run",
+            "--watch",
+            "--headless",
+            "--events",
+            "events",
+            "main.prism",
+        ],
+    );
+    let limit = std::time::Duration::from_secs(20);
+    session.wait_for_output(limit, |line| line.contains("\"Count: 0\""));
+    write(&directory.join("main.prism"), &counter_app("Clicks: "));
+    let text = session.wait_for_output(limit, |line| line.contains("Clicks: "));
+    assert!(text.contains("\"Clicks: 0\""), "{}", text);
+    session.wait_for(|line| line == "reload: applied main.prism");
+    session.stop();
+    fs::remove_dir_all(&directory).ok();
+}
+
+/// compose-hot-reload, ui: "Timing a UI reload". The times differ from run to run, so the lines
+/// are checked by their shape: a `timing: reload` line, then the reload pass with its scopes.
+#[test]
+fn timing_a_ui_reload() {
+    let directory = single_file("watch_ui_timing", &counter_app("Count: "));
+    write(&directory.join("main.prism.v2"), &counter_app("Clicks: "));
+    write(
+        &directory.join("events"),
+        "click \"+\"\nedit main.prism main.prism.v2\ndump\n",
+    );
+    let mut session = WatchedProgram::spawn(
+        &directory,
+        &[
+            "run",
+            "--watch",
+            "--timings",
+            "--headless",
+            "--events",
+            "events",
+            "main.prism",
+        ],
+    );
+    session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
+    let (stdout, seen) = session.stop();
+    assert!(stdout.contains("\"Clicks: 1\""), "{}", stdout);
+    let reload = seen
+        .iter()
+        .position(|line| line.starts_with("timing: reload ") && line.contains("detect"))
+        .unwrap_or_else(|| panic!("no reload timing: {:#?}", seen));
+    let pass = seen
+        .iter()
+        .position(|line| line.starts_with("timing: reload pass "))
+        .unwrap_or_else(|| panic!("no reload pass timing: {:#?}", seen));
+    assert!(reload < pass, "{:#?}", seen);
+    let rest = seen[pass].strip_prefix("timing: reload pass ").unwrap();
+    let (milliseconds, scopes) = rest.split_once(" ms (").expect("a time and its scopes");
+    assert!(
+        milliseconds.parse::<f64>().unwrap() >= 0.0,
+        "{}",
+        seen[pass]
+    );
+    let scopes = scopes.strip_suffix(" scopes)").expect("a scope count");
+    assert!(scopes.parse::<usize>().unwrap() >= 1, "{}", seen[pass]);
     fs::remove_dir_all(&directory).ok();
 }

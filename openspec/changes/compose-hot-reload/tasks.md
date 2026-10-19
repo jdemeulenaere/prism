@@ -75,8 +75,10 @@ Prerequisites (design, "Baseline"): `hot-reload`, `standard-library`, `compose-r
 
 ## 8. Real files and the benchmark (D13)
 
-- [ ] 8.1 In `crates/prism-cli/tests/run_cli_tests.rs`, add "Saving a file under a waiting headless app": run the counter app under `prism run --watch --headless --events` with `wait reload` and `dump`, save `main.prism` on disk with the new label, and expect the dump within a 20-second timeout. Add "Timing a UI reload": check the `timing: reload pass` line with the line-pattern assertion that "Timing a reload" uses.
-- [ ] 8.2 Add `crates/prism-cli/tests/ui_reload_timing.rs`, an `#[ignore]` benchmark (D13): the counter app in a temporary workspace, three clicks, then twenty rounds of a write on disk with a new label constant and `wait reload`, `frame` and `dump`, measured from the write to the dump showing the label. Print the median and 90th percentile, and fail on 50 ms only under `PRISM_ASSERT_TIMING=1`. Run it on a release build and record the numbers in the design's D13.
+- [x] 8.1 In `crates/prism-cli/tests/run_cli_tests.rs`, add "Saving a file under a waiting headless app": run the counter app under `prism run --watch --headless --events` with `wait reload` and `dump`, save `main.prism` on disk with the new label, and expect the dump within a 20-second timeout. Add "Timing a UI reload": check the `timing: reload pass` line with the line-pattern assertion that "Timing a reload" uses.
+- [x] 8.2 Add `crates/prism-cli/tests/ui_reload_timing.rs`, an `#[ignore]` benchmark (D13): the counter app in a temporary workspace, three clicks, then twenty rounds of a write on disk with a new label constant and `wait reload`, `frame` and `dump`, measured from the write to the dump showing the label. Print the median and 90th percentile, and fail on 50 ms only under `PRISM_ASSERT_TIMING=1`. Run it on a release build and record the numbers in the design's D13.
+
+- [x] 8.3 In `crates/prism-cli/tests/window_input.rs` (opt-in, `PRISM_WINDOW_TESTS=1`), add the scenario `watch-reload`: the counter under `prism run --watch` in a real window; after a click, saving an edit of its label and handler makes the idle window present a frame without input, and the next click runs the new handler on the kept count (D2, D9). Added at apply time; it passes on macOS.
 
 ## 9. Documentation and checks
 
