@@ -479,6 +479,21 @@ Planned in [`docs/architecture.md`](docs/architecture.md) §5 (`compose-architec
 
 ---
 
+## After Milestone 2: the review round (2026-10-20)
+Agreed with the user in the post–Milestone 2 review ([`docs/milestone-2-review-notes.md`](docs/milestone-2-review-notes.md), "Agreed changes"); each item is one OpenSpec change or plain fix, in this order.
+
+1. [ ] A3, plain fix: hot reload refreshes a window without waiting for input (the wake-up must return to the frame loop's reload point before a frame is built).
+2. [ ] F3, investigation: why a window's recomposition is about 3.5 times slower than headless on the 1,000-item list.
+3. [ ] `path-captures` (A2b): closures capture paths such as `todo.done`, not whole bindings.
+4. [ ] `owned-state` (A2′, A2‴, L5): `MutableState<T>` as an owning state object; `remember` keeps owned values; closures capture state through automatic generational handles only where the composition owns them, and through explicit nullable weak references elsewhere; deferred free and release order; system invariant 6 amended; the todo app's `Todo` holds `done: MutableState<Boolean>`.
+5. [ ] `strong-skipping` (A1): every restartable composable can skip; `Copy` parameters compare by value, borrowed ones by provenance identity; no inference, no deep comparison.
+6. [ ] `explicit-library` (A4): the library's sources move to a top-level `library/` directory, still imported as `/prism/...` from any workspace; no prelude, every function imported explicitly; built-in type names and their members stay in scope.
+7. [ ] `operator-conventions` (A4, L1): Kotlin-style `operator fun` (`get`, `set`, `iterator`, `plus`, `compareTo`, `equals`, `contains`, `invoke`).
+8. [ ] `drop-and-clone-hooks` (A4, L2): custom drop and clone for owning library types.
+9. [ ] `vararg` (A4, L4): variadic parameters, so `listOf` is ordinary code.
+10. [ ] `library-in-prism` (A4): `remember`, `key`, state, `Composition`, `print`, `toString` and the collection helpers written in Prism over runtime externals and the composer primitive, keeping the intrinsics to the minimum (`List`, `String` and `Heap` stay Rust-backed: no `unsafe` for now).
+11. [ ] `layout-in-prism` (A4, last): Compose's `Layout` and `MeasurePolicy`, with `Column`, `Row` and `Box` written in Prism.
+
 ## Phase 5: Tier 2 Release Backend (LLVM AOT), LSP & Self-Hosting (Milestone 3) (Current)
 - [ ] Tier 2 LLVM AOT native code generator (`prism build --release`) with whole-program optimization and LTO.
 - [ ] Prism Language Server Protocol (LSP) for VS Code / IDEs.
