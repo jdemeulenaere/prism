@@ -87,3 +87,20 @@ What is implemented and what is planned live in different places. Never treat a 
 When writing or reviewing code, always ensure existing tests pass and new language features include executable test fixtures.
 
 Naming: spell out new identifiers in full words (`Statement`, not `Stmt`); don't abbreviate for brevity's sake. Existing abbreviated names (`Expr`, `BlockExpr`, ...) stay until a change deliberately renames them.
+
+---
+
+## 5. Design Principles (from the user)
+
+These weigh on every design decision, alongside the invariants of §2:
+
+- **Compile speed is a primary criterion.** Stay as close to Kotlin and Jetpack Compose as possible, but when an inference or analysis would be expensive (global or cross-argument inference, super-linear or unbounded passes, per-instance re-checking), prefer a slightly more verbose explicit form. Every `design.md` states each decision's compile-time cost, and new stages get shapes in `crates/prism-cli/tests/compile_timing.rs` (see `openspec/config.yaml`).
+- **Follow Jetpack Compose.** UI code mirrors Compose's APIs, parameter names, order and defaults, and its module split (`/prism/compose/{runtime,ui,foundation,layout,material3}`). Document any deviation with its reason in the `ui` spec.
+- **No composed modifiers.** Modifiers are plain data elements whose state lives in UI nodes, as in Compose's `Modifier.Node`. Never add an equivalent of the deprecated `Modifier.composed { }`, or any modifier that composes or remembers.
+- **Prefer the best long-term design.** Prism is unreleased, so breaking changes are fine when they lead to a better design.
+
+---
+
+## 6. Working Practices
+
+[`docs/agent-workflow.md`](docs/agent-workflow.md) is the playbook for running several changes, alone or with subagents: the propose, implement, then review-and-archive loop (the fresh reviewer step finds real bugs); reconciling a packet with the main specs before applying it; sharing one checkout between agents; measuring on an idle machine; keeping `target/` small; and not opening windows on the user's screen unasked. Decisions taken on the user's behalf go in [`docs/decisions-for-review.md`](docs/decisions-for-review.md).
