@@ -4,7 +4,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 1. Reconcile
 
-- [ ] 1.1 Re-read the main specs this change modifies (`references`, `ownership`, `typed-tree`, `mir`, `code-generation`, `compose`, `collections`, `execution`) and re-base each MODIFIED block on the current main text, keeping every scenario of the main requirement; turn ADDED blocks for requirements that exist by then into MODIFIED. `owned-state` must not have landed first (it depends on this change); if another change touched closures meanwhile (`strong-skipping` reads kept handlers), reconcile with it. Check that every function named below still exists. Get `openspec validate path-captures --strict` clean with no INFO lines and record the reconciliation in `design.md`.
+- [x] 1.1 Re-read the main specs this change modifies (`references`, `ownership`, `typed-tree`, `mir`, `code-generation`, `compose`, `collections`, `execution`) and re-base each MODIFIED block on the current main text, keeping every scenario of the main requirement; turn ADDED blocks for requirements that exist by then into MODIFIED. `owned-state` must not have landed first (it depends on this change); if another change touched closures meanwhile (`strong-skipping` reads kept handlers), reconcile with it. Check that every function named below still exists. Get `openspec validate path-captures --strict` clean with no INFO lines and record the reconciliation in `design.md`.
 
 ## 2. Typed tree (D6)
 

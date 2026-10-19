@@ -14,6 +14,8 @@ Current state:
 - **The backend** lays a borrowing environment out as one pointer per capture (the captured place's address, in the creating frame), an owning one as each owned capture by value and each borrowed one as a pointer, held inline in the environment word when it fits and needs no drop; a closure owning only `Copy` captures has environment equality and duplicate entries, which compose uses to compare kept handlers. A slot's contract records each capture's mode and type fingerprint (`hot-reload`).
 - **Apps work around whole captures**: `examples/apps/todo/screen.prism` writes `val id = todo.id` before its handlers, as does its hot-reload session file `sessions/editing-the-row-layout-keeps-the-list.screen.prism.v2`.
 
+**Baseline (task 1.1, 2026-10-20).** Proposed on top of `a62f48f`, which touched only `ui` and `desktop`, neither of which this change modifies; nothing has landed in `openspec/specs/` since. Every MODIFIED block was checked against the current main text and keeps all of its requirement's scenarios, no ADDED requirement exists in a main spec yet, `owned-state` and `strong-skipping` have not landed, and every function `tasks.md` names exists (`decide_captures`, `Graph::decide`, `capture_help` and the `capture_decision_timing` benchmark in `captures.rs`, `BodyBuilder::use_local`, `lower_closure`, `Builder::place`, the borrow checker's `escapes.rs`, `borrows.rs` and `captures.rs`). `openspec validate path-captures --strict` is clean.
+
 ## Goals / Non-Goals
 
 **Goals:**
