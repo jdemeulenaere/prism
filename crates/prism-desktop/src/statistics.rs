@@ -287,14 +287,14 @@ mod tests {
         assert_eq!(statistics.presented_samples(), (2, 1));
         let lines = statistics.frame_statistics_lines();
         assert!(
-            lines[0].starts_with("frame stats: raster median 0.399 ms, p99 0.500 ms, max 0.500 ms"),
+            lines[0].starts_with("frame stats: raster median 0.400 ms, p99 0.500 ms, max 0.500 ms"),
             "{:?}",
             lines
         );
         assert!(lines[0].ends_with(" (2 frames presented)"), "{:?}", lines);
         assert_eq!(
             lines[1],
-            "frame stats: input to present median 2.998 ms, p99 2.998 ms, max 3.000 ms"
+            "frame stats: input to present median 3.000 ms, p99 3.000 ms, max 3.000 ms"
         );
         statistics.reset_presented_frames();
         assert_eq!(statistics.presented_samples(), (0, 0));

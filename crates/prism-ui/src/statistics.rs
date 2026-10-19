@@ -40,6 +40,7 @@ pub const BUCKETS: usize = (EXACT + (HIGHEST_EXPONENT as u64 - 6) * PER_OCTAVE) 
 pub struct Histogram {
     buckets: [u32; BUCKETS],
     count: u64,
+    min: u64,
     max: u64,
 }
 
@@ -47,6 +48,7 @@ impl std::fmt::Debug for Histogram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Histogram")
             .field("count", &self.count)
+            .field("min", &self.min)
             .field("max", &self.max)
             .finish_non_exhaustive()
     }
@@ -88,6 +90,7 @@ impl Histogram {
         Histogram {
             buckets: [0; BUCKETS],
             count: 0,
+            min: u64::MAX,
             max: 0,
         }
     }
@@ -97,6 +100,7 @@ impl Histogram {
         let index = bucket(value);
         self.buckets[index] = self.buckets[index].saturating_add(1);
         self.count += 1;
+        self.min = self.min.min(value);
         self.max = self.max.max(value);
     }
 
@@ -116,8 +120,9 @@ impl Histogram {
     }
 
     /// The nearest-rank `percentile`, from 0 to 100, or `None` before any value: the smallest
-    /// bucket at or below which `ceil(percentile / 100 × count)` values lie, at most the
-    /// largest value.
+    /// bucket at or below which `ceil(percentile / 100 × count)` values lie, kept between the
+    /// smallest and the largest value, so a histogram of one value, or of equal values, gives
+    /// that value exactly.
     pub fn percentile(&self, percentile: f64) -> Option<u64> {
         if self.count == 0 {
             return None;
@@ -127,7 +132,7 @@ impl Histogram {
         for (index, &count) in self.buckets.iter().enumerate() {
             seen += count as u64;
             if seen >= rank {
-                return Some(representative(index).min(self.max));
+                return Some(representative(index).clamp(self.min, self.max));
             }
         }
         Some(self.max)
@@ -142,6 +147,7 @@ impl Histogram {
     pub fn clear(&mut self) {
         self.buckets.fill(0);
         self.count = 0;
+        self.min = u64::MAX;
         self.max = 0;
     }
 }
@@ -440,6 +446,32 @@ mod tests {
         let mut line = String::new();
         stage_line(&mut line, "events", &histogram);
         assert_eq!(line, "frame stats: events none");
+    }
+
+    /// A report of one frame, or of frames that all took the same, reads the same number as its
+    /// median, 99th percentile and maximum, although the bucket's midpoint differs.
+    #[test]
+    fn percentiles_stay_between_the_smallest_and_largest_value() {
+        let mut histogram = Histogram::new();
+        histogram.record(629);
+        assert_ne!(
+            representative(bucket(629)),
+            629,
+            "629 is not its bucket's midpoint"
+        );
+        assert_eq!(histogram.median(), Some(629));
+        assert_eq!(histogram.percentile(99.0), Some(629));
+        histogram.record(629);
+        histogram.record(629);
+        assert_eq!(histogram.percentile(1.0), Some(629));
+        histogram.clear();
+        // Both lie in one bucket whose midpoint, 1,003,520, is above them both.
+        histogram.record(999_999);
+        histogram.record(1_000_001);
+        let low = histogram.percentile(1.0).unwrap();
+        let high = histogram.percentile(100.0).unwrap();
+        assert!((999_999..=1_000_001).contains(&low), "{}", low);
+        assert_eq!(high, 1_000_001);
     }
 
     #[test]
