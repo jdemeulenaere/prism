@@ -5,7 +5,7 @@
 
 use crate::entry::*;
 use prism_runtime::{RuntimeAddress, RuntimeFunction, RuntimeType};
-use RuntimeType::{Pointer, I64, I8};
+use RuntimeType::{Pointer, I32, I64, I8};
 
 const fn address(function: *const ()) -> RuntimeAddress {
     RuntimeAddress::new(function.cast())
@@ -187,6 +187,111 @@ pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
         address: address(prism_compose_kept_slot as *const ()),
         parameters: &[I64, I64, Pointer],
         result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_create",
+        address: address(prism_compose_state_create as *const ()),
+        parameters: &[Pointer, Pointer],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_read",
+        address: address(prism_compose_state_read as *const ()),
+        parameters: &[I64, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_write",
+        address: address(prism_compose_state_write as *const ()),
+        parameters: &[I64, Pointer, Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_begin_read",
+        address: address(prism_compose_state_begin_read as *const ()),
+        parameters: &[I64, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_end_read",
+        address: address(prism_compose_state_end_read as *const ()),
+        parameters: &[I64, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_take",
+        address: address(prism_compose_state_take as *const ()),
+        parameters: &[I64, Pointer, Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_put",
+        address: address(prism_compose_state_put as *const ()),
+        parameters: &[I64, Pointer, Pointer],
+        result: Some(I8),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_begin_edit",
+        address: address(prism_compose_state_begin_edit as *const ()),
+        parameters: &[I64, Pointer],
+        result: Some(Pointer),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_end_edit",
+        address: address(prism_compose_state_end_edit as *const ()),
+        parameters: &[I64, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_error",
+        address: address(prism_compose_state_error as *const ()),
+        parameters: &[Pointer, Pointer, I32, I32],
+        result: None,
+        never_returns: true,
+    },
+    RuntimeFunction {
+        name: "prism_compose_begin_program",
+        address: address(prism_compose_begin_program as *const ()),
+        parameters: &[],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_end_program",
+        address: address(prism_compose_end_program as *const ()),
+        parameters: &[],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_begin_remember",
+        address: address(prism_compose_begin_remember as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_end_remember",
+        address: address(prism_compose_end_remember as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_side_effect",
+        address: address(prism_compose_side_effect as *const ()),
+        parameters: &[I64, Pointer],
+        result: None,
         never_returns: false,
     },
 ];

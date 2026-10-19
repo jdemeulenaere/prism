@@ -42,6 +42,11 @@ pub struct CompositionRecord {
     /// Set when disposing starts: the handle is stale from then on, while the releases that
     /// need the applier run.
     pub disposed: bool,
+    /// The state cells its handlers and side effects created, freed when it is disposed (D12
+    /// of `state-handles`).
+    pub cells: Vec<Handle>,
+    /// The side effects its passes queued, run after each pass (D13 of `state-handles`).
+    pub effects: Vec<FunctionValue>,
 }
 
 /// What kind of frame of the composer's stack.
@@ -167,6 +172,16 @@ pub struct State {
     pub deferred: Vec<Handle>,
     /// The walk of a subtree whose nodes are placed again.
     pub walk: Vec<Handle>,
+    /// The state cells of the thread (D8 of `state-handles`).
+    pub cells: Arena<crate::state::Cell>,
+    /// Who owns the cells created now, innermost last (D11).
+    pub creation_owners: Vec<crate::state::CreationOwner>,
+    /// The cells the program owns, freed only under the allocation check (D12).
+    pub program_cells: Vec<Handle>,
+    /// The error the last failed state operation recorded, for its location (D14).
+    pub state_error: Option<crate::state::StateError>,
+    /// A spare effect queue, swapped with a composition's while its effects run.
+    pub spare_effects: Vec<FunctionValue>,
 }
 
 impl State {
@@ -188,6 +203,11 @@ impl State {
             spare_queue: Vec::new(),
             deferred: Vec::new(),
             walk: Vec::new(),
+            cells: Arena::new(),
+            creation_owners: Vec::new(),
+            program_cells: Vec::new(),
+            state_error: None,
+            spare_effects: Vec::new(),
         }
     }
 }

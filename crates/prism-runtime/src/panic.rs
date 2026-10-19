@@ -89,11 +89,22 @@ pub enum PanicKind {
     /// unbalanced group, or a composition operation during a pass; the detail says which (D12
     /// of `compose-runtime`). Reported without a location, since an entry point has none.
     CompositionMisuse = 10,
+    /// A use of a state handle whose cell was freed, or that names no cell of its type (D15
+    /// of `state-handles`). Reported at the access.
+    StaleStateHandle = 11,
+    /// An access to a state cell that a `read`, `update` or `edit` closure holds in a way the
+    /// access conflicts with (D6 of `state-handles`).
+    StateBorrowed = 12,
+    /// A write of a state, `update` or `edit` while a pass runs (D11 of `state-handles`).
+    StateWrittenDuringComposition = 13,
+    /// `mutableStateOf` while a pass runs, outside `remember` and top-level initializers (D11
+    /// of `state-handles`).
+    StateCreatedDuringComposition = 14,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 11] = [
+    pub const ALL: [PanicKind; 15] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
@@ -105,6 +116,10 @@ impl PanicKind {
         PanicKind::ListIndexOutOfRange,
         PanicKind::EmptyList,
         PanicKind::CompositionMisuse,
+        PanicKind::StaleStateHandle,
+        PanicKind::StateBorrowed,
+        PanicKind::StateWrittenDuringComposition,
+        PanicKind::StateCreatedDuringComposition,
     ];
 
     /// The kind with code `code`.
@@ -134,6 +149,12 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         PanicKind::ListIndexOutOfRange => format!("list index {}", detail),
         PanicKind::EmptyList => "removeLast() on an empty list".to_string(),
         PanicKind::CompositionMisuse => format!("composition misuse: {}", detail),
+        PanicKind::StaleStateHandle => "stale state handle".to_string(),
+        PanicKind::StateBorrowed => "state accessed while borrowed".to_string(),
+        PanicKind::StateWrittenDuringComposition => "state written during composition".to_string(),
+        PanicKind::StateCreatedDuringComposition => {
+            "state created during composition outside remember".to_string()
+        }
     }
 }
 
@@ -173,6 +194,13 @@ pub unsafe extern "C" fn prism_rt_panic(
         None => format!("internal error: unknown runtime error {}", kind),
     };
     report_at(&message, &file, line, column)
+}
+
+/// Reports the runtime error `kind` with `detail` at `file:line:column` and ends the process,
+/// for runtime crates that receive their caller's location: the state errors of
+/// `prism-compose` (D14 of `state-handles`).
+pub fn panic_at_location(kind: PanicKind, detail: &str, file: &str, line: u32, column: u32) -> ! {
+    panic_at(kind, detail, file, line, column)
 }
 
 /// Reports the runtime error `kind` with `detail` at `file:line:column` and ends the process:
@@ -282,6 +310,18 @@ mod tests {
                 PanicKind::CompositionMisuse,
                 "group left open",
                 "composition misuse: group left open",
+            ),
+            (PanicKind::StaleStateHandle, "", "stale state handle"),
+            (PanicKind::StateBorrowed, "", "state accessed while borrowed"),
+            (
+                PanicKind::StateWrittenDuringComposition,
+                "",
+                "state written during composition",
+            ),
+            (
+                PanicKind::StateCreatedDuringComposition,
+                "",
+                "state created during composition outside remember",
             ),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());

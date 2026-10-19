@@ -114,10 +114,11 @@ impl Program {
             .name("main".to_string())
             .stack_size(PROGRAM_STACK_SIZE)
             .spawn(move || {
-                // Under the allocation check, compositions still live when `main` returns are
-                // reported before the leaks (D13 of `compose-runtime`). The report reads this
-                // thread's compositions, and `finish` runs on this thread.
-                prism_runtime::set_finish_report(Some(prism_compose::live_compositions_report));
+                // Under the allocation check, the cells the program owns are freed, then the
+                // compositions still live when `main` returns are reported, before the leaks
+                // (D13 of `compose-runtime`, D12 of `state-handles`). The report reads this
+                // thread's cells and compositions, and `finish` runs on this thread.
+                prism_runtime::set_finish_report(Some(prism_compose::finish_report));
                 prism_runtime::start(arguments, check_allocations);
                 // The stack grows down from about here: generated code raises "stack overflow"
                 // before it reaches the end (D27).

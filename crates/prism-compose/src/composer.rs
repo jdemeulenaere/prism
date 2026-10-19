@@ -351,6 +351,62 @@ impl Composer {
     }
 }
 
+impl Composer {
+    /// Opens the window of a `remember` calculation that runs because its slot is missing or a
+    /// key changed (D11 of `state-handles`): the cells created until
+    /// [`Composer::end_remember`] belong to the slot the calculation's result is stored in.
+    pub fn begin_remember(self) -> ComposeResult<()> {
+        with_state(|state| {
+            check(state, self)?;
+            state
+                .creation_owners
+                .push(crate::state::CreationOwner::Remember(Vec::new()));
+            Ok(())
+        })
+    }
+
+    /// Closes the window of [`Composer::begin_remember`], after the result's slot was written:
+    /// attaches the cells created since to the slot before the cursor, or is the misuse `no slot
+    /// to read` when there is none.
+    pub fn end_remember(self) -> ComposeResult<()> {
+        with_state(|state| {
+            let (group, cursor) = slot_position(state, self)?;
+            let cells = match state.creation_owners.pop() {
+                Some(crate::state::CreationOwner::Remember(cells)) => cells,
+                Some(other) => {
+                    state.creation_owners.push(other);
+                    return Err(NO_SLOT);
+                }
+                None => return Err(NO_SLOT),
+            };
+            if cells.is_empty() {
+                return Ok(());
+            }
+            let slots = &mut state.groups.get_mut(group).unwrap().slots;
+            match cursor.checked_sub(1).and_then(|index| slots.get_mut(index)) {
+                Some(Slot::Typed {
+                    cells: attached, ..
+                }) => {
+                    attached.extend(cells);
+                    Ok(())
+                }
+                _ => Err(NO_SLOT),
+            }
+        })
+    }
+
+    /// Queues the side effect `effect`, a `() -> Unit` function value the composition takes
+    /// over, to run after the pass (D13 of `state-handles`).
+    pub fn side_effect(self, effect: FunctionValue) -> ComposeResult<()> {
+        with_state(|state| {
+            let pass = check(state, self)?;
+            let record = state.compositions.get_mut(pass.composition).unwrap();
+            record.effects.push(effect);
+            Ok(())
+        })
+    }
+}
+
 /// Invalidates the restart scope `scope` in O(1): it is recomposed by the next pass of its
 /// composition. A handle that names no live scope is ignored. A scope invalidated during a
 /// pass goes to the next pass (D4).
@@ -414,7 +470,10 @@ unsafe fn store(state: &mut State, slot_type: *const SlotType, value: *mut u8) {
     let slots = &mut state.groups.get_mut(frame.group).unwrap().slots;
     match slots.get_mut(cursor) {
         Some(slot) => {
-            if let (Some(old), None) = (slot.typed_match(slot_type), (*slot_type).drop) {
+            // A slot holding state cells is replaced, so its cells are released with it (D12
+            // of `state-handles`).
+            let in_place = slot.cells().is_empty() && (*slot_type).drop.is_none();
+            if let (Some(old), true) = (slot.typed_match(slot_type), in_place) {
                 std::ptr::copy_nonoverlapping(value, old, (*slot_type).size);
             } else {
                 let old = std::mem::replace(slot, Slot::typed(slot_type, value));

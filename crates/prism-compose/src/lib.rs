@@ -30,9 +30,12 @@ mod functions;
 pub mod group;
 mod handle;
 pub mod slot;
+pub mod state;
 pub mod test_support;
 pub mod thread;
 
+#[cfg(test)]
+mod state_tests;
 #[cfg(test)]
 mod tests;
 
@@ -43,4 +46,5 @@ pub use functions::{compose_function, COMPOSE_FUNCTIONS};
 pub use group::GroupKind;
 pub use handle::{Arena, Handle};
 pub use slot::{Slot, SlotType};
+pub use state::{finish_report, CreationOwner, StateError, States};
 pub use thread::{active_scope, live_compositions_report};

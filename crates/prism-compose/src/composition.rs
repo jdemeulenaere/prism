@@ -14,6 +14,7 @@ use crate::composer::{
 use crate::group::{Group, GroupKind};
 use crate::handle::Handle;
 use crate::slot::Slot;
+use crate::state::{CreationOwner, States};
 use crate::thread::{
     with_state, ActivePass, CompositionRecord, Frame, FrameKind, OrderEntry, Release, ReleaseWork,
     State,
@@ -37,6 +38,8 @@ impl Composition {
                 applier,
                 queue: Vec::new(),
                 disposed: false,
+                cells: Vec::new(),
+                effects: Vec::new(),
             });
             let mut root = Group::new(GroupKind::Restart, 0, 0, handle);
             root.restart = Some(content);
@@ -93,10 +96,34 @@ impl Composition {
             Ok(())
         })?;
         process_releases();
+        // Then the cells its handlers and side effects created, and the effects no pass ran
+        // (D12 and D13 of `state-handles`).
+        let (cells, effects) = with_state(|state| {
+            let record = state.compositions.get_mut(composition).unwrap();
+            (
+                std::mem::take(&mut record.cells),
+                std::mem::take(&mut record.effects),
+            )
+        });
+        States::release(&cells);
+        for effect in effects {
+            // SAFETY: a queued effect is a live function value the composition owns.
+            unsafe { effect.release() };
+        }
         // The applier is dropped outside the state.
         let record = with_state(|state| state.compositions.remove(composition));
         drop(record);
         Ok(())
+    }
+
+    /// Runs `f` as a handler of `composition` (D12 of `state-handles`): the state cells it
+    /// creates belong to the composition and are freed when it is disposed. What `ui-toolkit`
+    /// dispatches events through, and how side effects run.
+    pub fn run_handler<R>(composition: Handle, f: impl FnOnce() -> R) -> R {
+        States::push_owner(CreationOwner::Composition(composition));
+        let result = f();
+        States::pop_owner();
+        result
     }
 
     /// The root scope of the composition.
@@ -213,7 +240,36 @@ fn run_pass(composition: Handle, forced: bool) -> ComposeResult<bool> {
     }
     with_state(end_pass);
     process_releases();
+    run_effects(composition);
     Ok(true)
+}
+
+/// Runs the side effects the pass queued, in order, each as a handler of the composition and
+/// then released (D13 of `state-handles`). The queue is swapped with a spare one, so a pass
+/// that queues effects reuses both vectors.
+fn run_effects(composition: Handle) {
+    let effects = with_state(|state| {
+        let record = state.compositions.get_mut(composition)?;
+        if record.effects.is_empty() {
+            return None;
+        }
+        let spare = std::mem::take(&mut state.spare_effects);
+        Some(std::mem::replace(&mut record.effects, spare))
+    });
+    let Some(mut effects) = effects else {
+        return;
+    };
+    for effect in effects.drain(..) {
+        // SAFETY: a queued effect is a live `() -> Unit` function value the queue owns,
+        // released once after it runs.
+        Composition::run_handler(composition, || unsafe { effect.call() });
+        unsafe { effect.release() };
+    }
+    with_state(|state| {
+        if state.spare_effects.capacity() < effects.capacity() {
+            state.spare_effects = effects;
+        }
+    });
 }
 
 /// Orders the composition's invalid scopes in tree order into the pass's buffer: each scope's
@@ -390,6 +446,10 @@ pub(crate) fn process_releases() {
                     drop(value);
                 }
                 slot.free_block();
+                // A slot's state cells are released after its value (D12 of `state-handles`).
+                if !slot.cells().is_empty() {
+                    States::release(slot.cells());
+                }
             },
             ReleaseStep::Function(function) => unsafe { function.release() },
         }

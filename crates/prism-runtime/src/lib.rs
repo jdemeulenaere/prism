@@ -57,9 +57,9 @@ pub use output::{
     LineHook, OUTPUT_BUFFER_SIZE,
 };
 pub use panic::{
-    panic_message, panic_without_location, prism_rt_double_remainder, prism_rt_panic,
-    prism_rt_panic_without_location, prism_rt_unlinked_function, set_watch_mode, PanicKind,
-    StopHandler, PANIC_EXIT_STATUS,
+    panic_at_location, panic_message, panic_without_location, prism_rt_double_remainder,
+    prism_rt_panic, prism_rt_panic_without_location, prism_rt_unlinked_function, set_watch_mode,
+    PanicKind, StopHandler, PANIC_EXIT_STATUS,
 };
 pub use process::{exit_status, prism_rt_exit};
 pub use stack::{

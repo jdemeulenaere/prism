@@ -82,10 +82,9 @@ pub fn active_composition() -> Option<Handle> {
 }
 
 /// Runs `handler` as a handler of `composition`, so that the cells it creates belong to it
-/// (`state-handles`' `Composition::run_handler`, its D12). Until that change, a handler runs
-/// as plain code outside any pass.
-pub fn run_handler(_composition: Handle, handler: impl FnOnce()) {
-    handler()
+/// (`state-handles`' `Composition::run_handler`, its D12).
+pub fn run_handler(composition: Handle, handler: impl FnOnce()) {
+    prism_compose::Composition::run_handler(composition, handler)
 }
 
 /// Appends `text` to the program's output, in order with what the program prints (task 3.2's

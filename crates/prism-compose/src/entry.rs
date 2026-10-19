@@ -13,6 +13,7 @@ use crate::composition::Composition;
 use crate::group::GroupKind;
 use crate::handle::Handle;
 use crate::slot::SlotType;
+use crate::state::{CreationOwner, States};
 use prism_runtime::{panic_without_location, FunctionValue, PanicKind, PrismString};
 
 /// The value of `result`, or the runtime error of its misuse.
@@ -237,4 +238,193 @@ pub unsafe extern "C" fn prism_compose_kept_slot(
 ) -> *const u8 {
     let index = usize::try_from(index).unwrap_or(usize::MAX);
     or_misuse(Composer(composer).kept_slot(index, slot_type))
+}
+
+// State cells (D14 of `state-handles`). Each operation that can fail records its error and
+// returns a failure result: a null address, the word 0 or the status 0, after which generated
+// code calls `prism_compose_state_error` with the access's location.
+
+/// The success value of `result`, or `failure` after recording its error.
+fn or_record<T>(result: crate::state::StateResult<T>, failure: T) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            States::record_error(error);
+            failure
+        }
+    }
+}
+
+/// Creates a cell of `record` holding the value at `value`, moved in; its handle, or 0.
+///
+/// # Safety
+///
+/// `record` must be a valid record and `value` a value of it that the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_create(
+    record: *const SlotType,
+    value: *mut u8,
+) -> u64 {
+    or_record(States::create(record, value).map(Handle::word), 0)
+}
+
+/// The address of the value of the cell `handle`, or null.
+///
+/// # Safety
+///
+/// `record` must be a valid record.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_read(
+    handle: u64,
+    record: *const SlotType,
+) -> *const u8 {
+    or_record(States::read(Handle(handle), record), std::ptr::null())
+}
+
+/// Replaces the value of the cell `handle` with the value at `value`, moved in; 1, or 0.
+///
+/// # Safety
+///
+/// `record` must be a valid record and `value` a value of it that the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_write(
+    handle: u64,
+    record: *const SlotType,
+    value: *mut u8,
+) -> u8 {
+    or_record(States::write(Handle(handle), record, value).map(|_| 1), 0)
+}
+
+/// Borrows the cell `handle` shared, giving its value's address, or null.
+///
+/// # Safety
+///
+/// `record` must be a valid record.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_begin_read(
+    handle: u64,
+    record: *const SlotType,
+) -> *const u8 {
+    or_record(States::begin_read(Handle(handle), record), std::ptr::null())
+}
+
+/// Ends a shared borrow of the cell `handle`.
+#[no_mangle]
+pub extern "C" fn prism_compose_state_end_read(handle: u64, record: *const SlotType) {
+    let _ = record;
+    States::end_read(Handle(handle))
+}
+
+/// Moves the value of the cell `handle` to `destination`; 1, or 0.
+///
+/// # Safety
+///
+/// `record` must be a valid record and `destination` writable memory for a value of it.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_take(
+    handle: u64,
+    record: *const SlotType,
+    destination: *mut u8,
+) -> u8 {
+    or_record(
+        States::take(Handle(handle), record, destination).map(|_| 1),
+        0,
+    )
+}
+
+/// Moves the value at `value` into the cell `handle` that `take` emptied; 1, or 0.
+///
+/// # Safety
+///
+/// `record` must be a valid record and `value` a value of it that the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_put(
+    handle: u64,
+    record: *const SlotType,
+    value: *mut u8,
+) -> u8 {
+    or_record(States::put(Handle(handle), record, value).map(|_| 1), 0)
+}
+
+/// Borrows the cell `handle` mutably, giving its value's address, or null.
+///
+/// # Safety
+///
+/// `record` must be a valid record.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_begin_edit(
+    handle: u64,
+    record: *const SlotType,
+) -> *mut u8 {
+    or_record(
+        States::begin_edit(Handle(handle), record),
+        std::ptr::null_mut(),
+    )
+}
+
+/// Ends the mutable borrow of the cell `handle`, invalidating its readers.
+#[no_mangle]
+pub extern "C" fn prism_compose_state_end_edit(handle: u64, record: *const SlotType) {
+    let _ = record;
+    States::end_edit(Handle(handle))
+}
+
+/// Ends the program with the error the last failed state operation recorded, at
+/// `file:line:column`.
+///
+/// # Safety
+///
+/// `file` must point at `file_length` bytes of UTF-8 text.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_error(
+    file: *const u8,
+    file_length: usize,
+    line: u32,
+    column: u32,
+) -> ! {
+    let file = if file.is_null() || file_length == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(file, file_length)).into_owned()
+    };
+    let kind = States::recorded_error()
+        .map(|error| error.kind())
+        .unwrap_or(PanicKind::StaleStateHandle);
+    prism_runtime::panic_at_location(kind, "", &file, line, column)
+}
+
+/// Starts program code, a top-level value's initializer: the cells it creates belong to the
+/// program, even during a pass (D11 of `state-handles`).
+#[no_mangle]
+pub extern "C" fn prism_compose_begin_program() {
+    States::push_owner(CreationOwner::Program)
+}
+
+/// Ends the program code of `prism_compose_begin_program`.
+#[no_mangle]
+pub extern "C" fn prism_compose_end_program() {
+    States::pop_owner();
+}
+
+/// Opens the window of a `remember` calculation that runs.
+#[no_mangle]
+pub extern "C" fn prism_compose_begin_remember(composer: u64) {
+    or_misuse(Composer(composer).begin_remember())
+}
+
+/// Closes the window of a `remember` calculation, attaching its cells to the slot written.
+#[no_mangle]
+pub extern "C" fn prism_compose_end_remember(composer: u64) {
+    or_misuse(Composer(composer).end_remember())
+}
+
+/// Queues the side effect at `effect`, a `() -> Unit` function value, to run after the pass.
+///
+/// # Safety
+///
+/// `effect` must point at a `() -> Unit` function value the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_side_effect(composer: u64, effect: *mut u8) {
+    let effect = FunctionValue::read_from(effect);
+    or_misuse(Composer(composer).side_effect(effect))
 }

@@ -8,6 +8,7 @@
 //!   closure over one `Int` does (`escaping-closures` D9).
 //! - [`slot_type`] gives a record for a Rust type, with drop and equality entries over its
 //!   `Drop` and `PartialEq`.
+//! - [`effect`] wraps a Rust closure in a `() -> Unit` function value, a side effect.
 
 use crate::composer::Composer;
 use crate::slot::SlotType;
@@ -40,6 +41,35 @@ pub fn content(body: impl Fn(Composer) + 'static) -> FunctionValue {
     FunctionValue {
         descriptor: &CONTENT_DESCRIPTOR,
         environment: Box::into_raw(Box::new(closure)) as *mut u8,
+    }
+}
+
+type Effect = Box<dyn Fn()>;
+
+/// The code slot shared by every [`effect`] value.
+static EFFECT_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+static EFFECT_DESCRIPTOR: Descriptor = Descriptor {
+    slot: &EFFECT_SLOT,
+    drop_environment: Some(drop_effect),
+};
+
+unsafe extern "C" fn call_effect(environment: *mut u8) {
+    let effect = &*(environment as *const Effect);
+    effect()
+}
+
+unsafe extern "C" fn drop_effect(environment: *mut u8) {
+    drop(Box::from_raw(environment as *mut Effect));
+}
+
+/// A `() -> Unit` function value that calls `body`: a side effect or a handler.
+pub fn effect(body: impl Fn() + 'static) -> FunctionValue {
+    EFFECT_SLOT.store(call_effect as *const () as usize, Ordering::Release);
+    let effect: Effect = Box::new(body);
+    FunctionValue {
+        descriptor: &EFFECT_DESCRIPTOR,
+        environment: Box::into_raw(Box::new(effect)) as *mut u8,
     }
 }
 
