@@ -884,9 +884,18 @@ fn slug(title: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+/// The text of capability `spec`'s main spec, the implemented behaviour, if it exists. Checks
+/// that *demand* something of the code (a session a scenario names, for instance) read only
+/// this: a proposed change that is not implemented yet must never break the test suite.
+fn main_spec_text(spec: &str) -> Option<String> {
+    let openspec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../openspec");
+    fs::read_to_string(openspec.join("specs").join(spec).join("spec.md")).ok()
+}
+
 /// The texts of capability `spec`: its main spec, and the delta spec of every active (not yet
 /// archived) change that touches it, so a change's fixtures can name its new scenarios before
-/// the change is archived into the main specs.
+/// the change is archived into the main specs. Only checks that *permit* a name may read the
+/// deltas; demands come from `main_spec_text`, since an active change may be merely proposed.
 fn spec_texts(spec: &str) -> Vec<String> {
     let openspec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../openspec");
     let mut paths = vec![openspec.join("specs").join(spec).join("spec.md")];
@@ -1348,6 +1357,11 @@ fn session_header(script: &str, name: &str) -> Option<String> {
 /// example-apps: "Running every session" and "A session named after no scenario". Runs every
 /// session of the example apps headless under the allocation check, and under a watch session
 /// when it edits files, and compares its status and output with the snapshots beside it.
+///
+/// A session may be named after a scenario of the main spec or of an active change's delta (so
+/// a change's sessions can land before it is archived), but only the main spec's scenarios
+/// demand that the sessions they name exist: a proposed packet whose tasks are unticked names
+/// sessions nobody has written yet, and must not fail the suite.
 #[test]
 fn example_app_sessions() {
     let examples = normalized(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples"));
@@ -1362,10 +1376,12 @@ fn example_app_sessions() {
         .filter_map(|l| l.strip_prefix("#### Scenario:"))
         .map(|t| slug(t.trim()))
         .collect();
-    // The sessions the scenarios name: "the session `<name>`" in a WHEN.
-    let named: BTreeSet<String> = texts
-        .iter()
-        .flat_map(|text| text.lines())
+    // The sessions the main spec's scenarios name: "the session `<name>`" in a WHEN. Only the
+    // main spec demands sessions; an active change's delta may name sessions its apply has not
+    // written yet (its scenarios still permit the sessions that exist, through `slugs`).
+    let main = main_spec_text("example-apps").expect("the example-apps spec");
+    let named: BTreeSet<String> = main
+        .lines()
         .filter(|l| l.starts_with("- **WHEN**"))
         .filter_map(|l| l.split("the session `").nth(1))
         .filter_map(|rest| rest.split('`').next())
