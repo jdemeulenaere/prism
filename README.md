@@ -63,7 +63,7 @@ Milestones 1 and 2 are complete (2026-10-19). The bootstrap compiler, written in
 - **The tools:** `prism check` (with a per-user build cache), `prism fmt`, and `prism run`, which compiles a program with Cranelift in memory and reaches `main` in about 11 ms cold and 2 ms warm on a release build ([`execution`](openspec/specs/execution/spec.md), [`build-cache`](openspec/specs/build-cache/spec.md)); `--check-allocations` checks that every allocation, state cell, group and node is freed, and `--frame-stats` reports an app's frame times and allocations.
 - **Compose:** `compose fun`, `remember`, `key`, `mutableStateOf`, skipping of composables whose stable arguments did not change, and a toolkit after Compose's artifacts (`/prism/compose/ui`, `foundation`, `layout`, `material3`: `Column`, `Row`, `Box`, `Text`, `Button`, `Checkbox`, `TextField`, `Surface`, ordered `Modifier` chains, `16.dp`) ([`compose`](openspec/specs/compose/spec.md), [`ui`](openspec/specs/ui/spec.md), [`desktop`](openspec/specs/desktop/spec.md)).
 - **Hot reload:** `prism run --watch` applies an edit at the program's next call or the app's next frame; a composable edit keeps every remembered value whose type did not change ([`hot-reload`](openspec/specs/hot-reload/spec.md)).
-- **Example apps** under [`examples/apps`](examples/apps): a counter and a todo list, verified by scripted sessions under the allocation check, and a tour of the toolkit in [`examples/demo/ui`](examples/demo/ui/ui.prism). A click of the counter takes 0.003 ms and toggling an item of a 1,000-item list 2.3 ms at the 99th percentile, headless on a release build, with no allocation left behind after any frame ([`example-apps`](openspec/changes/reactive-app-verification/specs/example-apps/spec.md)).
+- **Example apps** under [`examples/apps`](examples/apps): a counter and a todo list, verified by scripted sessions under the allocation check, and a tour of the toolkit in [`examples/demo/ui`](examples/demo/ui/ui.prism). A click of the counter takes 0.003 ms and toggling an item of a 1,000-item list 2.3 ms at the 99th percentile, headless on a release build, with no allocation left behind after any frame ([`example-apps`](openspec/specs/example-apps/spec.md)).
 
 | Counter | Todo | Toolkit tour |
 |---|---|---|
@@ -78,13 +78,13 @@ prism run --headless --events examples/apps/todo/sessions/adding-toggling-and-re
 prism run --frame-stats --headless --events examples/apps/todo/sessions/a-thousand-items-start-and-end-cleanly.events examples/apps/todo/large.prism
 ```
 
-Known limits: no scrolling or lazy lists, no effects, timers or animation, one window at a time, CPU rendering without text shaping (no kerning or ligatures), Tier 1 (JIT) only with no `prism build`, and no traits yet. Rows that take a borrowed item recompose with their list. The follow-ups are in [`ROADMAP.md`](ROADMAP.md).
+Known limits: no scrolling or lazy lists, no effects, timers or animation, one window at a time, CPU rendering without text shaping (no kerning or ligatures), Tier 1 (JIT) only with no `prism build`, and no traits yet. Rows that take a borrowed item recompose with their list, and a composable cannot yet hand one event lambda to several handlers, so the todo app passes state handles where Compose would pass `onSelect: (Filter) -> Unit`. The follow-ups are in [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
 ## Specifications & Invariants
 
-Implemented behavior is specified in [`openspec/specs/`](openspec/specs). Planned subsystems (code generation, compilation avoidance, execution tiers, the memory model and the compose engine) are designed in [`docs/architecture.md`](docs/architecture.md). The tenets above are the vision; see [`ROADMAP.md`](ROADMAP.md) for what exists today.
+Implemented behavior is specified in [`openspec/specs/`](openspec/specs). Planned subsystems (parallel compilation, the Tier 2 backend and the rest of the memory model) are designed in [`docs/architecture.md`](docs/architecture.md), which also keeps the design notes of the compose engine. The tenets above are the vision; see [`ROADMAP.md`](ROADMAP.md) for what exists today.
 - [`system-invariants`](openspec/specs/system-invariants/spec.md): The 6 non-negotiable architectural rules.
 - [`package-resolution`](openspec/specs/package-resolution/spec.md): Zero-marker discovery and import resolution.
 - [`syntax`](openspec/specs/syntax/spec.md): Concrete grammar, tokens, and language constructs.

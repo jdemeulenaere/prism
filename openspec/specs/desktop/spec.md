@@ -181,6 +181,27 @@ Once its buffers have grown, presenting a display list of an unchanged size and 
 - **WHEN** `crates/prism-desktop/tests/allocations.rs` presents 100 frames of the same display list through the window host and rasterizes each one, with a counting allocator
 - **THEN** no allocation happens after the first two frames, by which both of the mailbox's lists have grown
 
+### Requirement: Window Frames in Frame Statistics
+With frame statistics on, an app in a window MUST also report, after its `frame` line, `frame stats: raster median <a> ms, p99 <b> ms, max <c> ms (<k> frames presented)`, the main thread's time to rasterize and present each presented frame, and `frame stats: input to present ...`, the time from the program thread taking a frame's first event to the main thread presenting that frame.
+
+#### Scenario: A window app's frame statistics
+- **WHEN** the window smoke test runs with `PRISM_WINDOW_TESTS=1` and frame statistics on, and presents two different display lists after one input event each
+- **THEN** the window's report lines read `raster` with `(2 frames presented)` and `input to present` with two samples
+
+### Requirement: Window Statistics Count Only Presented Frames
+A frame replaced in the frame mailbox before it was drawn MUST have no raster or input-to-present sample. Measuring MUST allocate nothing on either thread after the window has opened.
+
+#### Scenario: A replaced frame has no sample
+- **WHEN** a Rust test of `prism-desktop` puts three display lists into the frame mailbox, each stamped with its first event, before the drawing side takes one, and the drawing side then takes and records it
+- **THEN** the statistics hold one presented frame, one raster sample and one input-to-present sample, measured from the last list's stamp
+
+### Requirement: Window Frames of a Large List Meet Their Budget
+The manual verification MUST measure toggling items of `examples/apps/todo/large.prism` in an 800 × 600 logical-pixel window on a release build, and the 99th percentile from input to presented pixels SHOULD be under 16 ms at the display's scale factor.
+
+#### Scenario: Toggling items of a thousand-item list in a window
+- **WHEN** the manual verification of `reactive-app-verification` runs `prism run --frame-stats examples/apps/todo/large.prism` on a release build, toggles about twenty items and closes the window
+- **THEN** the `input to present` line's 99th percentile is under 16 ms, and the run is recorded with its date, machine and scale factor
+
 ## Design Rationale
 
 Decisions from `desktop-window` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`). What the app does in a window, apart from its text metrics, is the `ui` spec's; `--screenshot` is in `execution`.
@@ -203,3 +224,8 @@ Decisions from `desktop-window` (planned autonomously on 2026-10-18, implemented
 - **Watch sessions leave the main thread** (D17). With the `window` feature, `prism_cli::windows::watch_with_windows` runs the session on a `watch-session` thread with the main thread's 8 MiB stack, and the main thread serves every run's windows. When the program stops, the session closes the window it left (a stopped program thread never drops its host); when the session ends, the server stops. `WindowHost::wake` is the plain `fn()` reload wake-up, turned into a `Frame`, for `defer_to_reload_points`.
 - **Hooks in `prism-ui`** (D18). `Host::measurer` (a boxed measurer, read once when the app starts), `Host::scale_factor`, the `WindowFactory` closure, a final-frame sink and `Clone` on display lists; none reachable from Prism, and `prism-ui` keeps no window dependency.
 - **Costs and tests** (D19, D20). Release medians on 2026-10-19: the counter frame rasterized and converted in 0.33 ms at scale 2, 1,000 visible nodes in 0.43 ms, ten times the nodes at most ×5.3; the first frame about 80 ms after `runApp` in a real window. Golden PNGs within one unit per channel (`PRISM_UPDATE_GOLDEN=1` regenerates, and changed images are reviewed by eye); protocol and input-mapping tests without a window; an allocation-counting test; an opt-in smoke test (`window_smoke.rs`) and window input test (`window_input.rs`), both `harness = false` and skipped without `PRISM_WINDOW_TESTS=1`. What needs real hardware (the platform's own mouse and keyboard events, Retina sharpness, live resizing by hand, moving between displays) is a ROADMAP item for the user.
+
+Decisions from `reactive-app-verification` (planned autonomously on 2026-10-18 and 2026-10-19, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **The window's frame statistics** (D7). `WindowStatistics` keeps two `const` histograms beside its counters: raster time, measured by the main thread when it presents a frame, and input to present, from the instant the program thread took the frame's first event, which travels with its display list in the frame mailbox, to that present. A list the latest-wins mailbox replaced before it was drawn has no sample. `runApp`'s report reads them after the window closed and prints `raster` (with the frames presented) and `input to present` after its `frame` line. Live allocations in a window move by a few between frames, since the input channel's blocks are allocated on the main thread and freed on the program thread; the constant-live property is measured headless (`example-apps`).
+- **The 16 ms window budget of a 1,000-item list** (D9). Bounded from below by the headless frame (2.3 ms p99) and from above by the raster target (4 ms at scale 2), and checked by hand on a release build in a visible window, since `--events` cannot drive a window. On 2026-10-19 the screen was locked, the system throttled the window app (10.4 ms frames against 2.1 ms headless in the same process), and the 19.8 ms p99 measured there settles nothing; the check is left to the user.

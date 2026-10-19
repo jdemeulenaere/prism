@@ -400,6 +400,28 @@ Under `--check-allocations`, when `main` returns, compositions of the program th
 - **WHEN** `fun Greeting(k: Int, name: String) { startRestartGroup(k, 3); println("hello " + name); endRestartGroup(k) { c -> Greeting(c, name.clone()) } }` is declared, and `fun main() { val c = startComposition { k -> Greeting(k, "a" + "b") } }` runs with `--check-allocations` and `import /prism/composer`
 - **THEN** stdout is `hello ab`, stderr is the line `allocation check: compositions still live at exit: 1` followed by the line of live allocations, which counts the restart function's environment and its string, and the exit status is 102
 
+### Requirement: Live Runtime Objects Are Reported
+Under `--check-allocations`, when `main` returns with no live composition, the program thread's live groups, slots, state cells and nodes MUST be reported after the composition report and before the live allocations, one line per non-zero count in this order: `allocation check: groups still live at exit: <n>`, then `slots`, `state cells` and `nodes` in the same form. Any line MUST make the exit status 102. With a live composition, which holds them, or without the option, none MUST be reported.
+
+#### Scenario: A leaked group, cell and node are reported
+- **WHEN** a Rust test leaks one group, one state cell and one node through the runtime's test hooks, with no composition live, and runs the program's finish report
+- **THEN** the report is exactly the lines `allocation check: groups still live at exit: 1`, `allocation check: state cells still live at exit: 1` and `allocation check: nodes still live at exit: 1`
+
+#### Scenario: An app that ends cleanly reports nothing
+- **WHEN** `fun main() { runApp(width = 200, height = 100) { val c = remember { mutableStateOf(0) }; Text("n = ${c.value}") } }` runs with `import /prism/compose/ui` and `import /prism/compose/material3` under `prism run --check-allocations --headless`
+- **THEN** stderr is empty and the exit status is 0
+
+### Requirement: Frame Statistics Option
+The option `--frame-stats`, before the file, MUST make every `runApp` of the program measure its frames and print its report to stderr when it returns (`ui`, "Frame Statistics Report"), in headless runs, in windows and under `--watch`. It MUST NOT change the program's stdout or its exit status, and a program that never calls `runApp` MUST print nothing more.
+
+#### Scenario: Frame statistics without an app
+- **WHEN** `prism run --frame-stats main.prism` runs on `fun main() { println(1) }`
+- **THEN** stdout is `1` and a newline, stderr is empty, and the exit status is 0
+
+#### Scenario: Frame statistics of a headless app
+- **WHEN** `prism run --frame-stats --headless --events events main.prism` runs the counter screen of `ui`'s "Counter screen" in `runApp`, with the script `click "+"` and `frame`
+- **THEN** stdout is empty, stderr starts with a line `frame stats: frames 1, events 2, passes 2, reloads 0, ` and holds the lines of the report, and the exit status is 0
+
 ### Requirement: Running Out of Memory Is a Runtime Error
 An allocation the system cannot satisfy, or a string whose length would not fit in memory, MUST raise the runtime error "out of memory", which ends the program as any runtime error does but reports no location.
 
@@ -1037,3 +1059,8 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 Decisions from `desktop-window` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
 - **Screenshots of the final frame** (D15). `--screenshot <file.png>` sets `ui-toolkit`'s final-frame sink: when an app ends, after its last event and before its composition is dropped, the final display list is rasterized on the program thread by the window's rasterizer, at scale 1 headless and at the window's scale factor otherwise, and written as 8-bit RGBA; every `runApp` overwrites the file. A headless screenshot is laid out with the fixed-advance metric but drawn with Inter's glyphs, so its text is narrower than its boxes, which is acceptable for a debugging aid. The option needs the `window` feature, which holds the rasterizer, and is unknown without it. Fixtures do not compare screenshots; a CLI test checks one's size and exact pixels. Rejected: a script command (it would change `ui-toolkit`'s grammar and put files into fixtures), reading back the presented surface (not portable, and rasterizing the same list gives the same pixels), always scale 1 (blurry on the display people use).
+
+Decisions from `reactive-app-verification` (planned autonomously on 2026-10-18 and 2026-10-19, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`). The report `--frame-stats` prints is `ui`'s.
+
+- **Live runtime objects in the allocation check** (D6). Groups, slots and state cells live in `prism-compose`'s per-thread arenas and nodes in `prism-ui`'s, as Rust memory the allocation map never sees, so a release path that forgot an arena would pass the check. The finish report the program thread installs therefore runs, after the program's cells are released and the composition report, `live_objects_report` (groups and cells from their arenas, slots from the live groups and the release queue) and `live_nodes_report` (the current tree's nodes and those left in trees a later app replaced), one line per non-zero count. When a composition is live, what it holds is expected to be live, so only its line is printed. Counting costs nothing before exit: one read per arena then. No correct program prints these lines, so Rust tests leak through test hooks, and every UI fixture and session asserts their absence. Rejected: counting with a live composition (four more lines, no information), counting only nodes, routing arena records through the program allocator.
+- **`--frame-stats` and a counting allocator** (D7). The `prism` binary's `#[global_allocator]` is `prism_runtime::allocation_counter::CountingAllocator`, the system allocator plus, once `--frame-stats` enables it before the program thread starts, per-thread allocation and free counts in `const` thread-locals that never allocate (a reallocation counts one of each). Library tests and other embedders keep their allocator. Off, an allocation costs one relaxed atomic load: `run_timing.rs` stayed within its noise, and at review a build without it ran the 1,000-item todo app's 100 toggles in 240.1 ms against 240.7 ms with it (medians of 25). Under `--check-allocations` the map's own growth is counted too, so benchmarks run without that option. Rejected: counting program allocations through the allocation map only (needs the check, whose map dominates timings, and misses the runtime's allocations), `--timings` printing frames.
