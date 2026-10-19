@@ -343,7 +343,7 @@ impl TreeBuilder {
     /// Sets `node`'s chain, claiming its handlers.
     pub fn chain(&mut self, node: NodeId, elements: &[Element]) -> &mut Self {
         self.tree
-            .set_chain(node, elements, &mut self.handlers, &mut self.drops)
+            .set_chain_comparing(node, elements, &mut self.handlers, &mut self.drops)
             .unwrap();
         release_functions(&mut self.drops);
         self
@@ -387,8 +387,12 @@ impl TreeBuilder {
 
     /// Gives a text field its value-change handler.
     pub fn on_value_change(&mut self, node: NodeId, handler: HandlerId) -> &mut Self {
+        let equal = self
+            .tree
+            .value_change_pair(node, handler)
+            .is_some_and(|(named, current)| self.handlers.equal(named, current));
         self.tree
-            .set_on_value_change(node, handler, &mut self.handlers, &mut self.drops)
+            .set_on_value_change(node, handler, equal, &mut self.handlers, &mut self.drops)
             .unwrap();
         release_functions(&mut self.drops);
         self

@@ -57,6 +57,18 @@ pub fn environments_equal(a: &FunctionValue, b: &FunctionValue) -> bool {
     unsafe { a.equals(b) }
 }
 
+/// The code and environment word that identify a handler whose environment is that word and
+/// owns nothing: a keepable closure (it has an environment equality entry) with neither a drop
+/// nor a duplicate entry, which captures nothing or one `Copy` word. `None` for every other.
+pub fn intern_key(function: &FunctionValue) -> Option<(usize, usize)> {
+    // SAFETY: a handler's descriptor is static data of the program, live while it runs.
+    let descriptor = unsafe { &*function.descriptor };
+    let word_only = descriptor.equals_environment.is_some()
+        && descriptor.drop_environment.is_none()
+        && descriptor.duplicate_environment.is_none();
+    word_only.then_some((function.descriptor as usize, function.environment as usize))
+}
+
 /// The composition of the pass running on this thread, if one is.
 pub fn active_composition() -> Option<Handle> {
     prism_compose::active_composition()

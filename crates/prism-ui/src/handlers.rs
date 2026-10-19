@@ -11,7 +11,15 @@
 //!   once no state is borrowed (D2), since a drop entry is program code. Pending entries are
 //!   released at the end of each pass, and every entry when the app ends.
 //! - **Equality** of two ids: an id equals itself, and two live entries are equal when their
-//!   handlers have the same code and equal captures.
+//!   handlers have the same code and equal captures. The environment equality entry is program
+//!   code, so callers holding the thread's state copy the two function values out
+//!   ([`HandlerTable::comparable`]) and compare them after letting the state go (D2): an
+//!   equality entry comparing a captured `Modifier` calls `prism_ui_handlers_equal` again.
+//! - **Interning.** A handler whose environment is a single word that owns nothing (a keepable
+//!   closure capturing nothing or one `Copy` word, with no drop and no duplicate entry) is the
+//!   same value as any other handler with its code and word. Registering one while an equal
+//!   entry is live gives that entry's id instead of a new one, so equal handlers built on two
+//!   passes are one id, and every slot and node naming them names a live entry.
 //!
 //! Every handler has one owner at a time and is dropped exactly once, without counting. The
 //! table and its pending list are reused vectors, so a steady-state pass registering and
@@ -21,9 +29,10 @@ use crate::error::{UiResult, HANDLER_OF_ANOTHER_TYPE, SHARED_HANDLER, STALE_HAND
 use crate::handle::{Arena, HandlerId, NodeId};
 use crate::runtime;
 use prism_runtime::FunctionValue;
+use std::collections::HashMap;
 
 /// The type of a handler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HandlerKind {
     /// `() -> Unit`, of `clickable`.
     Click,
@@ -47,12 +56,44 @@ struct Entry {
     owner: Owner,
 }
 
+/// A bitwise copy of a live entry's kind and function value, to compare outside the thread's
+/// state; the table keeps owning the function value.
+#[derive(Debug)]
+pub struct Comparable {
+    kind: HandlerKind,
+    function: FunctionValue,
+}
+
+impl Comparable {
+    /// Whether two entries hold equal handlers: the same kind, code and captures. Runs the
+    /// environment equality entry, program code, so no thread state may be borrowed.
+    pub fn equal(a: Option<&Comparable>, b: Option<&Comparable>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                a.kind == b.kind && runtime::environments_equal(&a.function, &b.function)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether this entry's handler equals `function`, a handler of `kind`.
+    pub fn equals_function(&self, kind: HandlerKind, function: &FunctionValue) -> bool {
+        self.kind == kind && runtime::environments_equal(&self.function, function)
+    }
+}
+
+/// What an interned handler is known by: its kind, descriptor and environment word.
+type InternKey = (HandlerKind, usize, usize);
+
 /// The handlers of one thread's app.
 #[derive(Debug, Default)]
 pub struct HandlerTable {
     entries: Arena<Entry>,
     /// The entries registered since the last end of a pass, some of them claimed since.
     pending: Vec<HandlerId>,
+    /// The live entries of handlers whose environment is a word owning nothing, by kind, code
+    /// and word: the entry a registration of an equal handler gives instead of a new one.
+    interned: HashMap<InternKey, HandlerId>,
     /// Scratch for [`HandlerTable::release_all`].
     words: Vec<u64>,
 }
@@ -71,15 +112,43 @@ impl HandlerTable {
         self.entries.is_empty()
     }
 
-    /// Moves `function` into a new pending entry.
+    /// Moves `function` into a new pending entry, interned when its environment is a word that
+    /// owns nothing. Callers that may hold an equal interned entry ask
+    /// [`HandlerTable::interned`] first.
     pub fn register(&mut self, kind: HandlerKind, function: FunctionValue) -> HandlerId {
+        let key = runtime::intern_key(&function).map(|(code, word)| (kind, code, word));
         let id = HandlerId(self.entries.insert(Entry {
             function,
             kind,
             owner: Owner::Pending,
         }));
         self.pending.push(id);
+        if let Some(key) = key {
+            self.interned.entry(key).or_insert(id);
+        }
         id
+    }
+
+    /// The live interned entry with `function`'s kind, code and word, if any, with a copy of
+    /// its handler to compare with `function` outside the state: when they are equal, a
+    /// registration of `function` gives that entry instead (and drops `function`, which owns
+    /// nothing).
+    pub fn interned(
+        &self,
+        kind: HandlerKind,
+        function: &FunctionValue,
+    ) -> Option<(HandlerId, Comparable)> {
+        let (code, word) = runtime::intern_key(function)?;
+        let id = *self.interned.get(&(kind, code, word))?;
+        Some((id, self.comparable(id)?))
+    }
+
+    /// A copy of `id`'s kind and handler, when live, to compare outside the state.
+    pub fn comparable(&self, id: HandlerId) -> Option<Comparable> {
+        self.entries.get(id.0).map(|entry| Comparable {
+            kind: entry.kind,
+            function: runtime::borrowed(&entry.function),
+        })
     }
 
     /// Who holds `id`, or `None` when it was released.
@@ -131,6 +200,12 @@ impl HandlerTable {
     /// Releases `id`, if live, moving its function value to `drops`.
     pub fn release(&mut self, id: HandlerId, drops: &mut Vec<FunctionValue>) {
         if let Some(entry) = self.entries.remove(id.0) {
+            if let Some((code, word)) = runtime::intern_key(&entry.function) {
+                let key = (entry.kind, code, word);
+                if self.interned.get(&key) == Some(&id) {
+                    self.interned.remove(&key);
+                }
+            }
             drops.push(entry.function);
         }
     }
@@ -156,19 +231,14 @@ impl HandlerTable {
         words.clear();
         self.words = words;
         self.pending.clear();
+        self.interned.clear();
     }
 
-    /// Whether `a` and `b` hold equal handlers (`prism_ui_handlers_equal`).
+    /// Whether `a` and `b` hold equal handlers. It runs environment equality entries with the
+    /// table borrowed, so only callers that hold no thread state use it (Rust tests and their
+    /// hand-built handlers); `prism_ui_handlers_equal` compares [`Comparable`]s instead.
     pub fn equal(&self, a: HandlerId, b: HandlerId) -> bool {
-        if a == b {
-            return true;
-        }
-        match (self.entries.get(a.0), self.entries.get(b.0)) {
-            (Some(a), Some(b)) => {
-                a.kind == b.kind && runtime::environments_equal(&a.function, &b.function)
-            }
-            _ => false,
-        }
+        a == b || Comparable::equal(self.comparable(a).as_ref(), self.comparable(b).as_ref())
     }
 }
 

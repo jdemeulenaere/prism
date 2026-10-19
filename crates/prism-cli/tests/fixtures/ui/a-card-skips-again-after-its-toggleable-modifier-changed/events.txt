@@ -1,0 +1,4 @@
+click 5 25
+click 5 45
+click 5 45
+dump

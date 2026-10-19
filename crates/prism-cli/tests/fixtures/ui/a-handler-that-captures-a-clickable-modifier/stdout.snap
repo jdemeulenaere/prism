@@ -1,0 +1,6 @@
+1
+window 400x300
+  column #1 0,0 20x60
+    text #2 0,0 8x20 "1"
+    box #3 0,20 20x20 size(20x20) clickable
+    box #4 0,40 20x20 clickable size(20x20)

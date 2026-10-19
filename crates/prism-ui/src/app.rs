@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn equal_keepable_handlers_keep_the_first_entry() {
+    fn equal_one_word_handlers_are_one_entry() {
         let held = Rc::new(RefCell::new(Vec::new()));
         let record = held.clone();
         let (host, _) = scripted(Vec::new());
@@ -676,16 +676,12 @@ mod tests {
         app.settle().unwrap();
         invalidate_app();
         app.settle().unwrap();
-        assert_eq!(
-            with_state(|state| state.handlers.len()),
-            1,
-            "the new entry was released"
-        );
+        assert_eq!(with_state(|state| state.handlers.len()), 1);
         let first = held.borrow()[0].0;
         assert_eq!(
             *held.borrow(),
-            [(first, 1), (first, 2)],
-            "the node keeps its first entry"
+            [(first, 1), (first, 1)],
+            "the second registration gives the node's entry"
         );
         let (calls, _) = inline_calls();
         app.handle(HostEvent::Press(10, 10)).unwrap();

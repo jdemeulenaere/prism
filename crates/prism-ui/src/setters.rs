@@ -12,7 +12,7 @@ use crate::error::{
     UiError, UiResult, HANDLER_WITHOUT_APP, OUTSIDE_COMPOSITION, OUTSIDE_RUN_APP, STALE_NODE,
 };
 use crate::handle::{HandlerId, NodeId};
-use crate::handlers::{release_functions, HandlerKind};
+use crate::handlers::{release_functions, Comparable, HandlerKind};
 use crate::modifier::ModifierMirror;
 use crate::properties::{Alignment, Arrangement, Color, TextStyle};
 use crate::runtime;
@@ -98,9 +98,32 @@ pub fn set_enabled(node: NodeId, enabled: bool) -> UiResult<()> {
     })
 }
 
+/// Copies of the handlers of `pair`, to compare once the state is let go.
+fn comparables(
+    state: &State,
+    pair: Option<(HandlerId, HandlerId)>,
+) -> Option<(Option<Comparable>, Option<Comparable>)> {
+    let (a, b) = pair?;
+    Some((state.handlers.comparable(a), state.handlers.comparable(b)))
+}
+
+/// Whether the copied handlers are equal. Their environment equality entries are program
+/// code, which may compare handler ids again, so no state is borrowed here (D2); the entries
+/// stay live meanwhile, since comparing releases nothing.
+fn compare(copies: &Option<(Option<Comparable>, Option<Comparable>)>) -> bool {
+    copies
+        .as_ref()
+        .is_some_and(|(a, b)| Comparable::equal(a.as_ref(), b.as_ref()))
+}
+
 /// `prism_ui_set_modifier`: decodes the chain and sets it, claiming its handlers.
 pub fn set_modifier(node: NodeId, modifier: &ModifierMirror) -> UiResult<()> {
     let chain = modifier.decode();
+    let copies = with_node(node, |state| {
+        let pairs = state.tree.handler_pairs(node, chain.as_slice());
+        Ok(pairs.map(|pair| comparables(state, pair)))
+    })?;
+    let equal = copies.each_ref().map(compare);
     with_node(node, |state| {
         let State {
             tree,
@@ -108,13 +131,20 @@ pub fn set_modifier(node: NodeId, modifier: &ModifierMirror) -> UiResult<()> {
             drops,
             ..
         } = state;
-        tree.set_chain(node, chain.as_slice(), handlers, drops)
+        tree.set_chain(node, chain.as_slice(), &equal, handlers, drops)
             .map(|_| ())
     })
 }
 
 /// `prism_ui_set_on_value_change`: a text field's handler.
 pub fn set_on_value_change(node: NodeId, handler: HandlerId) -> UiResult<()> {
+    let copies = with_node(node, |state| {
+        Ok(comparables(
+            state,
+            state.tree.value_change_pair(node, handler),
+        ))
+    })?;
+    let equal = compare(&copies);
     with_node(node, |state| {
         let State {
             tree,
@@ -122,7 +152,7 @@ pub fn set_on_value_change(node: NodeId, handler: HandlerId) -> UiResult<()> {
             drops,
             ..
         } = state;
-        tree.set_on_value_change(node, handler, handlers, drops)
+        tree.set_on_value_change(node, handler, equal, handlers, drops)
             .map(|_| ())
     })
 }
@@ -130,20 +160,34 @@ pub fn set_on_value_change(node: NodeId, handler: HandlerId) -> UiResult<()> {
 /// `prism_ui_register_click`, `_toggle` and `_text`: moves `function` into a pending entry of
 /// the handler table. With no app on the thread, `function` is dropped and the result is
 /// `ui misuse: modifier handlers are made only while runApp runs`.
+///
+/// A handler whose environment is a word owning nothing gives the id of a live entry holding
+/// an equal handler, when there is one, and is dropped (which runs nothing): so the handler
+/// that `Modifier.clickable { count.value += 1 }` builds on every pass is one entry, and the
+/// chains naming it name a live entry wherever they are kept.
 pub fn register(kind: HandlerKind, function: FunctionValue) -> UiResult<HandlerId> {
-    let registered = with_state(|state| match state.app {
-        Some(_) => Ok(state.handlers.register(kind, function)),
-        None => Err(function),
-    });
-    registered.map_err(|function| {
+    let interned = with_state(|state| state.app.map(|_| state.handlers.interned(kind, &function)));
+    let Some(interned) = interned else {
         release_functions(&mut vec![function]);
-        HANDLER_WITHOUT_APP
-    })
+        return Err(HANDLER_WITHOUT_APP);
+    };
+    if let Some((id, existing)) = interned {
+        if existing.equals_function(kind, &function) {
+            // SAFETY: an interned handler's environment owns nothing: it has no drop entry.
+            unsafe { function.release() };
+            return Ok(id);
+        }
+    }
+    Ok(with_state(|state| state.handlers.register(kind, function)))
 }
 
-/// `prism_ui_handlers_equal`.
+/// `prism_ui_handlers_equal`, comparing copies of the two handlers once the state is let go.
 pub fn handlers_equal(a: HandlerId, b: HandlerId) -> bool {
-    with_state(|state| state.handlers.equal(a, b))
+    if a == b {
+        return true;
+    }
+    let copies = with_state(|state| comparables(state, Some((a, b))));
+    compare(&copies)
 }
 
 /// `prism_ui_modifier_overflow`: the misuse of a seventeenth element.

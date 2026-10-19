@@ -21,6 +21,12 @@ use crate::node::{ChainEntry, Node, NodeKind, OwnedText};
 use crate::properties::{Alignment, Arrangement, Color, TextStyle};
 use prism_runtime::FunctionValue;
 
+/// For each element of a chain, the handler it names and the other one its node holds there.
+pub type HandlerPairs = [Option<(HandlerId, HandlerId)>; CAPACITY];
+
+/// For each element of a chain, whether the two handlers of its pair are equal.
+pub type HandlerEqualities = [bool; CAPACITY];
+
 /// What a property update changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Update {
@@ -348,15 +354,41 @@ impl UiTree {
         Some(update)
     }
 
-    /// Sets a node's chain (D6, D23): claims the handler entries it names that the node does
-    /// not hold, keeps those it holds, and releases those it no longer names, moving their
-    /// function values to `drops`. A handler element naming an entry equal to the one the node
-    /// holds at that position keeps the held one, so its new entry stays pending and is
-    /// released at the end of the pass.
+    /// For each element of `new` naming a handler, the other entry the node holds at that
+    /// position in an element of the same variant: the pairs whose equality
+    /// [`UiTree::set_chain`] needs, which the caller compares outside the thread's state,
+    /// since an environment equality entry is program code (D2).
+    pub fn handler_pairs(&self, id: NodeId, new: &[Element]) -> HandlerPairs {
+        let mut pairs = [None; CAPACITY];
+        let Some(node) = self.node(id) else {
+            return pairs;
+        };
+        for (index, element) in new.iter().enumerate() {
+            let (Some(named), Some(old)) = (element.handler(), node.chain.get(index)) else {
+                continue;
+            };
+            if let Some(current) = old.element.handler() {
+                if current != named && old.element.same_variant(element) {
+                    pairs[index] = Some((named, current));
+                }
+            }
+        }
+        pairs
+    }
+
+    /// Sets a node's chain (D6, D23), given for each pair of [`UiTree::handler_pairs`]
+    /// whether its two handlers are equal. When the new chain equals the node's, element by
+    /// element with handlers compared by equality, the node keeps every entry it holds and the
+    /// entries the new chain names stay pending: the composable that passed the chain keeps its
+    /// old argument then, so the entries it names are the node's. Otherwise the node takes the
+    /// entries the new chain names, claiming those it does not hold, as that composable keeps
+    /// the new argument; and it releases those it no longer names, moving their function values
+    /// to `drops`.
     pub fn set_chain(
         &mut self,
         id: NodeId,
         new: &[Element],
+        equal: &HandlerEqualities,
         handlers: &mut HandlerTable,
         drops: &mut Vec<FunctionValue>,
     ) -> UiResult<Option<ChainChange>> {
@@ -365,6 +397,16 @@ impl UiTree {
         };
         let old_parent_data = (node.weight(), node.own_alignment());
         let old = &node.chain;
+        let chain_equal = new.len() == old.len()
+            && new.iter().zip(old).enumerate().all(|(index, (new, old))| {
+                let old = &old.element;
+                old.same_variant(new)
+                    && old.with_handler(HandlerId(0)) == new.with_handler(HandlerId(0))
+                    && match (new.handler(), old.handler()) {
+                        (Some(named), Some(current)) => named == current || equal[index],
+                        _ => true,
+                    }
+            });
         let mut reused = [false; CAPACITY];
         let mut held: [Option<HandlerId>; CAPACITY] = [None; CAPACITY];
         let mut change = ChainChange::default();
@@ -380,23 +422,24 @@ impl UiTree {
                 Element::Toggleable { .. } => HandlerKind::Toggle,
                 _ => HandlerKind::Click,
             };
-            // The entry held at this position, when it is the one named or an equal one.
-            if let Some(old_entry) = old.get(index) {
-                if let Some(current) = old_entry.element.handler() {
-                    if old_entry.element.same_variant(element)
-                        && !reused[index]
-                        && (current == named || handlers.equal(named, current))
-                    {
-                        reused[index] = true;
-                        held[index] = Some(current);
-                        continue;
-                    }
-                }
+            // An equal chain keeps the entry held at this position.
+            if chain_equal {
+                reused[index] = true;
+                held[index] = old[index].element.handler();
+                continue;
             }
-            // The entry held at another position.
-            if let Some(position) = old.iter().enumerate().position(|(position, entry)| {
-                !reused[position] && entry.element.handler() == Some(named)
-            }) {
+            // The entry named, held at this position or another one.
+            let same_position = old
+                .get(index)
+                .is_some_and(|entry| entry.element.handler() == Some(named));
+            let position = if same_position && !reused[index] {
+                Some(index)
+            } else {
+                old.iter().enumerate().position(|(position, entry)| {
+                    !reused[position] && entry.element.handler() == Some(named)
+                })
+            };
+            if let Some(position) = position {
                 reused[position] = true;
                 held[index] = Some(named);
                 continue;
@@ -449,12 +492,39 @@ impl UiTree {
         Ok(Some(change))
     }
 
+    /// [`UiTree::set_chain`], comparing handlers in the table: for callers that hold no
+    /// thread state, whose handlers are Rust's (tests and [`crate::test_support`]).
+    pub fn set_chain_comparing(
+        &mut self,
+        id: NodeId,
+        new: &[Element],
+        handlers: &mut HandlerTable,
+        drops: &mut Vec<FunctionValue>,
+    ) -> UiResult<Option<ChainChange>> {
+        let equal = self
+            .handler_pairs(id, new)
+            .map(|pair| pair.is_some_and(|(named, current)| handlers.equal(named, current)));
+        self.set_chain(id, new, &equal, handlers, drops)
+    }
+
+    /// The handler a text field holds, when it is not `named`: the pair whose equality
+    /// [`UiTree::set_on_value_change`] needs.
+    pub fn value_change_pair(
+        &self,
+        id: NodeId,
+        named: HandlerId,
+    ) -> Option<(HandlerId, HandlerId)> {
+        let current = self.node(id)?.value_change?;
+        (current != named).then_some((named, current))
+    }
+
     /// Gives a text field its value-change handler: keeps the one it holds when `named` is it
-    /// or equal to it, and otherwise claims `named` and releases the old one.
+    /// or, as `equal` says, equal to it, and otherwise claims `named` and releases the old one.
     pub fn set_on_value_change(
         &mut self,
         id: NodeId,
         named: HandlerId,
+        equal: bool,
         handlers: &mut HandlerTable,
         drops: &mut Vec<FunctionValue>,
     ) -> UiResult<Option<()>> {
@@ -462,7 +532,7 @@ impl UiTree {
             return Ok(None);
         };
         if let Some(current) = node.value_change {
-            if current == named || handlers.equal(named, current) {
+            if current == named || equal {
                 return Ok(Some(()));
             }
         }
@@ -589,7 +659,7 @@ mod tests {
                 enabled: true,
                 role: None,
             }];
-            tree.set_chain(node, &chain, &mut handlers, &mut out)
+            tree.set_chain_comparing(node, &chain, &mut handlers, &mut out)
                 .unwrap();
         }
         tree.set_text(first, "owned text");
@@ -665,21 +735,21 @@ mod tests {
         };
         let first = handlers.register(HandlerKind::Click, handler("first", || {}));
         let change = tree
-            .set_chain(node, &[clickable(first)], &mut handlers, &mut out)
+            .set_chain_comparing(node, &[clickable(first)], &mut handlers, &mut out)
             .unwrap()
             .unwrap();
         assert!(change.layout, "a new chain");
         handlers.release_unclaimed(&mut out);
         // The same entry again changes nothing.
         let change = tree
-            .set_chain(node, &[clickable(first)], &mut handlers, &mut out)
+            .set_chain_comparing(node, &[clickable(first)], &mut handlers, &mut out)
             .unwrap()
             .unwrap();
         assert!(!change.any());
         // A handler owning captures is never equal: the new one is claimed, the old released.
         let second = handlers.register(HandlerKind::Click, handler("second", || {}));
         let change = tree
-            .set_chain(node, &[clickable(second)], &mut handlers, &mut out)
+            .set_chain_comparing(node, &[clickable(second)], &mut handlers, &mut out)
             .unwrap()
             .unwrap();
         assert!(change.input && !change.layout);
@@ -687,13 +757,13 @@ mod tests {
         assert_eq!(drops(), ["drop first"]);
         // An equal keepable handler keeps the held entry; the new one stays pending.
         let kept = handlers.register(HandlerKind::Click, inline_handler(3));
-        tree.set_chain(node, &[clickable(kept)], &mut handlers, &mut out)
+        tree.set_chain_comparing(node, &[clickable(kept)], &mut handlers, &mut out)
             .unwrap();
         release_functions(&mut out);
         assert_eq!(drops(), ["drop first", "drop second"]);
         let equal = handlers.register(HandlerKind::Click, inline_handler(3));
         let change = tree
-            .set_chain(node, &[clickable(equal)], &mut handlers, &mut out)
+            .set_chain_comparing(node, &[clickable(equal)], &mut handlers, &mut out)
             .unwrap()
             .unwrap();
         assert!(!change.any());
@@ -705,12 +775,53 @@ mod tests {
         assert_eq!(handlers.len(), 1);
         // A stale entry is misuse.
         assert_eq!(
-            tree.set_chain(node, &[clickable(equal)], &mut handlers, &mut out),
+            tree.set_chain_comparing(node, &[clickable(equal)], &mut handlers, &mut out),
             Err(crate::error::STALE_HANDLER)
         );
         // Dropping the element releases its entry.
-        tree.set_chain(node, &[], &mut handlers, &mut out).unwrap();
+        tree.set_chain_comparing(node, &[], &mut handlers, &mut out)
+            .unwrap();
         assert!(handlers.is_empty());
+        release_functions(&mut out);
+    }
+
+    #[test]
+    fn a_changed_chain_takes_the_entries_it_names() {
+        let mut tree = UiTree::new(400, 300);
+        let mut handlers = HandlerTable::new();
+        let mut out = Vec::new();
+        let node = tree.create_kind(NodeKind::Box);
+        let clickable = |handler, enabled| Element::Clickable {
+            handler,
+            enabled,
+            role: None,
+        };
+        let first = handlers.register(HandlerKind::Click, inline_handler(3));
+        tree.set_chain_comparing(node, &[clickable(first, true)], &mut handlers, &mut out)
+            .unwrap();
+        // An equal handler in a changed chain: the node takes the new entry, which the
+        // composable passing the chain now keeps, and releases the old one.
+        let second = handlers.register(HandlerKind::Click, inline_handler(3));
+        tree.set_chain_comparing(node, &[clickable(second, false)], &mut handlers, &mut out)
+            .unwrap();
+        assert_eq!(
+            tree.node(node).unwrap().chain[0].element.handler(),
+            Some(second)
+        );
+        assert_eq!(handlers.owner(first), None);
+        // An equal handler in an equal chain: the node keeps its entry, as that composable
+        // keeps its old argument, and the new one stays pending.
+        let third = handlers.register(HandlerKind::Click, inline_handler(3));
+        tree.set_chain_comparing(node, &[clickable(third, false)], &mut handlers, &mut out)
+            .unwrap();
+        assert_eq!(
+            tree.node(node).unwrap().chain[0].element.handler(),
+            Some(second)
+        );
+        handlers.release_unclaimed(&mut out);
+        assert_eq!(handlers.len(), 1);
+        tree.set_chain_comparing(node, &[], &mut handlers, &mut out)
+            .unwrap();
         release_functions(&mut out);
     }
 
@@ -728,18 +839,18 @@ mod tests {
             role: None,
         };
         let copy = handlers.register(HandlerKind::Click, inline_handler(1));
-        tree.set_chain(a, &[clickable(copy)], &mut handlers, &mut out)
+        tree.set_chain_comparing(a, &[clickable(copy)], &mut handlers, &mut out)
             .unwrap();
-        tree.set_chain(b, &[clickable(copy)], &mut handlers, &mut out)
+        tree.set_chain_comparing(b, &[clickable(copy)], &mut handlers, &mut out)
             .unwrap();
         let held_by_b = tree.node(b).unwrap().chain[0].element.handler().unwrap();
         assert_ne!(held_by_b, copy);
         assert_eq!(handlers.len(), 2);
         let owning = handlers.register(HandlerKind::Click, handler("owning", || {}));
-        tree.set_chain(a, &[clickable(owning)], &mut handlers, &mut out)
+        tree.set_chain_comparing(a, &[clickable(owning)], &mut handlers, &mut out)
             .unwrap();
         assert_eq!(
-            tree.set_chain(b, &[clickable(owning)], &mut handlers, &mut out),
+            tree.set_chain_comparing(b, &[clickable(owning)], &mut handlers, &mut out),
             Err(crate::error::SHARED_HANDLER)
         );
         tree.release(a, &mut handlers, &mut out);
@@ -757,18 +868,18 @@ mod tests {
         let mut out = Vec::new();
         let field = tree.create_kind(NodeKind::TextField);
         let first = handlers.register(HandlerKind::Text, handler("first", || {}));
-        tree.set_on_value_change(field, first, &mut handlers, &mut out)
+        tree.set_on_value_change(field, first, false, &mut handlers, &mut out)
             .unwrap();
-        tree.set_on_value_change(field, first, &mut handlers, &mut out)
+        tree.set_on_value_change(field, first, false, &mut handlers, &mut out)
             .unwrap();
         let second = handlers.register(HandlerKind::Text, handler("second", || {}));
-        tree.set_on_value_change(field, second, &mut handlers, &mut out)
+        tree.set_on_value_change(field, second, false, &mut handlers, &mut out)
             .unwrap();
         release_functions(&mut out);
         assert_eq!(drops(), ["drop first"]);
         let click = handlers.register(HandlerKind::Click, inline_handler(0));
         assert_eq!(
-            tree.set_on_value_change(field, click, &mut handlers, &mut out),
+            tree.set_on_value_change(field, click, false, &mut handlers, &mut out),
             Err(crate::error::HANDLER_OF_ANOTHER_TYPE)
         );
         tree.release(field, &mut handlers, &mut out);
