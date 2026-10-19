@@ -1,0 +1,10 @@
+# entry: ../main.prism
+# example-apps: "Relabelling keeps the count". Three clicks, then a reload that relabels the
+# button: the count survives, and the next click counts on.
+click "Count: 0"
+click "Count: 1"
+click "Count: 2"
+edit ../main.prism relabelling-keeps-the-count.main.prism.v2
+dump
+click "Clicks: 3"
+dump

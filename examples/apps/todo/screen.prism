@@ -29,8 +29,10 @@ package compose fun TodoScreen(state: TodoState): Unit {
         }
         FilterRow(state.filter)
         for (todo in state.todos.value) {
-            if (state.filter.value.shows(todo)) {
-                key(todo.id) {
+            // The key is outermost in the loop's body, so an item's row keeps its groups and
+            // nodes when the items before it are removed or filtered out.
+            key(todo.id) {
+                if (state.filter.value.shows(todo)) {
                     TodoRow(todo, state)
                 }
             }

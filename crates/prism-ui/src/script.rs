@@ -4,7 +4,7 @@
 //! One command per line; blank lines are allowed and `#` starts a comment outside strings.
 //! Strings are double-quoted, with `\"`, `\\` and `\n` escapes. The commands:
 //!
-//! - `click "<text>" [<n>]` and `click <x> <y>`;
+//! - `click "<text>" [<n>]`, `click <kind> [<n>]` and `click <x> <y>`;
 //! - `press` and `release`, with the same targets;
 //! - `type "<text>"`;
 //! - `key backspace` and `key enter`;
@@ -15,8 +15,17 @@
 //!   `compose-hot-reload`). An `edit` makes the session read `<target>` as the content of
 //!   `<replacement>`, both relative to the script's directory; the replacement is read when the
 //!   script is parsed, and consecutive `edit` lines form one command, applied as one reload.
+//!
+//! A kind target (D5 of `reactive-app-verification`) names the n-th node, from 1 in tree order,
+//! of a kind the dump prints (`column`, `row`, `box`, `text`, `spacer`, `textfield`) or whose
+//! `clickable` or `toggleable` element has a role (`button`, `checkbox`), for nodes that show no
+//! text: `click checkbox 2`, `click textfield`. The three target forms do not overlap: a text
+//! target is quoted, a point is two integers and a kind is a word; another word is
+//! `unknown target '<word>'`.
 
 use crate::input::Key;
+use crate::node::NodeKind;
+use crate::properties::Role;
 use prism_runtime::reload::ScriptedEdit;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -30,11 +39,49 @@ pub enum DumpKind {
     Draw,
 }
 
+/// What a kind target names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    /// Nodes of a kind, as the dump names them.
+    Node(NodeKind),
+    /// Nodes whose `clickable` or `toggleable` element has a role.
+    Role(Role),
+}
+
+impl TargetKind {
+    /// The kind a target word names: a node kind but the window, or `button` or `checkbox`.
+    pub fn from_word(word: &str) -> Option<TargetKind> {
+        Some(match word {
+            "column" => TargetKind::Node(NodeKind::Column),
+            "row" => TargetKind::Node(NodeKind::Row),
+            "box" => TargetKind::Node(NodeKind::Box),
+            "text" => TargetKind::Node(NodeKind::Text),
+            "spacer" => TargetKind::Node(NodeKind::Spacer),
+            "textfield" => TargetKind::Node(NodeKind::TextField),
+            "button" => TargetKind::Role(Role::Button),
+            "checkbox" => TargetKind::Role(Role::Checkbox),
+            _ => return None,
+        })
+    }
+
+    /// The word of the kind in scripts and errors.
+    pub fn word(self) -> &'static str {
+        match self {
+            TargetKind::Node(kind) => kind.name(),
+            TargetKind::Role(Role::Button) => "button",
+            TargetKind::Role(Role::Checkbox) => "checkbox",
+            TargetKind::Role(_) => "role",
+        }
+    }
+}
+
 /// Where a pointer command acts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptTarget {
     /// The centre of the `occurrence`-th node, from 1 in tree order, showing exactly `text`.
     Text { text: String, occurrence: usize },
+    /// The centre of the `occurrence`-th node, from 1 in tree order, of `kind`.
+    Kind { kind: TargetKind, occurrence: usize },
     /// A point of the window.
     Point(i64, i64),
 }
@@ -182,6 +229,26 @@ fn command(tokens: &[Token], context: &ScriptContext) -> Result<ScriptCommand, S
                     text: text.clone(),
                     occurrence,
                 })
+            }
+            Some(Token::Word(word)) if number(&Token::Word(word.clone())).is_none() => {
+                let Some(kind) = TargetKind::from_word(word) else {
+                    return Err(format!("unknown target '{}'", word));
+                };
+                let occurrence = match arguments.get(1) {
+                    None => 1,
+                    Some(token) => match number(token) {
+                        Some(occurrence) if occurrence >= 1 => occurrence as usize,
+                        Some(_) => return Err("an occurrence counts from 1".to_string()),
+                        None => {
+                            return Err(format!(
+                                "expected an occurrence after the kind of '{}'",
+                                name
+                            ))
+                        }
+                    },
+                };
+                at_most(2)?;
+                Ok(ScriptTarget::Kind { kind, occurrence })
             }
             Some(first) => {
                 let (Some(x), Some(y)) = (number(first), arguments.get(1).and_then(number)) else {
@@ -379,6 +446,54 @@ mod tests {
         );
     }
 
+    /// D5 of `reactive-app-verification`: kind targets, with an occurrence or without.
+    #[test]
+    fn kind_targets() {
+        let kind = |word: &str, occurrence: usize| ScriptTarget::Kind {
+            kind: TargetKind::from_word(word).unwrap(),
+            occurrence,
+        };
+        assert_eq!(
+            parsed(
+                "click checkbox 2\nclick textfield\npress button 1\nrelease text 3\n\
+                 click column\nclick row\nclick box\nclick spacer\n"
+            ),
+            [
+                ScriptCommand::Click(kind("checkbox", 2)),
+                ScriptCommand::Click(kind("textfield", 1)),
+                ScriptCommand::Press(kind("button", 1)),
+                ScriptCommand::Release(kind("text", 3)),
+                ScriptCommand::Click(kind("column", 1)),
+                ScriptCommand::Click(kind("row", 1)),
+                ScriptCommand::Click(kind("box", 1)),
+                ScriptCommand::Click(kind("spacer", 1)),
+            ]
+        );
+        assert_eq!(error("click slider"), "1: unknown target 'slider'");
+        assert_eq!(error("click window"), "1: unknown target 'window'");
+        assert_eq!(error("click checkbox 0"), "1: an occurrence counts from 1");
+        assert_eq!(
+            error("click checkbox two"),
+            "1: expected an occurrence after the kind of 'click'"
+        );
+        assert_eq!(
+            error("click checkbox 1 2"),
+            "1: unexpected '2' after 'click'"
+        );
+        for word in [
+            "column",
+            "row",
+            "box",
+            "text",
+            "spacer",
+            "textfield",
+            "button",
+            "checkbox",
+        ] {
+            assert_eq!(TargetKind::from_word(word).unwrap().word(), word);
+        }
+    }
+
     #[test]
     fn comments_blank_lines_escapes_and_line_numbers() {
         let lines = parse_script(
@@ -408,7 +523,7 @@ mod tests {
             "1: expected a string or two numbers after 'click'"
         );
         assert_eq!(
-            error("press x y"),
+            error("press 1 y"),
             "1: expected a string or two numbers after 'press'"
         );
         assert_eq!(error("click \"+"), "1: unterminated string");

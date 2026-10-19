@@ -124,6 +124,21 @@
 //! script may hold only comments, so that the session watches no file and ends when the app's
 //! `main` returns.
 //!
+//! ## App sessions
+//!
+//! The example apps are not copied into fixtures: their sessions live beside them, in a
+//! `sessions` directory of `examples/` (D4 of `reactive-app-verification`). A session is an event
+//! script `<name>.events` whose leading comment lines name its entry, `# entry: <path>` relative
+//! to the script, and optionally its window, `# headless: <width>x<height>`. The test
+//! `example_app_sessions` spawns `prism run --check-allocations --headless[=<width>x<height>]
+//! --events <script> <entry>` with `examples/` as working directory, adding `--watch --edits
+//! <sessions>/scripted.edits` when the script has an `edit` line, and compares the status with 0
+//! and stdout and stderr with `<name>.stdout.snap` and `<name>.stderr.snap` beside the script, an
+//! absent file meaning empty output; `PRISM_BLESS=1` writes them. Every session's name must be
+//! the slug of an `example-apps` scenario, and every `example-apps` scenario whose WHEN names "the
+//! session `<name>`" must have one. An `edit` line's replacement is `<name>.<file>.v<k>` beside
+//! the script, its target the app's file, `../<file>`.
+//!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
 //! catalog in `openspec/specs/diagnostics/spec.md`: every expected code must be a live catalog
@@ -1273,4 +1288,183 @@ fn scalar_loop_fixtures_are_supported() {
         }
     }
     assert!(supported >= 11, "only {} loops cases supported", supported);
+}
+
+/// The `.events` files of every `sessions` directory under `dir`, in path order.
+fn session_scripts(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if !path.is_dir() {
+            continue;
+        }
+        if path.file_name().is_some_and(|name| name == "sessions") {
+            let mut scripts: Vec<_> = fs::read_dir(&path)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.extension().is_some_and(|e| e == "events"))
+                .collect();
+            scripts.sort();
+            out.extend(scripts);
+        } else {
+            session_scripts(&path, out);
+        }
+    }
+}
+
+/// `path` with its `.` and `..` components resolved lexically.
+fn normalized(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The value of a session script's leading `# <name>: <value>` header line.
+fn session_header(script: &str, name: &str) -> Option<String> {
+    let prefix = format!("# {}:", name);
+    script
+        .lines()
+        .take_while(|line| line.trim_start().starts_with('#') || line.trim().is_empty())
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix(&prefix)
+                .map(|v| v.trim().to_string())
+        })
+}
+
+/// example-apps: "Running every session" and "A session named after no scenario". Runs every
+/// session of the example apps headless under the allocation check, and under a watch session
+/// when it edits files, and compares its status and output with the snapshots beside it.
+#[test]
+fn example_app_sessions() {
+    let examples = normalized(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples"));
+    let mut scripts = Vec::new();
+    session_scripts(&examples, &mut scripts);
+    assert!(!scripts.is_empty(), "no sessions found under examples/");
+    let texts = spec_texts("example-apps");
+    assert!(!texts.is_empty(), "no example-apps spec");
+    let slugs: BTreeSet<String> = texts
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter_map(|l| l.strip_prefix("#### Scenario:"))
+        .map(|t| slug(t.trim()))
+        .collect();
+    // The sessions the scenarios name: "the session `<name>`" in a WHEN.
+    let named: BTreeSet<String> = texts
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter(|l| l.starts_with("- **WHEN**"))
+        .filter_map(|l| l.split("the session `").nth(1))
+        .filter_map(|rest| rest.split('`').next())
+        .map(str::to_string)
+        .collect();
+    let bless = std::env::var_os("PRISM_BLESS").is_some();
+    let mut problems = Vec::new();
+    let mut found = BTreeSet::new();
+    for script in &scripts {
+        let name = script.file_stem().unwrap().to_string_lossy().to_string();
+        let relative = script.strip_prefix(&examples).unwrap().to_path_buf();
+        found.insert(name.clone());
+        if !slugs.contains(&name) {
+            problems.push(format!(
+                "{}: the session `{}` is named after no example-apps scenario",
+                relative.display(),
+                name
+            ));
+            continue;
+        }
+        let text = fs::read_to_string(script).unwrap();
+        let Some(entry) = session_header(&text, "entry") else {
+            problems.push(format!("{}: no `# entry:` header", relative.display()));
+            continue;
+        };
+        let sessions = relative.parent().unwrap();
+        let entry = normalized(&sessions.join(entry));
+        let watching = text
+            .lines()
+            .any(|line| line.trim_start().starts_with("edit "));
+        let cache = std::env::temp_dir().join(format!(
+            "prism_session_cache_{}_{}",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::remove_dir_all(&cache);
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_prism"));
+        command.arg("run").arg("--check-allocations");
+        if watching {
+            command
+                .arg("--watch")
+                .arg("--edits")
+                .arg(sessions.join("scripted.edits"));
+        }
+        match session_header(&text, "headless") {
+            Some(size) => command.arg(format!("--headless={}", size)),
+            None => command.arg("--headless"),
+        };
+        let output = command
+            .arg("--events")
+            .arg(&relative)
+            .arg(&entry)
+            .current_dir(&examples)
+            .env("PRISM_CACHE", &cache)
+            .output()
+            .expect("prism runs");
+        let _ = fs::remove_dir_all(&cache);
+        if output.status.code() != Some(0) {
+            problems.push(format!(
+                "{}: exit status {:?}, expected 0\n--- stderr\n{}",
+                relative.display(),
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        for (suffix, actual) in [
+            ("stdout.snap", &output.stdout),
+            ("stderr.snap", &output.stderr),
+        ] {
+            let actual = String::from_utf8_lossy(actual).to_string();
+            let path = script.with_file_name(format!("{}.{}", name, suffix));
+            if bless {
+                if actual.is_empty() {
+                    let _ = fs::remove_file(&path);
+                } else {
+                    fs::write(&path, &actual).unwrap();
+                }
+                continue;
+            }
+            let expected = fs::read_to_string(&path).unwrap_or_default();
+            if expected != actual {
+                problems.push(format!(
+                    "{}: stale {} (re-bless with PRISM_BLESS=1):\n--- expected\n{}--- actual\n{}",
+                    relative.display(),
+                    suffix,
+                    expected,
+                    actual
+                ));
+            }
+        }
+    }
+    for missing in named.difference(&found) {
+        problems.push(format!(
+            "the example-apps scenarios name the session `{}`, which does not exist",
+            missing
+        ));
+    }
+    assert!(
+        problems.is_empty(),
+        "{} session problems:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
 }

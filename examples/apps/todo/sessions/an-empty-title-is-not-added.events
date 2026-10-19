@@ -1,0 +1,5 @@
+# entry: ../main.prism
+# headless: 480x640
+# example-apps: "An empty title is not added".
+click "Add"
+dump

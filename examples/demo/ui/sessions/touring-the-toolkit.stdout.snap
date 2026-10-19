@@ -1,0 +1,157 @@
+window 640x800
+  box #1 0,0 640x800 contentColor #FF000000 fillMaxSize background(#FFFFFFFF)
+    column #2 0,0 640x494 arrangement spacedBy(12) padding(16)
+      box #3 16,16 224x36 background(#FF6750A4) padding(12,4,12,4) defaultMinSize(200x28) clickable
+        text #4 28,20 104x20 "Prism UI tour" color #FFFFFFFF
+      row #5 16,64 264x40 arrangement spacedBy(8) alignment CenterVertically
+        box #6 16,64 168x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+          row #7 16,64 168x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+            text #8 40,74 120x20 "Clicked 0 times"
+        box #9 192,64 88x40 contentColor #611D1B20 background(#1F1D1B20 RoundedCorner(4)) clickable(Button disabled)
+          row #10 192,64 88x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+            text #11 216,74 40x20 "Reset"
+      column #12 16,116 608x118 arrangement spacedBy(4)
+        row #13 16,116 116x20 alignment CenterVertically
+          box #14 16,116 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))
+          spacer #15 36,126 8x0 width(8)
+          text #16 44,116 88x20 "Not checked"
+        row #17 16,140 608x36 alignment CenterVertically
+          textfield #18 16,140 558x36 weight(1.0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)
+          spacer #19 574,158 8x0 width(8)
+          text #20 582,149 42x17 "Hello " color #FF444444 fontSize 14
+        textfield #21 16,180 308x28 border(1 #FFCCCCCC) padding(4) fillMaxWidth(0.5)
+        text #22 16,212 81x22 "Toggle me" color #FF0000FF fontSize 18 toggleable(on)
+      column #23 16,246 608x124 arrangement spacedBy(2)
+        row #24 16,246 608x12 fillMaxWidth
+          box #25 16,246 12x12 size(12x12) background(#FFFF0000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #26 16,260 608x12 arrangement End fillMaxWidth
+          box #27 612,260 12x12 size(12x12) background(#FF00FF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #28 16,274 608x12 arrangement Center fillMaxWidth
+          box #29 314,274 12x12 size(12x12) background(#FF0000FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #30 16,288 608x12 arrangement SpaceBetween fillMaxWidth
+          box #31 16,288 12x12 size(12x12) background(#FFFFFF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #32 612,288 12x12 size(12x12) background(#FF00FFFF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #33 16,302 608x12 arrangement SpaceAround fillMaxWidth
+          box #34 162,302 12x12 size(12x12) background(#FFFF00FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #35 466,302 12x12 size(12x12) background(#FF000000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #36 16,316 608x12 arrangement SpaceEvenly fillMaxWidth
+          box #37 210,316 12x12 size(12x12) background(#FFFFFFFF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #38 416,316 12x12 size(12x12) background(#FF888888 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #39 16,330 24x40 height(40)
+          column #40 16,330 12x40 fillMaxHeight
+            box #41 16,330 12x12 size(12x12) background(#FFFF0000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          column #42 28,330 12x40 arrangement Bottom fillMaxHeight
+            box #43 28,358 12x12 size(12x12) background(#FF00FF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+      row #44 16,382 240x60 arrangement spacedBy(8)
+        box #45 16,382 60x60 alignment Center size(60x60) border(1 #FF888888)
+          box #46 40,406 12x12 size(12x12) background(#FFFF0000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #47 40,406 12x12 size(12x12) background(#00000000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        box #48 84,382 60x60 size(60x60) border(1 #FF888888)
+          box #49 84,382 12x12 align(TopStart)
+            box #50 84,382 12x12 size(12x12) background(#FFFF0000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #51 108,382 12x12 align(TopCenter)
+            box #52 108,382 12x12 size(12x12) background(#FF00FF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #53 132,382 12x12 align(TopEnd)
+            box #54 132,382 12x12 size(12x12) background(#FF0000FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #55 84,406 12x12 align(CenterStart)
+            box #56 84,406 12x12 size(12x12) background(#FFFFFF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #57 132,406 12x12 align(CenterEnd)
+            box #58 132,406 12x12 size(12x12) background(#FF00FFFF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #59 84,430 12x12 align(BottomStart)
+            box #60 84,430 12x12 size(12x12) background(#FFFF00FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #61 108,430 12x12 align(BottomCenter)
+            box #62 108,430 12x12 size(12x12) background(#FF000000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #63 132,430 12x12 align(BottomEnd)
+            box #64 132,430 12x12 size(12x12) background(#FF888888 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        column #65 152,382 60x36 alignment CenterHorizontally width(60) border(1 #FF888888)
+          box #66 176,382 12x12 size(12x12) background(#FFFF0000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #67 152,394 12x12 align(Start)
+            box #68 152,394 12x12 size(12x12) background(#FF00FF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #69 200,406 12x12 align(End)
+            box #70 200,406 12x12 size(12x12) background(#FF0000FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+        row #71 220,382 36x60 alignment Bottom height(60) border(1 #FF888888)
+          box #72 220,430 12x12 size(12x12) background(#FFFF0000 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #73 232,382 12x12 align(Top)
+            box #74 232,382 12x12 size(12x12) background(#FF00FF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+          box #75 244,406 12x12 align(CenterVertically)
+            box #76 244,406 12x12 size(12x12) background(#FF0000FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
+      row #77 16,454 608x24 fillMaxWidth height(24)
+        box #78 16,454 202x24 weight(1.0) fillMaxHeight background(#FFE8DEF8)
+        column #79 218,454 72x24 weight(2.0 nofill)
+          box #80 218,454 72x24 weight(1.0) background(#FFCCCCCC) padding(4,2,4,2)
+            text #81 222,456 64x20 "weighted"
+clear 640x800 #FFFFFFFF
+rect 0,0 640x800 #FFFFFFFF
+rect 16,16 224x36 #FF6750A4
+text 28,20 size 16 #FFFFFFFF "Prism UI tour"
+rect 16,64 168x40 #FF6750A4 radius 20
+text 40,74 size 16 #FFFFFFFF "Clicked 0 times"
+rect 192,64 88x40 #1F1D1B20 radius 4
+text 216,74 size 16 #611D1B20 "Reset"
+border 16,116 20x20 width 2 #FF49454F radius 2
+text 44,116 size 16 #FF000000 "Not checked"
+border 16,140 558x36 width 1 #FF79747E
+text 582,149 size 14 #FF444444 "Hello "
+border 16,180 308x28 width 1 #FFCCCCCC
+text 16,212 size 18 #FF0000FF "Toggle me"
+rect 16,246 12x12 #FFFF0000 radius 6
+border 16,246 12x12 width 1 #FF444444 radius 6
+rect 612,260 12x12 #FF00FF00 radius 6
+border 612,260 12x12 width 1 #FF444444 radius 6
+rect 314,274 12x12 #FF0000FF radius 6
+border 314,274 12x12 width 1 #FF444444 radius 6
+rect 16,288 12x12 #FFFFFF00 radius 6
+border 16,288 12x12 width 1 #FF444444 radius 6
+rect 612,288 12x12 #FF00FFFF radius 6
+border 612,288 12x12 width 1 #FF444444 radius 6
+rect 162,302 12x12 #FFFF00FF radius 6
+border 162,302 12x12 width 1 #FF444444 radius 6
+rect 466,302 12x12 #FF000000 radius 6
+border 466,302 12x12 width 1 #FF444444 radius 6
+rect 210,316 12x12 #FFFFFFFF radius 6
+border 210,316 12x12 width 1 #FF444444 radius 6
+rect 416,316 12x12 #FF888888 radius 6
+border 416,316 12x12 width 1 #FF444444 radius 6
+rect 16,330 12x12 #FFFF0000 radius 6
+border 16,330 12x12 width 1 #FF444444 radius 6
+rect 28,358 12x12 #FF00FF00 radius 6
+border 28,358 12x12 width 1 #FF444444 radius 6
+border 16,382 60x60 width 1 #FF888888
+rect 40,406 12x12 #FFFF0000 radius 6
+border 40,406 12x12 width 1 #FF444444 radius 6
+rect 40,406 12x12 #00000000 radius 6
+border 40,406 12x12 width 1 #FF444444 radius 6
+border 84,382 60x60 width 1 #FF888888
+rect 84,382 12x12 #FFFF0000 radius 6
+border 84,382 12x12 width 1 #FF444444 radius 6
+rect 108,382 12x12 #FF00FF00 radius 6
+border 108,382 12x12 width 1 #FF444444 radius 6
+rect 132,382 12x12 #FF0000FF radius 6
+border 132,382 12x12 width 1 #FF444444 radius 6
+rect 84,406 12x12 #FFFFFF00 radius 6
+border 84,406 12x12 width 1 #FF444444 radius 6
+rect 132,406 12x12 #FF00FFFF radius 6
+border 132,406 12x12 width 1 #FF444444 radius 6
+rect 84,430 12x12 #FFFF00FF radius 6
+border 84,430 12x12 width 1 #FF444444 radius 6
+rect 108,430 12x12 #FF000000 radius 6
+border 108,430 12x12 width 1 #FF444444 radius 6
+rect 132,430 12x12 #FF888888 radius 6
+border 132,430 12x12 width 1 #FF444444 radius 6
+border 152,382 60x36 width 1 #FF888888
+rect 176,382 12x12 #FFFF0000 radius 6
+border 176,382 12x12 width 1 #FF444444 radius 6
+rect 152,394 12x12 #FF00FF00 radius 6
+border 152,394 12x12 width 1 #FF444444 radius 6
+rect 200,406 12x12 #FF0000FF radius 6
+border 200,406 12x12 width 1 #FF444444 radius 6
+border 220,382 36x60 width 1 #FF888888
+rect 220,430 12x12 #FFFF0000 radius 6
+border 220,430 12x12 width 1 #FF444444 radius 6
+rect 232,382 12x12 #FF00FF00 radius 6
+border 232,382 12x12 width 1 #FF444444 radius 6
+rect 244,406 12x12 #FF0000FF radius 6
+border 244,406 12x12 width 1 #FF444444 radius 6
+rect 16,454 202x24 #FFE8DEF8
+rect 218,454 72x24 #FFCCCCCC
+text 222,456 size 16 #FF000000 "weighted"

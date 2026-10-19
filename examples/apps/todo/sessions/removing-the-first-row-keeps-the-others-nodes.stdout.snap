@@ -1,0 +1,73 @@
+window 480x640
+  column #1 0,0 480x292 arrangement spacedBy(8) padding(16)
+    row #2 16,16 448x40 alignment CenterVertically
+      textfield #3 16,18 368x36 weight(1.0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)
+      spacer #4 384,36 8x0 width(8)
+      box #5 392,16 72x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #6 392,16 72x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #7 416,26 24x20 "Add"
+    row #8 16,64 264x40 arrangement spacedBy(8)
+      box #9 16,64 72x40 contentColor #611D1B20 background(#1F1D1B20 RoundedCorner(50%)) clickable(Button disabled)
+        row #10 16,64 72x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #11 40,74 24x20 "All"
+      box #12 96,64 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #13 96,64 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #14 120,74 48x20 "Active"
+      box #15 200,64 80x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #16 200,64 80x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #17 224,74 32x20 "Done"
+    row #19 16,112 448x40 alignment CenterVertically
+      box #20 16,122 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))
+      spacer #21 36,132 8x0 width(8)
+      text #22 44,122 324x20 "Milk" weight(1.0)
+      box #23 368,112 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #24 368,112 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #25 392,122 48x20 "Remove"
+    row #26 16,160 448x40 alignment CenterVertically
+      box #27 16,170 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))
+      spacer #28 36,180 8x0 width(8)
+      text #29 44,170 324x20 "Eggs" weight(1.0)
+      box #30 368,160 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #31 368,160 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #32 392,170 48x20 "Remove"
+    row #33 16,208 448x40 alignment CenterVertically
+      box #34 16,218 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))
+      spacer #35 36,228 8x0 width(8)
+      text #36 44,218 324x20 "Bread" weight(1.0)
+      box #37 368,208 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #38 368,208 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #39 392,218 48x20 "Remove"
+    text #18 16,256 48x20 "3 left"
+window 480x640
+  column #1 0,0 480x244 arrangement spacedBy(8) padding(16)
+    row #2 16,16 448x40 alignment CenterVertically
+      textfield #3 16,18 368x36 weight(1.0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)
+      spacer #4 384,36 8x0 width(8)
+      box #5 392,16 72x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #6 392,16 72x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #7 416,26 24x20 "Add"
+    row #8 16,64 264x40 arrangement spacedBy(8)
+      box #9 16,64 72x40 contentColor #611D1B20 background(#1F1D1B20 RoundedCorner(50%)) clickable(Button disabled)
+        row #10 16,64 72x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #11 40,74 24x20 "All"
+      box #12 96,64 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #13 96,64 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #14 120,74 48x20 "Active"
+      box #15 200,64 80x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #16 200,64 80x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #17 224,74 32x20 "Done"
+    row #26 16,112 448x40 alignment CenterVertically
+      box #27 16,122 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))
+      spacer #28 36,132 8x0 width(8)
+      text #29 44,122 324x20 "Eggs" weight(1.0)
+      box #30 368,112 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #31 368,112 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #32 392,122 48x20 "Remove"
+    row #33 16,160 448x40 alignment CenterVertically
+      box #34 16,170 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))
+      spacer #35 36,180 8x0 width(8)
+      text #36 44,170 324x20 "Bread" weight(1.0)
+      box #37 368,160 96x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+        row #38 368,160 96x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+          text #39 392,170 48x20 "Remove"
+    text #18 16,208 48x20 "2 left"

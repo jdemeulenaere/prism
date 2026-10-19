@@ -1,0 +1,8 @@
+# entry: ../main.prism
+# example-apps: "Resetting the count". Reset is disabled at zero, so its first click changes
+# nothing; after two clicks it resets the count and is disabled again.
+click "Reset"
+click "Count: 0"
+click "Count: 1"
+click "Reset"
+dump

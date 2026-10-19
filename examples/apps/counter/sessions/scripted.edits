@@ -1,0 +1,2 @@
+# The event scripts' edit commands drive this directory's reloads, so the session watches no
+# file and ends when the app's main returns.

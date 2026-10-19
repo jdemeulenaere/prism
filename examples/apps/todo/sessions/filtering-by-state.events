@@ -1,0 +1,19 @@
+# entry: ../main.prism
+# headless: 480x640
+# example-apps: "Filtering by state". Eggs checked, then the three filters in turn.
+click textfield
+type "Milk"
+click "Add"
+click textfield
+type "Eggs"
+click "Add"
+click textfield
+type "Bread"
+click "Add"
+click checkbox 2
+click "Active"
+dump
+click "Done"
+dump
+click "All"
+dump

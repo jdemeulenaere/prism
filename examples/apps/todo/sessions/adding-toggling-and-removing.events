@@ -1,0 +1,16 @@
+# entry: ../main.prism
+# headless: 480x640
+# example-apps: "Adding, toggling and removing". Three items added from the field, the second
+# checked and the first removed.
+click textfield
+type "Milk"
+click "Add"
+click textfield
+type "Eggs"
+click "Add"
+click textfield
+type "Bread"
+click "Add"
+click checkbox 2
+click "Remove" 1
+dump

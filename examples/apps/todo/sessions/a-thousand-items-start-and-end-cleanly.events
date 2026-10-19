@@ -1,0 +1,6 @@
+# entry: ../large.prism
+# example-apps: "A thousand items start and end cleanly". The second item toggled twice.
+click checkbox 2
+frame
+click checkbox 2
+frame

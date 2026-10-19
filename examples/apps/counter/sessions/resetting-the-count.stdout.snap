@@ -1,0 +1,8 @@
+window 320x200
+  column #1 0,0 144x120 arrangement spacedBy(8) padding(16)
+    box #2 16,16 112x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #3 16,16 112x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #4 40,26 64x20 "Count: 0"
+    box #5 16,64 88x40 contentColor #611D1B20 background(#1F1D1B20 RoundedCorner(50%)) clickable(Button disabled)
+      row #6 16,64 88x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #7 40,74 40x20 "Reset"

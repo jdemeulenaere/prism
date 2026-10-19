@@ -1,0 +1,4 @@
+# entry: ../ui.prism
+# example-apps: "Touring the toolkit". The laid-out tree and the display list of the tour.
+dump
+dump draw

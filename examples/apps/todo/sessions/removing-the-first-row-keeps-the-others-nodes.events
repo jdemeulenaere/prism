@@ -1,0 +1,16 @@
+# entry: ../main.prism
+# headless: 480x640
+# example-apps: "Removing the first row keeps the others' nodes". The rows are keyed by their
+# items, so removing Milk keeps the nodes of Eggs and Bread.
+click textfield
+type "Milk"
+click "Add"
+click textfield
+type "Eggs"
+click "Add"
+click textfield
+type "Bread"
+click "Add"
+dump
+click "Remove" 1
+dump

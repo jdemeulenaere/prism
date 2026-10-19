@@ -1,0 +1,81 @@
+// The todo app's screen: a field and a button that add items, a row of filters, one row per
+// shown item, keyed by its identifier, and the number of items left.
+package apps.todo
+
+import model
+import /prism/compose/ui
+import /prism/compose/layout
+import /prism/compose/material3
+
+// The app over an empty list.
+package compose fun TodoApp(): Unit {
+    val state = remember { todoState(listOf()) }
+    TodoScreen(state)
+}
+
+// The whole screen of `state`.
+package compose fun TodoScreen(state: TodoState): Unit {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextField(
+                value = state.draft.value,
+                onValueChange = { state.draft.value = it },
+                modifier = Modifier.weight(1.0),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { state.add() }) {
+                Text("Add")
+            }
+        }
+        FilterRow(state.filter)
+        for (todo in state.todos.value) {
+            // The key is outermost in the loop's body, so an item's row keeps its groups and
+            // nodes when the items before it are removed or filtered out.
+            key(todo.id) {
+                if (state.filter.value.shows(todo)) {
+                    TodoRow(todo, state)
+                }
+            }
+        }
+        Text("${state.activeCount()} left")
+    }
+}
+
+// The three filters, the selected one disabled.
+package compose fun FilterRow(filter: MutableState<Filter>): Unit {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { filter.value = Filter.All }, enabled = filter.value != Filter.All) {
+            Text("All")
+        }
+        Button(
+            onClick = { filter.value = Filter.Active },
+            enabled = filter.value != Filter.Active,
+        ) {
+            Text("Active")
+        }
+        Button(onClick = { filter.value = Filter.Done }, enabled = filter.value != Filter.Done) {
+            Text("Done")
+        }
+    }
+}
+
+// One item: its title, grey once it is done, a checkbox showing whether it is done and a
+// button removing it.
+package compose fun TodoRow(todo: &Todo, state: TodoState): Unit {
+    val id = todo.id
+    Row(
+        modifier = Modifier.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            todo.title,
+            modifier = Modifier.weight(1.0),
+            color = if (todo.done) Color.Gray else Color.Unspecified,
+        )
+        Checkbox(checked = todo.done, onCheckedChange = { state.setDone(id, it) })
+        Spacer(Modifier.width(8.dp))
+        Button(onClick = { state.remove(id) }) {
+            Text("Remove")
+        }
+    }
+}

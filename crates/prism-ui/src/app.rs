@@ -27,7 +27,9 @@ use crate::draw::DisplayList;
 use crate::dump::{dump_display_list, dump_tree};
 use crate::error::{UiResult, APP_RUNNING, NO_WINDOW_SYSTEM};
 use crate::handlers::release_functions;
-use crate::headless::{missing_target, no_focus, resolve_text_target};
+use crate::headless::{
+    missing_kind, missing_target, no_focus, resolve_kind_target, resolve_text_target,
+};
 use crate::host::{
     call_final_frame_sink, configured_host, reload_timings, wait_for_reload, wake_for_reload,
     DumpKind, Host, HostEvent, Key,
@@ -352,6 +354,10 @@ impl App {
             ScriptTarget::Text { text, occurrence } => {
                 with_state(|state| resolve_text_target(&state.tree, text, *occurrence))
                     .ok_or_else(|| missing_target(line, text))
+            }
+            ScriptTarget::Kind { kind, occurrence } => {
+                with_state(|state| resolve_kind_target(&state.tree, *kind, *occurrence))
+                    .ok_or_else(|| missing_kind(line, *kind, *occurrence))
             }
         }
     }

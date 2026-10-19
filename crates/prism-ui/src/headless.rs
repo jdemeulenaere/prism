@@ -15,8 +15,9 @@ use crate::dump::write_quoted;
 use crate::error::UiError;
 use crate::host::{Host, HostEvent};
 use crate::layout::absolute_bounds;
-use crate::node::NodeKind;
-use crate::script::ScriptLine;
+use crate::modifier::Element;
+use crate::node::{Node, NodeKind};
+use crate::script::{ScriptLine, TargetKind};
 use crate::tree::UiTree;
 
 /// A host that runs an event script.
@@ -50,6 +51,36 @@ impl Host for HeadlessHost {
 /// The point a text target acts at: the centre, rounded down, of the `occurrence`-th node in
 /// tree order whose text or value is `text`.
 pub fn resolve_text_target(tree: &UiTree, text: &str, occurrence: usize) -> Option<(i64, i64)> {
+    resolve(tree, occurrence, |node| {
+        matches!(node.kind, NodeKind::Text | NodeKind::TextField) && node.text.as_str() == text
+    })
+}
+
+/// The point a kind target acts at: the centre, rounded down, of the `occurrence`-th node in
+/// tree order of `kind`, or whose `clickable` or `toggleable` element has its role.
+pub fn resolve_kind_target(
+    tree: &UiTree,
+    kind: TargetKind,
+    occurrence: usize,
+) -> Option<(i64, i64)> {
+    resolve(tree, occurrence, |node| match kind {
+        TargetKind::Node(node_kind) => node.kind == node_kind,
+        TargetKind::Role(role) => node.chain.iter().any(|entry| {
+            matches!(
+                entry.element,
+                Element::Clickable { role: Some(r), .. } | Element::Toggleable { role: Some(r), .. }
+                    if r == role
+            )
+        }),
+    })
+}
+
+/// The centre, rounded down, of the `occurrence`-th node in tree order that `matches`.
+fn resolve(
+    tree: &UiTree,
+    occurrence: usize,
+    matches: impl Fn(&Node) -> bool,
+) -> Option<(i64, i64)> {
     let mut seen = 0;
     let mut stack = Vec::new();
     let mut child = tree.node(tree.root())?.last_child;
@@ -59,7 +90,7 @@ pub fn resolve_text_target(tree: &UiTree, text: &str, occurrence: usize) -> Opti
     }
     while let Some(id) = stack.pop() {
         let node = tree.node(id).unwrap();
-        if matches!(node.kind, NodeKind::Text | NodeKind::TextField) && node.text.as_str() == text {
+        if matches(node) {
             seen += 1;
             if seen == occurrence {
                 return Some(absolute_bounds(tree, id).centre());
@@ -72,6 +103,14 @@ pub fn resolve_text_target(tree: &UiTree, text: &str, occurrence: usize) -> Opti
         }
     }
     None
+}
+
+/// `event script line <line>: the tree has no <kind> <occurrence>`.
+pub fn missing_kind(line: usize, kind: TargetKind, occurrence: usize) -> UiError {
+    UiError::Script {
+        line,
+        detail: format!("the tree has no {} {}", kind.word(), occurrence),
+    }
 }
 
 /// `event script line <line>: no node shows the text "<text>"`.
@@ -128,6 +167,11 @@ mod tests {
         // The odd box is at 0,60 9x9: its centre rounds down to 4,64.
         assert_eq!(resolve_text_target(&b.tree, "odd", 1), Some((4, 64)));
         assert_eq!(resolve_text_target(&b.tree, "Minus", 1), None);
+        let field = TargetKind::Node(NodeKind::TextField);
+        assert_eq!(resolve_kind_target(&b.tree, field, 1), Some((16, 50)));
+        assert_eq!(resolve_kind_target(&b.tree, field, 2), None);
+        let text = TargetKind::Node(NodeKind::Text);
+        assert_eq!(resolve_kind_target(&b.tree, text, 3), Some((4, 64)));
     }
 
     #[test]
@@ -135,6 +179,10 @@ mod tests {
         assert_eq!(
             missing_target(1, "Minus").message(),
             "event script line 1: no node shows the text \"Minus\""
+        );
+        assert_eq!(
+            missing_kind(1, TargetKind::from_word("checkbox").unwrap(), 1).message(),
+            "event script line 1: the tree has no checkbox 1"
         );
         assert_eq!(
             no_focus(3).message(),

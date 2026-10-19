@@ -1,0 +1,16 @@
+window 320x200
+  column #1 0,0 152x120 arrangement spacedBy(8) padding(16)
+    box #2 16,16 120x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #3 16,16 120x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #4 40,26 72x20 "Clicks: 3"
+    box #5 16,64 88x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #6 16,64 88x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #7 40,74 40x20 "Reset"
+window 320x200
+  column #1 0,0 152x120 arrangement spacedBy(8) padding(16)
+    box #2 16,16 120x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #3 16,16 120x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #4 40,26 72x20 "Clicks: 4"
+    box #5 16,64 88x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #6 16,64 88x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #7 40,74 40x20 "Reset"

@@ -1,0 +1,6 @@
+# entry: ../main.prism
+# example-apps: "Counting to three". Three clicks count to three, and Reset is enabled.
+click "Count: 0"
+click "Count: 1"
+click "Count: 2"
+dump
