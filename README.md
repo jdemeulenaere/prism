@@ -71,6 +71,13 @@ Milestones 1 and 2 are complete (2026-10-19). The bootstrap compiler, written in
 
 ### Running the examples
 
+The example apps' sources:
+
+- [`examples/apps/counter/main.prism`](examples/apps/counter/main.prism): a button counting its clicks and a reset button, in one file.
+- [`examples/apps/todo/`](examples/apps/todo): a todo list split as an app would be: its items, filters and state holder in [`model.prism`](examples/apps/todo/model.prism), its screen (adding, checking, filtering and removing items) in [`screen.prism`](examples/apps/todo/screen.prism), and its entry points [`main.prism`](examples/apps/todo/main.prism) and [`large.prism`](examples/apps/todo/large.prism) (1,000 items).
+- [`examples/demo/ui/ui.prism`](examples/demo/ui/ui.prism): a tour of the toolkit's components and modifiers.
+- [`examples/run/main.prism`](examples/run/main.prism): a plain program without UI, using the language's features.
+
 From the repository root, build the `prism` binary once (Rust stable; macOS for windows):
 
 ```bash
