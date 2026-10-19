@@ -69,6 +69,10 @@ For a non-`Copy` `T`, `s.value` MUST be a place that a composable context can bo
 - **WHEN** `compose fun C(s: State<String>) { val t = s.value }` is checked
 - **THEN** the type checker emits `E4017`, saying that the value of a state cannot be moved out, with help suggesting a borrow or `.clone()`
 
+#### Scenario: Taking a state's value apart rejected
+- **WHEN** `struct U { val name: String, val n: Int }` and `compose fun C(u: State<U>) { val (name, n) = u.value }` are checked
+- **THEN** the type checker emits `E4017`, saying that the value of the state `u` cannot be taken apart, with help destructuring its borrow `&u.value`
+
 ### Requirement: State Places Outside Composable Contexts
 Outside composable contexts, a non-`Copy` `s.value` MUST only be assigned, and no `s.value` MUST be borrowed mutably, used as a `mut fun` receiver or written in part. Any such use MUST be rejected with `E4033` (`StateValueOutsideComposable`), whose help names `read` for a shared use, `edit` for a mutable one and `update` for a compound assignment.
 

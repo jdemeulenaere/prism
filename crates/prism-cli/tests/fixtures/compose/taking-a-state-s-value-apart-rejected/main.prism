@@ -1,0 +1,9 @@
+// expect: E4017
+// run: 1
+struct U { val name: String, val n: Int }
+
+compose fun C(u: State<U>) {
+    val (name, n) = u.value
+}
+
+fun main() { }

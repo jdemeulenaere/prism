@@ -942,6 +942,20 @@ impl TypeChecker {
         if let Some(field) = self.implicit_this_field(expr) {
             return self.check_take_apart_source(&field, what);
         }
+        // The value of a state is a place of its cell, never moved out (D5 of `state-handles`);
+        // outside composable contexts its read is `E4033` already.
+        match (&expr.kind, self.builder.state_value_spans.get(&expr.span)) {
+            (_, Some(false)) => return,
+            (ExprKind::MemberAccess { target, .. }, Some(true)) => {
+                self.errors.push(TypeError::CannotTakeApart {
+                    source: format!("the value of the state '{}'", target),
+                    help: format!("{} its borrow instead: '&{}'", what, expr),
+                    span: expr.span,
+                });
+                return;
+            }
+            _ => {}
+        }
         if let Some((source, borrowed)) = self.move_source(expr) {
             let help = if let Some(root) = Self::safe_navigation_root(expr) {
                 // `&u?.name` would move out of the field: the borrow to match is the nullable's.
