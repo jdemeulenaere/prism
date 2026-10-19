@@ -13,6 +13,8 @@ prism-runtime = { path = "../prism-runtime" }
 # The compose runtime's entry points, which externals name and the JIT resolves (D2 of
 # `compose-runtime`).
 prism-compose = { path = "../prism-compose" }
+# The UI toolkit's entry points, which the toolkit modules' externals name (D2 of `ui-toolkit`).
+prism-ui = { path = "../prism-ui" }
 # Type fingerprints and slot contracts hash with the ABI's deterministic hasher (D6 of
 # `hot-reload`).
 prism-abi = { path = "../prism-abi" }

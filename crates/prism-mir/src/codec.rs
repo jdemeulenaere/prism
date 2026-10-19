@@ -759,6 +759,11 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::StateUpdate => 32,
             BuiltinFunction::StateEdit => 33,
             BuiltinFunction::SideEffect => 34,
+            BuiltinFunction::UiNode => 35,
+            BuiltinFunction::UiLeafNode => 36,
+            BuiltinFunction::RunApp => 37,
+            BuiltinFunction::DpOfInt => 38,
+            BuiltinFunction::TextUnitOfInt => 39,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -798,6 +803,11 @@ impl Codec for BuiltinFunction {
             32 => BuiltinFunction::StateUpdate,
             33 => BuiltinFunction::StateEdit,
             34 => BuiltinFunction::SideEffect,
+            35 => BuiltinFunction::UiNode,
+            36 => BuiltinFunction::UiLeafNode,
+            37 => BuiltinFunction::RunApp,
+            38 => BuiltinFunction::DpOfInt,
+            39 => BuiltinFunction::TextUnitOfInt,
             _ => return None,
         })
     }

@@ -1436,6 +1436,7 @@ dependencies = [
  "prism-runtime",
  "prism-typechecker",
  "prism-typed-tree",
+ "prism-ui",
 ]
 
 [[package]]

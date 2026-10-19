@@ -696,6 +696,18 @@ pub enum BuiltinFunction {
     StateEdit,
     /// `SideEffect(effect)`, a composable: queues `effect` to run after the pass (D13).
     SideEffect,
+    /// `Node(kind, update, content)` of `/prism/compose/ui`, a composable: a node group of
+    /// `kind` whose node `update` receives, holding `content` (D3 of `ui-toolkit`).
+    UiNode,
+    /// `LeafNode(kind, update)`: a node group without content.
+    UiLeafNode,
+    /// `runApp(title, width, height, content)` of `/prism/compose/ui`: runs an app of the
+    /// composable `content` until its window closes (D15 of `ui-toolkit`).
+    RunApp,
+    /// `n.dp` of an `Int`: the construction `Dp(n)` (D7 of `ui-toolkit`).
+    DpOfInt,
+    /// `n.sp` of an `Int`: the construction `TextUnit(n)`.
+    TextUnitOfInt,
 }
 
 /// The declared signature of a built-in list member (D5 of `collections`), written with the
@@ -748,6 +760,11 @@ impl BuiltinFunction {
             BuiltinFunction::StateUpdate => "update",
             BuiltinFunction::StateEdit => "edit",
             BuiltinFunction::SideEffect => "SideEffect",
+            BuiltinFunction::UiNode => "Node",
+            BuiltinFunction::UiLeafNode => "LeafNode",
+            BuiltinFunction::RunApp => "runApp",
+            BuiltinFunction::DpOfInt => "dp",
+            BuiltinFunction::TextUnitOfInt => "sp",
         }
     }
 
@@ -881,6 +898,9 @@ impl BuiltinFunction {
                 | BuiltinFunction::CurrentRecomposeScope
                 | BuiltinFunction::MutableStateOf
                 | BuiltinFunction::SideEffect
+                | BuiltinFunction::UiNode
+                | BuiltinFunction::UiLeafNode
+                | BuiltinFunction::RunApp
         )
     }
 
@@ -898,6 +918,9 @@ impl BuiltinFunction {
                 | BuiltinFunction::CurrentRecomposeScope
                 | BuiltinFunction::InvalidateScope
                 | BuiltinFunction::SideEffect
+                | BuiltinFunction::UiNode
+                | BuiltinFunction::UiLeafNode
+                | BuiltinFunction::RunApp
         )
     }
 

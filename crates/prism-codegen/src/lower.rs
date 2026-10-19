@@ -1961,16 +1961,12 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             Operation::CurrentScope => {
                 let composer = word(self, 0)?;
                 let scope = self.call_runtime("prism_compose_current_scope", &[composer])?[0];
-                let destination = self.address(destination)?;
-                self.builder.ins().store(aligned(), scope, destination, 0);
+                self.write_place(destination, Lowered::Scalar(scope), false)?;
             }
             Operation::StartComposition => {
                 let content = self.slot_value(&arguments[0], &parameters[0], span)?;
                 let composition = self.call_runtime("prism_compose_start", &[content])?[0];
-                let destination = self.address(destination)?;
-                self.builder
-                    .ins()
-                    .store(aligned(), composition, destination, 0);
+                self.write_place(destination, Lowered::Scalar(composition), false)?;
             }
             Operation::SetContent => {
                 let composition = handle(self, 0)?;
@@ -2056,8 +2052,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let value = self.slot_value(&arguments[0], &value_type, span)?;
                 let created = self.call_runtime("prism_compose_state_create", &[record, value])?[0];
                 fail_on_zero(self, created)?;
-                let destination = self.address(destination)?;
-                self.builder.ins().store(aligned(), created, destination, 0);
+                self.write_place(destination, Lowered::Scalar(created), false)?;
             }
             Operation::Read | Operation::BeginRead | Operation::BeginEdit => {
                 let handle = handle(self)?;

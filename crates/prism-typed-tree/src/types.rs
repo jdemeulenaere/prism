@@ -41,6 +41,9 @@ impl NominalId {
 /// The module of the compose prelude, `/prism/compose/runtime` (D15 of `compose-transform`).
 pub const COMPOSE_RUNTIME_MODULE: &str = "prism/compose/runtime";
 
+/// The UI toolkit's base module, `/prism/compose/ui` (D21 of `ui-toolkit`).
+pub const COMPOSE_UI_MODULE: &str = "prism/compose/ui";
+
 /// A struct whose representation, glue and operations the compiler provides, declared in the
 /// bundled library as an `intrinsic struct` without fields (D16 of `compose-transform`). No
 /// program constructs one, reads a field of one or takes one apart: its intrinsic functions
@@ -56,25 +59,33 @@ pub enum IntrinsicStruct {
     /// `MutableState<T>`, a `Copy` handle of a state cell that may be written; it converts
     /// to `State<T>`.
     MutableState,
+    /// `NodeId`, a `Copy` handle of a node of the UI tree, `package` to the toolkit (D3 of
+    /// `ui-toolkit`).
+    NodeId,
+    /// `HandlerId`, a `Copy` handle of an entry of the UI handler table, compared by the
+    /// runtime entry `prism_ui_handlers_equal` (D23 of `ui-toolkit`).
+    HandlerId,
 }
 
 impl IntrinsicStruct {
     /// Every intrinsic struct, in the order of the library's declarations.
-    pub const ALL: [IntrinsicStruct; 4] = [
+    pub const ALL: [IntrinsicStruct; 6] = [
         IntrinsicStruct::Composition,
         IntrinsicStruct::RecomposeScope,
         IntrinsicStruct::State,
         IntrinsicStruct::MutableState,
+        IntrinsicStruct::NodeId,
+        IntrinsicStruct::HandlerId,
     ];
 
     /// The intrinsic struct `id` names, if any: by its defining module and name.
     pub fn of(id: &NominalId) -> Option<Self> {
-        if id.module != COMPOSE_RUNTIME_MODULE {
+        if id.module != COMPOSE_RUNTIME_MODULE && id.module != COMPOSE_UI_MODULE {
             return None;
         }
         Self::ALL
             .into_iter()
-            .find(|intrinsic| intrinsic.name() == id.name)
+            .find(|intrinsic| intrinsic.module() == id.module && intrinsic.name() == id.name)
     }
 
     /// Its name in the library.
@@ -84,13 +95,18 @@ impl IntrinsicStruct {
             IntrinsicStruct::RecomposeScope => "RecomposeScope",
             IntrinsicStruct::State => "State",
             IntrinsicStruct::MutableState => "MutableState",
+            IntrinsicStruct::NodeId => "NodeId",
+            IntrinsicStruct::HandlerId => "HandlerId",
         }
     }
 
     /// The names of its type parameters: `T`, the value type, for the state handles.
     pub fn type_parameters(self) -> &'static [&'static str] {
         match self {
-            IntrinsicStruct::Composition | IntrinsicStruct::RecomposeScope => &[],
+            IntrinsicStruct::Composition
+            | IntrinsicStruct::RecomposeScope
+            | IntrinsicStruct::NodeId
+            | IntrinsicStruct::HandlerId => &[],
             IntrinsicStruct::State | IntrinsicStruct::MutableState => &["T"],
         }
     }
@@ -102,7 +118,28 @@ impl IntrinsicStruct {
 
     /// The library module declaring it.
     pub fn module(self) -> &'static str {
-        COMPOSE_RUNTIME_MODULE
+        match self {
+            IntrinsicStruct::NodeId | IntrinsicStruct::HandlerId => COMPOSE_UI_MODULE,
+            _ => COMPOSE_RUNTIME_MODULE,
+        }
+    }
+
+    /// The visibility its declaration must write: `package` for `NodeId`, which no public
+    /// API hands out yet (D3 of `ui-toolkit`), `public` for the others.
+    pub fn visibility(self) -> &'static str {
+        match self {
+            IntrinsicStruct::NodeId => "package",
+            _ => "public",
+        }
+    }
+
+    /// The runtime entry that compares two of its values, `(word, word) -> Bool`, when `==`
+    /// is not the comparison of their words (D23 of `ui-toolkit`).
+    pub fn equality_entry(self) -> Option<&'static str> {
+        match self {
+            IntrinsicStruct::HandlerId => Some("prism_ui_handlers_equal"),
+            _ => None,
+        }
     }
 
     /// Its identity.
@@ -118,7 +155,9 @@ impl IntrinsicStruct {
             // is `Copy` whatever its value type (D3 of `state-handles`).
             IntrinsicStruct::RecomposeScope
             | IntrinsicStruct::State
-            | IntrinsicStruct::MutableState => Some(TypeMarker::Copy),
+            | IntrinsicStruct::MutableState
+            | IntrinsicStruct::NodeId
+            | IntrinsicStruct::HandlerId => Some(TypeMarker::Copy),
         }
     }
 
@@ -132,12 +171,18 @@ impl IntrinsicStruct {
         };
         match self.marker() {
             Some(marker) => format!(
-                "public intrinsic struct {}{} : {}",
+                "{} intrinsic struct {}{} : {}",
+                self.visibility(),
                 self.name(),
                 parameters,
                 marker.as_str()
             ),
-            None => format!("public intrinsic struct {}{}", self.name(), parameters),
+            None => format!(
+                "{} intrinsic struct {}{}",
+                self.visibility(),
+                self.name(),
+                parameters
+            ),
         }
     }
 }

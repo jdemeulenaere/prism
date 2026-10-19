@@ -111,6 +111,7 @@ pub(crate) fn needs_equality_glue(contents: &Type) -> bool {
 /// nullable in memory, whose values are passed by address.
 fn is_aggregate(ty: &Type) -> bool {
     match ty {
+        Type::Struct { id, .. } if id.intrinsic().is_some() => false,
         Type::Struct { .. } | Type::Enum { .. } => true,
         Type::Nullable(inner) => !is_pointer(inner),
         _ => false,
@@ -225,6 +226,9 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
             Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
                 self.calls(inner)
             }
+            Type::Struct { id, .. } if id.intrinsic().is_some() => Ok(id
+                .intrinsic()
+                .is_some_and(|intrinsic| intrinsic.equality_entry().is_some())),
             Type::Struct { .. } | Type::Enum { .. } => {
                 let layout = self.layout(ty)?;
                 let parts: Vec<&Member> = match &layout.shape {
@@ -412,6 +416,7 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
                 self.add_weight(inner, limit, weight)
             }
             Type::Nullable(inner) => Ok(count(weight, 1) && self.add_weight(inner, limit, weight)?),
+            Type::Struct { id, .. } if id.intrinsic().is_some() => Ok(count(weight, 1)),
             Type::Struct { .. } | Type::Enum { .. } => {
                 let layout = self.layout(ty)?;
                 let parts: Box<dyn Iterator<Item = &Member>> = match &layout.shape {
@@ -597,6 +602,23 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
                     let right = comparison.member(right, &payload)?;
                     comparison.part(inner, left, right)
                 })?;
+            }
+            // A one-word intrinsic struct compares its handle words, or calls its catalog
+            // equality entry with them (D23 of `ui-toolkit`: handler ids compare by the
+            // handlers they name).
+            Type::Struct { id, .. } if id.intrinsic().is_some() => {
+                let intrinsic = id.intrinsic().expect("an intrinsic struct");
+                let (left, right) = (left.scalar()?, right.scalar()?);
+                match intrinsic.equality_entry() {
+                    Some(entry) => {
+                        let id = self.context.runtime_function(entry)?;
+                        self.call(id, &[left, right])?;
+                    }
+                    None => {
+                        let equal = self.builder.ins().icmp(IntCC::Equal, left, right);
+                        self.join(equal);
+                    }
+                }
             }
             Type::Struct { .. } => {
                 let layout = self.layout(ty)?;

@@ -3,7 +3,8 @@
 //!
 //! An `Int` is an `i64`, a `Double` an `f64`, a `Bool` an `i8` holding 0 or 1, a `Char` an
 //! `i32` holding a Unicode scalar value, and a reference, a `Heap<T>` and a nullable of either a
-//! pointer (0 for `null`). A `String`, a struct, an enum, a function value (a descriptor address
+//! pointer (0 for `null`). A one-word intrinsic struct (a `Composition`, a state handle, a
+//! `NodeId`) is an `i64` holding its handle. A `String`, a struct, an enum, a function value (a descriptor address
 //! and an environment address, D2 of `closures`) and any other nullable live in memory, laid out
 //! as [`crate::layout`] says. `Unit` and `Nothing` have no representation: they are left out of
 //! signatures. A value in memory is passed as its address, and returned through an address the
@@ -34,6 +35,11 @@ pub enum Representation {
 pub fn representation(ty: &Type, pointer: MachineType) -> Option<Representation> {
     match ty {
         Type::Unit | Type::Nothing => Some(Representation::Empty),
+        // A one-word intrinsic struct is its handle word (D16 of `compose-transform`, the
+        // `code-generation` delta of `ui-toolkit`).
+        Type::Struct { id, .. } if id.intrinsic().is_some() => {
+            Some(Representation::Scalar(types::I64))
+        }
         Type::String
         | Type::List(_)
         | Type::Struct { .. }
@@ -60,6 +66,7 @@ pub fn machine_type(ty: &Type, pointer: MachineType) -> Option<MachineType> {
         Type::Char => Some(types::I32),
         Type::Reference { .. } | Type::Heap(_) => Some(pointer),
         Type::Nullable(inner) if is_pointer(inner) => Some(pointer),
+        Type::Struct { id, .. } if id.intrinsic().is_some() => Some(types::I64),
         _ => None,
     }
 }

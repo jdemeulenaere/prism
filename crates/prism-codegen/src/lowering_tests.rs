@@ -1153,3 +1153,86 @@ fn state_operations_run() {
     prism_compose::finish_report();
     assert_eq!(prism_compose::States::live_cells(), 0);
 }
+
+/// ui (code-generation delta): "A UI entry point declared with the wrong signature".
+#[test]
+fn a_ui_entry_point_declared_with_the_wrong_signature() {
+    let source = "package prism\n\
+        public fun f(): Unit = prism_ui_set_enabled(1, 1.0)\n\
+        private external fun prism_ui_set_enabled(node: Int, enabled: Double): Unit\n";
+    let file = lower_files(&[("prism/test", source)]).remove(0);
+    let errors = check_file(&file).expect_err("the signature differs");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E6005");
+    let notes = errors[0].notes.join("\n");
+    assert!(
+        notes.contains("'prism_ui_set_enabled' is (i64, i8)") && notes.contains("(i64, f64)"),
+        "{}",
+        notes
+    );
+}
+
+/// The intrinsic structs of `/prism/compose/ui` and an external over each, for the tests of
+/// one-word intrinsic structs.
+const UI_HANDLES: &str = "package prism.compose\n\
+    package intrinsic struct NodeId : Copy\n\
+    public intrinsic struct HandlerId : Copy\n";
+
+/// The machine IR of function `symbol` in the dump `dump`.
+fn function_ir<'d>(dump: &'d str, symbol: &str) -> &'d str {
+    let start = dump
+        .find(&format!("function {}\n", symbol))
+        .unwrap_or_else(|| panic!("no function {} in:\n{}", symbol, dump));
+    let rest = &dump[start..];
+    let end = rest.find("\n\nfunction ").unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// ui (code-generation delta): "An external taking a node handle": a `NodeId` travels as a
+/// 64-bit word, not by address.
+#[test]
+fn an_external_taking_a_node_handle() {
+    let source = format!(
+        "{}package fun disable(node: NodeId): Unit = prism_ui_set_enabled(node, false)\n\
+         private external fun prism_ui_set_enabled(node: NodeId, enabled: Bool): Unit\n",
+        UI_HANDLES
+    );
+    let file = lower_files(&[("prism/compose/ui", &source)]).remove(0);
+    check_file(&file).expect("the signature matches the entry point's");
+    let dump = crate::dump::dump_file(&file).expect("it lowers");
+    let disable = function_ir(&dump, "prism/compose/ui::disable");
+    assert!(
+        disable.contains("(i64) system_v") || disable.contains("(i64) apple_aarch64"),
+        "{}",
+        disable
+    );
+    assert!(disable.contains("(i64, i8 uext)"), "{}", disable);
+}
+
+/// ui (code-generation delta): "Comparing handler ids": `==` and the equality glue of a
+/// struct holding one call `prism_ui_handlers_equal` with the two words.
+#[test]
+fn comparing_handler_ids() {
+    let source = format!(
+        "{}public fun same(a: HandlerId, b: HandlerId): Bool = a == b\n\
+         public struct Pair : Copy {{ val h: HandlerId }}\n\
+         public fun pairs(a: Pair, b: Pair): Bool = a == b\n",
+        UI_HANDLES
+    );
+    let file = lower_files(&[("prism/compose/ui", &source)]).remove(0);
+    let dump = crate::dump::dump_file(&file).expect("it lowers");
+    let same = function_ir(&dump, "prism/compose/ui::same");
+    assert!(same.contains("prism_ui_handlers_equal"), "{}", same);
+    let pairs = function_ir(&dump, "prism/compose/ui::pairs");
+    assert!(pairs.contains("prism_ui_handlers_equal"), "{}", pairs);
+}
+
+/// Every UI entry point is found by the backend's lookup and resolved by the JIT's linker.
+#[test]
+fn ui_entry_points_resolve() {
+    for function in prism_ui::UI_FUNCTIONS {
+        let found = crate::externals::entry_point(function.name).expect("found");
+        assert_eq!(found.address, function.address);
+        assert!(crate::externals::entry_points().any(|entry| entry.name == function.name));
+    }
+}

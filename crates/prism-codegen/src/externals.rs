@@ -15,21 +15,22 @@ use prism_compose::COMPOSE_FUNCTIONS;
 use prism_mir::{ExternalDeclaration, MirFile};
 use prism_runtime::{RuntimeFunction, RuntimeType, RUNTIME_FUNCTIONS};
 use prism_typed_tree::Type;
+use prism_ui::UI_FUNCTIONS;
 
 /// The runtime's entry point named `symbol`, the one lookup every external and runtime import
 /// goes through: the check of its declaration, the lowering of its calls and the unit's
 /// imports. It searches the base runtime's table, then the compose runtime's (D2 of
-/// `compose-runtime`).
+/// `compose-runtime`), then the UI toolkit's (D2 of `ui-toolkit`).
 pub fn entry_point(symbol: &str) -> Option<&'static RuntimeFunction> {
+    entry_points().find(|function| function.name == symbol)
+}
+
+/// Every entry point the JIT resolves by symbol, from the three tables.
+pub fn entry_points() -> impl Iterator<Item = &'static RuntimeFunction> {
     RUNTIME_FUNCTIONS
         .iter()
         .chain(COMPOSE_FUNCTIONS)
-        .find(|function| function.name == symbol)
-}
-
-/// Every entry point the JIT resolves by symbol, from both tables.
-pub fn entry_points() -> impl Iterator<Item = &'static RuntimeFunction> {
-    RUNTIME_FUNCTIONS.iter().chain(COMPOSE_FUNCTIONS)
+        .chain(UI_FUNCTIONS)
 }
 
 /// The machine signature of an external taking `parameters` and returning `result`, as the
@@ -62,6 +63,7 @@ pub fn machine_signature(
 fn runtime_type(ty: &Type) -> Option<RuntimeType> {
     Some(match ty {
         Type::Int => RuntimeType::I64,
+        Type::Struct { id, .. } if id.intrinsic().is_some() => RuntimeType::I64,
         Type::Float => RuntimeType::F64,
         Type::Bool => RuntimeType::I8,
         Type::Char => RuntimeType::I32,
