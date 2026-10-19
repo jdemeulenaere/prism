@@ -73,7 +73,7 @@ Each check runs a release build of `prism`, with `--frame-stats`, and is recorde
 
 ## 9. The review document (D14)
 
-- [ ] 9.1 Append this change's measured numbers to the decisions it logged, and add the "Review summary" section of design D14 at the top of `docs/decisions-for-review.md`, between the introduction and "Process decisions": how to review; every high-cost row; the selected medium-cost rows by theme (at most about 30); revisions; the targets and measurements of the whole road; and the counts. Re-estimate revert costs while writing it, marking each changed row "(re-estimated <date>)". Verify that every row the summary names exists with the decision number it gives, and that every high row is named.
+- [x] 9.1 Append this change's measured numbers to the decisions it logged, and add the "Review summary" section of design D14 at the top of `docs/decisions-for-review.md`, between the introduction and "Process decisions": how to review; every high-cost row; the selected medium-cost rows by theme (at most about 30); revisions; the targets and measurements of the whole road; and the counts. Re-estimate revert costs while writing it, marking each changed row "(re-estimated <date>)". Verify that every row the summary names exists with the decision number it gives, and that every high row is named.
 
 ## 10. Documents that close Milestone 2 (D13)
 
