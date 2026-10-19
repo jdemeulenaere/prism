@@ -60,6 +60,49 @@ pub struct RunOptions {
     /// The bundled library, which tests replace to add modules to it (D13 of
     /// `standard-library`). The command line never does.
     pub library: std::sync::Arc<prism_library::Library>,
+    /// `--headless[=<w>x<h>] [--events <script>]`: `runApp` runs headless, with the parsed
+    /// script (D16 of `ui-toolkit`); `None` leaves the host as configured.
+    pub headless: Option<HeadlessOptions>,
+}
+
+/// How a headless run's apps run: the window size that overrides `runApp`'s, and the event
+/// script's commands, parsed before the program is compiled.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeadlessOptions {
+    pub size: Option<(i64, i64)>,
+    pub commands: Vec<prism_ui::script::ScriptLine>,
+}
+
+impl HeadlessOptions {
+    /// Installs these options as the host every later `runApp` of the process uses.
+    pub fn configure(&self) {
+        prism_ui::configure(prism_ui::HostConfiguration::Headless {
+            size: self.size,
+            commands: self.commands.clone(),
+        });
+    }
+}
+
+/// The commands of the event script at `path`, or the error `prism run` reports for it:
+/// `<path>:<line>: <message>` for a line it cannot parse, `<path>: <message>` for a file it
+/// cannot read (D16 of `ui-toolkit`).
+pub fn read_event_script(path: &Path) -> Result<Vec<prism_ui::script::ScriptLine>, String> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "{}: cannot read the event script: {}",
+            path.display(),
+            error
+        )
+    })?;
+    prism_ui::script::parse_script(&text)
+        .map_err(|error| format!("{}:{}: {}", path.display(), error.line, error.message))
+}
+
+/// The size of `--headless=<width>x<height>`, or `None` when it is not two whole numbers.
+pub fn parse_headless_size(text: &str) -> Option<(i64, i64)> {
+    let (width, height) = text.split_once('x')?;
+    let (width, height) = (width.parse().ok()?, height.parse().ok()?);
+    (width >= 0 && height >= 0).then_some((width, height))
 }
 
 impl Default for RunOptions {
@@ -72,6 +115,7 @@ impl Default for RunOptions {
             cache: None,
             explain_cache: false,
             library: prism_library::Library::shared(),
+            headless: None,
         }
     }
 }
@@ -777,6 +821,9 @@ pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceErro
     }
     if options.timings {
         print_load_timings(compiled.timings, options);
+    }
+    if let Some(headless) = &options.headless {
+        headless.configure();
     }
     compiled
         .program

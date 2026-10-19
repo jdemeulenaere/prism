@@ -1906,3 +1906,24 @@ fn entries_of_closures() {
     assert!(!dump.contains("main::main#closure1#equals-environment"));
     assert!(!dump.contains("main::main#closure1#duplicate-environment"));
 }
+
+/// execution: "Events without headless mode": `--events` needs `--headless`, and nothing runs.
+#[test]
+fn events_without_headless_mode() {
+    let directory = single_file(
+        "events_without_headless",
+        "fun main() { println(\"ran\") }\n",
+    );
+    write(&directory.join("script"), "dump\n");
+    let output = prism(&["run", "--events", "script", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("usage: prism run") && stderr(&output).contains("--headless"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "");
+    let output = prism(&["run", "--headless=wide", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(1), "a size is two numbers");
+    fs::remove_dir_all(&directory).ok();
+}

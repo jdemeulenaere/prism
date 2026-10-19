@@ -35,7 +35,8 @@ COMMANDS:
                            --instances, compile the program the file is the entry of and
                            print the composed MIR of every instance of a generic it needs
     run [--timings] [--check-allocations] [--no-cache] [--explain-cache]
-        [--watch [--edits <script>]] <file.prism> [-- <argument>...]
+        [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]]
+        <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
                            'fun main()', exiting with the program's status (101 after a
                            runtime error, 1 when it does not compile), loading from the build
@@ -47,7 +48,10 @@ COMMANDS:
                            loaded; --watch keeps the program running and reloads its code
                            when its files change, running main again after it returns, and
                            --edits drives those reloads from an edit script instead of file
-                           events; the arguments after '--' are the program's
+                           events; --headless runs runApp without a window, in a window of the
+                           given size if one is given, and --events drives it from an event
+                           script, read before the program compiles; the arguments after '--'
+                           are the program's
     dump-clif [--instances] <file.prism>
                            Print the Cranelift IR the backend generates for a source file;
                            with --instances, compile the program the file is the entry of
@@ -182,18 +186,22 @@ fn main() {
     }
 }
 
-/// `prism run [--timings] [--check-allocations] [--watch [--edits <script>]] <file.prism>
-/// [-- <argument>...]` (D14 of `codegen-core`, D13 of `runtime-strings-and-drops`): options
-/// before the file, and everything after `--` for the program. The build cache the environment
-/// selects is used unless `--no-cache` (D9 of `instance-cache`). `--watch` runs a watch session
-/// (`hot-reload`), which `--edits` drives from a script.
+/// `prism run [--timings] [--check-allocations] [--watch [--edits <script>]]
+/// [--headless[=<w>x<h>] [--events <script>]] <file.prism> [-- <argument>...]` (D14 of
+/// `codegen-core`, D13 of `runtime-strings-and-drops`): options before the file, and everything
+/// after `--` for the program. The build cache the environment selects is used unless
+/// `--no-cache` (D9 of `instance-cache`). `--watch` runs a watch session (`hot-reload`), which
+/// `--edits` drives from a script. `--headless` runs apps without a window, driven by the
+/// event script of `--events`, which is parsed before anything compiles (D16 of `ui-toolkit`).
 fn run_program(args: &[String], started: std::time::Instant) {
     let usage = || -> ! {
         eprintln!(
-            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] [--watch [--edits <script>]] <file.prism> [-- <argument>...]"
+            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]] <file.prism> [-- <argument>...]"
         );
         process::exit(1);
     };
+    let mut headless: Option<Option<(i64, i64)>> = None;
+    let mut events: Option<String> = None;
     let mut timings = false;
     let mut check_allocations = false;
     let mut no_cache = false;
@@ -212,6 +220,17 @@ fn run_program(args: &[String], started: std::time::Instant) {
             Some("--check-allocations") => check_allocations = true,
             Some("--no-cache") => no_cache = true,
             Some("--explain-cache") => explain_cache = true,
+            Some("--headless") => headless = Some(None),
+            Some(option) if option.starts_with("--headless=") => {
+                match prism_cli::parse_headless_size(&option["--headless=".len()..]) {
+                    Some(size) => headless = Some(Some(size)),
+                    None => usage(),
+                }
+            }
+            Some("--events") => match rest.next() {
+                Some(script) => events = Some(script.clone()),
+                None => usage(),
+            },
             Some(option) if option.starts_with('-') => usage(),
             Some(file) => break file,
             None => usage(),
@@ -226,6 +245,25 @@ fn run_program(args: &[String], started: std::time::Instant) {
     if edits.is_some() && !watch {
         usage();
     }
+    // `--events` drives a headless run; without `--headless` there is none.
+    if events.is_some() && headless.is_none() {
+        usage();
+    }
+    // The script is read and parsed before anything is compiled, so that its errors come
+    // before the program's output (D16 of `ui-toolkit`).
+    let headless = headless.map(|size| {
+        let commands = match events.as_deref() {
+            Some(path) => match prism_cli::read_event_script(std::path::Path::new(path)) {
+                Ok(commands) => commands,
+                Err(message) => {
+                    eprintln!("Error: {}", message);
+                    process::exit(1);
+                }
+            },
+            None => Vec::new(),
+        };
+        prism_cli::HeadlessOptions { size, commands }
+    });
     let options = prism_cli::RunOptions {
         timings,
         check_allocations,
@@ -237,6 +275,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
             prism_cli::BuildCache::from_environment()
         },
         explain_cache,
+        headless,
         ..prism_cli::RunOptions::default()
     };
     if watch {

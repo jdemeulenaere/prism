@@ -84,6 +84,9 @@ pub fn run_watch(entry: &Path, options: RunOptions, edits: Option<&Path>) -> i32
         }
         None => None,
     };
+    if let Some(headless) = &options.headless {
+        headless.configure();
+    }
     let mut session = WatchSession::new(entry, options);
     match script {
         Some(script) => session.run_script(script),

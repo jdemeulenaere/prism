@@ -26,6 +26,9 @@ prism-formatter = { path = "../prism-formatter" }
 prism-codegen = { path = "../prism-codegen" }
 prism-runtime = { path = "../prism-runtime" }
 prism-library = { path = "../prism-library" }
+# The UI runtime's host configuration and event script parser, for `prism run --headless`
+# (D16 of `ui-toolkit`).
+prism-ui = { path = "../prism-ui" }
 # File-system events for `prism run --watch` (D15 of `hot-reload`): FSEvents on macOS, inotify on
 # Linux, ReadDirectoryChangesW on Windows, with a polling fallback. Pinned exactly; 8.2.0 was
 # released on 2025-08-03 under CC0-1.0.
