@@ -6,7 +6,7 @@ The standard library is the Prism source the compiler ships under the reserved r
 ## Requirements
 
 ### Requirement: The Compiler Ships the Library
-The `prism` executable MUST contain the source of every library module and MUST NOT read library files from disk. The modules MUST be `/prism/core` and `/prism/collections`, the prelude modules, and `/prism/system` and `/prism/composer` (compose, "The Composer Protocol Module"), which are imported explicitly. Each MUST be a file of the package `prism`, or of a package below it, whose module path is `prism/<name>`.
+The `prism` executable MUST contain the source of every library module and MUST NOT read library files from disk. The modules MUST be `/prism/core`, `/prism/collections` and `/prism/compose/runtime`, the prelude modules, and `/prism/system` and `/prism/composer` (compose, "The Composer Protocol Module"), which are imported explicitly. Each MUST be a file of the package `prism`, or of a package below it, whose module path is `prism/<name>`.
 
 #### Scenario: A library module is imported
 - **WHEN** `app/main.prism` declares `import /prism/system` and `fun main() { println(1); exitProcess(3) }`, in a workspace with no `prism` directory
@@ -21,7 +21,7 @@ A library module MUST go through every stage a workspace file does: Phase 1 extr
 
 #### Scenario: Unreached modules are not parsed
 - **WHEN** `prism check --explain-cache main.prism` runs on a file without imports
-- **THEN** its file lines name `prism/core.prism`, `prism/collections.prism` and `main.prism`, and no other library module
+- **THEN** its file lines name `prism/core.prism`, `prism/collections.prism`, `prism/compose/runtime.prism` and `main.prism`, and no other library module
 
 ### Requirement: Prelude Names Are Found Last
 The public declarations of the prelude modules MUST be in scope in every workspace file without an import. A name MUST resolve to a prelude declaration only when no local, parameter, top-level declaration or explicit import of that name is in scope, and such a declaration or import shadows it without `E4010` or `E4012`. An explicit import of a prelude module MUST be accepted, and makes its names explicit imports.
@@ -88,7 +88,8 @@ An `intrinsic fun` or `intrinsic val` MUST declare, without a body, a function o
 A call of an intrinsic MUST be checked as a call of its declared signature, except for those the catalog types by a rule:
 - `print` and `println` (`fun <T> print(value: &T)`) take an argument with a text form (type-system, "Output Built-In Arguments"), and `println` also none;
 - `listOf` (`fun <T> listOf(element: T): List<T>`) takes any number of elements;
-- `contains` and `indexOf` of `List<T>` also need `==` on `T`.
+- `contains` and `indexOf` of `List<T>` also need `==` on `T`;
+- `remember` also takes keys ("Remember Takes Up to Three Keys").
 
 #### Scenario: A signature-typed intrinsic
 - **WHEN** `fun f(xs: &List<Int>): Bool = xs.isEmpty(1)` is checked
@@ -97,6 +98,13 @@ A call of an intrinsic MUST be checked as a call of its declared signature, exce
 #### Scenario: A rule-typed intrinsic
 - **WHEN** `fun f() { println(); println(1); val xs = listOf(1, 2, 3) }` is checked
 - **THEN** the file typechecks, although `println` and `listOf` are declared with one parameter
+
+### Requirement: Remember Takes Up to Three Keys
+A call of `remember` (`fun <T : Copy> remember(calculation: () -> T): T`) MUST also accept up to three keys before the calculation, each typed by a type parameter of its own bounded by `Copy` and borrow-free (compose, "Remembering With Keys").
+
+#### Scenario: Keys of remember
+- **WHEN** `compose fun f(a: Int, b: Bool) { val x = remember(a, b) { 1 }; val y = remember(a, b, 'c', 1.5) { 2 } }` is checked
+- **THEN** the type checker accepts the first call and reports an argument count error (`E4004`) for the second, which has four keys
 
 ### Requirement: Intrinsic Extensions Are Members
 An intrinsic extension function or property MUST be a member of its receiver type wherever its module is visible. A call or read of that name on that type, through any `&`, `&mut` and `Heap<T>` layers, MUST use it before any extension, after fields and the built-in `clone()` and `unbox()`. A workspace extension of that name on that receiver type constructor could never be called, so it MUST be rejected with `E4010`.
@@ -152,6 +160,28 @@ Every library module MUST pass `prism check` with no diagnostic and `prism fmt -
 - **WHEN** `cargo test -p prism-cli --test library_tests` runs
 - **THEN** it checks and formats every embedded module, compares every external with the runtime table, compares the prelude modules' exported names, and compares the embedded module list with the files of `crates/prism-library/prism/`, failing on any difference
 
+### Requirement: Intrinsic Structs
+An `intrinsic struct` MUST declare a type whose representation, glue and operations the compiler provides from its catalog, with the markers the catalog gives it. A library declaration naming no intrinsic struct of the catalog, or with other type parameters or markers, MUST be rejected with `E4029`. No program MUST construct a value of an intrinsic struct, read a field of one, or take one apart: only its intrinsic functions make and use its values.
+
+#### Scenario: An unknown intrinsic struct is rejected
+- **WHEN** a library test module declares `public intrinsic struct Window`
+- **THEN** the type checker emits `E4029`, saying that the compiler provides no intrinsic struct `Window`
+
+#### Scenario: An intrinsic struct cannot be constructed
+- **WHEN** a workspace file declares `fun f() { val c = Composition() }` or `fun g(s: RecomposeScope) { val (h) = s }`
+- **THEN** the type checker rejects each, saying that `Composition` and `RecomposeScope` have no constructor and no fields
+
+### Requirement: The Compose Module
+`/prism/compose/runtime` MUST be a prelude module declaring, all as intrinsics, the structs `Composition` and `RecomposeScope : Copy`, the functions `composition`, `remember`, `key` and `currentRecomposeScope`, the members `setContent`, `recompose` and `dump` of `Composition`, and the member `invalidate` of `RecomposeScope`. `remember`, `key` and `currentRecomposeScope` MUST be composables.
+
+#### Scenario: Signatures of the compose module
+- **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
+- **THEN** it holds `public intrinsic fun composition(content: escaping compose () -> Unit): Composition`, `public intrinsic fun Composition.setContent(content: escaping compose () -> Unit)`, `public intrinsic fun Composition.recompose(): Bool`, `public intrinsic fun Composition.dump(): String`, `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentRecomposeScope(): RecomposeScope` and `public intrinsic fun RecomposeScope.invalidate()`
+
+#### Scenario: Members of a composition
+- **WHEN** a file declares `fun Composition.recompose(): Bool = false`
+- **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/runtime` always takes precedence
+
 ## Design Rationale
 
 Decisions from `standard-library` (planned autonomously on 2026-10-18, implemented and reviewed the same day, and logged in `docs/decisions-for-review.md`). Why `prism` is a reserved root package is in the Design Rationale of `package-resolution`.
@@ -172,3 +202,9 @@ Decisions from `standard-library` (planned autonomously on 2026-10-18, implement
 - **Compose modules come with their changes** (D14). `/prism/compose` (with its prelude entry) and `/prism/ui` are created by `compose-transform`, `state-handles` and `ui-toolkit`, which fill them; empty stubs would specify nothing.
 - **Reports and watch sessions** (D15, R3). `prism check`'s report lists workspace files only, and `--explain-cache` lists library files first. Diagnostics take sources from the graph's nodes, never from disk, which library modules and watch overlays need. Library nodes come from the library, never from a watch session's store, so they are never watched, re-parsed or reloaded.
 - **`/prism/composer` is a protocol module outside the prelude** (`compose-runtime`, D10). It declares the compose runtime's entry points as private externals with public wrappers over `Int` words, the machine form generated composables pass, so fixtures can write composables in lowered form. Its names never reach a program that does not import it, and it is parsed only when imported. It is not `/prism/compose/runtime`, `compose-transform`'s prelude module for applications.
+
+Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **`/prism/compose/runtime` is a prelude module** (D15, `ui-toolkit` D21). It is the library's first module in a subdirectory (`prism/compose/runtime.prism`, package `prism.compose`), so `MODULES` and its test walk the library recursively; the other compose modules (`ui`, `foundation`, `layout`, `material3`) are `ui-toolkit`'s, outside the prelude. Its declarations are all intrinsics, and a file's own declaration or import of one of its names shadows it.
+- **Intrinsic structs** (D16). `intrinsic struct Name<Parameters> : Markers` declares a type without fields whose representation, glue and operations the compiler provides, from a catalog of its own (`Composition`, neither `Copy` nor `Clone`; `RecomposeScope : Copy`); another name, parameter list or marker set in the library is `E4029`, and the form in the workspace `E3002`. `state-handles` declares its handle types with it. Rejected: user-defined destructors, built-in types without declarations, forgeable library structs.
+- **`remember` keys are rule-typed** (D12): up to three keys, each a fresh type parameter bounded by `Copy`, so the existing `E4021` and `E4022` checks apply, and a key written as a reference is copied out like any argument of a type parameter.

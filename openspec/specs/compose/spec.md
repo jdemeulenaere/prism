@@ -329,6 +329,242 @@ Once its buffers have grown to fit the composition, a pass that creates no group
 - **WHEN** `crates/prism-compose/tests/allocations.rs` composes 1,000 restart groups holding a word slot each, then runs 100 passes that each recompose the root, with every child skipping, and one invalid leaf scope
 - **THEN** the counting allocator of the test records no allocation and no free during the last 98 passes
 
+### Requirement: Composables Run in a Composition
+`composition(content)` MUST start a composition whose root content is the composable function value `content`, compose it once, and return an owned `Composition`. Every composable that the content calls, directly or through composable lambdas, MUST run during that pass with the composition's composer.
+
+#### Scenario: A composable runs in a composition
+- **WHEN** `compose fun Hello(n: Int) { println("hello $n") }` and `fun main() { val c = composition { Hello(1) } }` run with `--check-allocations`
+- **THEN** stdout is `hello 1` and a newline, and the exit status is 0
+
+#### Scenario: A trailing composable lambda runs
+- **WHEN** `compose fun Column(content: compose () -> Unit) { println("column"); content() }`, `compose fun Text(n: Int) { println("text $n") }` and `fun main() { val c = composition { Column { Text(1); Text(2) } } }` run
+- **THEN** stdout is `column`, `text 1` and `text 2`, one per line
+
+### Requirement: Compositions Are Owned Values
+`Composition` MUST be neither `Copy` nor `Clone`. Dropping a composition MUST dispose it: every group it holds is removed and released, with its kept and remembered values, and its root content is released. Dropping a composition while a pass runs MUST be the misuse `composition operation during a pass` (compose, "One Pass at a Time").
+
+#### Scenario: Dropping a composition frees everything
+- **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }` and `fun main() { val c = composition { val a = 1; val b = 2; Plus(onClick = { println(a + b) }) } }` run with `--check-allocations`
+- **THEN** stdout is `plus`, and the program exits with status 0: the handler, the copy of it that `Plus` keeps and the root content are freed when `c` is dropped
+
+#### Scenario: A composition is not copied
+- **WHEN** `fun main() { val c = composition { }; val d = c; val e = c }` is checked
+- **THEN** the borrow checker reports `E5001` for the second use of `c`
+
+### Requirement: Setting the Content and Recomposing
+`c.setContent(content)` MUST replace the composition's root content and recompose its root. `c.recompose()` MUST recompose the composition's invalid scopes and return `true` when any ran, and `false` without running anything otherwise.
+
+#### Scenario: New content recomposes a composition's root
+- **WHEN** `fun main() { val c = composition { println(1) }; c.setContent { println(2) }; println(c.recompose()) }` runs
+- **THEN** stdout is `1`, `2` and `false`, one per line
+
+### Requirement: Dumping a Composition From Prism
+`c.dump()` MUST return the composition's text dump (compose, "Dumping a Composition"). A kept parameter's or remembered value's slot MUST be shown with the name of its type.
+
+#### Scenario: A dump of a composable
+- **WHEN** `compose fun Badge(n: Int) { }` and `fun main() { val c = composition { Badge(7) }; print(c.dump()) }` run
+- **THEN** stdout is the line `root`, a `replaceable` line one level deeper for the content lambda, a `restart` line below it for `Badge`, the line `slot Int` below that, and the line `nodes`
+
+### Requirement: Composition Operations Are Rejected in Composable Contexts
+Calling `composition`, `setContent` or `recompose` in a composable context MUST be rejected with `E4030` (`CompositionInComposable`), at the call, with a note that compositions are started and driven outside composition. In a non-composable closure written inside a composable, they MUST be accepted.
+
+#### Scenario: Starting a composition inside a composable
+- **WHEN** `compose fun Screen(c: &Composition) { val d = composition { }; c.recompose() }` is checked
+- **THEN** the type checker emits `E4030` at `composition` and at `recompose`
+
+#### Scenario: A handler may start a composition
+- **WHEN** `fun later(f: () -> Unit) { f() }` and `compose fun Screen() { later { val d = composition { } } }` are checked
+- **THEN** the file typechecks
+
+### Requirement: The Compose Prelude
+The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and a file's own declaration or import of one of those names MUST shadow it.
+
+#### Scenario: Compose primitives need no import
+- **WHEN** a file without imports declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`
+- **THEN** it typechecks, `remember` and `currentRecomposeScope` resolve to `/prism/compose/runtime`, and `prism run` exits with status 0
+
+#### Scenario: A file's own `key`
+- **WHEN** a file declares `fun key(n: Int): Int = n` and `fun f(): Int = key(3)`
+- **THEN** it typechecks, and the call resolves to the file's own `key`
+
+### Requirement: A Composable Body Runs in One Group
+Each call of a composable MUST run its body in one group of the current composition: a restart group when the composable is skippable ("Skipping Composables With Stable Parameters"), and a replaceable group otherwise. A call MUST NOT add a group of its own, so calls of one composable among the same siblings match their groups in order.
+
+#### Scenario: Calls of one composable match in order
+- **WHEN** `compose fun Leaf() { }`, `compose fun Tree(s: String) { Leaf(); Leaf() }` and `fun main() { val c = composition { Tree("a") }; print(c.dump()) }` run
+- **THEN** the dump shows, below the content lambda's group, a `replaceable` group for `Tree` holding two `restart` groups with the same key
+
+### Requirement: Group Keys Come From Declarations and Source Structure
+A group key MUST be a 64-bit hash of the enclosing top-level declaration's path and of the path in the source structure from it to the group: a composable body by its declaration path alone, a composable lambda by the call it is an argument of, and a region by its construct and its ordinal among sibling constructs of the same kind. Keys MUST NOT depend on byte offsets, lines or columns.
+
+#### Scenario: Unrelated edits keep keys
+- **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Text(n: Int) { }`, `compose fun Button(n: Int) { }`, `compose fun Column(content: compose () -> Unit) { content() }` and `compose fun Counter(on: Bool) { if (on) { Column { Text(1) } } }`, and again after a comment is added above `Counter`, the argument of `Text` is changed to `2`, and a call `Button(0)` is inserted before the `Column` call
+- **THEN** the keys of `Counter`'s body group, of its `if` branch's group and of its content lambda's group are the same in both dumps
+
+### Requirement: Conditional and Repeated Composable Code Runs in Its Own Groups
+A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback of `?:`, the part of a safe call after its test, and a loop, around all its iterations, MUST run in a replaceable group of its own when it contains a composable call outside closures. Leaving such a region by any path, `return`, `break` and `continue` included, MUST end its group.
+
+#### Scenario: Branches of a composable get their own groups
+- **WHEN** `compose fun V(on: Bool) { if (on) { val a = remember { println("on"); 1 } } else { val b = remember { println("off"); 2 } } }`, `fun screen(on: Bool): compose () -> Unit = { V(on) }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); c.setContent(screen(true)) }` run
+- **THEN** stdout is `on`, `off` and `on`: each switch removes the other branch's group with its slot
+
+#### Scenario: A loop gets its own group
+- **WHEN** `compose fun Rows(n: Int) { for (i in 1..n) { val r = remember { println("row $i"); i } }; val after = remember { println("after"); 0 } }`, `fun screen(n: Int): compose () -> Unit = { Rows(n) }` and `fun main() { val c = composition(screen(2)); c.setContent(screen(3)); c.setContent(screen(1)); print(c.dump()) }` run
+- **THEN** stdout starts with `row 1`, `row 2`, `after` and `row 3`, and the dump shows `Rows`'s group with two slots, its kept `n` and `after`, and below them the loop's group with one slot
+
+#### Scenario: An early return ends its groups
+- **WHEN** `compose fun Leaf() { }`, `compose fun E(stop: Bool) { if (stop) { Leaf(); return }; Leaf() }`, `fun screen(stop: Bool): compose () -> Unit = { E(stop) }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); println("done") }` run
+- **THEN** stdout is `done`, and the exit status is 0
+
+### Requirement: A When With Composable Tests Runs in Its Own Group
+A `when` whose patterns or guards contain a composable call outside closures MUST run, as a whole, in a replaceable group of its own around its tests and its branches' groups, so that which tests ran never changes how the calls after the `when` match their groups.
+
+#### Scenario: Composable tests of a when run in its group
+- **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Check(n: Int, limit: Int): Bool { Inner(n); return n > limit }`, `compose fun Pick(limit: Int) { when { Check(1, limit) -> println("first"); Check(2, limit) -> println("second"); else -> println("none") }; val last = Check(3, limit) }`, `fun screen(limit: Int): compose () -> Unit = { Pick(limit) }` and `fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(1)); print(c.dump()) }` run
+- **THEN** after `--`, stdout is `inner 2` and `second`, and the dump shows `Pick`'s group holding the `when`'s group, with the two groups of `Check` that the second pass ran, and after it the group of the last `Check`
+
+### Requirement: Calls in a Loop With a Continue Run in Call-Site Groups
+In a loop that a `continue` targets, each composable call and each `remember` made directly in the loop's group, outside its branches' and inner loops' groups, MUST run in a replaceable group of its own, keyed by its ordinal among them in the loop. Calls at different call sites MUST NOT match each other's groups or slots. `key` calls MUST NOT get such a group, so keyed items still reorder across iterations.
+
+#### Scenario: A continue keeps calls apart
+- **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Outer(skip: Int) { for (i in 0..1) { val a = remember { 100 + i }; Inner(1); if (i == skip) { continue }; val b = remember { println("remember $i"); 200 + i }; Inner(2); println("$i $a $b") } }`, `fun screen(skip: Int): compose () -> Unit = { Outer(skip) }` and `fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(5)) }` run
+- **THEN** after `--`, stdout is `0 100 201`, `remember 1`, `inner 2` and `1 101 201`: each `remember` and each call of `Inner` matches only the groups of its own call site, in order, so no value moves from one call site to another and no call trusts change bits given at another
+
+### Requirement: Remembering a Value in a Composable
+`remember(calculation)` MUST be a composable that runs `calculation` the first time its position in its group is composed, keeps the result in a slot, and returns a copy of the kept value on every later pass without running `calculation`. Its type parameter MUST be bounded by `Copy`, and `calculation` MUST NOT be a composable context.
+
+#### Scenario: Remembered value survives recomposition
+- **WHEN** `compose fun C(label: String) { val id = remember { println("computed"); 7 }; println(label + id.toString()) }`, `fun screen(): compose () -> Unit = { C("x") }` and `fun main() { val c = composition(screen()); c.setContent(screen()); c.setContent(screen()) }` run
+- **THEN** stdout is `computed` followed by `x7` three times, one per line
+
+#### Scenario: Remembering a non-Copy value rejected
+- **WHEN** `compose fun C() { val s = remember { "a" + "b" } }` is checked
+- **THEN** the type checker reports an unsatisfied `Copy` bound (`E4021`)
+
+### Requirement: Remembering With Keys
+`remember(key1, calculation)`, `remember(key1, key2, calculation)` and `remember(key1, key2, key3, calculation)` MUST keep each key in a slot before the value, and MUST run `calculation` again, forgetting the old value, when any key differs from the kept one by `==`. Each key MUST be of a `Copy` type without borrows: `E4021` for a key that is not `Copy`, `E4022` for one holding a borrow.
+
+#### Scenario: A changed key recomputes
+- **WHEN** `compose fun K(n: Int, label: String) { val v = remember(n) { println("calc $n"); n * 10 }; println(v) }`, `fun screen(n: Int): compose () -> Unit = { K(n, "x") }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(1)); c.setContent(screen(2)); print(c.dump()) }` run
+- **THEN** stdout starts with `calc 1`, `10`, `10`, `calc 2` and `20`, and the dump shows `K`'s group holding exactly the slots `slot Int` for the key and `slot Int` for the value
+
+#### Scenario: Keys that cannot be kept rejected
+- **WHEN** `compose fun K(s: String, r: (&Int)?) { val a = remember(s) { 1 }; val b = remember(r) { 2 } }` is checked
+- **THEN** the type checker reports `E4021` for `s` and `E4022` for `r`
+
+#### Scenario: A borrowed key is copied out
+- **WHEN** `compose fun K(r: &Int) { val a = remember(r) { 1 } }` is checked
+- **THEN** it typechecks: the key is the `Int` copied out of `r`, as for any argument of a type parameter (references, "Copy-Out From References")
+
+### Requirement: Keyed Groups
+`key(value) { content }` MUST compose `content` in a movable group identified by its own key and by the `Int` `value`, so that keyed groups reordered among their siblings keep their groups, slots and nodes.
+
+#### Scenario: Reordered keyed items keep state
+- **WHEN** `compose fun Row(id: Int) { val v = remember { println("computed $id"); id * 10 }; println("row $id $v") }`, `compose fun Rows(order: Int) { for (i in 1..3) { val id = if (order == 0) i else (i + 1) % 3 + 1; key(id) { Row(id) } } }`, `fun screen(order: Int): compose () -> Unit = { Rows(order) }` and `fun main() { val c = composition(screen(0)); c.setContent(screen(1)); print(c.dump()) }` run
+- **THEN** each `computed` line is printed once, the `row` lines only on the first pass, and the dump lists the movable groups with data keys 3, 1 and 2, in that order
+
+#### Scenario: A key of another type rejected
+- **WHEN** `compose fun R(name: String) { key(name) { } }` is checked
+- **THEN** the type checker reports an argument type mismatch (`E4004`)
+
+### Requirement: Stable Parameters
+A parameter, the receiver included, MUST be stable when its type is `Copy` and holds no borrow, by declared markers alone (a type parameter only when bounded by `Copy`), or when it is an `escaping` non-composable function type, or a nullable of one. A function value MUST be kept only when it is keepable: its closure captures nothing or owns only `Copy` captures.
+
+#### Scenario: Which composables are skippable
+- **WHEN** `prism dump-mir --composed` runs on a file declaring `struct Point : Copy { val x: Int }` and the composables `A(n: Int, p: Point)`, `B(s: String)`, `C(r: &Int)`, `D(content: compose () -> Unit)`, `<T> E(x: T)`, `<T : Copy> F(x: T)`, `G(onClick: escaping () -> Unit)` and `H(): Int`
+- **THEN** the headers of `A`, `F` and `G` are marked `skippable`, and those of the others are not
+
+### Requirement: Callers Say What They Know of Each Argument
+A call of a composable MUST tell the callee, for each argument, that it is static (a constant, or a value read from a top-level `val`), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), or that it is uncertain. A callee MUST trust static and same arguments without comparing them.
+
+#### Scenario: A forwarded unchanged parameter is not compared again
+- **WHEN** `compose fun Inner(n: Int) { println("inner") }`, `compose fun Outer(n: Int, s: String) { Inner(n) }`, `fun screen(s: String): compose () -> Unit = { Outer(5, s.clone()) }` and `fun main() { val c = composition(screen("a")); c.setContent(screen("b")) }` run
+- **THEN** stdout is `inner` once: `Outer` runs again for its changed `String`, and passes `n` to `Inner` as static
+
+### Requirement: A Mutably Borrowed Local Forwards Nothing
+A local that is borrowed mutably, by a borrow or a closure, or assigned anything but a copy of a parameter, a constant or a top-level value, MUST NOT count as forwarding what it copied from then on: an argument read from it is uncertain.
+
+#### Scenario: A value written through a borrow is not forwarded
+- **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Outer(n: Int, m: Int) { var x = n; val r = &mut x; *r = m; Inner(x) }`, `fun screen(m: Int): compose () -> Unit = { Outer(5, m) }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(2)) }` run
+- **THEN** stdout is `inner 1` and `inner 2`: a local borrowed mutably is no longer known as a copy of `n`, so its argument is uncertain and compared
+
+### Requirement: Skipping Composables With Stable Parameters
+A composable returning `Unit` whose parameters are all stable MUST be skippable. It MUST keep its arguments in its group's slots, `Copy` values by copy and function values as a keepable copy, and MUST skip its body, dropping the arguments it owns, when every argument is the same as the kept one (by `==` through the type's equality, by closure and captures for function values, or as its caller says) and its scope is valid. Nothing MUST be cloned to compare.
+
+#### Scenario: Equal arguments skip the body
+- **WHEN** `compose fun Badge(n: Int) { println("badge") }`, `fun screen(): compose () -> Unit = { Badge(1) }` and `fun main() { val c = composition(screen()); c.setContent(screen()) }` run
+- **THEN** `badge` is printed only on the first composition
+
+#### Scenario: Changed arguments run the body
+- **WHEN** `compose fun Badge(n: Int) { println("badge $n") }`, `fun screen(n: Int): compose () -> Unit = { Badge(n) }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(1)); c.setContent(screen(2)) }` run
+- **THEN** stdout is `badge 1` and `badge 2`
+
+#### Scenario: Handler capturing a Copy value is stable
+- **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }`, `fun screen(id: Int): compose () -> Unit = { Plus(onClick = { println(id) }) }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(1)); c.setContent(screen(2)) }` run
+- **THEN** `plus` is printed twice: the second pass builds a closure equal to the kept one, and the third one with another capture
+
+#### Scenario: A handler owning a String is never kept
+- **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }`, `fun screen(): compose () -> Unit = { val s = "a" + "b"; Plus(onClick = { println(s) }) }` and `fun main() { val c = composition(screen()); c.setContent(screen()) }` run with `--check-allocations`
+- **THEN** `plus` is printed twice, and the exit status is 0
+
+#### Scenario: String parameters are always changed
+- **WHEN** `compose fun Title(s: String) { println("title") }`, `fun screen(): compose () -> Unit = { Title("a") }` and `fun main() { val c = composition(screen()); c.setContent(screen()) }` run
+- **THEN** `title` is printed twice
+
+### Requirement: Restart Scopes Recompose Alone
+A skippable composable MUST be a restart scope. When its scope is invalid, a pass MUST recompose it alone, from its kept arguments, without running its callers. A composable that is not skippable, and a composable lambda, MUST NOT be a restart scope: invalidating the current scope inside it invalidates the nearest restart scope enclosing it.
+
+#### Scenario: Only invalidated scopes recompose
+- **WHEN** `compose fun Child(n: Int) { val s = currentRecomposeScope(); val first = remember { if (n == 1) { s.invalidate() }; 0 }; println("child $n") }`, `compose fun Parent() { println("parent"); Child(1); Child(2) }` and `fun main() { val c = composition { Parent() }; println(c.recompose()); println(c.recompose()) }` run
+- **THEN** stdout is `parent`, `child 1`, `child 2`, `child 1`, `true` and `false`, one per line
+
+#### Scenario: A composable that is not skippable recomposes its caller
+- **WHEN** `compose fun Label(t: String) { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 }; println(t) }`, `compose fun Screen() { println("screen"); Label("a") }` and `fun main() { val c = composition { Screen() }; println(c.recompose()) }` run
+- **THEN** stdout is `screen`, `a`, `screen`, `a` and `true`
+
+### Requirement: The Current Recompose Scope
+`currentRecomposeScope()` MUST be a composable returning a `RecomposeScope`, a `Copy` handle of the innermost restart scope being composed, or of the composition's root scope when there is none. `s.invalidate()` MUST invalidate that scope, so that the next pass recomposes it, and do nothing when the scope has left its composition.
+
+#### Scenario: The root scope outside restart scopes
+- **WHEN** `fun main() { val c = composition { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 }; println("root") }; println(c.recompose()); println(c.recompose()) }` runs
+- **THEN** stdout is `root`, `root`, `true` and `false`: the content lambda is not a restart scope, so its current scope is the root's
+
+### Requirement: Composable Lambdas
+A composable closure MUST run its body in a replaceable group keyed by the call it is an argument of, or, when it is not an argument, by its ordinal among the closure values of its region. A call of a composable function value MUST pass the caller's composer and what it knows of each argument.
+
+#### Scenario: A content lambda's invalidation recomposes its author
+- **WHEN** `compose fun Column(content: compose () -> Unit) { content() }`, `compose fun Screen() { println("screen"); Column { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 }; println("content") } }` and `fun main() { val c = composition { Screen() }; println(c.recompose()) }` run
+- **THEN** stdout is `screen`, `content`, `screen`, `content` and `true`
+
+#### Scenario: A composable lambda with a parameter
+- **WHEN** `compose fun Each(n: Int, item: compose (Int) -> Unit) { for (i in 1..n) { item(i) } }` and `fun main() { val c = composition { Each(2) { i -> println("item $i") } } }` run
+- **THEN** stdout is `item 1` and `item 2`
+
+#### Scenario: A composable receiver lambda runs
+- **WHEN** `struct ColumnScope : Copy { val depth: Int }`, `compose fun ColumnScope.Item(n: Int) { println("item $n at depth $depth") }`, `compose fun Column(content: compose ColumnScope.() -> Unit) { val scope = ColumnScope(1); scope.content() }` and `fun main() { val c = composition { Column { Item(1); Item(2) } } }` run
+- **THEN** stdout is `item 1 at depth 1` and `item 2 at depth 1`: the lambda's receiver is its first parameter, before the composer and its change word
+
+### Requirement: Kept Values Are Released With Their Group
+The kept arguments of a skippable composable and the values of `remember` MUST be released with the slot that holds them: when their group is removed, when a changed key forgets them, or when the composition is disposed, after the pass ends.
+
+#### Scenario: A removed branch releases its kept handler
+- **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { }`, `fun screen(show: Bool): compose () -> Unit = { if (show) { val a = 1; val b = 2; Plus(onClick = { println(a + b) }) } }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); print(c.dump()) }` run with `--check-allocations`
+- **THEN** the dump shows the content lambda's group with no group below it, and the program exits with status 0
+
+### Requirement: Reading the Kept Slots of a Restarted Scope
+While a restart function runs and before it starts a group, the runtime MUST give generated code the address of slot `i` of the scope's group when that slot holds the requested slot type. Reading a slot that is missing or of another type, or reading outside a restart, MUST be the misuse `no slot to read`.
+
+#### Scenario: A restart reads its kept slots
+- **WHEN** a Rust test keeps two word-sized slots in a restart group, invalidates its scope, and its restart function reads slot 1 and then slot 0 before starting a group
+- **THEN** it reads the second value and then the first, and reading slot 2 is the misuse `no slot to read`
+
+### Requirement: The Compose Transform Takes Linear Time
+The compose transform MUST visit each composable body once, before instances are built, and its time MUST be proportional to the body's size: one key per group and one stability decision per parameter type.
+
+#### Scenario: Composable bodies scale linearly
+- **WHEN** `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` runs the compose shapes at their three sizes
+- **THEN** the time of each shape grows roughly linearly with its size
+
 ## Design Rationale
 
 Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-18 and 2026-10-19, and logged in `docs/decisions-for-review.md`). It implements the runtime side of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D1, D6, D7, D10, D11 and D23).
@@ -346,3 +582,20 @@ Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemente
 - **Compositions are `Copy` handles disposed explicitly** (D11); the owned `Composition` with drop glue is `compose-transform`'s. **Misuse is one runtime error kind** (D12), `composition misuse: <detail>` without a location, since an entry point has none; invalidating a stale scope is not misuse, because a state's readers may have left the composition. **The allocation check counts undisposed compositions** (D13) through a finish report that `prism-runtime` calls before its leak report. **Dumps** (D14) show keys, kinds, tags, values and node numbers, never addresses or generations.
 - **Hot reload interplay** (D15). Keys only decide which slots a group may reuse; slot types and node kinds are checked on every read and start. The runtime holds no code address, so a restart function reaches reloaded code through its descriptor's slot. `Composition::invalidate_where` invalidates the scopes whose restart functions name given slots, and `Composition::recompose_forced` runs a pass in which nothing skips; whether `compose-hot-reload` keeps it is that change's decision (its D6 relies on the force bit instead).
 - **Costs** (D16). Protocol operations are amortized O(1), a pass costs its bodies, the groups and slots it visits and releases, and the ordering; the runtime's buffers belong to the thread and are reused, so a steady-state pass allocates nothing (`tests/allocations.rs`). The benchmark `tests/runtime_timing.rs` measured about 54 ns per group for a first composition and 83 ns for one invalid leaf scope, flat from 1,000 to 100,000 groups. Startup is unchanged for programs that do not use the runtime. No compiler stage is added.
+
+Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`). It implements the compiler half of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D3 to D5 and D8 to D11) on this capability's runtime.
+
+- **The boundary** (D1). The transform owns the calling convention, groups and keys, stability, change words, kept arguments, restart closures, slot type records and `/prism/compose/runtime` (`Composition`, `composition`, `setContent`, `recompose`, `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope`, `invalidate`); the runtime gained only `prism_compose_kept_slot` and, at review, `prism_compose_keep`. `state-handles` adds `State<T>` and its reads and writes, `ui-toolkit` nodes, `compose-hot-reload` the recomposition of reloaded scopes. Rejected: leaving `currentRecomposeScope` to `state-handles` (no restart fixture could run before it).
+- **An explicit composer and change words** (D3, D4). Every composable takes, after its declared parameters (receiver and context first), the pass identifier as `$composer` and `max(1, ⌈n / 31⌉)` change words: two bits per parameter (uncertain, same, different, static) and a force bit (bit 0 of the first word), set by restart closures and root content adapters. Callers pass static for constants and copies of top-level values, forward their own knowledge of a parameter they pass on, and uncertain otherwise, from a block-local map of what each local copies; a local borrowed mutably, by a borrow or a closure, forgets it (review). Defaults stay caller-evaluated, so no default mask is passed. Cost: constant work per argument. Rejected: a thread-local current pass (hides which composition a call belongs to), a separate force argument, Jetpack's three bits (stability here is static), a default mask.
+- **One group per body, groups for regions, no call groups** (D5). A call runs its callee's body in one group the callee starts: a restart group when skippable, a replaceable one otherwise. Keys are 64-bit BLAKE3 hashes chained from the declaration path through construct kinds and ordinals (`if`, `when`, `and`, `or`, `elvis`, `safe call`, `loop`, `key`, closures by the call and parameter they are written for), never offsets, so comments, formatting, edited arguments and inserted calls of other composables keep every key. Same-callee siblings share a key and match in order, which is the ordinal of §5 at no cost, and lets a restart recompose a group without being told its key. A loop's group wraps all its iterations, so `key` groups of different iterations are siblings and reorder. One hash per group, linear whatever the depth. Rejected: a group per call (two groups per call, and the restart function would need the key), a `$key` parameter, source offsets, a group per iteration (defeats `key`), hashing whole lexical paths (quadratic in depth).
+- **Calls keep their call site** (D26, from the review). In-order matching of same-key siblings is only right while the `i`-th group of a key always comes from the same call site, which straight-line code, regions, `return` and `break` keep. A `continue` breaks it: in a loop it targets, each composable call and `remember` made directly in the loop's group runs in a call-site group keyed by its ordinal (`H(loop key, "call site", ordinal)`), one group per such call per iteration, nothing elsewhere; `key` calls get none, so keyed items still reorder. A `when` whose patterns or guards compose is a group as a whole (`when 0 tests`). Rejected: a group per iteration or after each `continue` (`if (hidden) { continue }; key(id) { ... }` would lose every item's state on a reorder), uncertain bits in such loops (fixes skipping but not `remember` slots), call-site groups for `when` tests (the transform cannot tell a test apart without another marker).
+- **Stability by declared markers, keepability at run time** (D7). A parameter is stable when its type is `Copy` and holds no borrow by declared markers alone (a type parameter by its `Copy` bound), or is an `escaping` non-composable function type or a nullable of one. A composable is skippable when it returns `Unit` and every parameter is stable; `String`, references, content lambdas and unbounded type parameters make it unskippable, and a shared receiver is a reference. A function value is kept only when its descriptor says it is keepable (captures nothing or owns only `Copy` captures); otherwise that call runs in a replaceable group of the same key, which never matches the restart group. One marker lookup per parameter type, no analysis of fields or other files. Rejected: inferring stability from fields (whole-program), treating every function parameter as unstable, rejecting unkeepable handlers, stable shared borrows now.
+- **Kept arguments in the restart group's first slots** (D8). Each argument is kept in parameter order, a function value as a duplicate so the body keeps the original: uncertain compares through the slot type's equality glue, different stores, same and static read past the kept slot and store only on a first composition. `Copy` arguments are kept by one call of `prism_compose_keep(composer, record, value, bits)`, which makes that choice and returns the bits the body now knows (review: half the backend time of a switch per parameter); function arguments keep the switch, since they are duplicated only when stored or compared. Rejected: comparisons expanded at call sites (code per site), arguments kept in the restart closure's environment (an allocation per scope end), a compare-without-store entry before measuring.
+- **Restart closures read the kept slots** (D10). `F#restart`, `(Int) -> Unit` capturing nothing, reads each kept argument with `prism_compose_kept_slot` in the restart window and calls `F` with the force bit and every parameter same, so ending a restart group allocates nothing. Its hot-reload contract is hashed with `F`'s (`compose-hot-reload` D8), so the two split together. Rejected: captured arguments, a separate `F#body`, dummy arguments with a restart bit.
+- **The shape of a composed body** (D11). A keepability test, the restart group, the kept arguments, the skip test (no force, nothing changed, `skipping`) whose path drops the function arguments and skips to the group's end, then the body, its calls passing the composer and change words; the replaceable path shares the body's blocks through a `Bool` that the group's end switches on, so a body is never duplicated.
+- **`remember` and `key`** (D12, D13). `remember<T : Copy>` is an intrinsic composable using the current group's slots after the kept arguments, with up to three `Copy`, borrow-free keys (rule-typed), each compared with `changed`; on a miss or a changed key the calculation runs as the only code between the decision and `set_slot`, the seam `state-handles` uses. `key(value: Int) { }` starts a movable group whose data key is the `Int`. Rejected: `vararg` keys (none yet), `remember1`-style names, a group per `remember`, keys of other types through a hash (collisions would share state silently).
+- **Composable lambdas** (D14). A composable closure runs in a replaceable group keyed by where it is written and is never a restart scope, so an invalidation inside it reruns the nearest restart scope above, its author. Calls of composable function values pass the caller's composer and change words.
+- **Entering composition** (D15, D16). `composition(content)` returns an owned `Composition`, an intrinsic struct whose drop glue disposes it; `setContent`, `recompose` and `dump` take a shared receiver, so `val c = composition { }` works as in Kotlin. A body calling `composition` or `setContent` gets one root content adapter, `<symbol>#root-content`, owning the content and calling it with the composer and the force bit. `RecomposeScope` is a `Copy` intrinsic struct. Rejected: one global composition started by `runApp`, exposing composer words, `mut` receivers, user-defined destructors, a library struct with an `Int` field (forgeable, no drop).
+- **What is rejected** (D17). `E4030` for `composition`, `setContent` and `recompose` in a composable context (a handler written inside one is not), `E4008` for composable calls in default values (generators run in the caller, outside the callee's groups; composable defaults are a follow-up), `E4021`/`E4022` for `remember` values and keys and `E4004` for a non-`Int` `key`. Dropping a `Composition` during a pass stays a runtime misuse. `/prism/composer` stays public and unchanged as the protocol's hand-testing surface (D18).
+- **Generics and hot reload** (D21, D22). A generic composable is composed once, before instantiation: stability from bounds, keys from its declaration path, slot types substituted per instance, so instances of one generic among the same siblings share a key and a reorder recreates only their slots. Keys never depend on positions, so a reloaded body keeps the state of every group whose construct path did not change; a reloaded scope is recomposed through `skipping`, with no bit of its own.
+- **Costs** (D24). One linear walk per composable body before instances, a terminator scan for other bodies, one hash per group, one marker lookup per parameter type, one small restart body per skippable composable; nothing per instance or across files. `compile_timing.rs` times the transform as the `compose` stage on five shapes, all roughly linear; at 4096 skippable composables of four parameters it takes 38 ms, and `lower` and `clif` about 0.14 ms per composable. A skipped call costs one group start and end and one runtime call per stable parameter, and allocates nothing for `Copy` arguments and one-word handlers.

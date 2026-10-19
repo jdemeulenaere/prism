@@ -799,6 +799,17 @@ A top-level function declaration MAY start with one context parameter, `context(
 - **WHEN** parsing `context(a: RowScope, b: ColumnScope) fun f() { }`, `context() fun g() { }`, `context(RowScope) fun h() { }`, `context(s: RowScope) struct S { }`, `context(s: RowScope) val v = 1`, `context(s: RowScope) private external fun e(): Int`, `public context(s: RowScope) fun m() { }` or `context(s: Box<T>) fun <T> k() { }`
 - **THEN** the parser reports `E2001` for each
 
+### Requirement: Intrinsic Struct Declarations
+`intrinsic struct`, optionally after a visibility modifier, MUST declare a struct without fields or constructor: its name, an optional type parameter list and optional markers (`public intrinsic struct RecomposeScope : Copy`), and no parenthesized fields and no block. An intrinsic struct with fields or a block, and a struct with both `intrinsic` and `external`, MUST be rejected with `E2001`. Which files may use it is the rule of `standard-library`.
+
+#### Scenario: Intrinsic structs parse
+- **WHEN** parsing `public intrinsic struct Composition` and `public intrinsic struct RecomposeScope : Copy`
+- **THEN** each parses as an intrinsic struct declaration with its visibility, name and markers
+
+#### Scenario: An intrinsic struct with fields rejected
+- **WHEN** parsing `intrinsic struct A(val n: Int)`, `intrinsic struct B { val n: Int }` or `external struct C`
+- **THEN** the parser reports `E2001`
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -883,3 +894,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 
 - **`T.(A) -> R` and `mut T.(A) -> R`** (D1). A function type may name a receiver before its parameter list, Kotlin's syntax; `mut` before it makes the receiver mutable, mirroring the `mut fun` modifier of extensions, since Kotlin has no borrows. The prefixes keep the order of declarations (`escaping compose mut Builder.() -> Unit`), and the parser decides with one token of lookahead: a named type followed by `.(` is a receiver, and `mut` cannot otherwise start a type. The receiver follows the rules of extension receivers, except that a type parameter is allowed (`fun <T> with(receiver: &T, block: T.() -> Unit)`), because a lambda checked against `T.() -> R` is checked once `T` is known. Rejected: only shared receivers (builders such as `buildList { add(x) }` need to mutate theirs), `(&mut T).() -> R` (references are no receivers anywhere), and `consuming T.() -> R` for now (no use case; a follow-up).
 - **`context(name: T)` declarations, one parameter, before every modifier** (D6). Kotlin 2.2's context parameters, limited to one, on any function with a body; the parameter is named, typed like a receiver and may not mention the declaration's own type parameters. `context` is a contextual keyword only at a top-level declaration's start directly followed by `(`, so it stays an identifier everywhere it was one. Rejected: `fun RowScope.weight(m: Modifier, ...)` or an explicit scope argument (unlike Compose's `Modifier.weight(1f)`), Kotlin's member extensions (Prism has no members), several context parameters (nothing needs them while contexts resolve to the innermost receiver; a follow-up), and context parameters on `external` and `intrinsic` declarations (a follow-up).
+
+Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **`intrinsic struct` declarations** (D16): visibility, `intrinsic struct`, a name, optional type parameters and markers, and neither fields nor a block, since the compiler provides the representation; `intrinsic` with fields or a block, or with `external`, is `E2001`. Which files may use the form is `standard-library`'s rule.

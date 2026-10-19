@@ -270,6 +270,13 @@ The formatter MUST print a function type's receiver as written, with no space ar
 - **WHEN** formatting `fun f(a: ColumnScope . ()->Unit, b: escaping  compose  mut Builder.(Int)->Unit) {}` and `// Weight.` followed by `context( scope : RowScope ) public fun Modifier.weight(w: Double): Modifier = this`
 - **THEN** the results are `fun f(a: ColumnScope.() -> Unit, b: escaping compose mut Builder.(Int) -> Unit) {}`, and `// Weight.`, `context(scope: RowScope)` and `public fun Modifier.weight(w: Double): Modifier = this` on three lines
 
+### Requirement: Intrinsic Structs Are Printed
+`prism fmt` MUST print an intrinsic struct declaration on one line, as its visibility, `intrinsic struct`, its name, its type parameters and its markers, with the spacing of other struct declarations.
+
+#### Scenario: Intrinsic structs formatted
+- **WHEN** `prism fmt -` reads `public  intrinsic struct RecomposeScope:Copy`
+- **THEN** it writes `public intrinsic struct RecomposeScope : Copy` and a newline
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -299,3 +306,7 @@ Decisions from `implicit-it` (planned autonomously on 2026-10-18, refined while 
 Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **A context parameter goes on its own line above its declaration** (D11), like an annotation, which keeps scoped modifiers' signatures within the line width; comments above a declaration stay above its context line. Receiver function types print as written, with one space after `compose`, `mut` and `escaping` and none around the `.`. The meaning check compares receivers and contexts. Rejected: the context on the declaration's line, which made most scoped modifiers' parameter lists break.
+
+Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **Intrinsic structs print on one line** (D16), as their visibility, `intrinsic struct`, name, type parameters and markers, like other struct headers.

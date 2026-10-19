@@ -398,6 +398,13 @@ Phase 1 MUST record whether a function type in an exported signature has a recei
 - **WHEN** a file exports `context(scope: RowScope) public fun Modifier.weight(w: Double): Modifier` and `context(scope: ColumnScope) public fun Modifier.weight(w: Double): Modifier`, and the two declarations are reordered
 - **THEN** the ABI records two distinct functions, and the exported ABI hash is the same in both orders
 
+### Requirement: Intrinsic Structs in the ABI
+An exported intrinsic struct MUST be an ABI entry with its name, type parameters and markers, marked intrinsic, covered by the ABI hash and shown by `prism abi` with its modifier (`public intrinsic struct RecomposeScope : Copy`). Its layout MUST NOT be part of the ABI: it comes from the compiler, whose version every artifact key holds.
+
+#### Scenario: The ABI of the compose module
+- **WHEN** the ABI of `/prism/compose/runtime` is extracted
+- **THEN** it holds `public intrinsic struct Composition`, `public intrinsic struct RecomposeScope : Copy` and `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`, and removing the `Copy` marker of `RecomposeScope` changes the module's ABI hash
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
@@ -454,3 +461,7 @@ Decisions from `instance-cache` (planned autonomously on 2026-10-17, implemented
 Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Receivers and contexts are part of the ABI** (D9). A structured function type records whether it has a receiver, and an extension's entry its context type, bound like any signature type; the hash covers both, so adding a context parameter or a receiver changes an importer's view, while the context parameter's name, which the ABI does not record, does not. Exported symbols are ordered by their context after receiver and name, so reordering declarations never changes the hash.
+
+Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **Intrinsic structs in the ABI** (D16): an exported intrinsic struct is an ABI entry with its name, type parameters and markers, so changing a marker changes the hash, but not its layout, which comes from the compiler whose version every artifact key holds.

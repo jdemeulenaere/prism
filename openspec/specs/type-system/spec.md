@@ -883,6 +883,17 @@ A value `f` of a receiver function type MUST be callable as `f(r, a)`, with the 
 - **WHEN** `struct Scope : Copy {}` and `struct Other : Copy {}` are declared and `fun a(f: Scope.() -> Int): Int = f()` and `fun Other.b(f: Scope.() -> Int): Int = f()` are checked
 - **THEN** the type checker emits `E4004` for each call, saying that `f` takes a receiver of type `Scope`, passed as `f(scope)` or `scope.f()`
 
+### Requirement: Default Values Are Not Composable Contexts
+A parameter's default value MUST be checked outside any composable context, also for a parameter of a composable, since its generator runs in the caller before the call. A composable call in a default value MUST be rejected with `E4008`, with a note that default values are not composable.
+
+#### Scenario: A composable call in a default value rejected
+- **WHEN** `compose fun Size(): Int = 4` and `compose fun Box(width: Int = Size()) { }` are checked
+- **THEN** the type checker reports `E4008` for the call of `Size`, noting that default values are not composable
+
+#### Scenario: A constant default of a composable
+- **WHEN** `compose fun Box(width: Int = 4) { }` and `compose fun Screen() { Box() }` are checked
+- **THEN** the file typechecks
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -989,3 +1000,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 - **Receiver and plain function types convert in place, both ways** (D2). `T.(A) -> R` and `(&T, A) -> R` share one representation, so `converts_in_place` ignores the flag, as Kotlin lets `T.() -> R` and `(T) -> R` stand for each other; the other rules apply to the receiver's parameter as to any, so a shared receiver may become a mutable one but never the reverse. Glue names write the receiver as source does, since glue is keyed by type and a unit may need both forms; the contract hash, which describes representations, ignores it. Rejected: no conversion, which would need a calling closure to pass a `(&ColumnScope) -> Unit` as content.
 - **A lambda against a receiver function type binds `this`** (D3). The closure binds `this` in its own scope before its parameters, as a `val` of the receiver's parameter type declared at its `{`, whatever the expected type's source (a parameter, an annotation, a return type, a field, a deferred closure of a generic call, a nullable function type). Its header and the implicit `it` count the other parameters only. A closure with no expected type, or checked against a plain function type, has no receiver of its own. Rejected: rewriting the lambda in the parser (it does not know the expected type). Cost: one binding per receiver lambda.
 - **Receiver function values are called in Kotlin's three ways** (D5): `f(r, a)` as an ordinary call; `r.f(a)`, where a local or parameter `f` of a receiver function type whose receiver is `r`'s type is considered after members and before extensions (Kotlin resolves locals first, and a parameter named like an imported extension would otherwise be unreachable in method form); and `f(a)` with the innermost `this` as the receiver when its type matches, which is how Compose's scopes call their content. Without such a `this`, the call is `E4004`, naming the receiver type and the two ways to pass one. Cost: one scoped lookup for a method call that found no member, and one comparison for `f(a)`.
+
+Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **Default values are not composable contexts** (D17). A default's generator runs in the caller before the call, outside the callee's groups, and is not a composable body, so a composable call in a default is `E4008` with a note. Kotlin allows composable defaults (`LocalContentColor.current`), which would need composer parameters on generators and groups in the caller; with no `CompositionLocal` yet, they are a follow-up.

@@ -78,7 +78,7 @@ A group key MUST be a 64-bit hash of the enclosing top-level declaration's path 
 - **THEN** the keys of `Counter`'s body group, of its `if` branch's group and of its content lambda's group are the same in both dumps
 
 ### Requirement: Conditional and Repeated Composable Code Runs in Its Own Groups
-A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback of `?:`, the part of a safe call after its test, and a loop, around all its iterations, MUST run in a replaceable group of its own when it contains a composable call outside closures. A `when` whose patterns or guards contain a composable call MUST also run, as a whole, in a replaceable group of its own around its tests and its branches' groups. In a loop that a `continue` targets, each composable call and each `remember` made directly in the loop's group MUST run in a replaceable group of its own, keyed by its ordinal among them, so that calls at different call sites never match each other's groups. Leaving such a region by any path, `return`, `break` and `continue` included, MUST end its group.
+A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback of `?:`, the part of a safe call after its test, and a loop, around all its iterations, MUST run in a replaceable group of its own when it contains a composable call outside closures. Leaving such a region by any path, `return`, `break` and `continue` included, MUST end its group.
 
 #### Scenario: Branches of a composable get their own groups
 - **WHEN** `compose fun V(on: Bool) { if (on) { val a = remember { println("on"); 1 } } else { val b = remember { println("off"); 2 } } }`, `fun screen(on: Bool): compose () -> Unit = { V(on) }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); c.setContent(screen(true)) }` run
@@ -92,13 +92,19 @@ A branch of an `if` or `when`, the right operand of `&&` or `||`, the fallback o
 - **WHEN** `compose fun Leaf() { }`, `compose fun E(stop: Bool) { if (stop) { Leaf(); return }; Leaf() }`, `fun screen(stop: Bool): compose () -> Unit = { E(stop) }` and `fun main() { val c = composition(screen(true)); c.setContent(screen(false)); println("done") }` run
 - **THEN** stdout is `done`, and the exit status is 0
 
-#### Scenario: A continue keeps calls apart
-- **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Outer(skip: Int) { for (i in 0..1) { val a = remember { 100 + i }; Inner(1); if (i == skip) { continue }; val b = remember { println("remember $i"); 200 + i }; Inner(2); println("$i $a $b") } }`, `fun screen(skip: Int): compose () -> Unit = { Outer(skip) }` and `fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(5)) }` run
-- **THEN** after `--`, stdout is `0 100 201`, `remember 1`, `inner 2` and `1 101 201`: each `remember` and each call of `Inner` matches only the groups of its own call site, in order, so no value moves from one call site to another and no call trusts change bits given at another
+### Requirement: A When With Composable Tests Runs in Its Own Group
+A `when` whose patterns or guards contain a composable call outside closures MUST run, as a whole, in a replaceable group of its own around its tests and its branches' groups, so that which tests ran never changes how the calls after the `when` match their groups.
 
 #### Scenario: Composable tests of a when run in its group
 - **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Check(n: Int, limit: Int): Bool { Inner(n); return n > limit }`, `compose fun Pick(limit: Int) { when { Check(1, limit) -> println("first"); Check(2, limit) -> println("second"); else -> println("none") }; val last = Check(3, limit) }`, `fun screen(limit: Int): compose () -> Unit = { Pick(limit) }` and `fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(1)); print(c.dump()) }` run
 - **THEN** after `--`, stdout is `inner 2` and `second`, and the dump shows `Pick`'s group holding the `when`'s group, with the two groups of `Check` that the second pass ran, and after it the group of the last `Check`
+
+### Requirement: Calls in a Loop With a Continue Run in Call-Site Groups
+In a loop that a `continue` targets, each composable call and each `remember` made directly in the loop's group, outside its branches' and inner loops' groups, MUST run in a replaceable group of its own, keyed by its ordinal among them in the loop. Calls at different call sites MUST NOT match each other's groups or slots. `key` calls MUST NOT get such a group, so keyed items still reorder across iterations.
+
+#### Scenario: A continue keeps calls apart
+- **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Outer(skip: Int) { for (i in 0..1) { val a = remember { 100 + i }; Inner(1); if (i == skip) { continue }; val b = remember { println("remember $i"); 200 + i }; Inner(2); println("$i $a $b") } }`, `fun screen(skip: Int): compose () -> Unit = { Outer(skip) }` and `fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(5)) }` run
+- **THEN** after `--`, stdout is `0 100 201`, `remember 1`, `inner 2` and `1 101 201`: each `remember` and each call of `Inner` matches only the groups of its own call site, in order, so no value moves from one call site to another and no call trusts change bits given at another
 
 ### Requirement: Remembering a Value in a Composable
 `remember(calculation)` MUST be a composable that runs `calculation` the first time its position in its group is composed, keeps the result in a slot, and returns a copy of the kept value on every later pass without running `calculation`. Its type parameter MUST be bounded by `Copy`, and `calculation` MUST NOT be a composable context.
@@ -145,11 +151,14 @@ A parameter, the receiver included, MUST be stable when its type is `Copy` and h
 - **THEN** the headers of `A`, `F` and `G` are marked `skippable`, and those of the others are not
 
 ### Requirement: Callers Say What They Know of Each Argument
-A call of a composable MUST tell the callee, for each argument, that it is static (a constant, or a value read from a top-level `val`), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), or that it is uncertain. A callee MUST trust static and same arguments without comparing them. A local that is borrowed mutably, or assigned anything but such a copy, MUST NOT count as forwarding a parameter or a constant from then on.
+A call of a composable MUST tell the callee, for each argument, that it is static (a constant, or a value read from a top-level `val`), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), or that it is uncertain. A callee MUST trust static and same arguments without comparing them.
 
 #### Scenario: A forwarded unchanged parameter is not compared again
 - **WHEN** `compose fun Inner(n: Int) { println("inner") }`, `compose fun Outer(n: Int, s: String) { Inner(n) }`, `fun screen(s: String): compose () -> Unit = { Outer(5, s.clone()) }` and `fun main() { val c = composition(screen("a")); c.setContent(screen("b")) }` run
 - **THEN** stdout is `inner` once: `Outer` runs again for its changed `String`, and passes `n` to `Inner` as static
+
+### Requirement: A Mutably Borrowed Local Forwards Nothing
+A local that is borrowed mutably, by a borrow or a closure, or assigned anything but a copy of a parameter, a constant or a top-level value, MUST NOT count as forwarding what it copied from then on: an argument read from it is uncertain.
 
 #### Scenario: A value written through a borrow is not forwarded
 - **WHEN** `compose fun Inner(n: Int) { println("inner $n") }`, `compose fun Outer(n: Int, m: Int) { var x = n; val r = &mut x; *r = m; Inner(x) }`, `fun screen(m: Int): compose () -> Unit = { Outer(5, m) }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(2)) }` run
