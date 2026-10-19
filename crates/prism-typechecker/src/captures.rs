@@ -50,7 +50,7 @@ struct ClosureInfo<'a> {
     /// Whether the closure is written in a default value, outside any other closure.
     in_default: bool,
     /// The bindings the closure captures, each once, in order of first use.
-    captures: std::borrow::Cow<'a, [Capture]>,
+    captures: &'a [Capture],
 }
 
 /// One block-like scope: its interval in a walk that numbers entries and exits, so that a scope
@@ -381,26 +381,14 @@ impl<'a> Graph<'a> {
                 unreachable!("a closure node")
             };
             let index = self.closures.len();
-            // The checker records whole bindings; a tree whose captures were already decided
-            // records paths, several per binding, which count once.
-            let captures = if captures.iter().all(|c| c.projections.is_empty()) {
-                std::borrow::Cow::Borrowed(captures.as_slice())
-            } else {
-                let mut seen = HashSet::new();
-                std::borrow::Cow::Owned(
-                    captures
-                        .iter()
-                        .filter(|c| seen.insert(c.local))
-                        .map(|c| Capture::whole(c.local, c.span, CaptureMode::Borrowed))
-                        .collect(),
-                )
-            };
+            // The checker records each captured binding once, whole.
+            debug_assert!(captures.iter().all(|c| c.projections.is_empty()));
             self.paths.push(Vec::new());
             self.closures.push(ClosureInfo {
                 expression,
                 parent: self.closure_stack.last().copied(),
                 in_default: self.in_default && self.closure_stack.is_empty(),
-                captures,
+                captures: captures.as_slice(),
             });
             self.closure_of[expression.0 as usize] = index as u32;
             index
@@ -1790,6 +1778,8 @@ mod tests {
 mod timing {
     use super::{decide_captures, BodyKind};
     use crate::checker::TypeChecker;
+    use prism_typed_tree::{Capture, CaptureMode, ExpressionKind};
+    use std::collections::HashSet;
     use std::fmt::Write;
     use std::time::{Duration, Instant};
 
@@ -1832,6 +1822,20 @@ mod timing {
         let check = start.elapsed();
         assert!(checker.errors.is_empty(), "{:?}", &checker.errors[..1]);
         let types = typed.types.clone();
+        // The pass's input as the checker builds it: each closure's captured bindings, whole and
+        // borrowed, once each in first-use order.
+        for (_, body) in typed.bodies.iter_mut() {
+            for (_, expression) in body.expressions.iter_mut() {
+                if let ExpressionKind::Closure { captures, .. } = &mut expression.kind {
+                    let mut seen = HashSet::new();
+                    captures.retain(|capture| seen.insert(capture.local));
+                    for capture in captures.iter_mut() {
+                        *capture =
+                            Capture::whole(capture.local, capture.span, CaptureMode::Borrowed);
+                    }
+                }
+            }
+        }
         let start = Instant::now();
         for (_, body) in typed.bodies.iter_mut() {
             decide_captures(body, &types, BodyKind::Function);

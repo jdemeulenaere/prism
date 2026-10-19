@@ -271,11 +271,9 @@ impl Escapes<'_> {
             .find_map(|(position, capture)| match capture {
                 // A moved input (a `&mut` reference) no longer holds its items where the closure
                 // escapes, so it is matched by its local.
-                Capture::Owned(Operand::Copy(place, span) | Operand::Move(place, span)) => (self
-                    .flow
-                    .capture_items(state, capture)
-                    .contains(&index)
-                    || item == Item::Input(place.local))
+                Capture::Owned(Operand::Copy(place, span) | Operand::Move(place, span)) => {
+                    (self.flow.capture_items(state, capture).contains(&index)
+                        || item == Item::Input(place.local))
                     .then(|| {
                         let widening = self
                             .file
@@ -284,7 +282,8 @@ impl Escapes<'_> {
                             .and_then(|closure| closure.capture_widenings.get(position))
                             .and_then(Option::as_ref);
                         (self.body.locals[place.local].name.clone(), *span, widening)
-                    }),
+                    })
+                }
                 _ => None,
             })
     }
