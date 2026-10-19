@@ -704,17 +704,44 @@ impl WatchSession {
         changed
     }
 
+    /// Reports the watched files that changed on disk since the last build read them, as a
+    /// change first noticed now. A file saved after the build read it but before its directory
+    /// was registered with the watcher has no event, so the session looks once its watch is
+    /// registered; a change that also has an event is reloaded once, since the second report
+    /// finds the content already read. Files the store holds no content for, or has marked to
+    /// read again, are left to their events, so a build that stopped before reading a file
+    /// does not report it again and again.
+    fn catch_up(&mut self) {
+        let changed: Vec<PathBuf> = self
+            .watched
+            .iter()
+            .filter(|path| !self.store.is_stale(path))
+            .filter(|path| match (self.store.content(path), self.store.current_content(path)) {
+                (Some(before), Ok(now)) => before != now,
+                _ => false,
+            })
+            .cloned()
+            .collect();
+        if !changed.is_empty() {
+            let _ = self
+                .sender
+                .send(SessionEvent::FilesChanged(changed, Instant::now()));
+        }
+    }
+
     /// Runs the session on file-system events (D15), until the process ends.
     pub fn run_watching(&mut self) -> i32 {
         self.install_stop_handler();
         let mut watcher = FileWatcher::start(self.sender());
         self.start();
         watcher.watch(&self.watched);
+        self.catch_up();
         loop {
             match self.next_event() {
                 Some(SessionEvent::FilesChanged(paths, detected)) => {
                     self.reload(&paths, detected);
                     watcher.watch(&self.watched);
+                    self.catch_up();
                 }
                 Some(SessionEvent::MainReturned(status)) => self.program_ended(status, false),
                 Some(SessionEvent::Stopped(status)) => self.program_ended(status, true),

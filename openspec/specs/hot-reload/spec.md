@@ -176,7 +176,7 @@ Under `--watch`, a runtime error MUST be reported as the `execution` spec requir
 - **THEN** stderr holds `panic: division by zero` with its location, `watch: the program stopped with a runtime error; waiting for changes` and `watch: running main again`, stdout holds `1`, and the session exits with status 0
 
 ### Requirement: Changes Are Detected From File-System Events
-Without an edit script, the session MUST detect changes from the platform's file-system events on the directories that hold the program's files and its unresolved imports' targets, registered again after each reload. After the first event it MUST wait for 10 ms without events, and at most 100 ms, before reloading. If events are unavailable, it MUST poll the files every 100 ms and say so on stderr.
+Without an edit script, the session MUST detect changes from the platform's file-system events on the directories that hold the program's files and its unresolved imports' targets, registered again after each reload. Once a registration is done, a watched file whose content differs from what the last build read MUST be reloaded as if it had an event, since a save between the read and the registration has none. After the first event it MUST wait for 10 ms without events, and at most 100 ms, before reloading. If events are unavailable, it MUST poll the files every 100 ms and say so on stderr.
 
 #### Scenario: An atomic save is seen
 - **WHEN** an editor saves `main.prism` by writing `main.prism.tmp` and renaming it to `main.prism` while the program runs

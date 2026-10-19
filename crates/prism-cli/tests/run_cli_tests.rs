@@ -1649,12 +1649,27 @@ struct WatchedProgram {
 
 impl WatchedProgram {
     fn start(directory: &Path, entry: &str) -> Self {
+        Self::spawn(directory, &["run", "--watch", entry])
+    }
+
+    /// Starts `prism run --watch --timings` on a program that compiles, and waits until its
+    /// first build has read its files and `main` is starting: the session prints its load
+    /// timings then. A save from then on is seen whatever the machine's load, by its event or,
+    /// when the save came before the watcher registered its directory, by the check the
+    /// session makes once it has, so no fixed sleep is needed.
+    fn start_running(directory: &Path, entry: &str) -> Self {
+        let mut session = Self::spawn(directory, &["run", "--watch", "--timings", entry]);
+        session.wait_for(|line| line.starts_with("timing: total to main"));
+        session
+    }
+
+    fn spawn(directory: &Path, arguments: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_prism"))
             .env(
                 "PRISM_CACHE",
                 std::env::temp_dir().join("prism_run_cli_build_cache"),
             )
-            .args(["run", "--watch", entry])
+            .args(arguments)
             .current_dir(directory)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1678,9 +1693,10 @@ impl WatchedProgram {
         }
     }
 
-    /// Waits up to 20 seconds for a stderr line satisfying `wanted`.
+    /// Waits up to 60 seconds, generous for a loaded machine, for a stderr line satisfying
+    /// `wanted`.
     fn wait_for(&mut self, wanted: impl Fn(&str) -> bool) -> String {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match self.lines.recv_timeout(left) {
@@ -1722,9 +1738,7 @@ const LOOPING: &str =
 #[test]
 fn saving_an_edited_body_while_the_program_runs() {
     let directory = single_file("watch_saving", LOOPING);
-    let mut session = WatchedProgram::start(&directory, "main.prism");
-    // The program runs once its first load is done; give the watcher time to register too.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut session = WatchedProgram::start_running(&directory, "main.prism");
     write(
         &directory.join("main.prism"),
         &LOOPING.replace("Int = 1\n", "Int = 2\n"),
@@ -1740,8 +1754,7 @@ fn saving_an_edited_body_while_the_program_runs() {
 #[test]
 fn saving_without_changes_does_nothing() {
     let directory = single_file("watch_unchanged", LOOPING);
-    let mut session = WatchedProgram::start(&directory, "main.prism");
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut session = WatchedProgram::start_running(&directory, "main.prism");
     write(&directory.join("main.prism"), LOOPING);
     session.drain_for(std::time::Duration::from_millis(500));
     write(
@@ -1762,11 +1775,11 @@ fn saving_without_changes_does_nothing() {
 #[test]
 fn an_atomic_save_is_seen() {
     let directory = single_file("watch_atomic", LOOPING);
-    let mut session = WatchedProgram::start(&directory, "main.prism");
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut session = WatchedProgram::start_running(&directory, "main.prism");
     let temporary = directory.join("main.prism.tmp");
     write(&temporary, &LOOPING.replace("Int = 1\n", "Int = 2\n"));
     fs::rename(&temporary, directory.join("main.prism")).unwrap();
+    session.wait_for(|line| line == "reload: applied main.prism");
     session.wait_for(|line| line == "watch: main returned with status 0; waiting for changes");
     let (stdout, seen) = session.stop();
     assert_eq!(stdout, "2\n");

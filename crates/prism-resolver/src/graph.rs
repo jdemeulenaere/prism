@@ -401,6 +401,11 @@ impl SourceStore {
         }
     }
 
+    /// Whether `path` is marked to be read again at the next build.
+    pub fn is_stale(&self, path: &Path) -> bool {
+        self.stale.contains(path)
+    }
+
     /// Whether `path` reads differently now than when the store last read it: a file it never
     /// read, or one that cannot be read any more, counts as changed.
     pub fn has_changed(&self, path: &Path) -> bool {
