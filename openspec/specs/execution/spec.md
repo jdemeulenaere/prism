@@ -895,6 +895,20 @@ A call of an extension with a context parameter MUST run the extension its conte
 - **WHEN** `struct Modifier : Copy { val fraction: Double }`, `struct ColumnScope : Copy { val factor: Double }`, `struct RowScope : Copy {}`, `context(scope: RowScope) fun Modifier.weight(w: Double): Modifier = Modifier(w)`, `context(scope: ColumnScope) fun Modifier.weight(w: Double): Modifier = Modifier(w * scope.factor)`, `fun Column(content: ColumnScope.() -> Unit) { println("column {"); content(ColumnScope(2.0)); println("}") }`, `fun Row(content: RowScope.() -> Unit) { println("row {"); RowScope().content(); println("}") }` and `fun Text(text: String, modifier: Modifier = Modifier(0.0)) { println(text + " " + modifier.fraction.toString()) }` are declared, and `fun main() { Column { Text("a", Modifier(0.0).weight(1.0)); Row { Text("b", Modifier(0.0).weight(1.0)); Text("c") }; listOf(3.0).forEach { Text("d", Modifier(0.0).weight(it)) } } }` runs with `--check-allocations`
 - **THEN** it prints `column {`, `a 2.0`, `row {`, `b 1.0`, `c 0.0`, `}`, `d 6.0` and `}`, reports no live allocation and exits with status 0
 
+### Requirement: State Errors Are Runtime Errors at the Access
+The runtime errors of state, `stale state handle`, `state accessed while borrowed`, `state written during composition` and `state created during composition outside remember`, MUST end the program as every runtime error does (execution, "Runtime Errors End the Program"), with the location of the access, write or creation that failed.
+
+#### Scenario: Location of a stale access
+- **WHEN** `app/main.prism` reads a stale handle with `println(kept.value)` on line 9, `kept.value` starting at column 13
+- **THEN** stderr is exactly `panic: stale state handle` and `  at app/main.prism:9:13`, each followed by a newline, and the exit status is 101
+
+### Requirement: Program Cells Are Released Before the Allocation Check
+Under `--check-allocations`, every cell that the program owns MUST be freed, its value dropped, when `main` returns, before compositions still live are reported and before the allocation check reports. Without the check, program cells MUST NOT be freed.
+
+#### Scenario: A program cell holding a composition
+- **WHEN** `compose fun Empty() { }` and `fun main() { val s = mutableStateOf(composition { Empty() }) }` run with `--check-allocations`
+- **THEN** the program exits with status 0: releasing the cell disposes the composition before live compositions are counted
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -974,3 +988,8 @@ Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemente
 
 - **Composition misuse has no location** (D12). It is one runtime error kind, `composition misuse: <detail>`, raised by an entry point of the compose runtime, which has no caller location; passing one would cost a word per call for an error the generated code never produces.
 - **Undisposed compositions fail the allocation check** (D13). A composition whose restart functions have inline environments holds no allocation of the program, so the leak report alone would miss it. `prism-runtime` calls a finish report, which `Program::run` installs from `prism-compose`, before its leak line; either line makes the status 102.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **State errors are located runtime errors** (D14). `stale state handle`, `state accessed while borrowed`, `state written during composition` and `state created during composition outside remember` are `PanicKind`s after `CompositionMisuse`, raised at the access through a recorded kind and a cold block with its location, since unlike composition misuse ordinary programs reach them.
+- **Program cells are freed first under the check** (D12). The finish report frees the program's cells, repeatedly, since a cell may hold a composition whose disposal frees cells, then reports live compositions, then allocations; without the check they are never freed, as top-level values are not.

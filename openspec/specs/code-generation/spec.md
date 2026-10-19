@@ -629,6 +629,34 @@ A closure that captures nothing or owns only `Copy` captures MUST have an enviro
 - **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Screen { val c: Composition, val s: RecomposeScope }` and `fun f(s: Screen) {}`
 - **THEN** it shows `Screen` with size 16 and alignment 8, and `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope` with size 8
 
+### Requirement: State Handles Are One Word
+`State<T>` and `MutableState<T>` MUST be laid out as one 8-byte, 8-aligned word for every `T`, with no drop glue, clone glue that copies the word, and equality glue that compares the words. `prism dump-layout` MUST name them `prism/compose/runtime::State<...>` and `prism/compose/runtime::MutableState<...>`.
+
+#### Scenario: Layout of a state handle
+- **WHEN** `prism dump-layout` runs on a file declaring `struct Todo { val title: String }` and `fun f(s: MutableState<List<Todo>>) { }`
+- **THEN** it prints the layout of `prism/compose/runtime::MutableState<List<Todo>>` as size 8 and alignment 8, holding only the hidden `handle: Int` word that every intrinsic struct has
+
+### Requirement: State Operations Call the Compose Runtime
+Each state operation MUST be a direct call of a compose runtime entry point with the handle word, the slot type record of the value type, and the value passed by address where it moves. When the entry reports a failure, the generated code MUST raise the error the runtime recorded at the operation's location.
+
+#### Scenario: A read in the IR dump
+- **WHEN** `prism dump-clif` runs on `fun f(s: State<Int>): Int = s.value`
+- **THEN** the function calls `prism_compose_state_read` with the handle and the record of `Int`, tests the result for null, and on null calls `prism_compose_state_error` with the location of `s.value`
+
+### Requirement: Cell Records Compare by Equality Glue
+The slot type record of a value type held in a cell MUST hold its drop glue, or null, and an equality entry exactly when `==` applies to the type, strings and lists included, or when it is a function type, compared by closure and captures. The equality entry MUST be the type's equality glue.
+
+#### Scenario: Records of a unit's cells
+- **WHEN** `prism dump-clif` runs on `fun main() { val s = mutableStateOf("a"); val l = mutableStateOf(listOf(1)); s.value = "b"; l.value = listOf(2) }`
+- **THEN** `main` refers to one slot type record each for `String` and `List<Int>`, and the unit defines `#equals(String)`, `#equals(List<Int>)` and `#drop(List<Int>)`, the glue those records name as their equality and drop entries
+
+### Requirement: Top-Level Initializers Run as Program Code
+The initializer of a top-level value MUST run between a call that marks program code and a call that ends it, so the cells it creates belong to the program even when it first runs during a pass.
+
+#### Scenario: A global state first read during composition
+- **WHEN** `val Theme: MutableState<Int> = mutableStateOf(3)` and `compose fun C() { println(Theme.value) }` are declared and `fun main() { val c = composition { C() } }` runs with `--check-allocations`
+- **THEN** stdout is `3`, and the exit status is 0
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -757,3 +785,8 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 - **Slot type records and equality glue** (D20). `<unit>#slot-type(<type>)` is defined once per type a unit keeps or remembers: fingerprint, size, alignment, drop glue or null, equality glue and name. Records of one type in two units are distinct and matched by fingerprint. Every kept type has equality glue, scalars included, giving `==` of the type (so `NaN` never equals itself); a function type's compares descriptors, then calls the environment equality entry.
 - **Four-word descriptors with environment equality and duplicate entries** (D9). A closure capturing nothing uses a runtime function returning true and a null duplicate entry; one owning only `Copy` captures gets `#equals-environment` (comparing captures with `==` in capture order) and, when its environment is allocated, `#duplicate-environment`; borrowing closures and those owning other captures get neither, which makes them unkeepable. `prism_runtime::Descriptor` stays a two-word Rust prefix, since only generated code reads the last two words (D26). Rejected: bitwise environment comparison (`Double` and padding), a `Copy` function type marker, shared equality functions per layout (a follow-up if code size asks).
 - **Intrinsic structs are one handle word** (D16, D20): laid out as a struct with one hidden `Int` field, so copies, `==` and equality glue need no special case; `Composition`'s drop glue calls `prism_compose_dispose`.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **The backend of state** (D19). Handles are the one-word intrinsic struct layout with its hidden `handle: Int` field, so copies, clone and `==` need no glue of their own. Each state operation is a direct call of its entry point with the handle word, the slot type record of the value type (whose equality entry is the type's equality glue, strings, lists and function types included), and moved values by address, followed by the failure test of compose D14 and a cold block calling `prism_compose_state_error` with the location. A top-level accessor brackets its initializer with `prism_compose_begin_program`, which returns whether it pushed the program as creation owner (not while compose is unused, from the review), and `prism_compose_end_program` with that answer.
+- **Type fingerprints hash type arguments** (from the review). A struct or enum hashes its type arguments as well as its substituted fields, so a struct without fields, such as a state handle, has a fingerprint per argument: `MutableState<Int>` and `MutableState<String>` never share an accessor's contract or a slot type.

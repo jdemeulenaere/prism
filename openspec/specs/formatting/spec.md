@@ -277,6 +277,13 @@ The formatter MUST print a function type's receiver as written, with no space ar
 - **WHEN** `prism fmt -` reads `public  intrinsic struct RecomposeScope:Copy`
 - **THEN** it writes `public intrinsic struct RecomposeScope : Copy` and a newline
 
+### Requirement: Writable Intrinsic Properties Are Printed
+`prism fmt` MUST print an `intrinsic var` declaration on one line, as it prints an `intrinsic val` declaration, with `var` in place of `val`.
+
+#### Scenario: Writable intrinsic properties formatted
+- **WHEN** `prism fmt -` reads `public  intrinsic var<T>MutableState<T>.value:T`
+- **THEN** it prints `public intrinsic var <T> MutableState<T>.value: T` and a newline
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -310,3 +317,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **Intrinsic structs print on one line** (D16), as their visibility, `intrinsic struct`, name, type parameters and markers, like other struct headers.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **`intrinsic var` prints as `intrinsic val` does** (D4), with `var` in place of `val`.

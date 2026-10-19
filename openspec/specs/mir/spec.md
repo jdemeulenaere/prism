@@ -610,6 +610,24 @@ A generic composable MUST be composed once, in its polymorphic MIR, and its reco
 - **WHEN** `compose fun <T : Copy> Show(x: T) { }` is declared and `fun main() { val c = composition { Show(1); Show(true) } }` runs through `prism dump-mir --instances main.prism`
 - **THEN** it prints `main::Show<Bool>` and `main::Show<Int>`, each keeping its argument in a slot of its own type argument, each with its restart closure
 
+### Requirement: State Operations Are Calls
+Every state operation MUST lower to `Call` terminators of state operations, each with the value type as its type argument and the handle passed by copy: creating a cell; reading it, which gives a shared reference to its value; writing it; borrowing it shared, moving its value out or borrowing it mutably, and ending each of those. A state place MUST be the dereference of the reference a read gives.
+
+#### Scenario: A compound assignment through a handle
+- **WHEN** `prism dump-mir` runs on `fun f(s: MutableState<Int>) { s.value += 1 }`
+- **THEN** the body copies `s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
+
+#### Scenario: An update call
+- **WHEN** `prism dump-mir` runs on `fun f(s: MutableState<Int>) { s.update { n -> n * 2 } }`
+- **THEN** the body calls `state take<Int>`, calls the closure value with the taken value moved, and calls `state put<Int>` with the result moved
+
+### Requirement: Composed MIR Marks Remember Windows and Side Effects
+In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin_remember` and an `end_remember` composer operation, the end after the result's slot is written, and a call of `SideEffect` MUST be a `side_effect` composer operation taking the effect moved.
+
+#### Scenario: Composed remember of a state
+- **WHEN** `prism dump-mir --composed` runs on `compose fun C() { val s = remember { mutableStateOf(0) } }`
+- **THEN** the missing path calls `composer begin_remember`, then the calculation, then `composer set_slot<MutableState<Int>>`, then `composer end_remember`
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -720,3 +738,7 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 - **Lowering marks regions; a memoized pre-pass decides which** (D6). Only lowering knows a body's structure and every edge leaving a construct, so it emits `GroupStart` and `GroupEnd` markers, attached to the scope it already opens for the construct, so `exit_scope` ends a region after that scope's drops on every exit, including `return`, `break` and `continue`. A post-order walk of the typed tree marks expressions containing composable calls outside closures, once per node, and only those constructs open regions. A `when`'s region is its branch body, and a `when` whose tests compose is also a region as a whole (review); a loop region records whether a `continue` targets it, shown as `loop 0, continued`. Markers read, write and drop nothing. Rejected: recovering regions from the CFG (dominators, and construct kinds lost), groups for every branch, block-range side tables (blocks are merged after lowering).
 - **Composed MIR** (D19). Composable bodies gain `$composer` and `$changed...` arguments after the declared ones; composer operations are `Callee::Composer` calls (`StartRestartGroup`, `StartGroup`, `StartMovableGroup`, `EndGroup`, `EndRestartGroup`, `Skipping`, `SkipToGroupEnd`, `Changed`, `SetSlot`, `Keep`, `KeptParameter`, `Keepable`, `Duplicate`, `CurrentScope` and the composition operations), `Remembered` reads the slot at the cursor with two successors, and `Rvalue::Bits` builds change words. Restart and root content bodies are owned by what they belong to (`BodyOwner::Restart`, `BodyOwner::RootContent`), so inserting a closure never renames them. The transform replays each body's blocks, splitting at markers and operations, builds the prologue as `bb0` and tidies with `merge_goto_blocks`; its temporaries live from entry to every return. `validate.rs` checks the composed phase, and keys carry a label only dumps read.
 - **Generic composables are composed once** (D21): records hold the composed body with its restart and adapter bodies, and `instantiate.rs` substitutes the slot types of `Changed`, `SetSlot`, `Keep`, `KeptParameter` and `Remembered`, so nothing about composing depends on type arguments.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **State operations are calls** (D17). `Callee::State` with `Create`, `Read`, `Write`, `BeginRead`, `EndRead`, `Take`, `Put`, `BeginEdit` and `EndEdit`, called by ordinary `Call` terminators whose type argument is the value type, so instantiation substitutes them like any call. A `Copy` read is `state read` and a copy of `*_r`, a place is `*_r`, a write is `state write` after the value, a compound assignment holds the handle in a temporary once, and the closure members are a begin, the closure call and an end. Composed MIR adds `begin_remember`, `end_remember` and `side_effect`; the instance cache's codec encodes every new form.

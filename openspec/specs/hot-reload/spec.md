@@ -63,7 +63,7 @@ A frame that is already running when a reload is applied MUST continue in the co
 - **THEN** stdout holds `2` and `3`
 
 ### Requirement: Slots Record the Contract of Their Code
-Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, type arguments, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted, so two instances of one generic struct differ even when no field mentions the argument, as for a state handle.
+Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, type arguments, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted.
 
 #### Scenario: A changed field type keeps old values with old code
 - **WHEN** `struct P { val x: Int }`, `fun show(p: &P) { println(p.x) }` and `fun main() { val p = P(1); show(p); show(p) }` run under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `struct P { val x: Double }`, `fun show(p: &P) { println(p.x + 0.5) }` and `fun main() { val p = P(1.0); show(p); show(p) }`
@@ -176,7 +176,7 @@ Under `--watch`, a runtime error MUST be reported as the `execution` spec requir
 - **THEN** stderr holds `panic: division by zero` with its location, `watch: the program stopped with a runtime error; waiting for changes` and `watch: running main again`, stdout holds `1`, and the session exits with status 0
 
 ### Requirement: Changes Are Detected From File-System Events
-Without an edit script, the session MUST detect changes from the platform's file-system events on the directories that hold the program's files and its unresolved imports' targets, registered again after each reload. Once a registration is done, a watched file whose content differs from what the last build read MUST be reloaded as if it had an event, since a save between the read and the registration has none. After the first event it MUST wait for 10 ms without events, and at most 100 ms, before reloading. If events are unavailable, it MUST poll the files every 100 ms and say so on stderr.
+Without an edit script, the session MUST detect changes from the platform's file-system events on the directories that hold the program's files and its unresolved imports' targets, registered again after each reload. A file saved between a build's read and the registration MUST reload once it is done. After the first event it MUST wait for 10 ms without events, and at most 100 ms, before reloading. If events are unavailable, it MUST poll the files every 100 ms and say so on stderr.
 
 #### Scenario: An atomic save is seen
 - **WHEN** an editor saves `main.prism` by writing `main.prism.tmp` and renaming it to `main.prism` while the program runs

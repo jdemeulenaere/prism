@@ -810,6 +810,17 @@ A top-level function declaration MAY start with one context parameter, `context(
 - **WHEN** parsing `intrinsic struct A(val n: Int)`, `intrinsic struct B { val n: Int }` or `external struct C`
 - **THEN** the parser reports `E2001`
 
+### Requirement: Intrinsic Writable Properties
+`intrinsic var`, optionally after a visibility modifier, MUST declare an extension property as `intrinsic val` does, with an optional type parameter list, a receiver type, `.`, the name, `:` and its type, and no initializer. A `var` declaration with a receiver and without `intrinsic`, and an `intrinsic var` with an initializer, MUST be rejected with `E2001`.
+
+#### Scenario: A writable intrinsic property parses
+- **WHEN** parsing `public intrinsic var <T> MutableState<T>.value: T`
+- **THEN** it is an intrinsic extension property marked writable, with type parameter `T`, receiver `MutableState<T>`, name `value` and type `T`
+
+#### Scenario: Writable extension properties need intrinsic
+- **WHEN** parsing `var Int.twice: Int` or `intrinsic var Int.twice: Int = 2`
+- **THEN** the parser reports `E2001`
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -898,3 +909,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **`intrinsic struct` declarations** (D16): visibility, `intrinsic struct`, a name, optional type parameters and markers, and neither fields nor a block, since the compiler provides the representation; `intrinsic` with fields or a block, or with `external`, is `E2001`. Which files may use the form is `standard-library`'s rule.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **`intrinsic var` properties** (D4). The property form of `intrinsic val` also takes `var`, with a `writable` flag in the AST and the ABI, for `MutableState<T>.value`; `var` with a receiver and no `intrinsic`, or an `intrinsic var` with an initializer, is `E2001`.

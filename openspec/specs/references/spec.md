@@ -765,6 +765,28 @@ A function type with a receiver MUST elide by rules 1, 3 and 4 as every function
 - **WHEN** `struct Team { val lead: String }`, `struct RowScope { val name: String }`, `context(s: RowScope) fun Team.leader(): &String = &lead` and `context(s: RowScope) fun Team.scopeName(): &String = &s.name` are checked
 - **THEN** the borrow checker accepts `leader` and emits `E5009` at `&s.name` in `scopeName`, because rule 2 ties the result to the receiver only
 
+### Requirement: Borrows of a State's Value Hold No Loan
+A borrow of a state place, taken in a composable context, MUST hold no loan of any local and MUST be valid until the body that took it ends, as a borrow of a top-level `val` is: no write of a local conflicts with it, and a body MAY return it under any elision rule. The runtime keeps it valid, since no state is written and no cell is freed while a pass runs.
+
+#### Scenario: A borrow of a state outlives later calls
+- **WHEN** `compose fun Leaf() { }` and `compose fun C(s: State<String>) { val r = &s.value; Leaf(); println(r) }` are declared and `fun main() { val s = mutableStateOf("a" + "b"); val c = composition { C(s) } }` runs with `--check-allocations`
+- **THEN** stdout is `ab`, and the exit status is 0
+
+#### Scenario: A composable returns a borrow of a state's value
+- **WHEN** `compose fun items(s: State<List<Int>>): &List<Int> = &s.value` and `compose fun C(s: State<List<Int>>) { println(items(s).size) }` are checked
+- **THEN** the file typechecks and passes the borrow checker
+
+### Requirement: Values Written Into a State Escape
+A value written into a state, by `mutableStateOf`, `value =`, the result of `update`'s transform or a compound assignment, MUST be at an owning position: a closure written there owns its captures, and a function value that may hold a borrow is `E5007`, as for a generic parameter.
+
+#### Scenario: A borrowing closure stored in a state rejected
+- **WHEN** `fun f(s: MutableState<() -> Int>, r: &Int) { s.value = { r + 1 } }` is checked
+- **THEN** the borrow checker emits `E5007`, labelling the capture of `r`
+
+#### Scenario: A handler stored in a state owns its captures
+- **WHEN** `fun main() { val n = 2; val s = mutableStateOf({ 0 }); s.value = { n * 3 }; s.read { f -> println(f()) } }` runs with `--check-allocations`
+- **THEN** stdout is `6`, and the exit status is 0
+
 ## Design Rationale
 Decisions from `reference-access` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change, 2026-10-17):
 
@@ -856,3 +878,7 @@ Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised 
 Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Receiver function types elide by rules 1, 3 and 4, as every function type does** (D9). The receiver counts as an input borrow like any reference parameter, not as rule 2's receiver: rule 2 would tie `T.(&A) -> &U`'s result to the receiver only while `(&T, &A) -> &U` ties it to both, which would make D2's in-place conversion unsound. A receiver value's call keeps `has_receiver` false in the tree for the same reason, the receiver being an ordinary first argument. A context parameter is an input borrow like a parameter, so a context extension's rule 2 still ties a returned borrow to its receiver, the second parameter; the borrow checker's signatures record whether a function has a context to find it.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **Borrows of a state's value are free references** (D18). A reference from `state read`, `begin read` or `begin edit` is derived from a call with no borrowed input, so it holds no loan, as a top-level value's does, and a composable may return a borrow of `s.value` under any rule. The runtime keeps it valid: no state is written and no cell freed during a pass (compose D5, D11, D12). Values written into a state are at owning positions, so a closure written there owns its captures and a function value that may hold a borrow is `E5007`.

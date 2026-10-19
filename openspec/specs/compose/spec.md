@@ -377,7 +377,7 @@ Calling `composition`, `setContent` or `recompose` in a composable context MUST 
 - **THEN** the file typechecks
 
 ### Requirement: The Compose Prelude
-The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and a file's own declaration or import of one of those names MUST shadow it.
+The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and the state declarations `State`, `MutableState`, `mutableStateOf`, `value`, `read`, `update`, `edit` and `SideEffect`, and a file's own declaration or import of one of those names MUST shadow it.
 
 #### Scenario: Compose primitives need no import
 - **WHEN** a file without imports declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`
@@ -386,6 +386,10 @@ The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST de
 #### Scenario: A file's own `key`
 - **WHEN** a file declares `fun key(n: Int): Int = n` and `fun f(): Int = key(3)`
 - **THEN** it typechecks, and the call resolves to the file's own `key`
+
+#### Scenario: A file's own mutableStateOf
+- **WHEN** a file declares `fun mutableStateOf(n: Int): Int = n + 1` and `fun main() { println(mutableStateOf(1)) }`
+- **THEN** it runs and prints `2`: the call resolves to the file's own `mutableStateOf`
 
 ### Requirement: A Composable Body Runs in One Group
 Each call of a composable MUST run its body in one group of the current composition: a restart group when the composable is skippable ("Skipping Composables With Stable Parameters"), and a replaceable group otherwise. A call MUST NOT add a group of its own, so calls of one composable among the same siblings match their groups in order.
@@ -503,6 +507,10 @@ A composable returning `Unit` whose parameters are all stable MUST be skippable.
 - **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }`, `fun screen(id: Int): compose () -> Unit = { Plus(onClick = { println(id) }) }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(1)); c.setContent(screen(2)) }` run
 - **THEN** `plus` is printed twice: the second pass builds a closure equal to the kept one, and the third one with another capture
 
+#### Scenario: Handler capturing a state handle is stable
+- **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }` and `compose fun Screen(count: MutableState<Int>, tick: State<Int>) { println("screen ${tick.value}"); Plus(onClick = { count.value += 1 }) }` are declared and `fun main() { val count = mutableStateOf(0); val tick = mutableStateOf(0); val c = composition { Screen(count, tick) }; tick.value = 1; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `screen 0`, `plus`, `screen 1` and `true`: the handler rebuilt with the same `count` handle equals the kept one, so `Plus` skips
+
 #### Scenario: A handler owning a String is never kept
 - **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }`, `fun screen(): compose () -> Unit = { val s = "a" + "b"; Plus(onClick = { println(s) }) }` and `fun main() { val c = composition(screen()); c.setContent(screen()) }` run with `--check-allocations`
 - **THEN** `plus` is printed twice, and the exit status is 0
@@ -565,6 +573,248 @@ The compose transform MUST visit each composable body once, before instances are
 - **WHEN** `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` runs the compose shapes at their three sizes
 - **THEN** the time of each shape grows roughly linearly with its size
 
+### Requirement: State Handles Are Copy Words
+`State<T>` and `MutableState<T>` MUST be `Copy` for every `T` and invariant in `T`. A handle MUST be one 64-bit word naming a cell of the runtime's cell arena by a 32-bit index and a 32-bit generation, and copying a handle MUST NOT copy the cell's value.
+
+#### Scenario: A handler capturing a handle copies the word
+- **WHEN** `fun main() { val count = mutableStateOf(1); val onClick = { count.value += 1 }; onClick(); onClick(); println(count.value) }` runs with `--check-allocations`
+- **THEN** stdout is `3` and a newline, and the exit status is 0
+
+#### Scenario: A handle of a non-Copy value is Copy
+- **WHEN** `fun twice(s: State<String>): Int = 2` and `fun main() { val s = mutableStateOf("a" + "b"); val t = s; println(twice(s) + twice(t)) }` run
+- **THEN** stdout is `4`: neither use of `s` moves it
+
+### Requirement: Creating a State
+`mutableStateOf(value)` MUST create a cell holding `value`, moved in, and return a `MutableState<T>` handle of it.
+
+#### Scenario: A state of a list
+- **WHEN** `struct Todo { val title: String }` and `fun main() { val todos = mutableStateOf(listOf(Todo("a"))); println(todos.read { list -> list.size }) }` run with `--check-allocations`
+- **THEN** stdout is `1`, and the exit status is 0
+
+### Requirement: Reading a Copy Value
+For a `Copy` `T`, `s.value` MUST read a copy of the cell's value, in any context.
+
+#### Scenario: Reading a counter outside composition
+- **WHEN** `fun main() { val count = mutableStateOf(41); val n = count.value + 1; println(n) }` runs
+- **THEN** stdout is `42`
+
+### Requirement: Writing a Value
+`s.value = v` on a `MutableState<T>` MUST move `v` into the cell and drop the old value, for every `T`, outside composable contexts. For a `Copy` `T`, a compound assignment `s.value op= e` MUST read the value, compute `value op e` and write the result through the same handle, evaluating the handle once.
+
+#### Scenario: Compound assignment through a handle
+- **WHEN** `fun main() { val count = mutableStateOf(1); count.value += 2; count.value *= 5; println(count.value) }` runs
+- **THEN** stdout is `15`
+
+#### Scenario: Writing a string drops the old one
+- **WHEN** `fun main() { val name = mutableStateOf("a" + "b"); name.value = "c" + "d"; name.read { s -> println(s) } }` runs with `--check-allocations`
+- **THEN** stdout is `cd`, and the exit status is 0
+
+### Requirement: Borrowing a Non-Copy Value in Composable Contexts
+For a non-`Copy` `T`, `s.value` MUST be a place that a composable context can borrow shared, explicitly or implicitly, and read `Copy` parts of. A borrow of it MUST be valid until the end of the body that took it. Moving it out MUST be rejected with `E4017`.
+
+#### Scenario: Iterating a list state in a composable
+- **WHEN** `struct Todo { val title: String }` and `compose fun Todos(todos: State<List<Todo>>) { println("count ${todos.value.size}"); for (todo in todos.value) { println(todo.title) } }` are declared and `fun main() { val todos = mutableStateOf(listOf(Todo("a"), Todo("b"))); val c = composition { Todos(todos) } }` runs with `--check-allocations`
+- **THEN** stdout is `count 2`, `a` and `b`, one per line, and the exit status is 0
+
+#### Scenario: Moving a state's value out rejected
+- **WHEN** `compose fun C(s: State<String>) { val t = s.value }` is checked
+- **THEN** the type checker emits `E4017`, saying that the value of a state cannot be moved out, with help suggesting a borrow or `.clone()`
+
+#### Scenario: Taking a state's value apart rejected
+- **WHEN** `struct U { val name: String, val n: Int }` and `compose fun C(u: State<U>) { val (name, n) = u.value }` are checked
+- **THEN** the type checker emits `E4017`, saying that the value of the state `u` cannot be taken apart, with help destructuring its borrow `&u.value`
+
+### Requirement: State Places Outside Composable Contexts
+Outside composable contexts, a non-`Copy` `s.value` MUST only be assigned, and no `s.value` MUST be borrowed mutably, used as a `mut fun` receiver or written in part. Any such use MUST be rejected with `E4033` (`StateValueOutsideComposable`), whose help names `read` for a shared use, `edit` for a mutable one and `update` for a compound assignment.
+
+#### Scenario: Reading a non-Copy state in a handler rejected
+- **WHEN** `compose fun T(todos: State<List<Int>>) { val onClick = { println(todos.value.size) } }` is checked
+- **THEN** the type checker emits `E4033` at `todos.value`, with help suggesting `todos.read { value -> ... }`
+
+#### Scenario: Changing a list state in place outside composition rejected
+- **WHEN** `fun add(todos: MutableState<List<Int>>) { todos.value.add(1) }` is checked
+- **THEN** the type checker emits `E4033`, with help suggesting `todos.edit { value -> ... }`
+
+#### Scenario: Writing part of a Copy state rejected
+- **WHEN** `struct Point : Copy { var x: Int }` and `fun f(p: MutableState<Point>) { p.value.x = 1 }` are checked
+- **THEN** the type checker emits `E4033`, with help suggesting `p.edit { value -> ... }` or assigning the whole value
+
+### Requirement: Reading a State With a Closure
+`s.read(reader)` MUST call `reader` with a shared borrow of the cell's value and return what it returns, in any context. While `reader` runs, the cell MUST be borrowed shared.
+
+#### Scenario: Reading a list's size in a handler
+- **WHEN** `fun main() { val todos = mutableStateOf(listOf(1, 2, 3)); val n = todos.read { it.size * 10 }; println(n) }` runs
+- **THEN** stdout is `30`
+
+### Requirement: Updating a State With a Closure
+`s.update(transform)` on a `MutableState<T>` MUST move the value out of the cell, call `transform` with it, and move its result into the cell, outside composable contexts. While `transform` runs, the cell MUST hold no value.
+
+#### Scenario: Updating a counter
+- **WHEN** `fun main() { val count = mutableStateOf(4); count.update { it * it }; println(count.value) }` runs
+- **THEN** stdout is `16`
+
+### Requirement: Editing a State in Place
+`s.edit(editor)` on a `MutableState<T>` MUST call `editor` with a mutable borrow of the cell's value, outside composable contexts. While `editor` runs, the cell MUST be borrowed mutably.
+
+#### Scenario: A list state edited from a handler
+- **WHEN** `struct Todo { val title: String }` and `compose fun Todos(todos: State<List<Todo>>) { println("count ${todos.value.size}") }` are declared and `fun main() { val todos = mutableStateOf(listOf(Todo("a"))); val c = composition { Todos(todos) }; val onClick = { todos.edit { it.add(Todo("b")) } }; onClick(); println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `count 1`, `count 2` and `true`, one per line, and the exit status is 0
+
+### Requirement: Conflicting Accesses to a Borrowed Cell
+While `read` borrows a cell, a write to it, `update` or `edit` of it MUST end the program with the runtime error `state accessed while borrowed`. While `update` or `edit` holds a cell, any access to it MUST end the program with that error.
+
+#### Scenario: Reading a state while updating it
+- **WHEN** `fun main() { val s = mutableStateOf(1); s.update { n -> n + s.value } }` runs
+- **THEN** stderr is `panic: state accessed while borrowed` and the location of `s.value` in the closure, and the exit status is 101
+
+### Requirement: Reads During a Pass Register Their Scope
+A read of a state during a pass (`s.value`, a borrow of it, or `read`) MUST register the innermost restart scope of the pass as a reader of the cell, whether the read is in a composable, a content lambda or a plain function called from composition. A read outside a pass MUST register nothing.
+
+#### Scenario: A counter write recomposes only its reader
+- **WHEN** `compose fun Label(count: State<Int>) { println("label ${count.value}") }`, `compose fun Title(n: Int) { println("title $n") }` and `compose fun Screen(count: State<Int>) { println("screen"); Title(1); Label(count) }` are declared and `fun main() { val count = mutableStateOf(0); val c = composition { Screen(count) }; val onClick = { count.value += 1 }; onClick(); println(c.recompose()); println(c.recompose()) }` runs
+- **THEN** stdout is `screen`, `title 1`, `label 0`, `label 1`, `true` and `false`, one per line
+
+#### Scenario: A read in a plain function registers the calling scope
+- **WHEN** `fun describe(s: State<Int>): String = "n = ${s.value}"`, `compose fun Show(s: State<Int>) { println(describe(s)) }` and `compose fun Root(s: State<Int>) { println("root"); Show(s) }` are declared and `fun main() { val count = mutableStateOf(0); val c = composition { Root(count) }; count.value = 1; println(c.recompose()) }` runs
+- **THEN** stdout is `root`, `n = 0`, `n = 1` and `true`, one per line
+
+#### Scenario: A read inside a content lambda invalidates the lambda's author
+- **WHEN** `compose fun Column(content: compose () -> Unit) { content() }` and `compose fun Counter(c: State<Int>) { println("counter"); Column { println("count ${c.value}") } }` are declared and `fun main() { val n = mutableStateOf(0); val c = composition { Counter(n) }; n.value = 1; println(c.recompose()) }` runs
+- **THEN** stdout is `counter`, `count 0`, `counter`, `count 1` and `true`, one per line
+
+#### Scenario: Reads outside composition register nothing
+- **WHEN** `compose fun Quiet() { println("quiet") }` and `fun main() { val count = mutableStateOf(0); val c = composition { Quiet() }; println(count.value); count.value = 5; println(c.recompose()) }` run
+- **THEN** stdout is `quiet`, `0` and `false`, one per line
+
+### Requirement: Writes Invalidate the Readers
+A write of a state (`value =`, a compound assignment, `update`, `edit`) MUST invalidate every scope registered as a reader of its cell, so that the next pass recomposes them, and MUST then forget those registrations. A scope that has left its composition MUST be skipped.
+
+#### Scenario: Two readers of one state
+- **WHEN** `compose fun A(s: State<Int>) { println("a ${s.value}") }` and `compose fun B(s: State<Int>) { println("b ${s.value}") }` are declared and `fun main() { val s = mutableStateOf(0); val c = composition { A(s); B(s) }; s.value = 1; println(c.recompose()); s.value = 2; println(c.recompose()) }` runs
+- **THEN** stdout is `a 0`, `b 0`, `a 1`, `b 1`, `true`, `a 2`, `b 2` and `true`, one per line
+
+### Requirement: Equal Value Writes Invalidate Nothing
+A `value =` write, or a compound assignment, whose new value is equal to the cell's value by `==` (for function values, by closure and captures, as for skipping) MUST keep the old value, drop the new one and invalidate nothing. A write of a type without `==`, `update` and `edit` MUST always invalidate.
+
+#### Scenario: An equal write recomposes nothing
+- **WHEN** `compose fun Show(n: State<Int>, s: State<String>) { println("show ${n.value} ${s.value}") }` is declared and `fun main() { val n = mutableStateOf(1); val s = mutableStateOf("a" + "b"); val c = composition { Show(n, s) }; n.value = 1; s.value = "a" + "b"; n.value += 0; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `show 1 ab` and `false`, and the exit status is 0
+
+### Requirement: State Writes Are Rejected in Composable Contexts
+A write of a state in a composable context, by `value =`, a compound assignment, `update`, `edit` or a mutable borrow of `s.value`, MUST be rejected with `E4031` (`StateWriteInComposable`), with a note that state is read-only during composition and help suggesting an event handler.
+
+#### Scenario: Writing a state in a composable rejected
+- **WHEN** `compose fun C(s: MutableState<Int>, l: MutableState<List<Int>>) { s.value = 1; s.value += 1; s.update { n -> n }; l.edit { v -> }; l.value.add(1) }` is checked
+- **THEN** the type checker emits `E4031` five times, once at each write
+
+#### Scenario: A handler inside a composable may write
+- **WHEN** `fun later(f: () -> Unit) { }` and `compose fun C(s: MutableState<Int>) { later { s.value += 1 } }` are checked
+- **THEN** the file typechecks
+
+### Requirement: State Writes During a Pass End the Program
+A write of a state, `update` or `edit`, run while a pass runs on the thread, MUST end the program with the runtime error `state written during composition`, at the write.
+
+#### Scenario: A plain function writes during composition
+- **WHEN** `fun reset(s: MutableState<Int>) { s.value = 0 }` and `compose fun Bad(s: MutableState<Int>) { reset(s) }` are declared and `fun main() { val s = mutableStateOf(1); val c = composition { Bad(s) } }` runs
+- **THEN** stderr is `panic: state written during composition` and the location of `s.value = 0`, and the exit status is 101
+
+### Requirement: Unremembered State Is Rejected in Composable Contexts
+A call of `mutableStateOf` in a composable context MUST be rejected with `E4032` (`UnrememberedState`), with help wrapping the call in `remember { }`. A `remember` calculation is not a composable context.
+
+#### Scenario: Unremembered state rejected
+- **WHEN** `compose fun C() { val s = mutableStateOf(0) }` is checked
+- **THEN** the type checker emits `E4032` at `mutableStateOf`, with help `remember { mutableStateOf(0) }`
+
+#### Scenario: Remembered state accepted
+- **WHEN** `compose fun C() { val s = remember { mutableStateOf(0) } }` is checked
+- **THEN** the file typechecks
+
+### Requirement: State Created During a Pass Outside Remember Ends the Program
+Creating a state while a pass runs, outside a `remember` calculation and outside a top-level value's initializer, MUST end the program with the runtime error `state created during composition outside remember`, at the call of `mutableStateOf`.
+
+#### Scenario: A plain function creates state during composition
+- **WHEN** `fun make(): MutableState<Int> = mutableStateOf(0)` and `compose fun Bad() { val s = make() }` are declared and `fun main() { val c = composition { Bad() } }` runs
+- **THEN** stderr is `panic: state created during composition outside remember` and the location of `mutableStateOf(0)`, and the exit status is 101
+
+### Requirement: A Remembered Cell Belongs to Its Slot
+A cell created while a `remember` calculation runs MUST belong to the slot in which `remember` keeps the calculation's result, and MUST be freed, its value dropped, when that slot is released: when its key changes, when its group is removed, or when its composition is disposed, at the end of the pass.
+
+#### Scenario: Remembered state survives recomposition
+- **WHEN** `compose fun Counter(tick: State<Int>, holder: MutableState<MutableState<Int>>) { val clicks = remember { mutableStateOf(0) }; println("tick ${tick.value} clicks ${clicks.value}"); SideEffect { holder.value = clicks } }` is declared and `fun main() { val tick = mutableStateOf(0); val holder = mutableStateOf(mutableStateOf(0)); val c = composition { Counter(tick, holder) }; holder.value.value += 1; tick.value += 1; println(c.recompose()) }` runs
+- **THEN** stdout is `tick 0 clicks 0`, `tick 1 clicks 1` and `true`, one per line
+
+#### Scenario: Forgotten state frees its value
+- **WHEN** `compose fun Item(n: Int) { val label = remember(n) { mutableStateOf("item $n") }; println(label.value) }` and `fun screen(n: Int): compose () -> Unit = { Item(n) }` are declared and `fun main() { val c = composition(screen(1)); c.setContent(screen(2)); print(c.dump()) }` runs with `--check-allocations`
+- **THEN** stdout starts with `item 1` and `item 2`, the dump shows `Item`'s group with one `cell String` line, and the exit status is 0
+
+#### Scenario: A removed group frees its state
+- **WHEN** `compose fun Child() { val s = remember { mutableStateOf("a" + "b") }; println(s.value) }` and `compose fun Parent(show: State<Bool>) { if (show.value) { Child() } }` are declared and `fun main() { val show = mutableStateOf(true); val c = composition { Parent(show) }; show.value = false; println(c.recompose()); print(c.dump()) }` runs with `--check-allocations`
+- **THEN** stdout is `ab`, `true` and a dump with no `cell` line, and the exit status is 0
+
+### Requirement: A Handler's Cell Belongs to Its Composition
+A cell created outside a pass while a side effect or an event handler of a composition runs MUST belong to that composition, and MUST be freed when the composition is disposed.
+
+#### Scenario: A side effect's state is freed with its composition
+- **WHEN** `fun session(holder: MutableState<MutableState<String>>) { val c = composition { SideEffect { holder.value = mutableStateOf("a" + "b") } }; holder.value.read { s -> println(s) } }` and `fun main() { val holder = mutableStateOf(mutableStateOf("")); session(holder); holder.value.read { s -> println(s) } }` run
+- **THEN** stdout is `ab`, stderr is `panic: stale state handle` and the location of the second `read`, and the exit status is 101
+
+### Requirement: Other Cells Belong to the Program
+A cell created outside a pass and outside any handler or side effect, or while a top-level value's initializer runs, MUST belong to the program. Program cells MUST be freed, their values dropped, before `--check-allocations` reports, and never earlier.
+
+#### Scenario: A program state passes the allocation check
+- **WHEN** `fun main() { val s = mutableStateOf(listOf("a" + "b")); s.edit { v -> v.add("c" + "d") } }` runs with `--check-allocations`
+- **THEN** the program exits with status 0
+
+### Requirement: A Cell Released While Borrowed Is Freed When the Borrow Ends
+A cell whose owner releases it while `read`, `update` or `edit` holds it MUST become stale at once and MUST be freed, its value dropped, when that call ends; for `update`, the result of `transform` MUST be dropped instead of stored.
+
+#### Scenario: Releasing a cell during an edit
+- **WHEN** a Rust test edits a remembered cell whose editor recomposes the cell's composition so that its group is removed
+- **THEN** the cell's value is dropped once, after the editor returns, and a later read of the handle is the error `stale state handle`
+
+### Requirement: Stale Handles End the Program
+Any use of a handle whose cell was freed MUST end the program with the runtime error `stale state handle`, at the use. A cell index whose generation reaches its maximum MUST be retired, never reused.
+
+#### Scenario: Stale handle detected
+- **WHEN** `compose fun Child(holder: MutableState<MutableState<Int>>) { val s = remember { mutableStateOf(5) }; SideEffect { holder.value = s } }` and `compose fun Parent(show: State<Bool>, holder: MutableState<MutableState<Int>>) { if (show.value) { Child(holder) } }` are declared and `fun main() { val show = mutableStateOf(true); val holder = mutableStateOf(mutableStateOf(0)); val c = composition { Parent(show, holder) }; val kept = holder.value; println(kept.value); show.value = false; println(c.recompose()); println(kept.value) }` runs
+- **THEN** stdout is `5` and `true`, stderr is `panic: stale state handle` and the location of the last `kept.value`, and the exit status is 101
+
+### Requirement: Side Effects Run After Their Pass
+`SideEffect(effect)` MUST be a composable that queues `effect` each time a pass runs the call. After the pass ends and has released what it removed, the queued effects MUST run in the order they were queued, outside composition and as handlers of the composition, and each effect MUST then be dropped. An effect's writes MUST be recomposed by the next pass.
+
+#### Scenario: Side effects run after composition
+- **WHEN** `compose fun Log(n: Int) { println("compose $n"); SideEffect { println("effect $n") } }` and `fun main() { val c = composition { Log(1); Log(2) }; println("after") }` run with `--check-allocations`
+- **THEN** stdout is `compose 1`, `compose 2`, `effect 1`, `effect 2` and `after`, one per line, and the exit status is 0
+
+#### Scenario: A side effect may write state
+- **WHEN** `compose fun Mark(seen: MutableState<Int>, n: State<Int>) { println("mark ${n.value}"); SideEffect { seen.value = 1 } }` is declared and `fun main() { val seen = mutableStateOf(0); val n = mutableStateOf(0); val c = composition { Mark(seen, n) }; println(seen.value); println(c.recompose()) }` runs
+- **THEN** stdout is `mark 0`, `1` and `false`: `Mark` does not read `seen`, so the write invalidates nothing
+
+### Requirement: Cells in Composition Dumps
+A composition's dump MUST list each cell that a slot owns on its own line `cell <type name>`, one level deeper than the slot's line and in creation order. Cells owned by the composition or the program MUST NOT appear in it.
+
+#### Scenario: A dump of a remembered state
+- **WHEN** `compose fun Counter() { val count = remember { mutableStateOf(0) } }` and `fun main() { val c = composition { Counter() }; print(c.dump()) }` run
+- **THEN** the dump shows, below `Counter`'s group, the `slot` line of the remembered handle and, one level deeper, the line `cell Int`
+
+### Requirement: State Operations Take Constant Time
+Creating, reading and writing a state MUST take amortized constant time in the size of the composition and the number of cells, plus time proportional to the readers a write invalidates. A reader MUST be registered at most once per cell however often it reads it, and the registrations of scopes that left their composition MUST NOT grow without bound.
+
+#### Scenario: Many readers of one state
+- **WHEN** `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-compose --test runtime_timing -- --ignored --nocapture` composes 1,000, 10,000 and 100,000 restart scopes that each read one state ten times per pass, writes it and recomposes
+- **THEN** the median time of a read grows by less than a factor of 2 from the smallest composition to the largest, and each scope is registered once
+
+#### Scenario: Steady-state reads allocate nothing
+- **WHEN** `crates/prism-compose/tests/allocations.rs` recomposes 1,000 restart scopes that each read one state, 100 times, without writing it
+- **THEN** the counting allocator records no allocation and no free during the last 98 passes
+
+### Requirement: State Rules Cost Linear Compile Time
+Checking and lowering state accesses MUST cost constant work per access: a member lookup, a marker lookup and a test of the composable context in the type checker, and a constant number of calls in MIR, with no analysis across bodies or files.
+
+#### Scenario: State accesses scale linearly
+- **WHEN** `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` runs the `state-accesses` shape at its three sizes
+- **THEN** its time grows roughly linearly with its size
+
 ## Design Rationale
 
 Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-18 and 2026-10-19, and logged in `docs/decisions-for-review.md`). It implements the runtime side of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D1, D6, D7, D10, D11 and D23).
@@ -599,3 +849,23 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 - **What is rejected** (D17). `E4030` for `composition`, `setContent` and `recompose` in a composable context (a handler written inside one is not), `E4008` for composable calls in default values (generators run in the caller, outside the callee's groups; composable defaults are a follow-up), `E4021`/`E4022` for `remember` values and keys and `E4004` for a non-`Int` `key`. Dropping a `Composition` during a pass stays a runtime misuse. `/prism/composer` stays public and unchanged as the protocol's hand-testing surface (D18).
 - **Generics and hot reload** (D21, D22). A generic composable is composed once, before instantiation: stability from bounds, keys from its declaration path, slot types substituted per instance, so instances of one generic among the same siblings share a key and a reorder recreates only their slots. Keys never depend on positions, so a reloaded body keeps the state of every group whose construct path did not change; a reloaded scope is recomposed through `skipping`, with no bit of its own.
 - **Costs** (D24). One linear walk per composable body before instances, a terminator scan for other bodies, one hash per group, one marker lookup per parameter type, one small restart body per skippable composable; nothing per instance or across files. `compile_timing.rs` times the transform as the `compose` stage on five shapes, all roughly linear; at 4096 skippable composables of four parameters it takes 38 ms, and `lower` and `clif` about 0.14 ms per composable. A skipped call costs one group start and end and one runtime call per stable parameter, and allocates nothing for `Copy` arguments and one-word handlers.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`). It implements the state layer of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D12 to D15 and the state half of D16):
+
+- **The boundary** (D1). This capability's state layer owns the handle types, `mutableStateOf`, `value`, `read`, `update`, `edit`, the cell arena with its flags, readers and owners, the `remember` window that attaches cells to a slot, `SideEffect`, and a Rust API that runs code as a handler of a composition (`Composition::run_handler`). Writes only invalidate: recomposing stays explicit (`c.recompose()`, later `runApp`'s frame loop), event dispatch is `ui-toolkit`'s, and counting live cells as leaks is `reactive-app-verification`'s. Rejected: a "recompose after each handler" call here.
+- **Kotlin's names, closures where Kotlin aliases** (D2). `mutableStateOf`, `State`, `MutableState` and `.value` are Jetpack Compose's; `update { it + 1 }` is `MutableStateFlow.update`'s shape. `read` and `edit` have no Kotlin counterpart: Kotlin reads a list state by aliasing it and changes one by rebuilding it, while single ownership needs a scope the runtime can guard to borrow a cell's value outside composition. The closures take plain one-parameter function types, so `todos.edit { it.add(Todo("x")) }` reads like Kotlin; a receiver lambda for `edit` was rejected because the receiver's members would shadow the handler's names. Left out, each a follow-up: `derivedStateOf`, `snapshotFlow`, `mutableStateListOf`, mutation policies and `by` delegation.
+- **Handles are intrinsic structs with unconditional markers** (D3, `compose-architecture` D12). Both are one word, `Copy` for every `T` (the catalog's markers hold for every argument, unlike a declared generic struct's), invariant, and stable parameters. `MutableState<T>` converts to `State<T>` as a subtype step that keeps the word, and a lookup on a `MutableState` that misses is retried on `State`, as Kotlin's `MutableState<T> : State<T>` makes it. Rejected: one handle type (a `State<T>` parameter says the composable does not write), a general nominal subtyping mechanism (traits come later), duplicated declarations per handle, and conditional markers (a `State<String>` would not be `Copy`).
+- **What `s.value` is** (D5, refining `compose-architecture` D13). For a `Copy` `T` it is a copy, anywhere, through `BuiltinFunction::StateValue`. For any other `T` it is a place only in composable contexts, borrowed shared in place (moving it out or taking it apart is `E4017`, naming "the value of the state"), and `E4033` elsewhere. It is sound because during a pass no state is written and no cell is freed, and a borrow taken in a composable context reaches only frames of that pass. Writes are whole values through a call taking the handle by value, so a handler's captured `val` handle writes (`escaping-closures` D7) and part writes go through `edit`. The rule costs one marker lookup and a test of the composable flag per access. Rejected: a place for `Copy` values too, run-time-checked place borrows released at their last use, a closure-only API, and Kotlin's silent `s.value.x = v`.
+- **`read`, `update` and `edit` under run-time borrow flags** (D6). Each lowers to a begin call, the closure call and an end call; a cell is free, shared with a count, empty (while `update`'s transform holds its value) or exclusive, and a conflicting access is `state accessed while borrowed`, as `RefCell`'s. The begin calls' references hold no loan, and the closure types keep them from escaping (borrow-free `R`, `Unit` for `edit`). Rejected: a runtime that calls the closure itself (its machine signature depends on `T`) and static exclusivity (every copy of a handle aliases the cell).
+- **Three codes, one per fix** (D7). `E4031` for a write in a composable context (move it to a handler or a `SideEffect`), `E4032` for `mutableStateOf` in one (wrap it in `remember`), `E4033` for a non-`Copy` `s.value` or any mutable use of `s.value` outside composable contexts (use `read`, `edit` or `update`). A non-composable closure inside a composable, a `remember` calculation and a default value are not composable contexts, so the runtime checks what they do. Rejected: one code for all three, reusing `E4008`, and a warning for unremembered state.
+- **Cells in an arena, values in blocks that never move** (D8). A cell holds its slot type record, its value in a block of the record's size, its flag, readers and release mark; handles are `compose-runtime`'s generational handles with generations from 1, so the word 0 is never a handle. Every entry validates the handle and compares the record it is given with the cell's, so a handle never reaches a cell of another type, even across a reload. Rejected: values inline in the arena's vector (growing it would move borrowed values), values in the owning slot, a global locked arena, and skipping the record check.
+- **Reads register the innermost restart scope** (D9). A read during a pass, in a composable, a content lambda or a plain function it calls, registers the pass's current scope once per cell (a vector with a membership test, a hash set beyond eight, pruned of scopes that left their composition before it grows); a read outside a pass registers nothing. A write clears the readers, so a scope that stopped reading recomposes at most once more; clearing a scope's old reads when it recomposes is a follow-up. Rejected: registering groups rather than scopes, and no deduplication.
+- **Equal writes invalidate nothing** (D10, refining `compose-architecture` D16). A `value =` write or a compound assignment compares through the record's equality entry, the type's equality glue (`NaN` is never equal); an equal value is dropped and the cell kept, Jetpack's `structuralEqualityPolicy`. `update` and `edit` always invalidate. The runtime compares, not the write site, so code does not grow with writes. Rejected: comparing in generated code, invalidating on every write, a configurable policy, and recomposing until nothing is invalid.
+- **State is read-only during composition, at run time too** (D11, `compose-architecture` D14). Writes, `take` and `begin edit` during a pass are `state written during composition`; a creation during a pass needs a creation owner, else `state created during composition outside remember`. A `remember` miss brackets its calculation with `begin remember` and `end remember`, which attaches the cells created since to the slot written; a top-level initializer runs as program code between `prism_compose_begin_program` and `end_program`. From the review: until a composition starts the program scope is a no-op (a process-wide flag, one load), so programs without compose never touch the runtime's state. Rejected: deferring writes to the end of the pass, inspecting remembered values for handles, and a static rule for plain functions (a whole-program analysis).
+- **Each cell has one owner** (D12, `compose-architecture` D15). A cell created in a `remember` window belongs to its slot and is freed when the slot is released (a changed key, a removed group, a disposed composition), after the slot's value, at the end of the pass; a slot holding cells is never overwritten in place. One created by a handler or side effect belongs to its composition, freed when it is disposed; any other belongs to the program, freed only under `--check-allocations`, before live compositions are counted. A cell released while a closure member holds it becomes stale at once and is freed when that call ends. Rejected: reference counting, freeing program cells at every exit, and freeing a borrowed cell at once.
+- **`SideEffect`, brought forward from `compose-architecture` D25** (D13). Jetpack's simplest effect: queued each time a pass runs the call, run after the pass and its releases in queue order as handlers of the composition, then dropped. Without it nothing composed could act outside a pass before `ui-toolkit`, so composition-owned cells and stale handles could not be tested from Prism. `LaunchedEffect` and `DisposableEffect` stay deferred.
+- **Errors at the access** (D14). An entry that fails records the error's kind and returns a failure result; the generated code tests it and, in a cold block, calls `prism_compose_state_error` with the location, as list bounds checks do. Rejected: no location, location arguments on every call, and a static record per access.
+- **Stale handles** (D15). A handle is stale when its index names no cell, its generation differs, its cell was released while borrowed, or its record is not the cell's; any use is `stale state handle`. Indexes at the maximum generation are retired. `==` of handles compares words and never fails.
+- **One program thread** (D16). Cells live in the per-thread state; a handle used on another thread, which only Rust tests can do, fails as stale. Snapshots wait for threads.
+- **Cells in dumps** (D20). A slot's cells follow it one level deeper as `cell <type name>`, in creation order; program and composition cells are not dumped.
+- **Costs** (D21). Per access, a member lookup, a marker lookup and a flag test in the type checker and one to three calls in MIR; nothing per instance or across files. At apply, `state-accesses` at 256, 1,024 and 4,096 grew x4.0 to x5.1 per x4 in every stage, and a read cost 13 to 15 ns with 1,000 to 100,000 readers of one state, each registered once; steady-state reads allocate nothing.

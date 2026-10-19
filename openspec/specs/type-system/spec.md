@@ -898,6 +898,28 @@ A parameter's default value MUST be checked outside any composable context, also
 - **WHEN** `compose fun Box(width: Int = 4) { }` and `compose fun Screen() { Box() }` are checked
 - **THEN** the file typechecks
 
+### Requirement: Mutable State Handles Convert to Read-Only Ones
+A `MutableState<T>` MUST be assignable where a `State<T>` of the same `T` is expected, as a subtype step that keeps the handle, wherever `&mut T` converts to `&T`. A `State<T>` MUST NOT convert to `MutableState<T>`, and `MutableState<A>` MUST NOT convert to `State<B>` for another `B`.
+
+#### Scenario: Passing a mutable handle as a read-only one
+- **WHEN** `fun show(s: State<Int>): Int = s.value` and `fun main() { val m = mutableStateOf(7); println(show(m)) }` run
+- **THEN** stdout is `7`
+
+#### Scenario: Type arguments inferred through the conversion
+- **WHEN** `fun <T : Copy> get(s: State<T>): T = s.value` and `fun main() { println(get(mutableStateOf(5))) }` run
+- **THEN** stdout is `5`: the `MutableState<Int>` argument solves `T` as `Int`
+
+#### Scenario: A read-only handle does not become mutable
+- **WHEN** `fun f(s: State<Int>): MutableState<Int> = s` is checked
+- **THEN** the type checker emits `E4005`
+
+### Requirement: Lookups on a Mutable Handle Fall Back to State
+A member or extension looked up on a `MutableState<T>` receiver and not found for `MutableState` MUST be looked up for `State<T>`, with the receiver converted, so the members and extensions of `State<T>` apply to both handles.
+
+#### Scenario: Reading through a mutable handle
+- **WHEN** `fun <T> State<T>.describe(): String = "state"` and `fun main() { val m = mutableStateOf(2); println(m.read { n -> n + 1 }); println(m.describe()) }` run
+- **THEN** stdout is `3` and `state`
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -1008,3 +1030,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **Default values are not composable contexts** (D17). A default's generator runs in the caller before the call, outside the callee's groups, and is not a composable body, so a composable call in a default is `E4008` with a note. Kotlin allows composable defaults (`LocalContentColor.current`), which would need composer parameters on generators and groups in the caller; with no `CompositionLocal` yet, they are a follow-up.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **`MutableState<T>` converts to `State<T>`** (D3). One built-in subtyping edge, in the positions where `&mut T` converts to `&T`, keeping the word (`Rvalue::Subtype`), with type arguments inferred through it; a member or extension lookup that misses on a `MutableState` receiver is retried on `State`. It costs one constructor comparison in assignability and one more hash lookup on a miss. Rejected: a general nominal subtyping or interface mechanism before traits.

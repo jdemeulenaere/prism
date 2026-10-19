@@ -182,6 +182,38 @@ An `intrinsic struct` MUST declare a type whose representation, glue and operati
 - **WHEN** a file declares `fun Composition.recompose(): Bool = false`
 - **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/runtime` always takes precedence
 
+### Requirement: The State Declarations of the Compose Module
+`/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T> : Copy` and `MutableState<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the members `read` of `State<T>` and `update` and `edit` of `MutableState<T>`, and the composable `SideEffect`.
+
+#### Scenario: Signatures of the state declarations
+- **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
+- **THEN** it holds `public intrinsic struct State<T> : Copy`, `public intrinsic struct MutableState<T> : Copy`, `public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>`, `public intrinsic val <T> State<T>.value: T`, `public intrinsic var <T> MutableState<T>.value: T`, `public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R`, `public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T)`, `public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit)` and `public intrinsic compose fun SideEffect(effect: escaping () -> Unit)`
+
+#### Scenario: State handles need no import
+- **WHEN** a file without imports declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
+- **THEN** it typechecks, and `prism abi` writes the signature of `counter` as `public fun counter(): MutableState<Int>`
+
+### Requirement: Intrinsic Struct Markers Hold for Every Type Argument
+The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `State<String>` and `MutableState<List<Int>>` are `Copy`.
+
+#### Scenario: A state of a String is Copy
+- **WHEN** `fun f(s: MutableState<String>): Int { val a = s; val b = s; return 1 }` is checked
+- **THEN** the file typechecks
+
+### Requirement: Writable Intrinsic Properties
+An `intrinsic var` property MUST be an intrinsic extension property that can also be assigned, as the catalog lowers it. It MUST be checked against the catalog like an `intrinsic val`, and declaring as `var` a property the catalog lists as read-only, or the reverse, MUST be `E4029`.
+
+#### Scenario: A writable property the catalog lists as read-only
+- **WHEN** a library test module declares `public intrinsic var String.length: Int`
+- **THEN** the type checker emits `E4029`, saying that the compiler provides `length` as a read-only property
+
+### Requirement: The Value of a State Is Typed by Its Own Rule
+`value` of `State<T>` and `MutableState<T>` MUST be typed by the catalog's rule rather than as a computed property: a copy for a `Copy` `T`, a place for any other `T`, and an assignment target on `MutableState<T>` (compose, "Reading a Copy Value", "Borrowing a Non-Copy Value in Composable Contexts", "Writing a Value").
+
+#### Scenario: Assigning the value of a read-only handle
+- **WHEN** `fun f(s: State<Int>) { s.value = 1 }` is checked
+- **THEN** the type checker emits `E4003`, saying that a `State<Int>` is read-only, with help suggesting a `MutableState<Int>` parameter
+
 ## Design Rationale
 
 Decisions from `standard-library` (planned autonomously on 2026-10-18, implemented and reviewed the same day, and logged in `docs/decisions-for-review.md`). Why `prism` is a reserved root package is in the Design Rationale of `package-resolution`.
@@ -208,3 +240,8 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 - **`/prism/compose/runtime` is a prelude module** (D15, `ui-toolkit` D21). It is the library's first module in a subdirectory (`prism/compose/runtime.prism`, package `prism.compose`), so `MODULES` and its test walk the library recursively; the other compose modules (`ui`, `foundation`, `layout`, `material3`) are `ui-toolkit`'s, outside the prelude. Its declarations are all intrinsics, and a file's own declaration or import of one of its names shadows it.
 - **Intrinsic structs** (D16). `intrinsic struct Name<Parameters> : Markers` declares a type without fields whose representation, glue and operations the compiler provides, from a catalog of its own (`Composition`, neither `Copy` nor `Clone`; `RecomposeScope : Copy`); another name, parameter list or marker set in the library is `E4029`, and the form in the workspace `E3002`. `state-handles` declares its handle types with it. Rejected: user-defined destructors, built-in types without declarations, forgeable library structs.
 - **`remember` keys are rule-typed** (D12): up to three keys, each a fresh type parameter bounded by `Copy`, so the existing `E4021` and `E4022` checks apply, and a key written as a reference is copied out like any argument of a type parameter.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **The state declarations** (D2). `State<T>` and `MutableState<T>` are `public intrinsic struct ... : Copy`, `mutableStateOf`, `read`, `update`, `edit` and the composable `SideEffect` are intrinsic functions of `/prism/compose/runtime`, after Jetpack's names; `read`, `update` and `edit` take a shared receiver, so a handler's captured `val` handle calls them. The catalog types `value` by its own rule (a copy, a place or an assignment target, compose D5) rather than as a computed property.
+- **`intrinsic var`** (D4). `MutableState<T>.value` is assigned, so the property form gains `intrinsic var`, checked against the catalog's read-only or writable flag (`E4029` for a mismatch) and recorded in the ABI, as Kotlin declares `val value` on `State` and `var value` on `MutableState`. The writability of an assignment comes from the declaration found. Rejected: one `intrinsic val` whose writability depends on the receiver (the ABI would not say which handle is writable), and ordinary extension properties (a follow-up).

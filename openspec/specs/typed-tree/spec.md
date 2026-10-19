@@ -381,6 +381,24 @@ A call of a function with a context parameter MUST start its arguments with the 
 - **WHEN** `struct Modifier : Copy { val fraction: Double }`, `struct RowScope : Copy {}`, `fun row(f: RowScope.() -> Modifier): Modifier = f(RowScope())` and `context(scope: RowScope) fun Modifier.weight(w: Double): Modifier = Modifier(w)` are declared and `prism dump-typed-tree` runs on a file adding `fun g(): Modifier = row { Modifier(0.0).weight(1.0) }`
 - **THEN** the call names its callee `main::Modifier.weight#context(RowScope)`, with three arguments: the context, a shared borrow of the lambda's `this` referent; a shared receiver borrow of the temporary `Modifier(0.0)`; and the literal `1.0`
 
+### Requirement: State Values Are Identified
+A read of a `Copy` `s.value` MUST be a call of the built-in state read with the handle as its receiver, copied. Any other `s.value` MUST be a state place node over the handle expression, of the value's type: the target of an assignment or compound assignment, or, in a composable context, a place read in place, borrowed or projected.
+
+#### Scenario: A Copy read and a write
+- **WHEN** `fun f(s: MutableState<Int>) { val n = s.value; s.value = n + 1 }` is checked and its typed tree dumped
+- **THEN** the initializer of `n` is a call of the built-in `value` with a copy of `s`, and the assignment's target is a state place over a copy of `s`
+
+#### Scenario: A borrowed list state
+- **WHEN** `compose fun C(s: State<List<Int>>) { for (x in s.value) { } }` is checked and its typed tree dumped
+- **THEN** the loop's iterable is an iteration borrow of a state place over a copy of `s`
+
+### Requirement: State Operations Are Identified
+Calls of `mutableStateOf`, `read`, `update`, `edit` and `SideEffect` MUST be calls of their built-ins, with the value type as their first type argument.
+
+#### Scenario: An edit call
+- **WHEN** `fun f(s: MutableState<List<Int>>) { s.edit { v -> v.add(1) } }` is checked and its typed tree dumped
+- **THEN** the call is a call of the built-in `edit` with type argument `List<Int>`, the handle as its receiver and the closure as its argument
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -444,3 +462,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 
 - **The receiver of a lambda is its first parameter, a local of its own kind** (D3, D9). It is a local named `this` of kind `LocalKind::ClosureReceiver`, dumped `(closure receiver)`, so downstream stages see a closure with one more parameter. Rejected: reusing `LocalKind::Receiver`, which would make a closure parameter claim an extension.
 - **Context arguments lead a call's arguments, marked** (D9). A context call starts its arguments with a shared borrow of the candidate's referent, marked as the context (`context` in the dump), then the receiver; a receiver value's call starts with its receiver as an ordinary argument. An extension with a context is named `<module>::<receiver>.<name>#context(<type>)`, since extensions may differ only by context. The new fields are boxed where they would grow every node, path or item of their kind.
+
+Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
+
+- **State places and state built-ins** (D17). `ExpressionKind::StatePlace { handle }` is the place of a non-`Copy` `s.value` in a composable context, and the target of an assignment of any `s.value`; `BuiltinFunction::{MutableStateOf, StateValue, StateRead, StateUpdate, StateEdit, SideEffect}` carry the value type as their first type argument. Validation checks that a state place is an assignment target or sits in a composable body and is never moved; a value written into a state is an owning position, labelled "stored in a state here".
