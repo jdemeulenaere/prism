@@ -959,6 +959,18 @@ pub fn dump_library_module(
     ))
 }
 
+/// The Phase 1 ABIs of the modules `modules` of the bundled library (`prism/compose/ui`), as
+/// a program importing them sees them: for the compile-time benchmark, which checks generated
+/// programs that import library modules against them.
+pub fn library_abis(modules: &[&str]) -> Result<Vec<prism_abi::FileAbi>, WorkspaceError> {
+    let graph = DependencyGraph::from_library(Library::bundled())?;
+    let (abis, _) = extract_abis(&graph)?;
+    Ok(modules
+        .iter()
+        .filter_map(|module| abis.get(&prism_resolver::library_key(module)).cloned())
+        .collect())
+}
+
 /// The composed MIR of the library module `module` of `library`, reached from the workspace
 /// entry `entry`, as `prism dump-mir --composed` prints a workspace file's: for the library
 /// cases of the fixtures (D13 of `standard-library`).

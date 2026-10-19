@@ -18,8 +18,8 @@ pub use watch::{run_watch, EditScript, ReloadOutcome, SessionEvent, WatchSession
 pub use workspace::{
     check_directory, check_directory_with, check_file, check_file_with, check_library, check_path,
     check_path_with, dump_composed_mir, dump_elaborated_mir, dump_library_module,
-    dump_library_module_composed, dump_mir, dump_typed_tree, explain_cache, CacheOutcome,
-    CheckOptions, CheckReport, CheckedFile, InstanceOutcome, MirDump, TypedTreeDump,
+    dump_library_module_composed, dump_mir, dump_typed_tree, explain_cache, library_abis,
+    CacheOutcome, CheckOptions, CheckReport, CheckedFile, InstanceOutcome, MirDump, TypedTreeDump,
     WorkspaceError,
 };
 

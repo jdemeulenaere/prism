@@ -502,6 +502,32 @@ fn many_adapters(n: usize) -> String {
     )
 }
 
+/// The toolkit modules a UI program imports (`ui-toolkit`).
+const TOOLKIT: [&str; 4] = [
+    "prism/compose/ui",
+    "prism/compose/foundation",
+    "prism/compose/layout",
+    "prism/compose/material3",
+];
+
+/// One composable calling `n` toolkit composables with modifier chains inside a `Column`
+/// (D19 of `ui-toolkit`): texts with a padded, filling chain, and buttons with a size and a
+/// click handler capturing nothing.
+fn ui_calls(n: usize) -> String {
+    let imports = join(TOOLKIT.len(), "\n", |i| format!("import /{}", TOOLKIT[i]));
+    format!(
+        "{imports}\n\
+         compose fun Screen(k: Int) {{\n\
+         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {{\n{}\n}}\n}}\n\
+         fun main() {{ runApp {{ Screen(1) }} }}\n",
+        join(n, "\n", |i| if i % 2 == 0 {
+            format!("Text(\"item {i}\", modifier = Modifier.padding(4.dp).fillMaxWidth())")
+        } else {
+            "Button(onClick = { }, modifier = Modifier.size(40.dp)) { Text(\"b\") }".to_string()
+        }),
+    )
+}
+
 /// `n` instances of a generic whose body builds a closure.
 fn generic_closures(n: usize) -> String {
     let mut source = String::from(
@@ -1071,6 +1097,7 @@ fn shapes() -> Vec<Shape> {
             nested_receiver_lambdas,
         ),
         shape("context-overloads", true, SIZES, context_overloads),
+        shape("ui-calls", true, SIZES, ui_calls),
     ]
 }
 
@@ -1102,6 +1129,14 @@ fn isa(extra: &[(&str, &str)]) -> cranelift_codegen::isa::OwnedTargetIsa {
         .unwrap()
 }
 
+/// The ABIs of the toolkit modules, extracted once per process.
+fn toolkit_abis() -> &'static [prism_abi::FileAbi] {
+    static ABIS: std::sync::OnceLock<Vec<prism_abi::FileAbi>> = std::sync::OnceLock::new();
+    ABIS.get_or_init(|| {
+        prism_cli::library_abis(&TOOLKIT).unwrap_or_else(|error| panic!("{}", error.render()))
+    })
+}
+
 /// Runs `f`, returning its result and how long it took.
 fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
     let start = Instant::now();
@@ -1125,6 +1160,12 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 10] {
     let ((tree, errors), time) = timed(|| {
         let mut checker = prism_typechecker::TypeChecker::new(package, "bench")
             .with_prelude(prism_typechecker::test_prelude());
+        // A UI program sees the toolkit modules' ABIs, which a cached build loads.
+        if source.contains("import /prism/compose/") {
+            for abi in toolkit_abis() {
+                checker.ingest_file_abi(abi);
+            }
+        }
         let tree = checker.check_module(&file);
         (tree, checker.errors)
     });

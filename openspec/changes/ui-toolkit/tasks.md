@@ -209,9 +209,9 @@ Read each snapshot against its scenario's THEN. Verify each task with `cargo tes
 
 ## 13. Measurements and integration
 
-- [ ] 13.1 Add the `ui-calls` shape to `crates/prism-cli/tests/compile_timing.rs` (design D19). Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` and check that it grows roughly linearly, for "Compile timing of a large screen". Add `crates/prism-cli/tests/ui_run_timing.rs` (`#[ignore]`d): a generated app of 1,000 `Text`s and a counter, run headless with 100 clicks, reporting the median per click. Record both in design.md, D19.
-- [ ] 13.2 Move `examples/demo/ui/ui.prism` to the new API: imports of `/prism/compose/ui`, `/prism/compose/layout` and `/prism/compose/material3`, and `Column(modifier = Modifier.padding(16.dp)) { Text("Hello Prism UI") }`. Check that `prism check` accepts it.
-- [ ] 13.3 Run the integration checks:
+- [x] 13.1 Add the `ui-calls` shape to `crates/prism-cli/tests/compile_timing.rs` (design D19). Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` and check that it grows roughly linearly, for "Compile timing of a large screen". Add `crates/prism-cli/tests/ui_run_timing.rs` (`#[ignore]`d): a generated app of 1,000 `Text`s and a counter, run headless with 100 clicks, reporting the median per click. Record both in design.md, D19.
+- [x] 13.2 Move `examples/demo/ui/ui.prism` to the new API: imports of `/prism/compose/ui`, `/prism/compose/layout` and `/prism/compose/material3`, and `Column(modifier = Modifier.padding(16.dp)) { Text("Hello Prism UI") }`. Check that `prism check` accepts it.
+- [x] 13.3 Run the integration checks:
   - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings) and `cargo test --workspace`;
   - `cargo run -q -p prism-cli -- check` on every file under `examples/`, and `cargo run -q -p prism-cli -- fmt --check examples/`;
   - `cargo run -q -p prism-cli -- run --check-allocations examples/run/main.prism`, which must behave as before;
