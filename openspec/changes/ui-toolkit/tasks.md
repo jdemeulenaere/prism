@@ -6,7 +6,7 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 1. Baseline reconciliation
 
-- [ ] 1.1 Compare the names the design takes from `compose-runtime`, `compose-transform`, `state-handles`, `standard-library` and `receiver-lambdas` (design, "Baseline") with the code those changes left, and fix every task below that names one differently:
+- [x] 1.1 Compare the names the design takes from `compose-runtime`, `compose-transform`, `state-handles`, `standard-library` and `receiver-lambdas` (design, "Baseline") with the code those changes left, and fix every task below that names one differently:
   - `Applier` and `Composition::start`;
   - `Composition::run_handler`, and the active pass's composition;
   - `prism_compose_start_node_group`;
@@ -37,7 +37,7 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 - [ ] 3.1 In `crates/prism-runtime/src/panic.rs`, add `PanicKind::UiMisuse` (`ui misuse: <detail>`) and `PanicKind::EventScriptFailed` (`event script line <detail>`), with the next free codes after `state-handles`' kinds, and extend `ALL`. Verify with the `panic_message` unit tests.
 - [ ] 3.2 In `output.rs`, add `pub fn write_output(text: &str)` over `append`. Verify with a unit test that the text joins the buffer in order with `prism_rt_print_string`.
-- [ ] 3.3 In `function_value.rs`, add `unsafe fn call_unit(&self)`, `call_with_bool(&self, value: bool)` and `call_with_string(&self, value: PrismString)`, with the closure code signatures of `closures` (environment first; the `String` by address, owned by the callee), and `is_keepable`, `duplicate` and `equals` over the descriptor's environment entries (`compose-transform` D9). Verify with unit tests over hand-built descriptors, including a `String` the callee frees under the allocation map, and equal and unequal environments.
+- [ ] 3.3 In `function_value.rs`, add `unsafe fn call_unit(&self)`, `call_with_bool(&self, value: bool)` and `call_with_string(&self, value: PrismString)`, with the closure code signatures of `closures` (environment first; the `String` by address, owned by the callee), and `is_keepable`, `duplicate` and `equals` over the descriptor's environment entries (`compose-transform` D9), adding the descriptor's third and fourth words, `equals_environment` and `duplicate_environment`, to `Descriptor` (task 1.1). Verify with unit tests over hand-built descriptors, including a `String` the callee frees under the allocation map, and equal and unequal environments.
 - [ ] 3.4 In `crates/prism-compose`, expose `active_composition() -> Option<Handle>` (the composition of the thread's active pass) for `prism-ui`. Verify with a unit test inside and outside a pass.
 
 ## 4. The `prism-ui` crate: handles, nodes, tree, handlers, applier (D2, D3, D10, D23)
@@ -134,7 +134,7 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
   - `Int.dp` and `Int.sp`, intrinsic properties.
 
   Each function gets a `BuiltinFunction` (`UiNode`, `UiLeafNode`, `RunApp`, `DpOfInt`, `TextUnitOfInt`). Extend `E4030` to `runApp`, and edit the `E4030` row of the diagnostics catalog to name it. Verify with the `standard-library` fixtures "A UI intrinsic in another library module" (a `// library:` case) and "Unit properties are members of Int", and the `ui` fixture "runApp inside a composable" (`// expect: E4030`).
-- [ ] 10.2 In `crates/prism-mir`, add `ComposerOperation::StartNodeGroup { key }`, which takes a kind operand and returns the node word, to the composed MIR, its dump (`composer start node group`), validation, instantiation and the `instance-cache` codec, and lower `DpOfInt` and `TextUnitOfInt` reads as aggregate constructions. In `crates/prism-compose-transform/src/intrinsics.rs`, lower `UiNode` and `UiLeafNode` as D3 says, with the key `H(parent, "node", ordinal)` from `keys.rs`. Extend the root content adapter of `composition` to `RunApp`'s content (`BodyOwner::RootContent`). Verify with the `mir` fixtures "A toolkit composable starts a node group" (a `// library:` case with `composed-mir.snap`), "The adapter of an app" and "A unit in MIR".
+- [ ] 10.2 In `crates/prism-mir`, add `ComposerOperation::StartNodeGroup { key }`, which takes a kind operand and returns the node word, to the composed MIR, its dump (`composer start node group`), validation, instantiation and the `instance-cache` codec, and lower `DpOfInt` and `TextUnitOfInt` reads as aggregate constructions. In `crates/prism-compose-transform/src/rewrite.rs` (`Rewriter::intrinsic`, task 1.1), lower `UiNode` and `UiLeafNode` as D3 says, with the key `H(parent, "node", ordinal)` from `keys.rs`. Extend the root content adapter of `composition` to `RunApp`'s content (`BodyOwner::RootContent`). Verify with the `mir` fixtures "A toolkit composable starts a node group" (a `// library:` case with `composed-mir.snap`), "The adapter of an app" and "A unit in MIR".
 - [ ] 10.3 In `crates/prism-codegen`, lower `StartNodeGroup` as a call of `prism_compose_start_node_group`, and `RunApp` as a call of `prism_ui_run_app` with the adapter moved by address. Verify with the fixtures of task 12.1.
 
 ## 11. The toolkit modules (D3 to D9, D21 to D25)
