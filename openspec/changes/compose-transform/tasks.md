@@ -63,13 +63,13 @@ Prerequisites (design, "Baseline"): `compose-runtime` archived, and with it `clo
 
 ## 9. Compile time (D24)
 
-- [ ] 9.1 Add the shapes `composable-calls`, `composable-branches`, `nested-composable-branches` (at `DEPTHS`), `many-composables` and `composable-lambdas` to `crates/prism-cli/tests/compile_timing.rs`, compiled, and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record the medians in design.md, D24, and fix any growth that is not roughly linear. This verifies "Composable bodies scale linearly".
+- [x] 9.1 Add the shapes `composable-calls`, `composable-branches`, `nested-composable-branches` (at `DEPTHS`), `many-composables` and `composable-lambdas` to `crates/prism-cli/tests/compile_timing.rs`, compiled, and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record the medians in design.md, D24, and fix any growth that is not roughly linear. This verifies "Composable bodies scale linearly".
 
 ## 10. Documents and integration
 
-- [ ] 10.1 In `openspec/specs/diagnostics/spec.md`, add `E4030` (`CompositionInComposable`), extend `E4008`'s meaning with composable calls in default values, and remove composable functions from `E6001`'s meaning and from its rationale line, pointing at D17.
-- [ ] 10.2 Add `examples/run/compose/screen.prism` with a skippable composable and a `remember`, called from `examples/run/main.prism` through a composition that prints on each pass, with the expected output updated in its comment. Check that `examples/demo/ui` still fails only for names of later changes (`mutableStateOf`, `Column`, `Text`).
-- [ ] 10.3 Run the apply guidance of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism`, `prism fmt --check crates/prism-library/prism`, and `openspec validate compose-transform --strict`. Re-run `crates/prism-cli/tests/run_timing.rs` and record that startup stays under its target with the larger prelude.
+- [x] 10.1 In `openspec/specs/diagnostics/spec.md`, add `E4030` (`CompositionInComposable`), extend `E4008`'s meaning with composable calls in default values, and remove composable functions from `E6001`'s meaning and from its rationale line, pointing at D17.
+- [x] 10.2 Add `examples/run/compose/screen.prism` with a skippable composable and a `remember`, called from `examples/run/main.prism` through a composition that prints on each pass, with the expected output updated in its comment. Check that `examples/demo/ui` still fails only for names of later changes (`mutableStateOf`, `Column`, `Text`).
+- [x] 10.3 Run the apply guidance of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` (no new warnings), `cargo test --workspace`, `prism check` and `prism fmt --check` on `examples/`, `prism run --check-allocations examples/run/main.prism`, `prism fmt --check crates/prism-library/prism`, and `openspec validate compose-transform --strict`. Re-run `crates/prism-cli/tests/run_timing.rs` and record that startup stays under its target with the larger prelude. Done at apply time: `prism run examples/run/main.prism`, now with a composition, is 9.4 ms to `main` cold and 1.8 ms warm (medians of 20, release), under the 15 ms target.
 
 ## Workflow follow-up
 

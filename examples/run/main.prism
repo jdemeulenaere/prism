@@ -5,9 +5,12 @@
 // and function values, closures that own their captures (a handler kept in a struct and a
 // closure returned from a function), lists built, updated by index, iterated, shrunk and
 // cloned, and the bundled library: a struct printed through its `toString()` and the list
-// helpers `map` and `joinToString`.
+// helpers `map` and `joinToString`. Last, it composes a screen of composables in a
+// composition: the first pass prints both rows, setting the same content again skips them,
+// and a larger step runs both rows again, each still remembering its first count.
 package run
 
+import /run/compose/screen
 import /run/generic/labels
 import /run/geometry/shapes
 import /run/math/expressions
@@ -27,6 +30,8 @@ fun press(b: &Button): Int = b.onClick()
 fun describer(name: String): (Int) -> String = { "$name = $it" }
 
 fun Point.toString(): String = "($x, $y)"
+
+fun screen(step: Int): compose () -> Unit = { CounterScreen(2, step) }
 
 fun main() {
     var primes = 0
@@ -101,4 +106,9 @@ fun main() {
     println(labels.contains("ok") && labels.indexOf("limit = 1") == 1)
     println(p)
     println(kept.map { it * 2 }.joinToString { it.toString() })
+
+    val composition = composition(screen(1))
+    composition.setContent(screen(1))
+    composition.setContent(screen(2))
+    println(composition.recompose())
 }

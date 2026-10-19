@@ -1,0 +1,17 @@
+package run.compose
+
+// A composable screen for the reference program of `prism run` (examples/run/main.prism).
+
+// One row of the screen. Its parameters are `Copy`, so it is skippable: a pass runs it again
+// only when its arguments change. The value it remembers is computed on its first pass alone.
+public compose fun CounterRow(label: Int, count: Int): Unit {
+    val first = remember { count }
+    println("row $label: $count (first $first)")
+}
+
+// `rows` rows, each counting a multiple of `step`.
+public compose fun CounterScreen(rows: Int, step: Int): Unit {
+    for (i in 1..rows) {
+        CounterRow(i, i * step)
+    }
+}

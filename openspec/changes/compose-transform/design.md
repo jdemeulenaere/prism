@@ -409,6 +409,19 @@ The transform runs on a generic composable's polymorphic body (D2): its stabilit
 
 Nothing is per instance or whole-program. `crates/prism-cli/tests/compile_timing.rs` gains five shapes, at its usual sizes: `composable-calls` (one composable calling `n` skippable composables), `composable-branches` (`n` sequential `if`s each calling a composable), `nested-composable-branches` (nesting depth `n`), `many-composables` (`n` skippable composables of four stable parameters) and `composable-lambdas` (`n` content lambdas). `PRISM_ASSERT_TIMING=1` asserts that each grows roughly linearly.
 
+Measured at apply time (release build, best of five, ms, at the largest size; the `compose` column is the transform, which `compile_timing.rs` now times as a stage of its own between `borrow` and `inst`):
+
+| shape | size | borrow | compose | lower | clif | worst growth |
+|---|---|---|---|---|---|---|
+| `composable-calls` | 4096 calls | 5.5 | 3.0 | 4.1 | 5.2 | x4.0 per x4 |
+| `composable-branches` | 4096 `if`s | 23.5 | 19.6 | 22.3 | 29.9 | x5.0 per x4 (`mir`) |
+| `nested-composable-branches` | depth 120 | 0.4 | 0.3 | 0.3 | 1.5 | below 5 ms |
+| `many-composables` | 4096 composables | 31.5 | 100.8 | 359.2 | 871.7 | x5.1 per x4 (`mir`) |
+| `composable-lambdas` | 4096 lambdas | 39.8 | 19.0 | 40.6 | 117.4 | x4.5 per x4 |
+| `nested-compose-ui` (now compiled) | depth 128 | 48.7 | 17.4 | 59.7 | 152.3 | x1.93 per x2 on average |
+
+Every stage grows roughly linearly. The transform costs about the borrow checker's time or less except for `many-composables`, where each skippable body's prologue keeps four arguments (one switch over four bit patterns each) and its code is what the backend then spends most on: about 0.2 ms of `lower` and `clif` per composable of four parameters, linear. Sharing that prologue in a runtime helper is a follow-up if large UIs show it.
+
 | Run-time operation | Cost |
 |---|---|
 | composable call | one group start and end, one runtime call per stable parameter, change words |
@@ -421,6 +434,14 @@ Nothing is per instance or whole-program. `crates/prism-cli/tests/compile_timing
 The language side of compose extends the `compose` capability that `compose-runtime` creates, so that one spec describes what a composable does. MIR forms extend `mir`, backend forms `code-generation`, the defaults rule `type-system`, the module and intrinsic structs `standard-library`, `syntax`, `compilation-and-abi` and `formatting`. The diagnostics catalog is edited directly.
 
 Behavior is pinned by executable fixtures under `crates/prism-cli/tests/fixtures/compose/`, all under `--check-allocations`, most printing what runs on each pass and some printing `c.dump()`. The transform's output is pinned by a new snapshot kind, `composed-mir.snap` (`prism dump-mir --composed`), required for the `mir` scenarios of composed MIR. Key stability under edits is a CLI test comparing two composed dumps. The kept-slot entry is a Rust test in `prism-compose`.
+
+### D26. Apply-time refinements (autonomous)
+
+Decided while implementing; each is also noted where its decision is:
+
+- **A `when`'s region is its branch body** (D6): guards and later branch conditions run before the branch is chosen and stay in the enclosing group. Rejected: a region around the whole `when` (one group for every branch, losing the per-branch state switch), or regions that start before a guard (a guard's false edge would have to end a group it may never have started). A composable call in a guard is rare and still type-safe through typed slots.
+- **`key` ordinals count the `key` calls of their innermost region in block order** (D5, D13), read from the open-region stacks the validator computes. Rejected: recording a `key` step in lowering, which would need a marker or a side table that survives block merging.
+- **The Rust `Descriptor` stays a two-word prefix** (D9): only generated code reads the equality and duplicate entries, from values generated code built. Rejected: four Rust fields, which would change the test descriptors of `prism-compose` and `prism-ui` for words they never read.
 
 ## Risks / Trade-offs
 

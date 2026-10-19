@@ -13,6 +13,7 @@
 //! - `type`: Phase 2's type checker, which builds the typed tree;
 //! - `mir`: MIR lowering;
 //! - `borrow`: the borrow checker, with drop elaboration and capture inference;
+//! - `compose`: the compose transform (`compose-transform`);
 //! - `inst`: the collection of the instances of generics the file needs, from its generic
 //!   records, with the cross-file recursion check and the support check of every instance;
 //! - `lower`: the backend's support check and lowering to Cranelift IR, of the file's unit and
@@ -384,6 +385,80 @@ fn nested_compose_ui(n: usize) -> String {
             body.push_str(&" }".repeat(n));
             format!("compose fun Screen{k}() {{ {body} }}\n")
         },
+    )
+}
+
+/// One composable calling `n` skippable composables (D24 of `compose-transform`).
+fn composable_calls(n: usize) -> String {
+    format!(
+        "compose fun Badge(n: Int) {{ }}\n\
+         compose fun Screen(k: Int) {{\n{}\n}}\n\
+         fun main() {{ val c = composition {{ Screen(1) }} }}\n",
+        join(n, "\n", |i| format!(
+            "Badge({})",
+            if i % 2 == 0 { "k" } else { "1" }
+        )),
+    )
+}
+
+/// `n` sequential `if`s, each calling a composable in its branch.
+fn composable_branches(n: usize) -> String {
+    format!(
+        "compose fun Badge(n: Int) {{ }}\n\
+         compose fun Screen(k: Int) {{\n{}\n}}\n\
+         fun main() {{ val c = composition {{ Screen(1) }} }}\n",
+        join(n, "\n", |i| format!(
+            "if (k > {i}) {{ Badge({i}) }} else {{ Badge(k) }}"
+        )),
+    )
+}
+
+/// `if`s nested `n` deep, each branch calling a composable.
+fn nested_composable_branches(n: usize) -> String {
+    let mut body = String::new();
+    for i in 0..n {
+        write!(body, "if (k > {i}) {{ Badge({i}); ").unwrap();
+    }
+    body.push_str(&" }".repeat(n));
+    format!(
+        "compose fun Badge(n: Int) {{ }}\n\
+         compose fun Screen(k: Int) {{ {body} }}\n\
+         fun main() {{ val c = composition {{ Screen(1) }} }}\n",
+    )
+}
+
+/// `n` skippable composables of four stable parameters, each calling the previous one.
+fn many_composables(n: usize) -> String {
+    let mut source = String::from("struct Point : Copy { val x: Int }\n");
+    for i in 0..n {
+        let call = if i == 0 {
+            String::new()
+        } else {
+            format!("Item{}(a, b, c, p)", i - 1)
+        };
+        writeln!(
+            source,
+            "compose fun Item{i}(a: Int, b: Bool, c: Double, p: Point) {{ {call} }}"
+        )
+        .unwrap();
+    }
+    writeln!(
+        source,
+        "fun main() {{ val c = composition {{ Item{}(1, true, 1.0, Point(2)) }} }}",
+        n - 1
+    )
+    .unwrap();
+    source
+}
+
+/// `n` content lambdas passed to a composable.
+fn composable_lambdas(n: usize) -> String {
+    format!(
+        "compose fun Column(content: compose () -> Unit) {{ content() }}\n\
+         compose fun Text(n: Int) {{ }}\n\
+         compose fun Screen(k: Int) {{\n{}\n}}\n\
+         fun main() {{ val c = composition {{ Screen(1) }} }}\n",
+        join(n, "\n", |i| format!("Column {{ Text({i}); Text(k) }}")),
     )
 }
 
@@ -911,7 +986,17 @@ fn shapes() -> Vec<Shape> {
             CALL_DEPTHS,
             nested_generic_implicit_lambdas,
         ),
-        shape("nested-compose-ui", false, CALL_DEPTHS, nested_compose_ui),
+        shape("nested-compose-ui", true, CALL_DEPTHS, nested_compose_ui),
+        shape("composable-calls", true, SIZES, composable_calls),
+        shape("composable-branches", true, SIZES, composable_branches),
+        shape(
+            "nested-composable-branches",
+            true,
+            DEPTHS,
+            nested_composable_branches,
+        ),
+        shape("many-composables", true, SIZES, many_composables),
+        shape("composable-lambdas", true, SIZES, composable_lambdas),
         shape("many-captures", true, SIZES, many_captures),
         shape("many-adapters", true, SIZES, many_adapters),
         shape("generic-closures", true, SIZES, generic_closures),
@@ -967,8 +1052,8 @@ fn shapes() -> Vec<Shape> {
     ]
 }
 
-const STAGES: [&str; 9] = [
-    "lex", "parse", "abi", "type", "mir", "borrow", "inst", "lower", "clif",
+const STAGES: [&str; 10] = [
+    "lex", "parse", "abi", "type", "mir", "borrow", "compose", "inst", "lower", "clif",
 ];
 
 /// The host ISA with the backend's settings, then `extra`, overridden by
@@ -1003,8 +1088,8 @@ fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
 }
 
 /// The time of each stage of `program`, `None` for the stages it does not reach.
-fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
-    let mut times = [None; 9];
+fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 10] {
+    let mut times = [None; 10];
     let source = program.source.as_str();
     let (tokens, time) = timed(|| prism_lexer::Lexer::new(source).tokenize_all());
     times[0] = Some(time);
@@ -1028,10 +1113,12 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
     let (elaborated, time) = timed(|| prism_borrowck::check_file(&mir));
     times[5] = Some(time);
     let elaborated = elaborated.unwrap_or_else(|errors| panic!("borrow errors: {:?}", errors));
+    let (composed, time) = timed(|| prism_cli::compose_file(&elaborated));
+    times[6] = Some(time);
     if !compiled {
         return times;
     }
-    let files = [elaborated];
+    let files = [composed];
     let (instances, time) = timed(|| {
         let instances = prism_codegen::collect_instances(&[&files[0]])
             .unwrap_or_else(|errors| panic!("instances rejected: {:?}", errors));
@@ -1039,7 +1126,7 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
             .unwrap_or_else(|errors| panic!("unsupported instances: {:?}", errors));
         instances
     });
-    times[6] = Some(time);
+    times[7] = Some(time);
     let mut module = JITModule::new(JITBuilder::with_isa(isa(&[]), default_libcall_names()));
     // The ISA the backend compiles large functions with (`prism_codegen::isa::is_large`).
     let large = isa(&[("regalloc_algorithm", "single_pass")]);
@@ -1055,7 +1142,7 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
         }
         units
     });
-    times[7] = Some(time);
+    times[8] = Some(time);
     let ((), time) = timed(|| {
         let mut context = module.make_context();
         for unit in units {
@@ -1072,12 +1159,12 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
             }
         }
     });
-    times[8] = Some(time);
+    times[9] = Some(time);
     times
 }
 
 /// The fastest time of each stage over five runs, or of one run when it takes over a second.
-fn best_of(program: &Generated, compiled: bool) -> [Option<Duration>; 9] {
+fn best_of(program: &Generated, compiled: bool) -> [Option<Duration>; 10] {
     let mut best = compile(program, compiled);
     let total: Duration = best.iter().flatten().sum();
     if total < Duration::from_secs(1) {
@@ -1117,11 +1204,11 @@ fn run_benchmark() {
                 continue;
             }
         }
-        let mut previous: Option<(usize, [Option<Duration>; 9])> = None;
+        let mut previous: Option<(usize, [Option<Duration>; 10])> = None;
         // The size and `borrow` time of each program.
         let mut borrow_times: Vec<(usize, Duration)> = Vec::new();
         // The size and stage times of each program.
-        let mut all_times: Vec<(usize, [Option<Duration>; 9])> = Vec::new();
+        let mut all_times: Vec<(usize, [Option<Duration>; 10])> = Vec::new();
         for &size in shape.sizes {
             let program = Generated {
                 size,
