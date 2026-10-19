@@ -6,7 +6,7 @@ Prerequisites (design, "Baseline"): `standard-library`, `compose-runtime`, `comp
 
 ## 1. Baseline reconciliation
 
-- [ ] 1.1 Compare the names the design takes from the seven packets (design, "Baseline") with the code they left, and fix every task below that names one differently:
+- [x] 1.1 Compare the names the design takes from the seven packets (design, "Baseline") with the code they left, and fix every task below that names one differently:
   - `prism_runtime::set_finish_report`, `finish_tracking`'s order, `prism_compose::finish` and `live_compositions_report`;
   - `prism-compose`'s group, slot and cell arenas;
   - `prism-ui`'s `app.rs` loop, `Host`, `HostEvent`, `HostConfiguration`, `ScriptCommand`, the script parser, the headless host, the dump's kind names and the node arena;
@@ -27,9 +27,9 @@ Prerequisites (design, "Baseline"): `standard-library`, `compose-runtime`, `comp
 
 ## 3. Live runtime objects in the allocation check (D6)
 
-- [ ] 3.1 In `prism-compose`, keep a live count in the group, slot and cell arenas of the thread state (incremented on insert, decremented on release), and add `live_objects_report() -> Option<String>`: `None` when a composition is live or every count is zero, otherwise the lines of design D6 for the non-zero counts, in order. Add test-support hooks that leak a group, a slot and a cell. Verify with Rust tests: each leak gives its line, a live composition hides them, and the order is fixed.
-- [ ] 3.2 In `prism-ui`, keep a live count of the node arena and add `live_nodes_report() -> Option<String>`, under the same rule, and a test-support hook that leaks a node. Verify with a Rust test.
-- [ ] 3.3 In `crates/prism-codegen/src/program.rs::Program::run` (and `Program::start`), install one finish report that runs `prism_compose::finish` and its composition report, then `live_objects_report`, then `live_nodes_report`, joining their lines. Verify with the Rust test of "A leaked group, cell and node are reported", with the existing fixture "A composition that is never disposed" (its stderr unchanged, "A live composition hides what it holds"), and with the `execution` fixture "An app that ends cleanly reports nothing".
+- [ ] 3.1 In `prism-compose`, count the live groups and cells from their arenas (`Arena::len`) and the slots from the live groups and the release queue (design, "Reconciliation"), and add `live_objects_report() -> Option<String>`: `None` when a composition is live or every count is zero, otherwise the lines of design D6 for the non-zero counts, in order. Add test-support hooks that leak a group, a slot and a cell. Verify with Rust tests: each leak gives its line, a live composition hides them, and the order is fixed.
+- [ ] 3.2 In `prism-ui`, count the live nodes of the thread's tree and of the trees `install_tree` replaced, and add `live_nodes_report() -> Option<String>`, under the same rule, and a test-support hook that leaks a node. Verify with a Rust test.
+- [ ] 3.3 In `crates/prism-codegen/src/program.rs::Program::start` (which `Program::run` calls), install one finish report that runs `prism_compose::finish_report` (program cells, then the composition report), then `live_objects_report`, then `live_nodes_report`, joining their lines. Verify with the Rust test of "A leaked group, cell and node are reported", with the existing fixture "A composition that is never disposed" (its stderr unchanged, "Undisposed Compositions Are Reported"), and with the `execution` fixture "An app that ends cleanly reports nothing".
 
 ## 4. Script targets by kind and the app sessions (D4, D5, D11)
 

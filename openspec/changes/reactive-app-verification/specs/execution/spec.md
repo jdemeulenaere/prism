@@ -1,20 +1,26 @@
 # Execution Delta
 
+## MODIFIED Requirements
+
+### Requirement: Undisposed Compositions Are Reported
+Under `--check-allocations`, when `main` returns, compositions of the program thread that were started and not disposed (compose, "Disposing a Composition Releases Everything") MUST be reported, after the output is flushed and before any report of live allocations, as `allocation check: compositions still live at exit: <n>` on stderr, and the program MUST exit with status 102. The groups, slots, state cells and nodes such a composition holds are expected to be live, so they MUST NOT then be reported ("Live Runtime Objects Are Reported"). Without the option they MUST NOT be counted.
+
+#### Scenario: A composition that is never disposed
+- **WHEN** `import /prism/composer` and `fun main() { val c = startComposition { k -> println("ok") } }` run with `--check-allocations`
+- **THEN** stdout holds `ok`, stderr is exactly `allocation check: compositions still live at exit: 1` and a newline, and the exit status is 102
+
+#### Scenario: An undisposed composition and what it holds
+- **WHEN** `fun Greeting(k: Int, name: String) { startRestartGroup(k, 3); println("hello " + name); endRestartGroup(k) { c -> Greeting(c, name.clone()) } }` is declared, and `fun main() { val c = startComposition { k -> Greeting(k, "a" + "b") } }` runs with `--check-allocations` and `import /prism/composer`
+- **THEN** stdout is `hello ab`, stderr is the line `allocation check: compositions still live at exit: 1` followed by the line of live allocations, which counts the restart function's environment and its string, and the exit status is 102
+
 ## ADDED Requirements
 
 ### Requirement: Live Runtime Objects Are Reported
-Under `--check-allocations`, when `main` returns with no live composition, the program thread's live groups, slots, state cells and nodes MUST be reported after the composition report and before the allocation report, one line per non-zero count in this order: `allocation check: groups still live at exit: <n>`, then `slots`, `state cells` and `nodes` in the same form. Any line MUST make the exit status 102. Without the option nothing MUST be counted.
+Under `--check-allocations`, when `main` returns with no live composition, the program thread's live groups, slots, state cells and nodes MUST be reported after the composition report and before the allocation report, one line per non-zero count in this order: `allocation check: groups still live at exit: <n>`, then `slots`, `state cells` and `nodes` in the same form. Any line MUST make the exit status 102. Without the option nothing MUST be reported.
 
 #### Scenario: A leaked group, cell and node are reported
 - **WHEN** a Rust test leaks one group, one state cell and one node through the runtime's test hooks, with no composition live, and runs the program's finish report
 - **THEN** the report is exactly the lines `allocation check: groups still live at exit: 1`, `allocation check: state cells still live at exit: 1` and `allocation check: nodes still live at exit: 1`
-
-### Requirement: A Live Composition Hides What It Holds
-When a composition is still live as `main` returns under `--check-allocations`, only the report of undisposed compositions MUST be printed, since its groups, slots, cells and nodes are expected to be live.
-
-#### Scenario: A live composition hides what it holds
-- **WHEN** `import /prism/composer` and `fun main() { val c = startComposition { k -> println("ok") } }` run with `--check-allocations`
-- **THEN** stderr is exactly `allocation check: compositions still live at exit: 1` and a newline, and the exit status is 102
 
 #### Scenario: An app that ends cleanly reports nothing
 - **WHEN** `fun main() { runApp(width = 200, height = 100) { val c = remember { mutableStateOf(0) }; Text("n = ${c.value}") } }` runs with `import /prism/compose/ui` and `import /prism/compose/material3` under `prism run --check-allocations --headless`
