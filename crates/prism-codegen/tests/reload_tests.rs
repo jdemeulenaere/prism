@@ -55,7 +55,7 @@ fn request_reload(
         then();
         AppliedReload {
             units,
-            message: String::new(),
+            ..AppliedReload::default()
         }
     }));
     splits
@@ -218,4 +218,59 @@ fn a_deferred_reload_is_applied_at_the_reload_point() {
     // the reload and reported its module.
     assert_eq!(*TICKS.lock().unwrap(), [1, 2, 2]);
     assert_eq!(*APPLIED.lock().unwrap(), [vec!["main".to_string()]]);
+}
+
+/// The test's `leave`: the frame loop stops deferring reloads, as `runApp` does when it
+/// returns.
+extern "C" fn test_leave() {
+    reload::apply_at_next_call();
+}
+
+/// Points the slots of `main::leave` and `main::tick` of `table` at the test's functions.
+fn install_leave_hooks(table: &prism_codegen::FunctionTable) {
+    table.set("main::leave", test_leave as extern "C" fn() as *const u8);
+    table.set("main::tick", test_tick as extern "C" fn(i64) as *const u8);
+}
+
+/// compose-hot-reload, hot-reload: "A reload pending when runApp returns". A reload requested
+/// while reloads are deferred to reload points, and never reaching one, is applied at the first
+/// call after the program stops deferring them.
+#[test]
+fn a_reload_pending_when_reload_points_end_is_applied_at_the_next_call() {
+    let _lock = prism_runtime::test_lock();
+    let source = "fun leave() {}\nfun tick(v: Int) {}\nfun value(): Int = 1\n\
+                  fun get(): Int = value()\n\
+                  fun main() { tick(get()); leave(); tick(get()) }\n";
+    let mut program = compile(source);
+    install_leave_hooks(program.table());
+    TICKS.lock().unwrap().clear();
+    let (started_sender, started) = mpsc::channel();
+    let (requested, requested_receiver) = mpsc::channel();
+    *FIRST_TICK.lock().unwrap() = Some((started_sender, requested_receiver));
+    reload::defer_to_reload_points(wake);
+    let (sender, receiver) = mpsc::channel();
+    let main = DeclarationPath::new("main", "main");
+    let running = program
+        .start(&main, Vec::new(), false, move |status| {
+            let _ = sender.send(status);
+        })
+        .expect("the program starts");
+    started
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the first tick runs");
+    let file = lowered(&source.replace("Int = 1", "Int = 2"));
+    let table = std::sync::Arc::clone(program.live().table());
+    request_reload(&mut program, &file, move || install_leave_hooks(&table));
+    requested.send(()).unwrap();
+    let status = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("main returns");
+    assert_eq!(status, 0);
+    running.join().unwrap();
+    *FIRST_TICK.lock().unwrap() = None;
+    assert_eq!(reload::reload_policy(), reload::ReloadPolicy::AtNextCall);
+    assert!(reload::withdraw().is_none(), "the reload was applied");
+    program.live_mut().settle(true);
+    // The first tick ran before the request, the second after `leave` applied it.
+    assert_eq!(*TICKS.lock().unwrap(), [1, 2]);
 }

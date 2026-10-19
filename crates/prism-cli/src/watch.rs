@@ -399,7 +399,11 @@ impl WatchSession {
                     modules
                 ));
             }
-            AppliedReload { units, message }
+            AppliedReload {
+                units,
+                message,
+                ..AppliedReload::default()
+            }
         }));
         ReloadOutcome::Requested
     }
