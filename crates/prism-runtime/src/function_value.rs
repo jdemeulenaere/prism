@@ -5,14 +5,17 @@
 //! A function value is 16 bytes (D2 and D3 of `closures`): the address of its closure's
 //! descriptor, never null, and its environment word, which is the address of its environment,
 //! null when the closure captures nothing, or the environment itself when it fits in one word
-//! (D9 of `escaping-closures`). A descriptor's first word is the address of the function-table
-//! slot of the closure's code, and its second the environment's drop entry, or null when the
-//! environment is borrowed or held inline. Closure code takes `(result?, environment,
-//! parameters...)` with the host's C calling convention.
+//! (D9 of `escaping-closures`). A descriptor is four words (D9 of `compose-transform`): the
+//! address of the function-table slot of the closure's code; the environment's drop entry, or
+//! null when the environment is borrowed or held inline; the environment equality entry of a
+//! keepable closure, or null when the closure is not keepable; and the duplicate entry of a
+//! keepable closure whose environment is allocated, or null. Closure code takes `(result?,
+//! environment, parameters...)` with the host's C calling convention.
 //!
 //! Calls load the code from the slot each time, so a slot repointed by a hot reload is followed
 //! by every value built before it. Nothing here keeps a code address.
 
+use crate::string::PrismString;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The static descriptor of a closure.
@@ -23,6 +26,27 @@ pub struct Descriptor {
     pub slot: *const AtomicUsize,
     /// The drop entry of an allocated environment, called with the environment's address.
     pub drop_environment: Option<unsafe extern "C" fn(*mut u8)>,
+    /// The environment equality entry of a keepable closure, called with two environment
+    /// words and giving 1 when they hold equal captures; null when the closure is not
+    /// keepable, because it owns a capture that is not `Copy` or borrows one.
+    pub equals_environment: Option<unsafe extern "C" fn(*const u8, *const u8) -> u8>,
+    /// The duplicate entry of a keepable closure whose environment is allocated, called with
+    /// the environment's address and giving a new allocation holding a copy of its captures;
+    /// null when a copy of the environment word is a duplicate.
+    pub duplicate_environment: Option<unsafe extern "C" fn(*const u8) -> *mut u8>,
+}
+
+impl Descriptor {
+    /// A descriptor of a closure with the code in `slot` and no environment entries: one that
+    /// captures nothing gets [`prism_rt_empty_environments_equal`] as its equality entry.
+    pub const fn new(slot: *const AtomicUsize) -> Descriptor {
+        Descriptor {
+            slot,
+            drop_environment: None,
+            equals_environment: None,
+            duplicate_environment: None,
+        }
+    }
 }
 
 // SAFETY: a descriptor is read-only static data; its slot is only accessed atomically.
@@ -82,6 +106,87 @@ impl FunctionValue {
         code(self.environment)
     }
 
+    /// Calls the value as a `(Bool) -> Unit` function with `value`, passed as one byte, 0 or 1,
+    /// as closure code takes a `Bool`.
+    ///
+    /// # Safety
+    ///
+    /// The value must be a live function value of type `(Bool) -> Unit`.
+    pub unsafe fn call_with_bool(&self, value: bool) {
+        let code = (*(*self.descriptor).slot).load(Ordering::Acquire);
+        let code: unsafe extern "C" fn(*mut u8, u8) = std::mem::transmute(code);
+        code(self.environment, value as u8)
+    }
+
+    /// Calls the value as a `(String) -> Unit` function with `value`, which the callee owns
+    /// from then on: a `String` is passed by address, as aggregates are, and the callee drops
+    /// it (D3 of `closures`).
+    ///
+    /// # Safety
+    ///
+    /// The value must be a live function value of type `(String) -> Unit`.
+    pub unsafe fn call_with_string(&self, value: PrismString) {
+        let code = (*(*self.descriptor).slot).load(Ordering::Acquire);
+        let code: unsafe extern "C" fn(*mut u8, *mut PrismString) = std::mem::transmute(code);
+        let mut value = std::mem::ManuallyDrop::new(value);
+        code(self.environment, &mut *value)
+    }
+
+    /// Calls the value as a `() -> Unit` function: [`FunctionValue::call`].
+    ///
+    /// # Safety
+    ///
+    /// The value must be a live function value of type `() -> Unit`.
+    pub unsafe fn call_unit(&self) {
+        self.call()
+    }
+
+    /// Whether the value may be kept and compared: its descriptor has an environment equality
+    /// entry (D9 of `compose-transform`).
+    ///
+    /// # Safety
+    ///
+    /// The value's descriptor must be valid.
+    pub unsafe fn is_keepable(&self) -> bool {
+        (*self.descriptor).equals_environment.is_some()
+    }
+
+    /// A duplicate of a keepable value that owns its own environment: the descriptor, and the
+    /// duplicate entry's copy of an allocated environment or a copy of the environment word.
+    /// `None` when the value is not keepable.
+    ///
+    /// # Safety
+    ///
+    /// The value must be live.
+    pub unsafe fn duplicate(&self) -> Option<FunctionValue> {
+        let descriptor = &*self.descriptor;
+        descriptor.equals_environment?;
+        let environment = match descriptor.duplicate_environment {
+            Some(duplicate) => duplicate(self.environment),
+            None => self.environment,
+        };
+        Some(FunctionValue {
+            descriptor: self.descriptor,
+            environment,
+        })
+    }
+
+    /// Whether `self` and `other` have the same code and equal captures: the same descriptor,
+    /// keepable, and environments its equality entry finds equal. Any other pair is unequal.
+    ///
+    /// # Safety
+    ///
+    /// Both values must be live.
+    pub unsafe fn equals(&self, other: &FunctionValue) -> bool {
+        if !std::ptr::eq(self.descriptor, other.descriptor) {
+            return false;
+        }
+        match (*self.descriptor).equals_environment {
+            Some(equals) => equals(self.environment, other.environment) != 0,
+            None => false,
+        }
+    }
+
     /// Releases the value: calls its environment's drop entry when the descriptor has one, and
     /// does nothing otherwise.
     ///
@@ -127,10 +232,7 @@ mod tests {
     #[test]
     fn a_call_goes_through_the_slot() {
         let slot = AtomicUsize::new(first as *const () as usize);
-        let descriptor = Descriptor {
-            slot: &slot,
-            drop_environment: None,
-        };
+        let descriptor = Descriptor::new(&slot);
         let value = FunctionValue {
             descriptor: &descriptor,
             environment: std::ptr::without_provenance_mut(5),
@@ -152,13 +254,10 @@ mod tests {
     fn release_calls_the_drop_entry_once_and_skips_a_null_one() {
         let slot = AtomicUsize::new(first as *const () as usize);
         let with_drop = Descriptor {
-            slot: &slot,
             drop_environment: Some(count_drop),
+            ..Descriptor::new(&slot)
         };
-        let without_drop = Descriptor {
-            slot: &slot,
-            drop_environment: None,
-        };
+        let without_drop = Descriptor::new(&slot);
         DROPS.with(|drops| drops.set(0));
         unsafe {
             FunctionValue {
@@ -178,10 +277,7 @@ mod tests {
     #[test]
     fn a_value_is_read_from_its_address() {
         let slot = AtomicUsize::new(first as *const () as usize);
-        let descriptor = Descriptor {
-            slot: &slot,
-            drop_environment: None,
-        };
+        let descriptor = Descriptor::new(&slot);
         let stored = FunctionValue {
             descriptor: &descriptor,
             environment: std::ptr::without_provenance_mut(9),
@@ -189,5 +285,109 @@ mod tests {
         let read = unsafe { FunctionValue::read_from((&stored as *const FunctionValue).cast()) };
         assert_eq!(read, stored);
         assert_eq!(std::mem::size_of::<FunctionValue>(), 16);
+    }
+
+    thread_local! {
+        static FLAGS: Cell<u8> = const { Cell::new(0) };
+        static STRING: Cell<usize> = const { Cell::new(0) };
+    }
+
+    unsafe extern "C" fn take_bool(environment: *mut u8, value: u8) {
+        FLAGS.with(|flags| flags.set(environment as u8 + value));
+    }
+
+    unsafe extern "C" fn take_string(_: *mut u8, value: *mut PrismString) {
+        STRING.with(|length| length.set((*value).character_count));
+        crate::prism_rt_string_drop(value);
+    }
+
+    unsafe extern "C" fn words_equal(a: *const u8, b: *const u8) -> u8 {
+        (a == b) as u8
+    }
+
+    /// Two-`Int` environments, allocated: equal when both words are.
+    unsafe extern "C" fn pairs_equal(a: *const u8, b: *const u8) -> u8 {
+        let (a, b) = (a.cast::<[i64; 2]>(), b.cast::<[i64; 2]>());
+        (*a == *b) as u8
+    }
+
+    unsafe extern "C" fn duplicate_pair(environment: *const u8) -> *mut u8 {
+        Box::into_raw(Box::new(*environment.cast::<[i64; 2]>())).cast()
+    }
+
+    unsafe extern "C" fn drop_pair(environment: *mut u8) {
+        drop(Box::from_raw(environment.cast::<[i64; 2]>()));
+    }
+
+    #[test]
+    fn calls_with_a_bool_and_with_a_string_the_callee_frees() {
+        let _lock = crate::test_lock();
+        let slot = AtomicUsize::new(take_bool as *const () as usize);
+        let descriptor = Descriptor::new(&slot);
+        let value = FunctionValue {
+            descriptor: &descriptor,
+            environment: std::ptr::without_provenance_mut(10),
+        };
+        unsafe { value.call_with_bool(true) };
+        assert_eq!(FLAGS.with(Cell::get), 11);
+        crate::output::start(Vec::new(), true);
+        let slot = AtomicUsize::new(take_string as *const () as usize);
+        let descriptor = Descriptor::new(&slot);
+        let value = FunctionValue {
+            descriptor: &descriptor,
+            environment: std::ptr::null_mut(),
+        };
+        unsafe { value.call_with_string(PrismString::owned("abc")) };
+        assert_eq!(STRING.with(Cell::get), 3);
+        assert_eq!(crate::finish(), 0, "the callee freed the string");
+    }
+
+    #[test]
+    fn keepable_values_duplicate_and_compare_by_their_environments() {
+        let slot = AtomicUsize::new(first as *const () as usize);
+        let inline = Descriptor {
+            equals_environment: Some(words_equal),
+            ..Descriptor::new(&slot)
+        };
+        let not_keepable = Descriptor::new(&slot);
+        let word = |descriptor: &Descriptor, word: usize| FunctionValue {
+            descriptor,
+            environment: std::ptr::without_provenance_mut(word),
+        };
+        unsafe {
+            assert!(word(&inline, 1).is_keepable());
+            assert!(!word(&not_keepable, 1).is_keepable());
+            assert!(word(&inline, 1).equals(&word(&inline, 1)));
+            assert!(!word(&inline, 1).equals(&word(&inline, 2)));
+            assert!(!word(&not_keepable, 1).equals(&word(&not_keepable, 1)));
+            let other = Descriptor {
+                equals_environment: Some(words_equal),
+                ..Descriptor::new(&slot)
+            };
+            assert!(!word(&inline, 1).equals(&word(&other, 1)), "another code");
+            assert_eq!(word(&inline, 7).duplicate(), Some(word(&inline, 7)));
+            assert_eq!(word(&not_keepable, 7).duplicate(), None);
+        }
+        let allocated = Descriptor {
+            slot: &slot,
+            drop_environment: Some(drop_pair),
+            equals_environment: Some(pairs_equal),
+            duplicate_environment: Some(duplicate_pair),
+        };
+        let pair = |a: i64, b: i64| FunctionValue {
+            descriptor: &allocated,
+            environment: Box::into_raw(Box::new([a, b])).cast(),
+        };
+        unsafe {
+            let (one, same, other) = (pair(1, 2), pair(1, 2), pair(1, 3));
+            assert!(one.equals(&same));
+            assert!(!one.equals(&other));
+            let copy = one.duplicate().expect("keepable");
+            assert_ne!(copy.environment, one.environment, "a new environment");
+            assert!(copy.equals(&one));
+            for value in [one, same, other, copy] {
+                value.release();
+            }
+        }
     }
 }

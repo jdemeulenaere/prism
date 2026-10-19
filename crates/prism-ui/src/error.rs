@@ -64,19 +64,21 @@ pub fn unknown_kind(kind: i64) -> UiError {
     UiError::Misuse(Cow::Owned(format!("unknown node kind {}", kind)))
 }
 
-/// Ends the program with the runtime error `error` names, without a location, and status 101.
-///
-/// Until `ui-toolkit` task 3.1 gives `prism-runtime` the kinds `UiMisuse` and
-/// `EventScriptFailed`, this writes the report itself; that task makes it
-/// `panic_without_location` with `UiMisuse`, `EventScriptFailed` or `CompositionMisuse`, which
-/// also flushes the program's output first and stops only the program's thread under a watch
-/// session.
+/// Ends the program with the runtime error `error` names, without a location, and status 101:
+/// `UiMisuse`, `EventScriptFailed` or `CompositionMisuse`, which flushes the program's output
+/// first and, under a watch session, stops only the program's thread.
 pub fn raise(error: &UiError) -> ! {
-    use std::io::Write;
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "panic: {}", error.message());
-    let _ = stderr.flush();
-    std::process::exit(prism_runtime::PANIC_EXIT_STATUS)
+    use prism_runtime::{panic_without_location, PanicKind};
+    match error {
+        UiError::Misuse(detail) => panic_without_location(PanicKind::UiMisuse, detail),
+        UiError::Script { line, detail } => panic_without_location(
+            PanicKind::EventScriptFailed,
+            &format!("{}: {}", line, detail),
+        ),
+        UiError::Composition(detail) => {
+            panic_without_location(PanicKind::CompositionMisuse, detail)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +95,20 @@ mod tests {
         };
         assert_eq!(
             script.message(),
+            "event script line 3: no text field is focused"
+        );
+    }
+
+    /// Each error is raised as the runtime error of its kind, whose message is the same.
+    #[test]
+    fn runtime_messages_match() {
+        use prism_runtime::{panic_message, PanicKind};
+        assert_eq!(
+            panic_message(PanicKind::UiMisuse, "stale node handle"),
+            STALE_NODE.message()
+        );
+        assert_eq!(
+            panic_message(PanicKind::EventScriptFailed, "3: no text field is focused"),
             "event script line 3: no text field is focused"
         );
     }

@@ -100,11 +100,17 @@ pub enum PanicKind {
     /// `mutableStateOf` while a pass runs, outside `remember` and top-level initializers (D11
     /// of `state-handles`).
     StateCreatedDuringComposition = 14,
+    /// A misuse of the UI toolkit; the detail says which (D17 of `ui-toolkit`). Reported
+    /// without a location, since an entry point has none.
+    UiMisuse = 15,
+    /// A headless run's event script that cannot go on; the detail is `<line>: <what>` (D16
+    /// of `ui-toolkit`). Reported without a location.
+    EventScriptFailed = 16,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 15] = [
+    pub const ALL: [PanicKind; 17] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
@@ -120,6 +126,8 @@ impl PanicKind {
         PanicKind::StateBorrowed,
         PanicKind::StateWrittenDuringComposition,
         PanicKind::StateCreatedDuringComposition,
+        PanicKind::UiMisuse,
+        PanicKind::EventScriptFailed,
     ];
 
     /// The kind with code `code`.
@@ -155,6 +163,8 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         PanicKind::StateCreatedDuringComposition => {
             "state created during composition outside remember".to_string()
         }
+        PanicKind::UiMisuse => format!("ui misuse: {}", detail),
+        PanicKind::EventScriptFailed => format!("event script line {}", detail),
     }
 }
 
@@ -326,6 +336,16 @@ mod tests {
                 PanicKind::StateCreatedDuringComposition,
                 "",
                 "state created during composition outside remember",
+            ),
+            (
+                PanicKind::UiMisuse,
+                "stale node handle",
+                "ui misuse: stale node handle",
+            ),
+            (
+                PanicKind::EventScriptFailed,
+                "1: no text field is focused",
+                "event script line 1: no text field is focused",
             ),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());

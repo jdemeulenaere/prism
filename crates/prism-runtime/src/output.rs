@@ -141,6 +141,12 @@ pub(crate) fn append(text: &[u8]) {
     run_line_hook(text);
 }
 
+/// Appends `text` to the program's output, in order with what the program prints: what the
+/// runtimes that write for the program use, such as `prism-ui`'s dumps (D16 of `ui-toolkit`).
+pub fn write_output(text: &str) {
+    append(text.as_bytes());
+}
+
 /// Takes the buffered output without writing it, for tests of what a function prints.
 #[cfg(test)]
 pub(crate) fn take_output() -> Vec<u8> {
@@ -236,6 +242,21 @@ mod tests {
         start(Vec::new(), false);
         assert_eq!(LINES.load(Ordering::SeqCst), 0);
         take_output();
+    }
+
+    #[test]
+    fn written_output_joins_printed_output_in_order() {
+        let _lock = crate::test_lock();
+        start(Vec::new(), false);
+        prism_rt_print_int(1);
+        write_output("window 4x3\n");
+        let string = crate::PrismString::owned("x");
+        // SAFETY: `string` is a live string.
+        unsafe { crate::prism_rt_print_string(&string) };
+        prism_rt_print_newline();
+        assert_eq!(take_output(), b"1window 4x3\nx\n");
+        // SAFETY: `string` is dropped once.
+        unsafe { crate::prism_rt_string_drop(&string as *const _ as *mut _) };
     }
 
     #[test]

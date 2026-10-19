@@ -76,19 +76,33 @@ static INLINE_SLOT: AtomicUsize = AtomicUsize::new(0);
 static UNIT_DESCRIPTOR: Descriptor = Descriptor {
     slot: &UNIT_SLOT,
     drop_environment: Some(drop_unit),
+    equals_environment: None,
+    duplicate_environment: None,
 };
 static BOOL_DESCRIPTOR: Descriptor = Descriptor {
     slot: &BOOL_SLOT,
     drop_environment: Some(drop_bool),
+    equals_environment: None,
+    duplicate_environment: None,
 };
 static TEXT_DESCRIPTOR: Descriptor = Descriptor {
     slot: &TEXT_SLOT,
     drop_environment: Some(drop_text),
+    equals_environment: None,
+    duplicate_environment: None,
 };
 static INLINE_DESCRIPTOR: Descriptor = Descriptor {
     slot: &INLINE_SLOT,
     drop_environment: None,
+    equals_environment: Some(inline_words_equal),
+    duplicate_environment: None,
 };
+
+/// The environment equality entry of an inline environment of one `Copy` word, as generated
+/// code gives a closure capturing one `Int` (D9 of `compose-transform`).
+unsafe extern "C" fn inline_words_equal(a: *const u8, b: *const u8) -> u8 {
+    (a == b) as u8
+}
 
 unsafe extern "C" fn call_unit(environment: *mut u8) {
     ((*(environment as *const UnitEnvironment)).body)()

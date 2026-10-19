@@ -244,6 +244,13 @@ pub fn active_scope() -> Option<Handle> {
     })
 }
 
+/// The composition of the pass running on this thread, if one is: what `prism-ui` checks its
+/// setters against, so that toolkit composables run only in the running app's composition (D10
+/// of `ui-toolkit`).
+pub fn active_composition() -> Option<Handle> {
+    with_state(|state| state.active.map(|pass| pass.composition))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

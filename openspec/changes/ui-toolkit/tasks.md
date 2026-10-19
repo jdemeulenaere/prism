@@ -35,10 +35,10 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 3. Runtime support (D16, D17, D23)
 
-- [ ] 3.1 In `crates/prism-runtime/src/panic.rs`, add `PanicKind::UiMisuse` (`ui misuse: <detail>`) and `PanicKind::EventScriptFailed` (`event script line <detail>`), with the next free codes after `state-handles`' kinds, and extend `ALL`. Verify with the `panic_message` unit tests.
-- [ ] 3.2 In `output.rs`, add `pub fn write_output(text: &str)` over `append`. Verify with a unit test that the text joins the buffer in order with `prism_rt_print_string`.
-- [ ] 3.3 In `function_value.rs`, add `unsafe fn call_unit(&self)`, `call_with_bool(&self, value: bool)` and `call_with_string(&self, value: PrismString)`, with the closure code signatures of `closures` (environment first; the `String` by address, owned by the callee), and `is_keepable`, `duplicate` and `equals` over the descriptor's environment entries (`compose-transform` D9), adding the descriptor's third and fourth words, `equals_environment` and `duplicate_environment`, to `Descriptor` (task 1.1). Verify with unit tests over hand-built descriptors, including a `String` the callee frees under the allocation map, and equal and unequal environments.
-- [ ] 3.4 In `crates/prism-compose`, expose `active_composition() -> Option<Handle>` (the composition of the thread's active pass) for `prism-ui`. Verify with a unit test inside and outside a pass.
+- [x] 3.1 In `crates/prism-runtime/src/panic.rs`, add `PanicKind::UiMisuse` (`ui misuse: <detail>`) and `PanicKind::EventScriptFailed` (`event script line <detail>`), with the next free codes after `state-handles`' kinds, and extend `ALL`. Verify with the `panic_message` unit tests.
+- [x] 3.2 In `output.rs`, add `pub fn write_output(text: &str)` over `append`. Verify with a unit test that the text joins the buffer in order with `prism_rt_print_string`.
+- [x] 3.3 In `function_value.rs`, add `unsafe fn call_unit(&self)`, `call_with_bool(&self, value: bool)` and `call_with_string(&self, value: PrismString)`, with the closure code signatures of `closures` (environment first; the `String` by address, owned by the callee), and `is_keepable`, `duplicate` and `equals` over the descriptor's environment entries (`compose-transform` D9), adding the descriptor's third and fourth words, `equals_environment` and `duplicate_environment`, to `Descriptor` (task 1.1). Verify with unit tests over hand-built descriptors, including a `String` the callee frees under the allocation map, and equal and unequal environments.
+- [x] 3.4 In `crates/prism-compose`, expose `active_composition() -> Option<Handle>` (the composition of the thread's active pass) for `prism-ui`. Verify with a unit test inside and outside a pass.
 
 ## 4. The `prism-ui` crate: handles, nodes, tree, handlers, applier (D2, D3, D10, D23)
 

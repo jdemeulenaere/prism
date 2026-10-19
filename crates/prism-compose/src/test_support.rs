@@ -23,6 +23,8 @@ static CONTENT_SLOT: AtomicUsize = AtomicUsize::new(0);
 static CONTENT_DESCRIPTOR: Descriptor = Descriptor {
     slot: &CONTENT_SLOT,
     drop_environment: Some(drop_closure),
+    equals_environment: None,
+    duplicate_environment: None,
 };
 
 unsafe extern "C" fn call_closure(environment: *mut u8, composer: u64) {
@@ -52,6 +54,8 @@ static EFFECT_SLOT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_DESCRIPTOR: Descriptor = Descriptor {
     slot: &EFFECT_SLOT,
     drop_environment: Some(drop_effect),
+    equals_environment: None,
+    duplicate_environment: None,
 };
 
 unsafe extern "C" fn call_effect(environment: *mut u8) {
@@ -81,6 +85,8 @@ pub fn descriptor(code: unsafe extern "C" fn(*mut u8, u64)) -> &'static Descript
     Box::leak(Box::new(Descriptor {
         slot,
         drop_environment: None,
+        equals_environment: None,
+        duplicate_environment: None,
     }))
 }
 

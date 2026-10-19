@@ -1734,3 +1734,23 @@ fn a_handle_from_another_thread_is_stale() {
     );
     Composition::dispose(c).unwrap();
 }
+
+/// `ui-toolkit` task 3.4: the composition of the thread's active pass, for `prism-ui`.
+#[test]
+fn the_active_composition_is_the_one_whose_pass_runs() {
+    assert_eq!(
+        crate::active_composition(),
+        None,
+        "no pass outside composition"
+    );
+    let seen: Rc<Cell<Option<Handle>>> = Rc::new(Cell::new(None));
+    let inside = Rc::clone(&seen);
+    let composition = Composition::start(
+        tree(),
+        content(move |_| inside.set(crate::active_composition())),
+    )
+    .unwrap();
+    assert_eq!(seen.get(), Some(composition));
+    assert_eq!(crate::active_composition(), None, "none after the pass");
+    Composition::dispose(composition).unwrap();
+}
