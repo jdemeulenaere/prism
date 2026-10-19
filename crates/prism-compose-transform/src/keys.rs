@@ -53,6 +53,7 @@ pub fn region_key(parent: u64, step: &GroupStep) -> u64 {
         GroupStep::Elvis { ordinal } => ("elvis", ordinal, 0),
         GroupStep::SafeCall { ordinal } => ("safe call", ordinal, 0),
         GroupStep::Loop { ordinal } => ("loop", ordinal, 0),
+        GroupStep::WhenTests { ordinal } => ("when tests", ordinal, 0),
     };
     hasher.text(kind);
     hasher.word(u64::from(ordinal));
@@ -94,6 +95,15 @@ pub fn movable_key(parent: u64, ordinal: u32) -> u64 {
     hasher.finish()
 }
 
+/// The key of the call-site group of the `ordinal`-th composable call or `remember` made
+/// directly in the loop whose key is `parent`, when a `continue` targets that loop (D26).
+pub fn call_site_key(parent: u64, ordinal: u32) -> u64 {
+    let mut hasher = KeyHasher::new("call site");
+    hasher.word(parent);
+    hasher.word(u64::from(ordinal));
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +132,7 @@ mod tests {
                 branch: 0,
             },
             GroupStep::Loop { ordinal: 0 },
+            GroupStep::WhenTests { ordinal: 0 },
         ] {
             assert_ne!(region_key(parent, &then), region_key(parent, &other));
         }
@@ -151,5 +162,7 @@ mod tests {
             closure_key(parent, &ClosureStep::Value { ordinal: 0 })
         );
         assert_ne!(movable_key(parent, 0), movable_key(parent, 1));
+        assert_ne!(call_site_key(parent, 0), call_site_key(parent, 1));
+        assert_ne!(call_site_key(parent, 0), movable_key(parent, 0));
     }
 }

@@ -180,9 +180,14 @@ impl MirFile {
                     StatementKind::GroupStart(group) => format!(
                         "group_start g{} /* {} */",
                         group.0,
-                        body.groups
-                            .get(*group)
-                            .map_or_else(|| "?".to_string(), |region| region.step.describe())
+                        body.groups.get(*group).map_or_else(
+                            || "?".to_string(),
+                            |region| if region.continued {
+                                format!("{}, continued", region.step.describe())
+                            } else {
+                                region.step.describe()
+                            }
+                        )
                     ),
                     StatementKind::GroupEnd(group) => format!("group_end g{}", group.0),
                 };

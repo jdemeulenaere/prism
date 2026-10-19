@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+compose fun Inner(n: Int) { println("inner $n") }
+compose fun Check(n: Int, limit: Int): Bool { Inner(n); return n > limit }
+compose fun Pick(limit: Int) {
+    when {
+        Check(1, limit) -> println("first")
+        Check(2, limit) -> println("second")
+        else -> println("none")
+    }
+    val last = Check(3, limit)
+}
+fun screen(limit: Int): compose () -> Unit = { Pick(limit) }
+fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(1)); print(c.dump()) }

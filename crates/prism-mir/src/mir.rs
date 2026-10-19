@@ -196,6 +196,10 @@ pub struct GroupRegion {
     /// that kind.
     pub step: GroupStep,
     pub span: Span,
+    /// For a loop, whether a `continue` targets it. The composable calls and `remember`s made
+    /// directly in such a loop's group then run in call-site groups of their own, since a
+    /// `continue` can skip some of them in one iteration and not in another.
+    pub continued: bool,
 }
 
 /// The construct of a region, with its ordinal among the regions of constructs of the same
@@ -207,6 +211,9 @@ pub enum GroupStep {
     If { ordinal: u32, branch: u32 },
     /// Branch `branch` of a `when`, in branch order.
     When { ordinal: u32, branch: u32 },
+    /// A whole `when` whose patterns or guards contain a composable call, around its tests and
+    /// its branches' regions, so that the tests that run vary only inside it.
+    WhenTests { ordinal: u32 },
     /// The right operand of `&&`.
     And { ordinal: u32 },
     /// The right operand of `||`.
@@ -231,6 +238,7 @@ impl GroupStep {
                 )
             }
             GroupStep::When { ordinal, branch } => format!("when {} branch {}", ordinal, branch),
+            GroupStep::WhenTests { ordinal } => format!("when {} tests", ordinal),
             GroupStep::And { ordinal } => format!("and {}", ordinal),
             GroupStep::Or { ordinal } => format!("or {}", ordinal),
             GroupStep::Elvis { ordinal } => format!("elvis {}", ordinal),

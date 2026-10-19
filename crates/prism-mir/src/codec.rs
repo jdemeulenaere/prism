@@ -1463,6 +1463,7 @@ impl Codec for crate::mir::GroupStep {
             GroupStep::Elvis { ordinal } => (4, ordinal, 0),
             GroupStep::SafeCall { ordinal } => (5, ordinal, 0),
             GroupStep::Loop { ordinal } => (6, ordinal, 0),
+            GroupStep::WhenTests { ordinal } => (7, ordinal, 0),
         };
         encoder.u8(tag);
         encoder.u32(ordinal);
@@ -1481,6 +1482,7 @@ impl Codec for crate::mir::GroupStep {
             4 => GroupStep::Elvis { ordinal },
             5 => GroupStep::SafeCall { ordinal },
             6 => GroupStep::Loop { ordinal },
+            7 => GroupStep::WhenTests { ordinal },
             _ => return None,
         })
     }
@@ -1488,16 +1490,23 @@ impl Codec for crate::mir::GroupStep {
 
 impl Codec for crate::mir::GroupRegion {
     fn encode(&self, encoder: &mut Encoder) {
-        let crate::mir::GroupRegion { parent, step, span } = self;
+        let crate::mir::GroupRegion {
+            parent,
+            step,
+            span,
+            continued,
+        } = self;
         parent.encode(encoder);
         step.encode(encoder);
         span.encode(encoder);
+        continued.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(crate::mir::GroupRegion {
             parent: decoder.decode()?,
             step: decoder.decode()?,
             span: decoder.decode()?,
+            continued: decoder.decode()?,
         })
     }
 }

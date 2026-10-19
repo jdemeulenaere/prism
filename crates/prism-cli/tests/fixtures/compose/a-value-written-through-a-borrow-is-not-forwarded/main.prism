@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+compose fun Inner(n: Int) { println("inner $n") }
+compose fun Outer(n: Int, m: Int) {
+    var x = n
+    val r = &mut x
+    *r = m
+    Inner(x)
+}
+fun screen(m: Int): compose () -> Unit = { Outer(5, m) }
+fun main() { val c = composition(screen(1)); c.setContent(screen(2)) }

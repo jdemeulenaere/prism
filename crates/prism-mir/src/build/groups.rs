@@ -133,6 +133,8 @@ pub(super) struct RegionState {
     /// The composable closures written as call arguments, by expression: the callee's name and
     /// the parameter's index.
     pub(super) arguments: HashMap<ExpressionId, (String, u32)>,
+    /// The region of each loop statement that is one, so that a `continue` marks it.
+    pub(super) loops: HashMap<StatementId, GroupId>,
 }
 
 impl Builder<'_> {
@@ -153,6 +155,37 @@ impl Builder<'_> {
         }
     }
 
+    /// Whether a pattern or guard of `branches` contains a composable call outside closures, in
+    /// a composable body: the tests that run then vary from pass to pass, so the whole `when`
+    /// is a region around its tests and branches.
+    pub(super) fn when_tests_compose(&self, branches: &[prism_typed_tree::WhenBranch]) -> bool {
+        if self.regions.marks.is_none() {
+            return false;
+        }
+        let mut expressions = Vec::new();
+        for branch in branches {
+            for pattern in &branch.patterns {
+                pattern.expressions(&mut expressions);
+            }
+            expressions.extend(branch.guard);
+        }
+        expressions.into_iter().any(|id| self.composes(id))
+    }
+
+    /// Opens the region of the loop statement `id` in its own scope, which was just opened.
+    pub(super) fn open_loop_region_of(&mut self, id: StatementId, step: GroupStep, span: Span) {
+        self.open_region(step, span);
+        let group = *self.regions.open.last().expect("the region just opened");
+        self.regions.loops.insert(id, group);
+    }
+
+    /// Marks the region of the loop statement `id`, if it is one, as targeted by a `continue`.
+    pub(super) fn mark_continued(&mut self, id: StatementId) {
+        if let Some(&group) = self.regions.loops.get(&id) {
+            self.groups[group].continued = true;
+        }
+    }
+
     /// The next ordinal of a construct of `kind` in the innermost open region.
     pub(super) fn region_ordinal(&mut self, kind: RegionKind) -> u32 {
         let key = (self.regions.open.last().copied(), kind);
@@ -169,6 +202,7 @@ impl Builder<'_> {
             parent: self.regions.open.last().copied(),
             step,
             span,
+            continued: false,
         });
         self.push_statement(StatementKind::GroupStart(group), span);
         self.scopes

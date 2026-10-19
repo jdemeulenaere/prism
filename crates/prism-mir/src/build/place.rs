@@ -722,7 +722,7 @@ impl Builder<'_> {
     fn open_loop_region(&mut self, id: StatementId, span: Span) {
         if self.statement_composes(id) {
             let ordinal = self.region_ordinal(super::groups::RegionKind::Loop);
-            self.open_region(crate::mir::GroupStep::Loop { ordinal }, span);
+            self.open_loop_region_of(id, crate::mir::GroupStep::Loop { ordinal }, span);
         }
     }
 

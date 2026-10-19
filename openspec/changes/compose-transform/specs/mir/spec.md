@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Composable Bodies Mark Their Regions
-The lowered MIR of a composable function or closure MUST hold a group start marker where each region of compose, "Conditional and Repeated Composable Code Runs in Its Own Groups", begins, and a group end marker on every path that leaves it, falling through or by `return`, `break` or `continue`. Each marker MUST name its region, its parent region and its construct. Markers MUST NOT read, write, move or drop anything.
+The lowered MIR of a composable function or closure MUST hold a group start marker where each region of compose, "Conditional and Repeated Composable Code Runs in Its Own Groups", begins, and a group end marker on every path that leaves it, falling through or by `return`, `break` or `continue`. Each marker MUST name its region, its parent region and its construct, and a loop's region MUST record whether a `continue` targets it. Markers MUST NOT read, write, move or drop anything.
 
 #### Scenario: A branch with a composable call is marked
 - **WHEN** `compose fun A() {}`, `fun log() {}` and `compose fun V(on: Bool) { if (on) { A() }; if (on) { log() } }` are lowered
@@ -12,6 +12,10 @@ The lowered MIR of a composable function or closure MUST hold a group start mark
 #### Scenario: A return leaves a loop's region
 - **WHEN** `compose fun A() {}` and `compose fun F(n: Int) { while (true) { A(); if (n > 0) { return } } }` are lowered
 - **THEN** the loop's region starts before its first iteration, and the path of the `return` ends it before returning
+
+#### Scenario: A continue marks its loop
+- **WHEN** `compose fun A() {}` and `compose fun F(n: Int) { for (i in 0..n) { if (i == 1) { continue }; A() } }` are lowered
+- **THEN** `prism dump-mir` shows the loop's group start as `loop 0, continued`
 
 ### Requirement: Composed MIR
 After borrow checking, the MIR of every file MUST be composed. A composable body MUST take the composer and its change words as `Int` arguments after its declared ones, start its body group first and end it before every return, and every composable call MUST pass the caller's composer and change words for the callee. Composed MIR MUST hold no region marker and MUST be well formed.

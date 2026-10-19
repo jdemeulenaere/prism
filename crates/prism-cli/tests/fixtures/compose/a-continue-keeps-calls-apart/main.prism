@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+compose fun Inner(n: Int) { println("inner $n") }
+compose fun Outer(skip: Int) {
+    for (i in 0..1) {
+        val a = remember { 100 + i }
+        Inner(1)
+        if (i == skip) { continue }
+        val b = remember { println("remember $i"); 200 + i }
+        Inner(2)
+        println("$i $a $b")
+    }
+}
+fun screen(skip: Int): compose () -> Unit = { Outer(skip) }
+fun main() { val c = composition(screen(0)); println("--"); c.setContent(screen(5)) }

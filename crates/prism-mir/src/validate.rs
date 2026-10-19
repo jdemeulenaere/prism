@@ -1677,6 +1677,7 @@ mod tests {
                 branch: 0,
             },
             span: prism_ast::Span::default(),
+            continued: false,
         });
         body.blocks[BlockId(0)]
             .statements

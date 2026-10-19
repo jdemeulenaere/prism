@@ -1,0 +1,21 @@
+inner 1
+first
+inner 3
+--
+inner 2
+second
+root
+  replaceable -6033661391146342411
+    restart -1544633025477252707
+      slot Int
+      replaceable 1972682892174354082
+        replaceable -6235643787255715720
+          restart -7892994982297446574
+            slot Int
+        replaceable -6235643787255715720
+          restart -7892994982297446574
+            slot Int
+      replaceable -6235643787255715720
+        restart -7892994982297446574
+          slot Int
+nodes

@@ -1,0 +1,65 @@
+module main
+compose fun main::A(): Unit @2:1
+  local _0: Unit (return)
+  bb0:
+    _0 = const () @2:17
+    return @2:1
+compose fun main::F(_1: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  local _2: Range (temporary)
+  local _3: Int (temporary)
+  local _4: Int (temporary)
+  local _5: Bool (temporary)
+  local _6 i: Int (user)
+  local _7: Bool (temporary)
+  local _8: Unit (temporary)
+  bb0:
+    group_start g0 /* loop 0, continued */ @3:25
+    storage_live _2 @3:25
+    _2 = struct <builtin>::Range(const 0, copy _1, const true) @3:35
+    storage_live _3 @3:25
+    storage_live _4 @3:25
+    storage_live _5 @3:25
+    _3 = copy _2.start @3:25
+    _5 = copy _2.start > copy _2.end @3:25
+    switch copy _5 [0 -> bb2, otherwise -> bb1] @3:25
+  bb1:
+    goto -> bb3 @3:25
+  bb2:
+    _4 = copy _2.end @3:25
+    goto -> bb4 @3:25
+  bb3:
+    storage_dead _5 @3:25
+    storage_dead _4 @3:25
+    storage_dead _3 @3:25
+    storage_dead _2 @3:25
+    group_end g0 @3:25
+    _0 = const () @3:23
+    return @3:1
+  bb4:
+    storage_live _6 @3:25
+    _6 = copy _3 @3:25
+    storage_live _7 @3:47
+    _7 = copy _6 == const 1 @3:47
+    switch move _7 [0 -> bb6, otherwise -> bb5] @3:47
+  bb5:
+    storage_dead _7 @3:47
+    storage_dead _6 @3:57
+    goto -> bb7 @3:57
+  bb6:
+    storage_dead _7 @3:47
+    storage_live _8 @3:69
+    _8 = call compose main::A() -> bb8 @3:69
+  bb7:
+    _5 = copy _3 == copy _4 @3:25
+    switch copy _5 [0 -> bb10, otherwise -> bb9] @3:25
+  bb8:
+    storage_dead _8 @3:69
+    storage_dead _6 @3:73
+    goto -> bb7 @3:25
+  bb9:
+    goto -> bb3 @3:25
+  bb10:
+    _3 = copy _3 + const 1 @3:25
+    goto -> bb4 @3:25

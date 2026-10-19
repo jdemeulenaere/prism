@@ -135,6 +135,8 @@ pub(crate) struct Rewriter<'a> {
     regions: Vec<GroupId>,
     /// The next ordinal of `key` calls, per region.
     key_ordinals: HashMap<Option<GroupId>, u32>,
+    /// The next ordinal of call-site groups, per loop that a `continue` targets (D26).
+    call_site_ordinals: HashMap<GroupId, u32>,
     /// The root content adapter of the body, once one is needed.
     adapter: Option<(BodyId, Type)>,
     /// A `Unit` temporary that operations without a result write.
@@ -169,6 +171,7 @@ impl<'a> Rewriter<'a> {
             sources: HashMap::new(),
             regions: Vec::new(),
             key_ordinals: HashMap::new(),
+            call_site_ordinals: HashMap::new(),
             adapter: None,
             unit: None,
         }
@@ -438,12 +441,48 @@ impl<'a> Rewriter<'a> {
                     span,
                 });
             }
+            StatementKind::Destructure {
+                source,
+                variant,
+                parts,
+            } => {
+                for (_, target) in &parts {
+                    self.sources.remove(target);
+                }
+                self.pending.push(Statement {
+                    kind: StatementKind::Destructure {
+                        source,
+                        variant,
+                        parts,
+                    },
+                    span,
+                });
+            }
             kind => self.pending.push(Statement { kind, span }),
         }
     }
 
     /// Records what the assigned local copies, for the change bits of a later call (D4).
     fn note_assignment(&mut self, place: &Place, rvalue: &Rvalue) {
+        // A local borrowed mutably, by a borrow or a closure, may be written through that
+        // borrow later in the block, so what it copied is forgotten.
+        match rvalue {
+            Rvalue::Borrow {
+                mutable: true,
+                place: borrowed,
+                ..
+            } => {
+                self.sources.remove(&borrowed.local);
+            }
+            Rvalue::Closure { captures, .. } => {
+                for capture in captures {
+                    if let Capture::Borrowed(borrowed) = capture {
+                        self.sources.remove(&borrowed.local);
+                    }
+                }
+            }
+            _ => {}
+        }
         let Some(local) = place.as_local() else {
             self.sources.remove(&place.local);
             return;
@@ -512,7 +551,20 @@ impl<'a> Rewriter<'a> {
                     target,
                     span,
                 };
-                if is_composition_operation(builtin) || self.body.is_compose {
+                if builtin == BuiltinFunction::Remember && self.body.is_compose {
+                    let target = call.target.expect("a compose intrinsic returns");
+                    if self.start_call_site_group(span) {
+                        let after = self.new_block();
+                        self.intrinsic(IntrinsicCall {
+                            target: Some(after),
+                            ..call
+                        });
+                        self.current = after;
+                        self.end_call_site_group(target, span);
+                    } else {
+                        self.intrinsic(call);
+                    }
+                } else if is_composition_operation(builtin) || self.body.is_compose {
                     self.intrinsic(call);
                 } else {
                     // A composable intrinsic outside a composable body never type-checks.
@@ -549,6 +601,7 @@ impl<'a> Rewriter<'a> {
                 target,
                 is_compose: true,
             } if self.body.is_compose => {
+                let wrapped = self.start_call_site_group(span);
                 let words = self.change_words(&arguments, span);
                 arguments.push(self.composer());
                 parameters.push(Type::Int);
@@ -561,6 +614,15 @@ impl<'a> Rewriter<'a> {
                 if let Some(local) = destination.as_local() {
                     self.sources.remove(&local);
                 }
+                // A call-site group ends when the call returns; a call that never returns
+                // leaves it open, as it leaves its caller's groups.
+                let (call_target, after) = match target {
+                    Some(target) if wrapped => {
+                        let after = self.new_block();
+                        (Some(after), Some((after, target)))
+                    }
+                    target => (target, None),
+                };
                 self.terminate(
                     TerminatorKind::Call {
                         callee,
@@ -569,11 +631,15 @@ impl<'a> Rewriter<'a> {
                         escaping,
                         type_arguments,
                         destination,
-                        target,
+                        target: call_target,
                         is_compose: true,
                     },
                     span,
                 );
+                if let Some((after, target)) = after {
+                    self.current = after;
+                    self.end_call_site_group(target, span);
+                }
             }
             kind => {
                 if let TerminatorKind::Call { destination, .. } = &kind {
@@ -584,6 +650,54 @@ impl<'a> Rewriter<'a> {
                 self.terminate(kind, span)
             }
         }
+    }
+
+    /// Starts the call-site group of a composable call or `remember` made directly in a loop
+    /// that a `continue` targets, and returns whether it did (D26). A `continue` can skip a
+    /// call in one iteration and not in another, so without it calls of one composable at two
+    /// call sites, or two `remember`s, could match each other's groups and slots, and trust
+    /// change bits meant for another call. The key is the call's ordinal among the loop's
+    /// direct calls in block order.
+    fn start_call_site_group(&mut self, span: Span) -> bool {
+        let Some(&region) = self.regions.last() else {
+            return false;
+        };
+        if !self.file.bodies[self.id].groups[region].continued {
+            return false;
+        }
+        let ordinal = self.call_site_ordinals.entry(region).or_insert(0);
+        let key = GroupKey {
+            hash: crate::keys::call_site_key(
+                self.keys.region_or_body(self.id, Some(region)),
+                *ordinal,
+            ),
+            label: format!("call {}", ordinal),
+        };
+        *ordinal += 1;
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::StartGroup { key },
+            vec![composer],
+            vec![Type::Int],
+            unit,
+            span,
+        );
+        true
+    }
+
+    /// Ends a call-site group in the current block, then continues at `target`.
+    fn end_call_site_group(&mut self, target: BlockId, span: Span) {
+        let composer = self.composer();
+        let unit = self.unit();
+        self.operation(
+            ComposerOperation::EndGroup,
+            vec![composer],
+            vec![Type::Int],
+            unit,
+            span,
+        );
+        self.goto(target, span);
     }
 
     /// The change words of a composable call with `arguments`, in the callee's parameter order

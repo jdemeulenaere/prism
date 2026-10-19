@@ -386,6 +386,14 @@ impl Builder<'_> {
         if self.current.is_none() {
             return;
         }
+        // When a pattern or guard composes, the whole `when` is a region around its tests and
+        // branches, so the tests that run vary only inside it (D26 of `compose-transform`).
+        let tests_compose = self.when_tests_compose(branches);
+        if tests_compose {
+            let ordinal = self.region_ordinal(RegionKind::When);
+            self.push_scope(span);
+            self.open_region(GroupStep::WhenTests { ordinal }, span);
+        }
         // Each branch body containing a composable call is a region (D5 of
         // `compose-transform`); guards and conditions stay in the enclosing group.
         let composes = branches.iter().any(|branch| self.composes(branch.body));
@@ -440,6 +448,9 @@ impl Builder<'_> {
         };
         self.when_region = saved_when;
         self.join(&ends, span);
+        if tests_compose {
+            self.pop_scope();
+        }
         if *ty == Type::Unit {
             if let Some(destination) = destination {
                 self.assign_unit(destination, span);
@@ -872,6 +883,8 @@ impl Builder<'_> {
     /// checker's initialization analysis can reject the condition's read of one of them.
     pub(super) fn lower_continue(&mut self, target: Option<StatementId>, span: Span) {
         let index = self.loop_index(target);
+        // The loop's direct composable calls get call-site groups (D26 of `compose-transform`).
+        self.mark_continued(self.loops[index].statement);
         self.exit_scopes_to(self.loops[index].continue_depth, Some(span));
         if self.current.is_none() {
             return;
