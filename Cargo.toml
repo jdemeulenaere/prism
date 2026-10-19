@@ -18,6 +18,7 @@ members = [
     "crates/prism-compose",
     "crates/prism-compose-transform",
     "crates/prism-ui",
+    "crates/prism-desktop",
 ]
 
 [workspace.package]
@@ -39,4 +40,15 @@ opt-level = 3
 [profile.dev.package.cranelift-frontend]
 opt-level = 3
 [profile.dev.package.regalloc2]
+opt-level = 3
+
+# Window frames are rasterized by `tiny-skia` and glyphs by `fontdue` (D2 of `desktop-window`):
+# unoptimized, they are ten to thirty times slower, which would make `cargo run` windows lag.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.fontdue]
+opt-level = 3
+[profile.dev.package.ttf-parser]
 opt-level = 3

@@ -1,0 +1,21 @@
+[package]
+name = "prism-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The window host of `desktop-window` (D2): only `prism-cli` depends on this crate, through its
+# default `window` feature, so no compiler crate, `prism-runtime`, `prism-compose` or `prism-ui`
+# ever builds a window, rasterization or font crate. The versions are pinned exactly (D5).
+[dependencies]
+prism-runtime = { path = "../prism-runtime" }
+prism-ui = { path = "../prism-ui" }
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+softbuffer = { version = "=0.4.6", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd", "png-format"] }
+fontdue = "=0.9.4"
+
+[dev-dependencies]
+# Pins the bundled font file by its hash (D6).
+blake3 = "1.8"

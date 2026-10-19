@@ -6,7 +6,7 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
 
 ## 1. Baseline, crate and dependencies (D2, D4, D5)
 
-- [ ] 1.1 Compare the names the design takes from `ui-toolkit` and `hot-reload` (design, "Baseline") with the code those changes left, and fix every task below that names one differently:
+- [x] 1.1 Compare the names the design takes from `ui-toolkit` and `hot-reload` (design, "Baseline") with the code those changes left, and fix every task below that names one differently:
   - `Host`, `HostEvent`, `Key`, `HostConfiguration` and `configure`;
   - `run_app`, `DisplayList` and `DrawCommand`, with their fields;
   - `TextMeasurer` and `FixedAdvanceMetrics`;
@@ -14,22 +14,23 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
   - `WatchSession`, and `reload::defer_to_reload_points`.
 
   Record any difference in design.md, "Baseline". Verify by reading the code.
-- [ ] 1.2 Create `crates/prism-desktop` (a workspace member, `license.workspace = true`) with `lib.rs` and the dependencies of design D5, pinned exactly and with their features: `winit = { version = "=0.30.13", default-features = false, features = [...] }`, `softbuffer = "=0.4.6"`, `tiny-skia = "=0.12.0"` and `fontdue = "=0.9.4"`, plus `prism-ui`. If `tiny-skia` 0.12.0 does not build, use `=0.11.4` and record it in D5. Add `opt-level = 3` for `tiny-skia`, `tiny-skia-path`, `fontdue` and `ttf-parser` under `[profile.dev.package.*]` in the workspace `Cargo.toml`. Verify that `cargo build -p prism-desktop` succeeds, and that `cargo tree -d -p prism-desktop --target aarch64-apple-darwin` shows a single `objc2`. Record its duplicates in D5.
+- [x] 1.2 Create `crates/prism-desktop` (a workspace member, `license.workspace = true`) with `lib.rs` and the dependencies of design D5, pinned exactly and with their features: `winit = { version = "=0.30.13", default-features = false, features = [...] }`, `softbuffer = "=0.4.6"`, `tiny-skia = "=0.12.0"` and `fontdue = "=0.9.4"`, plus `prism-ui`. If `tiny-skia` 0.12.0 does not build, use `=0.11.4` and record it in D5. Add `opt-level = 3` for `tiny-skia`, `tiny-skia-path`, `fontdue` and `ttf-parser` under `[profile.dev.package.*]` in the workspace `Cargo.toml`. Verify that `cargo build -p prism-desktop` succeeds, and that `cargo tree -d -p prism-desktop --target aarch64-apple-darwin` shows a single `objc2`. Record its duplicates in D5.
 - [ ] 1.3 In `crates/prism-cli/Cargo.toml`, add `prism-desktop` as an optional dependency, with `[features] default = ["window"]` and `window = ["dep:prism-desktop"]`. Measure and record in design.md, D2 and D4:
   - the clean `cargo build -p prism-cli` time with and without `--no-default-features`;
   - the incremental rebuild time after touching `crates/prism-typechecker/src/lib.rs`, with and without the feature;
   - the size of `target/release/prism`;
   - the wall time of the startup benchmark (`run_timing.rs`) before and after the feature, which must grow by at most 1 ms.
 - [ ] 1.4 Add `crates/prism-desktop/tests/dependencies.rs`. It reads every workspace member's `Cargo.toml` and checks that only `prism-cli` names `prism-desktop`, as an optional dependency of its default `window` feature, and that no member but `prism-desktop` names `winit`, `softbuffer`, `tiny-skia` or `fontdue`. Verify with `cargo test -p prism-desktop --test dependencies`, for the scenario "Only the CLI depends on the window crate".
+  - Apply note (2026-10-19): the test exists and passes, but until task 1.3 adds the dependency to `prism-cli` it checks only the negative half; task 1.3 sets its `CLI_WIRED` to `true`, which requires the optional dependency and the `window` feature.
 
 ## 2. The font and the window's text metrics (D6, D7, D8)
 
-- [ ] 2.1 Add `crates/prism-desktop/fonts/Inter-Regular.ttf`, from `extras/ttf/` of Inter 4.1's release archive (`https://github.com/rsms/inter/releases/tag/v4.1`), and `fonts/OFL.txt`, Inter's `LICENSE.txt`. Record the file's size and BLAKE3 hash in design.md, D6. Add `src/font.rs`:
+- [x] 2.1 Add `crates/prism-desktop/fonts/Inter-Regular.ttf`, from `extras/ttf/` of Inter 4.1's release archive (`https://github.com/rsms/inter/releases/tag/v4.1`), and `fonts/OFL.txt`, Inter's `LICENSE.txt`. Record the file's size and BLAKE3 hash in design.md, D6. Add `src/font.rs`:
   - `font() -> &'static fontdue::Font`, through a `OnceLock` over `include_bytes!`, with `FontSettings { scale: 40.0, load_substitutions: false, collection_index: 0 }`;
   - `is_loaded() -> bool`, for the statistics.
 
   Verify with unit tests for the scenario "The font and its licence": the family name is `Inter`, `OFL.txt` names "SIL Open Font License, Version 1.1", and a second `font()` returns the same address. Measure the parse time in a release build and record it in D6. If it exceeds 10 ms, add the subset follow-up to Open Questions.
-- [ ] 2.2 Add `src/metrics.rs` with `FontMetrics: prism_ui::TextMeasurer`:
+- [x] 2.2 Add `src/metrics.rs` with `FontMetrics: prism_ui::TextMeasurer`:
   - `advance` rounds `font().metrics(c, size).advance_width`, with a per-size 128-entry ASCII table and a map for other characters;
   - `line_height` rounds `horizontal_line_metrics(size).new_line_size`;
   - `baseline(size)` rounds the ascent.
@@ -38,17 +39,17 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
 
 ## 3. The rasterizer (D9, D12)
 
-- [ ] 3.1 Add `src/raster.rs` with `Rasterizer::new()` and `rasterize(&mut self, list: &DisplayList, scale: f64, width: u32, height: u32)`:
+- [x] 3.1 Add `src/raster.rs` with `Rasterizer::new()` and `rasterize(&mut self, list: &DisplayList, scale: f64, width: u32, height: u32)`:
   - the pixmap is kept and resized only on a size change;
-  - `Clear` is a fill; `Rectangle` without a radius is a snapped `fill_rect` without anti-aliasing; with a radius it is a rounded path (`rounded_rectangle_path`, κ = 0.5523, radius clamped to half the smaller side);
-  - `Border` is the even-odd difference of the outer and inset rounded rectangles;
+  - `Clear` is a fill; `Rectangle` without a radius is a snapped span fill without anti-aliasing; with a radius its corners are anti-aliased circular arcs (radius clamped to half the smaller side; D12's revision at apply);
+  - `Border` is the outer rounded rectangle's coverage minus the inset one's;
   - commands outside the pixmap are culled;
   - `pixmap()`, and `copy_to_surface(&self, buffer: &mut [u32])`, which converts to `0x00RRGGBB`.
 
   Verify with unit tests: the scenario "A rectangle at scale 2"; adjacent rectangles at scale 1.5 neither overlap nor leave a gap; a border lies inside its bounds; a command at negative coordinates is clipped; a command entirely outside counts as culled; the conversion of a known pixel.
-- [ ] 3.2 Add `src/glyphs.rs` with `GlyphCache` (keyed by glyph index and pixel size, cleared beyond 4,096 entries or on a scale change), and draw `Text` commands in `raster.rs`: one glyph per character at the pen position from `FontMetrics` advances, scaled and snapped, with the baseline from `FontMetrics::baseline`, blended source-over with the text colour. Verify with unit tests that record glyph positions: the scenarios "No kerning" (`AV` places `V` where `AX` places `X`) and "A character missing from the font" (glyph 0 drawn), the scenario "Glyph positions follow the measured advances", and a cache hit on the second rasterization.
-- [ ] 3.3 Add `tests/raster_golden.rs` and `tests/golden/*.png` with the cases of design D20, at scales 1, 1.5 and 2. Compare within one unit per channel, and regenerate with `PRISM_UPDATE_GOLDEN=1`. Look at every image before committing it. Verify with `cargo test -p prism-desktop --test raster_golden`, for the scenario "Golden images".
-- [ ] 3.4 Add `tests/raster_timing.rs` (`#[ignore]`d) with the shapes and targets of design D19 and the assertions of "Rasterization benchmark" under `PRISM_ASSERT_TIMING=1`. Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-desktop --test raster_timing -- --ignored --nocapture`, and record the medians in D19.
+- [x] 3.2 Add `src/glyphs.rs` with `GlyphCache` (keyed by glyph index and pixel size, cleared beyond 4,096 entries or on a scale change), and draw `Text` commands in `raster.rs`: one glyph per character at the pen position from `FontMetrics` advances, scaled and snapped, with the baseline from `FontMetrics::baseline`, blended source-over with the text colour. Verify with unit tests that record glyph positions: the scenarios "No kerning" (`AV` places `V` where `AX` places `X`) and "A character missing from the font" (glyph 0 drawn), the scenario "Glyph positions follow the measured advances", and a cache hit on the second rasterization.
+- [x] 3.3 Add `tests/raster_golden.rs` and `tests/golden/*.png` with the cases of design D20, at scales 1, 1.5 and 2. Compare within one unit per channel, and regenerate with `PRISM_UPDATE_GOLDEN=1`. Look at every image before committing it. Verify with `cargo test -p prism-desktop --test raster_golden`, for the scenario "Golden images".
+- [x] 3.4 Add `tests/raster_timing.rs` (`#[ignore]`d) with the shapes and targets of design D19 and the assertions of "Rasterization benchmark" under `PRISM_ASSERT_TIMING=1`. Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-desktop --test raster_timing -- --ignored --nocapture`, and record the medians in D19.
 
 ## 4. Hooks in prism-ui and the runtime (D15, D16, D18)
 

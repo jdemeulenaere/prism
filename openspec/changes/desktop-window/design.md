@@ -26,6 +26,10 @@ The delta specs add a new capability and an ADDED execution requirement. They mo
 
 **Baseline update (`ui-toolkit` revision, user direction 2026-10-19).** `ui-toolkit` now follows Jetpack Compose's modules and APIs: programs import `/prism/compose/ui` (with `runApp`), `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` instead of `/prism/ui`, and sizes are written `10.dp` (`ui-toolkit` D7, D21). A `Dp` is one logical pixel, which this change scales by the window's scale factor as it scaled `Int` sizes. Nothing this change relies on moves: `prism_ui::Host`, `HostEvent`, the display list's four commands and the text metrics interface (`ui-toolkit` D12, D13, D15) are unchanged.
 
+**Apply note (Rust-only groups ahead of the CLI, 2026-10-19).** Groups 1 to 5 were implemented, as far as they need no CLI, while `compose-transform` was being applied and before `ui-toolkit` and `hot-reload` were archived, touching only the new `prism-desktop` crate, the workspace manifest and the hooks of D18 in `prism-ui`. Task 1.1 compared the names above with the code:
+- **As planned:** `Host { size, next_event, present }`, `HostEvent` (its `Script` carries a `ScriptLine`), `Key { Backspace, Enter }` (in `input.rs`, re-exported by `host.rs`), `HostConfiguration::{None, Headless { size, commands }, Window(..)}` and `configure`; `run_app(title, width, height, content) -> UiResult<()>`, beside `run_app_with(host, measurer, content)` and `App`; `TextMeasurer { advance(char, i64) -> i64, line_height(i64) -> i64 }` and `FixedAdvanceMetrics`; `DisplayList { commands, text }` with private reused buffers, and `DrawCommand::{Clear { width, height, color }, Rectangle { bounds, color, corner_radius }, Border { bounds, width, color, corner_radius }, Text { x, y, font_size, color, text: Range<usize> }}`, where `Color(i64)` is ARGB with an unspecified sentinel and `Rect` has `i64` fields; `WatchSession` in `crates/prism-cli/src/watch.rs`; and `prism_runtime::reload::{defer_to_reload_points(wake: fn()), reload_point()}`.
+- **Different:** `WindowFactory` is a closure type, not a trait, and the app owns a boxed measurer (D18's apply note). `Program::start(main, arguments, check_allocations, on_return: impl FnOnce(i32) + Send + 'static) -> RunningProgram` already takes a closure and there is no `ProgramEvent`, so task 6.1's generalization is not needed: the CLI passes `move |_status| windows.program_ended()`. `prism-ui` raises its runtime errors through `error::raise`, which writes `panic: <message>` and exits with 101, until `ui-toolkit` task 3.1 adds its `PanicKind`s; `prism-desktop`'s `error::raise_display_error` follows the same seam until task 4.2 adds `PanicKind::DisplayFailed`, which, like 4.2 itself, waits for the integration step because `prism-runtime` is being changed by `compose-transform`.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -121,6 +125,8 @@ Every version is more than two weeks old. Exact pins keep `Cargo.lock` changes d
 - **`winit` 0.30.13, not 0.31.** 0.31 is still in beta (0.31.0-beta.3, 2026-09-04).
 - **Features** drop `winit`'s Adwaita title-bar font stack (`ab_glyph`) and `softbuffer`'s KMS backend. They keep X11 and Wayland through `dlopen`, so building on Linux needs no system packages.
 
+**Applied (task 1.2, 2026-10-19).** `tiny-skia` 0.12.0 and `softbuffer` 0.4.6 build here (macOS 27, arm64, Rust 1.99), so no fallback was needed. `cargo tree -d -p prism-desktop --target aarch64-apple-darwin` shows a single `objc2` (0.5.3). Its duplicates are small leaf crates: `bitflags` 1 and 2, `core-foundation` 0.9 and 0.10, `core-graphics` 0.23 (`winit`) and 0.24 (`softbuffer`), `core-graphics-types` 0.1 and 0.2, and `miniz_oxide` 0.8 (`png`) and 0.9 (`flate2`, under `png`). The crate's normal dependency tree holds 71 crates, and building them cold took 39 s here in the dev profile.
+
 Rejected: `wgpu` with `vello` or `glyphon` (`compose-architecture` D20: a large dependency tree and GPU-dependent output); `minifb` or `pixels` (fewer platforms, or `wgpu` underneath); `ab_glyph` or `swash` for glyphs (`fontdue` is the smallest and fastest rasterizer of the three, and shaping is out of scope, D8).
 
 ### D6. The bundled font: Inter 4.1 Regular, embedded and parsed once (autonomous; implements the font of `compose-architecture` D20)
@@ -128,6 +134,8 @@ Rejected: `wgpu` with `vello` or `glyphon` (`compose-architecture` D20: a large 
 `crates/prism-desktop/fonts/Inter-Regular.ttf` is the static Regular face from Inter 4.1's release archive (`extras/ttf/Inter-Regular.ttf`, released 2024-11-16). It sits beside its licence, `fonts/OFL.txt`: SIL Open Font License 1.1, copyright the Inter Project Authors, with no Reserved Font Name, so it may be embedded and later subset under its own name. `font.rs` embeds the file with `include_bytes!` and parses it in a `OnceLock<fontdue::Font>` on first use, with `FontSettings { scale: 40.0, load_substitutions: false, collection_index: 0 }`. `fontdue` builds the outline of every glyph the character map reaches when it loads a font. Skipping the substitution table keeps it from loading the alternates that it never draws without shaping (D8). One `&'static Font` serves both threads. The program thread starts parsing while the main thread creates the window (D3).
 
 Run-time cost: the parse, once per process, measured by task 2.1 against a 10 ms target in release builds. Size: about 0.4 MB of the executable.
+
+**Applied (task 2.1, 2026-10-19).** The archive is `Inter-4.1.zip` from the GitHub release `v4.1` of `rsms/inter`, published by `rsms` on 2024-11-16. Its 33,707,794 bytes match the asset size the GitHub API reports for that release, and its SHA-256 is `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`. `fonts/Inter-Regular.ttf` is its `extras/ttf/Inter-Regular.ttf`: 411,640 bytes, BLAKE3 `0c6305cd0a7a9f94daac842019537c6727fc0fadd4d44c336ec530317b42a42c`, which a unit test pins. `fonts/OFL.txt` is its `LICENSE.txt`, which declares no Reserved Font Name. The family name (name 1) is `Inter`; `fontdue`'s `Font::name()` gives the full name, `Inter Regular`, so the test reads the `name` table. The first `font()` takes 6.4 ms in a release build, under the 10 ms target, so no subset follow-up is needed.
 
 Rejected:
 - **Subsetting Inter now:** it needs `fonttools`, which this machine does not have. If the parse misses its target, a subset to Latin, Latin-1 and General Punctuation is the follow-up, made once with `pyftsubset` and committed with its command.
@@ -140,8 +148,8 @@ Rejected:
 `metrics.rs::FontMetrics` implements `TextMeasurer` over the bundled font:
 
 - `advance(c, size)` is `font.metrics(c, size).advance_width` rounded to the nearest integer. It is cached per font size in a 128-entry table for ASCII and a map for other characters.
-- `line_height(size)` is `horizontal_line_metrics(size).new_line_size`, rounded. For Inter 4.1 at 16 pixels that is 19, where the headless metric gives 20. Task 2.2 confirms the number.
-- The baseline is `round(ascent)` below the top of the line box.
+- `line_height(size)` is `horizontal_line_metrics(size).new_line_size`, rounded. For Inter 4.1 at 16 pixels that is 19, where the headless metric gives 20. Task 2.2 confirmed it.
+- The baseline is `round(ascent)` below the top of the line box: 16 at 16 pixels.
 
 The rasterizer draws each glyph at the pen position these rounded advances give, scaled to physical pixels, not at `fontdue`'s fractional advances. So a text run is drawn exactly as wide as it was measured. Wrapping, centring in buttons, and carets after the last character all agree with what is drawn.
 
@@ -170,9 +178,9 @@ This matches `String`'s length, which counts Unicode scalar values, and the tool
 
 - **The scale factor** is `window.scale_factor()`, an `f64` that may be fractional (1.25, 1.5 or 1.75 on Windows and Linux). The logical size reported to the app is `floor(physical / scale)` on each axis. The pixmap and the surface have the window's physical inner size.
 - **Coordinates.** A logical coordinate `v` maps to `round(v × scale)` physical pixels. A rectangle's physical edges are its rounded corners in that mapping, so adjacent rectangles never overlap or gap, whatever the scale.
-- **Axis-aligned rectangles** (radius 0) are filled with `anti_alias = false` at those snapped edges. They are crisp at every scale, and pixel-exact for the golden tests and screenshots.
-- **Rounded rectangles** are filled as anti-aliased paths: four lines and four cubic arcs with κ = 0.5523, the radius scaled and clamped to half the smaller side.
-- **Borders** are the outer rounded rectangle minus the inner one, inset by `round(width × scale)` physical pixels, with an inner radius of `max(radius − width, 0)` scaled, filled with `FillRule::EvenOdd`. Unlike a centred stroke, the border then lies entirely inside the bounds, as `ui-toolkit` lays it out. Without radii, it is anti-aliasing-free.
+- **Axis-aligned rectangles** (radius 0) are filled without anti-aliasing at those snapped edges. They are crisp at every scale, and pixel-exact for the golden tests and screenshots.
+- **Rounded rectangles** keep the snapped edges and anti-alias only their corners, with exact circular arcs: the radius is scaled and clamped to half the smaller side, and a pixel in a corner's square is covered by `clamp(r + 0.5 − d, 0, 1)`, where `d` is the distance from the pixel's centre to the corner circle's centre (revised at apply, D12).
+- **Borders** are the outer rounded rectangle minus the inner one, inset by `round(width × scale)` physical pixels (at least 1), with an inner radius of `max(radius − width, 0)` scaled: a pixel's coverage is the outer coverage minus the inner one, clamped at 0. Unlike a centred stroke, the border then lies entirely inside the bounds, as `ui-toolkit` lays it out. Without radii, it is anti-aliasing-free.
 - **Glyphs** are rasterized at `font_size × scale` pixels, and each is placed at the snapped pen position plus its bitmap offset. The glyph cache is keyed by glyph index and pixel size, so a scale change gives new entries rather than blurry scaled ones.
 - **A scale change** (`ScaleFactorChanged`, for instance between a laptop and an external display) keeps the logical size when the platform scales the window with it. Then only the main thread redraws, from the last display list. If the logical size changes too, `winit` follows with `Resized`, which is delivered as a resize (D13).
 
@@ -215,9 +223,9 @@ Rejected: a 60 Hz timer (work when nothing changed); `ControlFlow::Poll` (a busy
 
 | Command | Drawing |
 |---|---|
-| `Clear { color }` | `pixmap.fill(color)` |
-| `Rectangle { bounds, color, corner_radius }` | a snapped `fill_rect` without anti-aliasing, or a rounded path (D9) |
-| `Border { bounds, width, color, corner_radius }` | the even-odd difference of two rounded rectangles (D9) |
+| `Clear { color }` | a fill of the whole pixmap |
+| `Rectangle { bounds, color, corner_radius }` | snapped spans without anti-aliasing, or a rounded rectangle with anti-aliased corners (D9) |
+| `Border { bounds, width, color, corner_radius }` | the outer rounded rectangle's coverage minus the inner one's (D9) |
 | `Text { x, y, font_size, color, text }` | one glyph per character at measured positions (D7, D8), each coverage mask blended source-over into the pixmap's premultiplied pixels with the text colour |
 
 - **Culling.** A command whose physical bounds miss the pixmap is skipped, and others are clipped to it. A 1,000-item list in an 800 × 600 window rasterizes only its visible rows.
@@ -227,6 +235,8 @@ Rejected: a 60 Hz timer (work when nothing changed); `ControlFlow::Poll` (a busy
 - **Glyph blending** is the toolkit's own loop over the coverage mask, rather than a `tiny-skia` mask fill: a mask fill would build a `Mask` and a paint shader per glyph.
 
 The same `Rasterizer` makes screenshots and golden images, without a window (D15, D20).
+
+**Revision at apply: the rasterizer computes coverage itself (autonomous, 2026-10-19).** The design planned `tiny-skia`'s `fill_rect` and `fill_path` for rectangles, rounded rectangles and borders. `tiny-skia` 0.12's path filler allocates on every fill: an edge list (`Vec::with_capacity(64)`) and alpha runs as wide as the pixmap. The counter screen's button is a rounded rectangle, so a steady-state frame could not meet D19's "allocates nothing". `raster.rs` therefore fills spans and computes coverage itself: solid spans for straight rows, a distance to the corner's centre for corner pixels, and the difference of two such coverages for borders, all blended source-over in integer premultiplied arithmetic (`div255` rounding), like the glyphs. `tiny-skia` keeps the pixmap and the PNG encoding and decoding, and stays the tool for later shapes (paths, gradients, images), where an allocation per path is acceptable. Run-time cost: one square root per corner pixel; straight rows are plain span fills. It also makes rectangles and corners the same on every architecture, since no SIMD floating point is involved (glyph coverage still comes from `fontdue`). Rejected: `tiny-skia` paths with a per-frame allocation (against D19); caching each rounded rectangle's coverage mask (memory per distinct size, for no measured need).
 
 ### D13. Input mapping (autonomous)
 
@@ -338,6 +348,8 @@ How they are measured:
 - **`crates/prism-desktop/tests/allocations.rs`:** with a counting `#[global_allocator]`, 100 presents and rasterizations of the same list at the same size allocate nothing after the first.
 - **The startup benchmark** (`run_timing.rs`) runs before and after the change. Its wall time must not grow by more than 1 ms (D4).
 
+The spec's scenario "Rasterization benchmark" asks for the 1,000-node lists under 4 ms at scale 2, stricter than the 8 ms above, and the benchmark asserts the spec's target. Medians at apply time (release build, 2026-10-19, macOS 27 on arm64, warm glyph cache; cold in parentheses): the counter frame, rasterized and converted into a surface buffer, 0.085 ms (0.26) at scale 1 and 0.33 ms (1.06) at scale 2; the grid of 1,000 nodes 0.18 ms (0.30) at scale 1 and 0.43 ms (0.55) at scale 2, of 10,000 nodes 0.97 and 1.48 ms, growth ×5.3 and ×3.4; the todo column of 1,000 nodes 0.072 and 0.19 ms, of 10,000 nodes 0.49 and 0.60 ms, growth ×6.8 and ×3.1. The clear and the conversion of 1.9 million pixels at scale 2 take most of a frame, and every target is met by a factor of ten or more, so damage regions are not needed.
+
 Compile-time cost: no new compiler stage, analysis, MIR or backend work. Building `prism` cold compiles the crates of D2. An incremental rebuild after a compiler edit relinks a larger `prism`: task 1.3 measures both.
 
 ### D20. A new `desktop` capability, and how the change is tested
@@ -349,6 +361,7 @@ The window is a host of the toolkit, not a toolkit feature, so it gets its own c
   - text at 12, 16 and 24 pixels, `AV` against `AX`, and `中`;
   - the counter screen's list from `ui-toolkit`'s "A dump of the counter screen";
   - culled and clipped commands.
+  - at apply, also the counter screen laid out with the window's metrics at 200 × 120 (`counter-window`), which pins the window's layout as `ui-toolkit`'s tree builder makes it.
 
   Each image is compared within one unit per channel, which absorbs FMA and SIMD differences between architectures. `PRISM_UPDATE_GOLDEN=1` rewrites the images, and a changed golden image is reviewed by eye in the diff.
 - **Unit tests** of `raster.rs` (snapping, culling, the pixel conversion, glyph placement from the measurer), `metrics.rs` (advances, line height, the cache), `input.rs` (every mapping in D13), and the window host's protocol in `host.rs`. The protocol tests drive the host through its channels with no window: input first, one frame after a burst, resize, close, wake, presents after close, and the "no display" error in a child process.
