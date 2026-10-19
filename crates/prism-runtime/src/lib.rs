@@ -52,9 +52,9 @@ pub use list::{
     prism_rt_list_with_capacity, PrismList, FIRST_CAPACITY, ZERO_SIZED_CAPACITY,
 };
 pub use output::{
-    finish, format_bool, format_char, format_int, prism_rt_print_bool, prism_rt_print_char,
-    prism_rt_print_double, prism_rt_print_int, prism_rt_print_newline, set_line_hook, start,
-    write_output, LineHook, OUTPUT_BUFFER_SIZE,
+    finish, flush_output, format_bool, format_char, format_int, prism_rt_print_bool,
+    prism_rt_print_char, prism_rt_print_double, prism_rt_print_int, prism_rt_print_newline,
+    set_line_hook, start, write_output, LineHook, OUTPUT_BUFFER_SIZE,
 };
 pub use panic::{
     panic_at_location, panic_message, panic_without_location, prism_rt_double_remainder,

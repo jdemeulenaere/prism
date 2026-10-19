@@ -264,7 +264,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
     // before the program's output (D16 of `ui-toolkit`).
     let headless = headless.map(|size| {
         let commands = match events.as_deref() {
-            Some(path) => match prism_cli::read_event_script(std::path::Path::new(path)) {
+            Some(path) => match prism_cli::read_event_script(std::path::Path::new(path), watch) {
                 Ok(commands) => commands,
                 Err(message) => {
                     eprintln!("Error: {}", message);

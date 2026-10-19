@@ -90,7 +90,10 @@ impl HeadlessOptions {
 /// The commands of the event script at `path`, or the error `prism run` reports for it:
 /// `<path>:<line>: <message>` for a line it cannot parse, `<path>: <message>` for a file it
 /// cannot read (D16 of `ui-toolkit`).
-pub fn read_event_script(path: &Path) -> Result<Vec<prism_ui::script::ScriptLine>, String> {
+pub fn read_event_script(
+    path: &Path,
+    watching: bool,
+) -> Result<Vec<prism_ui::script::ScriptLine>, String> {
     let text = fs::read_to_string(path).map_err(|error| {
         format!(
             "{}: cannot read the event script: {}",
@@ -98,7 +101,16 @@ pub fn read_event_script(path: &Path) -> Result<Vec<prism_ui::script::ScriptLine
             error
         )
     })?;
-    prism_ui::script::parse_script(&text)
+    // `edit` paths are relative to the script's directory, and only a watching run may edit
+    // or wait for a reload (D12 of `compose-hot-reload`).
+    let context = prism_ui::script::ScriptContext {
+        watching,
+        directory: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        read: &|replacement: &Path| {
+            fs::read_to_string(replacement).map_err(|error| error.to_string())
+        },
+    };
+    prism_ui::script::parse_script_with(&text, &context)
         .map_err(|error| format!("{}:{}: {}", path.display(), error.line, error.message))
 }
 
@@ -134,6 +146,7 @@ impl RunOptions {
         if let Some(headless) = &self.headless {
             headless.configure();
         }
+        prism_ui::host::set_reload_timings(self.timings);
         #[cfg(feature = "window")]
         if let Some(path) = &self.screenshot {
             prism_ui::host::set_final_frame_sink(Some(prism_desktop::screenshot::writer(
@@ -304,6 +317,9 @@ pub(crate) struct Build {
     /// The initializer hash of each top-level value of the file units built (D8 of
     /// `hot-reload`).
     pub value_keys: ValueKeys,
+    /// The generic of each instance of the plan, by the instance's symbol, whose composable
+    /// bodies a reload of the instance affects (D4 of `compose-hot-reload`).
+    pub instance_generics: HashMap<String, DeclarationPath>,
 }
 
 /// One file of a program being built.
@@ -571,6 +587,15 @@ pub(crate) fn build_program(
         front_end,
         code_generation,
         value_keys,
+        instance_generics: instances
+            .iter()
+            .map(|instance| {
+                (
+                    instance.planned.symbol.clone(),
+                    instance.planned.path.clone(),
+                )
+            })
+            .collect(),
     })
 }
 

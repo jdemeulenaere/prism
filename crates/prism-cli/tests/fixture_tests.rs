@@ -117,6 +117,13 @@
 //! the `hot-reload` spec is a watch case, except the scenarios whose WHEN is a Rust test or a
 //! real file save (`UNSCRIPTED_HOT_RELOAD_SCENARIOS`), which have Rust tests instead.
 //!
+//! A watch case may also be a headless case (D12 of `compose-hot-reload`): with `// events:`,
+//! `// headless:` or both, the runner spawns `prism run --check-allocations --watch --edits
+//! <script> --headless[=<width>x<height>] --events <events> <entry>`. Its event script may then
+//! hold `edit <target> <replacement>` commands, which reload between two events, and its edit
+//! script may hold only comments, so that the session watches no file and ends when the app's
+//! `main` returns.
+//!
 //! The runner uses the same pipeline as the CLI (`prism_cli::check_path`) and takes the codes from
 //! the rendered diagnostics (`error[E4002]: ...`). It also checks the fixtures against the
 //! catalog in `openspec/specs/diagnostics/spec.md`: every expected code must be a live catalog

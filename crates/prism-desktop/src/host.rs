@@ -15,7 +15,9 @@
 //!   closed are dropped. Dropping the host, when `runApp` returns for any reason, asks the
 //!   main thread to close the window, so no window outlives its app.
 //! - **Reloads.** [`WindowHost::wake`] is a plain `fn()` that turns into a frame, so the frame
-//!   loop reaches its top; `compose-hot-reload` registers it with `defer_to_reload_points`.
+//!   loop reaches its top, where it applies a pending reload: a window host registers it as
+//!   `prism-ui`'s reload waker, which `runApp`'s reload wake-up calls (D2 of
+//!   `compose-hot-reload`).
 
 use crate::input::WindowInput;
 use crate::metrics::FontMetrics;
@@ -213,6 +215,7 @@ impl std::fmt::Debug for WindowHost {
 impl WindowHost {
     pub fn new(connection: WindowConnection) -> WindowHost {
         *wake_sender() = Some(connection.wake);
+        prism_ui::host::set_reload_waker(Some(WindowHost::wake));
         WindowHost {
             size: connection.size,
             input: connection.input,
@@ -377,6 +380,20 @@ pub(crate) mod tests {
         assert_eq!(host.size(), (200, 100));
         endpoint.mailbox.set_scale_factor(1.0);
         assert_eq!(host.scale_factor(), 1.0);
+    }
+
+    /// compose-hot-reload, D2: a reload requested while the app defers reloads to its reload
+    /// points wakes the window's app with a frame.
+    #[test]
+    fn a_pending_reload_wakes_the_window_host() {
+        let _lock = crate::test_lock();
+        let (mut host, _endpoint, _) = host((400, 300));
+        assert_eq!(host.next_event(), Some(HostEvent::Frame), "the first frame");
+        prism_runtime::reload::defer_to_reload_points(prism_ui::host::wake_for_reload);
+        prism_runtime::reload::request(prism_runtime::reload::PendingReload::new(Default::default));
+        assert_eq!(host.next_event(), Some(HostEvent::Frame));
+        assert!(prism_runtime::reload::withdraw().is_some());
+        prism_runtime::reload::apply_at_next_call();
     }
 
     #[test]

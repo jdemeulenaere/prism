@@ -1,0 +1,8 @@
+package app
+import /prism/compose/ui
+import /prism/compose/material3
+import /lib/labels
+compose fun Screen() {
+    Text("${label(2)}!")
+}
+fun main() { runApp(width = 400, height = 300) { Screen() } }

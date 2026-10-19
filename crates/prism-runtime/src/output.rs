@@ -141,6 +141,12 @@ pub(crate) fn append(text: &[u8]) {
     run_line_hook(text);
 }
 
+/// Writes the program's buffered output to stdout now, as before a frame loop blocks for a
+/// reload (`wait reload`, D12 of `compose-hot-reload`), so that what it printed is seen.
+pub fn flush_output() {
+    flush();
+}
+
 /// Appends `text` to the program's output, in order with what the program prints: what the
 /// runtimes that write for the program use, such as `prism-ui`'s dumps (D16 of `ui-toolkit`).
 pub fn write_output(text: &str) {

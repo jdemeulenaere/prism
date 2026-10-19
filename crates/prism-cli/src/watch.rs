@@ -15,6 +15,12 @@
 //!
 //! Status lines go to stderr and start with `reload:` or `watch:`; the program's output goes to
 //! stdout.
+//!
+//! For compositions (`compose-hot-reload`), each reload names the composable bodies it affects,
+//! by their body keys in the kept summaries: those of the units it defines and of every file
+//! importing a reloaded file, directly or not ([`affected_bodies`], D4), and the slots its
+//! splits retire (D8). An app's event script may edit files too: its `edit` commands reach the
+//! session through the runtime's scripted-edit hook, as [`SessionEvent::ScriptedEdit`] (D12).
 
 #![allow(clippy::result_large_err)]
 
@@ -28,8 +34,10 @@ use crate::workspace::{
     assert_workspace_boundary, explain_cache, validate_entry_file, CacheOutcome, WorkspaceError,
 };
 use prism_codegen::{Program, SlotKind};
+use prism_mir::GenericSummary;
 use prism_resolver::{DependencyGraph, ResolveError, SourceStore};
-use prism_runtime::reload::{self, AppliedReload, PendingReload};
+use prism_runtime::reload::{self, AppliedReload, PendingReload, ScriptedEdit};
+use prism_typed_tree::DeclarationPath;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +57,9 @@ pub enum SessionEvent {
     Stopped(i32),
     /// The program wrote its `n`-th newline of the run and waits for the session (D16).
     LineWritten(u64),
+    /// The program's event script reached a group of `edit` commands, and the program waits
+    /// for the session to request their reload (D12 of `compose-hot-reload`).
+    ScriptedEdit(Vec<ScriptedEdit>),
 }
 
 /// What a change did.
@@ -241,6 +252,34 @@ impl WatchSession {
         })));
     }
 
+    /// Makes an event script's `edit` commands stop the program, tell the session, and continue
+    /// once the session has requested their reload or reported their errors (D12 of
+    /// `compose-hot-reload`). The reload is applied at the frame loop's next reload point.
+    pub fn install_edit_hook(&self) {
+        let sender = Mutex::new(self.sender.clone());
+        let resume = Arc::clone(&self.resume_receiver);
+        reload::set_edit_hook(Some(Arc::new(move |edits| {
+            if let Ok(sender) = sender.lock() {
+                let _ = sender.send(SessionEvent::ScriptedEdit(edits));
+            }
+            if let Ok(resume) = resume.lock() {
+                let _ = resume.recv();
+            }
+        })));
+    }
+
+    /// Reloads the program after an event script's `edit` commands, then lets it continue.
+    fn scripted_edit(&mut self, edits: Vec<ScriptedEdit>) {
+        let mut changed = Vec::new();
+        for edit in edits {
+            let target = prism_resolver::absolute_path(&edit.target);
+            self.overlay(target.clone(), edit.content);
+            changed.push(target);
+        }
+        self.reload(&changed, Instant::now());
+        self.resume();
+    }
+
     /// Stops the program at its `line`-th newline of the run.
     pub fn stop_at_line(&self, line: u64) {
         self.line_target.store(line, Ordering::SeqCst);
@@ -362,7 +401,7 @@ impl WatchSession {
         self.settle_pending();
         let started = Instant::now();
         let prepared = self.prepare();
-        let (build, prepared, mut timings) = match prepared {
+        let (build, prepared, mut timings, composable_bodies) = match prepared {
             Ok(Some(prepared)) => prepared,
             Ok(None) => return ReloadOutcome::Unchanged,
             Err(error) => {
@@ -375,6 +414,7 @@ impl WatchSession {
         timings.detect = started.saturating_duration_since(detected);
         let mut message = self.applied_message(&build, &prepared.splits);
         let units = prepared.unit_names();
+        let retired_slots = prepared.retired_slots();
         let program = self.program.as_mut().expect("a program runs");
         let writes = program.live_mut().hold(prepared);
         let modules = program.live().module_count();
@@ -401,8 +441,9 @@ impl WatchSession {
             }
             AppliedReload {
                 units,
+                composable_bodies,
+                retired_slots,
                 message,
-                ..AppliedReload::default()
             }
         }));
         ReloadOutcome::Requested
@@ -435,9 +476,18 @@ impl WatchSession {
 
     /// Builds the reload of the running program: the graph, the build of the units the running
     /// plan lacks, and their module, finalized but not applied. `None` when no unit changed.
+    #[allow(clippy::type_complexity)]
     fn prepare(
         &mut self,
-    ) -> Result<Option<(Build, prism_codegen::PreparedReload, ReloadTimings)>, WorkspaceError> {
+    ) -> Result<
+        Option<(
+            Build,
+            prism_codegen::PreparedReload,
+            ReloadTimings,
+            Vec<u64>,
+        )>,
+        WorkspaceError,
+    > {
         let started = Instant::now();
         let graph = self.graph()?;
         let graph_time = started.elapsed();
@@ -473,7 +523,8 @@ impl WatchSession {
             code_generation: build.code_generation,
             linking: linking_started.elapsed(),
         };
-        Ok(Some((build, prepared, timings)))
+        let bodies = affected_bodies(&graph, &build);
+        Ok(Some((build, prepared, timings, bodies)))
     }
 
     /// Settles the reload requested last: if the program has not applied it, takes it back and
@@ -646,6 +697,7 @@ impl WatchSession {
     pub fn run_script(&mut self, script: EditScript) -> i32 {
         self.install_stop_handler();
         self.install_line_hook();
+        self.install_edit_hook();
         let mut groups = script.groups.into_iter().peekable();
         // The line a step waits for is set before the program can run past it: before it
         // starts, and before it continues from the line of the step before.
@@ -681,6 +733,7 @@ impl WatchSession {
                         }
                         Some(SessionEvent::Stopped(status)) => self.program_ended(status, true),
                         Some(SessionEvent::FilesChanged(..)) => {}
+                        Some(SessionEvent::ScriptedEdit(edits)) => self.scripted_edit(edits),
                         None => return self.exit_status(),
                     }
                 }
@@ -717,6 +770,7 @@ impl WatchSession {
                 Some(SessionEvent::Stopped(status)) => self.program_ended(status, true),
                 Some(SessionEvent::LineWritten(_)) => self.resume(),
                 Some(SessionEvent::FilesChanged(..)) => {}
+                Some(SessionEvent::ScriptedEdit(edits)) => self.scripted_edit(edits),
                 None => return,
             }
         }
@@ -782,6 +836,7 @@ impl WatchSession {
     /// workspace root is removed, which ends the session with status 1.
     pub fn run_watching(&mut self) -> i32 {
         self.install_stop_handler();
+        self.install_edit_hook();
         let mut watcher = FileWatcher::start(self.sender());
         self.start();
         watcher.watch(&self.watched);
@@ -808,10 +863,94 @@ impl WatchSession {
                 Some(SessionEvent::MainReturned(status)) => self.program_ended(status, false),
                 Some(SessionEvent::Stopped(status)) => self.program_ended(status, true),
                 Some(SessionEvent::LineWritten(_)) => self.resume(),
+                Some(SessionEvent::ScriptedEdit(edits)) => {
+                    self.scripted_edit(edits);
+                    watcher.watch(&self.watched);
+                }
                 None => return self.exit_status(),
             }
         }
     }
+}
+
+/// The body keys of the composable bodies the reload of `build` affects (D4 and D5 of
+/// `compose-hot-reload`): those of the files whose units it defines and of every file that
+/// imports one of them, directly or not, and those of the generic of every instance unit it
+/// defines.
+fn affected_bodies(graph: &DependencyGraph, build: &Build) -> Vec<u64> {
+    let paths: HashMap<&str, &Path> = build
+        .plan
+        .units
+        .iter()
+        .map(|unit| (unit.module.as_str(), unit.path.as_path()))
+        .collect();
+    let mut reloaded = Vec::new();
+    let mut generics = Vec::new();
+    for unit in &build.units {
+        match &unit.id {
+            UnitId::File(module) => reloaded.extend(paths.get(module.as_str()).copied()),
+            UnitId::Instance(symbol) => generics.extend(build.instance_generics.get(symbol)),
+        }
+    }
+    let imports: Vec<(&Path, &[PathBuf])> = graph
+        .nodes
+        .iter()
+        .map(|(path, node)| (path.as_path(), node.direct_imports.as_slice()))
+        .collect();
+    composable_bodies(&imports, &build.kept, &reloaded, &generics)
+}
+
+/// The body keys of the files of `reloaded`, of the files that import them through `imports`
+/// (each file with its direct imports), directly or not, found by one breadth-first pass over
+/// the reversed imports, and of the generics `generics`, from the summaries of `kept`.
+/// Linear in the program's files, imports and composable bodies.
+fn composable_bodies(
+    imports: &[(&Path, &[PathBuf])],
+    kept: &KeptFiles,
+    reloaded: &[&Path],
+    generics: &[&DeclarationPath],
+) -> Vec<u64> {
+    let mut importers: HashMap<&Path, Vec<&Path>> = HashMap::new();
+    for (file, targets) in imports {
+        for target in targets.iter() {
+            importers.entry(target.as_path()).or_default().push(file);
+        }
+    }
+    let mut affected: Vec<&Path> = Vec::new();
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let mut queue: std::collections::VecDeque<&Path> = reloaded.iter().copied().collect();
+    while let Some(file) = queue.pop_front() {
+        if !seen.insert(file) {
+            continue;
+        }
+        affected.push(file);
+        if let Some(importers) = importers.get(file) {
+            queue.extend(importers.iter().copied());
+        }
+    }
+    let mut bodies = Vec::new();
+    for file in affected {
+        if let Some(kept) = kept.files.get(file) {
+            bodies.extend_from_slice(&kept.summary.composable_bodies);
+            for generic in &kept.summary.generics {
+                bodies.extend_from_slice(&generic.composable_bodies);
+            }
+        }
+    }
+    if !generics.is_empty() {
+        let by_path: HashMap<&DeclarationPath, &GenericSummary> = kept
+            .files
+            .values()
+            .flat_map(|file| &file.summary.generics)
+            .map(|generic| (&generic.path, generic))
+            .collect();
+        for path in generics {
+            if let Some(generic) = by_path.get(path) {
+                bodies.extend_from_slice(&generic.composable_bodies);
+            }
+        }
+    }
+    bodies
 }
 
 impl Drop for WatchSession {
@@ -1106,6 +1245,65 @@ mod tests {
         EditScript::parse_text(text, Path::new("/case"), &|path: &Path| {
             Ok(format!("content of {}", path.display()))
         })
+    }
+
+    /// A kept file whose summary lists `bodies`, with a generic `generic` listing
+    /// `generic_bodies` when it is given.
+    fn kept_file(bodies: &[u64], generic: Option<(&str, &[u64])>) -> crate::run::KeptFile {
+        crate::run::KeptFile {
+            check_key: prism_abi::ContentHash([0; 32]),
+            summary: prism_mir::FileSummary {
+                composable_bodies: bodies.to_vec(),
+                generics: generic
+                    .into_iter()
+                    .map(|(name, bodies)| GenericSummary {
+                        path: DeclarationPath::new("lib/leaf", name),
+                        type_parameters: Vec::new(),
+                        record_hash: [0; 32],
+                        calls: Vec::new(),
+                        defaults: Vec::new(),
+                        composable_bodies: bodies.to_vec(),
+                    })
+                    .collect(),
+                ..prism_mir::FileSummary::default()
+            },
+            elaborated: None,
+        }
+    }
+
+    /// D4 of `compose-hot-reload`: an edit of a leaf affects the leaf's bodies and those of its
+    /// importers, directly or not, and not those of a sibling; an instance unit affects its
+    /// generic's.
+    #[test]
+    fn a_reload_affects_the_bodies_of_its_files_and_their_importers() {
+        let (leaf, middle, top, sibling) = (
+            PathBuf::from("/w/lib/leaf.prism"),
+            PathBuf::from("/w/lib/middle.prism"),
+            PathBuf::from("/w/app/main.prism"),
+            PathBuf::from("/w/lib/sibling.prism"),
+        );
+        let mut kept = KeptFiles::default();
+        kept.files
+            .insert(leaf.clone(), kept_file(&[1], Some(("Each", &[5, 6]))));
+        kept.files.insert(middle.clone(), kept_file(&[2], None));
+        kept.files.insert(top.clone(), kept_file(&[3], None));
+        kept.files.insert(sibling.clone(), kept_file(&[4], None));
+        let middle_imports = [leaf.clone()];
+        let top_imports = [middle.clone(), sibling.clone()];
+        let imports: Vec<(&Path, &[PathBuf])> = vec![
+            (leaf.as_path(), &[]),
+            (middle.as_path(), &middle_imports),
+            (top.as_path(), &top_imports),
+            (sibling.as_path(), &[]),
+        ];
+        let mut bodies = composable_bodies(&imports, &kept, &[leaf.as_path()], &[]);
+        bodies.sort();
+        assert_eq!(bodies, [1, 2, 3, 5, 6]);
+        let mut bodies = composable_bodies(&imports, &kept, &[sibling.as_path()], &[]);
+        bodies.sort();
+        assert_eq!(bodies, [3, 4]);
+        let generic = DeclarationPath::new("lib/leaf", "Each");
+        assert_eq!(composable_bodies(&imports, &kept, &[], &[&generic]), [5, 6]);
     }
 
     #[test]

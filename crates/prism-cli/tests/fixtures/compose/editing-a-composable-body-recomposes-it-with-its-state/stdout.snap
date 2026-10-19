@@ -1,0 +1,6 @@
+window 400x300
+  column #1 0,0 104x100 arrangement spacedBy(8) padding(16)
+    text #2 16,16 72x20 "Clicks: 3"
+    box #3 16,44 58x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #4 16,44 58x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #5 41,54 8x20 "+"

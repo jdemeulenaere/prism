@@ -1,0 +1,3 @@
+edit lib/labels.prism lib/labels.prism.v2
+edit app/main.prism app/main.prism.v2
+dump

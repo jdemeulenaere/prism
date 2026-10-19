@@ -40,6 +40,13 @@ The deltas were written as ADDED requirements of `compose`, `ui` and `hot-reload
 - **Hosts and the waker.** `prism-desktop` depends on `prism-ui` but not `prism-compose`; `WindowHost::new`, which already records the wake channel, registers `WindowHost::wake` with `prism_ui::host::set_reload_waker` (task 6.3). `--timings` reaches `prism-ui` through `prism_ui::host::set_reload_timings`, which `RunOptions::configure_ui` calls.
 - **Spec deltas.** `compose`, `ui` and `hot-reload` are now main specs. The hot-reload requirement "Edit Steps Wait for the Reload Point of a Frame Loop" became a MODIFIED block of "Edit Triggers", and the `ui` requirement "Headless Runs Follow an Event Script", which lists the script's commands, is MODIFIED to name `edit` and `wait reload`. Every other requirement of the three deltas is new: none overlaps a main requirement's name or rule. `openspec validate compose-hot-reload --strict` passes.
 
+**Apply notes (groups 2 to 6, 2026-10-19).** What implementing the runtime, compiler, session and frame loop settled:
+- **`wait reload` lives in the frame loop**, not the headless host: `App::script` runs it, waiting on `prism-ui`'s condition variable (`host::wait_for_reload`) until the runtime's requested flag is set, so a reload requested before the command returns at once. It flushes the program's output first, so that a test or benchmark reading stdout sees the dumps before the loop blocks; without a line hook, output to a pipe is otherwise buffered until 8 KiB or the end of the run.
+- **Scripted edits are parsed into one command per group.** `parse_script_with` takes a `ScriptContext` (whether the run watches, the script's directory, how to read a replacement); consecutive `edit` lines merge into one `ScriptCommand::Edit`, numbered by its first line. The session makes each target absolute, as edit scripts do, so it matches the watched paths.
+- **Instance units name their generic through the build.** `Build::instance_generics` maps each planned instance's symbol to its generic, whose `GenericSummary::composable_bodies` the session adds (D4).
+- **The `--timings` pass time includes layout**, since the frame loop's `settle` runs the passes and then lays out; it is what a reload costs the frame beyond compilation.
+- **Groups 5 and 6 share a commit**: the script commands of task 5.3 are run by the frame loop of task 6.1, and neither builds alone.
+
 ## Goals / Non-Goals
 
 **Goals:**

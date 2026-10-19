@@ -6,11 +6,14 @@
 //!    is `ui misuse: no window system is available; run with --headless`.
 //! 2. It gives the thread a tree with a window root of the host's size, and starts the
 //!    composition with [`UiApplier`] (the first pass).
-//! 3. It loops: while a scope is invalid, it runs a pass and then releases the handler entries
-//!    no node claimed (D23); while layout is dirty, it lays out; otherwise it takes the host's
-//!    next event and dispatches it, which a pass and a layout follow before the next event
-//!    (D14). A frame rebuilds the display list when it is stale and presents it; a dump prints;
-//!    the end of events stops.
+//! 3. It loops: at the top of each iteration, its reload point applies a pending reload,
+//!    whose hook invalidates the scopes it affects (D2 of `compose-hot-reload`); while a scope
+//!    is invalid, it runs a pass and then releases the handler entries no node claimed (D23);
+//!    while layout is dirty, it lays out; otherwise it takes the host's next event and
+//!    dispatches it, which a pass and a layout follow before the next event (D14). A frame
+//!    rebuilds the display list when it is stale and presents it; a dump prints; the end of
+//!    events stops. While the app runs, reloads are deferred to that reload point, so none
+//!    lands during a pass, a handler, layout or drawing.
 //! 4. It disposes of the composition, which removes and releases every node, then releases
 //!    the handler table's entries and the tree, and returns.
 //!
@@ -25,7 +28,10 @@ use crate::dump::{dump_display_list, dump_tree};
 use crate::error::{UiResult, APP_RUNNING, NO_WINDOW_SYSTEM};
 use crate::handlers::release_functions;
 use crate::headless::{missing_target, no_focus, resolve_text_target};
-use crate::host::{call_final_frame_sink, configured_host, DumpKind, Host, HostEvent, Key};
+use crate::host::{
+    call_final_frame_sink, configured_host, reload_timings, wait_for_reload, wake_for_reload,
+    DumpKind, Host, HostEvent, Key,
+};
 use crate::input::{Action, Dispatcher};
 use crate::layout::Layout;
 use crate::runtime;
@@ -33,7 +39,9 @@ use crate::script::{ScriptCommand, ScriptLine, ScriptTarget};
 use crate::text::TextMeasurer;
 use crate::thread::{install_tree, release_dropped, with_state, RunningApp, State};
 use prism_compose::{Composition, Handle};
+use prism_runtime::reload;
 use prism_runtime::FunctionValue;
+use std::time::Instant;
 
 /// What an app did, for tests of idling.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -78,6 +86,20 @@ pub fn run_app(title: &str, width: i64, height: i64, content: FunctionValue) -> 
 /// Runs an app against `host`, measuring text with `measurer`, and gives what it did. When the
 /// app ends normally, the final-frame sink sees its last display list.
 pub fn run_app_with(
+    host: Box<dyn Host>,
+    measurer: Box<dyn TextMeasurer>,
+    content: FunctionValue,
+) -> UiResult<Counters> {
+    // Reloads wait for the frame loop's reload point while the app runs, and apply at the
+    // program's next call again once it ends, a pending one included (D2 of
+    // `compose-hot-reload`).
+    reload::defer_to_reload_points(wake_for_reload);
+    let result = run_deferring(host, measurer, content);
+    reload::apply_at_next_call();
+    result
+}
+
+fn run_deferring(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
     content: FunctionValue,
@@ -174,15 +196,37 @@ impl App {
         Ok(())
     }
 
-    /// The loop: settle, then take and dispatch the next event, until events end.
+    /// The loop: apply a pending reload, settle, then take and dispatch the next event, until
+    /// events end.
     pub fn run(&mut self) -> UiResult<()> {
         loop {
+            self.reload_point()?;
             self.settle()?;
             let Some(event) = self.host.next_event() else {
                 return Ok(());
             };
             self.handle(event)?;
         }
+    }
+
+    /// The reload point at the top of the loop (D2 of `compose-hot-reload`): applies the
+    /// pending reload, if any, whose hook invalidates the scopes it affects, and runs the
+    /// passes that follow it, timed under `--timings`.
+    pub fn reload_point(&mut self) -> UiResult<()> {
+        if reload::reload_point().is_none() {
+            return Ok(());
+        }
+        let started = Instant::now();
+        self.settle()?;
+        let scopes = prism_compose::reload::take_invalidated_scopes();
+        if reload_timings() {
+            eprintln!(
+                "timing: reload pass {:.3} ms ({} scopes)",
+                started.elapsed().as_secs_f64() * 1000.0,
+                scopes
+            );
+        }
+        Ok(())
     }
 
     /// Dispatches one event.
@@ -356,6 +400,19 @@ impl App {
             }
             ScriptCommand::Frame => self.handle(HostEvent::Frame)?,
             ScriptCommand::Dump(kind) => self.print_dump(kind),
+            // The session requests the reload, which the loop's reload point applies next
+            // (D12 of `compose-hot-reload`).
+            ScriptCommand::Edit(edits) => reload::request_scripted_edit(edits),
+            ScriptCommand::WaitReload => {
+                // What the program printed so far is seen before the loop blocks.
+                prism_runtime::flush_output();
+                if !wait_for_reload() {
+                    return Err(crate::error::UiError::Script {
+                        line: number,
+                        detail: "no reload arrived within 10 seconds".to_string(),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -796,6 +853,118 @@ mod tests {
             run_with_output(headless("key enter"), counter(Rc::new(Cell::new(0)), log()));
         assert_eq!(result.unwrap_err(), no_focus(1));
         with_state(|state| assert!(state.app.is_none() && state.tree.is_empty()));
+    }
+
+    static RELOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    fn label() -> &'static str {
+        match RELOADED.load(std::sync::atomic::Ordering::SeqCst) {
+            true => "new",
+            false => "old",
+        }
+    }
+
+    /// The child-process half of `a_reload_waits_for_the_running_handler`: a counter whose
+    /// label is the code's version, and whose handler requests a reload that switches it.
+    fn reload_in_handler_child() -> ! {
+        prism_runtime::reload::set_applied_hook(Some(prism_compose::reload::reload_applied));
+        let log = log();
+        let count = Rc::new(Cell::new(0));
+        let (content_log, handler_log) = (log.clone(), log.clone());
+        let content = content(move |k| {
+            push_line(&content_log, format!("compose {} {}", label(), count.get()));
+            let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+            setters::set_modifier(column, &ModifierMirror::encode(&[padding(16)])).unwrap();
+            text(k, 2, &format!("{} {}", label(), count.get()));
+            let (count, handler_log) = (count.clone(), handler_log.clone());
+            button(
+                k,
+                10,
+                "+",
+                handler("increment", move || {
+                    count.set(count.get() + 1);
+                    invalidate_app();
+                    prism_runtime::reload::request(prism_runtime::reload::PendingReload::new(
+                        || {
+                            RELOADED.store(true, std::sync::atomic::Ordering::SeqCst);
+                            prism_runtime::reload::AppliedReload {
+                                // The column's node group, under the root.
+                                composable_bodies: vec![1],
+                                ..Default::default()
+                            }
+                        },
+                    ));
+                    push_line(&handler_log, format!("handler {}", label()));
+                }),
+            );
+            k.end_group().unwrap();
+        });
+        let result = run_app_with(
+            headless("click \"+\""),
+            Box::new(FixedAdvanceMetrics),
+            content,
+        );
+        assert!(result.is_ok());
+        for line in log.borrow().iter() {
+            println!("\nlog: {}", line);
+        }
+        std::process::exit(0)
+    }
+
+    fn push_line(log: &Log, line: String) {
+        log.borrow_mut().push(line);
+    }
+
+    /// compose-hot-reload, ui: "A reload waits for the running handler". The handler finishes in
+    /// its old code, and the reload is applied before the next pass, which runs the new code.
+    #[test]
+    fn a_reload_waits_for_the_running_handler() {
+        let output = run_in_child(
+            "app::tests::a_reload_waits_for_the_running_handler",
+            reload_in_handler_child,
+        );
+        assert_eq!(output.status.code(), Some(0), "{:?}", output);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.strip_prefix("log: "))
+                .collect::<Vec<_>>(),
+            ["compose old 0", "handler old", "compose new 1"]
+        );
+    }
+
+    /// The child-process half of `waiting_for_a_reload_that_never_comes`.
+    fn wait_in_child() -> ! {
+        crate::host::set_wait_for_reload(std::time::Duration::from_millis(10));
+        let commands = crate::script::parse_script_with(
+            "wait reload\n",
+            &crate::script::ScriptContext {
+                watching: true,
+                directory: std::path::PathBuf::new(),
+                read: &|_| Err("no file".to_string()),
+            },
+        )
+        .unwrap();
+        let result = run_app_with(
+            Box::new(HeadlessHost::new((400, 300), commands)),
+            Box::new(FixedAdvanceMetrics),
+            counter(Rc::new(Cell::new(0)), log()),
+        );
+        crate::error::raise(&result.unwrap_err())
+    }
+
+    /// compose-hot-reload, ui: "Waiting for a reload that never comes".
+    #[test]
+    fn waiting_for_a_reload_that_never_comes() {
+        let output = run_in_child(
+            "app::tests::waiting_for_a_reload_that_never_comes",
+            wait_in_child,
+        );
+        assert_eq!(output.status.code(), Some(101));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "panic: event script line 1: no reload arrived within 10 seconds\n"
+        );
     }
 
     /// The child-process half of `script_failures_end_the_process`.

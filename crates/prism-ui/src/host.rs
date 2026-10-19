@@ -9,6 +9,11 @@
 //! pixels a logical one covers ([`Host::scale_factor`]), and the CLI may set a
 //! [final-frame sink](set_final_frame_sink) that sees each app's last display list
 //! (`desktop-window` D15 and D18).
+//!
+//! While an app runs, reloads wait for the reload point at the top of its frame loop, and a
+//! request wakes the loop through [`wake_for_reload`]: it notifies the condition variable that
+//! `wait reload` waits on, and calls the waker a window host registers with
+//! [`set_reload_waker`] (D2 and D12 of `compose-hot-reload`).
 
 use crate::draw::DisplayList;
 use crate::headless::HeadlessHost;
@@ -16,7 +21,9 @@ pub use crate::input::Key;
 pub use crate::script::DumpKind;
 use crate::script::ScriptLine;
 use crate::text::{FixedAdvanceMetrics, TextMeasurer};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 /// An event a host gives the frame loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +153,80 @@ pub fn configured_host(title: &str, width: i64, height: i64) -> Option<Box<dyn H
         ))),
         HostConfiguration::Window(factory) => Some(factory(title, width, height)),
     }
+}
+
+static RELOAD_WAKER: Mutex<Option<fn()>> = Mutex::new(None);
+static RELOAD_SIGNAL: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
+static RELOAD_TIMINGS: AtomicBool = AtomicBool::new(false);
+/// How long `wait reload` waits, in milliseconds: 10 seconds unless a test shortens it.
+static WAIT_FOR_RELOAD_MILLISECONDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(10_000);
+
+/// Sets what wakes the running app's host when a reload becomes pending, or removes it: a
+/// window's `WindowHost::wake`, which turns into a frame (`desktop-window` D17).
+pub fn set_reload_waker(waker: Option<fn()>) {
+    *RELOAD_WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = waker;
+}
+
+/// The wake-up `runApp` gives `prism_runtime::reload::defer_to_reload_points`, called on the
+/// session's thread after a request: wakes `wait reload`, then the host's waker.
+pub fn wake_for_reload() {
+    {
+        // Notified under the lock, so a waiter that found nothing requested is waiting already.
+        let _guard = RELOAD_SIGNAL
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        RELOAD_SIGNAL.1.notify_all();
+    }
+    let waker = *RELOAD_WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(waker) = waker {
+        waker();
+    }
+}
+
+/// Waits until a reload is requested, at most the wait of `wait reload`; gives whether one is.
+pub fn wait_for_reload() -> bool {
+    let limit = Duration::from_millis(WAIT_FOR_RELOAD_MILLISECONDS.load(Ordering::SeqCst));
+    let deadline = Instant::now() + limit;
+    let mut guard = RELOAD_SIGNAL
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        if prism_runtime::reload::is_requested() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        guard = RELOAD_SIGNAL
+            .1
+            .wait_timeout(guard, deadline - now)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0;
+    }
+}
+
+/// Shortens the wait of `wait reload`, for tests.
+pub fn set_wait_for_reload(limit: Duration) {
+    WAIT_FOR_RELOAD_MILLISECONDS.store(limit.as_millis() as u64, Ordering::SeqCst);
+}
+
+/// Makes the frame loop print `timing: reload pass <ms> (<n> scopes)` after the passes that
+/// follow each reload (`--timings` under `--watch`, D13 of `compose-hot-reload`).
+pub fn set_reload_timings(on: bool) {
+    RELOAD_TIMINGS.store(on, Ordering::SeqCst);
+}
+
+/// Whether reload passes are timed.
+pub fn reload_timings() -> bool {
+    RELOAD_TIMINGS.load(Ordering::SeqCst)
 }
 
 #[cfg(test)]

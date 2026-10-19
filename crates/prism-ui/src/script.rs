@@ -10,12 +10,16 @@
 //! - `key backspace` and `key enter`;
 //! - `resize <width> <height>`;
 //! - `frame`;
-//! - `dump`, `dump tree` and `dump draw`.
-//!
-//! `edit` is reserved for `compose-hot-reload`.
+//! - `dump`, `dump tree` and `dump draw`;
+//! - under `--watch` only, `edit <target> <replacement>` and `wait reload` (D12 of
+//!   `compose-hot-reload`). An `edit` makes the session read `<target>` as the content of
+//!   `<replacement>`, both relative to the script's directory; the replacement is read when the
+//!   script is parsed, and consecutive `edit` lines form one command, applied as one reload.
 
 use crate::input::Key;
+use prism_runtime::reload::ScriptedEdit;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// What `dump` prints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +50,19 @@ pub enum ScriptCommand {
     Resize(i64, i64),
     Frame,
     Dump(DumpKind),
+    /// One group of consecutive `edit` lines, applied as one reload.
+    Edit(Vec<ScriptedEdit>),
+    /// `wait reload`: waits for a reload from the session's file watcher.
+    WaitReload,
+}
+
+/// What parsing a script needs beyond its text: whether the run watches, which allows `edit`
+/// and `wait`, the script's directory, which `edit` paths are relative to, and how to read a
+/// replacement file.
+pub struct ScriptContext<'a> {
+    pub watching: bool,
+    pub directory: PathBuf,
+    pub read: &'a dyn Fn(&Path) -> Result<String, String>,
 }
 
 /// A command and the line it is on, from 1.
@@ -134,7 +151,7 @@ fn number(token: &Token) -> Option<i64> {
 }
 
 /// Parses one line's tokens into a command.
-fn command(tokens: &[Token]) -> Result<ScriptCommand, String> {
+fn command(tokens: &[Token], context: &ScriptContext) -> Result<ScriptCommand, String> {
     let Token::Word(name) = &tokens[0] else {
         return Err("expected a command".to_string());
     };
@@ -223,7 +240,35 @@ fn command(tokens: &[Token]) -> Result<ScriptCommand, String> {
             at_most(1)?;
             ScriptCommand::Dump(kind)
         }
-        "edit" => return Err("'edit' is reserved for hot reload".to_string()),
+        "edit" => {
+            if !context.watching {
+                return Err("the edit command needs --watch".to_string());
+            }
+            let (Some(Token::Word(target)), Some(Token::Word(replacement))) =
+                (arguments.first(), arguments.get(1))
+            else {
+                return Err("expected a target and a replacement after 'edit'".to_string());
+            };
+            at_most(2)?;
+            let replacement = context.directory.join(replacement);
+            let content = (context.read)(&replacement)
+                .map_err(|error| format!("cannot read {}: {}", replacement.display(), error))?;
+            ScriptCommand::Edit(vec![ScriptedEdit {
+                target: context.directory.join(target),
+                content,
+            }])
+        }
+        "wait" => {
+            if !context.watching {
+                return Err("the wait command needs --watch".to_string());
+            }
+            match arguments.first() {
+                Some(Token::Word(word)) if word == "reload" => {}
+                _ => return Err("expected 'reload' after 'wait'".to_string()),
+            }
+            at_most(1)?;
+            ScriptCommand::WaitReload
+        }
         other => return Err(format!("unknown command '{}'", other)),
     })
 }
@@ -235,9 +280,24 @@ fn quoted(token: &Token) -> String {
     }
 }
 
-/// Parses a whole script.
+/// Parses a whole script of a run that does not watch, in which `edit` and `wait` are errors.
 pub fn parse_script(text: &str) -> Result<Vec<ScriptLine>, ScriptError> {
-    let mut lines = Vec::new();
+    parse_script_with(
+        text,
+        &ScriptContext {
+            watching: false,
+            directory: PathBuf::new(),
+            read: &|_| Err("no file is read".to_string()),
+        },
+    )
+}
+
+/// Parses a whole script in `context`.
+pub fn parse_script_with(
+    text: &str,
+    context: &ScriptContext,
+) -> Result<Vec<ScriptLine>, ScriptError> {
+    let mut lines: Vec<ScriptLine> = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let error = |message| ScriptError {
             line: index + 1,
@@ -247,7 +307,19 @@ pub fn parse_script(text: &str) -> Result<Vec<ScriptLine>, ScriptError> {
         if tokens.is_empty() {
             continue;
         }
-        let command = command(&tokens).map_err(error)?;
+        let command = command(&tokens, context).map_err(error)?;
+        // Consecutive edits are one reload.
+        if let (
+            ScriptCommand::Edit(edits),
+            Some(ScriptLine {
+                command: ScriptCommand::Edit(group),
+                ..
+            }),
+        ) = (&command, lines.last_mut())
+        {
+            group.extend(edits.iter().cloned());
+            continue;
+        }
         lines.push(ScriptLine {
             line: index + 1,
             command,
@@ -368,9 +440,77 @@ mod tests {
             "1: expected 'tree' or 'draw' after 'dump'"
         );
         assert_eq!(
-            error("edit main.prism"),
-            "1: 'edit' is reserved for hot reload"
+            error("edit main.prism main.prism.v2"),
+            "1: the edit command needs --watch"
         );
+        assert_eq!(error("wait reload"), "1: the wait command needs --watch");
         assert_eq!(error("\"+\""), "1: expected a command");
+    }
+
+    fn watching(text: &str) -> Result<Vec<ScriptLine>, ScriptError> {
+        parse_script_with(
+            text,
+            &ScriptContext {
+                watching: true,
+                directory: PathBuf::from("/case"),
+                read: &|path: &Path| Ok(format!("content of {}", path.display())),
+            },
+        )
+    }
+
+    /// D12 of `compose-hot-reload`: consecutive edits form one command, read relative to the
+    /// script's directory; `wait reload` waits.
+    #[test]
+    fn edits_and_waits_under_watch() {
+        let lines = watching(
+            "edit lib/labels.prism lib/labels.prism.v2\n\
+             edit app/main.prism app/main.prism.v2\n\
+             dump\nwait reload\nedit main.prism main.prism.v3\n",
+        )
+        .unwrap();
+        let edit = |target: &str, replacement: &str| ScriptedEdit {
+            target: PathBuf::from(format!("/case/{}", target)),
+            content: format!("content of /case/{}", replacement),
+        };
+        let commands: Vec<(usize, ScriptCommand)> = lines
+            .into_iter()
+            .map(|line| (line.line, line.command))
+            .collect();
+        assert_eq!(
+            commands,
+            [
+                (
+                    1,
+                    ScriptCommand::Edit(vec![
+                        edit("lib/labels.prism", "lib/labels.prism.v2"),
+                        edit("app/main.prism", "app/main.prism.v2")
+                    ])
+                ),
+                (3, ScriptCommand::Dump(DumpKind::Tree)),
+                (4, ScriptCommand::WaitReload),
+                (
+                    5,
+                    ScriptCommand::Edit(vec![edit("main.prism", "main.prism.v3")])
+                ),
+            ]
+        );
+        let error = |text: &str| watching(text).unwrap_err().to_string();
+        assert_eq!(
+            error("edit main.prism"),
+            "1: expected a target and a replacement after 'edit'"
+        );
+        assert_eq!(error("wait"), "1: expected 'reload' after 'wait'");
+        assert_eq!(error("wait reload now"), "1: unexpected 'now' after 'wait'");
+        let missing = parse_script_with(
+            "edit a b\n",
+            &ScriptContext {
+                watching: true,
+                directory: PathBuf::from("/case"),
+                read: &|_| Err("no such file".to_string()),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(missing, "1: cannot read /case/b: no such file");
     }
 }
