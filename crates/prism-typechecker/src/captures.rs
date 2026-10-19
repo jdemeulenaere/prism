@@ -535,10 +535,11 @@ impl<'a> Graph<'a> {
             } => {
                 let node = self.closure_node(id);
                 self.enter_scope();
+                // The closure declares its parameters: they are none of its captures.
+                self.closure_stack.push(node - self.local_count);
                 for parameter in parameters {
                     self.declare(*parameter);
                 }
-                self.closure_stack.push(node - self.local_count);
                 self.own(*closure_body, OwnershipReasonKind::Returned);
                 self.expression(*closure_body);
                 self.closure_stack.pop();
