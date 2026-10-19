@@ -1,8 +1,9 @@
 //! `prism run --watch`: a watch session that keeps a program running while its files change
 //! (the `hot-reload` spec).
 //!
-//! The session runs on the CLI's thread and the program on a thread of its own, as `prism run`
-//! runs it (D2). The session watches the program's files ([`FileWatcher`], D15) or follows an
+//! The session runs on the CLI's thread, or on a `watch-session` thread while the main thread
+//! serves windows (D17 of `desktop-window`), and the program on a thread of its own, as
+//! `prism run` runs it (D2). The session watches the program's files ([`FileWatcher`], D15) or follows an
 //! edit script ([`EditScript`], D16). On a change it rebuilds the graph through its
 //! [`SourceStore`], which parses only changed files, checks again only the files whose check key
 //! changed, and compiles only the units whose code key is not in the plan of the code that is
@@ -76,6 +77,21 @@ struct ReloadTimings {
 /// one is given, and returns the session's exit status. Without a script it returns only if the
 /// watcher fails; the session normally ends with the process (Ctrl-C).
 pub fn run_watch(entry: &Path, options: RunOptions, edits: Option<&Path>) -> i32 {
+    run_watch_with(entry, options, edits, None)
+}
+
+/// What a watch session calls each time the program stops, by returning from `main` or with a
+/// runtime error: the window system's `close_all`, since a stopped program thread never drops
+/// its window host (D17 of `desktop-window`).
+pub type ProgramEndHook = Arc<dyn Fn() + Send + Sync>;
+
+/// [`run_watch`], calling `on_program_end` each time the program stops.
+pub fn run_watch_with(
+    entry: &Path,
+    options: RunOptions,
+    edits: Option<&Path>,
+    on_program_end: Option<ProgramEndHook>,
+) -> i32 {
     let script = match edits.map(EditScript::parse) {
         Some(Ok(script)) => Some(script),
         Some(Err(message)) => {
@@ -84,10 +100,9 @@ pub fn run_watch(entry: &Path, options: RunOptions, edits: Option<&Path>) -> i32
         }
         None => None,
     };
-    if let Some(headless) = &options.headless {
-        headless.configure();
-    }
+    options.configure_ui();
     let mut session = WatchSession::new(entry, options);
+    session.on_program_end = on_program_end;
     match script {
         Some(script) => session.run_script(script),
         None => session.run_watching(),
@@ -130,6 +145,8 @@ pub struct WatchSession {
     /// Lets the program thread stopped at a line continue.
     resume: Sender<()>,
     resume_receiver: Arc<Mutex<Receiver<()>>>,
+    /// Called each time the program stops ([`run_watch_with`]).
+    on_program_end: Option<ProgramEndHook>,
 }
 
 impl WatchSession {
@@ -161,6 +178,7 @@ impl WatchSession {
             line_target: Arc::new(AtomicU64::new(0)),
             resume,
             resume_receiver: Arc::new(Mutex::new(resume_receiver)),
+            on_program_end: None,
         }
     }
 
@@ -477,6 +495,9 @@ impl WatchSession {
     /// Handles the end of a run: `main` returned with `status`, or stopped with a runtime error
     /// when `stopped`.
     pub fn program_ended(&mut self, status: i32, stopped: bool) {
+        if let Some(on_program_end) = &self.on_program_end {
+            on_program_end();
+        }
         self.running = false;
         self.status = Some(status);
         self.failed = false;

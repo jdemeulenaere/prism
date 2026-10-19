@@ -33,6 +33,15 @@ prism-ui = { path = "../prism-ui" }
 # Linux, ReadDirectoryChangesW on Windows, with a polling fallback. Pinned exactly; 8.2.0 was
 # released on 2025-08-03 under CC0-1.0.
 notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }
+# The window host of `desktop-window` (D2): `runApp` opens a native window unless `--headless`.
+# Only the `prism` binary links it, through the default `window` feature, so no compiler crate
+# builds a window, rasterization or font crate, and `--no-default-features` builds a
+# headless-only `prism`.
+prism-desktop = { path = "../prism-desktop", optional = true }
+
+[features]
+default = ["window"]
+window = ["dep:prism-desktop"]
 
 [dev-dependencies]
 # The bundled prelude for the tests that build a checker directly.

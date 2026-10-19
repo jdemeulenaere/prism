@@ -36,7 +36,7 @@ COMMANDS:
                            print the composed MIR of every instance of a generic it needs
     run [--timings] [--check-allocations] [--no-cache] [--explain-cache]
         [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]]
-        <file.prism> [-- <argument>...]
+        [--screenshot <file.png>] <file.prism> [-- <argument>...]
                            Compile the file and everything it imports in memory and run its
                            'fun main()', exiting with the program's status (101 after a
                            runtime error, 1 when it does not compile), loading from the build
@@ -48,10 +48,11 @@ COMMANDS:
                            loaded; --watch keeps the program running and reloads its code
                            when its files change, running main again after it returns, and
                            --edits drives those reloads from an edit script instead of file
-                           events; --headless runs runApp without a window, in a window of the
-                           given size if one is given, and --events drives it from an event
-                           script, read before the program compiles; the arguments after '--'
-                           are the program's
+                           events; runApp opens a window, unless --headless runs it without
+                           one, in a window of the given size if one is given, and --events
+                           drives it from an event script, read before the program compiles;
+                           --screenshot writes each app's final frame to a PNG file; the
+                           arguments after '--' are the program's
     dump-clif [--instances] <file.prism>
                            Print the Cranelift IR the backend generates for a source file;
                            with --instances, compile the program the file is the entry of
@@ -187,16 +188,19 @@ fn main() {
 }
 
 /// `prism run [--timings] [--check-allocations] [--watch [--edits <script>]]
-/// [--headless[=<w>x<h>] [--events <script>]] <file.prism> [-- <argument>...]` (D14 of
-/// `codegen-core`, D13 of `runtime-strings-and-drops`): options before the file, and everything
-/// after `--` for the program. The build cache the environment selects is used unless
-/// `--no-cache` (D9 of `instance-cache`). `--watch` runs a watch session (`hot-reload`), which
-/// `--edits` drives from a script. `--headless` runs apps without a window, driven by the
-/// event script of `--events`, which is parsed before anything compiles (D16 of `ui-toolkit`).
+/// [--headless[=<w>x<h>] [--events <script>]] [--screenshot <file.png>] <file.prism>
+/// [-- <argument>...]` (D14 of `codegen-core`, D13 of `runtime-strings-and-drops`): options
+/// before the file, and everything after `--` for the program. The build cache the environment
+/// selects is used unless `--no-cache` (D9 of `instance-cache`). `--watch` runs a watch session
+/// (`hot-reload`), which `--edits` drives from a script. `--headless` runs apps without a
+/// window, driven by the event script of `--events`, which is parsed before anything compiles
+/// (D16 of `ui-toolkit`). Otherwise, with the `window` feature, the main thread serves the
+/// program's windows while the program runs on its own thread (D3 of `desktop-window`), and
+/// `--screenshot` writes each app's final frame (D15).
 fn run_program(args: &[String], started: std::time::Instant) {
     let usage = || -> ! {
         eprintln!(
-            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]] <file.prism> [-- <argument>...]"
+            "Error: usage: prism run [--timings] [--check-allocations] [--no-cache] [--explain-cache] [--watch [--edits <script>]] [--headless[=<width>x<height>] [--events <script>]] [--screenshot <file.png>] <file.prism> [-- <argument>...]"
         );
         process::exit(1);
     };
@@ -208,6 +212,7 @@ fn run_program(args: &[String], started: std::time::Instant) {
     let mut explain_cache = false;
     let mut watch = false;
     let mut edits: Option<String> = None;
+    let mut screenshot: Option<std::path::PathBuf> = None;
     let mut rest = args.iter();
     let file = loop {
         match rest.next().map(String::as_str) {
@@ -229,6 +234,12 @@ fn run_program(args: &[String], started: std::time::Instant) {
             }
             Some("--events") => match rest.next() {
                 Some(script) => events = Some(script.clone()),
+                None => usage(),
+            },
+            // Screenshots need the rasterizer, which only the `window` feature links (D15 of
+            // `desktop-window`).
+            Some("--screenshot") if cfg!(feature = "window") => match rest.next() {
+                Some(path) => screenshot = Some(std::path::PathBuf::from(path)),
                 None => usage(),
             },
             Some(option) if option.starts_with('-') => usage(),
@@ -276,8 +287,18 @@ fn run_program(args: &[String], started: std::time::Instant) {
         },
         explain_cache,
         headless,
+        screenshot,
         ..prism_cli::RunOptions::default()
     };
+    #[cfg(feature = "window")]
+    if options.headless.is_none() {
+        let status = if watch {
+            watch_with_windows(file, options, edits)
+        } else {
+            run_with_windows(file, &options)
+        };
+        process::exit(status);
+    }
     if watch {
         let status = prism_cli::run_watch(
             std::path::Path::new(file),
@@ -293,6 +314,68 @@ fn run_program(args: &[String], started: std::time::Instant) {
             process::exit(1);
         }
     }
+}
+
+/// `prism run` of a program that may open windows (D3 of `desktop-window`): the program is
+/// compiled here, its `main` runs on the program's thread, and the main thread serves its
+/// windows until it ends, since the platform's event loop must run on the main thread. A
+/// program that opens none costs a channel: the event loop and the font are created at the
+/// first window (D4). Returns the exit status.
+#[cfg(feature = "window")]
+fn run_with_windows(file: &str, options: &prism_cli::RunOptions) -> i32 {
+    let compiled = match prism_cli::prepare_run(std::path::Path::new(file), options) {
+        Ok(compiled) => compiled,
+        Err(err) => {
+            eprint!("{}", err.render());
+            return 1;
+        }
+    };
+    let (server, windows) = prism_desktop::MainThreadServer::new();
+    prism_ui::configure(prism_ui::HostConfiguration::Window(windows.factory()));
+    let running = match prism_cli::start_run(&compiled, options, move |_| windows.program_ended()) {
+        Ok(running) => running,
+        Err(err) => {
+            eprint!("{}", err.render());
+            return 1;
+        }
+    };
+    server.serve();
+    match running.join() {
+        Ok(status) => status,
+        Err(err) => {
+            eprint!("{}", prism_cli::WorkspaceError::Backend(err).render());
+            1
+        }
+    }
+}
+
+/// `prism run --watch` of a program that may open windows (D17 of `desktop-window`): the
+/// session runs on a `watch-session` thread, with the main thread's stack size, and the main
+/// thread serves the windows of every run of `main`. Each time the program stops, the session
+/// closes the window it left open, and when the session ends, the server stops. Returns the
+/// session's exit status.
+#[cfg(feature = "window")]
+fn watch_with_windows(file: &str, options: prism_cli::RunOptions, edits: Option<String>) -> i32 {
+    let (server, windows) = prism_desktop::MainThreadServer::new();
+    prism_ui::configure(prism_ui::HostConfiguration::Window(windows.factory()));
+    let entry = std::path::PathBuf::from(file);
+    let closer = windows.clone();
+    let session = std::thread::Builder::new()
+        .name("watch-session".to_string())
+        .stack_size(prism_codegen::PROGRAM_STACK_SIZE)
+        .spawn(move || {
+            let status = prism_cli::run_watch_with(
+                &entry,
+                options,
+                edits.as_deref().map(std::path::Path::new),
+                Some(std::sync::Arc::new(move || closer.close_all())),
+            );
+            windows.shut_down();
+            status
+        })
+        .expect("the watch session's thread starts");
+    server.serve();
+    session.join().unwrap_or(1)
 }
 
 /// Prints a dump, or reports its errors with a failure status.

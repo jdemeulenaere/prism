@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 /// The crates only `prism-desktop` may name.
 const WINDOW_CRATES: [&str; 4] = ["winit", "softbuffer", "tiny-skia", "fontdue"];
 
-/// Whether `prism-cli` names `prism-desktop` yet: the CLI integration step (`desktop-window`
-/// task 6.1) wires it in and sets this to `true`, which makes the dependency required.
-const CLI_WIRED: bool = false;
+/// Whether `prism-cli` must name `prism-desktop`: since `desktop-window` task 1.3 it does,
+/// through its default `window` feature.
+const CLI_WIRED: bool = true;
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

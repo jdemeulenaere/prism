@@ -1406,6 +1406,7 @@ dependencies = [
  "prism-borrowck",
  "prism-codegen",
  "prism-compose-transform",
+ "prism-desktop",
  "prism-formatter",
  "prism-lexer",
  "prism-library",

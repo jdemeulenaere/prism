@@ -85,6 +85,19 @@ Rejected:
 - **A non-default feature:** `cargo run -- run app.prism` would silently be headless-only.
 - **A `prism-desktop` dynamic library loaded with `dlopen` at the first `runApp`:** see D4.
 
+**Measured (task 1.3, 2026-10-19, macOS 27 on arm64, Rust 1.99, dev profile unless noted).** Other agents share `target/`, so "clean" means every package of `prism-cli`'s dependency tree removed with `cargo clean -p`, not a removed `target/`.
+
+| Build | Without `window` | With `window` |
+|---|---|---|
+| clean `cargo build -p prism-cli` | 19.1 s wall, 89 s CPU (70 packages) | 21.1 to 21.5 s wall, 113 s CPU (121 packages) |
+| rebuild after touching `crates/prism-typechecker/src/lib.rs` | 0.60 to 0.61 s | 0.67 to 0.75 s |
+| `target/debug/prism` | 31.8 MB | 37.3 MB |
+| `target/release/prism` | 9,479,968 bytes | 10,948,320 bytes (+1.47 MB, 0.41 MB of it the font) |
+
+The window crates build in parallel with the compiler's, so a cold build takes 2 s longer. A compiler edit never rebuilds `prism-desktop` or its dependencies, and relinking the larger `prism` costs about 0.1 s.
+
+**A build without the feature (task 6.4, 2026-10-19).** `cargo build -p prism-cli --no-default-features` builds a `prism` that links no AppKit (`otool -L`). On `fun main() { runApp { Text("hi") } }`, with `import /prism/compose/ui` and `import /prism/compose/material3`, `prism run main.prism` prints exactly `panic: ui misuse: no window system is available; run with --headless` and a newline, and exits with status 101. `--screenshot` is a usage error there.
+
 ### D3. The program keeps its thread; the main thread serves windows (autonomous; implements the threading of `compose-architecture` D20)
 
 `prism run` compiles on the main thread as today, then starts the program with `Program::start` and, instead of joining it at once, serves the main thread:
@@ -101,7 +114,7 @@ running.join()
   - `OpenWindow { title, width, height, reply }`: the server creates the event loop if needed (D4), runs it with `run_app_on_demand` until that window closes, and then waits again;
   - `Shutdown`, sent by `program_ended` or by the watch session (D17): `serve` returns.
 - **`WindowFactory::open`,** called by `runApp` on the program thread, sends `OpenWindow` and blocks for the reply. The reply holds the window's actual logical size and scale factor, a `Receiver<WindowMessage>` of input, and the frame mailbox with the event loop's proxy (D10). While it waits, it parses the font (D6).
-- **What runs where.** On the program thread: `main`, compositions, handlers, layout, display lists, hit testing, and text measurement. On the main thread: the event loop, the window, the `softbuffer` surface, rasterization, PNG encoding for windowed screenshots, and nothing compiled from Prism. So the program's stack, its stack-overflow check, `hot-reload`'s interrupt sentinel and the per-thread state of `prism-compose` and `prism-ui` are exactly as without windows.
+- **What runs where.** On the program thread: `main`, compositions, handlers, layout, display lists, hit testing, text measurement, and screenshots (D15). On the main thread: the event loop, the window, the `softbuffer` surface, rasterization, and nothing compiled from Prism. So the program's stack, its stack-overflow check, `hot-reload`'s interrupt sentinel and the per-thread state of `prism-compose` and `prism-ui` are exactly as without windows.
 - **Runtime errors** still end the process from the program thread with status 101, after flushing output. The window disappears with the process. The smoke test and the manual checklist cover this.
 
 Rejected:
@@ -111,11 +124,26 @@ Rejected:
 
 Run-time cost for programs without windows: one channel and a blocked `recv` on the main thread instead of a `join`.
 
+**Applied (task 6.1, 2026-10-19).** `run.rs::run_file` is split into `prepare_run` (compile, `--explain-cache`, `--timings`, and `RunOptions::configure_ui`, which installs the headless host and the screenshot sink) and `start_run` (`Program::start` with an `on_return` closure). `run_file` calls both and joins, with no window: it is the library's entry. `main.rs::run_with_windows` runs D3's sketch between them whenever the `window` feature is on and `--headless` is off, and `--headless` and builds without the feature keep `run_file`.
+
+**The fixture "No window and no headless mode" became a library test (autonomous, 2026-10-19).** Its `prism run main.prism` now opens a window in the default build, so the executable fixture would hang. The `ui` scenario names "a build without a window host": `crates/prism-cli/tests/run_library_tests.rs` runs the same source through `run_file`, the library entry without a window, in a child process, and task 6.4 checks the binary built without the feature by hand. Rejected: an environment variable or option that turns windows off (a user-visible switch for a test's sake), and building a second `prism` inside `cargo test` (a nested cargo build holding the target directory's lock).
+
 ### D4. The window system starts lazily and is reused (autonomous)
 
 Nothing in `prism-desktop` runs before the first `OpenWindow`. Then `EventLoop::<UserEvent>::with_user_event().build()` creates the event loop, with `with_default_menu(false)` on macOS (D14). It is kept in the server for the life of the process, since `winit` cannot create a second one (`RecreationAttempt`). Each app runs it with `EventLoopExtRunOnDemand::run_app_on_demand` and a fresh `WindowApp` handler, which creates the window in `resumed` and calls `exit()` when the window closes. `run_app_on_demand` exists on macOS, Windows, X11 and Wayland. Under `--watch` the same loop serves every fresh run of `main`.
 
 **Linking cost on macOS.** `winit` links AppKit, Foundation, CoreGraphics and QuartzCore by `#[link]` attributes, so `dyld` loads them when `prism` starts, even for programs that never open a window. A C program linked with those four frameworks took 0.9 ms longer to start and exit than the same program without them: 2.5 ms against 1.6 ms median over 80 runs (macOS 27, arm64, 2026-10-18). That is outside `--timings`' "total to main", which counts from `main`. Task 1.3 measures `prism run`'s wall time on the startup benchmark before and after. On Linux, `winit` and `softbuffer` load X11 and Wayland with `dlopen` (`x11-dl`, `wayland-dlopen`), so nothing is loaded at startup. On Windows, the system libraries they use are loaded by every process anyway.
+
+**Measured (task 1.3, 2026-10-19, release builds, the same machine).** `run_timing.rs` now also reports each run's wall time, and its warm runs first wait until `prism` is older than the build cache's settle time (2 s, `instance-cache` D16): cargo relinks the binary just before the benchmark, so the warm runs used to hash the whole executable every time, which made them 5 ms slower than a user's warm runs and grew with the binary's size. Medians of two runs of 20 each, without the feature and with it:
+
+| `examples/run/main.prism` | Without `window` | With `window` |
+|---|---|---|
+| cold, total to `main` | 10.47 to 10.51 ms | 10.40 ms |
+| cold, wall time | 13.13 to 13.16 ms | 13.50 to 13.57 ms |
+| warm, total to `main` | 1.97 to 2.12 ms | 2.00 ms |
+| warm, wall time | 4.38 to 4.65 ms | 4.75 to 4.80 ms |
+
+A one-line program (`println("hi")`), measured the same way by a script over 60 runs: cold wall 5.32 against 5.77 ms, warm wall 3.78 against 4.14 ms, total to `main` unchanged (2.07 and 0.71 ms). The frameworks cost about 0.4 ms of wall time, under the 1 ms budget, so the `dlopen` alternative below is not needed. `--timings`' total to `main` is unchanged and stays under the 15 ms target.
 
 Rejected:
 - **Loading `prism-desktop` as a dynamic library with `dlopen` at the first `runApp`.** It saves the 0.9 ms on macOS, but it needs a second artifact next to `prism` that `cargo build -p prism-cli` would not build, and a C ABI between two Rust artifacts. If the wall-time benchmark shows more than 1 ms of regression, the follow-up is to revisit this.
@@ -292,6 +320,8 @@ Rejected: keeping the window open until `runApp` returns (it would linger while 
 
 `--screenshot` needs the `window` feature, because it needs the rasterizer: without it, the option is a usage error. It works headless with or without `--events`. Fixtures do not compare screenshots (§5 D21), but `crates/prism-cli/tests/screenshot.rs` checks the size and exact pixels of one, which D9 makes reliable for rectangles.
 
+**Applied (task 6.2, 2026-10-19).** `RunOptions::screenshot` and `--screenshot <file.png>`, parsed only with the `window` feature (otherwise the option is unknown, a usage error). A headless screenshot is laid out with the fixed-advance metric, while the rasterizer draws Inter's glyphs at Inter's rounded advances (D7), so its text is narrower than the boxes laid out for it. That is acceptable for a debugging aid, and a headless mode with the window's metrics is already a follow-up.
+
 Rejected:
 - **A script command `screenshot "<file>"`:** it would change `ui-toolkit`'s grammar for a debugging aid, and it would make the file part of fixtures.
 - **Screenshots of the presented surface:** `softbuffer` cannot read the surface back on every platform, and rasterizing the same list gives the same pixels anyway (D12).
@@ -315,6 +345,8 @@ With the `window` feature, `prism run --watch` starts `WatchSession` on a thread
 For reloads, `WindowHost` exposes `wake()`, a plain `fn()` over a static sender of the open window's channel, as `defer_to_reload_points(wake: fn())` requires. It sends `WindowMessage::Wake`, which `next_event` turns into `HostEvent::Frame`, so `ui-toolkit`'s loop reaches its top, where `compose-hot-reload` puts its reload point. This change adds and tests the seam from Rust, and `compose-hot-reload` registers it.
 
 Rejected: keeping the session on the main thread and the window on another thread (macOS forbids it); polling for reloads with a timer.
+
+**Applied (task 6.3, 2026-10-19).** `main.rs::watch_with_windows` starts the session on a `watch-session` thread with an 8 MiB stack, the size of the main thread it used to run on, so the front end's recursion has the room it had. `run_watch_with` takes a hook that `WatchSession::program_ended` calls each time the program stops, set to `close_all`; when the session returns, its thread calls `shut_down`, `serve` returns, and the process exits with the session's status. With `--headless`, the session stays on the main thread, as before.
 
 ### D18. What changes in `prism-ui` (autonomous)
 

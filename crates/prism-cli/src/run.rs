@@ -63,6 +63,10 @@ pub struct RunOptions {
     /// `--headless[=<w>x<h>] [--events <script>]`: `runApp` runs headless, with the parsed
     /// script (D16 of `ui-toolkit`); `None` leaves the host as configured.
     pub headless: Option<HeadlessOptions>,
+    /// `--screenshot <file.png>`: each app's final frame is written to this file as a PNG
+    /// (D15 of `desktop-window`). It needs the `window` feature, which holds the rasterizer;
+    /// without it the command line rejects the option and the library ignores it.
+    pub screenshot: Option<PathBuf>,
 }
 
 /// How a headless run's apps run: the window size that overrides `runApp`'s, and the event
@@ -116,6 +120,25 @@ impl Default for RunOptions {
             explain_cache: false,
             library: prism_library::Library::shared(),
             headless: None,
+            screenshot: None,
+        }
+    }
+}
+
+impl RunOptions {
+    /// Installs what these options ask of the UI runtime before a program runs: the headless
+    /// host of `--headless`, and the screenshot writer of `--screenshot` as the final-frame
+    /// sink. A run without `--headless` keeps the host configured before, which the CLI sets to
+    /// its window system (D3 of `desktop-window`) and the library leaves empty.
+    pub fn configure_ui(&self) {
+        if let Some(headless) = &self.headless {
+            headless.configure();
+        }
+        #[cfg(feature = "window")]
+        if let Some(path) = &self.screenshot {
+            prism_ui::host::set_final_frame_sink(Some(prism_desktop::screenshot::writer(
+                path.clone(),
+            )));
         }
     }
 }
@@ -801,7 +824,21 @@ pub fn dump_instance_clif(entry: &Path) -> Result<String, WorkspaceError> {
 /// error ends the process with status 101 instead of returning, and an invalid free under the
 /// allocation check with status 102. With `--explain-cache`, what was checked, compiled or
 /// loaded is printed to stderr before `main` runs, since stdout is the program's.
+///
+/// This is the library's entry, which opens no window: without `--headless`, `runApp` uses the
+/// host configured before, none unless the caller set one. The command line serves windows
+/// between [`prepare_run`] and [`start_run`] instead (D3 of `desktop-window`).
 pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceError> {
+    let compiled = prepare_run(entry, options)?;
+    start_run(&compiled, options, |_| {})?
+        .join()
+        .map_err(WorkspaceError::Backend)
+}
+
+/// Compiles the program whose entry file is `entry` for [`start_run`], as [`run_file`] does:
+/// prints what `--explain-cache` and `--timings` ask for, and configures the UI runtime
+/// ([`RunOptions::configure_ui`]).
+pub fn prepare_run(entry: &Path, options: &RunOptions) -> Result<CompiledProgram, WorkspaceError> {
     let compiled = compile_program_with(entry, options)?;
     if options.explain_cache {
         let files: Vec<(&Path, CacheOutcome)> = compiled
@@ -822,15 +859,25 @@ pub fn run_file(entry: &Path, options: &RunOptions) -> Result<i32, WorkspaceErro
     if options.timings {
         print_load_timings(compiled.timings, options);
     }
-    if let Some(headless) = &options.headless {
-        headless.configure();
-    }
+    options.configure_ui();
+    Ok(compiled)
+}
+
+/// Starts `compiled`'s `main` on the program's thread without waiting for it: `on_return` is
+/// called on that thread with the exit status once `main` returned and the run finished. The
+/// program must outlive the returned handle's `join`.
+pub fn start_run(
+    compiled: &CompiledProgram,
+    options: &RunOptions,
+    on_return: impl FnOnce(i32) + Send + 'static,
+) -> Result<prism_codegen::RunningProgram, WorkspaceError> {
     compiled
         .program
-        .run(
+        .start(
             &compiled.main,
             options.arguments.clone(),
             options.check_allocations,
+            on_return,
         )
         .map_err(WorkspaceError::Backend)
 }
