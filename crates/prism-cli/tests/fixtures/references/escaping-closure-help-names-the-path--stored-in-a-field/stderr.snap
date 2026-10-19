@@ -1,0 +1,10 @@
+error[E5007]: a closure that captures the reference 't' cannot escape
+  --> main.prism:7:38
+    7 | fun g(t: &mut Todo): Button = Button({ t.id })
+      |                                      ^^^^^^^^ stored in a field here
+  --> main.prism:7:40
+    7 | fun g(t: &mut Todo): Button = Button({ t.id })
+      |                                        ^^^^ 't' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = note: 't' is a mutable reference, whose referent may be replaced
+   = help: copy 't.id' into a 'val' before the closure and capture that instead: 'val id = t.id'

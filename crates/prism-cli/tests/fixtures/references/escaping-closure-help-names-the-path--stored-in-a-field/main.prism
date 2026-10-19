@@ -1,0 +1,8 @@
+// expect: E5007
+// run: 1
+// A handler stored in a field moves the `&mut` reference it owns into its environment, and the
+// help still names the path the handler reads.
+struct Todo { val id: Int, val title: String }
+struct Button { val onClick: () -> Int }
+fun g(t: &mut Todo): Button = Button({ t.id })
+fun main() {}
