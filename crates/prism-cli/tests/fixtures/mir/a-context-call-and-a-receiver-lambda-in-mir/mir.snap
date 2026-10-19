@@ -16,11 +16,11 @@ fun main::row(_1: RowScope.() -> Modifier): Modifier @4:1
     drop _1 -> bb2 @4:1
   bb2:
     return @4:1
-fun main::Modifier.weight#context(RowScope)(_1: &RowScope, _2: &Modifier, _3: Float): Modifier @5:1
+fun main::Modifier.weight#context(RowScope)(_1: &RowScope, _2: &Modifier, _3: Double): Modifier @5:1
   local _0: Modifier (return)
   local _1 scope: &RowScope (argument)
   local _2 this: &Modifier (argument)
-  local _3 w: Float (argument)
+  local _3 w: Double (argument)
   bb0:
     _0 = struct main::Modifier(copy _3) @6:44
     return @5:1

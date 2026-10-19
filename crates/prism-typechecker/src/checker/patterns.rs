@@ -1070,7 +1070,7 @@ mod tests {
             &[],
         );
         assert!(
-            dump.contains("pattern binding %1 r (copy): Float"),
+            dump.contains("pattern binding %1 r (copy): Double"),
             "{}",
             dump
         );

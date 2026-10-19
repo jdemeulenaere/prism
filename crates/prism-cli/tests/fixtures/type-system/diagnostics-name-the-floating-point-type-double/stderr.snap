@@ -1,0 +1,10 @@
+error[E4004]: type 'Double' cannot be called as a function
+  --> main.prism:4:5
+    4 |     x(1)
+      |     ^
+   = help: verify parameter counts, argument types, or named parameters
+error[E4004]: type 'Double' cannot be called as a function
+  --> main.prism:5:5
+    5 |     y(2)
+      |     ^
+   = help: verify parameter counts, argument types, or named parameters

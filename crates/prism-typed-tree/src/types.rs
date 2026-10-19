@@ -937,7 +937,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Int => write!(f, "Int"),
-            Type::Float => write!(f, "Float"),
+            Type::Float => write!(f, "Double"),
             Type::Bool => write!(f, "Bool"),
             Type::Char => write!(f, "Char"),
             Type::String => write!(f, "String"),

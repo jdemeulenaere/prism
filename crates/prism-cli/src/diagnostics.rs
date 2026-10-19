@@ -768,7 +768,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "= help: '-=' needs a target and a value that are both 'Int' or both 'Float'"
+                "= help: '-=' needs a target and a value that are both 'Int' or both 'Double'"
             ),
             "{}",
             rendered

@@ -31,7 +31,7 @@ impl PrimKind {
     fn as_str(self) -> &'static str {
         match self {
             PrimKind::Int => "Int",
-            PrimKind::Float => "Float",
+            PrimKind::Float => "Double",
             PrimKind::Bool => "Bool",
             PrimKind::Char => "Char",
             PrimKind::String => "String",

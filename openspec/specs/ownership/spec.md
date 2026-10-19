@@ -17,7 +17,7 @@ A struct or enum MUST be `Copy` only when it declares `: Copy`, and `Clone` only
 - **THEN** the type checker emits `E4017`, because `Point` is not `Copy`
 
 #### Scenario: Copy enum with payloads
-- **WHEN** `enum Shape : Copy { Circle(Float), Square(Float), Empty }` and `struct Slot { val shape: Shape }` are declared and `fun f(s: Slot): Shape = s.shape` is checked
+- **WHEN** `enum Shape : Copy { Circle(Double), Square(Double), Empty }` and `struct Slot { val shape: Shape }` are declared and `fun f(s: Slot): Shape = s.shape` is checked
 - **THEN** the file typechecks successfully
 
 #### Scenario: Clone struct is not Copy
@@ -29,10 +29,10 @@ A struct or enum MUST be `Copy` only when it declares `: Copy`, and `Clone` only
 - **THEN** the file typechecks successfully
 
 ### Requirement: Built-In Copy Types
-`Int`, `Float`, `Bool`, `Char`, `Unit`, `Nothing`, the built-in `Range` and shared borrows `&T` MUST be `Copy`, and `T?` MUST be `Copy` exactly when `T` is. A type parameter MUST be `Copy` exactly when it is bounded by `Copy`. `&mut T`, `String`, `Heap<T>`, function types (composable or not), unbounded or `Clone`-bounded type parameters and type names with no declaration in scope MUST NOT be `Copy`.
+`Int`, `Double`, `Bool`, `Char`, `Unit`, `Nothing`, the built-in `Range` and shared borrows `&T` MUST be `Copy`, and `T?` MUST be `Copy` exactly when `T` is. A type parameter MUST be `Copy` exactly when it is bounded by `Copy`. `&mut T`, `String`, `Heap<T>`, function types (composable or not), unbounded or `Clone`-bounded type parameters and type names with no declaration in scope MUST NOT be `Copy`.
 
 #### Scenario: Copy built-ins as fields of a Copy struct
-- **WHEN** `struct S : Copy { val a: Int, val b: Float, val c: Bool, val d: Char, val e: Unit, val r: Range, val n: Int? }` is declared
+- **WHEN** `struct S : Copy { val a: Int, val b: Double, val c: Bool, val d: Char, val e: Unit, val r: Range, val n: Int? }` is declared
 - **THEN** the declaration typechecks successfully
 
 #### Scenario: String is move-only

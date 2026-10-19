@@ -984,8 +984,8 @@ mod tests {
         assert_eq!(
             first,
             "struct main::Point : Copy (size 16, align 8)\n\
-             \x20 x: Float at 0\n\
-             \x20 y: Float at 8\n\
+             \x20 x: Double at 0\n\
+             \x20 y: Double at 8\n\
              enum main::Expr (size 24, align 8, tag u8 at 0)\n\
              \x20 Literal(Int at 8)\n\
              \x20 Add(Heap<Expr> at 8, Heap<Expr> at 16)\n\

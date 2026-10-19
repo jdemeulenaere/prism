@@ -71,7 +71,7 @@ fn surface_extraction_records_package_and_every_exported_kind() {
         "#,
     );
 
-    // `Double` is an alias of `Float`, so the ABI records `Float`.
+    // `Float` is an alias of `Double`, and the ABI records `Double`.
     assert_eq!(abi.package.as_deref(), Some("demo.math"));
     assert_eq!(abi.symbols.len(), 5);
 
@@ -92,8 +92,8 @@ fn surface_extraction_records_package_and_every_exported_kind() {
                 assert_eq!(
                     shapes,
                     vec![
-                        ("x", false, "Float".to_string()),
-                        ("y", true, "Float".to_string())
+                        ("x", false, "Double".to_string()),
+                        ("y", true, "Double".to_string())
                     ]
                 );
                 seen.push("struct");
@@ -116,7 +116,7 @@ fn surface_extraction_records_package_and_every_exported_kind() {
                     .collect();
                 assert_eq!(
                     shapes,
-                    vec![("Dot", vec![]), ("Circle", vec!["Float".to_string()])]
+                    vec![("Dot", vec![]), ("Circle", vec!["Double".to_string()])]
                 );
                 seen.push("enum");
             }
@@ -132,7 +132,7 @@ fn surface_extraction_records_package_and_every_exported_kind() {
                 assert_eq!(params[0].name, "p");
                 assert_eq!(params[1].ty.to_string(), "Int");
                 assert!(params[1].default.is_some(), "the default value is recorded");
-                assert_eq!(return_type.to_string(), "Float");
+                assert_eq!(return_type.to_string(), "Double");
                 seen.push("area");
             }
             ExportedSymbol::Function {
@@ -1113,8 +1113,8 @@ fn extensions_differing_by_context_in_the_abi() {
     assert_eq!(
         text,
         [
-            "context(ColumnScope) public fun Modifier.weight(w: Float): Modifier",
-            "context(RowScope) public fun Modifier.weight(w: Float): Modifier",
+            "context(ColumnScope) public fun Modifier.weight(w: Double): Modifier",
+            "context(RowScope) public fun Modifier.weight(w: Double): Modifier",
         ]
     );
 }

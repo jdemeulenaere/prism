@@ -51,7 +51,7 @@ impl TypeRelations for Type {
     ///   otherwise invariant in their referent
     /// - `Heap<T>` is invariant in its contents, and `List<T>` in its elements
     /// - Structs and Enums are nominal (matched by [`NominalId`])
-    /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Float`)
+    /// - All other types are strictly invariant (e.g. `Int` does NOT widen to `Double`)
     fn is_assignable_to(&self, expected: &Type) -> bool {
         if self == &Type::Error || expected == &Type::Error {
             return true;

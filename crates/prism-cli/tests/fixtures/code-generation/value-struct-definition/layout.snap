@@ -1,3 +1,3 @@
 struct main::Point (size 16, align 8)
-  x: Float at 0
-  y: Float at 8
+  x: Double at 0
+  y: Double at 8

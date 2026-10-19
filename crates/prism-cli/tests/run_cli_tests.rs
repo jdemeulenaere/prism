@@ -517,7 +517,7 @@ fn dumping_a_file_s_layouts() {
     assert_eq!(stdout(&first), stdout(&second));
     assert_eq!(
         stdout(&first),
-        "struct main::Point : Copy (size 16, align 8)\n  x: Float at 0\n  y: Float at 8\n\
+        "struct main::Point : Copy (size 16, align 8)\n  x: Double at 0\n  y: Double at 8\n\
          enum main::Color (size 1, align 1, tag u8 at 0)\n  Red\n  Green\n\
          nullable Int? (size 16, align 8, tag u8 at 0)\n  payload Int at 8\n"
     );

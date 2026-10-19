@@ -25,7 +25,7 @@ The type checker MUST resolve identifiers across nested lexical scopes (local bl
 - **THEN** the type checker rejects the duplicate declaration with `DuplicateSymbol` (`E4010`)
 
 ### Requirement: Static Type Inference and Assignment Compatibility
-The type checker MUST infer types for unannotated `val` and `var` bindings, enforce strict numeric typing without implicit coercion, and verify assignment compatibility for references, nullable types, and struct fields.
+The type checker MUST infer types for unannotated `val` and `var` bindings, enforce strict numeric typing without implicit coercion, and verify assignment compatibility for references, nullable types, and struct fields. The floating-point type is `Double`, which a type annotation MAY also write `Float`; every diagnostic, dump and ABI MUST name it `Double`.
 
 #### Scenario: Primitive type inference
 - **WHEN** `val x = 42`, `val c = 'a'`, or `val b = true` is declared without an explicit type annotation
@@ -36,11 +36,15 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **THEN** the type checker rejects the assignment with a type mismatch error (`E4002`)
 
 #### Scenario: Implicit numeric widening prohibited
-- **WHEN** an arithmetic operation mixes numeric types (e.g. `val x: Float = 1 + 2.0`)
+- **WHEN** an arithmetic operation mixes numeric types (e.g. `val x: Double = 1 + 2.0`)
 - **THEN** the type checker rejects the operation with a type mismatch error (`E4002`)
 
-#### Scenario: Ordering comparison needs Int, Float or Char
-- **WHEN** `<`, `<=`, `>` or `>=` compares two `Int`s, two `Float`s or two `Char`s, it has type `Bool`; when it compares two `Bool`s (`false < true`), two `String`s, values of different types (`1 < 2.0`), or any other type
+#### Scenario: Diagnostics name the floating-point type Double
+- **WHEN** `fun f(x: Float, y: Double) { x(1); y(2) }` is checked
+- **THEN** the type checker emits `E4004` twice, each saying `type 'Double' cannot be called as a function`: the alias `Float` is the same type, and no message calls it `Float`
+
+#### Scenario: Ordering comparison needs Int, Double or Char
+- **WHEN** `<`, `<=`, `>` or `>=` compares two `Int`s, two `Double`s or two `Char`s, it has type `Bool`; when it compares two `Bool`s (`false < true`), two `String`s, values of different types (`1 < 2.0`), or any other type
 - **THEN** the type checker rejects it with `E4002` through `OperatorMismatch`, whose message names the operator and both operand types (`operator '<' cannot be applied to 'Bool' and 'Bool'`) and whose help names the accepted types, rather than a mismatch between two identical types
 
 #### Scenario: Reassignment to immutable val rejected
@@ -513,7 +517,7 @@ A half-open range `a..<b` MUST be typed exactly like a closed range `a..b`: both
 - **THEN** the program typechecks without errors
 
 ### Requirement: Compound Assignment Typing
-`t op= v` MUST typecheck as `t = t op v` with `t` written once. The target MUST be writable under the rules for `=` (`E4003` otherwise). The operator MUST apply to the target's type and the value's type under the operator rules: `Int` with `Int` and `Float` with `Float` for every compound operator, and `String` with `String` for `+=` only. Otherwise the type checker MUST report `E4002`, with help naming the operand types the operator accepts.
+`t op= v` MUST typecheck as `t = t op v` with `t` written once. The target MUST be writable under the rules for `=` (`E4003` otherwise). The operator MUST apply to the target's type and the value's type under the operator rules: `Int` with `Int` and `Double` with `Double` for every compound operator, and `String` with `String` for `+=` only. Otherwise the type checker MUST report `E4002`, with help naming the operand types the operator accepts.
 
 #### Scenario: Compound assignment of numbers and strings
 - **WHEN** a body runs `var n = 1; n += 2; n -= 1; n *= 3; n /= 2; n %= 2`, `var d = 1.5; d += 0.5; d %= 1.0` and `var s = "a"; s += "b"`
@@ -899,7 +903,7 @@ Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
 - **A separate `prism-typechecker` crate.** Semantic analysis stays decoupled from the grammar and from module resolution, and can be tested with in-memory ASTs.
 - **Bidirectional checking, not Hindley-Milner.** Exported signatures and parameters always carry types, so local `infer`/`check` modes are enough. They are fast and deterministic and give precise errors without unification traces.
-- **A small subtyping lattice.** `Nothing` is assignable to every type, `T` to `T?`, `T?` to `U?` when `T` is assignable to `U`, and `&mut T` to `&T`. Everything else is invariant: in particular `Int` never widens to `Float`. An `Error` type is compatible with everything so one mistake does not cascade into secondary errors.
+- **A small subtyping lattice.** `Nothing` is assignable to every type, `T` to `T?`, `T?` to `U?` when `T` is assignable to `U`, and `&mut T` to `&T`. Everything else is invariant: in particular `Int` never widens to `Double`. An `Error` type is compatible with everything so one mistake does not cascade into secondary errors.
 - **Imports are checked against `FileAbi` only.** A file's body is checked against the exported signatures of its imports, never their bodies, which keeps each file an independent compilation unit. Symbols carry their declaring package so `package` visibility can be enforced (`E4007`).
 - **Compose context is a stack.** Entering a `compose fun` pushes `true`. A closure pushes `true` or `false` depending on whether its expected function type is composable, so a normal callback such as `onClick` inside a composable cannot call composables (`E4008`). Checking this statically avoids slot-table failures at runtime.
 - **Two passes per file, two phases per workspace.** Pass 1 registers all top-level symbols, so declarations can refer to each other in any order. Across the workspace, every file's ABI is extracted before any body is checked, so files in an import cycle can see each other. (Unannotated private declarations are now inferred on demand; see `typechecker-soundness` below.)
@@ -940,13 +944,13 @@ Decisions from `reference-access`:
 
 Decisions from the `Bool` plain fixes (2026-10-18, logged in `docs/decisions-for-review.md`):
 
-- **Only `Int`, `Float` and `Char` are ordered.** `false < true` is `E4002`, which Kotlin allows; `Bool` has no natural ordering that a program should rely on, and `String` is unordered until comparison becomes a trait (a type parameter's ordering is `E4002` for the same reason). Allowing it later is compatible. An unordered or mixed comparison is reported through `OperatorMismatch`, as compound assignment's operators are, not as a type mismatch between two identical types; the other binary operators still report `TypeMismatch` (ROADMAP).
+- **Only `Int`, `Double` and `Char` are ordered.** `false < true` is `E4002`, which Kotlin allows; `Bool` has no natural ordering that a program should rely on, and `String` is unordered until comparison becomes a trait (a type parameter's ordering is `E4002` for the same reason). Allowing it later is compatible. An unordered or mixed comparison is reported through `OperatorMismatch`, as compound assignment's operators are, not as a type mismatch between two identical types; the other binary operators still report `TypeMismatch` (ROADMAP).
 - **`true` and `false` cover a `Bool`, and with `null` a `Bool?`.** Only the literals count, as only a variant's name covers a variant; a constant or a condition that happens to be `true` covers nothing. No new typed-tree or MIR concept is needed: the patterns stay value tests and the exhaustive flag makes the fall-through unreachable.
 
 Decisions from `compound-assignment` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **`t op= v` evaluates the place, reads it, then evaluates the value.** This is Kotlin's and Java's order (`a[i] += f()` reads `a[i]` before calling `f`) and what `t = t op v` already does under "Operands Are Evaluated in Order", so `n += inc(&mut n)` adds the old `n`. Rejected: Rust's order for primitives (value first, place last), which Rust reverses for overloaded operators; desugaring with the target duplicated, which evaluates a call or an index twice. Plain `=` still evaluates its value first; it never reads the old value, so the orders cannot be confused.
-- **The operator follows the binary operator rules, and the value is a non-consumed operand.** `Int` with `Int`, `Float` with `Float`, and for `+=` `String` with `String`; the result always has the target's type, so no extra assignability check is needed. The value is read through references and in place (`s += t` leaves `t` usable), as Kotlin's `s += "x"` suggests. `String += String` means `s = s + t`; an in-place append is observably identical, so the backend may implement it later (ROADMAP). Rejected: consuming the value; rejecting `String +=` until an append exists.
+- **The operator follows the binary operator rules, and the value is a non-consumed operand.** `Int` with `Int`, `Double` with `Double`, and for `+=` `String` with `String`; the result always has the target's type, so no extra assignability check is needed. The value is read through references and in place (`s += t` leaves `t` usable), as Kotlin's `s += "x"` suggests. `String += String` means `s = s + t`; an in-place append is observably identical, so the backend may implement it later (ROADMAP). Rejected: consuming the value; rejecting `String +=` until an append exists.
 - **Compound-assignment diagnostics reuse existing codes.** Non-writable targets share `=`'s target typing and its `E4003` messages. An operator that does not apply is `E4002` through `OperatorMismatch`, whose message names the operator and both operand types, with help naming the accepted operand types, instead of `TypeMismatch`'s "expected 'String', found 'String'"; it is the same kind of error as an operand mismatch, so no new code. A reference binding target (`r += 1`) is rejected as `r = 5` is, with help suggesting `*r += 1`. The binary operators still report `TypeMismatch`; moving them is a follow-up (ROADMAP).
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):

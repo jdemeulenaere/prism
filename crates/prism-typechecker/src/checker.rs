@@ -4628,7 +4628,7 @@ impl TypeChecker {
                     // 'Bool'": the operator, not an operand, does not apply.
                     let help = type_parameter_operator_help(op, &left_ty, &right_ty).or_else(|| {
                         Some(format!(
-                            "'{}' needs two operands that are both 'Int', both 'Float' or both 'Char'",
+                            "'{}' needs two operands that are both 'Int', both 'Double' or both 'Char'",
                             operator_text(op)
                         ))
                     });
@@ -9954,12 +9954,12 @@ fn arithmetic_result(op: BinaryOp, left: &Type, right: &Type) -> Option<Type> {
 fn compound_operand_help(op: BinaryOp, compound: &str) -> String {
     if op == BinaryOp::Add {
         format!(
-            "'{}' needs a target and a value that are both 'Int', both 'Float' or both 'String'",
+            "'{}' needs a target and a value that are both 'Int', both 'Double' or both 'String'",
             compound
         )
     } else {
         format!(
-            "'{}' needs a target and a value that are both 'Int' or both 'Float'",
+            "'{}' needs a target and a value that are both 'Int' or both 'Double'",
             compound
         )
     }

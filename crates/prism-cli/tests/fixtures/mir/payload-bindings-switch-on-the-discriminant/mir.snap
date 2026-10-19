@@ -1,10 +1,10 @@
 module main
-fun main::f(_1: Shape): Float @3:1
-  local _0: Float (return)
+fun main::f(_1: Shape): Double @3:1
+  local _0: Double (return)
   local _1 s: Shape (argument)
   local _2: Int (temporary)
-  local _3 r: Float (user)
-  local _4 w: Float (user)
+  local _3 r: Double (user)
+  local _4 w: Double (user)
   bb0:
     storage_live _2 @3:33
     _2 = discriminant _1 @3:33
