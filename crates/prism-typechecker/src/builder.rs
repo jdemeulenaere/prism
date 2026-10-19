@@ -122,11 +122,9 @@ impl BodyBuilder {
             if (id.0 as usize) < closure.first_local
                 && !closure.captures.iter().any(|c| c.local == id)
             {
-                closure.captures.push(Capture {
-                    local: id,
-                    span,
-                    mode: CaptureMode::Borrowed,
-                });
+                closure
+                    .captures
+                    .push(Capture::whole(id, span, CaptureMode::Borrowed));
             }
         }
     }

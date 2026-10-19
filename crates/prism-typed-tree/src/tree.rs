@@ -1172,14 +1172,141 @@ impl BindingMode {
     }
 }
 
-/// A binding of an enclosing scope that a closure uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A path of a binding of an enclosing scope that a closure uses (`path-captures`): the binding,
+/// then the fields and dereferences in `projections` (empty for the whole binding).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capture {
     pub local: LocalId,
-    /// The first use.
+    /// The fields and dereferences of the captured path, from the binding outwards: the
+    /// binding's own first dereference when it is a `val` reference, then fields and box
+    /// dereferences (D1 of `path-captures`).
+    pub projections: Vec<CaptureProjection>,
+    /// The first use of any path the capture covers.
     pub span: Span,
-    /// How the closure takes the binding when it is built.
+    /// How the closure takes the path when it is built.
     pub mode: CaptureMode,
+    /// For an owned capture of a whole binding that the closure uses only through paths it
+    /// cannot copy, the first such path and why (D3, D6 of `path-captures`).
+    pub widened: Option<Widening>,
+}
+
+/// One step of a captured path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CaptureProjection {
+    /// Field `index` of a struct.
+    Field(usize),
+    /// The referent of a reference or the contents of a box.
+    Deref,
+}
+
+/// Why an owning closure took a whole binding for a path it reads (D3 of `path-captures`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Widening {
+    /// The first path the closure could not copy.
+    pub projections: Vec<CaptureProjection>,
+    pub reason: WideningReason,
+}
+
+/// Why an owning closure cannot copy a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WideningReason {
+    /// The path's type is not `Copy`.
+    NotCopy,
+    /// The path's binding is a `var`.
+    VariableBinding,
+    /// The path dereferences a `&mut` reference, whose referent may be replaced.
+    MutableReference,
+    /// The path reads a `var` field through a reference.
+    VariableField,
+}
+
+impl WideningReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WideningReason::NotCopy => "not Copy",
+            WideningReason::VariableBinding => "a var binding",
+            WideningReason::MutableReference => "through a mutable reference",
+            WideningReason::VariableField => "a var field through a reference",
+        }
+    }
+}
+
+impl Capture {
+    /// The capture of the whole binding `local`.
+    pub fn whole(local: LocalId, span: Span, mode: CaptureMode) -> Self {
+        Self {
+            local,
+            projections: Vec::new(),
+            span,
+            mode,
+            widened: None,
+        }
+    }
+
+    /// The type of the captured path, for a binding of type `binding`: `None` when a step does
+    /// not apply to the type it is taken of.
+    pub fn path_type(&self, binding: &Type, types: &TypeTable) -> Option<Type> {
+        path_type(binding, &self.projections, types)
+    }
+
+    /// The captured path as source writes it, for a binding named `name` of type `binding`.
+    pub fn path_text(&self, name: &str, binding: &Type, types: &TypeTable) -> String {
+        path_text(name, binding, &self.projections, types)
+    }
+}
+
+/// The type of the path `projections` of a binding of type `binding`.
+pub fn path_type(
+    binding: &Type,
+    projections: &[CaptureProjection],
+    types: &TypeTable,
+) -> Option<Type> {
+    let mut ty = binding.clone();
+    for projection in projections {
+        ty = match (projection, ty) {
+            (CaptureProjection::Field(index), Type::Struct { id, arguments }) => {
+                types.instantiated_field(&id, &arguments, *index)?
+            }
+            (CaptureProjection::Deref, Type::Reference { inner, .. } | Type::Heap(inner)) => {
+                *inner
+            }
+            _ => return None,
+        };
+    }
+    Some(ty)
+}
+
+/// The path `projections` of a binding named `name` of type `binding` as source writes it: the
+/// binding and its fields joined by `.`, the dereferences between them implied by the types, and
+/// a `*` for each dereference after the last field (`p.x`, `todo.done`, `*r`).
+pub fn path_text(
+    name: &str,
+    binding: &Type,
+    projections: &[CaptureProjection],
+    types: &TypeTable,
+) -> String {
+    let mut text = name.to_string();
+    let mut trailing = 0;
+    let mut ty = Some(binding.clone());
+    for projection in projections {
+        match projection {
+            CaptureProjection::Deref => trailing += 1,
+            CaptureProjection::Field(index) => {
+                trailing = 0;
+                let field = match &ty {
+                    Some(Type::Struct { id, .. }) => types
+                        .struct_fields(id)
+                        .and_then(|fields| fields.get(*index))
+                        .map(|(name, _, _)| name.clone()),
+                    _ => None,
+                };
+                text.push('.');
+                text.push_str(&field.unwrap_or_else(|| index.to_string()));
+            }
+        }
+        ty = ty.and_then(|ty| path_type(&ty, std::slice::from_ref(projection), types));
+    }
+    format!("{}{}", "*".repeat(trailing), text)
 }
 
 /// How a closure takes a captured binding (D2 of `escaping-closures`). Whether a borrow is

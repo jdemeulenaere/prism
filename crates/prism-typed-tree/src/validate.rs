@@ -964,16 +964,37 @@ impl Validator<'_> {
                 }
                 for capture in captures.clone() {
                     self.check_local(capture.local);
-                    if capture.mode == CaptureMode::Copied {
-                        if let Some(local) = self.body.locals.get(capture.local) {
-                            if !self.types.is_copy(&local.ty) {
-                                let message = format!(
-                                    "closure {} copies '{}', whose type {} is not Copy",
-                                    id.0, local.name, local.ty
-                                );
-                                self.report(message);
-                            }
-                        }
+                    let Some(local) = self.body.locals.get(capture.local) else {
+                        continue;
+                    };
+                    let path = capture.path_text(&local.name, &local.ty, self.types);
+                    let Some(path_type) = capture.path_type(&local.ty, self.types) else {
+                        let message = format!(
+                            "closure {} captures '{}', which the type {} has no such path of",
+                            id.0, path, local.ty
+                        );
+                        self.report(message);
+                        continue;
+                    };
+                    if capture.mode == CaptureMode::Copied && !self.types.is_copy(&path_type) {
+                        let message = format!(
+                            "closure {} copies '{}', whose type {} is not Copy",
+                            id.0, path, path_type
+                        );
+                        self.report(message);
+                    }
+                    if capture.mode == CaptureMode::Moved && !capture.projections.is_empty() {
+                        let message =
+                            format!("closure {} moves the path '{}' out alone", id.0, path);
+                        self.report(message);
+                    }
+                    let widens = capture.mode.is_owned() && capture.projections.is_empty();
+                    if capture.widened.is_some() && !widens {
+                        let message = format!(
+                            "closure {} records a widening for '{}', which is not an owned binding",
+                            id.0, path
+                        );
+                        self.report(message);
                     }
                 }
                 let owns = captures.iter().any(|c| c.mode.is_owned());
@@ -1066,10 +1087,44 @@ impl Validator<'_> {
         let mut declared: HashSet<LocalId> = parameters.iter().copied().collect();
         let mut used = Vec::new();
         self.collect_bindings(body, &mut declared, &mut used);
-        let expected: HashSet<LocalId> =
-            used.into_iter().filter(|l| !declared.contains(l)).collect();
+        used.retain(|(local, _)| !declared.contains(local));
+        let expected: HashSet<LocalId> = used.iter().map(|(local, _)| *local).collect();
         let recorded: HashSet<LocalId> = captures.iter().map(|c| c.local).collect();
-        if recorded.len() != captures.len() || recorded != expected {
+        // Per binding, its captured paths: none a prefix of another, and one a prefix of each
+        // use (D2 of `path-captures`).
+        let mut paths: HashMap<LocalId, Vec<&[crate::tree::CaptureProjection]>> = HashMap::new();
+        for capture in captures {
+            paths
+                .entry(capture.local)
+                .or_default()
+                .push(&capture.projections);
+        }
+        for (local, list) in &paths {
+            for (i, a) in list.iter().enumerate() {
+                for b in &list[i + 1..] {
+                    if a.starts_with(b) || b.starts_with(a) {
+                        let message = format!(
+                            "closure {} captures overlapping paths of {}",
+                            id.0, local
+                        );
+                        self.report(message);
+                    }
+                }
+            }
+        }
+        for (local, projections) in &used {
+            let covered = paths
+                .get(local)
+                .is_some_and(|list| list.iter().any(|path| projections.starts_with(path)));
+            if !covered && recorded.contains(local) {
+                let message = format!(
+                    "closure {} uses a path of {} that no capture covers",
+                    id.0, local
+                );
+                self.report(message);
+            }
+        }
+        if recorded != expected {
             let mut expected: Vec<_> = expected.into_iter().map(|l| l.to_string()).collect();
             expected.sort();
             let message = format!(
@@ -1287,13 +1342,43 @@ impl Validator<'_> {
         &self,
         id: ExpressionId,
         declared: &mut HashSet<LocalId>,
-        used: &mut Vec<LocalId>,
+        used: &mut Vec<(LocalId, Vec<crate::tree::CaptureProjection>)>,
     ) {
         let Some(expression) = self.body.expressions.get(id) else {
             return;
         };
         if let ExpressionKind::Local(local) = expression.kind {
-            used.push(local);
+            used.push((local, Vec::new()));
+        }
+        // A chain of fields and dereferences down to a binding is one use of the path it
+        // spells out.
+        if matches!(
+            expression.kind,
+            ExpressionKind::Field { .. } | ExpressionKind::Deref { .. }
+        ) {
+            let mut projections = Vec::new();
+            let mut current = id;
+            loop {
+                match self.body.expressions.get(current).map(|e| &e.kind) {
+                    Some(ExpressionKind::Field { base, index, .. }) => {
+                        projections.push(crate::tree::CaptureProjection::Field(*index));
+                        current = *base;
+                    }
+                    Some(ExpressionKind::Deref { pointer }) => {
+                        projections.push(crate::tree::CaptureProjection::Deref);
+                        current = *pointer;
+                    }
+                    _ => break,
+                }
+            }
+            if let Some(ExpressionKind::Local(local)) =
+                self.body.expressions.get(current).map(|e| &e.kind)
+            {
+                projections.reverse();
+                used.push((*local, projections));
+                return;
+            }
+            return self.collect_bindings(current, declared, used);
         }
         if let ExpressionKind::Closure { parameters, .. } = &expression.kind {
             declared.extend(parameters.iter().copied());

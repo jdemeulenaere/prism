@@ -98,6 +98,7 @@ impl TypedFile {
                     .unwrap();
                     let body = &self.bodies[f.body];
                     let mut printer = Printer {
+                        types: &self.types,
                         body,
                         out: &mut out,
                     };
@@ -123,6 +124,7 @@ impl TypedFile {
                     .unwrap();
                     let body = &self.bodies[v.body];
                     let mut printer = Printer {
+                        types: &self.types,
                         body,
                         out: &mut out,
                     };
@@ -198,6 +200,7 @@ fn dump_variants(out: &mut String, variants: &[(String, Vec<Type>)]) {
 /// Prints the nodes of one body.
 struct Printer<'a> {
     body: &'a Body,
+    types: &'a crate::types::TypeTable,
     out: &'a mut String,
 }
 
@@ -397,7 +400,28 @@ impl Printer<'_> {
                                 CaptureMode::Moved => "move",
                                 CaptureMode::Copied => "copy",
                             };
-                            format!("{} {}", mode, self.local_name(c.local))
+                            let path = match self.body.locals.get(c.local) {
+                                Some(local) => format!(
+                                    "{} {}",
+                                    c.local,
+                                    c.path_text(&local.name, &local.ty, self.types)
+                                ),
+                                None => self.local_name(c.local),
+                            };
+                            let widened = match (&c.widened, self.body.locals.get(c.local)) {
+                                (Some(widening), Some(local)) => format!(
+                                    " (widened from {}: {})",
+                                    crate::tree::path_text(
+                                        &local.name,
+                                        &local.ty,
+                                        &widening.projections,
+                                        self.types
+                                    ),
+                                    widening.reason.as_str()
+                                ),
+                                _ => String::new(),
+                            };
+                            format!("{} {}{}", mode, path, widened)
                         })
                         .collect();
                     write!(text, " captures [{}]", captures.join(", ")).unwrap();
