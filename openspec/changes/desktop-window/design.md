@@ -30,6 +30,12 @@ The delta specs add a new capability and an ADDED execution requirement. They mo
 - **As planned:** `Host { size, next_event, present }`, `HostEvent` (its `Script` carries a `ScriptLine`), `Key { Backspace, Enter }` (in `input.rs`, re-exported by `host.rs`), `HostConfiguration::{None, Headless { size, commands }, Window(..)}` and `configure`; `run_app(title, width, height, content) -> UiResult<()>`, beside `run_app_with(host, measurer, content)` and `App`; `TextMeasurer { advance(char, i64) -> i64, line_height(i64) -> i64 }` and `FixedAdvanceMetrics`; `DisplayList { commands, text }` with private reused buffers, and `DrawCommand::{Clear { width, height, color }, Rectangle { bounds, color, corner_radius }, Border { bounds, width, color, corner_radius }, Text { x, y, font_size, color, text: Range<usize> }}`, where `Color(i64)` is ARGB with an unspecified sentinel and `Rect` has `i64` fields; `WatchSession` in `crates/prism-cli/src/watch.rs`; and `prism_runtime::reload::{defer_to_reload_points(wake: fn()), reload_point()}`.
 - **Different:** `WindowFactory` is a closure type, not a trait, and the app owns a boxed measurer (D18's apply note). `Program::start(main, arguments, check_allocations, on_return: impl FnOnce(i32) + Send + 'static) -> RunningProgram` already takes a closure and there is no `ProgramEvent`, so task 6.1's generalization is not needed: the CLI passes `move |_status| windows.program_ended()`. `prism-ui` raises its runtime errors through `error::raise`, which writes `panic: <message>` and exits with 101, until `ui-toolkit` task 3.1 adds its `PanicKind`s; `prism-desktop`'s `error::raise_display_error` follows the same seam until task 4.2 adds `PanicKind::DisplayFailed`, which, like 4.2 itself, waits for the integration step because `prism-runtime` is being changed by `compose-transform`.
 
+The crate side of groups 5 and 6 is in place: `host.rs` (`WindowHost`, `FrameMailbox`, `connect`, `FrameSink`, `WindowMessage`, `UserEvent`), `input.rs`, `statistics.rs`, `window.rs`, `server.rs` (`MainThreadServer`, `WindowSystem` with `factory`, `try_open`, `close_all`, `program_ended` and `shut_down`), `error.rs` and `screenshot.rs` (`writer`, `encode_png`, `read`). What the integration step does, once `ui-toolkit` and `hot-reload` are archived:
+- task 1.3: `prism-cli`'s optional dependency and default `window` feature, the build measurements, and `CLI_WIRED = true` in `tests/dependencies.rs` (task 1.4);
+- task 4.2: `PanicKind::DisplayFailed`, and `error::raise_display_error` through `panic_without_location`;
+- group 6: `main.rs` serving the main thread around `prism run` (D3's sketch, with the `on_return` closure above) and around `--watch` (D17), `--screenshot` with `screenshot::writer` as the final-frame sink, and `crates/prism-cli/tests/screenshot.rs`;
+- groups 7 and 8: the integration checks, the startup benchmark, and the manual checklist.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -80,7 +86,7 @@ Rejected:
 ```
 let (server, windows) = prism_desktop::MainThreadServer::new();   // channels only
 prism_ui::host::configure(HostConfiguration::Window(windows.factory()));
-let running = program.start(main, arguments, check, move |event| windows.program_ended(event))?;
+let running = program.start(main, arguments, check, move |_status| windows.program_ended())?;
 server.serve();          // returns once the program has ended
 running.join()
 ```
@@ -344,8 +350,8 @@ Targets, on a release build on a developer machine, at 800 × 600 logical pixels
 How they are measured:
 
 - **`crates/prism-desktop/tests/raster_timing.rs`** (ignored), in the style of `compile_timing.rs`. It builds display lists directly, of 1,000 and 10,000 nodes in two shapes, "visible grid" and "todo column", at scales 1 and 2. It reports the median of 50 rasterizations after a warm-up, the glyph cache warm, and once with a cold cache. Under `PRISM_ASSERT_TIMING=1` it asserts the targets and linearity. The medians are recorded here at apply time.
-- **The smoke test** (D20) reports the time to the first frame and the median frame time of the counter screen in a real window.
-- **`crates/prism-desktop/tests/allocations.rs`:** with a counting `#[global_allocator]`, 100 presents and rasterizations of the same list at the same size allocate nothing after the first.
+- **The smoke test** (D20) reports the time to the first frame and the median frame time of the counter screen in a real window. At apply time (2026-10-19, the same machine): the first frame 80 ms after `try_open` in a release build, the event loop's creation taking 39 ms of it, and a median frame of 0.10 ms in release and 0.51 ms in debug, from the redraw callback to `present`. A debug test binary run from `target/debug/deps` takes 12 to 15 s to create its event loop: AppKit's application check-in (`_RegisterApplication`, `CFBundleCopyInfoDictionaryInDirectory`) lists the executable's directory, which holds 620,000 files here; the same binary copied to a small directory creates it in 43 ms. `prism` lives in `target/debug` or `target/release`, which hold a few dozen entries, so this is a cost of the test's location only.
+- **`crates/prism-desktop/tests/allocations.rs`:** with a counting `#[global_allocator]`, 100 presents and rasterizations of the same list at the same size allocate nothing after the first two, which grow the mailbox's list and the main thread's (they trade places at each frame; the scenario was worded "after the first frame" before apply).
 - **The startup benchmark** (`run_timing.rs`) runs before and after the change. Its wall time must not grow by more than 1 ms (D4).
 
 The spec's scenario "Rasterization benchmark" asks for the 1,000-node lists under 4 ms at scale 2, stricter than the 8 ms above, and the benchmark asserts the spec's target. Medians at apply time (release build, 2026-10-19, macOS 27 on arm64, warm glyph cache; cold in parentheses): the counter frame, rasterized and converted into a surface buffer, 0.085 ms (0.26) at scale 1 and 0.33 ms (1.06) at scale 2; the grid of 1,000 nodes 0.18 ms (0.30) at scale 1 and 0.43 ms (0.55) at scale 2, of 10,000 nodes 0.97 and 1.48 ms, growth ×5.3 and ×3.4; the todo column of 1,000 nodes 0.072 and 0.19 ms, of 10,000 nodes 0.49 and 0.60 ms, growth ×6.8 and ×3.1. The clear and the conversion of 1.9 million pixels at scale 2 take most of a frame, and every target is met by a factor of ten or more, so damage regions are not needed.
@@ -368,7 +374,7 @@ The window is a host of the toolkit, not a toolkit feature, so it gets its own c
 - **The smoke test** (`tests/window_smoke.rs`, `harness = false`, so its `main` runs on the process's main thread, as `winit` requires on macOS). It runs only with `PRISM_WINDOW_TESTS=1` and, on Linux, `DISPLAY` or `WAYLAND_DISPLAY`. Otherwise it prints `window smoke test skipped` and passes, so `cargo test --workspace` stays CI-safe. It:
   - serves the main thread and, on a program thread, opens a 320 × 200 window;
   - presents the counter screen's list, waits up to 5 s for the first presented frame, and checks the threads and the statistics;
-  - waits 500 ms idle and checks that nothing was rasterized;
+  - waits 500 ms idle and checks that nothing was rasterized or presented, after letting the platform's own redraws of the newly shown window settle (at apply, macOS redraws it once after activation, presenting the last pixels again, which "The Window Redraws Only When Needed" allows);
   - presents a changed list and checks one more frame;
   - drops the host and checks that the window closes and `serve` returns within 1 s.
 - **The CLI test** `crates/prism-cli/tests/screenshot.rs` covers the execution scenarios.

@@ -179,4 +179,4 @@ Once its buffers have grown, presenting a display list of an unchanged size and 
 
 #### Scenario: Allocation-counting test
 - **WHEN** `crates/prism-desktop/tests/allocations.rs` presents 100 frames of the same display list through the window host and rasterizes each one, with a counting allocator
-- **THEN** no allocation happens after the first frame
+- **THEN** no allocation happens after the first two frames, by which both of the mailbox's lists have grown

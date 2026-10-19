@@ -58,7 +58,7 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
 
 ## 5. The window host and the main-thread server (D3, D4, D10, D11, D13, D14, D17)
 
-- [ ] 5.1 Add `src/host.rs` with `WindowHost: prism_ui::Host`:
+- [x] 5.1 Add `src/host.rs` with `WindowHost: prism_ui::Host`:
   - `size`, from the window's reply, then from `Resize` messages;
   - `next_event`, with the `frame_due` rule of D11;
   - `present`, copying into the `FrameMailbox` (D10) and sending `UserEvent::FrameReady` unless the mailbox is closed;
@@ -74,28 +74,28 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
   - `wake` gives a `Frame`;
   - a present after close does nothing;
   - the scenario "Frames faster than redraws": three presents before one mailbox take give the third list, once, and a take with nothing new reports that the last pixels can be presented again.
-- [ ] 5.2 Add `src/input.rs` with `InputState` (cursor position, modifiers, scale factor) and pure functions `pointer_button`, `cursor_moved`, `key_pressed(logical_key, text, modifiers, platform)` and `resized(physical, scale)`, each returning the `WindowMessage`s to send, or a close. Verify with unit tests of every mapping in D13, including the scenarios "A click at scale 2", "Typing, deleting and shortcuts" and "A resize at a fractional scale", a scale change with an unchanged logical size sending nothing to the app (the program half of "Moving to another display"), Cmd+W and Cmd+Q on macOS, a press before any cursor move, and a zero size.
-- [ ] 5.3 Add `src/statistics.rs`, `WindowStatistics`, with atomic counters and times shared by both threads: event loop created, windows opened, frames received, rasterized and presented, and the last and median frame times. Add `src/window.rs` with `WindowApp: winit::application::ApplicationHandler<UserEvent>`:
+- [x] 5.2 Add `src/input.rs` with `InputState` (cursor position, modifiers, scale factor) and pure functions `pointer_button`, `cursor_moved`, `key_pressed(logical_key, text, modifiers, platform)` and `resized(physical, scale)`, each returning the `WindowMessage`s to send, or a close. Verify with unit tests of every mapping in D13, including the scenarios "A click at scale 2", "Typing, deleting and shortcuts" and "A resize at a fractional scale", a scale change with an unchanged logical size sending nothing to the app (the program half of "Moving to another display"), Cmd+W and Cmd+Q on macOS, a press before any cursor move, and a zero size.
+- [x] 5.3 Add `src/statistics.rs`, `WindowStatistics`, with atomic counters and times shared by both threads: event loop created, windows opened, frames received, rasterized and presented, and the last and median frame times. Add `src/window.rs` with `WindowApp: winit::application::ApplicationHandler<UserEvent>`:
   - `resumed` creates the window (D14), the `softbuffer` context and surface, and replies to `OpenWindow`, or replies with the error;
   - `window_event` routes through `input.rs`, resizes the surface, and rasterizes and presents on `RedrawRequested` by the rule of D10, calling `pre_present_notify`;
   - `user_event` handles `FrameReady` (`request_redraw`) and `CloseWindow`;
   - closing follows D14.
 
   Verify with `cargo build -p prism-desktop` and the smoke test (5.6).
-- [ ] 5.4 Add `src/server.rs` with `MainThreadServer::new() -> (MainThreadServer, WindowSystem)`:
+- [x] 5.4 Add `src/server.rs` with `MainThreadServer::new() -> (MainThreadServer, WindowSystem)`:
   - `serve()` (D3), creating the event loop at the first `OpenWindow` with `with_default_menu(false)` on macOS, and running `run_app_on_demand` per window;
   - `WindowSystem: Clone + Send`, with `factory() -> Arc<dyn WindowFactory>`, `program_ended()`, `close_all()` and `shut_down()`;
   - `MainThreadServer::with_starter`, so tests can fake an event loop that fails to start.
 
   `WindowFactory::open` sends `OpenWindow`, parses the font while it waits, and raises `display error: cannot open a window (<reason>)` on an error reply. Verify with Rust tests: the scenario "A program without an app" (no event loop, no font); and the scenario "No display", with a starter failing with `no display`, in a child process.
-- [ ] 5.5 Add `tests/allocations.rs` with a counting `#[global_allocator]` and the scenario "Allocation-counting test": 100 presents through a `WindowHost` with a fake proxy, each followed by the mailbox swap and a rasterization of the counter screen's list at a fixed size. Verify with `cargo test -p prism-desktop --test allocations`.
-- [ ] 5.6 Add `tests/window_smoke.rs` with `harness = false` in `Cargo.toml` and the steps of design D20. Skip with the line `window smoke test skipped: set PRISM_WINDOW_TESTS=1 on a machine with a display` unless enabled. It covers:
+- [x] 5.5 Add `tests/allocations.rs` with a counting `#[global_allocator]` and the scenario "Allocation-counting test": 100 presents through a `WindowHost` with a fake proxy, each followed by the mailbox swap and a rasterization of the counter screen's list at a fixed size, after two warm-up frames (the mailbox and the main thread trade their two lists, so each grows once). Verify with `cargo test -p prism-desktop --test allocations`.
+- [x] 5.6 Add `tests/window_smoke.rs` with `harness = false` in `Cargo.toml` and the steps of design D20. Skip with the line `window smoke test skipped: set PRISM_WINDOW_TESTS=1 on a machine with a display` unless enabled. It covers:
   - "Threads of a window app": thread identities are recorded by the test's fake program and by `WindowStatistics`;
   - "Title and size of the window": `Window::title()` and `inner_size()` are reported through a test hook of `window.rs`;
   - "An idle window";
   - two windows opened one after the other through the host API.
 
-  It also reports the time to the first frame and the median frame time. Run `PRISM_WINDOW_TESTS=1 cargo test -p prism-desktop --test window_smoke` and `cargo test --release` likewise, and record the times in D19. Check that `cargo test --workspace` prints the skip line without the variable.
+  It also reports the time to the first frame and the median frame time. The protocol test of "A resize relays out the app" is `tests/window_host.rs`, and the server's tests ("A program without an app", "No display") are `tests/server.rs`. Run `PRISM_WINDOW_TESTS=1 cargo test -p prism-desktop --test window_smoke` and `cargo test --release` likewise, and record the times in D19. Check that `cargo test --workspace` prints the skip line without the variable.
 
 ## 6. The CLI (D2, D3, D15, D17)
 

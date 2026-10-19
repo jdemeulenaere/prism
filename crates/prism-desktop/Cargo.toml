@@ -19,3 +19,11 @@ fontdue = "=0.9.4"
 [dev-dependencies]
 # Pins the bundled font file by its hash (D6).
 blake3 = "1.8"
+# Builds composition content from Rust for the window host's protocol tests.
+prism-compose = { path = "../prism-compose" }
+
+# The smoke test opens a real window, which `winit` requires on the process's main thread, so
+# it has its own `main` (D20).
+[[test]]
+name = "window_smoke"
+harness = false
