@@ -56,8 +56,16 @@ Up to three agents worked on `main` at once (a proposer next to an implementer, 
 ## 6. The environment
 
 - **`target/` grows without bound.** `target/debug/deps` reached about 600,000 files and tens of GiB of stale `*.rcgu.o` objects. Besides filling the disk, this made macOS's app check-in list the folder, so a debug test binary took 12–15 s to create its window event loop. Clean stale artifacts regularly (`cargo clean -p <crate>`, or delete `deps` entries older than a few hours), and don't create extra `CARGO_TARGET_DIR`s or scratch Cargo projects.
-- **Windows open on the user's real screen.** `prism run` without `--headless` opens a window. Don't launch windowed runs while the user is at the machine unless they ask: repeated launches look like a misbehaving app. Use `--headless --events`, or the opt-in window tests (`PRISM_WINDOW_TESTS=1`).
-- **The display may be locked** during unattended runs. Window behaviour is then tested by feeding input through the window's own handling (`crates/prism-cli/tests/window_input.rs`, `app_windows.rs`). Real hardware checks go to the user under a "Needs the user" item in `ROADMAP.md`.
+- **Test in real windows when it adds coverage, deliberately.** Headless runs (`--headless --events`) cover composition, layout, input semantics and draw lists. Only a real window covers:
+  - the launch path (`prism run` → the main-thread window server → winit/AppKit), where a run that returned at once with status 0 was seen and never explained;
+  - the window's Inter metrics and HiDPI scaling;
+  - rasterized pixels (`--screenshot`);
+  - platform focus, occlusion, resize and close events;
+  - input-to-present timing.
+
+  `prism run` without `--headless` opens a window on the user's real screen, so if the user is around, say so in one line first. Batch the runs, keep them short, close every window you open, and prefer the opt-in tests (`PRISM_WINDOW_TESTS=1 cargo test -p prism-cli --test window_input`, `--test app_windows`) over ad-hoc launches. Unannounced relaunches, eight in two minutes on 2026-10-19, look to the user like a misbehaving app.
+- **Real OS input needs a permission.** The window tests feed input through the window's own event handling, which covers the mapping code but not the OS's event delivery. Posting real mouse and keyboard events (CGEventPost) needs the Accessibility permission for the process running the tests. That is the user's security setting to grant: ask, never work around it.
+- **The display may be locked** during unattended runs. The window tests above still run, and checks that need a person and real hardware go to the user under a "Needs the user" item in `ROADMAP.md`.
 - **Watch tests spawn `prism run --watch`.** Their helpers must kill and reap the child on drop, or a failed test leaves the program spinning forever.
 - **Rate limits and crashes** interrupted agents several times. A per-group commit plus resuming the same agent (SendMessage with its id) lost no work. A long silence from a fresh agent was usually a slow start, not a hang: ask for a status line before restarting it.
 
