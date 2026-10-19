@@ -110,7 +110,7 @@ Prerequisites (design, "Baseline"): `state-handles` is archived, which brings `c
 
 ## 9. Entry points, backend and CLI (D2, D15, D16, D17, D23)
 
-- [ ] 9.1 Add `src/entry.rs` with every `#[no_mangle] pub extern "C" fn prism_ui_*`:
+- [x] 9.1 Add `src/entry.rs` with every `#[no_mangle] pub extern "C" fn prism_ui_*`:
   - the setters `set_text(node, *const PrismString)`, `set_text_style`, `set_modifier(node, *const Modifier)`, `set_arrangement`, `set_alignment`, `set_content_color`, `set_enabled` and `set_on_value_change(node, handler)`;
   - `register_click`, `register_toggle` and `register_text`, each taking a `*mut FunctionValue` by move and returning a `HandlerId` word, and `handlers_equal(a, b) -> u8`;
   - `modifier_overflow()`, which never returns;
