@@ -9,6 +9,9 @@
 //! - [`slot_type`] gives a record for a Rust type, with drop and equality entries over its
 //!   `Drop` and `PartialEq`.
 //! - [`effect`] wraps a Rust closure in a `() -> Unit` function value, a side effect.
+//! - [`leak_group`], [`leak_slot`] and [`leak_cell`] leave a group, a slot and a state cell
+//!   live on the thread that no composition owns, as a runtime bug would, for the tests of the
+//!   allocation check's live-object report (D6 of `reactive-app-verification`).
 
 use crate::composer::Composer;
 use crate::slot::SlotType;
@@ -136,4 +139,43 @@ pub fn slot_type_with_fingerprint<T: PartialEq + 'static>(
         name: name.as_ptr(),
         name_length: name.len(),
     }))
+}
+
+/// Leaves a group in this thread's group arena that no composition holds.
+pub fn leak_group() {
+    crate::thread::with_state(|state| {
+        state.groups.insert(crate::group::Group::new(
+            crate::group::GroupKind::Replaceable,
+            0,
+            0,
+            crate::handle::Handle::new(0, 0),
+        ));
+    });
+}
+
+/// Leaves a word slot in this thread's release queue that no pass releases.
+pub fn leak_slot() {
+    crate::thread::with_state(|state| {
+        state
+            .releases
+            .push_back(crate::thread::Release::Slot(crate::slot::Slot::Word {
+                tag: 0,
+                value: 0,
+            }));
+    });
+}
+
+/// Leaves a state cell in this thread's cell arena that nothing owns. Its value is never read
+/// or dropped.
+pub fn leak_cell() {
+    let record = slot_type::<i64>("Int");
+    crate::thread::with_state(|state| {
+        state.cells.insert(crate::state::Cell {
+            record,
+            value: std::ptr::null_mut(),
+            flag: crate::state::Flag::Free,
+            readers: Default::default(),
+            released: false,
+        });
+    });
 }

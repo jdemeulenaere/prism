@@ -11,6 +11,9 @@
 //!   nothing. Its calls are counted ([`inline_calls`]).
 //! - [`TreeBuilder`] builds trees with modifier chains without a composition, for layout,
 //!   drawing and input tests and the benchmarks.
+//! - [`leak_node`] leaves a node in the thread's tree that no node group owns and no parent
+//!   holds, as a runtime bug would, for the allocation check's live-node report (D6 of
+//!   `reactive-app-verification`).
 
 use crate::geometry::Size;
 use crate::handle::{HandlerId, NodeId};
@@ -478,4 +481,11 @@ pub fn run_in_child(test: &str, child: fn() -> !) -> std::process::Output {
         .env(VARIABLE, test)
         .output()
         .unwrap()
+}
+
+/// Creates a text node in the thread's tree and never places or releases it.
+pub fn leak_node() {
+    crate::thread::with_state(|state| {
+        state.tree.create_kind(NodeKind::Text);
+    });
 }

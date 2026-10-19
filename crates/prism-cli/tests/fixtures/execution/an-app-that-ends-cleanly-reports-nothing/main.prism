@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+// events: events
+import /prism/compose/ui
+import /prism/compose/material3
+
+fun main() {
+    runApp(width = 200, height = 100) {
+        val c = remember { mutableStateOf(0) }
+        Text("n = ${c.value}")
+    }
+}

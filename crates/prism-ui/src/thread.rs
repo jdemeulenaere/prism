@@ -36,6 +36,9 @@ pub struct State {
     pub app: Option<RunningApp>,
     /// Released handlers' function values, dropped by [`release_dropped`].
     pub drops: Vec<FunctionValue>,
+    /// The nodes left in the trees [`install_tree`] replaced, which a release path forgot: the
+    /// allocation check reports them with the current tree's ([`live_nodes_report`]).
+    pub replaced_nodes: usize,
 }
 
 impl State {
@@ -45,6 +48,7 @@ impl State {
             handlers: HandlerTable::new(),
             app: None,
             drops: Vec::new(),
+            replaced_nodes: 0,
         }
     }
 }
@@ -60,8 +64,25 @@ pub fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
 
 /// Gives the thread a new, empty tree with a window of `width` × `height`.
 pub fn install_tree(width: i64, height: i64) {
-    let old = with_state(|state| std::mem::replace(&mut state.tree, UiTree::new(width, height)));
+    let old = with_state(|state| {
+        let old = std::mem::replace(&mut state.tree, UiTree::new(width, height));
+        state.replaced_nodes += old.len();
+        old
+    });
     drop(old);
+}
+
+/// The line the allocation check writes for this thread's nodes still live when `main` returns,
+/// after `prism-compose`'s groups, slots and cells (D6 of `reactive-app-verification`):
+/// `allocation check: nodes still live at exit: <n>`, counting the current tree's nodes, the
+/// window root excepted, and those left in the trees [`install_tree`] replaced. `None` when a
+/// composition is still live, since its nodes are expected to be live then, or when none is.
+pub fn live_nodes_report() -> Option<String> {
+    if prism_compose::live_compositions_report().is_some() {
+        return None;
+    }
+    let live = with_state(|state| state.tree.len() + state.replaced_nodes);
+    (live > 0).then(|| format!("allocation check: nodes still live at exit: {}", live))
 }
 
 /// Drops the function values released handlers left in [`State::drops`], outside the state,
@@ -109,6 +130,29 @@ mod tests {
             assert_eq!(state.tree.window_size().width, 400);
             state.app = None;
         });
+    }
+
+    /// execution: "A leaked group, cell and node are reported", for this crate's part: a node
+    /// left in the tree, or in a tree that a later app replaced, is reported.
+    #[test]
+    fn a_leaked_node_is_reported_even_after_its_tree_is_replaced() {
+        std::thread::spawn(|| {
+            assert_eq!(live_nodes_report(), None);
+            install_tree(400, 300);
+            crate::test_support::leak_node();
+            assert_eq!(
+                live_nodes_report().as_deref(),
+                Some("allocation check: nodes still live at exit: 1")
+            );
+            install_tree(0, 0);
+            crate::test_support::leak_node();
+            assert_eq!(
+                live_nodes_report().as_deref(),
+                Some("allocation check: nodes still live at exit: 2")
+            );
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

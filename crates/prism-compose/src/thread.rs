@@ -257,6 +257,38 @@ pub fn live_compositions_report() -> Option<String> {
     })
 }
 
+/// The lines the allocation check writes for this thread's groups, slots and state cells still
+/// live when `main` returns, after the composition report (D6 of `reactive-app-verification`):
+/// `allocation check: groups still live at exit: <n>`, then `slots` and `state cells` in the
+/// same form, one line per non-zero count, in this order. `None` when a composition is still
+/// live, since what it holds is expected to be live then, or when nothing is. Groups and cells
+/// are their arenas' live entries; slots are those of the live groups and those waiting in the
+/// release queue. It walks the groups once, at exit, so counting costs nothing before.
+pub fn live_objects_report() -> Option<String> {
+    let (groups, slots, cells) = with_state(|state| {
+        if state.live_compositions > 0 {
+            return (0, 0, 0);
+        }
+        let held: usize = state
+            .groups
+            .iter()
+            .map(|(_, group)| group.slots.len())
+            .sum();
+        let pending = state
+            .releases
+            .iter()
+            .filter(|release| matches!(release, Release::Slot(_)))
+            .count();
+        (state.groups.len(), held + pending, state.cells.len())
+    });
+    let lines: Vec<String> = [("groups", groups), ("slots", slots), ("state cells", cells)]
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(name, count)| format!("allocation check: {} still live at exit: {}", name, count))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 /// The current scope of the pass running on this thread, if one is: the innermost restart
 /// group open, or the composition's root (compose, "The Current Scope"). For `state-handles`,
 /// which registers it as a reader.
@@ -301,5 +333,35 @@ mod tests {
         });
         assert_eq!(live_compositions_report(), None);
         assert_eq!(active_scope(), None);
+    }
+
+    /// execution: "A leaked group, cell and node are reported", for this crate's part: each
+    /// leak gives its line, in the fixed order, and a live composition hides them.
+    #[test]
+    fn leaked_groups_slots_and_cells_are_reported_in_order() {
+        std::thread::spawn(|| {
+            assert_eq!(live_objects_report(), None);
+            crate::test_support::leak_cell();
+            assert_eq!(
+                live_objects_report().as_deref(),
+                Some("allocation check: state cells still live at exit: 1")
+            );
+            crate::test_support::leak_slot();
+            crate::test_support::leak_group();
+            crate::test_support::leak_group();
+            assert_eq!(
+                live_objects_report().as_deref(),
+                Some(
+                    "allocation check: groups still live at exit: 2\n\
+                     allocation check: slots still live at exit: 1\n\
+                     allocation check: state cells still live at exit: 1"
+                )
+            );
+            with_state(|state| state.live_compositions = 1);
+            assert_eq!(live_objects_report(), None, "a live composition hides them");
+            with_state(|state| state.live_compositions = 0);
+        })
+        .join()
+        .unwrap();
     }
 }

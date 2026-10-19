@@ -115,10 +115,12 @@ impl Program {
             .stack_size(PROGRAM_STACK_SIZE)
             .spawn(move || {
                 // Under the allocation check, the cells the program owns are freed, then the
-                // compositions still live when `main` returns are reported, before the leaks
-                // (D13 of `compose-runtime`, D12 of `state-handles`). The report reads this
-                // thread's cells and compositions, and `finish` runs on this thread.
-                prism_runtime::set_finish_report(Some(prism_compose::finish_report));
+                // compositions still live when `main` returns are reported, then the groups,
+                // slots, cells and nodes still live, before the leaks (D13 of
+                // `compose-runtime`, D12 of `state-handles`, D6 of
+                // `reactive-app-verification`). The report reads this thread's runtime state,
+                // and `finish` runs on this thread.
+                prism_runtime::set_finish_report(Some(finish_report));
                 // A reload applied on this thread invalidates the scopes of the compositions it
                 // affects (D3 of `compose-hot-reload`).
                 prism_runtime::reload::set_applied_hook(Some(
@@ -141,5 +143,47 @@ impl Program {
             })
             .map_err(|error| BackendError::new(format!("starting the program: {}", error)))?;
         Ok(RunningProgram { thread })
+    }
+}
+
+/// The report the allocation check writes before its leak line when `main` returns: the
+/// program's cells are released and undisposed compositions reported (`prism-compose`), then,
+/// when no composition is live, the groups, slots and state cells still live (`prism-compose`)
+/// and the nodes (`prism-ui`), one line each.
+pub fn finish_report() -> Option<String> {
+    let lines: Vec<String> = [
+        prism_compose::finish_report(),
+        prism_compose::live_objects_report(),
+        prism_ui::thread::live_nodes_report(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    /// execution: "A leaked group, cell and node are reported".
+    #[test]
+    fn a_leaked_group_cell_and_node_are_reported() {
+        std::thread::spawn(|| {
+            assert_eq!(finish_report(), None);
+            prism_compose::test_support::leak_group();
+            prism_compose::test_support::leak_cell();
+            prism_ui::test_support::leak_node();
+            assert_eq!(
+                finish_report().as_deref(),
+                Some(
+                    "allocation check: groups still live at exit: 1\n\
+                     allocation check: state cells still live at exit: 1\n\
+                     allocation check: nodes still live at exit: 1"
+                )
+            );
+        })
+        .join()
+        .unwrap();
     }
 }
