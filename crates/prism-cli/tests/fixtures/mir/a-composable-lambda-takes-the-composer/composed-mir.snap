@@ -29,7 +29,7 @@ compose composed skippable fun main::Screen(_1: Int, _2: Int): Unit @6:1
   local _3: compose () -> Unit (temporary)
   local _4: Unit (temporary)
   local _5: Unit (temporary)
-  local _6: Bool (temporary)
+  local _6: Int (temporary)
   local _7: Int (temporary)
   local _8: Bool (temporary)
   local _9: (Int) -> Unit (temporary)
@@ -49,7 +49,8 @@ compose composed skippable fun main::Screen(_1: Int, _2: Int): Unit @6:1
     _9 = closure main::Screen#restart [] @6:1
     _5 = call composer end_restart_group(copy _1, move _9) -> bb10 @6:1
   bb3:
-    _6 = const false @6:1
+    _6 = const 0 @6:1
+    _6 = bits copy _6 & const 4 @6:1
     _7 = bits copy _2 & const 1 @6:1
     switch copy _7 [0 -> bb5, otherwise -> bb4] @6:1
   bb4:

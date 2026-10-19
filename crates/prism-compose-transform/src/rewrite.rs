@@ -39,6 +39,8 @@ pub(crate) const DIFFERENT: i64 = 2;
 pub(crate) const STATIC: i64 = 3;
 /// The force bit, bit 0 of the first change word.
 pub(crate) const FORCE: i64 = 1;
+/// Added to the result of `keep` when the kept value changed (D8).
+pub(crate) const KEEP_CHANGED: i64 = 4;
 
 /// The number of change words of a composable with `parameters` parameters.
 pub(crate) fn word_count(parameters: usize) -> usize {
@@ -1176,15 +1178,17 @@ impl<'a> Rewriter<'a> {
                 span,
             );
         }
-        let dirty = self.temporary(Type::Bool);
-        self.assign(
-            dirty,
-            Rvalue::Use(Operand::Constant(Constant::Bool(false))),
-            span,
-        );
+        // `KEEP_CHANGED` is or-ed into `dirty` for each argument that changed.
+        let dirty = self.temporary(Type::Int);
+        self.assign(dirty, Rvalue::Use(Self::int(0)), span);
         for index in 0..self.declared {
             self.keep_parameter(index, dirty);
         }
+        self.assign(
+            dirty,
+            Rvalue::Bits(BitOperator::And, self.copy(dirty), Self::int(KEEP_CHANGED)),
+            span,
+        );
         // Skip when nothing forces the body, nothing changed and the scope is valid.
         let body = self.new_block();
         let check = self.new_block();
@@ -1298,7 +1302,9 @@ impl<'a> Rewriter<'a> {
     /// Keeps declared parameter `index` in the next slot of the restart group by its bits
     /// (D8): uncertain compares it, different stores it, same and static read past the kept
     /// slot, storing it only when there is none. Sets its bits to what the body now knows, and
-    /// `dirty` when it changed.
+    /// or-s `KEEP_CHANGED` into `dirty` when it changed. A `Copy` value is kept by one call of
+    /// the runtime's `keep`, which makes that decision; a function value, which is duplicated
+    /// only when it is stored or compared, by a switch over its bits here.
     fn keep_parameter(&mut self, index: usize, dirty: LocalId) {
         let span = self.span;
         let ty = self.declared_type(index);
@@ -1316,6 +1322,29 @@ impl<'a> Rewriter<'a> {
             Rvalue::Bits(BitOperator::And, self.copy(passed), Self::int(3)),
             span,
         );
+        if !is_function_parameter(&ty) {
+            let result = self.temporary(Type::Int);
+            let composer = self.composer();
+            let value = self.copy(LocalId((index + 1) as u32));
+            self.operation(
+                ComposerOperation::Keep(ty.clone()),
+                vec![composer, value, self.copy(passed)],
+                vec![Type::Int, ty, Type::Int],
+                Place::local(result),
+                span,
+            );
+            self.assign(
+                bits,
+                Rvalue::Bits(BitOperator::And, self.copy(result), Self::int(3)),
+                span,
+            );
+            self.assign(
+                dirty,
+                Rvalue::Bits(BitOperator::Or, self.copy(dirty), self.copy(result)),
+                span,
+            );
+            return;
+        }
         let uncertain = self.new_block();
         let same = self.new_block();
         let different = self.new_block();
@@ -1335,7 +1364,11 @@ impl<'a> Rewriter<'a> {
             if changed {
                 rewriter.assign(
                     dirty,
-                    Rvalue::Use(Operand::Constant(Constant::Bool(true))),
+                    Rvalue::Bits(
+                        BitOperator::Or,
+                        rewriter.copy(dirty),
+                        Self::int(KEEP_CHANGED),
+                    ),
                     span,
                 );
             }

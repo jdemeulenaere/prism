@@ -348,6 +348,59 @@ fn comparing_values_with_slots() {
     assert_eq!(drops(), ["drop a", "drop a", "drop b"]);
 }
 
+/// `keep` (D8 of `compose-transform`): uncertain compares, different stores, same and static
+/// read past the kept slot and store only where there is none; a value not stored is released
+/// at once.
+#[test]
+fn keeping_arguments_by_their_change_bits() {
+    let tracked = slot_type::<Tracked>("Tracked");
+    let results: Rc<RefCell<Vec<i64>>> = Rc::default();
+    let phase = Rc::new(Cell::new(0));
+    let (r, p) = (results.clone(), phase.clone());
+    let c = Composition::start(
+        tree(),
+        content(move |k| unsafe {
+            let keep = |name: &'static str, bits: i64| {
+                let mut value = std::mem::ManuallyDrop::new(Tracked(name));
+                k.keep(tracked, (&mut *value as *mut Tracked).cast(), bits)
+                    .unwrap()
+            };
+            let (first, bits) = match p.get() {
+                0 => ("a", UNCERTAIN),
+                1 => ("b", SAME),
+                2 => ("c", 3),
+                3 => ("a", UNCERTAIN),
+                _ => ("d", DIFFERENT),
+            };
+            r.borrow_mut().push(keep(first, bits));
+            if p.get() == 1 {
+                // Same, where no slot is kept yet: stored.
+                r.borrow_mut().push(keep("x", SAME));
+            }
+        }),
+    )
+    .unwrap();
+    for next in 1..=4 {
+        phase.set(next);
+        invalidate(Composition::root_scope(c).unwrap());
+        Composition::recompose(c).unwrap();
+    }
+    assert_eq!(
+        *results.borrow(),
+        [
+            DIFFERENT | KEEP_CHANGED,
+            SAME,
+            SAME,
+            3,
+            SAME,
+            DIFFERENT | KEEP_CHANGED
+        ]
+    );
+    assert_eq!(drops(), ["drop b", "drop c", "drop x", "drop a", "drop a"]);
+    Composition::dispose(c).unwrap();
+    assert_eq!(drops().last().map(String::as_str), Some("drop d"));
+}
+
 #[test]
 fn reading_a_word_where_there_is_none_is_a_misuse() {
     let result: Rc<Cell<Option<Misuse>>> = Rc::default();

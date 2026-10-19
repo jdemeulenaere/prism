@@ -35,6 +35,16 @@ pub const LEFT_OPEN: Misuse = Misuse("group left open");
 /// No position.
 const NONE: u32 = u32::MAX;
 
+/// Change bits of a composable's parameter (D4 of `compose-transform`): the caller knows
+/// nothing of the argument.
+pub const UNCERTAIN: i64 = 0;
+/// The argument is the same as on the call's last composition.
+pub const SAME: i64 = 1;
+/// The argument differs from the one of the call's last composition.
+pub const DIFFERENT: i64 = 2;
+/// Added by [`Composer::keep`] to its result when the kept value changed.
+pub const KEEP_CHANGED: i64 = 4;
+
 /// The composer of a pass: the pass's identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Composer(pub u64);
@@ -221,6 +231,43 @@ impl Composer {
             return Ok(false);
         }
         Ok(true)
+    }
+
+    /// Keeps the value at `value`, an argument of a skippable composable, in the slot at the
+    /// cursor by the two change bits `passed` its caller gave it (D8 of `compose-transform`):
+    /// uncertain compares it as [`Composer::changed`] does, different stores it, and same or
+    /// static read past the kept slot, storing the value only when there is none. Returns the
+    /// bits the body now knows (same, different or static), with [`KEEP_CHANGED`] added when
+    /// the value differs from the kept one. The caller gives the value up either way.
+    ///
+    /// # Safety
+    ///
+    /// `slot_type` must be a valid record and `value` a value of it that the caller gives up.
+    pub unsafe fn keep(
+        self,
+        slot_type: *const SlotType,
+        value: *mut u8,
+        passed: i64,
+    ) -> ComposeResult<i64> {
+        match passed & 3 {
+            UNCERTAIN => Ok(if self.changed(slot_type, value)? {
+                DIFFERENT | KEEP_CHANGED
+            } else {
+                SAME
+            }),
+            DIFFERENT => {
+                self.set_slot(slot_type, value)?;
+                Ok(DIFFERENT | KEEP_CHANGED)
+            }
+            known => {
+                if self.slot(slot_type)?.is_null() {
+                    self.set_slot(slot_type, value)?;
+                } else if let Some(drop) = (*slot_type).drop {
+                    drop(value);
+                }
+                Ok(known)
+            }
+        }
     }
 
     /// During a restart, before the restart function starts a group, the address of the value

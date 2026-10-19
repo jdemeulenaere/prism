@@ -805,6 +805,11 @@ pub enum ComposerOperation {
     Changed(Type),
     /// `(composer, value moved)`: stores the value in the slot at the cursor.
     SetSlot(Type),
+    /// `(composer, value moved, passed bits) -> Int`: keeps an argument of a skippable body in
+    /// the slot at the cursor by the change bits its caller passed: compared when uncertain,
+    /// stored when different, read past when same or static (stored when missing). Gives the
+    /// bits the body now knows, plus 4 when the value changed (D8 of `compose-transform`).
+    Keep(Type),
     /// `(composer) -> T`: during a restart, the value kept in slot `index` of the scope's
     /// group, copied out or duplicated.
     KeptParameter { index: u32, ty: Type },
@@ -839,6 +844,7 @@ impl ComposerOperation {
             ComposerOperation::SkipToGroupEnd => "skip_to_group_end",
             ComposerOperation::Changed(_) => "changed",
             ComposerOperation::SetSlot(_) => "set_slot",
+            ComposerOperation::Keep(_) => "keep",
             ComposerOperation::KeptParameter { .. } => "kept_parameter",
             ComposerOperation::Keepable => "keepable",
             ComposerOperation::Duplicate => "duplicate",
@@ -871,6 +877,7 @@ impl ComposerOperation {
         match self {
             ComposerOperation::Changed(ty)
             | ComposerOperation::SetSlot(ty)
+            | ComposerOperation::Keep(ty)
             | ComposerOperation::KeptParameter { ty, .. } => Some(ty),
             _ => None,
         }

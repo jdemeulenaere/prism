@@ -226,6 +226,7 @@ impl Instance<'_> {
         match operation {
             Operation::Changed(ty) => Operation::Changed(self.substitute(ty)),
             Operation::SetSlot(ty) => Operation::SetSlot(self.substitute(ty)),
+            Operation::Keep(ty) => Operation::Keep(self.substitute(ty)),
             Operation::KeptParameter { index, ty } => Operation::KeptParameter {
                 index: *index,
                 ty: self.substitute(ty),

@@ -206,6 +206,23 @@ pub unsafe extern "C" fn prism_compose_changed(
     or_misuse(Composer(composer).changed(slot_type, value)) as u8
 }
 
+/// Keeps an argument of a skippable composable in the slot at the cursor by the change bits
+/// `passed` its caller gave it; the bits the body now knows, plus 4 when the value changed
+/// (D8 of `compose-transform`).
+///
+/// # Safety
+///
+/// `slot_type` must be a valid record and `value` a value of it that the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_keep(
+    composer: u64,
+    slot_type: *const SlotType,
+    value: *mut u8,
+    passed: i64,
+) -> i64 {
+    or_misuse(Composer(composer).keep(slot_type, value, passed))
+}
+
 /// During a restart, the address of kept slot `index` of the restarted scope's group when it
 /// has `slot_type`; the misuse `no slot to read` otherwise (D10 of `compose-transform`).
 ///

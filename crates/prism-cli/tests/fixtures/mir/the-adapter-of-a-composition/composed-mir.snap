@@ -5,7 +5,7 @@ compose composed skippable fun main::Hello(_1: Int, _2: Int): Unit @2:1
   local _1 $composer: Int (argument)
   local _2 $changed: Int (argument)
   local _3: Unit (temporary)
-  local _4: Bool (temporary)
+  local _4: Int (temporary)
   local _5: Int (temporary)
   local _6: Bool (temporary)
   local _7: (Int) -> Unit (temporary)
@@ -20,7 +20,8 @@ compose composed skippable fun main::Hello(_1: Int, _2: Int): Unit @2:1
     _7 = closure main::Hello#restart [] @2:1
     _3 = call composer end_restart_group(copy _1, move _7) -> bb9 @2:1
   bb2:
-    _4 = const false @2:1
+    _4 = const 0 @2:1
+    _4 = bits copy _4 & const 4 @2:1
     _5 = bits copy _2 & const 1 @2:1
     switch copy _5 [0 -> bb4, otherwise -> bb3] @2:1
   bb3:

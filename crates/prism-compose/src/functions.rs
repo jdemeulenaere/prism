@@ -176,6 +176,13 @@ pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
+        name: "prism_compose_keep",
+        address: address(prism_compose_keep as *const ()),
+        parameters: &[I64, Pointer, Pointer, I64],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_compose_kept_slot",
         address: address(prism_compose_kept_slot as *const ()),
         parameters: &[I64, I64, Pointer],

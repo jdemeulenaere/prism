@@ -496,7 +496,9 @@ fn composer_operation(operation: &crate::mir::ComposerOperation) -> String {
         | Operation::StartMovableGroup { key } => {
             format!(" key 0x{:016x} /* {} */", key.hash, key.label)
         }
-        Operation::Changed(ty) | Operation::SetSlot(ty) => format!("<{}>", ty.qualified()),
+        Operation::Changed(ty) | Operation::SetSlot(ty) | Operation::Keep(ty) => {
+            format!("<{}>", ty.qualified())
+        }
         Operation::KeptParameter { index, ty } => format!(" {}<{}>", index, ty.qualified()),
         _ => String::new(),
     };

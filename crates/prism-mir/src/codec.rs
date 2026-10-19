@@ -1357,6 +1357,10 @@ impl Codec for crate::mir::ComposerOperation {
             Operation::Recompose => encoder.u8(15),
             Operation::Dump => encoder.u8(16),
             Operation::Invalidate => encoder.u8(17),
+            Operation::Keep(ty) => {
+                encoder.u8(18);
+                ty.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1389,6 +1393,7 @@ impl Codec for crate::mir::ComposerOperation {
             15 => Operation::Recompose,
             16 => Operation::Dump,
             17 => Operation::Invalidate,
+            18 => Operation::Keep(decoder.decode()?),
             _ => return None,
         })
     }

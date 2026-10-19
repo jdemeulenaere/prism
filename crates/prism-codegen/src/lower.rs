@@ -1911,6 +1911,16 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     self.call_runtime("prism_compose_set_slot", &[composer, record, value])?;
                 }
             }
+            Operation::Keep(ty) => {
+                let composer = word(self, 0)?;
+                let record = self.context.slot_type(ty)?;
+                let record = self.data(record);
+                let value = self.slot_value(&arguments[1], ty, span)?;
+                let passed = word(self, 2)?;
+                let result =
+                    self.call_runtime("prism_compose_keep", &[composer, record, value, passed])?;
+                self.write_place(destination, Lowered::Scalar(result[0]), false)?;
+            }
             Operation::KeptParameter { index, ty } => {
                 let composer = word(self, 0)?;
                 let record = self.context.slot_type(ty)?;

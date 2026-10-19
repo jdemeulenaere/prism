@@ -57,7 +57,7 @@ What exists today:
 
 | Concern | `compose-transform` (this change) | Elsewhere |
 |---|---|---|
-| Runtime protocol | one new entry, `prism_compose_kept_slot` (D10) | `compose-runtime` |
+| Runtime protocol | two new entries, `prism_compose_kept_slot` (D10) and `prism_compose_keep` (D8, added at review) | `compose-runtime` |
 | Calling convention, groups, keys | all of it | `compose-hot-reload` relies on the keys |
 | Skipping and restarting | stability, change words, kept arguments, restart closures | the runtime decides `skipping` and runs restarts |
 | Slot type records and equality glue | emitted per unit | fingerprints from `hot-reload` |
@@ -187,6 +187,8 @@ A skippable body keeps its arguments in the first slots of its restart group, in
 - **same** or **static**: `Remembered` (D19) reads past the kept slot; only when there is none, on the group's first composition, the value is stored. The parameter is unchanged.
 
 The body then knows, per parameter, same or different, and forwards that to its own calls (D4). Equality is the type's equality glue, called through the record (D20), whatever the type's size: no comparison is expanded at the call site.
+
+Refined at review: for a `Copy` parameter the choice by bits is made by one runtime call, `prism_compose_keep(composer, record, value, passed bits)` (`ComposerOperation::Keep`), which returns the bits the body now knows plus 4 when the value changed, so the prologue keeps a parameter with one call and three bit operations instead of a four-way switch over runtime calls. A function parameter keeps the switch, since it is duplicated only when it is stored or compared, which the runtime cannot do (D26).
 
 Run-time cost: one runtime call per stable parameter per call, plus one equality glue call for uncertain ones; no allocation, except when an uncertain function argument's environment is allocated, whose duplicate is allocated and, when equal, freed.
 
@@ -416,11 +418,11 @@ Measured at apply time (release build, best of five, ms, at the largest size; th
 | `composable-calls` | 4096 calls | 5.5 | 3.0 | 4.1 | 5.2 | x4.0 per x4 |
 | `composable-branches` | 4096 `if`s | 23.5 | 19.6 | 22.3 | 29.9 | x5.0 per x4 (`mir`) |
 | `nested-composable-branches` | depth 120 | 0.4 | 0.3 | 0.3 | 1.5 | below 5 ms |
-| `many-composables` | 4096 composables | 31.5 | 100.8 | 359.2 | 871.7 | x5.1 per x4 (`mir`) |
+| `many-composables` | 4096 composables | 29.0 | 37.7 | 173.4 | 386.9 | x4.7 per x4 (`mir`) |
 | `composable-lambdas` | 4096 lambdas | 39.8 | 19.0 | 40.6 | 117.4 | x4.5 per x4 |
-| `nested-compose-ui` (now compiled) | depth 128 | 48.7 | 17.4 | 59.7 | 152.3 | x1.93 per x2 on average |
+| `nested-compose-ui` (now compiled) | depth 128 | 44.3 | 14.9 | 53.4 | 144.6 | x2.09 per x2 on average |
 
-Every stage grows roughly linearly. The transform costs about the borrow checker's time or less except for `many-composables`, where each skippable body's prologue keeps four arguments (one switch over four bit patterns each) and its code is what the backend then spends most on: about 0.2 ms of `lower` and `clif` per composable of four parameters, linear. Sharing that prologue in a runtime helper is a follow-up if large UIs show it.
+Every stage grows roughly linearly. The transform costs about the borrow checker's time or less except for `many-composables`, where each skippable body's prologue keeps four arguments and its code is what the backend then spends most on. At apply time each argument was kept by a switch over its four bit patterns, about 0.29 ms of `lower` and `clif` per composable of four parameters (100.8, 359.2 and 871.7 ms for `compose`, `lower` and `clif` at 4096). Keeping each `Copy` argument with one call of `prism_compose_keep` (D8, refined at review) halves that, to about 0.14 ms per composable, with the same run-time behavior; the row above is measured after it. The rest is the restart body, the skip test and the forwarded bits of each call; one runtime call keeping all of a body's arguments at once is a follow-up if large UIs show it.
 
 | Run-time operation | Cost |
 |---|---|
@@ -447,6 +449,7 @@ Found at review (2026-10-19), each with a regression fixture. D5 relies on one p
 
 - **A `continue` gives its loop call-site groups.** A `continue` can skip some calls of one iteration and not of another, so `Inner(1); if (c) { continue }; Inner(2)` in a loop matched `Inner(2)` with an old `Inner(1)` group and skipped it on bits meant for the other call, and two `remember`s of one type read each other's slots. Lowering marks a loop region that a `continue` targets (`GroupRegion::continued`, shown as `loop 0, continued` in dumps), and the transform runs each composable call and `remember` made directly in its group in a replaceable group keyed by `H(loop key, "call site", ordinal)`, the ordinal counting them in block order. A call-site group ends when the call returns. Compile-time cost: one flag per `continue`, and one group per such call; nothing elsewhere. Run-time cost: one group per such call per iteration, only in loops with a `continue`. `key` calls need none, since their keys are already per call site, so keyed items still reorder across iterations. Rejected: a group per iteration of such loops, or a region around the rest of an iteration after each `continue` (both put `key` groups of different iterations under different parents, so the common `if (item.hidden) { continue }; key(item.id) { ... }` would lose every item's state on a reorder); passing every argument as uncertain in such loops (fixes the skipping but not the `remember` slots).
 - **A `when` whose tests compose is a region as a whole** (`GroupStep::WhenTests`, `when 0 tests`), around its tests and its branches' regions, which are numbered inside it. Which tests run depends on which match, so the tests' calls and the calls after the `when` could match each other's groups. Compile-time cost: one walk of the patterns' and guards' marks per `when` of a composable body. Run-time cost: one group per such `when`, which is rare. Rejected: call-site groups for the tests' calls (the transform cannot tell a test from other code without one more marker).
+- **`Copy` arguments are kept by one runtime call** (D8): `prism_compose_keep` takes the passed bits and makes D8's choice, halving the backend's time per skippable composable (D24). Run-time cost: unchanged, since it makes the calls the switch made. Rejected: a helper keeping every argument of a body at once (slot types and values of mixed sizes passed through arrays, for a smaller further gain; a follow-up); the helper for function values too (it would duplicate each value before knowing whether it is kept).
 - **A local borrowed mutably forgets what it copies** (D4). `var x = n; val r = &mut x; *r = m; Inner(x)` wrote `x` through `r` in the same block, and the map still knew `x` as a copy of `n`, so `Inner` trusted `n`'s bits. A mutable borrow of a local, or a closure borrowing it, now removes it from the map, and so does being a target of a destructuring.
 
 ## Risks / Trade-offs

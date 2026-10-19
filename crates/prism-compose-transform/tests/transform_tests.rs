@@ -90,9 +90,10 @@ fn remember_with_two_keys() {
             _ => None,
         })
         .collect();
-    let changed = operations.iter().filter(|name| *name == "changed").count();
-    // Two kept parameters compared, then the two keys.
-    assert_eq!(changed, 4, "{:?}", operations);
+    let count = |wanted: &str| operations.iter().filter(|name| *name == wanted).count();
+    // Two kept parameters, each kept by one call, then the two keys compared.
+    assert_eq!(count("keep"), 2, "{:?}", operations);
+    assert_eq!(count("changed"), 2, "{:?}", operations);
     let dump = file.dump();
     assert!(dump.contains("composer changed<Bool>"), "{}", dump);
     assert!(dump.contains("remembered<Int>"), "{}", dump);
