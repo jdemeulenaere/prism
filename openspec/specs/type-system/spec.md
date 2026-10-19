@@ -225,7 +225,7 @@ The type checker MUST validate struct instantiations, field access expressions, 
 - **THEN** both declarations are accepted, the qualified paths `A.None` and `B.None` resolve, a bare `None` resolves as a `when` pattern over either enum, and a bare `None` elsewhere emits `E4001`
 
 #### Scenario: Type names are not values
-- **WHEN** a struct or enum name is used as a value (`fun f(): User = User`), a field is read from a struct name (`User.name`), or an enum name is called (`A()`)
+- **WHEN** a struct without a companion value, or an enum, is named as a value (`fun f(): User = User`), a field is read from a struct name (`User.name`), or an enum name is called (`A()`)
 - **THEN** the type checker emits `E4002`, `E4006` and `E4004` respectively, while a struct constructor call `User(...)` and an enum variant path `A.X` or `A.Y(1)` still typecheck
 
 #### Scenario: Unknown nominal type name stays opaque
@@ -920,6 +920,35 @@ A member or extension looked up on a `MutableState<T>` receiver and not found fo
 - **WHEN** `fun <T> State<T>.describe(): String = "state"` and `fun main() { val m = mutableStateOf(2); println(m.read { n -> n + 1 }); println(m.describe()) }` run
 - **THEN** stdout is `3` and `state`
 
+### Requirement: A Struct May Have a Companion Value
+A top-level `val` MAY have the name of a struct declared in the same file, as that struct's companion value. The name MUST then mean the struct in a type position and the struct's constructor as the callee of a call. Anywhere else in a value position, as a receiver or before `.field` included, it MUST mean the value.
+
+#### Scenario: A companion value and its struct
+- **WHEN** a file declares `struct Color : Copy { val argb: Int }`, `struct Colors : Copy { val Red: Color }`, `val Color: Colors = Colors(Red = Color(0xFFFF0000))` and `fun pick(c: Color): Int = c.argb`, and `fun main() { println(pick(Color.Red)); println(pick(Color(7))) }` runs
+- **THEN** it prints `4294901760` and `7`: `Color` is the struct in `c: Color`, the constructor in `Color(7)`, and the value in `Color.Red`
+
+#### Scenario: An extension called on a companion value
+- **WHEN** a file declares `struct Gap : Copy { val size: Int }`, `struct Gaps : Copy { val None: Gap }`, `val Gap: Gaps = Gaps(Gap(0))` and `fun Gaps.of(size: Int): Gap = Gap(size)`, and `fun main() { println(Gap.of(8).size) }` runs
+- **THEN** it prints `8`
+
+### Requirement: Only a Same-File Struct and Value Share a Name
+Every other pair of top-level declarations with one name MUST still be rejected with `E4010`: two `val`s, a `val` and an enum or a function, and a `val` and a struct that are not declared in the same file, an imported one included. An extension is a member of its receiver type, not a top-level name, so a `val` may share its name, as before.
+
+#### Scenario: A value named like an imported struct
+- **WHEN** a file imports a module exporting `public struct User` and declares `val User: Int = 1`
+- **THEN** the type checker emits `E4010` for `User`
+
+#### Scenario: A value named like an enum
+- **WHEN** a file declares `enum Mode { On, Off }` and `val Mode: Int = 1`
+- **THEN** the type checker emits `E4010` for `Mode`
+
+### Requirement: Importing a Struct With Its Companion Value
+Importing a module MUST bring a public struct and its public companion value under their shared name, each meaning what it means in its own file.
+
+#### Scenario: Using an imported companion value
+- **WHEN** `lib/shape.prism` declares `public struct Size : Copy { val w: Int }`, `public struct Sizes : Copy { val Zero: Size }` and `public val Size: Sizes = Sizes(Size(0))`, and `app/main.prism` imports `/lib/shape` and declares `fun main() { val s: Size = Size.Zero; println(s.w + Size(2).w) }`
+- **THEN** `prism run app/main.prism` prints `2`
+
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
 
@@ -1034,3 +1063,8 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **`MutableState<T>` converts to `State<T>`** (D3). One built-in subtyping edge, in the positions where `&mut T` converts to `&T`, keeping the word (`Rvalue::Subtype`), with type arguments inferred through it; a member or extension lookup that misses on a `MutableState` receiver is retried on `State`. It costs one constructor comparison in assignability and one more hash lookup on a miss. Rejected: a general nominal subtyping or interface mechanism before traits.
+
+Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **Companion values** (D4). A top-level `val` may share its name with a struct of the same file: a type position or a call means the struct, any other value position the value, so `Modifier.padding(16.dp)`, `Color.Red` beside `Color(0xFF336699)` and `TextStyle.Default` read as in Compose without Kotlin's `companion object`. Every other same-name pair stays `E4010`, a pair across files included, so an import never silently changes what a local struct name means; a `val` and an extension of one name coexist, as an extension is a member of its receiver. The checker defines the pair through `define_companion`, the value being the name's innermost binding, and a call or struct pattern finds the struct through `lookup_constructor`; the cost is one filtered lookup and one kind compare. A prelude module cannot give a struct a companion, since the prelude layer keeps one symbol per name. Rejected: struct field defaults (`Modifier()`), enum colours, static members, pairs across files.
+- **Intrinsic properties of `Int`** (apply). `n.dp` and `n.sp` are found through the member table of the file and its imports, as `String` and `List` members are, and typed as a call of their built-in with the `Int` copied, so any later unit property needs no new rule. Rejected: special-casing `dp` and `sp` by name.

@@ -405,6 +405,17 @@ An exported intrinsic struct MUST be an ABI entry with its name, type parameters
 - **WHEN** the ABI of `/prism/compose/runtime` is extracted
 - **THEN** it holds `public intrinsic struct Composition`, `public intrinsic struct RecomposeScope : Copy` and `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`, and removing the `Copy` marker of `RecomposeScope` changes the module's ABI hash
 
+### Requirement: Companion Values in the ABI
+A public struct and its public companion value MUST both be exported, as two symbols with one name: the struct with its definition and the value with its declared type. Adding, removing or retyping the companion value MUST change the file's ABI hash.
+
+#### Scenario: A struct and its companion value are exported
+- **WHEN** `prism abi` runs on a file declaring `public struct Gap : Copy { val size: Int }`, `public struct Gaps : Copy { val None: Gap }` and `public val Gap: Gaps = Gaps(Gap(0))`
+- **THEN** it lists both `public struct Gap : Copy` and `public val Gap: Gaps`
+
+#### Scenario: Adding a companion value changes the ABI hash
+- **WHEN** `public val Gap: Gaps = Gaps(Gap(0))` is added to a file that declares `public struct Gap` and `public struct Gaps`
+- **THEN** the file's ABI hash changes
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
@@ -465,3 +476,8 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconciled with `compose-runtime`, `receiver-lambdas` and `compose-hot-reload` and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **Intrinsic structs in the ABI** (D16): an exported intrinsic struct is an ABI entry with its name, type parameters and markers, so changing a marker changes the hash, but not its layout, which comes from the compiler whose version every artifact key holds.
+
+Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **A struct and its companion value are two symbols of one name** (D4). `FileAbi::symbols` already held a list, so both are exported, sorted by kind before name, and the order of the two declarations does not change the hash; an import brings both.
+- **Default inputs ride on the default's hash** (D26, review). Each parameter with a default also records which of the context, the receiver and the earlier parameters its default may read, computed from the default's syntax in Phase 1, so a caller in another file borrows exactly what the generator takes (`mir`). It follows from the syntax the ABI hash already covers, so it is not hashed again, and editing a default still recompiles exactly the files that a changed default recompiled before.

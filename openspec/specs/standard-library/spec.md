@@ -214,6 +214,39 @@ An `intrinsic var` property MUST be an intrinsic extension property that can als
 - **WHEN** `fun f(s: State<Int>) { s.value = 1 }` is checked
 - **THEN** the type checker emits `E4003`, saying that a `State<Int>` is read-only, with help suggesting a `MutableState<Int>` parameter
 
+### Requirement: The UI Modules Are Bundled Outside the Prelude
+The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` as bundled modules that are not in the prelude, all files of the package `prism.compose` beside `/prism/compose/runtime`. Their files MUST be checked, formatted and compiled by the library tests like every bundled module, and their externals MUST match `prism-ui`'s entry points.
+
+#### Scenario: The UI modules' externals match the entry points
+- **WHEN** `library_tests.rs` checks and compiles every bundled module
+- **THEN** `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism` and `prism/compose/material3.prism` pass `prism check`, `prism fmt --check` and the backend's check of each external, with no `E6005`
+
+#### Scenario: The UI modules are not in the prelude
+- **WHEN** `prism check --explain-cache` runs on a file without imports, and then on the same file with `import /prism/compose/material3`
+- **THEN** the first lists no file of `prism/compose/` but `prism/compose/runtime.prism`, and the second also lists `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism` and `prism/compose/material3.prism`
+
+### Requirement: The UI Intrinsics
+The intrinsic catalog MUST hold, as intrinsics of `/prism/compose/ui`: the one-word structs `NodeId : Copy`, with `package` visibility, and `HandlerId : Copy`, public, whose equality is the runtime entry `prism_ui_handlers_equal`; the `package` composables `Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit)` and `LeafNode(kind: Int, update: (NodeId) -> Unit)`; and the function `runApp`. A declaration of one of them with another signature or in another module MUST be `E4029`.
+
+#### Scenario: The public signature of runApp
+- **WHEN** `prism abi` prints the ABI of `/prism/compose/ui`
+- **THEN** it holds the public intrinsic function `runApp` with the parameters `title: &String`, `width: Int` and `height: Int`, each with a default, and `content: escaping compose () -> Unit`, the public intrinsic struct `HandlerId : Copy`, and the public intrinsic properties `Int.dp` and `Int.sp`, and none of `NodeId`, `Node` and `LeafNode`, which are not public
+
+#### Scenario: A UI intrinsic in another library module
+- **WHEN** a library test module declares `private intrinsic compose fun LeafNode(kind: Int, update: (Int) -> Unit)`
+- **THEN** the type checker emits `E4029`, saying that the compiler provides `LeafNode` only in `/prism/compose/ui`
+
+#### Scenario: Calling runApp with its defaults
+- **WHEN** `fun main() { runApp { } }` runs with `import /prism/compose/ui` under `prism run --headless` with the script `dump`
+- **THEN** stdout is `window 800x600`: `width` and `height` took their defaults
+
+### Requirement: The Unit Properties
+The catalog MUST hold the public intrinsic properties `val Int.dp: Dp` and `val Int.sp: TextUnit` of `/prism/compose/ui`, lowered as the constructions `Dp(n)` and `TextUnit(n)`, and members of `Int` wherever that module is visible.
+
+#### Scenario: Unit properties are members of Int
+- **WHEN** a file declares `import /prism/compose/ui` and `fun Int.dp(): Int = 0`
+- **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/ui` always takes precedence
+
 ## Design Rationale
 
 Decisions from `standard-library` (planned autonomously on 2026-10-18, implemented and reviewed the same day, and logged in `docs/decisions-for-review.md`). Why `prism` is a reserved root package is in the Design Rationale of `package-resolution`.
@@ -245,3 +278,8 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 
 - **The state declarations** (D2). `State<T>` and `MutableState<T>` are `public intrinsic struct ... : Copy`, `mutableStateOf`, `read`, `update`, `edit` and the composable `SideEffect` are intrinsic functions of `/prism/compose/runtime`, after Jetpack's names; `read`, `update` and `edit` take a shared receiver, so a handler's captured `val` handle calls them. The catalog types `value` by its own rule (a copy, a place or an assignment target, compose D5) rather than as a computed property.
 - **`intrinsic var`** (D4). `MutableState<T>.value` is assigned, so the property form gains `intrinsic var`, checked against the catalog's read-only or writable flag (`E4029` for a mismatch) and recorded in the ABI, as Kotlin declares `val value` on `State` and `var value` on `MutableState`. The writability of an assignment comes from the declaration found. Rejected: one `intrinsic val` whose writability depends on the receiver (the ABI would not say which handle is writable), and ordinary extension properties (a follow-up).
+
+Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **The toolkit modules** (D21, user direction). `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` are files of the package directory `prism/compose/` beside `/prism/compose/runtime`, outside the prelude, importing each other with sibling imports (`import ui`) in one direction, as Compose's artifacts depend: `ui` on nothing of the toolkit, `foundation` and `layout` on `ui`, `material3` on all three. A program that imports none pays nothing; one importing `material3` loads four cached ABIs. Rejected: one `/prism/ui`, toolkit modules in the prelude.
+- **The UI intrinsics** (D3, D7, D15, D23). `NodeId` (`package`) and `HandlerId` (public, whose catalog equality entry is `prism_ui_handlers_equal`) are one-word intrinsic structs; `Node` and `LeafNode` are `package` intrinsic composables; `runApp` is an intrinsic so that `E4030` names it and its call builds a root content adapter, its defaults being ordinary generators in `/prism/compose/ui` that `BuiltinFunction::declaration_with_defaults` names; `Int.dp` and `Int.sp` are intrinsic properties lowered as constructions. Setters are `package` externals, so only the toolkit's files reach them. `ModifierElement` and `HandlerId` stay public because programs read chains, until fields have visibility.

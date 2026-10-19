@@ -26,7 +26,7 @@ A read of the intrinsic property `n.dp` or `n.sp` MUST lower to the construction
 ## MODIFIED Requirements
 
 ### Requirement: Default Values Are Generator Bodies
-Each parameter's default value MUST be lowered to its own body, which returns the parameter's value and takes a shared borrow of each of the context, the receiver and the earlier arguments that the default may read: an earlier parameter or the context when its name appears in the default, the receiver and the context when `this` or any other name appears, and all of them when the default holds a block, a closure, a `when` or a jump, or when the parameter's type may hold a borrow (a reference, a function type or a type parameter). A call omitting that argument MUST call the generator with borrows of those same arguments of its own.
+Each parameter's default value MUST be lowered to its own body, which returns the parameter's value and takes shared borrows of those of the context, the receiver and the earlier arguments that the default may read: a parameter or the context named in it, the receiver and the context when it names `this` or anything else, or all for a block, closure, `when` or jump, or a type that may hold a borrow. A call omitting the argument MUST call the generator with borrows of the same arguments.
 
 #### Scenario: Default reading an earlier parameter
 - **WHEN** `fun f(a: Int, b: Int = a + 1): Int = b` is declared and `fun g(): Int = f(1)` is lowered

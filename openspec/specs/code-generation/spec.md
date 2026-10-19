@@ -657,6 +657,27 @@ The initializer of a top-level value MUST run between a call that marks program 
 - **WHEN** `val Theme: MutableState<Int> = mutableStateOf(3)` and `compose fun C() { println(Theme.value) }` are declared and `fun main() { val c = composition { C() } }` runs with `--check-allocations`
 - **THEN** stdout is `3`, and the exit status is 0
 
+### Requirement: UI Entry Points Are Checked Like Runtime Entry Points
+The JIT MUST resolve `prism-ui`'s entry points by symbol, as it resolves the runtime's and the compose runtime's. The backend MUST find every external that names one in `prism-ui`'s table, and MUST compare its machine signature with the table's (code-generation, "Externals Match the Runtime").
+
+#### Scenario: A UI entry point declared with the wrong signature
+- **WHEN** a library test module declares `private external fun prism_ui_set_enabled(node: Int, enabled: Double)` and a program calls it
+- **THEN** compiling the program reports `E6005`, saying that the entry point `prism_ui_set_enabled` takes `i8` where the declaration passes `f64`
+
+### Requirement: One-Word Intrinsic Structs Travel as Words
+A value of an intrinsic struct that the catalog lays out as one word (`NodeId`, `HandlerId`, `State<T>`, `MutableState<T>`, `RecomposeScope`, `Composition`) MUST be passed to and returned from functions and externals as a 64-bit word, not by address. Its representation is fixed by the catalog, so no signature depends on a declared type's layout.
+
+#### Scenario: An external taking a node handle
+- **WHEN** `prism dump-clif` runs on a library test module declaring `private external fun prism_ui_set_enabled(node: NodeId, enabled: Bool)` and a call of it
+- **THEN** the call passes two machine values, a 64-bit word and an 8-bit `Bool`, and no address
+
+### Requirement: Intrinsic Structs Compared Through a Runtime Entry
+When the catalog gives an intrinsic struct an equality entry, `==` of two of its values, and its part in the equality glue of every type that holds it, MUST call that entry with the two words and use its result, instead of comparing the words.
+
+#### Scenario: Comparing handler ids
+- **WHEN** `prism dump-clif` runs on a library test module of `/prism/compose/ui` declaring `fun same(a: HandlerId, b: HandlerId): Bool = a == b` and `struct Pair : Copy { val h: HandlerId }`, with a comparison of two `Pair`s
+- **THEN** the body of `same` and the equality glue of `Pair` each call `prism_ui_handlers_equal` with two 64-bit words
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -790,3 +811,9 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 
 - **The backend of state** (D19). Handles are the one-word intrinsic struct layout with its hidden `handle: Int` field, so copies, clone and `==` need no glue of their own. Each state operation is a direct call of its entry point with the handle word, the slot type record of the value type (whose equality entry is the type's equality glue, strings, lists and function types included), and moved values by address, followed by the failure test of compose D14 and a cold block calling `prism_compose_state_error` with the location. A top-level accessor brackets its initializer with `prism_compose_begin_program`, which returns whether it pushed the program as creation owner (not while compose is unused, from the review), and `prism_compose_end_program` with that answer.
 - **Type fingerprints hash type arguments** (from the review). A struct or enum hashes its type arguments as well as its substituted fields, so a struct without fields, such as a state handle, has a fingerprint per argument: `MutableState<Int>` and `MutableState<String>` never share an accessor's contract or a slot type.
+
+Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **`UI_FUNCTIONS` beside the runtime tables** (D2). The entry-point lookup searches `RUNTIME_FUNCTIONS`, `COMPOSE_FUNCTIONS`, then `UI_FUNCTIONS`, and `Linker::new` registers all three, so `prism-ui`'s externals are checked for `E6005` like the runtime's; the cost is one more table per external a unit declares.
+- **One-word intrinsic structs are words** (apply). Intrinsic structs travelled by address; they are now `i64` scalars in machine signatures, laid out as one `Int` in memory, and the composer and state operations that wrote a handle through its destination's address write it as a scalar. So an external taking a `NodeId` passes a word and no signature depends on a declared type's layout.
+- **Equality through a catalog entry** (D23). An intrinsic struct whose catalog names an equality entry (`HandlerId`, `prism_ui_handlers_equal`) compares through a call of that entry, inline and in every equality glue that holds it, so a `Modifier` holding handler elements compares its handlers by code and captures.

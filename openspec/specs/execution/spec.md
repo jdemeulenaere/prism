@@ -909,6 +909,24 @@ Under `--check-allocations`, every cell that the program owns MUST be freed, its
 - **WHEN** `compose fun Empty() { }` and `fun main() { val s = mutableStateOf(composition { Empty() }) }` run with `--check-allocations`
 - **THEN** the program exits with status 0: releasing the cell disposes the composition before live compositions are counted
 
+### Requirement: Headless Runs
+`prism run --headless[=<width>x<height>] [--events <script>] <file.prism>` MUST run the program with no window: `runApp` runs headless, in a window of the given size when one is given and of its own `width` and `height` otherwise. Without `--events`, `runApp` MUST compose and lay out its content and return. The options MUST come before the file, and `--events` without `--headless` MUST be a usage error with status 1.
+
+#### Scenario: A headless run of the given size
+- **WHEN** `prism run --headless=320x200 --events script main.prism` runs on `fun main() { runApp(width = 800, height = 600) { } }` with `import /prism/compose/ui`, and `script` holds `dump`
+- **THEN** stdout is `window 320x200` and a newline, and the exit status is 0
+
+#### Scenario: Events without headless mode
+- **WHEN** `prism run --events script main.prism` runs
+- **THEN** stderr holds the usage of `prism run`, nothing runs, and the exit status is 1
+
+### Requirement: Event Scripts Are Parsed Before the Program Runs
+`prism run` MUST read and parse the event script before it compiles or runs the program. A script it cannot read, or a line it cannot parse, MUST be reported on stderr as `Error: <script>:<line>: <message>`, with status 1 and without running the program.
+
+#### Scenario: An unknown script command
+- **WHEN** `prism run --headless --events events.txt main.prism` runs a program that prints before calling `runApp`, and `events.txt` holds `clik "+"` on its first line
+- **THEN** stderr is exactly `Error: events.txt:1: unknown command 'clik'` and a newline, stdout is empty, and the exit status is 1
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -993,3 +1011,7 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 
 - **State errors are located runtime errors** (D14). `stale state handle`, `state accessed while borrowed`, `state written during composition` and `state created during composition outside remember` are `PanicKind`s after `CompositionMisuse`, raised at the access through a recorded kind and a cold block with its location, since unlike composition misuse ordinary programs reach them.
 - **Program cells are freed first under the check** (D12). The finish report frees the program's cells, repeatedly, since a cell may hold a composition whose disposal frees cells, then reports live compositions, then allocations; without the check they are never freed, as top-level values are not.
+
+Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **Headless runs and event scripts** (D16). `--headless[=<width>x<height>]` runs `runApp` without a window, the size overriding `runApp`'s, and `--events <script>` drives it; `--events` alone is a usage error, since a program wanting a window would otherwise silently do nothing. The script is parsed before the program compiles, so a syntax error is `Error: <script>:<line>: <message>` with status 1 and nothing runs, rather than surfacing after the program's earlier output. Fixtures gain `// events:` and `// headless:` headers.
