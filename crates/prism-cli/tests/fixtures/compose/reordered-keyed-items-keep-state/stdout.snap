@@ -1,0 +1,27 @@
+computed 1
+row 1 10
+computed 2
+row 2 20
+computed 3
+row 3 30
+root
+  replaceable -6033661391146342411
+    restart -4927393828324439895
+      slot Int
+      replaceable -9083850186935839754
+        movable -5029810514579441176 (3)
+          replaceable -9014178854254755197
+            restart 4923049028387322629
+              slot Int
+              slot Int
+        movable -5029810514579441176 (1)
+          replaceable -9014178854254755197
+            restart 4923049028387322629
+              slot Int
+              slot Int
+        movable -5029810514579441176 (2)
+          replaceable -9014178854254755197
+            restart 4923049028387322629
+              slot Int
+              slot Int
+nodes

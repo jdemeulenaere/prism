@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun Label(t: String) { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 }; println(t) }
+compose fun Screen() { println("screen"); Label("a") }
+fun main() { val c = composition { Screen() }; println(c.recompose()) }

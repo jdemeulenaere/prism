@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun Rows(n: Int) { for (i in 1..n) { val r = remember { println("row $i"); i } }; val after = remember { println("after"); 0 } }
+fun screen(n: Int): compose () -> Unit = { Rows(n) }
+fun main() { val c = composition(screen(2)); c.setContent(screen(3)); c.setContent(screen(1)); print(c.dump()) }

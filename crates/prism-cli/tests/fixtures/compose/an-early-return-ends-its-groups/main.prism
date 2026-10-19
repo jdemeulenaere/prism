@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+compose fun Leaf() { }
+compose fun E(stop: Bool) { if (stop) { Leaf(); return }; Leaf() }
+fun screen(stop: Bool): compose () -> Unit = { E(stop) }
+fun main() { val c = composition(screen(true)); c.setContent(screen(false)); println("done") }

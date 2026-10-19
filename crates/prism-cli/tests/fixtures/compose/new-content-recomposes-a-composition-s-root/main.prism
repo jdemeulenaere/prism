@@ -1,0 +1,3 @@
+// expect: ok
+// run: 0
+fun main() { val c = composition { println(1) }; c.setContent { println(2) }; println(c.recompose()) }

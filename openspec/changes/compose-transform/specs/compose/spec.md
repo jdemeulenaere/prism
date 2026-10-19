@@ -195,6 +195,10 @@ A composable closure MUST run its body in a replaceable group keyed by the call 
 - **WHEN** `compose fun Each(n: Int, item: compose (Int) -> Unit) { for (i in 1..n) { item(i) } }` and `fun main() { val c = composition { Each(2) { i -> println("item $i") } } }` run
 - **THEN** stdout is `item 1` and `item 2`
 
+#### Scenario: A composable receiver lambda runs
+- **WHEN** `struct ColumnScope : Copy { val depth: Int }`, `compose fun ColumnScope.Item(n: Int) { println("item $n at depth $depth") }`, `compose fun Column(content: compose ColumnScope.() -> Unit) { val scope = ColumnScope(1); scope.content() }` and `fun main() { val c = composition { Column { Item(1); Item(2) } } }` run
+- **THEN** stdout is `item 1 at depth 1` and `item 2 at depth 1`: the lambda's receiver is its first parameter, before the composer and its change word
+
 ### Requirement: Kept Values Are Released With Their Group
 The kept arguments of a skippable composable and the values of `remember` MUST be released with the slot that holds them: when their group is removed, when a changed key forgets them, or when the composition is disposed, after the pass ends.
 

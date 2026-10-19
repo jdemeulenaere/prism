@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun C(label: String) { val id = remember { println("computed"); 7 }; println(label + id.toString()) }
+fun screen(): compose () -> Unit = { C("x") }
+fun main() { val c = composition(screen()); c.setContent(screen()); c.setContent(screen()) }

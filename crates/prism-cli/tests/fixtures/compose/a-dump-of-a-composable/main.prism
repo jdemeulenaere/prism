@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+compose fun Badge(n: Int) { }
+fun main() { val c = composition { Badge(7) }; print(c.dump()) }

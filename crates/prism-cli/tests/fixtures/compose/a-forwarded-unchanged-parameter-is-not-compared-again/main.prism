@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+compose fun Inner(n: Int) { println("inner") }
+compose fun Outer(n: Int, s: String) { Inner(n) }
+fun screen(s: String): compose () -> Unit = { Outer(5, s.clone()) }
+fun main() { val c = composition(screen("a")); c.setContent(screen("b")) }

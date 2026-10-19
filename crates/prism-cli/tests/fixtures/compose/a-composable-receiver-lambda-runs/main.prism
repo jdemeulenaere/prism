@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+struct ColumnScope : Copy { val depth: Int }
+compose fun ColumnScope.Item(n: Int) { println("item $n at depth $depth") }
+compose fun Column(content: compose ColumnScope.() -> Unit) { val scope = ColumnScope(1); scope.content() }
+fun main() { val c = composition { Column { Item(1); Item(2) } } }

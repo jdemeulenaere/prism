@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun Leaf() { }
+compose fun Tree(s: String) { Leaf(); Leaf() }
+fun main() { val c = composition { Tree("a") }; print(c.dump()) }

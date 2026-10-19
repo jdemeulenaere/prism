@@ -1,0 +1,6 @@
+// expect: E5001
+fun main() {
+    val c = composition { }
+    val d = c
+    val e = c
+}

@@ -1,0 +1,3 @@
+// expect: ok
+// run: 0
+fun main() { val c = composition { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 }; println("root") }; println(c.recompose()); println(c.recompose()) }

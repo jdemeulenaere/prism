@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun V(on: Bool) { if (on) { val a = remember { println("on"); 1 } } else { val b = remember { println("off"); 2 } } }
+fun screen(on: Bool): compose () -> Unit = { V(on) }
+fun main() { val c = composition(screen(true)); c.setContent(screen(false)); c.setContent(screen(true)) }

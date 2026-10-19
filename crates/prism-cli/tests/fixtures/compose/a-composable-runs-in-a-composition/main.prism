@@ -1,0 +1,4 @@
+// expect: ok
+// run: 0
+compose fun Hello(n: Int) { println("hello $n") }
+fun main() { val c = composition { Hello(1) } }

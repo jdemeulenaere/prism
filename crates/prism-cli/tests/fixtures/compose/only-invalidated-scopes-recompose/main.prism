@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun Child(n: Int) { val s = currentRecomposeScope(); val first = remember { if (n == 1) { s.invalidate() }; 0 }; println("child $n") }
+compose fun Parent() { println("parent"); Child(1); Child(2) }
+fun main() { val c = composition { Parent() }; println(c.recompose()); println(c.recompose()) }

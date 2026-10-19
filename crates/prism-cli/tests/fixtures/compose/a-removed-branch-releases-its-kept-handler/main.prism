@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+compose fun Plus(onClick: escaping () -> Unit) { }
+fun screen(show: Bool): compose () -> Unit = { if (show) { val a = 1; val b = 2; Plus(onClick = { println(a + b) }) } }
+fun main() { val c = composition(screen(true)); c.setContent(screen(false)); print(c.dump()) }
