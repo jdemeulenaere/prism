@@ -1,0 +1,4 @@
+// expect: ok
+struct P { var x: Int, var y: Int }
+fun run(f: () -> Int): Int = f()
+fun f(r: &mut P): Int { val g = { r.x += 1; r.x }; r.y = 5; return run(g) }

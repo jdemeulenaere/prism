@@ -1,0 +1,7 @@
+// expect: E5003
+struct User { var name: String }
+struct Order { var user: User, var email: String }
+fun greet(s: &String): Int = 1
+fun show(u: &User): Int = 1
+fun run(f: () -> Int): Int = f()
+fun g() { var o = Order(User("a"), "b"); val g = { o.email = "z"; 1 }; greet(o.email); run(g) }

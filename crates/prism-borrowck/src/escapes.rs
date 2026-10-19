@@ -23,10 +23,10 @@ use crate::location::locations;
 use crate::places;
 use prism_ast::Span;
 use prism_mir::{
-    AggregateKind, Body, BodyOwner, Callee, Capture, LocalId, LocalKind, MirFile, Operand, Place,
-    Projection, Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, Body, BodyId, BodyOwner, Callee, Capture, LocalId, LocalKind, MirFile, Operand,
+    Place, Projection, Rvalue, StatementKind, TerminatorKind,
 };
-use prism_typed_tree::{BuiltinFunction, Type};
+use prism_typed_tree::{BuiltinFunction, Type, Widening, WideningReason};
 use std::collections::HashSet;
 
 /// The escapes of `body` of `file`, with the loans of the escaping values, whose end the
@@ -148,7 +148,7 @@ pub(crate) fn check_escapes(
                     .map_or(Value::Other, |place| Value::Local(place.local)),
                 operand_span(operand, statement.span),
             ),
-            Rvalue::Closure { captures, .. } => (Value::Closure(captures), statement.span),
+            Rvalue::Closure { body, captures } => (Value::Closure(*body, captures), statement.span),
             _ => (Value::Other, statement.span),
         };
         escaped.extend(checker.loans(&items));
@@ -166,8 +166,8 @@ fn operand_span(operand: &Operand, otherwise: Span) -> Span {
 
 /// The escaping value, as far as the diagnostic needs it.
 enum Value<'a> {
-    /// A closure built at the escape, from these captures.
-    Closure(&'a [Capture]),
+    /// A closure built at the escape, of this body, from these captures.
+    Closure(BodyId, &'a [Capture]),
     /// The value of a local.
     Local(LocalId),
     Other,
@@ -216,9 +216,9 @@ impl Escapes<'_> {
 
     /// The captures of the closure `value` is: one built at the escape, or the closure a
     /// temporary was assigned once.
-    fn closure_captures<'v>(&'v self, value: &'v Value) -> Option<&'v [Capture]> {
+    fn closure_captures<'v>(&'v self, value: &'v Value) -> Option<(BodyId, &'v [Capture])> {
         match value {
-            Value::Closure(captures) => Some(captures),
+            Value::Closure(body, captures) => Some((*body, captures)),
             Value::Local(local) if self.body.locals[*local].kind == LocalKind::Temporary => {
                 self.body.blocks.iter().find_map(|(_, block)| {
                     block
@@ -229,7 +229,9 @@ impl Escapes<'_> {
                                 if place.as_local() == Some(*local) =>
                             {
                                 match rvalue.as_ref() {
-                                    Rvalue::Closure { captures, .. } => Some(captures.as_slice()),
+                                    Rvalue::Closure { body, captures } => {
+                                        Some((*body, captures.as_slice()))
+                                    }
                                     _ => None,
                                 }
                             }
@@ -249,16 +251,81 @@ impl Escapes<'_> {
         value: &Value,
         item: Item,
     ) -> Option<(Option<String>, Span)> {
-        let captures = self.closure_captures(value)?;
+        self.owning_capture_index(state, value, item)
+            .map(|(name, span, _)| (name, span))
+    }
+
+    /// [`Self::owning_capture`], with the path the closure's body widened the capture from
+    /// (D10 of `path-captures`).
+    fn owning_capture_index(
+        &self,
+        state: &Holdings,
+        value: &Value,
+        item: Item,
+    ) -> Option<(Option<String>, Span, Option<&Widening>)> {
+        let (body, captures) = self.closure_captures(value)?;
         let index = self.borrows.item_index(item);
-        captures.iter().find_map(|capture| match capture {
-            Capture::Owned(Operand::Copy(place, span) | Operand::Move(place, span)) => self
-                .flow
-                .capture_items(state, capture)
-                .contains(&index)
-                .then(|| (self.body.locals[place.local].name.clone(), *span)),
-            _ => None,
-        })
+        captures
+            .iter()
+            .enumerate()
+            .find_map(|(position, capture)| match capture {
+                Capture::Owned(Operand::Copy(place, span) | Operand::Move(place, span)) => self
+                    .flow
+                    .capture_items(state, capture)
+                    .contains(&index)
+                    .then(|| {
+                        let widening = self
+                            .file
+                            .bodies
+                            .get(body)
+                            .and_then(|closure| closure.capture_widenings.get(position))
+                            .and_then(Option::as_ref);
+                        (self.body.locals[place.local].name.clone(), *span, widening)
+                    }),
+                _ => None,
+            })
+    }
+
+    /// The help and note of `E5007` for a closure owning the reference `name`, of type `ty`,
+    /// which its body widened from a path it could not copy (D10 of `path-captures`): a copy or
+    /// clone of the path into a `val`, and why the path was not copied.
+    fn widened_help(
+        &self,
+        name: &str,
+        ty: &Type,
+        widening: &Widening,
+    ) -> Option<(String, Option<String>)> {
+        let types = &self.file.types;
+        let path = prism_typed_tree::path_text(name, ty, &widening.projections, types);
+        let path_type = prism_typed_tree::path_type(ty, &widening.projections, types)?;
+        let expression = path.trim_start_matches('*');
+        let field = expression.rsplit('.').next().filter(|field| *field != name);
+        let fresh = field.unwrap_or(if name == "m" { "k" } else { "m" });
+        let help = if types.is_copy(&path_type) {
+            format!(
+                "copy '{}' into a 'val' before the closure and capture that instead: 'val {} = {}'",
+                path, fresh, expression
+            )
+        } else if types.is_clone(&path_type) {
+            format!(
+                "clone '{}' into a 'val' before the closure and capture that instead: 'val {} = {}.clone()'",
+                path, fresh, expression
+            )
+        } else {
+            return None;
+        };
+        let note = match widening.reason {
+            WideningReason::VariableField => Some(
+                "a closure copies a field read through a reference only when the field is a 'val'"
+                    .to_string(),
+            ),
+            WideningReason::MutableReference => Some(format!(
+                "'{}' is a mutable reference, whose referent may be replaced",
+                name
+            )),
+            WideningReason::NotCopy | WideningReason::VariableBinding => None,
+        };
+        Some((help, note))
     }
 
     /// The error for a value holding `items` that escapes at `span`, when it may hold a
@@ -287,7 +354,11 @@ impl Escapes<'_> {
                 let declaration = &self.body.locals[local];
                 let name = declaration.name.clone();
                 let quoted = places::quoted(&name);
-                let captured = self.owning_capture(state, value, item);
+                let captured_widened = self.owning_capture_index(state, value, item);
+                let widening = captured_widened
+                    .as_ref()
+                    .and_then(|(_, _, widening)| *widening);
+                let captured = captured_widened.map(|(capture, at, _)| (capture, at));
                 // The capture that holds the input: the input itself, or a function value that
                 // holds it, such as a closure that captured it (`{ h() }` for `h = { r }`).
                 let captured_label = |(capture, at): (Option<String>, Span)| Label {
@@ -349,17 +420,31 @@ impl Escapes<'_> {
                             message: format!("{} is a parameter here", quoted),
                         });
                     }
+                    let mut notes = vec![
+                        "a closure that escapes owns what it captures, and a reference cannot be owned"
+                            .to_string(),
+                    ];
+                    let mut helps = vec![format!(
+                        "pass the value {} refers to instead of a reference",
+                        quoted
+                    )];
+                    // The closure reads a path of the reference it could not copy: copy or
+                    // clone that path instead (D10 of `path-captures`).
+                    let widened = match (&name, widening) {
+                        (Some(name), Some(widening)) if !through_holder => {
+                            self.widened_help(name, &declaration.ty, widening)
+                        }
+                        _ => None,
+                    };
+                    if let Some((help, note)) = widened {
+                        helps = vec![help];
+                        notes.extend(note);
+                    }
                     (
                         EscapingHolder::ClosureOwningReference(name),
                         related,
-                        vec![
-                            "a closure that escapes owns what it captures, and a reference cannot be owned"
-                                .to_string(),
-                        ],
-                        vec![format!(
-                            "pass the value {} refers to instead of a reference",
-                            quoted
-                        )],
+                        notes,
+                        helps,
                     )
                 }
             }

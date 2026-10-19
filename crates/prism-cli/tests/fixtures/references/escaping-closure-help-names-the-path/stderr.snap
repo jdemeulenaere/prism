@@ -1,0 +1,29 @@
+error[E5007]: a closure that captures the reference 't' cannot escape
+  --> main.prism:5:33
+    5 | fun f(t: &Todo): () -> String = { t.title.clone() }
+      |                                 ^^^^^^^^^^^^^^^^^^^ returned here
+  --> main.prism:5:35
+    5 | fun f(t: &Todo): () -> String = { t.title.clone() }
+      |                                   ^^^^^^^ 't' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = help: clone 't.title' into a 'val' before the closure and capture that instead: 'val title = t.title.clone()'
+error[E5007]: a closure that captures the reference 'c' cannot escape
+  --> main.prism:6:33
+    6 | fun g(c: &Counter): () -> Int = { c.n }
+      |                                 ^^^^^^^ returned here
+  --> main.prism:6:35
+    6 | fun g(c: &Counter): () -> Int = { c.n }
+      |                                   ^^^ 'c' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = note: a closure copies a field read through a reference only when the field is a 'val'
+   = help: copy 'c.n' into a 'val' before the closure and capture that instead: 'val n = c.n'
+error[E5007]: a closure that captures the reference 't' cannot escape
+  --> main.prism:7:34
+    7 | fun h(t: &mut Todo): () -> Int = { t.id }
+      |                                  ^^^^^^^^ returned here
+  --> main.prism:7:36
+    7 | fun h(t: &mut Todo): () -> Int = { t.id }
+      |                                    ^^^^ 't' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = note: 't' is a mutable reference, whose referent may be replaced
+   = help: copy 't.id' into a 'val' before the closure and capture that instead: 'val id = t.id'

@@ -230,6 +230,43 @@ E5007 the parameter 'p' cannot escape @14:34 returned here
     );
 }
 
+/// references: "A closure borrowing a field leaves the others free" and "A closure writing
+/// through a mutable reference leaves the other fields free" (`path-captures`): a closure
+/// borrows the paths it captures, which conflict only with overlapping places.
+#[test]
+fn closures_borrow_disjoint_paths() {
+    accept("fun f() { var o = Order(User(\"a\"), \"b\"); val g = { o.email = \"z\"; 1 }; greet(o.user.name); o.user.name = \"c\"; run(g) }\n");
+    accept("fun f() { var o = Order(User(\"a\"), \"b\"); val g = { greet(o.email) }; o.user.name = \"c\"; greet(o.email); run(g) }\n");
+    assert_eq!(
+        check("fun f() { var o = Order(User(\"a\"), \"b\"); val g = { o.user.name = \"z\"; 1 }; touch(&mut o.user, &mut o.email); run(g) }\n"),
+        "\
+E5003 cannot borrow 'o.user' as mutable because 'o.user.name' is borrowed as mutable @14:82 second mutable borrow occurs here
+  related @14:50 closure borrows 'o.user.name' mutably here
+  related @14:52 borrow occurs due to this use of 'o.user.name' in the closure
+  related @14:114 first borrow later used here"
+    );
+    assert!(check(
+        "fun f() { var o = Order(User(\"a\"), \"b\"); val g = { greet(o.email) }; o.email = \"c\"; run(g) }\n"
+    )
+    .starts_with("E5004 cannot assign to 'o.email' because it is borrowed"));
+}
+
+/// A closure writing a field through a `val` mutable reference borrows that path only, and a
+/// `var` reference is captured whole, so re-pointing it conflicts (D1 of `path-captures`).
+#[test]
+fn paths_through_references() {
+    let declarations = "struct P { var x: Int, var y: Int }\nfun run(f: () -> Int): Int = f()\n";
+    passes(&format!(
+        "{}fun f(r: &mut P): Int {{ val g = {{ r.x += 1; r.x }}; r.y = 5; return run(g) }}\n",
+        declarations
+    ));
+    let found = rendered(&format!(
+        "{}fun f(a: &P, b: &P): Int {{ var r = a; val g = {{ r.x }}; r = b; return run(g) }}\n",
+        declarations
+    ));
+    assert!(found.starts_with("E5004 cannot assign to 'r'"), "{}", found);
+}
+
 #[test]
 fn closures_without_captures_may_escape() {
     accept("fun f(): () -> Int = { 1 }\n");

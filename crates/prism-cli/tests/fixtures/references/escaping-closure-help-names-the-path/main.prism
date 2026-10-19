@@ -1,0 +1,8 @@
+// expect: E5007
+// run: 1
+struct Todo { val id: Int, val title: String }
+struct Counter { var n: Int }
+fun f(t: &Todo): () -> String = { t.title.clone() }
+fun g(c: &Counter): () -> Int = { c.n }
+fun h(t: &mut Todo): () -> Int = { t.id }
+fun main() {}
