@@ -871,7 +871,10 @@ impl TypeChecker {
     fn reject_composition_in_composable(&mut self, builtin: BuiltinFunction, span: Span) {
         let starts_or_drives = matches!(
             builtin,
-            BuiltinFunction::Composition | BuiltinFunction::SetContent | BuiltinFunction::Recompose
+            BuiltinFunction::Composition
+                | BuiltinFunction::SetContent
+                | BuiltinFunction::Recompose
+                | BuiltinFunction::RunApp
         );
         if starts_or_drives && self.is_in_compose() {
             self.errors.push(TypeError::CompositionInComposable {
@@ -9350,7 +9353,9 @@ impl TypeChecker {
                 }
                 // Intrinsic properties read like fields: `length` of a `String`, `size` and
                 // `indices` of a list (D7 of `standard-library`).
-                Type::String | Type::List(_) => return self.has_intrinsic_property(ty, name),
+                Type::String | Type::List(_) | Type::Int => {
+                    return self.has_intrinsic_property(ty, name)
+                }
                 _ => return false,
             }
         }
@@ -9420,6 +9425,34 @@ impl TypeChecker {
     /// A call of the built-in string member `builtin` (`length` or `get`) on the string `base`,
     /// with a shared receiver borrow of it and then `arguments` (D5 and D6 of
     /// `runtime-strings-and-drops`). A string that is not a place is borrowed in a temporary.
+    /// A read of the intrinsic property `member` of the `Int` `base`, of type `ty`: a call of
+    /// its built-in with the `Int` copied as its receiver (D7 of `ui-toolkit`).
+    fn int_property_read(
+        &mut self,
+        base: ExpressionId,
+        ty: Type,
+        member: &str,
+        span: Span,
+    ) -> ExpressionId {
+        let builtin = self
+            .member(&Type::Int, member)
+            .and_then(|member| member.builtin)
+            .expect("an intrinsic property of Int");
+        let base = self.consume(base);
+        let call = Call {
+            callee: Callee::Builtin(builtin),
+            evaluation_order: vec![0],
+            escaping: vec![false],
+            arguments: vec![Argument::Written(base)],
+            parameters: vec![(Some(THIS.to_string()), Type::Int)],
+            type_arguments: Vec::new(),
+            has_receiver: true,
+            has_context: false,
+            is_compose: false,
+        };
+        self.add(ExpressionKind::Call(call), ty, span)
+    }
+
     fn builtin_member_call(
         &mut self,
         builtin: BuiltinFunction,
@@ -9631,6 +9664,7 @@ impl TypeChecker {
             Type::String => {
                 self.builtin_member_call(BuiltinFunction::StringLength, base, Vec::new(), span)
             }
+            Type::Int => self.int_property_read(base, member_ty.clone(), member, span),
             Type::List(element) => {
                 let builtin = if member == LIST_SIZE {
                     BuiltinFunction::ListSize
@@ -9846,6 +9880,20 @@ impl TypeChecker {
                     wrap(Type::plain_struct(NominalId::builtin_range())),
                     Some(false),
                 )
+            }
+            // An intrinsic property of an `Int` of a library module the file reaches, such as
+            // `16.dp` of `/prism/compose/ui` (D7 of `ui-toolkit`): not assignable.
+            Type::Int if self.has_intrinsic_property(&peeled_ty, member) => {
+                let property_ty = match &self
+                    .member(&peeled_ty, member)
+                    .expect("a member")
+                    .symbol
+                    .ty()
+                {
+                    Type::Fn { ret, .. } => (**ret).clone(),
+                    other => other.clone(),
+                };
+                (wrap(property_ty), Some(false))
             }
             other => {
                 let help = matches!(other, Type::Parameter(_)).then(|| {

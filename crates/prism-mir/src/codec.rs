@@ -1401,6 +1401,10 @@ impl Codec for crate::mir::ComposerOperation {
             Operation::BeginRemember => encoder.u8(19),
             Operation::EndRemember => encoder.u8(20),
             Operation::SideEffect => encoder.u8(21),
+            Operation::StartNodeGroup { key } => {
+                encoder.u8(22);
+                key.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1437,6 +1441,9 @@ impl Codec for crate::mir::ComposerOperation {
             19 => Operation::BeginRemember,
             20 => Operation::EndRemember,
             21 => Operation::SideEffect,
+            22 => Operation::StartNodeGroup {
+                key: decoder.decode()?,
+            },
             _ => return None,
         })
     }

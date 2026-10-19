@@ -2,13 +2,13 @@
 
 use super::{BodySlots, Builder, Preallocated};
 use crate::mir::{
-    Body, BodyId, BodyOwner, BorrowOrigin, Callee, Constant, Operand, Place, Projection, Rvalue,
-    TerminatorKind,
+    AggregateKind, Body, BodyId, BodyOwner, BorrowOrigin, Callee, Constant, Operand, Place,
+    Projection, Rvalue, TerminatorKind,
 };
 use prism_ast::Span;
 use prism_typed_tree::{
-    Argument, BorrowOrigin as TreeBorrowOrigin, Call, Callee as TreeCallee, ExpressionId,
-    ExpressionKind, FunctionItem, SafeNavigationOrigin, Type, TypeTable, TypedFile,
+    Argument, BorrowOrigin as TreeBorrowOrigin, BuiltinFunction, Call, Callee as TreeCallee,
+    ExpressionId, ExpressionKind, FunctionItem, SafeNavigationOrigin, Type, TypeTable, TypedFile,
 };
 
 /// A receiver that a call borrows: its place is evaluated before the written arguments and
@@ -58,6 +58,22 @@ impl Builder<'_> {
     ) {
         if matches!(&call.callee, TreeCallee::Builtin(builtin) if builtin.is_state_operation()) {
             return self.lower_state_call(destination, call, ty, span);
+        }
+        // `n.dp` and `n.sp` build their unit from the `Int`, with no call (D7 of `ui-toolkit`).
+        if let (
+            TreeCallee::Builtin(BuiltinFunction::DpOfInt | BuiltinFunction::TextUnitOfInt),
+            [Argument::Written(value)],
+            Type::Struct { id, .. },
+        ) = (&call.callee, call.arguments.as_slice(), ty)
+        {
+            let operand = self.argument(*value, false);
+            if self.current.is_none() {
+                return;
+            }
+            let destination = self.destination_or_temporary(destination, ty, span);
+            let kind = AggregateKind::plain_struct(id.clone());
+            self.assign(destination, Rvalue::Aggregate(kind, vec![operand]), span);
+            return;
         }
         let callee = match &call.callee {
             TreeCallee::Function(path) => Callee::Function(path.clone()),
@@ -244,9 +260,14 @@ impl Builder<'_> {
         operands: &[Option<Operand>],
         span: Span,
     ) -> Operand {
-        let TreeCallee::Function(function) = &call.callee else {
-            panic!("internal error: an omitted argument of a function value");
+        let function = match &call.callee {
+            TreeCallee::Function(function) => function.clone(),
+            TreeCallee::Builtin(builtin) => builtin
+                .declaration_with_defaults()
+                .expect("internal error: an omitted argument of an intrinsic without defaults"),
+            _ => panic!("internal error: an omitted argument of a function value"),
         };
+        let function = &function;
         // The generator is as generic as its function: it is called with the call's type
         // arguments, its parameters are declared, and the caller's temporaries are substituted.
         let (name, declared_ty) = call.parameters[index].clone();

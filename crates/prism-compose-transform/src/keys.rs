@@ -95,6 +95,15 @@ pub fn movable_key(parent: u64, ordinal: u32) -> u64 {
     hasher.finish()
 }
 
+/// The key of the node group of the `ordinal`-th `Node` or `LeafNode` call of the region or
+/// body whose key is `parent` (D3 of `ui-toolkit`).
+pub fn node_key(parent: u64, ordinal: u32) -> u64 {
+    let mut hasher = KeyHasher::new("node");
+    hasher.word(parent);
+    hasher.word(u64::from(ordinal));
+    hasher.finish()
+}
+
 /// The key of the call-site group of the `ordinal`-th composable call or `remember` made
 /// directly in the loop whose key is `parent`, when a `continue` targets that loop (D26).
 pub fn call_site_key(parent: u64, ordinal: u32) -> u64 {

@@ -7,7 +7,7 @@ In composed MIR, a call of the intrinsic composable `Node` or `LeafNode` MUST st
 
 #### Scenario: A toolkit composable starts a node group
 - **WHEN** `prism dump-mir --composed` runs on a library test module of `/prism/compose/ui` that declares `compose fun T(text: &String) { LeafNode(4) { node -> } }`
-- **THEN** the body of `T` shows `composer start node group` with key 16 hexadecimal digits followed by `/* node 0 */` and kind `4`, a call of the update closure with its result, and `composer end group` before its body group ends
+- **THEN** the body of `T` shows `composer start_node_group` with a key of 16 hexadecimal digits followed by `/* node 0 */` and the kind `const 4`, a call of the update closure with its result, and `composer end_group` before its body group ends
 
 ### Requirement: runApp Gets a Root Content Adapter
 A body that calls `runApp` MUST have one root content adapter closure, `<symbol>#root-content`, built from the content it is given and passed to the app, as for `composition`.

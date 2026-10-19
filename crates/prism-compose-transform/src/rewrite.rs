@@ -64,6 +64,7 @@ pub(crate) fn is_composition_operation(builtin: BuiltinFunction) -> bool {
             | BuiltinFunction::Recompose
             | BuiltinFunction::DumpComposition
             | BuiltinFunction::InvalidateScope
+            | BuiltinFunction::RunApp
     )
 }
 
@@ -137,6 +138,8 @@ pub(crate) struct Rewriter<'a> {
     regions: Vec<GroupId>,
     /// The next ordinal of `key` calls, per region.
     key_ordinals: HashMap<Option<GroupId>, u32>,
+    /// The next ordinal of `Node` and `LeafNode` calls, per region (D3 of `ui-toolkit`).
+    node_ordinals: HashMap<Option<GroupId>, u32>,
     /// The next ordinal of call-site groups, per loop that a `continue` targets (D26).
     call_site_ordinals: HashMap<GroupId, u32>,
     /// The root content adapter of the body, once one is needed.
@@ -173,6 +176,7 @@ impl<'a> Rewriter<'a> {
             sources: HashMap::new(),
             regions: Vec::new(),
             key_ordinals: HashMap::new(),
+            node_ordinals: HashMap::new(),
             call_site_ordinals: HashMap::new(),
             adapter: None,
             unit: None,
@@ -817,6 +821,29 @@ impl<'a> Rewriter<'a> {
                 self.operation(operation, arguments, parameters, destination, span);
                 self.goto(target, span);
             }
+            // `runApp` keeps its call, its content wrapped in the body's root content adapter
+            // (D15 of `ui-toolkit`); the backend calls the UI runtime's entry with it.
+            BuiltinFunction::RunApp => {
+                let content_index = arguments.len() - 1;
+                let content_type = parameters[content_index].clone();
+                let mut arguments = arguments;
+                let content = arguments.pop().expect("the content");
+                let adapter = self.adapter_value(content, content_type, span);
+                arguments.push(Operand::Move(Place::local(adapter), span));
+                let mut parameters = parameters;
+                parameters[content_index] = word_function();
+                self.call(
+                    Callee::Builtin(BuiltinFunction::RunApp),
+                    arguments,
+                    parameters,
+                    destination,
+                    span,
+                );
+                self.goto(target, span);
+            }
+            BuiltinFunction::UiNode | BuiltinFunction::UiLeafNode => {
+                self.node(builtin, arguments, parameters, target, span)
+            }
             BuiltinFunction::Recompose
             | BuiltinFunction::DumpComposition
             | BuiltinFunction::InvalidateScope => {
@@ -998,6 +1025,93 @@ impl<'a> Rewriter<'a> {
             span,
         );
         self.drop_then(Place::local(content), target, span);
+    }
+
+    /// `Node(kind, update) { content }` and `LeafNode(kind, update)` (D3 of `ui-toolkit`): the
+    /// node group of the region's next node key, started with `kind` and giving the node;
+    /// `update` called with it; for `Node`, `content` called with the composer; the group
+    /// ended. A node call adds no other group.
+    fn node(
+        &mut self,
+        builtin: BuiltinFunction,
+        mut arguments: Vec<Operand>,
+        parameters: Vec<Type>,
+        target: BlockId,
+        span: Span,
+    ) {
+        let content = (builtin == BuiltinFunction::UiNode).then(|| {
+            let content = arguments.pop().expect("the content");
+            self.held_in_local(content, &parameters[2], span)
+        });
+        let update = arguments.pop().expect("the update function");
+        let update = self.held_in_local(update, &parameters[1], span);
+        let kind = arguments.pop().expect("the kind");
+        let node_type = match &parameters[1] {
+            Type::Fn { params, .. } => params[0].clone(),
+            other => panic!("internal error: an update function of type {}", other),
+        };
+        let region = self.regions.last().copied();
+        let ordinal = self.node_ordinals.entry(region).or_insert(0);
+        let key = GroupKey {
+            hash: crate::keys::node_key(self.keys.region_or_body(self.id, region), *ordinal),
+            label: format!("node {}", ordinal),
+        };
+        *ordinal += 1;
+        let node = self.temporary(node_type.clone());
+        let composer = self.composer();
+        self.operation(
+            ComposerOperation::StartNodeGroup { key },
+            vec![composer, kind],
+            vec![Type::Int, Type::Int],
+            Place::local(node),
+            span,
+        );
+        let unit = self.unit();
+        self.call(
+            Callee::Value(Place::local(update), span),
+            vec![self.copy(node)],
+            vec![node_type],
+            unit.clone(),
+            span,
+        );
+        if let Some(content) = content {
+            let words = self.change_words(&[], span);
+            let mut call_arguments = vec![self.composer()];
+            call_arguments.extend(words);
+            let call_parameters = vec![Type::Int; call_arguments.len()];
+            let calling = self.current;
+            self.call(
+                Callee::Value(Place::local(content), span),
+                call_arguments,
+                call_parameters,
+                unit.clone(),
+                span,
+            );
+            // The call of a composable function value is composable.
+            if let TerminatorKind::Call { is_compose, .. } =
+                &mut self.blocks[calling.index()].terminator.kind
+            {
+                *is_compose = true;
+            }
+        }
+        let composer = self.composer();
+        self.operation(
+            ComposerOperation::EndGroup,
+            vec![composer],
+            vec![Type::Int],
+            unit,
+            span,
+        );
+        // The function values were moved into the call, which would have dropped them.
+        match content {
+            Some(content) => {
+                let after = self.new_block();
+                self.drop_then(Place::local(update), after, span);
+                self.current = after;
+                self.drop_then(Place::local(content), target, span);
+            }
+            None => self.drop_then(Place::local(update), target, span),
+        }
     }
 
     /// `operand`, of type `ty`, in a whole local: its own when it moves one, else a temporary.

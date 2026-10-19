@@ -33,6 +33,7 @@ pub struct Intrinsic {
 const CORE: &str = "prism/core";
 const COLLECTIONS: &str = "prism/collections";
 const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
+const COMPOSE_UI: &str = prism_typed_tree::COMPOSE_UI_MODULE;
 
 const fn entry(
     module: &'static str,
@@ -341,6 +342,49 @@ pub const CATALOG: &[Intrinsic] = &[
         "SideEffect",
         BuiltinFunction::SideEffect,
         "public intrinsic compose fun SideEffect(effect: escaping () -> Unit): Unit",
+        false,
+    ),
+    // `/prism/compose/ui` (D3, D7 and D15 of `ui-toolkit`): the two node composables the
+    // toolkit is written over, which the transform lowers to node groups, the app's entry and
+    // the unit properties, lowered to constructions.
+    entry(
+        COMPOSE_UI,
+        None,
+        "Node",
+        BuiltinFunction::UiNode,
+        "package intrinsic compose fun Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_UI,
+        None,
+        "LeafNode",
+        BuiltinFunction::UiLeafNode,
+        "package intrinsic compose fun LeafNode(kind: Int, update: (NodeId) -> Unit): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_UI,
+        None,
+        "runApp",
+        BuiltinFunction::RunApp,
+        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: escaping compose () -> Unit): Unit",
+        false,
+    ),
+    entry(
+        COMPOSE_UI,
+        Some("Int"),
+        "dp",
+        BuiltinFunction::DpOfInt,
+        "public intrinsic val Int.dp: Dp",
+        false,
+    ),
+    entry(
+        COMPOSE_UI,
+        Some("Int"),
+        "sp",
+        BuiltinFunction::TextUnitOfInt,
+        "public intrinsic val Int.sp: TextUnit",
         false,
     ),
 ];

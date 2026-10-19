@@ -768,6 +768,19 @@ impl BuiltinFunction {
         }
     }
 
+    /// The declaration path of an intrinsic whose declaration gives default values, whose
+    /// generators a call that omits an argument calls: `runApp` of `/prism/compose/ui` (D5 of
+    /// `ui-toolkit`, R8 of `standard-library`).
+    pub fn declaration_with_defaults(self) -> Option<crate::DeclarationPath> {
+        match self {
+            BuiltinFunction::RunApp => Some(crate::DeclarationPath::new(
+                crate::types::COMPOSE_UI_MODULE,
+                "runApp",
+            )),
+            _ => None,
+        }
+    }
+
     /// Whether the built-in is a state operation of `/prism/compose/runtime`, which MIR
     /// lowering turns into state operations (D17 of `state-handles`).
     pub fn is_state_operation(self) -> bool {
