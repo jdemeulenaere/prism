@@ -106,11 +106,15 @@ pub enum PanicKind {
     /// A headless run's event script that cannot go on; the detail is `<line>: <what>` (D16
     /// of `ui-toolkit`). Reported without a location.
     EventScriptFailed = 16,
+    /// The window system cannot do what an app needs: open a window, or write a screenshot;
+    /// the detail says which and why (D16 of `desktop-window`). Reported without a location,
+    /// since it is the environment's failure, not an expression's.
+    DisplayFailed = 17,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 17] = [
+    pub const ALL: [PanicKind; 18] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
@@ -128,6 +132,7 @@ impl PanicKind {
         PanicKind::StateCreatedDuringComposition,
         PanicKind::UiMisuse,
         PanicKind::EventScriptFailed,
+        PanicKind::DisplayFailed,
     ];
 
     /// The kind with code `code`.
@@ -165,6 +170,7 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         }
         PanicKind::UiMisuse => format!("ui misuse: {}", detail),
         PanicKind::EventScriptFailed => format!("event script line {}", detail),
+        PanicKind::DisplayFailed => format!("display error: {}", detail),
     }
 }
 
@@ -347,6 +353,11 @@ mod tests {
                 "1: no text field is focused",
                 "event script line 1: no text field is focused",
             ),
+            (
+                PanicKind::DisplayFailed,
+                "cannot open a window (no display)",
+                "display error: cannot open a window (no display)",
+            ),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());
         for (kind, detail, message) in cases {
@@ -354,6 +365,42 @@ mod tests {
             assert_eq!(PanicKind::from_code(kind as u32), Some(kind));
         }
         assert_eq!(PanicKind::from_code(99), None);
+    }
+
+    /// A display error ends the process with status 101 and its message, without a location
+    /// line, after the program's output (D16 of `desktop-window`); in a child process, since it
+    /// exits.
+    #[test]
+    fn a_display_error_ends_the_process() {
+        const VARIABLE: &str = "PRISM_RUNTIME_DISPLAY_ERROR_CHILD";
+        if std::env::var_os(VARIABLE).is_some() {
+            crate::output::append(b"before\n");
+            panic_without_location(
+                PanicKind::DisplayFailed,
+                "cannot open a window (no display)",
+            );
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "panic::tests::a_display_error_ends_the_process",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(VARIABLE, "1")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(PANIC_EXIT_STATUS));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("before\n"),
+            "the output is flushed first"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .ends_with("panic: display error: cannot open a window (no display)\n"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     /// Under watch mode a runtime error parks the program's thread and tells the session,

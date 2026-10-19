@@ -6,7 +6,7 @@ The desktop layer shows `runApp`'s apps in a native window. It covers the window
 ## ADDED Requirements
 
 ### Requirement: Window Code Is Linked Only Into the CLI
-The window, its event loop, the rasterizer and the bundled font MUST be in a `prism-desktop` crate. Only `prism-cli` MUST depend on it, as an optional dependency enabled by its default `window` feature. No compiler crate, the backend, `prism-runtime`, `prism-compose` or `prism-ui` MUST depend on `prism-desktop` or on a window, rasterization or font crate. A `prism` built without the `window` feature MUST behave as `ui-toolkit` specifies for a build without a window host.
+The window, its event loop, the rasterizer and the bundled font MUST be in a `prism-desktop` crate. Only `prism-cli` MUST depend on it, as an optional dependency enabled by its default `window` feature. No compiler crate, `prism-runtime`, `prism-compose` or `prism-ui` MUST depend on it or on a window, rasterization or font crate. A `prism` built without the `window` feature MUST have no window host (`ui`, "Apps Need a Window or Headless Mode").
 
 #### Scenario: Only the CLI depends on the window crate
 - **WHEN** a Rust test of `prism-desktop` reads every workspace member's `Cargo.toml`
@@ -38,7 +38,7 @@ A program that never calls `runApp` with a window MUST NOT create an event loop,
 - **THEN** the server returns when the program ends, and its statistics show that no event loop was created and no font was loaded
 
 ### Requirement: Closing the Window Ends runApp
-Closing the window, by its close button, the platform's close action, or Cmd+W or Cmd+Q on macOS, MUST close the window at once and end the app as the end of an event script does: `runApp` drops its composition, releasing every node and the values nodes own, and returns to its caller. Frames presented after the window closed MUST be discarded.
+Closing the window, by its close button, the platform's close action, or Cmd+W or Cmd+Q on macOS, MUST close the window at once and end the app as the end of an event script does: `runApp` drops its composition, releasing every node, every handler and the values nodes own, and returns to its caller. Frames presented after the window closed MUST be discarded.
 
 #### Scenario: Statements after runApp run
 - **WHEN** `fun main() { runApp { Text("hi") }; println("closed") }` runs with `prism run --check-allocations`, and the window is closed by its close button
@@ -87,7 +87,7 @@ The window MUST draw text with Inter Regular, embedded in the `prism` executable
 - **THEN** the font parses, its family name is `Inter`, and the licence text names the SIL Open Font License, Version 1.1
 
 ### Requirement: Window Text Uses the Bundled Font's Metrics
-In a window, layout MUST measure text with the bundled font's metrics. A character's advance at a font size MUST be its glyph's horizontal advance at that size, rounded to the nearest whole logical pixel. A line's height MUST be the font's ascent minus its descent plus its line gap at that size, rounded likewise. Headless runs MUST keep `ui-toolkit`'s fixed-advance metric, so a window's layout may differ from the headless dump of the same program.
+In a window, layout MUST measure text with the bundled font's metrics. A character's advance at a font size MUST be its glyph's horizontal advance at that size, rounded to the nearest whole logical pixel. A line's height MUST be the font's ascent minus its descent plus its line gap at that size, rounded likewise. Headless runs MUST keep the fixed-advance metric of the `ui` requirement "Text Measurement", so a window's layout may differ from the headless dump of the same program.
 
 #### Scenario: A text node's size in a window
 - **WHEN** a window app composes `Text("Count: 0")` at the default font size 16

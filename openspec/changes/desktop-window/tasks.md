@@ -1,6 +1,6 @@
 # Tasks
 
-Most scenarios of the `desktop` capability are tested by Rust tests in `crates/prism-desktop`, since executable fixtures cannot open windows. Those whose WHEN names a Rust test, a benchmark or the smoke test are tested where their task says. Those that need a person, closing a window by its button for instance, are in the manual checklist (group 8), whose results are recorded in design.md. The `execution` scenarios are CLI tests in `crates/prism-cli/tests/screenshot.rs`. "The counter screen" means the `Counter` composable of `ui-toolkit`'s scenario "Counter screen", and its display list is the one `dump draw` prints for it headless at 400 × 300.
+Most scenarios of the `desktop` capability are tested by Rust tests in `crates/prism-desktop`, since executable fixtures cannot open windows. Those whose WHEN names a Rust test, a benchmark or the smoke test are tested where their task says. Those that need a person, closing a window by its button for instance, are in the manual checklist (group 8), whose results are recorded in design.md. The `execution` scenarios are CLI tests in `crates/prism-cli/tests/screenshot.rs`. "The counter screen" means the `Counter` composable of the `ui` spec's scenario "Counter screen", and its display list is the one `dump draw` prints for it headless at 400 × 300.
 
 Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `state-handles`, `compose-transform`, `compose-runtime` and `standard-library`, and `hot-reload`'s `Program::start` and `WatchSession` have landed. Groups 2 and 3 need only `prism-ui`'s display list and `TextMeasurer`, so they can start as soon as those exist.
 
@@ -54,7 +54,7 @@ Prerequisites (design, "Baseline"): `ui-toolkit` is archived, which brings `stat
 ## 4. Hooks in prism-ui and the runtime (D15, D16, D18)
 
 - [x] 4.1 In `crates/prism-ui/src/host.rs`, add `Host::measurer` (default `&FixedAdvanceMetrics`) and `Host::scale_factor` (default 1.0), `WindowFactory` and `HostConfiguration::Window(Arc<dyn WindowFactory>)`, and `set_final_frame_sink`. In `app.rs`, take the measurer from the host when the app starts. When the app ends, rebuild a stale display list and call the sink before dropping the composition. In `draw.rs`, derive `Clone` for `DisplayList` and `DrawCommand`. Verify with `prism-ui` unit tests: a host with its own measurer lays out with it; the sink is called once per app with the final list and the host's size and scale; and every headless fixture still passes unchanged (`cargo test -p prism-cli --test fixture_tests`).
-- [ ] 4.2 Add `PanicKind::DisplayFailed` to `crates/prism-runtime/src/panic.rs`, printing `display error: <detail>`, raised with `panic_without_location`. Verify with a runtime unit test of the message, in a child process for the status 101.
+- [x] 4.2 Add `PanicKind::DisplayFailed` to `crates/prism-runtime/src/panic.rs`, printing `display error: <detail>`, raised with `panic_without_location`. Verify with a runtime unit test of the message, in a child process for the status 101.
 
 ## 5. The window host and the main-thread server (D3, D4, D10, D11, D13, D14, D17)
 

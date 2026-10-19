@@ -67,13 +67,22 @@ pub fn set_final_frame_sink(sink: Option<FinalFrameSink>) {
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = sink;
 }
 
-/// Calls the final-frame sink, if one is set.
+/// Calls the final-frame sink, if one is set. The sink is taken out while it runs, so a sink
+/// that raises a runtime error under a watch session, which parks the thread, leaves no lock
+/// held for the next run.
 pub(crate) fn call_final_frame_sink(list: &DisplayList, size: (i64, i64), scale_factor: f64) {
-    let mut sink = FINAL_FRAME_SINK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(sink) = sink.as_mut() {
+    let lock = || {
+        FINAL_FRAME_SINK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    let taken = lock().take();
+    if let Some(mut sink) = taken {
         sink(list, size, scale_factor);
+        let mut slot = lock();
+        if slot.is_none() {
+            *slot = Some(sink);
+        }
     }
 }
 
