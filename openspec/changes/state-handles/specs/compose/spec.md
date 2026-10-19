@@ -3,6 +3,23 @@
 ## Purpose
 Compose is Prism's native support for declarative UI. This change adds reactive state to the capability that `compose-runtime` creates and `compose-transform` extends: state handles and cells, reading and writing them, read tracking and invalidation, the rules that keep state read-only during composition, cell ownership, and `SideEffect`.
 
+## MODIFIED Requirements
+
+### Requirement: The Compose Prelude
+The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and the state declarations `State`, `MutableState`, `mutableStateOf`, `value`, `read`, `update`, `edit` and `SideEffect`, and a file's own declaration or import of one of those names MUST shadow it.
+
+#### Scenario: Compose primitives need no import
+- **WHEN** a file without imports declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`
+- **THEN** it typechecks, `remember` and `currentRecomposeScope` resolve to `/prism/compose/runtime`, and `prism run` exits with status 0
+
+#### Scenario: A file's own `key`
+- **WHEN** a file declares `fun key(n: Int): Int = n` and `fun f(): Int = key(3)`
+- **THEN** it typechecks, and the call resolves to the file's own `key`
+
+#### Scenario: A file's own mutableStateOf
+- **WHEN** a file declares `fun mutableStateOf(n: Int): Int = n + 1` and `fun main() { println(mutableStateOf(1)) }`
+- **THEN** it runs and prints `2`: the call resolves to the file's own `mutableStateOf`
+
 ## ADDED Requirements
 
 ### Requirement: State Handles Are Copy Words
@@ -71,21 +88,21 @@ Outside composable contexts, a non-`Copy` `s.value` MUST only be assigned, and n
 `s.read(reader)` MUST call `reader` with a shared borrow of the cell's value and return what it returns, in any context. While `reader` runs, the cell MUST be borrowed shared.
 
 #### Scenario: Reading a list's size in a handler
-- **WHEN** `fun main() { val todos = mutableStateOf(listOf(1, 2, 3)); val n = todos.read { list -> list.size * 10 }; println(n) }` runs
+- **WHEN** `fun main() { val todos = mutableStateOf(listOf(1, 2, 3)); val n = todos.read { it.size * 10 }; println(n) }` runs
 - **THEN** stdout is `30`
 
 ### Requirement: Updating a State With a Closure
 `s.update(transform)` on a `MutableState<T>` MUST move the value out of the cell, call `transform` with it, and move its result into the cell, outside composable contexts. While `transform` runs, the cell MUST hold no value.
 
 #### Scenario: Updating a counter
-- **WHEN** `fun main() { val count = mutableStateOf(4); count.update { n -> n * n }; println(count.value) }` runs
+- **WHEN** `fun main() { val count = mutableStateOf(4); count.update { it * it }; println(count.value) }` runs
 - **THEN** stdout is `16`
 
 ### Requirement: Editing a State in Place
 `s.edit(editor)` on a `MutableState<T>` MUST call `editor` with a mutable borrow of the cell's value, outside composable contexts. While `editor` runs, the cell MUST be borrowed mutably.
 
 #### Scenario: A list state edited from a handler
-- **WHEN** `struct Todo { val title: String }` and `compose fun Todos(todos: State<List<Todo>>) { println("count ${todos.value.size}") }` are declared and `fun main() { val todos = mutableStateOf(listOf(Todo("a"))); val c = composition { Todos(todos) }; val onClick = { todos.edit { list -> list.add(Todo("b")) } }; onClick(); println(c.recompose()) }` runs with `--check-allocations`
+- **WHEN** `struct Todo { val title: String }` and `compose fun Todos(todos: State<List<Todo>>) { println("count ${todos.value.size}") }` are declared and `fun main() { val todos = mutableStateOf(listOf(Todo("a"))); val c = composition { Todos(todos) }; val onClick = { todos.edit { it.add(Todo("b")) } }; onClick(); println(c.recompose()) }` runs with `--check-allocations`
 - **THEN** stdout is `count 1`, `count 2` and `true`, one per line, and the exit status is 0
 
 ### Requirement: Conflicting Accesses to a Borrowed Cell

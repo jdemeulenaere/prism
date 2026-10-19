@@ -14,8 +14,8 @@ Every state operation MUST lower to `Call` terminators of state operations, each
 - **THEN** the body calls `state take<Int>`, calls the closure value with the taken value moved, and calls `state put<Int>` with the result moved
 
 ### Requirement: Composed MIR Marks Remember Windows and Side Effects
-In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin remember` and an `end remember` composer operation, the `end` after the result's slot is written, and a call of `SideEffect` MUST be a `side effect` composer operation taking the effect moved.
+In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin_remember` and an `end_remember` composer operation, the end after the result's slot is written, and a call of `SideEffect` MUST be a `side_effect` composer operation taking the effect moved.
 
 #### Scenario: Composed remember of a state
 - **WHEN** `prism dump-mir --composed` runs on `compose fun C() { val s = remember { mutableStateOf(0) } }`
-- **THEN** the missing path calls `composer begin remember`, then the calculation, then `composer set slot<MutableState<Int>>`, then `composer end remember`
+- **THEN** the missing path calls `composer begin_remember`, then the calculation, then `composer set_slot<MutableState<Int>>`, then `composer end_remember`

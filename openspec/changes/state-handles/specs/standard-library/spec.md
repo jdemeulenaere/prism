@@ -11,7 +11,7 @@
 
 #### Scenario: State handles need no import
 - **WHEN** a file without imports declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
-- **THEN** it typechecks, and `prism abi` writes the result type of `counter` as `prism/compose/runtime.MutableState<Int>`
+- **THEN** it typechecks, and `prism abi` writes the signature of `counter` as `public fun counter(): MutableState<Int>`
 
 ### Requirement: Intrinsic Struct Markers Hold for Every Type Argument
 The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `State<String>` and `MutableState<List<Int>>` are `Copy`.
