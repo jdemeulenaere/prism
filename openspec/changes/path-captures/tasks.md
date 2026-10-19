@@ -36,6 +36,6 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 8. Compile time and catalog
 
-- [ ] 8.1 Add the shapes `field-path-captures` (one closure reading `n` distinct fields and nested fields of a few struct bindings, some through a reference) and `nested-path-captures` (closures nested `n` deep, each reading paths of outer bindings, the innermost escaping) to `crates/prism-cli/tests/compile_timing.rs`, and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; growth must stay roughly linear, also for the existing closure shapes (`many-captures`, `nested-closures`, `escaping-handlers`, `closures-kept-past-blocks`).
-- [ ] 8.2 Update the `E4028` and `E5007` rows of `openspec/specs/diagnostics/spec.md` (D10): path examples, and `E5007`'s example `{ r.length }` for `r: &String` in place of `{ *r }`.
-- [ ] 8.3 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, all clean.
+- [x] 8.1 Add the shapes `field-path-captures` (one closure reading `n` distinct fields and nested fields of a few struct bindings, some through a reference) and `nested-path-captures` (closures nested `n` deep, each reading paths of outer bindings, the innermost escaping) to `crates/prism-cli/tests/compile_timing.rs`, and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; growth must stay roughly linear, also for the existing closure shapes (`many-captures`, `nested-closures`, `escaping-handlers`, `closures-kept-past-blocks`).
+- [x] 8.2 Update the `E4028` and `E5007` rows of `openspec/specs/diagnostics/spec.md` (D10): path examples, and `E5007`'s example `{ r.length }` for `r: &String` in place of `{ *r }`.
+- [x] 8.3 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, all clean.

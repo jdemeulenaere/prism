@@ -79,7 +79,8 @@ const BORROW_GROWTH: f64 = 4.6;
 /// the deepest. A step quadratic in the depth grows x4; the closures' symbols, which name every
 /// enclosing closure (`main::f#closure0#closure0`), leave the backend's growth slightly above
 /// x2.
-const LINEAR_DEPTH: [&str; 6] = [
+const LINEAR_DEPTH: [&str; 7] = [
+    "nested-path-captures",
     "nested-trailing-lambdas",
     "nested-receiver-lambdas",
     "nested-lambdas-with-parameters",
@@ -490,6 +491,44 @@ fn many_captures(n: usize) -> String {
          fun main() {{\n{}\nprintln(run {{ var t = 0\n{}\nt }})\n}}\n",
         join(n, "\n", |i| format!("val v{i} = {i}")),
         join(n, "\n", |i| format!("t += v{i}")),
+    )
+}
+
+/// One closure borrowing `n` distinct nested fields of a struct binding, and one escaping
+/// closure copying `n` of them through a reference (`path-captures`): the width of a closure's
+/// paths of one binding, which the capture pass sorts and merges.
+fn field_path_captures(n: usize) -> String {
+    format!(
+        "struct Inner {{ val a: Int, val b: Int }}\n\
+         struct S {{ {} }}\n\
+         struct Button {{ val onClick: () -> Int }}\n\
+         fun run(f: () -> Int): Int = f()\n\
+         fun make(r: &S): Button = Button({{ var t = 0\n{}\nt }})\n\
+         fun main() {{\nval s = S({})\nprintln(run {{ var t = 0\n{}\nt }})\nprintln(make(s).onClick())\n}}\n",
+        join(n, ", ", |i| format!("val f{i}: Inner")),
+        join(n, "\n", |i| format!("t += r.f{i}.{}", if i % 2 == 0 { "a" } else { "b" })),
+        join(n, ", ", |i| format!("Inner({i}, 1)")),
+        join(n, "\n", |i| format!("t += s.f{i}.a + s.f{}.b", (i + 1) % n)),
+    )
+}
+
+/// Closures nested `n` deep, each reading the same paths of two outer bindings, one through a
+/// reference, the innermost escaping and copying them (`path-captures`): the propagation of a
+/// closure's paths to its parents.
+fn nested_path_captures(n: usize) -> String {
+    let mut body = String::new();
+    for _ in 1..n {
+        body.push_str("run { val v = p.x.a + q.y; ");
+    }
+    body.push_str("store { p.x.a + q.y + p.y }");
+    body.push_str(&" }".repeat(n - 1));
+    format!(
+        "struct Inner {{ val a: Int }}\n\
+         struct P {{ val x: Inner, val y: Int }}\n\
+         fun run(f: () -> Int): Int = f()\n\
+         fun store(f: escaping () -> Int): Int = f()\n\
+         fun f(p: &P, q: P): Int = {body}\n\
+         fun main() {{ println(f(P(Inner(1), 2), P(Inner(3), 4))) }}\n"
     )
 }
 
@@ -1046,6 +1085,8 @@ fn shapes() -> Vec<Shape> {
         shape("composable-lambdas", true, SIZES, composable_lambdas),
         shape("state-accesses", true, SIZES, state_accesses),
         shape("many-captures", true, SIZES, many_captures),
+        shape("field-path-captures", true, SIZES, field_path_captures),
+        shape("nested-path-captures", true, DEPTHS, nested_path_captures),
         shape("many-adapters", true, SIZES, many_adapters),
         shape("generic-closures", true, SIZES, generic_closures),
         shape("escaping-handlers", true, SIZES, escaping_handlers),
