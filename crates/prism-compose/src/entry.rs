@@ -13,7 +13,7 @@ use crate::composition::Composition;
 use crate::group::GroupKind;
 use crate::handle::Handle;
 use crate::slot::SlotType;
-use crate::state::{CreationOwner, States};
+use crate::state::States;
 use prism_runtime::{panic_without_location, FunctionValue, PanicKind, PrismString};
 
 /// The value of `result`, or the runtime error of its misuse.
@@ -394,16 +394,17 @@ pub unsafe extern "C" fn prism_compose_state_error(
 }
 
 /// Starts program code, a top-level value's initializer: the cells it creates belong to the
-/// program, even during a pass (D11 of `state-handles`).
+/// program, even during a pass (D11 of `state-handles`). Gives 1 when it pushed the program as
+/// the creation owner and 0 when compose is unused, for `prism_compose_end_program`.
 #[no_mangle]
-pub extern "C" fn prism_compose_begin_program() {
-    States::push_owner(CreationOwner::Program)
+pub extern "C" fn prism_compose_begin_program() -> u8 {
+    u8::from(States::begin_program())
 }
 
-/// Ends the program code of `prism_compose_begin_program`.
+/// Ends the program code of `prism_compose_begin_program`, given what it returned.
 #[no_mangle]
-pub extern "C" fn prism_compose_end_program() {
-    States::pop_owner();
+pub extern "C" fn prism_compose_end_program(pushed: u8) {
+    States::end_program(pushed != 0)
 }
 
 /// Opens the window of a `remember` calculation that runs.

@@ -29,6 +29,7 @@ impl Composition {
     /// Creates a composition that owns `content` and `applier`, and runs its first pass,
     /// which composes the content as the body of the root restart group.
     pub fn start(applier: Box<dyn Applier>, content: FunctionValue) -> ComposeResult<Handle> {
+        crate::state::mark_in_use();
         let handle = with_state(|state| {
             if state.active.is_some() {
                 return Err(DURING_PASS);

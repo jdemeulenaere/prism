@@ -36,6 +36,23 @@ use crate::slot::{allocate_block, free_block, SlotType};
 use crate::thread::{with_state, State};
 use prism_runtime::PanicKind;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether a composition was started or a creation owner pushed, on any thread of the
+/// process. Until then no thread runs a pass or has a creation owner, so every cell created
+/// belongs to the program whatever a top-level initializer says, and its program scope has
+/// nothing to do: a program that does not use compose pays one load per top-level value
+/// initialized (D11). The thread that sets it reads it back in program order, which is all a
+/// thread's own scopes need.
+static IN_USE: AtomicBool = AtomicBool::new(false);
+
+/// Records that compose is in use: called when a composition starts and when a creation owner
+/// is pushed.
+pub(crate) fn mark_in_use() {
+    if !IN_USE.load(Ordering::Relaxed) {
+        IN_USE.store(true, Ordering::Relaxed);
+    }
+}
 
 /// How many readers a cell tests linearly before it keeps a hash set of them too.
 const LINEAR_READERS: usize = 8;
@@ -473,7 +490,27 @@ impl States {
 
     /// Pushes `owner` as the innermost creation owner.
     pub fn push_owner(owner: CreationOwner) {
+        mark_in_use();
         with_state(|state| state.creation_owners.push(owner))
+    }
+
+    /// Opens the program scope of a top-level initializer (D11), giving whether it pushed the
+    /// program as the creation owner: it does not while compose is unused, since no pass runs
+    /// and no owner is pushed, so the program owns what the initializer creates anyway.
+    pub fn begin_program() -> bool {
+        if !IN_USE.load(Ordering::Relaxed) {
+            return false;
+        }
+        with_state(|state| state.creation_owners.push(CreationOwner::Program));
+        true
+    }
+
+    /// Closes the program scope [`States::begin_program`] opened, popping the program when it
+    /// pushed it.
+    pub fn end_program(pushed: bool) {
+        if pushed {
+            Self::pop_owner();
+        }
     }
 
     /// Pops the innermost creation owner.

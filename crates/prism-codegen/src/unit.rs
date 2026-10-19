@@ -522,11 +522,13 @@ impl<'m, M: Module> UnitContext<'m, M> {
             let marker = builder.ins().iconst(types::I8, state::INITIALIZING);
             builder.ins().store(flags, marker, state_address, 0);
             // The initializer is program code: the state cells it creates belong to the
-            // program, even when it first runs during a pass (D11 of `state-handles`).
+            // program, even when it first runs during a pass (D11 of `state-handles`). The
+            // runtime opens that scope only once compose is in use, and says whether it did.
             let begin_program = self
                 .module
                 .declare_func_in_func(begin_program, builder.func);
-            builder.ins().call(begin_program, &[]);
+            let begin_call = builder.ins().call(begin_program, &[]);
+            let pushed = builder.inst_results(begin_call)[0];
             let slot_address = data_address(&mut builder, initializer, pointer);
             let target = builder.ins().load(pointer, flags, slot_address, 0);
             let signature_ref = builder.import_signature(initializer_signature);
@@ -554,7 +556,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
                     .call(register, &[storage_address, glue_address]);
             }
             let end_program = self.module.declare_func_in_func(end_program, builder.func);
-            builder.ins().call(end_program, &[]);
+            builder.ins().call(end_program, &[pushed]);
             let marker = builder.ins().iconst(types::I8, state::INITIALIZED);
             builder.ins().store(flags, marker, state_address, 0);
             builder.ins().jump(done, &[]);
