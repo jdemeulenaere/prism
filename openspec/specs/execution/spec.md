@@ -927,6 +927,24 @@ Under `--check-allocations`, every cell that the program owns MUST be freed, its
 - **WHEN** `prism run --headless --events events.txt main.prism` runs a program that prints before calling `runApp`, and `events.txt` holds `clik "+"` on its first line
 - **THEN** stderr is exactly `Error: events.txt:1: unknown command 'clik'` and a newline, stdout is empty, and the exit status is 1
 
+### Requirement: Screenshots of an App
+`prism run --screenshot <file.png> <file.prism>`, in a build with the `window` feature, MUST write a PNG image of the app's final frame to `<file.png>` each time `runApp` returns, after the app's last event and before its composition is dropped. The image MUST be the final display list rasterized as a window draws it, at scale 1 in headless runs and at the window's scale factor otherwise, as 8-bit RGBA without premultiplied alpha. The option MUST come before the file.
+
+#### Scenario: A headless screenshot
+- **WHEN** `prism run --headless=40x30 --screenshot shot.png main.prism` runs on `fun main() { runApp { Box(modifier = Modifier.size(10.dp).background(Color.Red)) { } } }` with `import /prism/compose/ui`, `import /prism/compose/foundation` and `import /prism/compose/layout`
+- **THEN** the exit status is 0, and `shot.png` is a 40 × 30 image whose pixels at columns 0 to 9 and rows 0 to 9 are `#FFFF0000` and whose other pixels are white
+
+### Requirement: Screenshot Errors
+`--screenshot` without a file name MUST be a usage error with status 1, and nothing MUST run. When the file cannot be written, the program MUST end with the runtime error `display error: cannot write the screenshot <file.png> (<reason>)`, without a location line and with status 101.
+
+#### Scenario: A screenshot without a file name
+- **WHEN** `prism run --screenshot` runs with nothing after the option
+- **THEN** stderr holds the usage of `prism run`, nothing runs, and the exit status is 1
+
+#### Scenario: A screenshot that cannot be written
+- **WHEN** `prism run --headless --screenshot missing/shot.png main.prism` runs an app, and the directory `missing` does not exist
+- **THEN** stderr ends with `panic: display error: cannot write the screenshot missing/shot.png (` followed by the platform's reason, `)` and a newline, and the exit status is 101
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -1015,3 +1033,7 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
 - **Headless runs and event scripts** (D16). `--headless[=<width>x<height>]` runs `runApp` without a window, the size overriding `runApp`'s, and `--events <script>` drives it; `--events` alone is a usage error, since a program wanting a window would otherwise silently do nothing. The script is parsed before the program compiles, so a syntax error is `Error: <script>:<line>: <message>` with status 1 and nothing runs, rather than surfacing after the program's earlier output. Fixtures gain `// events:` and `// headless:` headers.
+
+Decisions from `desktop-window` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
+
+- **Screenshots of the final frame** (D15). `--screenshot <file.png>` sets `ui-toolkit`'s final-frame sink: when an app ends, after its last event and before its composition is dropped, the final display list is rasterized on the program thread by the window's rasterizer, at scale 1 headless and at the window's scale factor otherwise, and written as 8-bit RGBA; every `runApp` overwrites the file. A headless screenshot is laid out with the fixed-advance metric but drawn with Inter's glyphs, so its text is narrower than its boxes, which is acceptable for a debugging aid. The option needs the `window` feature, which holds the rasterizer, and is unknown without it. Fixtures do not compare screenshots; a CLI test checks one's size and exact pixels. Rejected: a script command (it would change `ui-toolkit`'s grammar and put files into fixtures), reading back the presented surface (not portable, and rasterizing the same list gives the same pixels), always scale 1 (blurry on the display people use).
