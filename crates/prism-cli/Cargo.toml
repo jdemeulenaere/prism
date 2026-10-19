@@ -62,3 +62,10 @@ cranelift-native = "=0.136.2"
 name = "window_input"
 harness = false
 required-features = ["window"]
+
+# Drives real windows of the example apps without a person (`reactive-app-verification`, D12),
+# with its own `main` for the same reason, and only with `PRISM_WINDOW_TESTS=1`.
+[[test]]
+name = "app_windows"
+harness = false
+required-features = ["window"]
