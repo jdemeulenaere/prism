@@ -463,10 +463,11 @@ fn composable_lambdas(n: usize) -> String {
     )
 }
 
-/// `n` state accesses of each kind (D21 of `state-handles`): one handler of `n` compound
-/// assignments of a counter, one composable reading `n` states, and `n` `edit` calls.
+/// `n` state accesses of each kind (D21 of `state-handles`, D23 of `owned-state`): one handler
+/// of `n` compound assignments of a counter, one composable reading `n` borrowed states, and `n`
+/// in-place changes of a list state.
 fn state_accesses(n: usize) -> String {
-    let parameters = join(n, ", ", |i| format!("s{i}: State<Int>"));
+    let parameters = join(n, ", ", |i| format!("s{i}: &State<Int>"));
     let reads = join(n, "\n", |i| format!("println(s{i}.value)"));
     let arguments = join(n, ", ", |_| "count".to_string());
     format!(
@@ -480,7 +481,42 @@ fn state_accesses(n: usize) -> String {
          val c = composition {{ Reads({arguments}) }}\n\
          }}\n",
         join(n, "\n", |_| "count.value += 1".to_string()),
-        join(n, "\n", |i| format!("todos.edit {{ it.add({i}) }}")),
+        join(n, "\n", |i| format!("todos.value.add({i})")),
+    )
+}
+
+/// `n` guarded accesses of state values outside composable contexts (D3 and D23 of
+/// `owned-state`): borrows bound to a `val`, in-place changes and writes, each taking and ending
+/// a flag.
+fn guarded_state_accesses(n: usize) -> String {
+    format!(
+        "fun f(s: &MutableState<List<Int>>, t: &MutableState<String>) {{\n{}\n}}\n\
+         fun main() {{\n\
+         val s = mutableStateOf(listOf(0))\n\
+         val t = mutableStateOf(\"a\")\n\
+         f(s, t)\n\
+         }}\n",
+        join(n, "\n", |i| format!(
+            "val items{i} = &s.value\nprintln(items{i}.size)\ns.value.add({i})\nt.value = \"x\""
+        )),
+    )
+}
+
+/// `n` handlers given to an attached parameter, each capturing three state paths through
+/// references weakly (D10 and D23 of `owned-state`).
+fn weak_captures(n: usize) -> String {
+    format!(
+        "struct Todo {{ val id: Int, val done: MutableState<Bool>, val title: MutableState<String> }}\n\
+         fun keep(f: attached () -> Unit) {{ f() }}\n\
+         fun row(todo: &Todo, count: &MutableState<Int>) {{\n{}\n}}\n\
+         fun main() {{\n\
+         val todo = Todo(1, mutableStateOf(false), mutableStateOf(\"a\"))\n\
+         val count = mutableStateOf(0)\n\
+         row(todo, count)\n\
+         }}\n",
+        join(n, "\n", |i| format!(
+            "keep {{ todo.done.value = true; todo.title.value = \"t{i}\"; count.value += 1 }}"
+        )),
     )
 }
 
@@ -1084,6 +1120,13 @@ fn shapes() -> Vec<Shape> {
         shape("many-composables", true, SIZES, many_composables),
         shape("composable-lambdas", true, SIZES, composable_lambdas),
         shape("state-accesses", true, SIZES, state_accesses),
+        shape(
+            "guarded-state-accesses",
+            true,
+            SIZES,
+            guarded_state_accesses,
+        ),
+        shape("weak-captures", true, SIZES, weak_captures),
         shape("many-captures", true, SIZES, many_captures),
         shape("field-path-captures", true, SIZES, field_path_captures),
         shape("nested-path-captures", true, DEPTHS, nested_path_captures),

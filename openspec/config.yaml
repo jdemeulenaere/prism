@@ -8,7 +8,7 @@ context: |
   - Deterministic hermetic builds: Phase 1 extracts exported ABI hashes; Phase 2 compiles bodies. Body edits must produce zero downstream recompilations.
   - Kotlin-like syntax without grammatical ambiguity.
   - Zero-cost memory: zero GC, zero hidden ARC, no lifetime annotations (`'a`). Value ownership, stack borrows, `Heap<T>` for recursive types, typed handles for graphs.
-  - First-class UI primitives: `compose` modifier (`compose fun`) and slot-table state handles (`State<T>`, `NodeId`).
+  - First-class UI primitives: `compose` modifier (`compose fun`), state objects (`MutableState<T>`) owned like any value with generational handles as a runtime detail, and `Copy` node IDs (`NodeId`).
   - Cite invariants by name, not number.
   - Implementation tasks must follow the Elephant-Goldfish model: clear behavioral requirements/scenarios in specs, technical decisions in design.md, and testable checklist in tasks.md.
   - The normative invariants are openspec/specs/system-invariants/spec.md; the lines above summarize them.
