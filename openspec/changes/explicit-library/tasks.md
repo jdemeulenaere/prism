@@ -40,9 +40,9 @@ This group is one commit: the fixtures, examples and tests cannot pass between r
 
 ## 6. Documents and timing (D14)
 
-- [ ] 6.1 Update `README.md` (where the library lives, programs showing their imports), `docs/architecture.md`'s program samples, and the comments across the crates that cite `standard-library` D4 or "the prelude" (`grep -rn -i prelude crates --include=*.rs`). Verify that the grep finds only historical references.
-- [ ] 6.2 In `crates/prism-cli/tests/compile_timing.rs`, replace the shape `prelude-calls` by `library-calls` (the same statements with `import /prism/core` and `import /prism/collections`), and `prelude_benchmark`/`prelude_costs_a_lookup_per_file` by `library_imports_cost_per_file` (256, 1,024 and 4,096 files each importing the two modules, checked with the member scope shared, asserting under `PRISM_ASSERT_TIMING=1` a time per file at 4,096 no more than 1.2 times that at 256, and printing it). Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; growth must stay roughly linear. Record the per-file times in `design.md` (D1, D14).
-- [ ] 6.3 Commit ("Implement explicit-library: documents and timing").
+- [x] 6.1 Update `README.md` (where the library lives, programs showing their imports), `docs/architecture.md`'s program samples, and the comments across the crates that cite `standard-library` D4 or "the prelude" (`grep -rn -i prelude crates --include=*.rs`). Verify that the grep finds only historical references.
+- [x] 6.2 In `crates/prism-cli/tests/compile_timing.rs`, replace the shape `prelude-calls` by `library-calls` (the same statements with `import /prism/core` and `import /prism/collections`), and `prelude_benchmark`/`prelude_costs_a_lookup_per_file` by `library_imports_cost_per_file` (256, 1,024 and 4,096 files each importing the two modules, checked with the member scope shared, asserting under `PRISM_ASSERT_TIMING=1` a time per file at 4,096 no more than 1.2 times that at 256, and printing it). Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; growth must stay roughly linear. Record the per-file times in `design.md` (D1, D14).
+- [x] 6.3 Commit ("Implement explicit-library: documents and timing").
 
 ## 7. Verification
 

@@ -36,7 +36,8 @@ struct Generated {
 /// Structs `S0` to `S<depth - 1>`, each holding two of the one below, `S0` two `Int`s: one
 /// comparison of `S<depth - 1>` compares `2^depth` integers.
 fn nested_structs(depth: usize) -> Generated {
-    let mut source = String::from("struct S0 : Copy { val a: Int, val b: Int }\n");
+    let mut source =
+        String::from("import /prism/core\nstruct S0 : Copy { val a: Int, val b: Int }\n");
     for level in 1..depth {
         writeln!(
             source,
@@ -57,7 +58,7 @@ fn nested_structs(depth: usize) -> Generated {
     let top = depth - 1;
     writeln!(
         source,
-        "import /prism/core\nfun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
+        "fun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
     )
     .unwrap();
     Generated {
@@ -114,7 +115,8 @@ fn wide_strings(width: usize) -> Generated {
 /// Enums `E0` to `E<depth - 1>`, each with a variant holding one and a variant holding two of
 /// the one below.
 fn nested_enums(depth: usize) -> Generated {
-    let mut source = String::from("enum E0 : Copy { A(Int), B(Int, Int), C }\n");
+    let mut source =
+        String::from("import /prism/core\nenum E0 : Copy { A(Int), B(Int, Int), C }\n");
     for level in 1..depth {
         writeln!(
             source,
@@ -135,7 +137,7 @@ fn nested_enums(depth: usize) -> Generated {
     let top = depth - 1;
     writeln!(
         source,
-        "import /prism/core\nfun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
+        "fun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
     )
     .unwrap();
     // E0 compares a tag and three payloads, and each level a tag and three of the one below.

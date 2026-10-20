@@ -39,7 +39,7 @@ impl NominalId {
     }
 }
 
-/// The module of the compose prelude, `/prism/compose/runtime` (D15 of `compose-transform`).
+/// The compose runtime module, `/prism/compose/runtime` (D15 of `compose-transform`).
 pub const COMPOSE_RUNTIME_MODULE: &str = "prism/compose/runtime";
 
 /// The UI toolkit's base module, `/prism/compose/ui` (D21 of `ui-toolkit`).

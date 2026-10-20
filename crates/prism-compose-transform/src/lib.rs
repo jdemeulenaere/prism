@@ -25,7 +25,7 @@
 //!   parameter after the change words; a composable closure owns the versions of the
 //!   references it borrows from as hidden captures; a call whose borrow has none runs in a
 //!   replaceable group ([`identity`]).
-//! - **The compose prelude** (D12 to D15). `remember`, `key` and `currentRecomposeScope`, and
+//! - **The compose runtime module** (D12 to D15). `remember`, `key` and `currentRecomposeScope`, and
 //!   in any body the composition operations, become composer operations; the content given to
 //!   `composition` and `setContent` is wrapped in a root content adapter.
 //!

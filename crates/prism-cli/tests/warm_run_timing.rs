@@ -87,7 +87,7 @@ fn many_instances(n: usize) -> Generated {
         )
     };
     let main = |body: &str| {
-        let mut source = String::from("package app\nimport /lib/box\n");
+        let mut source = String::from("package app\nimport /lib/box\nimport /prism/core\n");
         for i in 0..n {
             source.push_str(&format!("struct S{i}(val v: Int)\n"));
         }
