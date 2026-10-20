@@ -146,6 +146,30 @@ impl FunctionValue {
         code(self.environment, &mut *value)
     }
 
+    /// Calls the value as a function of three parameters held in memory whose result is held
+    /// in memory too, as a measure policy `MeasureScope.(&List<Measurable>, Constraints) ->
+    /// MeasureResult` is (D8 of `layout-primitive`): the result's address first, then the
+    /// environment word and the three parameters' addresses, the receiver first.
+    ///
+    /// # Safety
+    ///
+    /// The value must be a live function value of such a type, `result` must point at
+    /// writable storage for its result, and each parameter at a value of its type that the
+    /// callee only reads (the receiver and the `Copy` constraints are copies the callee may
+    /// not keep, and the list is borrowed).
+    pub unsafe fn call_with_addresses(
+        &self,
+        result: *mut u8,
+        first: *const u8,
+        second: *const u8,
+        third: *const u8,
+    ) {
+        let code = (*(*self.descriptor).slot).load(Ordering::Acquire);
+        let code: unsafe extern "C" fn(*mut u8, *mut u8, *const u8, *const u8, *const u8) =
+            std::mem::transmute(code);
+        code(result, self.environment, first, second, third)
+    }
+
     /// Calls the value as a `() -> Unit` function: [`FunctionValue::call`].
     ///
     /// # Safety

@@ -88,13 +88,13 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 /// The counter screen, whose button's handler writes nothing.
 fn counter_screen() -> prism_runtime::FunctionValue {
     content(|k| {
-        let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+        let column = node_group(k, 1, 1);
         setters::set_modifier(column, &ModifierMirror::encode(&[padding(16)])).unwrap();
         setters::set_arrangement(column, 8, 8).unwrap();
         let text = NodeId(k.start_node_group(2, 4).unwrap().0);
         setters::set_text(text, "Count: 0").unwrap();
         k.end_group().unwrap();
-        let button = NodeId(k.start_node_group(3, 3).unwrap().0);
+        let button = node_group(k, 3, 3);
         let handler = setters::register(HandlerKind::Click, inline_handler(1)).unwrap();
         let chain = ModifierMirror::encode(&[
             background(0xFF67_50A4, Shape::new(0, 50)),
@@ -102,7 +102,7 @@ fn counter_screen() -> prism_runtime::FunctionValue {
         ]);
         setters::set_modifier(button, &chain).unwrap();
         setters::set_content_color(button, 0xFFFF_FFFF).unwrap();
-        let row = NodeId(k.start_node_group(4, 2).unwrap().0);
+        let row = node_group(k, 4, 2);
         let chain = ModifierMirror::encode(&[default_min_size(58, 40), padding_each(24, 8, 24, 8)]);
         setters::set_modifier(row, &chain).unwrap();
         let label = NodeId(k.start_node_group(5, 4).unwrap().0);
@@ -148,6 +148,59 @@ fn steady_state_iterations_allocate_nothing() {
         "each click was followed by a pass"
     );
     assert_eq!(app.display_list().commands.len(), 4);
+    assert_eq!(
+        counts[99],
+        counts[0],
+        "allocations after the first iteration: {:?}",
+        &counts[..10]
+    );
+    app.finish();
+}
+
+/// A column of 20 rows, each a box holding a text, then a text, every container measured by
+/// the test support's policies.
+fn rows() -> prism_runtime::FunctionValue {
+    content(|k| {
+        node_group(k, 1, 1);
+        for index in 0..20 {
+            let key = 10 + index * 10;
+            node_group(k, key, 2);
+            let boxed = node_group(k, key + 1, 3);
+            setters::set_modifier(boxed, &ModifierMirror::encode(&[padding(4)])).unwrap();
+            let text = node_group(k, key + 2, 4);
+            setters::set_text(text, "item").unwrap();
+            k.end_group().unwrap();
+            k.end_group().unwrap();
+            let text = node_group(k, key + 3, 4);
+            setters::set_text(text, "label").unwrap();
+            k.end_group().unwrap();
+            k.end_group().unwrap();
+        }
+        k.end_group().unwrap();
+    })
+}
+
+/// The scenario "Resizing an app allocates nothing": 100 resizes alternating between two
+/// window widths, each followed by a layout of the whole tree, through the policies' calls and
+/// their lent measurables, and a display list build.
+#[test]
+fn resizing_an_app_allocates_nothing() {
+    let _lock = lock();
+    prism_ui::host::set_frame_statistics(None);
+    let mut app = App::start(Box::new(NoEvents), Box::new(FixedAdvanceMetrics), rows()).unwrap();
+    app.settle().unwrap();
+    let mut counts = Vec::with_capacity(100);
+    let layouts = app.counters.layouts;
+    COUNTING.with(|counting| counting.set(true));
+    for index in 0..100 {
+        let width = if index % 2 == 0 { 401 } else { 400 };
+        app.handle(HostEvent::Resize(width, 300)).unwrap();
+        app.settle().unwrap();
+        app.build_display_list(true);
+        counts.push(ALLOCATIONS.with(Cell::get));
+    }
+    COUNTING.with(|counting| counting.set(false));
+    assert_eq!(app.counters.layouts, layouts + 100, "every resize laid out");
     assert_eq!(
         counts[99],
         counts[0],

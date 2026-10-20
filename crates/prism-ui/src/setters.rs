@@ -157,6 +157,53 @@ pub fn set_on_value_change(node: NodeId, handler: HandlerId) -> UiResult<()> {
     })
 }
 
+/// `prism_ui_set_measure_policy`: a layout node's measure policy (D8 of `layout-primitive`),
+/// compared with the one it holds outside the state's borrow, as handlers are.
+pub fn set_measure_policy(node: NodeId, policy: HandlerId) -> UiResult<()> {
+    let copies = with_node(node, |state| {
+        Ok(comparables(
+            state,
+            state.tree.measure_policy_pair(node, policy),
+        ))
+    })?;
+    let equal = compare(&copies);
+    with_node(node, |state| {
+        let State {
+            tree,
+            handlers,
+            drops,
+            ..
+        } = state;
+        tree.set_measure_policy(node, policy, equal, handlers, drops)
+            .map(|_| ())
+    })
+}
+
+/// `prism_ui_register_measure_policy`: moves a toolkit layout's policy into a pending entry,
+/// during a pass of the running app only, as the toolkit's setters check (D8 of
+/// `layout-primitive`); otherwise `function` is dropped and the result is the setters' misuse.
+pub fn register_measure_policy(function: FunctionValue) -> UiResult<HandlerId> {
+    let checked = match runtime::active_composition() {
+        None => Err(OUTSIDE_COMPOSITION),
+        Some(active) => with_state(|state| {
+            let app = state.app.as_mut().ok_or(OUTSIDE_RUN_APP)?;
+            match app.composition {
+                Some(composition) if composition != active => Err(OUTSIDE_RUN_APP),
+                Some(_) => Ok(()),
+                None => {
+                    app.composition = Some(active);
+                    Ok(())
+                }
+            }
+        }),
+    };
+    if let Err(error) = checked {
+        release_functions(&mut vec![function]);
+        return Err(error);
+    }
+    register(HandlerKind::Measure, function)
+}
+
 /// `prism_ui_register_click`, `_toggle` and `_text`: moves `function` into a pending entry of
 /// the handler table. With no app on the thread, `function` is dropped and the result is
 /// `ui misuse: modifier handlers are made only while runApp runs`.
@@ -198,7 +245,7 @@ pub fn modifier_overflow() -> UiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{drops, handler, inline_handler, reset_drops};
+    use crate::test_support::{drops, handler, inline_handler, node_group, reset_drops};
     use crate::thread::{install_tree, release_dropped, RunningApp};
     use prism_compose::test_support::content;
     use prism_compose::{Composition, NodeTree};
@@ -248,7 +295,7 @@ mod tests {
         let c = Composition::start(
             Box::new(crate::UiApplier),
             content(move |k| {
-                let node = NodeId(k.start_node_group(1, 3).unwrap().0);
+                let node = node_group(k, 1, 3);
                 let mut results = result.borrow_mut();
                 results.push(set_text(NodeId(node.0 + (1 << 32)), "a"));
                 results.push(set_alignment(node, 99));

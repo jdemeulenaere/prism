@@ -1,0 +1,16 @@
+window 400x300
+  column #1 0,0 88x80
+    layout #2 0,0 8x40
+      text #3 0,0 8x20 "a"
+      text #4 0,20 8x20 "b"
+    box #5 0,40 88x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #6 0,40 88x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #7 24,50 40x20 "wider"
+window 400x300
+  column #1 0,0 88x100
+    layout #2 0,0 8x60
+      text #3 0,0 8x20 "a"
+      text #4 0,30 8x20 "b"
+    box #5 0,60 88x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #6 0,60 88x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #7 24,70 40x20 "wider"

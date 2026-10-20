@@ -158,7 +158,7 @@ mod tests {
         let mut builder = TreeBuilder::new(400, 300);
         let root = builder.root();
         let text = builder.text(root, "Count: 0");
-        Layout::new().run(&mut builder.tree, &metrics);
+        builder.lay_out_with(&mut Layout::new(), &metrics);
         let node = builder.tree.node(text).unwrap();
         let width: i64 = "Count: 0".chars().map(|c| uncached(c, 16)).sum();
         assert_eq!((node.size.width, node.size.height), (width, 19));

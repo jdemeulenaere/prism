@@ -21,11 +21,11 @@
 //!   script is parsed, and consecutive `edit` lines form one command, applied as one reload.
 //!
 //! A kind target (D5 of `reactive-app-verification`) names the n-th node, from 1 in tree order,
-//! of a kind the dump prints (`column`, `row`, `box`, `text`, `spacer`, `textfield`) or whose
-//! `clickable` or `toggleable` element has a role (`button`, `checkbox`), for nodes that show no
-//! text: `click checkbox 2`, `click textfield`. The three target forms do not overlap: a text
-//! target is quoted, a point is two integers and a kind is a word; another word is
-//! `unknown target '<word>'`.
+//! of a kind the dump prints (`column`, `row`, `box`, `text`, `spacer`, `textfield`, `layout`)
+//! or whose `clickable` or `toggleable` element has a role (`button`, `checkbox`), for nodes
+//! that show no text: `click checkbox 2`, `click textfield`. The three target forms do not
+//! overlap: a text target is quoted, a point is two integers and a kind is a word; another word
+//! is `unknown target '<word>'`.
 
 use crate::input::Key;
 use crate::node::NodeKind;
@@ -65,6 +65,7 @@ impl TargetKind {
             "text" => TargetKind::Node(NodeKind::Text),
             "spacer" => TargetKind::Node(NodeKind::Spacer),
             "textfield" => TargetKind::Node(NodeKind::TextField),
+            "layout" => TargetKind::Node(NodeKind::Layout),
             "button" => TargetKind::Role(Role::Button),
             "checkbox" => TargetKind::Role(Role::Checkbox),
             _ => return None,

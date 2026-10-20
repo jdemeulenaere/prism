@@ -1,0 +1,37 @@
+package app
+
+import /lib/gaps
+import /prism/collections
+import /prism/compose/material3
+import /prism/compose/ui
+
+// Stacks its children with `gap()` pixels after each, a function of another file.
+compose fun Spaced(content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints) }
+        var width = 0
+        var height = 0
+        for (p in placeables) {
+            if (p.width > width) {
+                width = p.width
+            }
+            height += p.height + gap()
+        }
+        layout(width, height) {
+            var y = 0
+            for (p in placeables) {
+                p.place(0, y)
+                y += p.height + gap()
+            }
+        }
+    }
+}
+
+fun main() {
+    runApp(width = 400, height = 300) {
+        Spaced {
+            Text("a")
+            Text("b")
+        }
+    }
+}

@@ -82,12 +82,13 @@ package compose fun SurfaceBox(
     contentColor: Color,
     content: compose () -> Unit,
 ): Unit {
-    Node(
+    LayoutNode(
         boxKind,
+        { measurables, constraints -> measureBox(measurables, constraints) },
+        modifier,
         { node ->
             prism_ui_set_alignment(node.word, Alignment.TopStart.code)
             prism_ui_set_content_color(node.word, contentColor.argb)
-            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content()

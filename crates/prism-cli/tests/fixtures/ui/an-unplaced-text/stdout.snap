@@ -1,0 +1,6 @@
+window 400x300
+  layout #1 0,0 40x20
+    text #2 0,0 40x20 "shown"
+    text #3 0,0 0x0 "hidden" unplaced
+clear 400x300 #FFFFFFFF
+text 0,0 size 16 #FF000000 "shown"

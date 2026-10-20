@@ -1,0 +1,69 @@
+// expect: ok
+// run: 0
+// headless: 400x300
+// events: events.txt
+// Diagonal layouts nested three deep, the middle one measuring through a clone of the
+// measurables lent to it, which outlives its children's policies and is freed with its frame.
+import /prism/compose/ui
+import /prism/compose/material3
+import /prism/collections
+import /prism/core
+
+compose fun Diagonal(content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints) }
+        var width = 0
+        var height = 0
+        for (p in placeables) {
+            width += p.width
+            height += p.height
+        }
+        layout(width, height) {
+            var x = 0
+            var y = 0
+            for (p in placeables) {
+                p.place(x, y)
+                x += p.width
+                y += p.height
+            }
+        }
+    }
+}
+
+compose fun ClonedDiagonal(content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val copy = measurables.clone()
+        val placeables = copy.map { it.measure(constraints) }
+        println("lent ${measurables.size}, cloned ${copy.size}")
+        var width = 0
+        var height = 0
+        for (p in placeables) {
+            width += p.width
+            height += p.height
+        }
+        layout(width, height) {
+            var x = 0
+            var y = 0
+            for (p in placeables) {
+                p.place(x, y)
+                x += p.width
+                y += p.height
+            }
+        }
+    }
+}
+
+fun main() {
+    runApp(width = 400, height = 300) {
+        Diagonal {
+            ClonedDiagonal {
+                Diagonal {
+                    Text("a")
+                    Text("bb")
+                }
+                Text("c")
+            }
+            Text("d")
+        }
+    }
+}

@@ -95,8 +95,11 @@ fn visit(
     let (origin_x, origin_y) = (parent_x + node.x, parent_y + node.y);
     let mut child = node.last_child;
     while let Some(current) = child {
-        if let Some(target) = visit(tree, current, origin_x, origin_y, x, y) {
-            return Some(target);
+        // An unplaced node and its subtree are not hit (D7 of `layout-primitive`).
+        if tree.node(current).unwrap().placed {
+            if let Some(target) = visit(tree, current, origin_x, origin_y, x, y) {
+                return Some(target);
+            }
         }
         child = tree.node(current).unwrap().previous;
     }
@@ -232,15 +235,13 @@ impl Dispatcher {
 mod tests {
     use super::*;
     use crate::handlers::HandlerKind;
-    use crate::layout::Layout;
     use crate::properties::{Color, Role, Shape};
     use crate::test_support::*;
-    use crate::text::FixedAdvanceMetrics;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     fn lay_out(builder: &mut TreeBuilder) {
-        Layout::new().run(&mut builder.tree, &FixedAdvanceMetrics);
+        builder.lay_out();
     }
 
     fn click(dispatcher: &mut Dispatcher, builder: &TreeBuilder, x: i64, y: i64) -> Option<Action> {
@@ -559,5 +560,30 @@ mod tests {
         crate::handlers::release_functions(&mut drops);
         assert_eq!(dispatcher.focused(&b.tree), None);
         assert!(dispatcher.character(&b.tree, 'a').is_none());
+    }
+
+    /// D7 of `layout-primitive`: a node its parent does not place is not hit, nor is its
+    /// subtree, even where it lies under the press.
+    #[test]
+    fn an_unplaced_button_is_not_hit() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let node = b.add(root, NodeKind::Layout);
+        b.set_policy(node, first_only_policy());
+        b.text(node, "shown");
+        let seen = log.clone();
+        button(
+            &mut b,
+            node,
+            "hidden",
+            true,
+            handler("hidden", move || seen.borrow_mut().push("hidden")),
+        );
+        lay_out(&mut b);
+        let mut dispatcher = Dispatcher::new();
+        assert!(click(&mut dispatcher, &b, 10, 10).is_none());
+        assert!(hit_test(&b.tree, 10, 10).is_none());
+        assert!(log.borrow().is_empty());
     }
 }

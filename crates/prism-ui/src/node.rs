@@ -18,6 +18,8 @@ pub enum NodeKind {
     Text = 4,
     Spacer = 5,
     TextField = 6,
+    /// A user layout of `Layout` (D10 of `layout-primitive`).
+    Layout = 7,
 }
 
 impl NodeKind {
@@ -30,6 +32,7 @@ impl NodeKind {
             4 => NodeKind::Text,
             5 => NodeKind::Spacer,
             6 => NodeKind::TextField,
+            7 => NodeKind::Layout,
             _ => return None,
         })
     }
@@ -44,7 +47,18 @@ impl NodeKind {
             NodeKind::Text => "text",
             NodeKind::Spacer => "spacer",
             NodeKind::TextField => "textfield",
+            NodeKind::Layout => "layout",
         }
+    }
+
+    /// Whether a node of this kind has its content measured by its measure policy: columns,
+    /// rows, boxes, spacers and user layouts (D10 of `layout-primitive`). Texts, text fields
+    /// and the window are measured natively.
+    pub fn has_policy(self) -> bool {
+        matches!(
+            self,
+            NodeKind::Column | NodeKind::Row | NodeKind::Box | NodeKind::Spacer | NodeKind::Layout
+        )
     }
 
     /// The arrangement a node of this kind has until its composable sets one.
@@ -129,6 +143,8 @@ pub struct Node {
     pub chain: Vec<ChainEntry>,
     /// A text field's value-change handler.
     pub value_change: Option<HandlerId>,
+    /// The measure policy of a node of a policy kind (D8 of `layout-primitive`).
+    pub policy: Option<HandlerId>,
 
     /// The constraints of the last measurement, if any.
     pub last_constraints: Option<Constraints>,
@@ -142,6 +158,13 @@ pub struct Node {
     pub break_width: i64,
     pub needs_measure: bool,
     pub child_needs_measure: bool,
+    /// Whether its parent placed it in its last measurement: an unplaced node and its subtree
+    /// are not drawn, hit or found by script targets (D7 of `layout-primitive`).
+    pub placed: bool,
+    /// The stamp of the measurement frame that last measured it, and of the one that last
+    /// placed it (D6).
+    pub stamp: u64,
+    pub placed_stamp: u64,
 }
 
 impl Node {
@@ -162,6 +185,7 @@ impl Node {
             content_color: Color::UNSPECIFIED,
             chain: Vec::new(),
             value_change: None,
+            policy: None,
             last_constraints: None,
             size: Size::ZERO,
             x: 0,
@@ -170,6 +194,9 @@ impl Node {
             break_width: 0,
             needs_measure: true,
             child_needs_measure: false,
+            placed: true,
+            stamp: 0,
+            placed_stamp: 0,
         }
     }
 
@@ -181,6 +208,9 @@ impl Node {
             }
         }
         if let Some(handler) = self.value_change {
+            out(handler);
+        }
+        if let Some(handler) = self.policy {
             out(handler);
         }
     }
@@ -208,19 +238,27 @@ mod tests {
 
     #[test]
     fn kinds_decode_from_their_codes() {
-        let names: Vec<_> = (1..=6)
+        let names: Vec<_> = (1..=7)
             .map(|code| NodeKind::from_code(code).unwrap().name())
             .collect();
         assert_eq!(
             names,
-            ["column", "row", "box", "text", "spacer", "textfield"]
+            [
+                "column",
+                "row",
+                "box",
+                "text",
+                "spacer",
+                "textfield",
+                "layout"
+            ]
         );
         assert_eq!(
             NodeKind::from_code(0),
             None,
             "the window is no composable's"
         );
-        assert_eq!(NodeKind::from_code(7), None);
+        assert_eq!(NodeKind::from_code(8), None);
         assert_eq!(NodeKind::from_code(-1), None);
     }
 

@@ -5,8 +5,9 @@
 //! and writing to the program's output. One place for these seams, so that the rest of the
 //! crate does not depend on how the two runtimes spell them.
 
+use crate::geometry::Constraints;
 use prism_compose::Handle;
-use prism_runtime::{FunctionValue, PrismString};
+use prism_runtime::{FunctionValue, PrismList, PrismString};
 
 /// Calls a `() -> Unit` function value.
 ///
@@ -33,6 +34,119 @@ pub unsafe fn call_with_bool(function: &FunctionValue, value: bool) {
 /// `function` must be a live function value of type `(String) -> Unit`.
 pub unsafe fn call_with_string(function: &FunctionValue, value: PrismString) {
     function.call_with_string(value)
+}
+
+/// `MeasureScope` of `/prism/compose/ui` as generated code lays it out: its node's word.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasureScopeMirror {
+    pub node: u64,
+}
+
+/// `Constraints` of `/prism/compose/ui`: `minWidth`, `maxWidth`, `minHeight`, `maxHeight`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstraintsMirror {
+    pub min_width: i64,
+    pub max_width: i64,
+    pub min_height: i64,
+    pub max_height: i64,
+}
+
+impl From<Constraints> for ConstraintsMirror {
+    fn from(c: Constraints) -> ConstraintsMirror {
+        ConstraintsMirror {
+            min_width: c.min_width,
+            max_width: c.max_width,
+            min_height: c.min_height,
+            max_height: c.max_height,
+        }
+    }
+}
+
+impl From<ConstraintsMirror> for Constraints {
+    fn from(c: ConstraintsMirror) -> Constraints {
+        Constraints {
+            min_width: c.min_width,
+            max_width: c.max_width,
+            min_height: c.min_height,
+            max_height: c.max_height,
+        }
+    }
+}
+
+/// `Measurable`: its node's word, as the lent buffer holds it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasurableMirror {
+    pub node: u64,
+}
+
+/// `Placeable`: `node`, `width` and `height`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaceableMirror {
+    pub node: u64,
+    pub width: i64,
+    pub height: i64,
+}
+
+/// `MeasureResult`: `width`, `height` and `node`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MeasureResultMirror {
+    pub width: i64,
+    pub height: i64,
+    pub node: u64,
+}
+
+/// `Arrangement` of `/prism/compose/layout`: `code` and `space`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrangementMirror {
+    pub code: i64,
+    pub space: i64,
+}
+
+/// `Alignment` of `/prism/compose/ui`: `code`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlignmentMirror {
+    pub code: i64,
+}
+
+/// `ParentData` of `/prism/compose/ui`: `weight` (0.0 for none), `alignment` (-1 for none)
+/// and `fill`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParentDataMirror {
+    pub weight: f64,
+    pub alignment: i64,
+    pub fill: u8,
+}
+
+/// Calls a measure policy with its scope, its measurables and its constraints, and gives its
+/// result (D8 of `layout-primitive`).
+///
+/// # Safety
+///
+/// `function` must be a live function value of type `MeasureScope.(&List<Measurable>,
+/// Constraints) -> MeasureResult`, and `list` must describe live `Measurable` words that stay
+/// untouched during the call.
+pub unsafe fn call_measure_policy(
+    function: &FunctionValue,
+    scope: &MeasureScopeMirror,
+    list: &PrismList,
+    constraints: &ConstraintsMirror,
+) -> MeasureResultMirror {
+    let mut result = MeasureResultMirror::default();
+    function.call_with_addresses(
+        (&mut result as *mut MeasureResultMirror).cast(),
+        (scope as *const MeasureScopeMirror).cast(),
+        (list as *const PrismList).cast(),
+        (constraints as *const ConstraintsMirror).cast(),
+    );
+    result
 }
 
 /// Whether a handler may be given to a second node, by a duplicate of its environment: its
@@ -75,7 +189,7 @@ pub fn active_composition() -> Option<Handle> {
 }
 
 /// Runs `handler` as a handler of `composition`, so that the cells it creates belong to it.
-pub fn run_handler(composition: Handle, handler: impl FnOnce()) {
+pub fn run_handler<R>(composition: Handle, handler: impl FnOnce() -> R) -> R {
     prism_compose::Composition::run_handler(composition, handler)
 }
 

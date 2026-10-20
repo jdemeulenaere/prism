@@ -1,0 +1,67 @@
+// expect: ok
+// run: 0
+// headless: 400x300
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/collections
+import /prism/core
+
+// Children in lines as wide as the constraints allow, a new line starting when the next child
+// would not fit.
+compose fun FlowRow(content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
+        var width = 0
+        var height = 0
+        var lineWidth = 0
+        var lineHeight = 0
+        for (p in placeables) {
+            if (lineWidth > 0 && lineWidth + p.width > constraints.maxWidth) {
+                height += lineHeight
+                lineWidth = 0
+                lineHeight = 0
+            }
+            lineWidth += p.width
+            if (lineWidth > width) {
+                width = lineWidth
+            }
+            if (p.height > lineHeight) {
+                lineHeight = p.height
+            }
+        }
+        height += lineHeight
+        layout(width, height) {
+            var x = 0
+            var y = 0
+            var rowHeight = 0
+            for (p in placeables) {
+                if (x > 0 && x + p.width > constraints.maxWidth) {
+                    y += rowHeight
+                    x = 0
+                    rowHeight = 0
+                }
+                p.place(x, y)
+                x += p.width
+                if (p.height > rowHeight) {
+                    rowHeight = p.height
+                }
+            }
+        }
+    }
+}
+
+fun main() {
+    runApp(width = 400, height = 300) {
+        Box(modifier = Modifier.width(40.dp)) {
+            FlowRow {
+                Text("aa")
+                Text("bb")
+                Text("cc")
+            }
+        }
+    }
+}

@@ -3,6 +3,9 @@
 // events: events.txt
 // Two node groups with Compose's node key, 125, as `Node` starts them, whose kinds change
 // between passes: each gets a new node, and the texts composed inside the first keep theirs.
+// The raw groups are of the kinds measured natively, text and text field, since a node of a
+// layout kind needs the measure policy only the toolkit gives (`layout-primitive`); the texts
+// inside the first are not laid out, so they are unplaced.
 import /prism/compose/ui
 import /prism/compose/foundation
 import /prism/compose/layout
@@ -12,11 +15,11 @@ import /prism/composer
 
 compose fun Raw(flag: Bool) {
     val k = currentComposer()
-    val first = startNodeGroup(k, 125, if (flag) 1 else 2)
+    val first = startNodeGroup(k, 125, if (flag) 4 else 6)
     Text("child")
     Text("second")
     endGroup(k)
-    val last = startNodeGroup(k, 125, if (flag) 4 else 5)
+    val last = startNodeGroup(k, 125, if (flag) 6 else 4)
     endGroup(k)
 }
 

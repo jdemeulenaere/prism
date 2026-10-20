@@ -209,13 +209,17 @@ impl DisplayList {
     ) {
         let mut child = tree.node(parent).unwrap().last_child;
         while let Some(current) = child {
-            self.stack.push(Pending {
-                node: current,
-                x,
-                y,
-                content_color,
-            });
-            child = tree.node(current).unwrap().previous;
+            let node = tree.node(current).unwrap();
+            // An unplaced node and its subtree are not drawn (D7 of `layout-primitive`).
+            if node.placed {
+                self.stack.push(Pending {
+                    node: current,
+                    x,
+                    y,
+                    content_color,
+                });
+            }
+            child = node.previous;
         }
     }
 }
@@ -224,13 +228,12 @@ impl DisplayList {
 mod tests {
     use super::*;
     use crate::dump::dump_display_list;
-    use crate::layout::Layout;
     use crate::properties::{Shape, TextStyle};
     use crate::test_support::*;
     use crate::text::FixedAdvanceMetrics;
 
     fn drawn(builder: &mut TreeBuilder, focused: Option<NodeId>) -> String {
-        Layout::new().run(&mut builder.tree, &FixedAdvanceMetrics);
+        builder.lay_out();
         let mut list = DisplayList::new();
         list.build(&builder.tree, &FixedAdvanceMetrics, focused);
         let mut out = String::new();
@@ -408,7 +411,7 @@ mod tests {
     fn a_rebuild_reuses_its_buffers() {
         let mut b = TreeBuilder::new(400, 300);
         counter_screen(&mut b, "Count: 0", inline_handler(1));
-        Layout::new().run(&mut b.tree, &FixedAdvanceMetrics);
+        b.lay_out();
         let mut list = DisplayList::new();
         list.build(&b.tree, &FixedAdvanceMetrics, None);
         let (commands, text) = (list.commands.capacity(), list.text.capacity());
@@ -416,5 +419,23 @@ mod tests {
         assert_eq!(list.commands.len(), 4);
         assert_eq!(list.commands.capacity(), commands);
         assert_eq!(list.text.capacity(), text);
+    }
+
+    /// D7 of `layout-primitive`: a node its parent does not place is not drawn, nor is its
+    /// subtree.
+    #[test]
+    fn an_unplaced_subtree_is_not_drawn() {
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let node = b.add(root, NodeKind::Layout);
+        b.set_policy(node, first_only_policy());
+        b.text(node, "shown");
+        let hidden = b.add(node, NodeKind::Box);
+        b.chain(hidden, &[background(0xFFFF_0000, Shape::RECTANGLE)]);
+        b.text(hidden, "inside");
+        assert_eq!(
+            drawn(&mut b, None),
+            "clear 400x300 #FFFFFFFF\ntext 0,0 size 16 #FF000000 \"shown\"\n"
+        );
     }
 }

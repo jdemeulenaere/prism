@@ -77,6 +77,22 @@ impl Arrangement {
         })
     }
 
+    /// The code and spacing words of `/prism/compose/layout`'s `Arrangement`, which
+    /// [`Arrangement::from_words`] decodes.
+    pub fn words(self) -> (i64, i64) {
+        match self {
+            Arrangement::Top => (0, 0),
+            Arrangement::Bottom => (1, 0),
+            Arrangement::Start => (2, 0),
+            Arrangement::End => (3, 0),
+            Arrangement::Center => (4, 0),
+            Arrangement::SpaceBetween => (5, 0),
+            Arrangement::SpaceAround => (6, 0),
+            Arrangement::SpaceEvenly => (7, 0),
+            Arrangement::SpacedBy(space) => (8, space),
+        }
+    }
+
     /// The fixed space between two children.
     pub fn spacing(self) -> i64 {
         match self {

@@ -543,6 +543,67 @@ impl UiTree {
         }
         Ok(Some(()))
     }
+
+    /// The policy a node holds, when it is not `named`: the pair whose equality
+    /// [`UiTree::set_measure_policy`] needs.
+    pub fn measure_policy_pair(
+        &self,
+        id: NodeId,
+        named: HandlerId,
+    ) -> Option<(HandlerId, HandlerId)> {
+        let current = self.node(id)?.policy?;
+        (current != named).then_some((named, current))
+    }
+
+    /// Gives a node its measure policy (D8 of `layout-primitive`): keeps the one it holds when
+    /// `named` is it or, as `equal` says, equal to it, and otherwise claims `named`, releases
+    /// the old one and marks the node for measuring.
+    pub fn set_measure_policy(
+        &mut self,
+        id: NodeId,
+        named: HandlerId,
+        equal: bool,
+        handlers: &mut HandlerTable,
+        drops: &mut Vec<FunctionValue>,
+    ) -> UiResult<Option<()>> {
+        let Some(node) = self.node(id) else {
+            return Ok(None);
+        };
+        if let Some(current) = node.policy {
+            if current == named || equal {
+                return Ok(Some(()));
+            }
+        }
+        let claimed = handlers.claim(named, HandlerKind::Measure, id)?;
+        let node = self.node_mut(id).unwrap();
+        if let Some(old) = node.policy.replace(claimed) {
+            handlers.release(old, drops);
+        }
+        self.mark_needs_measure(id);
+        Ok(Some(()))
+    }
+
+    /// Marks every node measured by a measure policy for measuring, and the root, so that the
+    /// next layout runs every policy again from the root: what a reload does, since it may
+    /// have changed the code of any policy (D12 of `layout-primitive`).
+    pub fn mark_policies_for_measure(&mut self) {
+        let root = self.root;
+        let mut stack = std::mem::take(&mut self.release_stack);
+        stack.push(root);
+        while let Some(id) = stack.pop() {
+            let node = self.node_mut(id).unwrap();
+            if node.kind.has_policy() {
+                node.needs_measure = true;
+            }
+            let mut child = node.first_child;
+            while let Some(current) = child {
+                stack.push(current);
+                child = self.node(current).unwrap().next;
+            }
+        }
+        self.release_stack = stack;
+        self.node_mut(root).unwrap().needs_measure = true;
+    }
 }
 
 /// The children of a node, in order.
@@ -886,5 +947,46 @@ mod tests {
         handlers.release_all(&mut out);
         release_functions(&mut out);
         assert_eq!(drops(), ["drop first", "drop second"]);
+    }
+
+    /// D8 of `layout-primitive`: an equal policy is kept, another replaces the old one and
+    /// marks the node, and releasing the node drops its policy.
+    #[test]
+    fn a_node_holds_its_measure_policy() {
+        use crate::test_support::{counting_policy, policy};
+        let mut tree = UiTree::new(400, 300);
+        let mut handlers = HandlerTable::new();
+        let mut drops = Vec::new();
+        let root = tree.root();
+        let column = tree.create_kind(NodeKind::Column);
+        tree.place_after(root, None, column);
+        let first = handlers.register(HandlerKind::Measure, policy(NodeKind::Column).unwrap());
+        tree.set_measure_policy(column, first, false, &mut handlers, &mut drops)
+            .unwrap();
+        assert_eq!(tree.node(column).unwrap().policy, Some(first));
+        clean(&mut tree);
+        // An equal policy of a later pass is kept, and its own entry stays pending.
+        let equal = handlers.register(HandlerKind::Measure, policy(NodeKind::Column).unwrap());
+        let pair = tree.measure_policy_pair(column, equal);
+        assert_eq!(pair, Some((equal, first)));
+        assert!(handlers.equal(equal, first));
+        tree.set_measure_policy(column, equal, true, &mut handlers, &mut drops)
+            .unwrap();
+        assert_eq!(tree.node(column).unwrap().policy, Some(first));
+        assert!(!tree.needs_layout(), "an equal policy changes nothing");
+        handlers.release_unclaimed(&mut drops);
+        // Another policy replaces it, releases the old one and marks the node.
+        let other = handlers.register(HandlerKind::Measure, counting_policy());
+        assert!(!handlers.equal(other, first));
+        tree.set_measure_policy(column, other, false, &mut handlers, &mut drops)
+            .unwrap();
+        assert_eq!(tree.node(column).unwrap().policy, Some(other));
+        assert_eq!(handlers.owner(first), None, "the old policy is released");
+        assert!(tree.node(column).unwrap().needs_measure);
+        assert_eq!(handlers.len(), 1);
+        // Releasing the node drops its policy.
+        tree.release(column, &mut handlers, &mut drops);
+        assert!(handlers.is_empty());
+        crate::handlers::release_functions(&mut drops);
     }
 }

@@ -1,0 +1,48 @@
+// expect: ok
+// run: 0
+// headless: 400x300
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/collections
+import /prism/core
+
+// Stacks its children with `gap` pixels after each.
+compose fun Spaced(gap: Int, content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints) }
+        var width = 0
+        var height = 0
+        for (p in placeables) {
+            if (p.width > width) {
+                width = p.width
+            }
+            height += p.height + gap
+        }
+        layout(width, height) {
+            var y = 0
+            for (p in placeables) {
+                p.place(0, y)
+                y += p.height + gap
+            }
+        }
+    }
+}
+
+compose fun Screen() {
+    val gap = remember { mutableStateOf(0) }
+    Column {
+        Spaced(gap.value) {
+            Text("a")
+            Text("b")
+        }
+        Button(onClick = { gap.value = 10 }) { Text("wider") }
+    }
+}
+
+fun main() {
+    runApp(width = 400, height = 300) { Screen() }
+}

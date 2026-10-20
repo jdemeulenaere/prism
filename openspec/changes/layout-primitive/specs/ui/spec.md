@@ -41,7 +41,7 @@
 - **THEN** the type checker emits `E4034` at `place`, saying that it needs a `PlacementScope` and that the innermost receiver is a `MeasureScope`
 
 ### Requirement: Children a Policy Does Not Place
-A child that its parent's policy did not place in its last measurement, and that child's subtree, MUST NOT be drawn, hit by presses or found by script targets. `dump` MUST print it with `unplaced` after its other properties and before its modifier elements.
+A child that its parent's policy did not place in its last measurement, and that child's subtree, MUST NOT be drawn, hit by presses or found by script targets. The children of a text or text field, which only a raw node group of `/prism/composer` can give it, MUST be unplaced too. `dump` MUST print an unplaced node with `unplaced` after its other properties and before its modifier elements.
 
 #### Scenario: An unplaced text
 - **WHEN** a headless app of 400 × 300 composes `Layout(content = { Text("shown"); Text("hidden") }) { measurables, constraints -> val first = measurables[0].measure(constraints); layout(first.width, first.height) { first.place(0, 0) } }` and its script is `dump`, `dump draw` and `click "hidden"`
@@ -53,6 +53,13 @@ A node MUST keep its measure policy in the handler table, as it keeps its handle
 #### Scenario: A changed policy lays its node out again
 - **WHEN** a headless app of 400 × 300 composes `Column { Spaced(gap.value) { Text("a"); Text("b") }; Button(onClick = { gap.value = 10 }) { Text("wider") } }`, with `val gap = remember { mutableStateOf(0) }` and `compose fun Spaced(gap: Int, content: compose () -> Unit)` a `Layout` that stacks its children with `gap` pixels after each, runs under `--check-allocations`, and its script is `dump`, `click "wider"` and `dump`
 - **THEN** the first dump holds `layout #2 0,0 8x40` and `text #4 0,20 8x20 "b"`, the second holds `layout #2 0,0 8x60` and `text #4 0,30 8x20 "b"`, and the exit status is 0
+
+### Requirement: A Layout Node Needs a Measure Policy
+A node of kind `column`, `row`, `box`, `spacer` or `layout` that is measured without a measure policy, which only a raw node group of `/prism/composer` can make, MUST end the program with `ui misuse: a layout node has no measure policy`.
+
+#### Scenario: A raw column without a policy
+- **WHEN** a headless app composes `compose fun Raw() { val k = currentComposer(); startNodeGroup(k, 125, 1); endGroup(k) }` and its script is `dump`
+- **THEN** stderr is exactly `panic: ui misuse: a layout node has no measure policy` and a newline, and the exit status is 101
 
 ### Requirement: Measure Policies Run as Program Code
 A measure policy MUST run during layout, outside any pass, as a handler of the app's composition: states it creates belong to whatever holds them, a state it writes invalidates its readers, which the frame loop recomposes before the next event, and a runtime error in it ends the program with its location. A policy's reads of states MUST NOT make its node measure again when those states change.
@@ -152,3 +159,14 @@ A full layout and a display list build MUST take time linear in the nodes, their
 #### Scenario: Layout timing benchmark
 - **WHEN** `crates/prism-ui/tests/ui_timing.rs` runs with `PRISM_ASSERT_TIMING=1` on trees of 1,000, 10,000 and 100,000 nodes
 - **THEN** each tenfold increase multiplies the full layout and display list times by at most 15, and relaying out after one text change of the 10,000-node tree takes under a tenth of its full layout
+
+### Requirement: Node Identity Survives Unrelated Edits
+A node MUST be identified by its node group, which `Node` or `LeafNode` starts with Compose's constant node key under the calling toolkit composable's group, and which matches the old node group at the same position among its siblings. A node MUST keep its number, focus and layout cache while that group is matched, and a node group composed with another kind MUST get a new node.
+
+#### Scenario: Inserting a button before a text keeps the text's node
+- **WHEN** `compose fun Screen() { val more = remember { mutableStateOf(false) }; Column { if (more.value) { Button(onClick = { }) { Text("new") } }; Text("kept"); Button(onClick = { more.value = true }) { Text("more") } } }` runs headless with the script `click "more"` then `dump`
+- **THEN** the dump shows `kept` as node `#2`, the node it was created as
+
+#### Scenario: A node group composed with another kind gets a new node
+- **WHEN** a composable of a headless app starts two node groups with the key 125 through `/prism/composer`, the first of kind text or text field and holding two `Text`s, the second of kind text field or text, each kind chosen by a state that a button flips, and the script is `dump`, `click "flip"`, `dump`, `click "flip"` and `dump`
+- **THEN** each flip gives both node groups new nodes of their new kinds, the two texts keep their node numbers inside the new first node, where they are unplaced, and the program exits with status 0 under `--check-allocations`

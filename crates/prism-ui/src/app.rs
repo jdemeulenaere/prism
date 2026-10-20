@@ -85,6 +85,9 @@ pub struct App {
     /// The time of the current iteration spent in what is not measured: dumps, edits and
     /// waits for reloads.
     excluded: Duration,
+    /// Set by an applied reload: the next layout measures every policy's node again and makes
+    /// the display list stale only when that changed something (D12 of `layout-primitive`).
+    reloaded: bool,
 }
 
 /// Runs an app titled `title` of `width` × `height` with the configured host, composing
@@ -248,6 +251,7 @@ impl App {
             run_started: run_started.unwrap_or(called),
             frame_presented: false,
             excluded: Duration::ZERO,
+            reloaded: false,
         };
         app.end_of_pass();
         if let (Some(statistics), Some(composed)) = (statistics.as_mut(), composed) {
@@ -344,9 +348,12 @@ impl App {
             }
         }
         let started = self.now();
-        let measurer = &*self.measurer;
-        let layout = &mut self.layout;
-        if with_state(|state| layout.run(&mut state.tree, measurer)) {
+        let laid_out = if std::mem::take(&mut self.reloaded) {
+            self.layout.run_after_reload(&*self.measurer)
+        } else {
+            self.layout.run(&*self.measurer)
+        };
+        if laid_out {
             self.counters.layouts += 1;
             self.record(Stage::Layout, started);
         }
@@ -396,6 +403,9 @@ impl App {
         if let Some(statistics) = self.statistics.as_mut() {
             statistics.reload();
         }
+        // The reload may have changed the code of any measure policy, or of what one calls.
+        with_state(|state| state.tree.mark_policies_for_measure());
+        self.reloaded = true;
         let started = Instant::now();
         self.settle()?;
         let scopes = prism_compose::reload::take_invalidated_scopes();
@@ -732,7 +742,7 @@ mod tests {
 
     /// `Button(onClick) { Text(label) }` as material3 builds it, keyed `key`.
     fn button(k: Composer, key: i64, label: &str, on_click: FunctionValue) {
-        let node = NodeId(k.start_node_group(key, 3).unwrap().0);
+        let node = node_group(k, key, 3);
         let handler = setters::register(HandlerKind::Click, on_click).unwrap();
         let chain = ModifierMirror::encode(&[
             background(0xFF67_50A4, Shape::new(0, 50)),
@@ -740,7 +750,7 @@ mod tests {
         ]);
         setters::set_modifier(node, &chain).unwrap();
         setters::set_content_color(node, 0xFFFF_FFFF).unwrap();
-        let row = NodeId(k.start_node_group(key + 1, 2).unwrap().0);
+        let row = node_group(k, key + 1, 2);
         let chain = ModifierMirror::encode(&[default_min_size(58, 40), padding_each(24, 8, 24, 8)]);
         setters::set_modifier(row, &chain).unwrap();
         setters::set_arrangement(row, 4, 0).unwrap();
@@ -761,7 +771,7 @@ mod tests {
     fn counter(count: Rc<Cell<i64>>, log: Log) -> FunctionValue {
         content(move |k| {
             log.borrow_mut().push("compose".to_string());
-            let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+            let column = node_group(k, 1, 1);
             setters::set_modifier(column, &ModifierMirror::encode(&[padding(16)])).unwrap();
             setters::set_arrangement(column, 8, 8).unwrap();
             text(k, 2, &format!("Count: {}", count.get()));
@@ -894,7 +904,7 @@ mod tests {
         let (result, output) = run_with_output(
             headless("resize 200 100\ndump"),
             content(|k| {
-                let node = NodeId(k.start_node_group(1, 3).unwrap().0);
+                let node = node_group(k, 1, 3);
                 let chain = ModifierMirror::encode(&[fill_max(true, true, 1.0)]);
                 setters::set_modifier(node, &chain).unwrap();
                 k.end_group().unwrap();
@@ -924,7 +934,7 @@ mod tests {
             content(move |k| {
                 let pass = seen.get();
                 seen.set(pass + 1);
-                let node = NodeId(k.start_node_group(1, 3).unwrap().0);
+                let node = node_group(k, 1, 3);
                 let kept =
                     setters::register(HandlerKind::Click, handler(names[pass], invalidate_app))
                         .unwrap();
@@ -959,7 +969,7 @@ mod tests {
             host,
             Box::new(FixedAdvanceMetrics),
             content(move |k| {
-                let node = NodeId(k.start_node_group(1, 3).unwrap().0);
+                let node = node_group(k, 1, 3);
                 let id = setters::register(HandlerKind::Click, inline_handler(7)).unwrap();
                 let chain = ModifierMirror::encode(&[size(20, 20), clickable(id, true, None)]);
                 setters::set_modifier(node, &chain).unwrap();
@@ -976,11 +986,12 @@ mod tests {
         app.settle().unwrap();
         invalidate_app();
         app.settle().unwrap();
-        assert_eq!(with_state(|state| state.handlers.len()), 1);
+        // The box's measure policy, capture-free, is the other entry, kept the same way.
+        assert_eq!(with_state(|state| state.handlers.len()), 2);
         let first = held.borrow()[0].0;
         assert_eq!(
             *held.borrow(),
-            [(first, 1), (first, 1)],
+            [(first, 2), (first, 2)],
             "the second registration gives the node's entry"
         );
         let (calls, _) = inline_calls();
@@ -998,7 +1009,7 @@ mod tests {
             host,
             Box::new(FixedAdvanceMetrics),
             content(|k| {
-                let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+                let column = node_group(k, 1, 1);
                 let _ = column;
                 button(k, 10, "a", handler("a", || {}));
                 button(k, 20, "b", handler("b", || {}));
@@ -1030,7 +1041,7 @@ mod tests {
         let (result, output) = run_with_output(
             headless("click 100 18\ntype \"ab\"\nkey backspace\ntype \"c\"\ndump"),
             content(move |k| {
-                let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+                let column = node_group(k, 1, 1);
                 let _ = column;
                 let field = NodeId(k.start_node_group(2, 6).unwrap().0);
                 let current = state.borrow().clone();
@@ -1116,7 +1127,7 @@ mod tests {
         let (content_log, handler_log) = (log.clone(), log.clone());
         let content = content(move |k| {
             push_line(&content_log, format!("compose {} {}", label(), count.get()));
-            let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+            let column = node_group(k, 1, 1);
             setters::set_modifier(column, &ModifierMirror::encode(&[padding(16)])).unwrap();
             text(k, 2, &format!("{} {}", label(), count.get()));
             let (count, handler_log) = (count.clone(), handler_log.clone());
@@ -1174,6 +1185,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["compose old 0", "handler old", "compose new 1"]
         );
+    }
+
+    /// The child-process half of `a_reload_changing_no_layout_draws_nothing`.
+    fn unchanged_layout_after_reload_child() -> ! {
+        fn wake() {}
+        prism_runtime::reload::defer_to_reload_points(wake);
+        let content = content(|k| {
+            let column = node_group(k, 1, 1);
+            setters::set_modifier(column, &ModifierMirror::encode(&[padding(16)])).unwrap();
+            text(k, 2, "kept");
+            k.end_group().unwrap();
+        });
+        let (host, presented) = scripted(Vec::new());
+        let mut app = App::start(host, Box::new(FixedAdvanceMetrics), content).unwrap();
+        app.settle().unwrap();
+        app.handle(HostEvent::Frame).unwrap();
+        let (layouts, builds) = (app.counters.layouts, app.counters.builds);
+        assert_eq!((layouts, builds, presented.get()), (1, 1, 1));
+        prism_runtime::reload::request(prism_runtime::reload::PendingReload::new(|| {
+            prism_runtime::reload::AppliedReload::default()
+        }));
+        app.reload_point().unwrap();
+        assert_eq!(
+            app.counters.layouts,
+            layouts + 1,
+            "the reload measures the column's policy again"
+        );
+        assert!(
+            !with_state(|state| state.tree.redraw),
+            "nothing visible changed"
+        );
+        app.handle(HostEvent::Frame).unwrap();
+        assert_eq!(app.counters.builds, builds, "no display list is built");
+        app.finish();
+        std::process::exit(0)
+    }
+
+    /// layout-primitive D12: after a reload, every node measured by a policy is measured
+    /// again, and a reload that changes no node's bounds builds no display list.
+    #[test]
+    fn a_reload_changing_no_layout_draws_nothing() {
+        let output = run_in_child(
+            "app::tests::a_reload_changing_no_layout_draws_nothing",
+            unchanged_layout_after_reload_child,
+        );
+        assert_eq!(output.status.code(), Some(0), "{:?}", output);
     }
 
     /// The child-process half of `waiting_for_a_reload_that_never_comes`.
@@ -1312,7 +1369,7 @@ mod tests {
             host,
             Box::new(FixedAdvanceMetrics),
             content(move |k| {
-                let id = NodeId(k.start_node_group(1, 3).unwrap().0);
+                let id = node_group(k, 1, 3);
                 remembered.set(id);
                 let node = remembered.clone();
                 let record = record.clone();

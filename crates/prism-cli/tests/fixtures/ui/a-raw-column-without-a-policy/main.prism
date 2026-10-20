@@ -1,0 +1,17 @@
+// expect: ok
+// run: 101
+// headless: 400x300
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/runtime
+import /prism/composer
+
+compose fun Raw() {
+    val k = currentComposer()
+    startNodeGroup(k, 125, 1)
+    endGroup(k)
+}
+
+fun main() {
+    runApp(width = 400, height = 300) { Raw() }
+}

@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+import /prism/compose/ui
+import /prism/core
+
+fun main() {
+    val c = Constraints.fixed(10, 20)
+    println(c.constrainWidth(30))
+    println(c.hasFixedHeight)
+    val loose = Constraints(0, Constraints.Infinity, 5, 50)
+    println(loose.hasBoundedWidth)
+    println(loose.constrainHeight(2))
+    println(loose.offset(vertical = -10).minHeight)
+    println(loose.copy(maxHeight = 40).maxHeight)
+}

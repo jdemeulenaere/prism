@@ -1,0 +1,4 @@
+package lib
+
+// The gap after each child of a spaced layout.
+public fun gap(): Int = 10

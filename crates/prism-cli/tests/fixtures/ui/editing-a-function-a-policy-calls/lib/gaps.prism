@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+// watch: edits
+// events: events.txt
+// headless: 400x300
+// entry: app/main.prism
+package lib
+
+// The gap after each child of a spaced layout.
+public fun gap(): Int = 0

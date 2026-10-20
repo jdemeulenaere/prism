@@ -10,7 +10,7 @@ use prism_ui::draw::DisplayList;
 use prism_ui::dump::dump_display_list;
 use prism_ui::modifier::ModifierMirror;
 use prism_ui::properties::Shape;
-use prism_ui::test_support::{background, fill_max};
+use prism_ui::test_support::{background, fill_max, node_group};
 use prism_ui::{setters, Host, HostEvent, NodeId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -51,7 +51,7 @@ fn a_resize_relays_out_the_app() {
         let host = WindowHost::new(connection);
         let measurer = host.measurer();
         let content = content(|k| {
-            let node = NodeId(k.start_node_group(1, 3).unwrap().0);
+            let node = node_group(k, 1, 3);
             let chain = ModifierMirror::encode(&[
                 fill_max(true, true, 1.0),
                 background(0xFFFF_0000, Shape::RECTANGLE),
@@ -96,7 +96,7 @@ fn a_reload_is_presented_without_input() {
         let host = WindowHost::new(connection);
         let measurer = host.measurer();
         let content = content(|k| {
-            let column = NodeId(k.start_node_group(1, 1).unwrap().0);
+            let column = node_group(k, 1, 1);
             let text = NodeId(k.start_node_group(2, 4).unwrap().0);
             let label = match RELOADED.load(Ordering::SeqCst) {
                 true => "new code",

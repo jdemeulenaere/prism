@@ -11,7 +11,11 @@ use crate::app::run_app;
 use crate::error::{raise, UiResult};
 use crate::handle::{HandlerId, NodeId};
 use crate::handlers::HandlerKind;
+use crate::layout;
 use crate::modifier::ModifierMirror;
+use crate::runtime::{
+    AlignmentMirror, ArrangementMirror, ConstraintsMirror, ParentDataMirror, PlaceableMirror,
+};
 use crate::setters;
 use prism_runtime::{FunctionValue, PrismString};
 
@@ -126,6 +130,118 @@ pub extern "C" fn prism_ui_handlers_equal(a: u64, b: u64) -> u8 {
 #[no_mangle]
 pub extern "C" fn prism_ui_modifier_overflow() -> ! {
     raise(&setters::modifier_overflow())
+}
+
+/// Registers a layout's measure policy, taken over, and gives its id (D8 of
+/// `layout-primitive`).
+///
+/// # Safety
+///
+/// `policy` must point at a `MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult`
+/// function value the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_register_measure_policy(policy: *mut u8) -> u64 {
+    let policy = FunctionValue::read_from(policy);
+    or_raise(setters::register_measure_policy(policy)).word()
+}
+
+/// Gives a layout node its measure policy.
+#[no_mangle]
+pub extern "C" fn prism_ui_set_measure_policy(node: u64, policy: u64) {
+    or_raise(setters::set_measure_policy(NodeId(node), HandlerId(policy)))
+}
+
+/// `Measurable.measure(constraints)`: measures a child of the running policy's node and
+/// writes its `Placeable` to `result` (D6 of `layout-primitive`).
+///
+/// # Safety
+///
+/// `result` must point at storage for a `Placeable`, and `constraints` at a `Constraints`.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_measure(
+    result: *mut PlaceableMirror,
+    node: u64,
+    constraints: *const ConstraintsMirror,
+) {
+    let size = or_raise(layout::measure_child(NodeId(node), (*constraints).into()));
+    result.write(PlaceableMirror {
+        node,
+        width: size.width,
+        height: size.height,
+    });
+}
+
+/// The `Placeable` of a child measured by the running policy (D9 of `layout-primitive`).
+///
+/// # Safety
+///
+/// `result` must point at storage for a `Placeable`.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_measured(result: *mut PlaceableMirror, node: u64) {
+    let size = or_raise(layout::measured(NodeId(node)));
+    result.write(PlaceableMirror {
+        node,
+        width: size.width,
+        height: size.height,
+    });
+}
+
+/// The start of `layout(width, height) { ... }` in the policy of `node`.
+#[no_mangle]
+pub extern "C" fn prism_ui_begin_placement(node: u64, width: i64, height: i64) {
+    or_raise(layout::begin_placement(NodeId(node), width, height))
+}
+
+/// The end of `layout`'s placement block.
+#[no_mangle]
+pub extern "C" fn prism_ui_end_placement(node: u64) {
+    or_raise(layout::end_placement(NodeId(node)))
+}
+
+/// `Placeable.place(x, y)` in the placement block of `parent`'s policy.
+#[no_mangle]
+pub extern "C" fn prism_ui_place(parent: u64, child: u64, x: i64, y: i64) {
+    or_raise(layout::place(NodeId(parent), NodeId(child), x, y))
+}
+
+/// A row's or column's arrangement, as its policy reads it.
+///
+/// # Safety
+///
+/// `result` must point at storage for an `Arrangement`.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_arrangement(result: *mut ArrangementMirror, node: u64) {
+    let arrangement = or_raise(layout::arrangement(NodeId(node)));
+    let (code, space) = arrangement.words();
+    result.write(ArrangementMirror { code, space });
+}
+
+/// A box's, row's or column's alignment, as its policy reads it.
+///
+/// # Safety
+///
+/// `result` must point at storage for an `Alignment`.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_alignment(result: *mut AlignmentMirror, node: u64) {
+    let alignment = or_raise(layout::alignment(NodeId(node)));
+    result.write(AlignmentMirror {
+        code: alignment.code(),
+    });
+}
+
+/// A child's parent data: its first `weight` and `fill`, and its first `align`.
+///
+/// # Safety
+///
+/// `result` must point at storage for a `ParentData`.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_parent_data(result: *mut ParentDataMirror, node: u64) {
+    let (weight, fill, alignment) = or_raise(layout::parent_data(NodeId(node)));
+    result.write(ParentDataMirror {
+        weight,
+        alignment: alignment.map_or(-1, |alignment| alignment.code()),
+        fill: fill as u8,
+    });
 }
 
 /// Runs an app titled `title` of `width` × `height` composing `content`, `runApp`'s
@@ -318,5 +434,84 @@ mod tests {
             state.app = None;
         });
         crate::thread::release_dropped();
+    }
+
+    /// The scenario "Measuring with no layout running": the measure entry point, called by a
+    /// click handler of a running app with a child of a laid-out column.
+    fn measure_outside_layout_in_child() -> ! {
+        use crate::test_support::{clickable, node_group};
+        let child = Rc::new(Cell::new(0u64));
+        let seen = child.clone();
+        let content = content(move |k| {
+            let column = node_group(k, 1, 1);
+            let text = node_group(k, 2, 4);
+            setters::set_text(text, "a").unwrap();
+            seen.set(text.word());
+            k.end_group().unwrap();
+            let target = child.clone();
+            let probe = crate::test_support::handler("measure", move || {
+                let constraints = crate::runtime::ConstraintsMirror::from(
+                    crate::geometry::Constraints::up_to(100, 100),
+                );
+                let mut placeable = std::mem::MaybeUninit::uninit();
+                unsafe { prism_ui_measure(placeable.as_mut_ptr(), target.get(), &constraints) };
+            });
+            let handler = setters::register(HandlerKind::Click, probe).unwrap();
+            let chain = ModifierMirror::encode(&[
+                crate::test_support::size(100, 100),
+                clickable(handler, true, None),
+            ]);
+            setters::set_modifier(column, &chain).unwrap();
+            k.end_group().unwrap();
+        });
+        let mut app =
+            App::start(Box::new(NoEvents), Box::new(FixedAdvanceMetrics), content).unwrap();
+        app.settle().unwrap();
+        app.handle(HostEvent::Press(50, 50)).unwrap();
+        app.handle(HostEvent::Release(50, 50)).unwrap();
+        unreachable!("the entry point ends the program")
+    }
+
+    #[test]
+    fn measuring_with_no_layout_running() {
+        let output = run_in_child(
+            "entry::tests::measuring_with_no_layout_running",
+            measure_outside_layout_in_child,
+        );
+        assert_eq!(
+            stderr(&output),
+            "panic: ui misuse: a measurable was measured outside its parent's measure policy\n"
+        );
+    }
+
+    /// The scenario "A policy that never calls layout": a policy that measures its child and
+    /// returns.
+    fn no_layout_in_child() -> ! {
+        use crate::node::NodeKind;
+        use crate::test_support::{probe_policy, TreeBuilder};
+        let mut b = TreeBuilder::new(100, 100);
+        let root = b.root();
+        let node = b.add(root, NodeKind::Layout);
+        b.text(node, "a");
+        b.set_policy(
+            node,
+            probe_policy(|_, measurables, c| {
+                crate::layout::measure_child(NodeId(measurables[0]), c).unwrap()
+            }),
+        );
+        b.lay_out();
+        unreachable!("the layout pass ends the program")
+    }
+
+    #[test]
+    fn a_policy_that_never_calls_layout() {
+        let output = run_in_child(
+            "entry::tests::a_policy_that_never_calls_layout",
+            no_layout_in_child,
+        );
+        assert_eq!(
+            stderr(&output),
+            "panic: ui misuse: a measure policy returned without calling layout\n"
+        );
     }
 }

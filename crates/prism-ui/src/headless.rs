@@ -90,6 +90,10 @@ fn resolve(
     }
     while let Some(id) = stack.pop() {
         let node = tree.node(id).unwrap();
+        // An unplaced node and its subtree are no target (D7 of `layout-primitive`).
+        if !node.placed {
+            continue;
+        }
         if matches(node) {
             seen += 1;
             if seen == occurrence {
@@ -131,10 +135,8 @@ pub fn no_focus(line: usize) -> UiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::Layout;
     use crate::script::parse_script;
     use crate::test_support::*;
-    use crate::text::FixedAdvanceMetrics;
 
     #[test]
     fn the_script_is_given_in_order_and_then_ends() {
@@ -160,7 +162,7 @@ mod tests {
         b.text_field(column, "item");
         let odd = b.text(column, "odd");
         b.chain(odd, &[size(9, 9)]);
-        Layout::new().run(&mut b.tree, &FixedAdvanceMetrics);
+        b.lay_out();
         assert_eq!(resolve_text_target(&b.tree, "item", 1), Some((16, 10)));
         assert_eq!(resolve_text_target(&b.tree, "item", 2), Some((16, 50)));
         assert_eq!(resolve_text_target(&b.tree, "item", 3), None);
@@ -188,5 +190,25 @@ mod tests {
             no_focus(3).message(),
             "event script line 3: no text field is focused"
         );
+    }
+
+    /// D7 of `layout-primitive`: a node its parent does not place, and its subtree, are no
+    /// text or kind target; `layout` is a kind target.
+    #[test]
+    fn unplaced_nodes_are_no_targets() {
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let node = b.add(root, NodeKind::Layout);
+        b.set_policy(node, first_only_policy());
+        b.text(node, "shown");
+        let hidden = b.add(node, NodeKind::Box);
+        b.text(hidden, "inside");
+        b.lay_out();
+        assert_eq!(resolve_text_target(&b.tree, "shown", 1), Some((20, 10)));
+        assert_eq!(resolve_text_target(&b.tree, "inside", 1), None);
+        let boxes = TargetKind::Node(NodeKind::Box);
+        assert_eq!(resolve_kind_target(&b.tree, boxes, 1), None);
+        let layouts = TargetKind::from_word("layout").unwrap();
+        assert_eq!(resolve_kind_target(&b.tree, layouts, 1), Some((20, 10)));
     }
 }

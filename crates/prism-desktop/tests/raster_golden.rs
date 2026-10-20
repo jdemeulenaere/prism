@@ -76,7 +76,7 @@ fn counter_window() -> DisplayList {
     let metrics = FontMetrics::new();
     let mut builder = TreeBuilder::new(200, 120);
     counter_screen(&mut builder, "Count: 0", inline_handler(1));
-    Layout::new().run(&mut builder.tree, &metrics);
+    builder.lay_out_with(&mut Layout::new(), &metrics);
     let mut list = DisplayList::new();
     list.build(&builder.tree, &metrics, None);
     list

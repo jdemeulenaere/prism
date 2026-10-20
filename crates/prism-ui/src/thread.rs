@@ -5,8 +5,9 @@
 //! thread, and Rust tests run on many threads, each with its own state.
 //!
 //! **The re-entrancy rule.** Every operation borrows the state through [`with_state`], does its
-//! work and lets go of it before program code runs. Program code runs in three ways here: a
-//! composition's content, a handler, and the drop entry of a released handler. A handler's
+//! work and lets go of it before program code runs. Program code runs in four ways here: a
+//! composition's content, a handler, a measure policy during layout (`layout-primitive`), and
+//! the drop entry of a released handler. A handler's
 //! function value is copied out of its entry before it is called, and a released handler's
 //! value is moved to [`State::drops`] and dropped by [`release_dropped`] once nothing is
 //! borrowed. This matters most in the applier, which `prism-compose` calls while it holds its
@@ -15,6 +16,7 @@
 //! composition runtime.
 
 use crate::handlers::{release_functions, HandlerTable};
+use crate::layout::LayoutState;
 use crate::tree::UiTree;
 use prism_compose::Handle;
 use prism_runtime::FunctionValue;
@@ -39,6 +41,9 @@ pub struct State {
     /// The nodes left in the trees [`install_tree`] replaced, which a release path forgot: the
     /// allocation check reports them with the current tree's ([`live_nodes_report`]).
     pub replaced_nodes: usize,
+    /// The running layout pass's frames and buffers, which the entry points a measure policy
+    /// calls reach (D21 of `layout-primitive`).
+    pub layout: LayoutState,
 }
 
 impl State {
@@ -49,6 +54,7 @@ impl State {
             app: None,
             drops: Vec::new(),
             replaced_nodes: 0,
+            layout: LayoutState::default(),
         }
     }
 }

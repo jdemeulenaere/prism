@@ -1,0 +1,56 @@
+// expect: ok
+// run: 0
+// headless: 400x300
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/collections
+import /prism/core
+
+// The larger of two sizes.
+fun larger(a: Int, b: Int): Int = if (a > b) a else b
+
+// Children in `columns` columns of equal width, row after row.
+compose fun Grid(columns: Int, content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val cellWidth = constraints.maxWidth / columns
+        val placeables = measurables.map {
+            it.measure(Constraints(0, cellWidth, 0, constraints.maxHeight))
+        }
+        var height = 0
+        var rowHeight = 0
+        for (index in placeables.indices) {
+            if (index % columns == 0) {
+                height += rowHeight
+                rowHeight = 0
+            }
+            rowHeight = larger(rowHeight, placeables[index].height)
+        }
+        height += rowHeight
+        layout(constraints.maxWidth, height) {
+            var y = 0
+            var lineHeight = 0
+            for (index in placeables.indices) {
+                if (index % columns == 0 && index > 0) {
+                    y += lineHeight
+                    lineHeight = 0
+                }
+                placeables[index].place((index % columns) * cellWidth, y)
+                lineHeight = larger(lineHeight, placeables[index].height)
+            }
+        }
+    }
+}
+
+fun main() {
+    runApp(width = 400, height = 300) {
+        Grid(columns = 2) {
+            Text("a")
+            Text("b")
+            Text("c")
+        }
+    }
+}

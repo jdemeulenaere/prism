@@ -487,6 +487,118 @@ fn the_modifier_mirrors_match_the_layout_of_the_ui_module() {
     }
 }
 
+/// `layout-primitive` task 3.2: `prism-ui`'s mirrors of the measurement protocol's structs
+/// (`Constraints`, `Measurable`, `Placeable`, `MeasureScope`, `MeasureResult`, `ParentData`,
+/// `Arrangement`, `Alignment`) have the sizes and field offsets `prism dump-layout` gives their
+/// declarations, so that their field order cannot drift. `ParentData` is a `package` struct,
+/// so its declaration is copied out of `/prism/compose/ui` into the probe as a struct of its
+/// own.
+#[test]
+fn the_measurement_mirrors_match_the_layout_of_the_library() {
+    use prism_ui::runtime::{
+        AlignmentMirror, ArrangementMirror, ConstraintsMirror, MeasurableMirror,
+        MeasureResultMirror, MeasureScopeMirror, ParentDataMirror, PlaceableMirror,
+    };
+    use std::mem::{offset_of, size_of};
+    let library = Library::bundled();
+    let ui = &library.module("prism/compose/ui").unwrap().source;
+    let start = ui
+        .find("package struct ParentData")
+        .expect("ParentData in /prism/compose/ui");
+    let end = start + ui[start..].find('}').unwrap() + 1;
+    let parent_data = ui[start..end].replacen("package struct", "struct", 1);
+    let directory =
+        std::env::temp_dir().join(format!("prism-measure-layout-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let entry = directory.join("main.prism");
+    std::fs::write(
+        &entry,
+        format!(
+            "import /prism/compose/ui\nimport /prism/compose/layout\n{}\nfun f(c: Constraints, m: Measurable, p: Placeable, s: MeasureScope, r: MeasureResult, d: ParentData, a: Arrangement, l: Alignment): Int = 0\n",
+            parent_data
+        ),
+    )
+    .unwrap();
+    let layout = prism_cli::dump_layout(&entry)
+        .unwrap_or_else(|error| panic!("no layout:\n{}", error.render()));
+    std::fs::remove_dir_all(&directory).unwrap();
+    let expect = |name: &str, size: usize, fields: &[(&str, &str, usize)]| {
+        let mut text = format!("{} : Copy (size {}, align 8)\n", name, size);
+        for (field, ty, offset) in fields {
+            text.push_str(&format!("  {}: {} at {}\n", field, ty, offset));
+        }
+        assert!(layout.contains(&text), "{} in:\n{}", text, layout);
+    };
+    expect(
+        "struct prism/compose/ui::Constraints",
+        size_of::<ConstraintsMirror>(),
+        &[
+            ("minWidth", "Int", offset_of!(ConstraintsMirror, min_width)),
+            ("maxWidth", "Int", offset_of!(ConstraintsMirror, max_width)),
+            (
+                "minHeight",
+                "Int",
+                offset_of!(ConstraintsMirror, min_height),
+            ),
+            (
+                "maxHeight",
+                "Int",
+                offset_of!(ConstraintsMirror, max_height),
+            ),
+        ],
+    );
+    expect(
+        "struct prism/compose/ui::Measurable",
+        size_of::<MeasurableMirror>(),
+        &[("node", "Int", offset_of!(MeasurableMirror, node))],
+    );
+    expect(
+        "struct prism/compose/ui::MeasureScope",
+        size_of::<MeasureScopeMirror>(),
+        &[("node", "Int", offset_of!(MeasureScopeMirror, node))],
+    );
+    expect(
+        "struct prism/compose/ui::Placeable",
+        size_of::<PlaceableMirror>(),
+        &[
+            ("node", "Int", offset_of!(PlaceableMirror, node)),
+            ("width", "Int", offset_of!(PlaceableMirror, width)),
+            ("height", "Int", offset_of!(PlaceableMirror, height)),
+        ],
+    );
+    expect(
+        "struct prism/compose/ui::MeasureResult",
+        size_of::<MeasureResultMirror>(),
+        &[
+            ("width", "Int", offset_of!(MeasureResultMirror, width)),
+            ("height", "Int", offset_of!(MeasureResultMirror, height)),
+            ("node", "Int", offset_of!(MeasureResultMirror, node)),
+        ],
+    );
+    expect(
+        "struct main::ParentData",
+        size_of::<ParentDataMirror>(),
+        &[
+            ("weight", "Double", offset_of!(ParentDataMirror, weight)),
+            ("alignment", "Int", offset_of!(ParentDataMirror, alignment)),
+            ("fill", "Bool", offset_of!(ParentDataMirror, fill)),
+        ],
+    );
+    expect(
+        "struct prism/compose/layout::Arrangement",
+        size_of::<ArrangementMirror>(),
+        &[
+            ("code", "Int", offset_of!(ArrangementMirror, code)),
+            ("space", "Int", offset_of!(ArrangementMirror, space)),
+        ],
+    );
+    expect(
+        "struct prism/compose/ui::Alignment",
+        size_of::<AlignmentMirror>(),
+        &[("code", "Int", offset_of!(AlignmentMirror, code))],
+    );
+}
+
 /// standard-library: "The public UI declarations" (`compose-library-in-prism` D8 to D10): the
 /// ABI of `/prism/compose/ui` exports `runApp` with a default for each of its first three
 /// parameters, `HandlerId` with its `equals` operator, and the unit properties, and none of

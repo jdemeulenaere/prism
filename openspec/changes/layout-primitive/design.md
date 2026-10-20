@@ -426,7 +426,7 @@ These end the program as UI runtime errors, with no location ("UI Runtime Errors
 | `layout was called outside its node's measurement` | `layout` on a scope whose frame is not the innermost |
 | `a placeable was placed outside its parent's placement` | `place` while the parent's frame is not placing, or for a child not measured in it |
 | `a measure policy returned without calling layout` | the frame ends with no `layout` |
-| `a layout node has no measure policy` | a node of a policy kind measured with no policy, which only the toolkit's own code can cause |
+| `a layout node has no measure policy` | a node of a policy kind measured with no policy, which only a raw node group of `/prism/composer` can make (D22) |
 
 Placing outside a placement block in source is also `E4034` (D5).
 
@@ -590,6 +590,36 @@ Each of these becomes an unchecked follow-up in `ROADMAP.md` at archive:
 - **Right-to-left layout**: `placeRelative` places as `place`.
 - **`typealias`**, which would give `MeasurePolicy` its name (D3).
 - **`Int.coerceIn`, `coerceAtLeast`, `maxOf` and the rest of Kotlin's number helpers** in `/prism/core`, so that user layouts need fewer `if`s.
+
+### D21. The pass runs on the thread's state, one borrow per step (autonomous, implementation)
+
+Added at implementation (task 3.3). D14's rule means every entry call a policy makes must reach the tree, the handler table and the running pass. So the pass's own state moves into the thread's state, beside the tree:
+
+- `State.layout: LayoutState` holds the frame stack, the measurable buffers per depth, the text-breaking buffer, the stamp counter, the run's text measurer (a pointer valid only while `Layout::run` runs) and the composition policies run as handlers of.
+- `Layout::run(measurer)` lays out the thread's tree, and no longer takes `&mut UiTree`. `prism-ui`'s Rust tests and benchmarks build trees in a `TreeBuilder`, whose `lay_out` swaps its tree and handler table into the thread's state for the run (`TreeBuilder::installed`).
+- A measurement is a short sequence of **steps**, each one borrow of the state: the cache check and the chain fold, then, for a text or text field, the content and the fold back to the outermost element in the same borrow; for a policy kind, pushing the frame and lending the children; the policy call with no borrow; then popping the frame and the fold back. `measure_child` does its frame checks and the child's first step in one borrow, so measuring a text child is one borrow.
+- The fold's arrays (seventeen constraints and offsets) live on the measuring Rust frame and are passed by reference, never moved: moving them through the steps' results cost a third of the full layout's time in `ui_timing` (2.2× the native layout, against 1.3× by reference).
+
+**Run-time cost.** Per policy node, two borrows of the thread's state around the call; per child, one borrow per entry call. `ui_timing`'s full layout of 10,000 nodes: 0.65 ms against the native 0.49 ms (1.3×, budget 2×).
+
+Rejected:
+
+- **A pointer to the running pass's context in a thread-local**: a `&mut` alive in the calling frame while an entry call makes another is undefined behaviour in Rust.
+- **The pass's buffers in the app (`App`)**: entry calls cannot reach them.
+
+### D22. Raw node groups and native kinds (autonomous, implementation)
+
+`/prism/composer` is public (`compose-library-in-prism`), so a program can start a node group of a layout kind without going through the toolkit, and so without a policy. The proposal assumed only the toolkit could. Found when the `ui` scenario "A node group composed with another kind gets a new node", which starts raw groups of kinds column, row, text and spacer, ended in `ui misuse: a layout node has no measure policy`:
+
+- A node of a policy kind measured without a policy ends the program with that misuse, as Compose's `LayoutNode` without a measure policy throws. A new requirement, "A Layout Node Needs a Measure Policy", states it with the scenario "A raw column without a policy".
+- A text or text field lays out no children: the children a raw node group gives one are unplaced (D7), never measured and not shown, rather than drawn at the text's corner.
+- The scenario "A node group composed with another kind gets a new node" now alternates its raw groups between the two native kinds, text and text field, its texts inside the first unplaced. It still covers what it was written for: a kind change under the node key makes a new node, and the children keep theirs.
+
+Rejected: a native fallback measuring a policy-less node as a box (D17 rejects native containers); a public way to set a raw node's policy (`ComposeNode`'s `update` with `SetMeasurePolicy`), a larger API for no current use.
+
+**Material's surfaces.** `SurfaceBox` of `/prism/compose/material3` started a box node directly. It is now a `LayoutNode` with the box policy, which `/prism/compose/layout` declares `package` (`measureBox`), as Compose's `Surface` is a `Box`.
+
+**Registering a policy** checks the pass as the setters do (`register_measure_policy`): a container composed outside `runApp` keeps ending with `ui misuse: toolkit composables run only inside runApp`, not with the handlers' `modifier handlers are made only while runApp runs`. `Measurable.measured()` of a child not measured in the running measurement, which only toolkit code can call, reuses the detail `a placeable was placed outside its parent's placement`.
 
 ## Risks / Trade-offs
 

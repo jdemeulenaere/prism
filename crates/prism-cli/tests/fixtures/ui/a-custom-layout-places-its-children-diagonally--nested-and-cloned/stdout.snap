@@ -1,0 +1,9 @@
+lent 2, cloned 2
+window 400x300
+  layout #1 0,0 40x80
+    layout #2 0,0 32x60
+      layout #3 0,0 24x40
+        text #4 0,0 8x20 "a"
+        text #5 8,20 16x20 "bb"
+      text #6 24,40 8x20 "c"
+    text #7 32,60 8x20 "d"

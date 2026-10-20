@@ -1,0 +1,8 @@
+window 400x300
+  layout #1 0,0 8x40
+    text #2 0,0 8x20 "a"
+    text #3 0,20 8x20 "b"
+window 400x300
+  layout #1 0,0 8x60
+    text #2 0,0 8x20 "a"
+    text #3 0,30 8x20 "b"

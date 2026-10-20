@@ -53,7 +53,7 @@ fn counter(size: (i64, i64), count: i64) -> DisplayList {
         &format!("Count: {}", count),
         inline_handler(1),
     );
-    Layout::new().run(&mut builder.tree, &metrics);
+    builder.lay_out_with(&mut Layout::new(), &metrics);
     let mut list = DisplayList::new();
     list.build(&builder.tree, &metrics, None);
     list

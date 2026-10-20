@@ -4,7 +4,8 @@
 //! - **`dump`** prints `window <width>x<height>`, then a line per node in tree order, indented
 //!   two spaces per depth: `<kind> #<number> <x>,<y> <width>x<height>` with absolute bounds,
 //!   then the node's non-default properties in a fixed order (the quoted text, `color`,
-//!   `fontSize`, `contentColor`, `disabled`, `focused`, `arrangement`, `alignment`), then its
+//!   `fontSize`, `contentColor`, `disabled`, `focused`, `arrangement`, `alignment`,
+//!   `unplaced`), then its
 //!   modifier elements in chain order with their arguments.
 //! - **`dump draw`** prints one display list command per line: `clear`, `rect`, `border` and
 //!   `text`, with `radius <r>` after a rounded rectangle or border.
@@ -104,6 +105,9 @@ fn write_properties(out: &mut String, node: &Node, focused: bool) {
     }
     if lays_out_children && node.alignment != node.kind.default_alignment() {
         let _ = write!(out, " alignment {}", node.alignment);
+    }
+    if !node.placed {
+        out.push_str(" unplaced");
     }
 }
 
@@ -281,13 +285,11 @@ pub fn bounds_text(tree: &UiTree, id: NodeId) -> String {
 mod tests {
     use super::*;
     use crate::handlers::HandlerKind;
-    use crate::layout::Layout;
     use crate::properties::{Alignment, Arrangement, Color, Role};
     use crate::test_support::*;
-    use crate::text::FixedAdvanceMetrics;
 
     fn dumped(builder: &mut TreeBuilder, focused: Option<NodeId>) -> String {
-        Layout::new().run(&mut builder.tree, &FixedAdvanceMetrics);
+        builder.lay_out();
         let mut out = String::new();
         dump_tree(&builder.tree, focused, &mut out);
         out

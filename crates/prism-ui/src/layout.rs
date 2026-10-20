@@ -1,22 +1,39 @@
 //! Constraint layout (D11 of `ui-toolkit`): one measure-and-place pass over the tree, in
-//! whole logical pixels.
+//! whole logical pixels, whose containers are measured by their measure policies
+//! (`layout-primitive`).
 //!
 //! Measuring a node under constraints folds its modifier chain from the first element,
 //! Compose's outermost, each layout element changing the constraints it passes on and the
-//! size it gets back, then measures the content with the kind's policy under what remains:
+//! size it gets back, then measures the content under what remains:
 //!
 //! - `padding` deflates the constraints, floored at 0, offsets the rest, and returns the
 //!   rest's size plus the padding, clamped into its constraints;
 //! - `size` makes each set axis exact, clamped into the constraints;
 //! - `defaultMinSize` raises a minimum of 0 to a specified value, at most the maximum;
 //! - `fillMax*` makes each bounded axis exactly the maximum times the fraction, rounded down;
-//! - `weight` and `align` are parent data, read by the parent, the first in a chain counting;
+//! - `weight` and `align` are parent data, read by the parent's policy, the first in a chain
+//!   counting;
 //! - drawing and input elements record the bounds at their position, the offset of the
 //!   elements before them and the size of the elements after them.
 //!
-//! The fold is a loop over at most sixteen elements with its state on the stack; recursion is
-//! only from a node to its children. Children are placed relative to their parent, so a clean
-//! subtree needs no placement.
+//! The content of a text or a text field is measured natively; the window measures its
+//! children under its size and places them at its top-left corner; every other node (a
+//! column, row, box, spacer or user layout) is measured by calling its **measure policy**, a
+//! function value of the program kept in the handler table (D8 of `layout-primitive`).
+//!
+//! **The measurement protocol** (D6). While a policy runs, the pass keeps a stack of
+//! measurement frames: the node, a fresh stamp, the content's origin, whether `layout` was
+//! called and whether placement is running. The policy calls back through the entry points:
+//! [`measure_child`] measures a child of the innermost frame's node once, [`begin_placement`]
+//! and [`end_placement`] bracket `layout`'s placement block, and [`place`] positions a child
+//! measured in the frame. The children are lent to the policy as a `&List<Measurable>` over a
+//! buffer of their words, one buffer per depth of nested policies, reused across passes (D4).
+//!
+//! **Re-entrancy** (D14, D21). A policy is program code, which calls the entry points, which
+//! use the thread's state. So no borrow of the thread's state is held while a policy runs:
+//! every step of the pass borrows the state for its own reads and writes ([`with_state`]), and
+//! the pass's own state (frames, buffers, the text measurer of the run) lives in the thread's
+//! state too ([`LayoutState`]).
 //!
 //! **The cache.** A node that is neither `needs_measure` nor `child_needs_measure` and is
 //! measured with its last constraints returns its last size without visiting its subtree. A
@@ -24,22 +41,81 @@
 //! constraints, and when each keeps its size, keeps its own size and its children's positions
 //! without running its policy; otherwise its policy runs. So a relayout is linear in the dirty
 //! nodes, their ancestors and those ancestors' children, and a change that keeps a node's size
-//! costs a flag check per sibling on its path.
+//! costs a flag check per sibling on its path. A policy is taken to depend only on its
+//! constraints, its children's sizes and parent data, its node's properties and its captures
+//! (D11): a child it did not measure has its last constraints cleared, so that its changes run
+//! the policy again.
 
+use crate::error::{
+    raise, UiResult, INVALID_CONSTRAINTS, LAYOUT_OUTSIDE, LAYOUT_TWICE, MEASURED_OUTSIDE,
+    MEASURED_TWICE, NO_LAYOUT, NO_POLICY, PLACED_OUTSIDE, STALE_NODE,
+};
 use crate::geometry::{Constraints, Rect, Size, UNBOUNDED};
 use crate::handle::NodeId;
 use crate::modifier::{Element, CAPACITY};
-use crate::node::NodeKind;
-use crate::properties::Alignment;
+use crate::node::{Node, NodeKind};
+use crate::properties::{Alignment, Arrangement};
+use crate::runtime::{self, ConstraintsMirror, MeasureResultMirror, MeasureScopeMirror};
 use crate::text::{break_lines, line_width, Line, TextMeasurer};
-use crate::tree::UiTree;
+use crate::thread::{with_state, State};
+use prism_compose::Handle;
+use prism_runtime::{FunctionValue, PrismList};
 
-/// The layout pass's reused buffers and counters.
+/// The layout pass as the app drives it: its counter of the last run.
 #[derive(Debug, Default)]
 pub struct Layout {
-    lines: Vec<Line>,
     /// How many nodes the last pass measured, cached ones not counted.
     pub measured: usize,
+}
+
+/// One measurement frame: a policy running for `node` (D6).
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    node: NodeId,
+    stamp: u64,
+    /// The content's origin in the node, where `place(0, 0)` puts a child.
+    origin: (i64, i64),
+    layout_called: bool,
+    placing: bool,
+    /// The size `layout` gave.
+    size: Size,
+}
+
+/// The state of the running layout pass, kept in the thread's state so that the entry points
+/// a policy calls reach it (D21). Its buffers are reused across passes.
+#[derive(Debug, Default)]
+pub struct LayoutState {
+    frames: Vec<Frame>,
+    /// The measurables lent to the policy running at each depth.
+    buffers: Vec<Vec<u64>>,
+    lines: Vec<Line>,
+    measured: usize,
+    /// The last stamp given to a frame.
+    stamps: u64,
+    /// The text measurer of the running pass, valid while it runs.
+    measurer: Option<*const (dyn TextMeasurer + 'static)>,
+    /// The composition policies run as handlers of, when an app runs.
+    composition: Option<Handle>,
+    /// Whether the pass changed a node's size, position, content or element bounds.
+    changed: bool,
+}
+
+impl LayoutState {
+    /// The running pass's measurer, not tied to the borrow of the state.
+    fn measurer(&self) -> &'static dyn TextMeasurer {
+        // SAFETY: set by `Layout::run` for the duration of the pass, from a measurer that
+        // outlives it, and only used during the pass.
+        unsafe {
+            &*self
+                .measurer
+                .expect("a text measured outside a layout pass")
+        }
+    }
+
+    /// Whether a layout pass is running on the thread.
+    pub fn running(&self) -> bool {
+        self.measurer.is_some()
+    }
 }
 
 impl Layout {
@@ -47,88 +123,67 @@ impl Layout {
         Layout::default()
     }
 
-    /// Lays out the tree when anything in it needs measuring, and gives whether it did, which
-    /// makes the display list stale.
-    pub fn run(&mut self, tree: &mut UiTree, measurer: &dyn TextMeasurer) -> bool {
-        self.measured = 0;
-        if !tree.needs_layout() {
+    /// Lays out the thread's tree when anything in it needs measuring, and gives whether it
+    /// did, which makes the display list stale.
+    pub fn run(&mut self, measurer: &dyn TextMeasurer) -> bool {
+        self.run_marking(measurer, false)
+    }
+
+    /// [`Layout::run`] after a reload (D12): the display list is made stale only when the pass
+    /// changed a node's size, position, content or element bounds.
+    pub fn run_after_reload(&mut self, measurer: &dyn TextMeasurer) -> bool {
+        self.run_marking(measurer, true)
+    }
+
+    fn run_marking(&mut self, measurer: &dyn TextMeasurer, only_changes: bool) -> bool {
+        // SAFETY: the pointer is cleared before this function returns, and the measurer
+        // outlives the call.
+        let measurer: *const (dyn TextMeasurer + 'static) =
+            unsafe { std::mem::transmute(measurer as *const dyn TextMeasurer) };
+        let start = with_state(|state| {
+            if !state.tree.needs_layout() {
+                return None;
+            }
+            let root = state.tree.root();
+            let window = state.tree.window_size();
+            let constraints = Constraints::up_to(window.width, window.height);
+            let root_node = state.tree.node(root).unwrap();
+            let from_root =
+                root_node.needs_measure || root_node.last_constraints != Some(constraints);
+            let dirty = std::mem::take(&mut state.tree.dirty);
+            let layout = &mut state.layout;
+            layout.measurer = Some(measurer);
+            layout.composition = state.app.and_then(|app| app.composition);
+            layout.measured = 0;
+            layout.changed = false;
+            Some((root, constraints, from_root, dirty))
+        });
+        let Some((root, constraints, from_root, mut dirty)) = start else {
+            self.measured = 0;
             return false;
-        }
-        let root = tree.root();
-        let window = tree.window_size();
-        let constraints = Constraints::up_to(window.width, window.height);
-        let root_node = tree.node(root).unwrap();
-        let from_root = root_node.needs_measure || root_node.last_constraints != Some(constraints);
-        let mut dirty = std::mem::take(&mut tree.dirty);
-        let mut context = Context {
-            tree,
-            measurer,
-            lines: &mut self.lines,
-            measured: 0,
         };
         if from_root {
-            context.measure(root, constraints);
+            measure(root, constraints);
         } else {
             for &id in &dirty {
-                context.relayout_from(id);
+                relayout_from(id);
             }
             for &id in &dirty {
-                context.clear_ancestors(id);
+                clear_ancestors(id);
             }
         }
-        self.measured = context.measured;
-        dirty.clear();
-        tree.dirty = dirty;
-        tree.redraw = true;
+        with_state(|state| {
+            let layout = &mut state.layout;
+            self.measured = layout.measured;
+            layout.measurer = None;
+            layout.composition = None;
+            if !only_changes || layout.changed {
+                state.tree.redraw = true;
+            }
+            dirty.clear();
+            state.tree.dirty = dirty;
+        });
         true
-    }
-}
-
-struct Context<'a> {
-    tree: &'a mut UiTree,
-    measurer: &'a dyn TextMeasurer,
-    lines: &'a mut Vec<Line>,
-    measured: usize,
-}
-
-/// The constraints of one axis pair, main axis first, for rows (horizontal) and columns.
-fn oriented(
-    vertical: bool,
-    main_min: i64,
-    main_max: i64,
-    cross_min: i64,
-    cross_max: i64,
-) -> Constraints {
-    if vertical {
-        Constraints {
-            min_width: cross_min,
-            max_width: cross_max,
-            min_height: main_min,
-            max_height: main_max,
-        }
-    } else {
-        Constraints {
-            min_width: main_min,
-            max_width: main_max,
-            min_height: cross_min,
-            max_height: cross_max,
-        }
-    }
-}
-
-fn main_of(vertical: bool, size: Size) -> i64 {
-    if vertical {
-        size.height
-    } else {
-        size.width
-    }
-}
-
-fn cross_of(vertical: bool, size: Size) -> i64 {
-    if vertical {
-        size.width
-    } else {
-        size.height
     }
 }
 
@@ -142,25 +197,34 @@ fn fraction_of(maximum: i64, fraction: f64) -> i64 {
     }
 }
 
-impl Context<'_> {
-    /// Measures `id` under `constraints`, records its layout and gives its size.
-    fn measure(&mut self, id: NodeId, constraints: Constraints) -> Size {
-        let node = self.tree.node(id).unwrap();
-        if !node.needs_measure
-            && node.last_constraints == Some(constraints)
-            && (!node.child_needs_measure || self.remeasure_dirty_children(id))
-        {
-            let node = self.tree.node_mut(id).unwrap();
-            node.child_needs_measure = false;
-            return node.size;
+/// The chain fold of one measurement: the constraints each element receives and the offset
+/// of the rest at its position; index `count` is what the content receives.
+struct Fold {
+    received: [Constraints; CAPACITY + 1],
+    offsets: [(i64, i64); CAPACITY + 1],
+    count: usize,
+}
+
+impl Fold {
+    fn new() -> Fold {
+        Fold {
+            received: [Constraints::up_to(0, 0); CAPACITY + 1],
+            offsets: [(0, 0); CAPACITY + 1],
+            count: 0,
         }
-        let node = self.tree.node(id).unwrap();
-        self.measured += 1;
-        let count = node.chain.len().min(CAPACITY);
-        // The constraints each element receives and the offset of the rest at its position;
-        // index `count` is what the kind's policy receives.
-        let mut received = [constraints; CAPACITY + 1];
-        let mut offsets = [(0i64, 0i64); CAPACITY + 1];
+    }
+
+    /// Folds `node`'s chain from the first element under `constraints`, in place.
+    fn fold(&mut self, node: &Node, constraints: Constraints) {
+        let Fold {
+            received,
+            offsets,
+            count,
+        } = self;
+        received[0] = constraints;
+        offsets[0] = (0, 0);
+        *count = node.chain.len().min(CAPACITY);
+        let count = *count;
         for index in 0..count {
             let c = received[index];
             let (x, y) = offsets[index];
@@ -210,288 +274,540 @@ impl Context<'_> {
             received[index + 1] = next;
             offsets[index + 1] = offset;
         }
-        let (content_x, content_y) = offsets[count];
-        let content = self.measure_content(id, received[count], content_x, content_y);
-        // Back from the content to the outermost element.
-        let node = self.tree.node_mut(id).unwrap();
-        let mut size = content;
-        for index in (0..count).rev() {
-            let entry = &mut node.chain[index];
-            match entry.element {
-                Element::Padding {
-                    start,
-                    top,
-                    end,
-                    bottom,
-                } => {
-                    size = received[index].constrain(Size::new(
-                        size.width + start + end,
-                        size.height + top + bottom,
-                    ));
-                }
-                element if element.records_bounds() => {
-                    let (x, y) = offsets[index];
-                    entry.bounds = Rect::new(x, y, size.width, size.height);
-                }
-                _ => {}
-            }
-        }
-        if node.kind == NodeKind::Window {
-            size = node.size;
-        }
-        node.content = Rect::new(content_x, content_y, content.width, content.height);
-        node.size = size;
-        node.last_constraints = Some(constraints);
-        node.needs_measure = false;
-        node.child_needs_measure = false;
-        size
     }
 
-    /// A relayout from a node marked for measuring: re-measures it with its last
-    /// constraints, which stay its own while its siblings and ancestors are unchanged, and,
-    /// when its size changed, its parent with its policy, and so on up, stopping at the first
-    /// node whose size stays. A node never measured is measured by its parent's policy.
-    fn relayout_from(&mut self, id: NodeId) {
-        let mut current = id;
-        loop {
-            let Some(node) = self.tree.node(current) else {
-                return;
-            };
-            if !node.needs_measure && !node.child_needs_measure {
-                return;
-            }
-            let parent = node.parent;
-            let measured = match node.last_constraints {
-                Some(last) => {
-                    let old = node.size;
-                    self.measure(current, last) != old
-                }
-                None => true,
-            };
-            let Some(parent) = parent.filter(|_| measured) else {
-                return;
-            };
-            self.tree.node_mut(parent).unwrap().needs_measure = true;
-            current = parent;
-        }
+    /// The constraints of the content.
+    fn content_constraints(&self) -> Constraints {
+        self.received[self.count]
     }
 
-    /// Clears `child_needs_measure` on the ancestors of `id` once every dirty node has been
-    /// measured.
-    fn clear_ancestors(&mut self, id: NodeId) {
-        let mut parent = self.tree.node(id).and_then(|node| node.parent);
-        while let Some(ancestor) = parent {
-            let node = self.tree.node_mut(ancestor).unwrap();
-            node.child_needs_measure = false;
-            parent = node.parent;
-        }
-    }
-
-    /// For a node that is clean itself and measured with its last constraints: re-measures
-    /// its dirty children with their last constraints, which are still theirs while every
-    /// sibling keeps its size, and gives whether every one kept its size, in which case the
-    /// node's size and its children's positions stand. Otherwise the caller measures the node
-    /// again with its policy.
-    fn remeasure_dirty_children(&mut self, id: NodeId) -> bool {
-        let mut child = self.tree.node(id).unwrap().first_child;
-        while let Some(current) = child {
-            let node = self.tree.node(current).unwrap();
-            child = node.next;
-            if !node.needs_measure && !node.child_needs_measure {
-                continue;
-            }
-            let (Some(last), size) = (node.last_constraints, node.size) else {
-                return false;
-            };
-            if self.measure(current, last) != size {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// Measures a node's content with its kind's policy, placing its children at
-    /// `(x, y)` plus their position in the content.
-    fn measure_content(&mut self, id: NodeId, c: Constraints, x: i64, y: i64) -> Size {
-        let node = self.tree.node(id).unwrap();
-        match node.kind {
-            NodeKind::Text => {
-                let font_size = node.style.resolved_font_size();
-                break_lines(
-                    node.text.as_str(),
-                    c.max_width,
-                    font_size,
-                    self.measurer,
-                    self.lines,
-                );
-                let width = self.lines.iter().map(|line| line.width).max().unwrap_or(0);
-                let height = self.lines.len() as i64 * self.measurer.line_height(font_size);
-                self.tree.node_mut(id).unwrap().break_width = c.max_width;
-                c.constrain(Size::new(width, height))
-            }
-            NodeKind::TextField => {
-                let font_size = node.style.resolved_font_size();
-                let width = line_width(node.text.as_str(), font_size, self.measurer);
-                c.constrain(Size::new(width, self.measurer.line_height(font_size)))
-            }
-            NodeKind::Spacer => c.constrain(Size::ZERO),
-            NodeKind::Window => {
-                let window = node.size;
-                self.measure_box(
-                    id,
-                    Constraints::up_to(window.width, window.height),
-                    Alignment::TOP_START,
-                    x,
-                    y,
-                );
-                window
-            }
-            NodeKind::Box => {
-                let alignment = node.alignment;
-                self.measure_box(id, c, alignment, x, y)
-            }
-            NodeKind::Column => self.measure_line(id, c, true, x, y),
-            NodeKind::Row => self.measure_line(id, c, false, x, y),
-        }
-    }
-
-    /// A box: children under the constraints loosened, the size of the largest at least the
-    /// minimum, each child placed by its own alignment or the box's.
-    fn measure_box(
-        &mut self,
-        id: NodeId,
-        c: Constraints,
-        alignment: Alignment,
-        x: i64,
-        y: i64,
-    ) -> Size {
-        let loose = c.loosened();
-        let mut largest = Size::ZERO;
-        let mut child = self.tree.node(id).unwrap().first_child;
-        while let Some(current) = child {
-            let size = self.measure(current, loose);
-            largest.width = largest.width.max(size.width);
-            largest.height = largest.height.max(size.height);
-            child = self.tree.node(current).unwrap().next;
-        }
-        let size = c.constrain(largest);
-        let mut child = self.tree.node(id).unwrap().first_child;
-        while let Some(current) = child {
-            let node = self.tree.node_mut(current).unwrap();
-            let own = node.own_alignment().unwrap_or(alignment);
-            node.x = x + own.horizontal().offset(size.width - node.size.width);
-            node.y = y + own.vertical().offset(size.height - node.size.height);
-            child = node.next;
-        }
-        size
-    }
-
-    /// A column (`vertical`) or a row: unweighted children in order under what remains of the
-    /// main axis, then weighted children sharing what is left of a bounded main axis, then
-    /// placement by the arrangement and each child's alignment.
-    fn measure_line(&mut self, id: NodeId, c: Constraints, vertical: bool, x: i64, y: i64) -> Size {
-        let node = self.tree.node(id).unwrap();
-        let arrangement = node.arrangement;
-        let alignment = node.alignment;
-        let spacing = arrangement.spacing();
-        let (main_max, cross_max) = if vertical {
-            (c.max_height, c.max_width)
-        } else {
-            (c.max_width, c.max_height)
-        };
-        let bounded = main_max != UNBOUNDED;
-        let mut count: i64 = 0;
-        let mut measured: i64 = 0;
-        let mut used: i64 = 0;
-        let mut cross: i64 = 0;
-        let mut total_weight = 0.0;
-        let mut weighted: i64 = 0;
-        let mut child = node.first_child;
-        while let Some(current) = child {
-            let node = self.tree.node(current).unwrap();
-            let next = node.next;
-            count += 1;
-            match node.weight().filter(|(weight, _)| bounded && *weight > 0.0) {
-                Some((weight, _)) => {
-                    total_weight += weight;
-                    weighted += 1;
-                }
-                None => {
-                    let remaining = if bounded {
-                        (main_max - used - spacing * measured).max(0)
-                    } else {
-                        UNBOUNDED
-                    };
-                    let size =
-                        self.measure(current, oriented(vertical, 0, remaining, 0, cross_max));
-                    used += main_of(vertical, size);
-                    cross = cross.max(cross_of(vertical, size));
-                    measured += 1;
-                }
-            }
-            child = next;
-        }
-        let gaps = spacing * (count - 1).max(0);
-        if weighted > 0 {
-            let remaining = (main_max - used - gaps).max(0);
-            let mut given = 0;
-            let mut seen = 0;
-            let mut child = self.tree.node(id).unwrap().first_child;
-            while let Some(current) = child {
-                let node = self.tree.node(current).unwrap();
-                let next = node.next;
-                if let Some((weight, fill)) = node.weight().filter(|(weight, _)| *weight > 0.0) {
-                    seen += 1;
-                    let share = if seen == weighted {
-                        remaining - given
-                    } else {
-                        fraction_of(remaining, weight / total_weight)
-                    };
-                    given += share;
-                    let main_min = if fill { share } else { 0 };
-                    let size =
-                        self.measure(current, oriented(vertical, main_min, share, 0, cross_max));
-                    used += main_of(vertical, size);
-                    cross = cross.max(cross_of(vertical, size));
-                }
-                child = next;
-            }
-        }
-        let content = used + gaps;
-        let size = if vertical {
-            c.constrain(Size::new(cross, content))
-        } else {
-            c.constrain(Size::new(content, cross))
-        };
-        let (main_size, cross_size) = (main_of(vertical, size), cross_of(vertical, size));
-        let (start, gap) = arrangement.start_and_gap(main_size - content, count);
-        let mut position = start;
-        let mut child = self.tree.node(id).unwrap().first_child;
-        while let Some(current) = child {
-            let node = self.tree.node_mut(current).unwrap();
-            let own = node.own_alignment().unwrap_or(alignment);
-            let part = if vertical {
-                own.horizontal()
-            } else {
-                own.vertical()
-            };
-            let along = part.offset(cross_size - cross_of(vertical, node.size));
-            if vertical {
-                node.x = x + along;
-                node.y = y + position;
-            } else {
-                node.x = x + position;
-                node.y = y + along;
-            }
-            position += main_of(vertical, node.size) + spacing + gap;
-            child = node.next;
-        }
-        size
+    /// The content's origin in the node.
+    fn content_origin(&self) -> (i64, i64) {
+        self.offsets[self.count]
     }
 }
 
+/// A policy call a measurement makes once the state is let go.
+struct PolicyCall {
+    function: FunctionValue,
+    list: PrismList,
+    constraints: Constraints,
+    composition: Option<Handle>,
+}
+
+/// A measurement under way: what is left to do once the state is let go. A step is taken
+/// within one borrow of the state, and the native kinds complete in it.
+enum Step {
+    Done(Size),
+    /// The node is clean and measured with its last constraints, but has dirty children.
+    CheckChildren,
+    /// The window's children are measured next.
+    Window,
+    /// The node's policy is called next, its frame pushed.
+    Policy(PolicyCall),
+}
+
+/// Measures `id` under `constraints`, records its layout and gives its size.
+fn measure(id: NodeId, constraints: Constraints) -> Size {
+    let mut fold = Fold::new();
+    let step = with_state(|state| start(state, id, constraints, &mut fold));
+    complete(id, constraints, step, &mut fold)
+}
+
+/// The first step of measuring `id`: from the cache, or [`start_full`].
+fn start(
+    state: &mut State,
+    id: NodeId,
+    constraints: Constraints,
+    fold: &mut Fold,
+) -> UiResult<Step> {
+    let node = state.tree.node(id).unwrap();
+    if !node.needs_measure && node.last_constraints == Some(constraints) {
+        if node.child_needs_measure {
+            return Ok(Step::CheckChildren);
+        }
+        return Ok(Step::Done(node.size));
+    }
+    start_full(state, id, constraints, fold)
+}
+
+/// Measures `id` in full: folds its chain, then measures a text's or text field's content and
+/// completes, or prepares the window's children or the node's policy call.
+fn start_full(
+    state: &mut State,
+    id: NodeId,
+    constraints: Constraints,
+    fold: &mut Fold,
+) -> UiResult<Step> {
+    state.layout.measured += 1;
+    let node = state.tree.node(id).unwrap();
+    let kind = node.kind;
+    fold.fold(node, constraints);
+    let c = fold.content_constraints();
+    match kind {
+        NodeKind::Text | NodeKind::TextField => {
+            let content = native_content(state, id, c);
+            Ok(Step::Done(finish(state, id, constraints, fold, content)))
+        }
+        NodeKind::Window => Ok(Step::Window),
+        _ => Ok(Step::Policy(prepare_policy(
+            state,
+            id,
+            c,
+            fold.content_origin(),
+        )?)),
+    }
+}
+
+/// Takes the steps of a measurement left after `step`, letting the state go between them.
+fn complete(id: NodeId, constraints: Constraints, step: UiResult<Step>, fold: &mut Fold) -> Size {
+    let step = match step {
+        Ok(step) => step,
+        Err(error) => raise(&error),
+    };
+    match step {
+        Step::Done(size) => size,
+        Step::CheckChildren => {
+            if remeasure_dirty_children(id) {
+                return with_state(|state| {
+                    let node = state.tree.node_mut(id).unwrap();
+                    node.child_needs_measure = false;
+                    node.size
+                });
+            }
+            let step = with_state(|state| start_full(state, id, constraints, fold));
+            complete(id, constraints, step, fold)
+        }
+        Step::Window => {
+            // The window: its children under its size, at its top-left corner.
+            let (x, y) = fold.content_origin();
+            let (window, first) = with_state(|state| {
+                let node = state.tree.node(id).unwrap();
+                (node.size, node.first_child)
+            });
+            let loose = Constraints::up_to(window.width, window.height);
+            let mut child = first;
+            while let Some(current) = child {
+                measure(current, loose);
+                child = with_state(|state| {
+                    set_position(state, current, x, y);
+                    let node = state.tree.node_mut(current).unwrap();
+                    state.layout.changed |= !node.placed;
+                    node.placed = true;
+                    node.next
+                });
+            }
+            with_state(|state| finish(state, id, constraints, fold, window))
+        }
+        Step::Policy(call) => {
+            call_policy(id, &call);
+            let size = with_state(|state| {
+                let content = end_policy(state, id, fold.content_constraints())?;
+                Ok(finish(state, id, constraints, fold, content))
+            });
+            match size {
+                Ok(size) => size,
+                Err(error) => raise(&error),
+            }
+        }
+    }
+}
+
+/// The last step of a measurement: back from the content to the outermost element, recording
+/// the node's layout.
+fn finish(
+    state: &mut State,
+    id: NodeId,
+    constraints: Constraints,
+    fold: &Fold,
+    content: Size,
+) -> Size {
+    let node = state.tree.node_mut(id).unwrap();
+    let mut changed = false;
+    let mut size = content;
+    for index in (0..fold.count).rev() {
+        let entry = &mut node.chain[index];
+        match entry.element {
+            Element::Padding {
+                start,
+                top,
+                end,
+                bottom,
+            } => {
+                size = fold.received[index].constrain(Size::new(
+                    size.width + start + end,
+                    size.height + top + bottom,
+                ));
+            }
+            element if element.records_bounds() => {
+                let (x, y) = fold.offsets[index];
+                let bounds = Rect::new(x, y, size.width, size.height);
+                changed |= entry.bounds != bounds;
+                entry.bounds = bounds;
+            }
+            _ => {}
+        }
+    }
+    if node.kind == NodeKind::Window {
+        size = node.size;
+    }
+    let (content_x, content_y) = fold.content_origin();
+    let content = Rect::new(content_x, content_y, content.width, content.height);
+    changed |= node.content != content || node.size != size;
+    node.content = content;
+    node.size = size;
+    node.last_constraints = Some(constraints);
+    node.needs_measure = false;
+    node.child_needs_measure = false;
+    state.layout.changed |= changed;
+    size
+}
+
+/// A relayout from a node marked for measuring: re-measures it with its last constraints,
+/// which stay its own while its siblings and ancestors are unchanged, and, when its size
+/// changed, its parent with its policy, and so on up, stopping at the first node whose size
+/// stays. A node without last constraints is measured by its parent's policy.
+fn relayout_from(id: NodeId) {
+    let mut current = id;
+    loop {
+        let step = with_state(|state| {
+            let node = state.tree.node(current)?;
+            if !node.needs_measure && !node.child_needs_measure {
+                return None;
+            }
+            Some((node.parent, node.last_constraints, node.size))
+        });
+        let Some((parent, last, old)) = step else {
+            return;
+        };
+        let measured = match last {
+            Some(last) => measure(current, last) != old,
+            None => true,
+        };
+        let Some(parent) = parent.filter(|_| measured) else {
+            return;
+        };
+        with_state(|state| state.tree.node_mut(parent).unwrap().needs_measure = true);
+        current = parent;
+    }
+}
+
+/// Clears `child_needs_measure` on the ancestors of `id` once every dirty node has been
+/// measured.
+fn clear_ancestors(id: NodeId) {
+    with_state(|state| {
+        let tree = &mut state.tree;
+        let mut parent = tree.node(id).and_then(|node| node.parent);
+        while let Some(ancestor) = parent {
+            let node = tree.node_mut(ancestor).unwrap();
+            node.child_needs_measure = false;
+            parent = node.parent;
+        }
+    })
+}
+
+/// For a node that is clean itself and measured with its last constraints: re-measures its
+/// dirty children with their last constraints, which are still theirs while every sibling
+/// keeps its size, and gives whether every one kept its size, in which case the node's size
+/// and its children's positions stand. Otherwise the caller measures the node again with its
+/// policy.
+fn remeasure_dirty_children(id: NodeId) -> bool {
+    let mut child = with_state(|state| state.tree.node(id).unwrap().first_child);
+    while let Some(current) = child {
+        let (next, dirty, last, size) = with_state(|state| {
+            let node = state.tree.node(current).unwrap();
+            (
+                node.next,
+                node.needs_measure || node.child_needs_measure,
+                node.last_constraints,
+                node.size,
+            )
+        });
+        child = next;
+        if !dirty {
+            continue;
+        }
+        let Some(last) = last else {
+            return false;
+        };
+        if measure(current, last) != size {
+            return false;
+        }
+    }
+    true
+}
+
+/// Sets a child's position relative to its parent, noting a change.
+fn set_position(state: &mut State, child: NodeId, x: i64, y: i64) {
+    let node = state.tree.node_mut(child).unwrap();
+    if node.x != x || node.y != y {
+        node.x = x;
+        node.y = y;
+        state.layout.changed = true;
+    }
+}
+
+/// The content of a text or a text field, measured natively. A text or text field lays out no
+/// children: any a raw node group gave it are not shown (D7 of `layout-primitive`).
+fn native_content(state: &mut State, id: NodeId, c: Constraints) -> Size {
+    let State { tree, layout, .. } = state;
+    let measurer = layout.measurer();
+    let node = tree.node(id).unwrap();
+    let font_size = node.style.resolved_font_size();
+    let mut child = node.first_child;
+    let size = if node.kind == NodeKind::Text {
+        break_lines(
+            node.text.as_str(),
+            c.max_width,
+            font_size,
+            measurer,
+            &mut layout.lines,
+        );
+        let width = layout
+            .lines
+            .iter()
+            .map(|line| line.width)
+            .max()
+            .unwrap_or(0);
+        let height = layout.lines.len() as i64 * measurer.line_height(font_size);
+        let node = tree.node_mut(id).unwrap();
+        layout.changed |= node.break_width != c.max_width;
+        node.break_width = c.max_width;
+        c.constrain(Size::new(width, height))
+    } else {
+        let width = line_width(node.text.as_str(), font_size, measurer);
+        c.constrain(Size::new(width, measurer.line_height(font_size)))
+    };
+    while let Some(current) = child {
+        let node = tree.node_mut(current).unwrap();
+        layout.changed |= node.placed;
+        node.placed = false;
+        child = node.next;
+    }
+    size
+}
+
+/// Prepares the call of a node's policy (D6): pushes its frame and lends its children as
+/// measurables, in the buffer of the frame's depth.
+fn prepare_policy(
+    state: &mut State,
+    id: NodeId,
+    c: Constraints,
+    origin: (i64, i64),
+) -> UiResult<PolicyCall> {
+    let State {
+        tree,
+        handlers,
+        layout,
+        ..
+    } = state;
+    let node = tree.node(id).unwrap();
+    let function = node
+        .policy
+        .and_then(|policy| handlers.function(policy))
+        .ok_or(NO_POLICY)?;
+    let depth = layout.frames.len();
+    if layout.buffers.len() == depth {
+        layout.buffers.push(Vec::new());
+    }
+    let buffer = &mut layout.buffers[depth];
+    buffer.clear();
+    let mut child = node.first_child;
+    while let Some(current) = child {
+        buffer.push(current.word());
+        child = tree.node(current).unwrap().next;
+    }
+    // The list header over the buffer: never null, as an empty list's pointer is its element
+    // alignment.
+    let list = PrismList {
+        pointer: if buffer.is_empty() {
+            std::ptr::without_provenance_mut(std::mem::align_of::<u64>())
+        } else {
+            buffer.as_mut_ptr().cast()
+        },
+        size: buffer.len(),
+        capacity: buffer.len(),
+    };
+    layout.stamps += 1;
+    layout.frames.push(Frame {
+        node: id,
+        stamp: layout.stamps,
+        origin,
+        layout_called: false,
+        placing: false,
+        size: Size::ZERO,
+    });
+    Ok(PolicyCall {
+        function,
+        list,
+        constraints: c,
+        composition: layout.composition,
+    })
+}
+
+/// Calls a node's policy with no state borrowed, as a handler of the app's composition when an
+/// app runs (D14).
+fn call_policy(id: NodeId, call: &PolicyCall) {
+    let scope = MeasureScopeMirror { node: id.word() };
+    let constraints = ConstraintsMirror::from(call.constraints);
+    let run = || {
+        // SAFETY: the node claimed the entry as a measure policy, of the policy's function
+        // type; the entry stays live during the call, since no pass runs during layout, and the
+        // list's buffer is not touched until the call returns (D4).
+        unsafe { runtime::call_measure_policy(&call.function, &scope, &call.list, &constraints) }
+    };
+    let _result: MeasureResultMirror = match call.composition {
+        Some(composition) => runtime::run_handler(composition, run),
+        None => run(),
+    };
+}
+
+/// After a node's policy returned: pops its frame, checks that it called `layout`, forgets the
+/// last constraints of the children it did not measure, notes which it placed, and gives the
+/// size `layout` gave, clamped into the content's constraints.
+fn end_policy(state: &mut State, id: NodeId, c: Constraints) -> UiResult<Size> {
+    let State { tree, layout, .. } = state;
+    let frame = layout.frames.pop().expect("the policy's frame");
+    debug_assert_eq!(frame.node, id);
+    let mut child = tree.node(id).unwrap().first_child;
+    while let Some(current) = child {
+        let node = tree.node_mut(current).unwrap();
+        if node.stamp != frame.stamp {
+            // Not measured: its changes run this policy again (D11).
+            node.last_constraints = None;
+            node.needs_measure = false;
+            node.child_needs_measure = false;
+        }
+        // Placed by this run or not (D7).
+        let placed = node.placed_stamp == frame.stamp;
+        layout.changed |= placed != node.placed;
+        node.placed = placed;
+        child = node.next;
+    }
+    if !frame.layout_called {
+        return Err(NO_LAYOUT);
+    }
+    Ok(c.constrain(frame.size))
+}
+
+/// Whether constraints have minimums of at least 0 and at most their maximums.
+fn valid(c: Constraints) -> bool {
+    c.min_width >= 0
+        && c.min_height >= 0
+        && c.min_width <= c.max_width
+        && c.min_height <= c.max_height
+}
+
+/// `Measurable.measure(constraints)` (D6): measures `child`, a child of the node whose policy
+/// is running innermost, at most once in that run, and gives its size.
+pub fn measure_child(child: NodeId, constraints: Constraints) -> UiResult<Size> {
+    let mut fold = Fold::new();
+    let step = with_state(|state| {
+        let frame = *state.layout.frames.last().ok_or(MEASURED_OUTSIDE)?;
+        let node = state.tree.node_mut(child).ok_or(MEASURED_OUTSIDE)?;
+        if node.parent != Some(frame.node) {
+            return Err(MEASURED_OUTSIDE);
+        }
+        if node.stamp == frame.stamp {
+            return Err(MEASURED_TWICE);
+        }
+        if !valid(constraints) {
+            return Err(INVALID_CONSTRAINTS);
+        }
+        node.stamp = frame.stamp;
+        Ok(start(state, child, constraints, &mut fold))
+    })?;
+    Ok(complete(child, constraints, step, &mut fold))
+}
+
+/// The size of `child`, measured in the innermost running frame: the placeable a container
+/// gets again in its placement block (D9).
+pub fn measured(child: NodeId) -> UiResult<Size> {
+    with_state(|state| {
+        let frame = *state.layout.frames.last().ok_or(PLACED_OUTSIDE)?;
+        let node = state.tree.node(child).ok_or(PLACED_OUTSIDE)?;
+        if node.parent != Some(frame.node) || node.stamp != frame.stamp {
+            return Err(PLACED_OUTSIDE);
+        }
+        Ok(node.size)
+    })
+}
+
+/// The start of `layout(width, height) { ... }` in the policy of `node` (D6).
+pub fn begin_placement(node: NodeId, width: i64, height: i64) -> UiResult<()> {
+    with_state(|state| {
+        let frame = state.layout.frames.last_mut().ok_or(LAYOUT_OUTSIDE)?;
+        if frame.node != node {
+            return Err(LAYOUT_OUTSIDE);
+        }
+        if frame.layout_called {
+            return Err(LAYOUT_TWICE);
+        }
+        frame.layout_called = true;
+        frame.placing = true;
+        frame.size = Size::new(width, height);
+        Ok(())
+    })
+}
+
+/// The end of `layout`'s placement block.
+pub fn end_placement(node: NodeId) -> UiResult<()> {
+    with_state(|state| {
+        let frame = state.layout.frames.last_mut().ok_or(LAYOUT_OUTSIDE)?;
+        if frame.node != node {
+            return Err(LAYOUT_OUTSIDE);
+        }
+        frame.placing = false;
+        Ok(())
+    })
+}
+
+/// `Placeable.place(x, y)`: places `child`, measured in the running frame of `parent`, at
+/// `(x, y)` from the content's top-left corner, while that frame is placing.
+pub fn place(parent: NodeId, child: NodeId, x: i64, y: i64) -> UiResult<()> {
+    with_state(|state| {
+        let frame = *state.layout.frames.last().ok_or(PLACED_OUTSIDE)?;
+        let node = state.tree.node(child).ok_or(PLACED_OUTSIDE)?;
+        if frame.node != parent
+            || !frame.placing
+            || node.parent != Some(parent)
+            || node.stamp != frame.stamp
+        {
+            return Err(PLACED_OUTSIDE);
+        }
+        let (origin_x, origin_y) = frame.origin;
+        set_position(state, child, origin_x + x, origin_y + y);
+        state.tree.node_mut(child).unwrap().placed_stamp = frame.stamp;
+        Ok(())
+    })
+}
+
+/// A live node's value, for the property reads of the containers' policies.
+fn read<R>(node: NodeId, read: impl FnOnce(&Node) -> R) -> UiResult<R> {
+    with_state(|state| state.tree.node(node).map(read).ok_or(STALE_NODE))
+}
+
+/// A row's or column's arrangement, as its policy reads it.
+pub fn arrangement(node: NodeId) -> UiResult<Arrangement> {
+    read(node, |node| node.arrangement)
+}
+
+/// A box's, row's or column's alignment, as its policy reads it.
+pub fn alignment(node: NodeId) -> UiResult<Alignment> {
+    read(node, |node| node.alignment)
+}
+
+/// A child's parent data (D9): its first `weight` (0.0 for none) with its `fill`, and its
+/// first `align` (`None` for none).
+pub fn parent_data(node: NodeId) -> UiResult<(f64, bool, Option<Alignment>)> {
+    read(node, |node| {
+        let (weight, fill) = node.weight().unwrap_or((0.0, false));
+        (weight, fill, node.own_alignment())
+    })
+}
+
 /// The absolute bounds of `id`, from the positions relative to each parent.
-pub fn absolute_bounds(tree: &UiTree, id: NodeId) -> Rect {
+pub fn absolute_bounds(tree: &crate::tree::UiTree, id: NodeId) -> Rect {
     let node = tree.node(id).unwrap();
     let (mut x, mut y) = (node.x, node.y);
     let mut parent = node.parent;
@@ -513,7 +829,7 @@ mod tests {
     use std::cell::Cell;
 
     fn lay_out(builder: &mut TreeBuilder) {
-        Layout::new().run(&mut builder.tree, &FixedAdvanceMetrics);
+        builder.lay_out();
     }
 
     /// `x,y wxh` of a node, as dumps print it.
@@ -850,16 +1166,16 @@ mod tests {
             .collect();
         let measurer = CountingMeasurer(Cell::new(0));
         let mut layout = Layout::new();
-        assert!(layout.run(&mut b.tree, &measurer));
+        assert!(b.lay_out_with(&mut layout, &measurer));
         assert_eq!(measurer.0.get(), 100 * 8);
         assert_eq!(layout.measured, 102);
         measurer.0.set(0);
         assert!(
-            !layout.run(&mut b.tree, &measurer),
+            !b.lay_out_with(&mut layout, &measurer),
             "a clean tree is not laid out"
         );
         b.tree.set_text(texts[50], "changed!");
-        assert!(layout.run(&mut b.tree, &measurer));
+        assert!(b.lay_out_with(&mut layout, &measurer));
         assert_eq!(measurer.0.get(), 8, "only the changed text's characters");
         assert_eq!(
             layout.measured, 1,
@@ -869,7 +1185,7 @@ mod tests {
         // cached.
         measurer.0.set(0);
         b.tree.set_text(texts[20], "a longer text");
-        assert!(layout.run(&mut b.tree, &measurer));
+        assert!(b.lay_out_with(&mut layout, &measurer));
         assert_eq!(measurer.0.get(), 13);
         assert_eq!(layout.measured, 3, "the text, its column and the root");
         assert_eq!(
@@ -922,13 +1238,13 @@ mod tests {
             }
             nodes.push(node);
         }
-        let dump = |tree: &UiTree| {
+        let dump = |tree: &crate::tree::UiTree| {
             let mut out = String::new();
             crate::dump::dump_tree(tree, None, &mut out);
             out
         };
         let mut layout = Layout::new();
-        layout.run(&mut b.tree, &FixedAdvanceMetrics);
+        b.lay_out_with(&mut layout, &FixedAdvanceMetrics);
         for step in 0..300 {
             let node = nodes[1 + random(nodes.len() as u64 - 1) as usize];
             if b.tree.node(node).is_none() {
@@ -987,14 +1303,14 @@ mod tests {
                     .tree
                     .resize(300 + random(200) as i64, 200 + random(200) as i64),
             }
-            layout.run(&mut b.tree, &FixedAdvanceMetrics);
+            b.lay_out_with(&mut layout, &FixedAdvanceMetrics);
             let incremental = dump(&b.tree);
             let mut stack = vec![b.tree.root()];
             while let Some(id) = stack.pop() {
                 stack.extend(b.tree.children(id));
                 b.tree.mark_needs_measure(id);
             }
-            layout.run(&mut b.tree, &FixedAdvanceMetrics);
+            b.lay_out_with(&mut layout, &FixedAdvanceMetrics);
             assert_eq!(
                 incremental,
                 dump(&b.tree),
@@ -1004,5 +1320,180 @@ mod tests {
             );
             assert!(!b.tree.needs_layout());
         }
+    }
+
+    /// The scenario "A text keeping its size calls no policy".
+    #[test]
+    fn a_text_keeping_its_size_calls_no_policy() {
+        let mut b = TreeBuilder::new(400, 100_000);
+        let root = b.root();
+        let column = b.add(root, NodeKind::Column);
+        b.set_policy(column, counting_policy());
+        let texts: Vec<NodeId> = (0..100)
+            .map(|index| b.text(column, &format!("text {:03}", index)))
+            .collect();
+        let mut layout = Layout::new();
+        b.lay_out_with(&mut layout, &FixedAdvanceMetrics);
+        let calls = policy_calls();
+        b.tree.set_text(texts[50], "changed!");
+        assert!(b.lay_out_with(&mut layout, &FixedAdvanceMetrics));
+        assert_eq!(policy_calls(), calls, "a text of the same width");
+        b.tree.set_text(texts[20], "a longer text");
+        assert!(b.lay_out_with(&mut layout, &FixedAdvanceMetrics));
+        assert_eq!(policy_calls(), calls + 1, "a wider text");
+    }
+
+    /// The misuse details of D13 that Rust code can reach in process, from a policy and from
+    /// outside any layout.
+    #[test]
+    fn measure_policy_misuse_details() {
+        use crate::error::UiError;
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let node = b.add(root, NodeKind::Layout);
+        let text = b.text(node, "a");
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        b.set_policy(
+            node,
+            probe_policy(move |node, measurables, c| {
+                let mut seen = record.borrow_mut();
+                let mut note = |result: Result<(), UiError>| {
+                    seen.push(result.map_err(|error| error.message()).err());
+                };
+                let child = NodeId(measurables[0]);
+                note(place(node, child, 0, 0));
+                note(measured(child).map(|_| ()));
+                let invalid = Constraints {
+                    min_width: 10,
+                    max_width: 5,
+                    min_height: 0,
+                    max_height: 0,
+                };
+                note(measure_child(child, invalid).map(|_| ()));
+                let negative = Constraints { min_width: -1, ..c };
+                note(measure_child(child, negative).map(|_| ()));
+                note(measure_child(child, c).map(|_| ()));
+                note(measure_child(child, c).map(|_| ()));
+                note(begin_placement(child, 0, 0));
+                note(place(node, child, 0, 0));
+                note(begin_placement(node, 8, 20));
+                note(begin_placement(node, 1, 1));
+                note(place(node, child, 0, 0));
+                note(end_placement(node));
+                note(place(node, child, 0, 0));
+                Size::new(8, 20)
+            }),
+        );
+        lay_out(&mut b);
+        let placed_outside =
+            Some("ui misuse: a placeable was placed outside its parent's placement".to_string());
+        let invalid = Some(
+            "ui misuse: invalid constraints: a minimum is negative or above its maximum"
+                .to_string(),
+        );
+        assert_eq!(
+            *seen.borrow(),
+            [
+                placed_outside.clone(),
+                placed_outside.clone(),
+                invalid.clone(),
+                invalid,
+                None,
+                Some("ui misuse: a measurable was measured twice in one measurement".to_string()),
+                Some("ui misuse: layout was called outside its node's measurement".to_string()),
+                placed_outside.clone(),
+                None,
+                Some("ui misuse: layout was called twice in one measurement".to_string()),
+                None,
+                None,
+                placed_outside,
+            ]
+        );
+        assert_eq!(bounds(&b, node), "0,0 8x20");
+        assert_eq!(bounds(&b, text), "0,0 8x20");
+        // Outside any layout.
+        b.installed(|| {
+            assert_eq!(
+                measure_child(text, Constraints::up_to(10, 10)),
+                Err(crate::error::MEASURED_OUTSIDE)
+            );
+            assert_eq!(
+                begin_placement(node, 0, 0),
+                Err(crate::error::LAYOUT_OUTSIDE)
+            );
+            assert_eq!(place(node, text, 0, 0), Err(crate::error::PLACED_OUTSIDE));
+        });
+    }
+
+    /// Nested policies three levels deep, each lent its own buffer: the middle one copies its
+    /// measurables before measuring and finds its lent list unchanged after its children's
+    /// policies ran, as the reviewer of D4 should probe.
+    #[test]
+    fn nested_policies_keep_their_lent_measurables() {
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let outer = b.add(root, NodeKind::Layout);
+        let middle = b.add(outer, NodeKind::Layout);
+        let first = b.text(outer, "abc");
+        let inner = b.add(middle, NodeKind::Layout);
+        let second = b.text(middle, "ab");
+        let leaves = [b.text(inner, "a"), b.text(inner, "abcd")];
+        let checks = std::rc::Rc::new(Cell::new(0));
+        let counted = checks.clone();
+        // Every level stacks its children vertically; the middle copies its list first.
+        let stack = move |node: NodeId, measurables: &[u64], c: Constraints| {
+            let copy = measurables.to_vec();
+            let mut sizes = Vec::new();
+            for &child in &copy {
+                sizes.push(measure_child(NodeId(child), c.loosened()).unwrap());
+            }
+            if node == middle {
+                assert_eq!(measurables, copy.as_slice(), "the lent list stays");
+                counted.set(counted.get() + 1);
+            }
+            let width = sizes.iter().map(|size| size.width).max().unwrap_or(0);
+            let height = sizes.iter().map(|size| size.height).sum();
+            begin_placement(node, width, height).unwrap();
+            let mut y = 0;
+            for (&child, size) in copy.iter().zip(&sizes) {
+                place(node, NodeId(child), 0, y).unwrap();
+                y += size.height;
+            }
+            end_placement(node).unwrap();
+            Size::new(width, height)
+        };
+        let policy = probe_policy(stack);
+        b.set_policy(outer, policy);
+        let duplicate = crate::test_support::probe_policy_again();
+        b.set_policy(middle, duplicate);
+        b.set_policy(inner, crate::test_support::probe_policy_again());
+        lay_out(&mut b);
+        assert_eq!(checks.get(), 1);
+        assert_eq!(bounds(&b, outer), "0,0 32x80");
+        assert_eq!(bounds(&b, middle), "0,0 32x60");
+        assert_eq!(bounds(&b, inner), "0,0 32x40");
+        assert_eq!(bounds(&b, leaves[0]), "0,0 8x20");
+        assert_eq!(bounds(&b, leaves[1]), "0,20 32x20");
+        assert_eq!(bounds(&b, second), "0,40 16x20");
+        assert_eq!(bounds(&b, first), "0,60 24x20");
+    }
+
+    /// D7: a child its parent does not place keeps its last bounds, and is printed unplaced.
+    #[test]
+    fn an_unplaced_child_is_dumped_unplaced() {
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let node = b.add(root, NodeKind::Layout);
+        b.set_policy(node, first_only_policy());
+        b.text(node, "shown");
+        b.text(node, "hidden");
+        lay_out(&mut b);
+        let mut out = String::new();
+        crate::dump::dump_tree(&b.tree, None, &mut out);
+        assert_eq!(
+            out,
+            "window 400x300\n  layout #1 0,0 40x20\n    text #2 0,0 40x20 \"shown\"\n    text #3 0,0 48x20 \"hidden\" unplaced\n"
+        );
     }
 }

@@ -22,6 +22,12 @@
 //! Under `PRISM_ASSERT_TIMING=1` it fails when a tenfold larger tree multiplies the full
 //! layout or the display list time by more than 15, or when relaying out after one text change
 //! of the 10,000-node tree takes a tenth of its full layout or more.
+//!
+//! The rows and the column are measured by the test support's Rust policies through the
+//! measurement protocol (D17 of `layout-primitive`). The full layout of 10,000 nodes is printed
+//! against the native layout's, measured before that change on the machine that set the
+//! budget ([`NATIVE_LAYOUT_10000`], `layout-primitive` D18), which it must stay within twice
+//! of; that comparison is only printed, since it holds for that machine alone.
 
 use prism_ui::draw::DisplayList;
 use prism_ui::handlers::HandlerKind;
@@ -36,6 +42,10 @@ use std::time::{Duration, Instant};
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const RUNS: usize = 7;
+
+/// The full layout of 10,000 nodes of the native layout pass, in milliseconds, on the M4 Pro
+/// that measured `layout-primitive`'s baseline (D18).
+const NATIVE_LAYOUT_10000: f64 = 0.493;
 
 /// A column of `nodes / 3` rows, and the texts of the rows.
 fn build(nodes: usize) -> (TreeBuilder, Vec<NodeId>) {
@@ -85,7 +95,7 @@ fn measure(nodes: usize) -> Timings {
     let (mut builder, texts) = build(nodes);
     let mut layout = Layout::new();
     let metrics = FixedAdvanceMetrics;
-    layout.run(&mut builder.tree, &metrics);
+    builder.lay_out_with(&mut layout, &metrics);
     let mut full = Vec::new();
     let mut partial = Vec::new();
     let mut draw = Vec::new();
@@ -97,14 +107,14 @@ fn measure(nodes: usize) -> Timings {
     for run in 0..RUNS {
         mark_all(&mut builder.tree);
         let start = Instant::now();
-        layout.run(&mut builder.tree, &metrics);
+        builder.lay_out_with(&mut layout, &metrics);
         full.push(start.elapsed());
 
         builder
             .tree
             .set_text(middle, if run % 2 == 0 { "row 0000" } else { "row 1111" });
         let start = Instant::now();
-        layout.run(&mut builder.tree, &metrics);
+        builder.lay_out_with(&mut layout, &metrics);
         partial.push(start.elapsed());
 
         let start = Instant::now();
@@ -161,6 +171,12 @@ fn ui_timing() {
     );
     let ratio = timings[1].relayout.as_secs_f64() / timings[1].layout.as_secs_f64();
     println!("relayout / layout at 10,000 nodes: {:.4}", ratio);
+    println!(
+        "full layout at 10,000 nodes: {:.3} ms, {:.2} x the native baseline of {:.3} ms (budget 2 x)",
+        milliseconds(timings[1].layout),
+        milliseconds(timings[1].layout) / NATIVE_LAYOUT_10000,
+        NATIVE_LAYOUT_10000
+    );
     if std::env::var_os("PRISM_ASSERT_TIMING").is_some_and(|value| value == "1") {
         assert!(
             layout_growth.iter().all(|growth| *growth <= 15.0),

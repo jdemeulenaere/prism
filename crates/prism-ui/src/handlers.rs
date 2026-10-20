@@ -1,5 +1,5 @@
 //! The handler table (D23 of `ui-toolkit`): the handlers of `clickable`, `toggleable` and text
-//! fields, held by `prism-ui` so that a `Copy` modifier element can name one by a
+//! fields, and the measure policies of layout nodes (D8 of `layout-primitive`), held by `prism-ui` so that a `Copy` modifier element can name one by a
 //! [`HandlerId`].
 //!
 //! - **Registering** moves a function value into a free entry, which is *pending*.
@@ -40,6 +40,9 @@ pub enum HandlerKind {
     Toggle,
     /// `(String) -> Unit`, of a text field.
     Text,
+    /// `MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult`, a node's measure
+    /// policy (D8 of `layout-primitive`).
+    Measure,
 }
 
 /// Who holds an entry.

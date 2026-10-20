@@ -1773,10 +1773,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 // The nearest `Double`, ties to even (D15 of `layout-primitive`), of the
                 // borrowed receiver.
                 let receiver = self.receiver(arguments, span)?;
-                let value = self
-                    .builder
-                    .ins()
-                    .load(types::I64, aligned(), receiver, 0);
+                let value = self.builder.ins().load(types::I64, aligned(), receiver, 0);
                 let double = self.builder.ins().fcvt_from_sint(types::F64, value);
                 self.write_place(destination, Lowered::Scalar(double), false)?;
             }
@@ -1784,10 +1781,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 // Kotlin's conversion: toward zero, saturating, NaN giving 0, which is what the
                 // saturating instruction does.
                 let receiver = self.receiver(arguments, span)?;
-                let value = self
-                    .builder
-                    .ins()
-                    .load(types::F64, aligned(), receiver, 0);
+                let value = self.builder.ins().load(types::F64, aligned(), receiver, 0);
                 let int = self.builder.ins().fcvt_to_sint_sat(types::I64, value);
                 self.write_place(destination, Lowered::Scalar(int), false)?;
             }

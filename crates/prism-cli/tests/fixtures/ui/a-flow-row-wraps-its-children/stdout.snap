@@ -1,0 +1,6 @@
+window 400x300
+  box #1 0,0 40x40 width(40)
+    layout #2 0,0 32x40
+      text #3 0,0 16x20 "aa"
+      text #4 16,0 16x20 "bb"
+      text #5 0,20 16x20 "cc"

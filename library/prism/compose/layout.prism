@@ -1,9 +1,12 @@
 // The toolkit's layouts, after Jetpack Compose's `compose-foundation-layout` artifact
 // (`androidx.compose.foundation.layout`): boxes, columns, rows and spacers, their scopes and
 // arrangements, and the layout modifiers. `weight` and `align` are extensions with the scope of
-// a row, column or box as their context, so they resolve only in that scope's content.
+// a row, column or box as their context, so they resolve only in that scope's content. Each
+// container is a `Layout` whose capture-free measure policy, written here, reads its
+// arrangement and alignment back from its node and its children's parent data.
 package prism.compose
 
+import /prism/core
 import ui
 
 // The receiver of a box's content, which gives it `Modifier.align`.
@@ -123,12 +126,11 @@ public compose fun Box(
     contentAlignment: Alignment = Alignment.TopStart,
     content: compose BoxScope.() -> Unit,
 ): Unit {
-    Node(
+    LayoutNode(
         boxKind,
-        { node ->
-            prism_ui_set_alignment(node.word, contentAlignment.code)
-            prism_ui_set_modifier(node.word, modifier)
-        },
+        { measurables, constraints -> measureBox(measurables, constraints) },
+        modifier,
+        { node -> prism_ui_set_alignment(node.word, contentAlignment.code) },
     ) {
         content(BoxScope())
     }
@@ -142,12 +144,13 @@ public compose fun Column(
     horizontalAlignment: Alignment = Alignment.Start,
     content: compose ColumnScope.() -> Unit,
 ): Unit {
-    Node(
+    LayoutNode(
         columnKind,
+        { measurables, constraints -> measureLine(true, measurables, constraints) },
+        modifier,
         { node ->
             prism_ui_set_arrangement(node.word, verticalArrangement.code, verticalArrangement.space)
             prism_ui_set_alignment(node.word, horizontalAlignment.code)
-            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content(ColumnScope())
@@ -162,8 +165,10 @@ public compose fun Row(
     verticalAlignment: Alignment = Alignment.Top,
     content: compose RowScope.() -> Unit,
 ): Unit {
-    Node(
+    LayoutNode(
         rowKind,
+        { measurables, constraints -> measureLine(false, measurables, constraints) },
+        modifier,
         { node ->
             prism_ui_set_arrangement(
                 node.word,
@@ -171,7 +176,6 @@ public compose fun Row(
                 horizontalArrangement.space,
             )
             prism_ui_set_alignment(node.word, verticalAlignment.code)
-            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content(RowScope())
@@ -180,7 +184,216 @@ public compose fun Row(
 
 // An empty node whose size comes from its modifier and its constraints.
 public compose fun Spacer(modifier: Modifier): Unit {
-    LeafNode(spacerKind) { node ->
-        prism_ui_set_modifier(node.word, modifier)
+    LeafLayoutNode(
+        spacerKind,
+        { measurables, constraints -> layout(constraints.minWidth, constraints.minHeight) {} },
+        modifier,
+        { node -> },
+    )
+}
+
+// The larger of `a` and `b`.
+private fun larger(a: Int, b: Int): Int = if (a > b) a else b
+
+// The constraints of a row's (`vertical` false) or column's child, main axis first.
+private fun oriented(
+    vertical: Bool,
+    mainMinimum: Int,
+    mainMaximum: Int,
+    crossMaximum: Int,
+): Constraints = if (vertical) {
+    Constraints(0, crossMaximum, mainMinimum, mainMaximum)
+} else {
+    Constraints(mainMinimum, mainMaximum, 0, crossMaximum)
+}
+
+// A placeable's size along the main axis of a column (`vertical`) or row.
+private fun mainOf(vertical: Bool, placeable: &Placeable): Int = if (vertical) {
+    placeable.height
+} else {
+    placeable.width
+}
+
+// A placeable's size across the main axis of a column (`vertical`) or row.
+private fun crossOf(vertical: Bool, placeable: &Placeable): Int = if (vertical) {
+    placeable.width
+} else {
+    placeable.height
+}
+
+// The horizontal part of the alignment of `code`: 0 for the start, 1 for the centre, 2 for the
+// end. A vertical alignment is at the start.
+private fun horizontalPart(code: Int): Int = if (code <= 8) {
+    code % 3
+} else if (code <= 11) {
+    code - 9
+} else {
+    0
+}
+
+// The vertical part of the alignment of `code`: 0 for the top, 1 for the centre, 2 for the
+// bottom. A horizontal alignment is at the top.
+private fun verticalPart(code: Int): Int = if (code <= 8) {
+    code / 3
+} else if (code >= 12) {
+    code - 12
+} else {
+    0
+}
+
+// A child's offset by an alignment part in `free` pixels of space.
+private fun partOffset(part: Int, free: Int): Int = if (part == 0) {
+    0
+} else if (part == 1) {
+    free / 2
+} else {
+    free
+}
+
+// Where an arrangement places the first of `count` children in `free` pixels of space.
+private fun arrangementStart(code: Int, free: Int, count: Int): Int = if (code == 1 || code == 3) {
+    free
+} else if (code == 4) {
+    free / 2
+} else if (code == 6) {
+    if (count == 0) 0 else free / count / 2
+} else if (code == 7) {
+    free / (count + 1)
+} else {
+    0
+}
+
+// The extra gap an arrangement puts between `count` children in `free` pixels of space.
+private fun arrangementGap(code: Int, free: Int, count: Int): Int = if (code == 5) {
+    if (count <= 1) 0 else free / (count - 1)
+} else if (code == 6) {
+    if (count == 0) 0 else free / count
+} else if (code == 7) {
+    free / (count + 1)
+} else {
+    0
+}
+
+// A column (`vertical`) or a row: unweighted children in order under what remains of the main
+// axis, then weighted children sharing what is left of a bounded main axis, then placement by
+// the arrangement and each child's alignment. Compose's `RowColumnMeasurePolicy`.
+private fun MeasureScope.measureLine(
+    vertical: Bool,
+    measurables: &List<Measurable>,
+    constraints: Constraints,
+): MeasureResult {
+    val arrangement = prism_ui_arrangement(node)
+    val alignment = prism_ui_alignment(node).code
+    val spacing = if (arrangement.code == 8) arrangement.space else 0
+    val mainMaximum = if (vertical) constraints.maxHeight else constraints.maxWidth
+    val crossMaximum = if (vertical) constraints.maxWidth else constraints.maxHeight
+    val bounded = mainMaximum != Constraints.Infinity
+    val count = measurables.size
+    var measured = 0
+    var used = 0
+    var cross = 0
+    var totalWeight = 0.0
+    var weighted = 0
+    for (measurable in measurables) {
+        val weight = measurable.parentData.weight
+        if (bounded && weight > 0.0) {
+            totalWeight += weight
+            weighted += 1
+        } else {
+            val remaining = if (bounded) {
+                larger(mainMaximum - used - spacing * measured, 0)
+            } else {
+                Constraints.Infinity
+            }
+            val placeable = measurable.measure(oriented(vertical, 0, remaining, crossMaximum))
+            used += mainOf(vertical, placeable)
+            cross = larger(cross, crossOf(vertical, placeable))
+            measured += 1
+        }
+    }
+    val gaps = spacing * larger(count - 1, 0)
+    if (weighted > 0) {
+        val remaining = larger(mainMaximum - used - gaps, 0)
+        var given = 0
+        var seen = 0
+        for (measurable in measurables) {
+            val data = measurable.parentData
+            if (data.weight > 0.0) {
+                seen += 1
+                val share = if (seen == weighted) {
+                    remaining - given
+                } else {
+                    (remaining.toDouble() * (data.weight / totalWeight)).toInt()
+                }
+                given += share
+                val mainMinimum = if (data.fill) share else 0
+                val placeable = measurable.measure(
+                    oriented(vertical, mainMinimum, share, crossMaximum),
+                )
+                used += mainOf(vertical, placeable)
+                cross = larger(cross, crossOf(vertical, placeable))
+            }
+        }
+    }
+    val content = used + gaps
+    val width = constraints.constrainWidth(if (vertical) cross else content)
+    val height = constraints.constrainHeight(if (vertical) content else cross)
+    val mainSize = if (vertical) height else width
+    val crossSize = if (vertical) width else height
+    val free = larger(mainSize - content, 0)
+    val start = arrangementStart(arrangement.code, free, count)
+    val gap = arrangementGap(arrangement.code, free, count)
+    return layout(width, height) {
+        var position = start
+        for (measurable in measurables) {
+            val placeable = measurable.measured()
+            val own = measurable.parentData.alignment
+            val code = if (own >= 0) own else alignment
+            val part = if (vertical) horizontalPart(code) else verticalPart(code)
+            val along = partOffset(part, crossSize - crossOf(vertical, placeable))
+            if (vertical) {
+                placeable.place(along, position)
+            } else {
+                placeable.place(position, along)
+            }
+            position += mainOf(vertical, placeable) + spacing + gap
+        }
     }
 }
+
+// A box: children under the constraints loosened, as large as the largest and at least the
+// minimum, each child placed by its own alignment or the box's. Compose's `BoxMeasurePolicy`,
+// which material's surfaces use too.
+package fun MeasureScope.measureBox(
+    measurables: &List<Measurable>,
+    constraints: Constraints,
+): MeasureResult {
+    val alignment = prism_ui_alignment(node).code
+    val loose = constraints.copy(minWidth = 0, minHeight = 0)
+    var largestWidth = 0
+    var largestHeight = 0
+    for (measurable in measurables) {
+        val placeable = measurable.measure(loose)
+        largestWidth = larger(largestWidth, placeable.width)
+        largestHeight = larger(largestHeight, placeable.height)
+    }
+    val width = constraints.constrainWidth(largestWidth)
+    val height = constraints.constrainHeight(largestHeight)
+    return layout(width, height) {
+        for (measurable in measurables) {
+            val placeable = measurable.measured()
+            val own = measurable.parentData.alignment
+            val code = if (own >= 0) own else alignment
+            placeable.place(
+                partOffset(horizontalPart(code), width - placeable.width),
+                partOffset(verticalPart(code), height - placeable.height),
+            )
+        }
+    }
+}
+
+// A row's or column's arrangement, as its node holds it.
+private external fun prism_ui_arrangement(node: Int): Arrangement
+
+// A box's, row's or column's alignment, as its node holds it.
+private external fun prism_ui_alignment(node: Int): Alignment

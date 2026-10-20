@@ -1,10 +1,12 @@
 // The UI toolkit's base, after Jetpack Compose's `compose-ui` artifact with `ui-graphics`,
 // `ui-unit` and `ui-text` (`androidx.compose.ui` and its `graphics`, `unit`, `text`,
 // `semantics` and `window` packages): modifiers, alignments, colours, shapes, units, text
-// styles, roles and `runApp`. With `package` visibility, it also holds the node layer that the
-// other toolkit modules of `prism.compose` are written over: `Node`, `LeafNode`, the node kinds
-// and the UI runtime's setters, whose nodes and handlers live in `prism-ui`. A modifier is
-// plain data, an ordered chain of elements that its node applies; no modifier composes.
+// styles, roles, `runApp`, and the layout primitive (`androidx.compose.ui.layout`): `Layout`,
+// `Constraints`, `Measurable`, `Placeable` and `MeasureScope`. With `package` visibility, it
+// also holds the node layer that the other toolkit modules of `prism.compose` are written over:
+// `Node`, `LeafNode`, `LayoutNode`, the node kinds and the UI runtime's setters, whose nodes,
+// handlers and measure policies live in `prism-ui`. A modifier is plain data, an ordered chain
+// of elements that its node applies; no modifier composes.
 package prism.compose
 
 import runtime
@@ -60,6 +62,9 @@ package val spacerKind: Int = 5
 // The node kind of a text field.
 package val textFieldKind: Int = 6
 
+// The node kind of a user layout.
+package val layoutKind: Int = 7
+
 // Sets the text of a text node, or the value of a text field.
 package external fun prism_ui_set_text(node: Int, text: &String): Unit
 
@@ -95,6 +100,14 @@ package external fun prism_ui_register_text(handler: attached (String) -> Unit):
 
 // Ends the program: a chain cannot hold a seventeenth element.
 package external fun prism_ui_modifier_overflow(): Nothing
+
+// Moves a layout's measure policy into the handler table, until a node claims it.
+package external fun prism_ui_register_measure_policy(
+    policy: attached MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult,
+): Int
+
+// Gives a layout node its measure policy.
+package external fun prism_ui_set_measure_policy(node: Int, policy: Int): Unit
 
 // A colour: an ARGB value in the low 32 bits, or unspecified outside them.
 public struct Color : Copy { val argb: Int }
@@ -360,6 +373,248 @@ public fun runApp(
     height: Int = 600,
     content: attached compose () -> Unit,
 ): Unit = prism_ui_run_app(title, width, height, content)
+
+// Minimum and maximum widths and heights in logical pixels, which a parent gives a child it
+// measures; `Constraints.Infinity` is an unbounded maximum. Compose's `Constraints`.
+public struct Constraints : Copy {
+    val minWidth: Int
+    val maxWidth: Int
+    val minHeight: Int
+    val maxHeight: Int
+}
+
+// The constraints' companion: the unbounded maximum and the constraints' factories.
+public struct ConstraintsCompanion : Copy { val Infinity: Int }
+
+// `Constraints.Infinity`, `Int`'s largest value, and `Constraints.fixed(width, height)`.
+public val Constraints: ConstraintsCompanion = ConstraintsCompanion(Infinity = 9223372036854775807)
+
+// Exactly `width` × `height`.
+public fun ConstraintsCompanion.fixed(width: Int, height: Int): Constraints = Constraints(
+    width,
+    width,
+    height,
+    height,
+)
+
+// Exactly `width` wide, and from 0 to unbounded high.
+public fun ConstraintsCompanion.fixedWidth(width: Int): Constraints = Constraints(
+    width,
+    width,
+    0,
+    Infinity,
+)
+
+// Exactly `height` high, and from 0 to unbounded wide.
+public fun ConstraintsCompanion.fixedHeight(height: Int): Constraints = Constraints(
+    0,
+    Infinity,
+    height,
+    height,
+)
+
+// Whether the maximum width is bounded.
+public val Constraints.hasBoundedWidth: Bool get() = maxWidth != Constraints.Infinity
+
+// Whether the maximum height is bounded.
+public val Constraints.hasBoundedHeight: Bool get() = maxHeight != Constraints.Infinity
+
+// Whether only one width is allowed.
+public val Constraints.hasFixedWidth: Bool get() = maxWidth == minWidth
+
+// Whether only one height is allowed.
+public val Constraints.hasFixedHeight: Bool get() = maxHeight == minHeight
+
+// Whether only a size of no area is allowed.
+public val Constraints.isZero: Bool get() = maxWidth == 0 || maxHeight == 0
+
+// `value` clamped between `minimum` and `maximum`.
+private fun clamp(value: Int, minimum: Int, maximum: Int): Int = if (value < minimum) {
+    minimum
+} else if (value > maximum) {
+    maximum
+} else {
+    value
+}
+
+// `width` clamped into the width bounds.
+public fun Constraints.constrainWidth(width: Int): Int = clamp(width, minWidth, maxWidth)
+
+// `height` clamped into the height bounds.
+public fun Constraints.constrainHeight(height: Int): Int = clamp(height, minHeight, maxHeight)
+
+// `other` clamped into these constraints, bound by bound.
+public fun Constraints.constrain(other: Constraints): Constraints = Constraints(
+    clamp(other.minWidth, minWidth, maxWidth),
+    clamp(other.maxWidth, minWidth, maxWidth),
+    clamp(other.minHeight, minHeight, maxHeight),
+    clamp(other.maxHeight, minHeight, maxHeight),
+)
+
+// `maximum` plus `value`, at least 0, an unbounded maximum staying unbounded.
+private fun offsetMaximum(maximum: Int, value: Int): Int = if (maximum == Constraints.Infinity) {
+    maximum
+} else {
+    clamp(maximum + value, 0, Constraints.Infinity)
+}
+
+// The constraints with `horizontal` added to each width bound and `vertical` to each height
+// bound, at least 0, unbounded maximums staying unbounded.
+public fun Constraints.offset(horizontal: Int = 0, vertical: Int = 0): Constraints = Constraints(
+    clamp(minWidth + horizontal, 0, Constraints.Infinity),
+    offsetMaximum(maxWidth, horizontal),
+    clamp(minHeight + vertical, 0, Constraints.Infinity),
+    offsetMaximum(maxHeight, vertical),
+)
+
+// These constraints with the bounds given replaced.
+public fun Constraints.copy(
+    minWidth: Int = this.minWidth,
+    maxWidth: Int = this.maxWidth,
+    minHeight: Int = this.minHeight,
+    maxHeight: Int = this.maxHeight,
+): Constraints = Constraints(minWidth, maxWidth, minHeight, maxHeight)
+
+// A child of a layout, which its parent's measure policy measures once. Compose's `Measurable`.
+public struct Measurable : Copy { package val node: Int }
+
+// A measured child, of its measured size, which its parent's measure policy places in its
+// placement block. Compose's `Placeable`.
+public struct Placeable : Copy {
+    package val node: Int
+    val width: Int
+    val height: Int
+}
+
+// The receiver of a measure policy, which gives it `layout`. Compose's `MeasureScope`.
+public struct MeasureScope : Copy { package val node: Int }
+
+// The receiver of a placement block, which gives it `place`. Compose's `PlacementScope`.
+public struct PlacementScope : Copy { package val node: Int }
+
+// What a measure policy returns: the size `layout` gave its node. Compose's `MeasureResult`.
+public struct MeasureResult : Copy {
+    val width: Int
+    val height: Int
+    package val node: Int
+}
+
+// Measures this child under `constraints` and gives its placeable: once per measurement of its
+// parent, from its parent's measure policy only.
+public fun Measurable.measure(constraints: Constraints): Placeable = prism_ui_measure(
+    node,
+    constraints,
+)
+
+// Gives the node's content the size `width` × `height`, clamped into its constraints, and runs
+// `placementBlock` at once to place the children measured in this measurement.
+public fun MeasureScope.layout(
+    width: Int,
+    height: Int,
+    placementBlock: PlacementScope.() -> Unit,
+): MeasureResult {
+    prism_ui_begin_placement(node, width, height)
+    placementBlock(PlacementScope(node))
+    prism_ui_end_placement(node)
+    return MeasureResult(width, height, node)
+}
+
+// Places this child with its top-left corner at `(x, y)` from the content's top-left corner.
+context(scope: PlacementScope)
+public fun Placeable.place(x: Int, y: Int): Unit = prism_ui_place(scope.node, node, x, y)
+
+// Places this child at `(x, y)`, mirrored in a right-to-left layout, which Prism does not have
+// yet: as `place`.
+context(scope: PlacementScope)
+public fun Placeable.placeRelative(x: Int, y: Int): Unit = prism_ui_place(scope.node, node, x, y)
+
+// This size in pixels: a logical pixel is a pixel of layout.
+context(scope: MeasureScope)
+public fun Dp.roundToPx(): Int = value
+
+// A child's data for the toolkit's layouts: the first `weight` of its chain (0.0 for none)
+// with its `fill`, and the code of its first `align` (-1 for none).
+package struct ParentData : Copy {
+    val weight: Double
+    val alignment: Int
+    val fill: Bool
+}
+
+// This child's data for the toolkit's layouts.
+package val Measurable.parentData: ParentData get() = prism_ui_parent_data(node)
+
+// The placeable of this child, measured in the running measurement of its parent: what the
+// toolkit's layouts place without keeping a list of placeables.
+package fun Measurable.measured(): Placeable = prism_ui_measured(node)
+
+// A node group of `kind` whose content `measurePolicy` measures: `update` receives its node on
+// every pass after its policy and modifier are set, then `content` composes its children.
+@ExplicitGroupsComposable
+package compose fun LayoutNode(
+    kind: Int,
+    measurePolicy: attached MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult,
+    modifier: Modifier,
+    update: (NodeId) -> Unit,
+    content: compose () -> Unit,
+): Unit {
+    val policy = prism_ui_register_measure_policy(measurePolicy)
+    Node(
+        kind,
+        { node ->
+            prism_ui_set_measure_policy(node.word, policy)
+            prism_ui_set_modifier(node.word, modifier)
+            update(node)
+        },
+    ) {
+        content()
+    }
+}
+
+// A node group of `kind` without children, measured by `measurePolicy`.
+@ExplicitGroupsComposable
+package compose fun LeafLayoutNode(
+    kind: Int,
+    measurePolicy: attached MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult,
+    modifier: Modifier,
+    update: (NodeId) -> Unit,
+): Unit {
+    val policy = prism_ui_register_measure_policy(measurePolicy)
+    LeafNode(kind) { node ->
+        prism_ui_set_measure_policy(node.word, policy)
+        prism_ui_set_modifier(node.word, modifier)
+        update(node)
+    }
+}
+
+// A layout of `content`'s children, which `measurePolicy` measures and places: Compose's
+// `Layout`. The policy measures each child at most once with `measure`, then calls `layout`
+// with the content's size, whose block places the children; a child it does not place is not
+// shown.
+public compose fun Layout(
+    content: compose () -> Unit,
+    modifier: Modifier = Modifier,
+    measurePolicy: attached MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult,
+): Unit {
+    LayoutNode(layoutKind, measurePolicy, modifier, { node -> }, content)
+}
+
+// Measures a child of the running measure policy's node.
+private external fun prism_ui_measure(node: Int, constraints: Constraints): Placeable
+
+// The placeable of a child measured by the running measure policy.
+private external fun prism_ui_measured(node: Int): Placeable
+
+// Starts `layout`'s placement block in the measurement of `node`.
+private external fun prism_ui_begin_placement(node: Int, width: Int, height: Int)
+
+// Ends `layout`'s placement block.
+private external fun prism_ui_end_placement(node: Int)
+
+// Places a child of `parent` at `(x, y)` from its content's top-left corner.
+private external fun prism_ui_place(parent: Int, child: Int, x: Int, y: Int)
+
+// A child's data for the toolkit's layouts.
+private external fun prism_ui_parent_data(node: Int): ParentData
 
 // Runs an app of composable content.
 private external fun prism_ui_run_app(

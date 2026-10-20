@@ -58,6 +58,16 @@ pub const SHARED_HANDLER: UiError =
     misuse("a handler that owns captures that are not Copy was given to two nodes");
 pub const HANDLER_OF_ANOTHER_TYPE: UiError =
     misuse("a handler of another type was given to a modifier");
+pub const MEASURED_OUTSIDE: UiError =
+    misuse("a measurable was measured outside its parent's measure policy");
+pub const MEASURED_TWICE: UiError = misuse("a measurable was measured twice in one measurement");
+pub const INVALID_CONSTRAINTS: UiError =
+    misuse("invalid constraints: a minimum is negative or above its maximum");
+pub const LAYOUT_TWICE: UiError = misuse("layout was called twice in one measurement");
+pub const LAYOUT_OUTSIDE: UiError = misuse("layout was called outside its node's measurement");
+pub const PLACED_OUTSIDE: UiError = misuse("a placeable was placed outside its parent's placement");
+pub const NO_LAYOUT: UiError = misuse("a measure policy returned without calling layout");
+pub const NO_POLICY: UiError = misuse("a layout node has no measure policy");
 
 /// The misuse for a node kind no composable has.
 pub fn unknown_kind(kind: i64) -> UiError {

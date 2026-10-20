@@ -1,0 +1,16 @@
+// expect: E4034
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/collections
+import /prism/core
+
+compose fun Screen() {
+    Layout(content = { Text("a") }) { measurables, constraints ->
+        val a = measurables[0].measure(constraints)
+        a.place(0, 0)
+        layout(a.width, a.height) { }
+    }
+}
