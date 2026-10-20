@@ -1,0 +1,57 @@
+module main
+struct main::Item @2:1
+  field 0 var count: Int
+struct main::Bag @3:1
+  field 0 var items: List<Item>
+fun main::Bag.get(this, index: Int): &Item @5:1
+  local %0 this: &Bag (receiver)
+  local %1 index: Int (parameter)
+  borrow (written): &Item @5:43
+    index: Item @5:44
+      base: field 0 items: List<Item> @5:44
+        deref: Bag @5:44
+          local %0 this: &Bag @5:44
+      index: local %1 index: Int @5:50
+fun main::Bag.get#mut(mut this, index: Int): &mut Item @6:1
+  local %0 this: &mut Bag (receiver)
+  local %1 index: Int (parameter)
+  borrow mut (written): &mut Item @6:51
+    index: Item @6:56
+      base: field 0 items: List<Item> @6:56
+        deref: Bag @6:56
+          local %0 this: &mut Bag @6:56
+      index: local %1 index: Int @6:62
+fun main::f(b: &mut Bag): Int @8:1
+  local %0 b: &mut Bag (parameter)
+  local %1 r: &Item (val)
+  block: Int @8:25
+    assign @9:5
+      target: field 0 count: Int @9:5
+        deref: Item @9:5
+          temporary: &mut Item @9:5
+            call operator [] main::Bag.get#mut: &mut Item @9:5
+              receiver: borrow mut (receiver): &mut Bag @9:5
+                deref: Bag @9:5
+                  local %0 b: &mut Bag @9:5
+              argument index: literal 0: Int @9:7
+      value: literal 1: Int @9:18
+    let %1 r @10:5
+      borrow (written): &Item @10:20
+        deref: Item @10:21
+          temporary: &Item @10:21
+            call operator [] main::Bag.get: &Item @10:21
+              receiver: borrow (receiver): &Bag @10:21
+                deref: Bag @10:21
+                  local %0 b: &mut Bag @10:21
+              argument index: literal 1: Int @10:23
+    tail: coerce diverge: Int @11:5
+      return: Nothing @11:5
+        copy: Int @11:12
+          field 0 count: Int @11:12
+            deref: Item @11:12
+              temporary: &Item @11:12
+                call operator [] main::Bag.get: &Item @11:12
+                  receiver: borrow (receiver): &Bag @11:12
+                    deref: Bag @11:12
+                      local %0 b: &mut Bag @11:12
+                  argument index: literal 2: Int @11:14

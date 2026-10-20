@@ -1,0 +1,6 @@
+// expect: ok
+struct User { val id: Int }
+
+operator fun User.equals(other: &User): Bool = id == other.id
+
+fun f(a: &User, b: &User): Bool = a == b

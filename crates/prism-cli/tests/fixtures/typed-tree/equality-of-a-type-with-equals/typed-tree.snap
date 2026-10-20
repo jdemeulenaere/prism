@@ -1,0 +1,21 @@
+module main
+struct main::User @2:1
+  field 0 val id: Int
+fun main::User.equals(this, other: &User): Bool @4:1
+  local %0 this: &User (receiver)
+  local %1 other: &User (parameter)
+  binary ==: Bool @4:48
+    field 0 id: Int @4:48
+      deref: User @4:48
+        local %0 this: &User @4:48
+    field 0 id: Int @4:54
+      deref: User @4:54
+        local %1 other: &User @4:54
+fun main::f(a: &User, b: &User): Bool @6:1
+  local %0 a: &User (parameter)
+  local %1 b: &User (parameter)
+  binary ==: Bool @6:35
+    deref: User @6:35
+      local %0 a: &User @6:35
+    deref: User @6:40
+      local %1 b: &User @6:40

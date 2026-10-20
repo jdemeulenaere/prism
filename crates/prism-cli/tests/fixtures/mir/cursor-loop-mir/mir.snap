@@ -1,0 +1,125 @@
+module main
+fun main::Bag.iterator(_1: &Bag): Int @5:1
+  local _0: Int (return)
+  local _1 this: &Bag (argument)
+  bb0:
+    _0 = const 0 @5:36
+    return @5:1
+fun main::Bag.hasNext(_1: &Bag, _2: &Int): Bool @6:1
+  local _0: Bool (return)
+  local _1 this: &Bag (argument)
+  local _2 cursor: &Int (argument)
+  local _3: Int (temporary)
+  local _4: Int (temporary)
+  local _5: &List<Item> (temporary)
+  bb0:
+    storage_live _3 @6:48
+    _3 = copy (*_2) @6:48
+    storage_live _4 @6:57
+    storage_live _5 @6:57
+    _5 = &(*_1).items (receiver) @6:57
+    _4 = call builtin size<main::Item>(move _5) -> bb1 @6:57
+  bb1:
+    _0 = move _3 < move _4 @6:48
+    storage_dead _5 @6:48
+    storage_dead _4 @6:48
+    storage_dead _3 @6:48
+    return @6:1
+fun main::Bag.next(_1: &Bag, _2: &mut Int): &Item @7:1
+  local _0: &Item (return)
+  local _1 this: &Bag (argument)
+  local _2 cursor: &mut Int (argument)
+  local _3 i: Int (user)
+  local _4: Int (temporary)
+  local _5: Int (temporary)
+  bb0:
+    storage_live _3 @8:5
+    _3 = copy (*_2) @8:18
+    storage_live _4 @9:15
+    _4 = copy _3 + const 1 @9:15
+    (*_2) = move _4 @9:6
+    storage_dead _4 @9:5
+    storage_live _5 @10:19
+    _5 = copy _3 @10:19
+    _0 = &(*_1).items[_5] (written) @10:12
+    storage_dead _5 @10:5
+    storage_dead _3 @10:5
+    return @7:1
+fun main::f(_1: &Bag): Unit @13:1
+  local _0: Unit (return)
+  local _1 b: &Bag (argument)
+  local _2: &Bag (temporary)
+  local _3: Int (temporary)
+  local _4: &Bag (temporary)
+  local _5: Bool (temporary)
+  local _6: &Bag (temporary)
+  local _7: &Int (temporary)
+  local _8 item: &Item (user)
+  local _9: &Bag (temporary)
+  local _10: &mut Int (temporary)
+  local _11: Bool (temporary)
+  local _12: &String (temporary)
+  local _13: String (temporary)
+  local _14: &String (temporary)
+  bb0:
+    storage_live _2 @14:5
+    _2 = &(*_1) (iteration) @14:18
+    storage_live _3 @14:5
+    storage_live _4 @14:5
+    _4 = &(*_2) (receiver) @14:5
+    _3 = call main::Bag.iterator(move _4) -> bb1 @14:5
+  bb1:
+    goto -> bb2 @14:5
+  bb2:
+    storage_live _5 @14:5
+    storage_live _6 @14:5
+    _6 = &(*_2) (receiver) @14:5
+    storage_live _7 @14:5
+    _7 = &_3 (argument) @14:5
+    _5 = call main::Bag.hasNext(move _6, move _7) -> bb3 @14:5
+  bb3:
+    storage_dead _7 @14:5
+    storage_dead _6 @14:5
+    switch move _5 [0 -> bb5, otherwise -> bb4] @14:5
+  bb4:
+    storage_dead _5 @14:5
+    storage_live _8 @14:5
+    storage_live _9 @14:5
+    _9 = &(*_2) (receiver) @14:5
+    storage_live _10 @14:5
+    _10 = &mut _3 (argument) @14:5
+    _8 = call main::Bag.next(move _9, move _10) -> bb6 @14:5
+  bb5:
+    storage_dead _5 @14:5
+    storage_dead _4 @14:5
+    storage_dead _3 @14:5
+    storage_dead _2 @14:5
+    _0 = const () @13:16
+    return @13:1
+  bb6:
+    storage_live _11 @15:13
+    storage_live _12 @15:13
+    _12 = &(*_8).name (operator) @15:13
+    storage_live _13 @15:26
+    _13 = const "x" @15:26
+    storage_live _14 @15:26
+    _14 = &_13 (operator) @15:26
+    _11 = move _12 == move _14 @15:13
+    storage_dead _14 @15:13
+    drop _13 -> bb7 @15:13
+  bb7:
+    storage_dead _13 @15:13
+    storage_dead _12 @15:13
+    switch move _11 [0 -> bb9, otherwise -> bb8] @15:13
+  bb8:
+    storage_dead _11 @15:13
+    storage_dead _10 @15:31
+    storage_dead _9 @15:31
+    storage_dead _8 @15:31
+    goto -> bb2 @15:31
+  bb9:
+    storage_dead _11 @15:13
+    storage_dead _10 @16:5
+    storage_dead _9 @16:5
+    storage_dead _8 @16:5
+    goto -> bb2 @14:5

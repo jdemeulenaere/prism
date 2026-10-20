@@ -1,0 +1,9 @@
+// expect: ok
+struct Vector2 : Copy { val x: Int }
+
+operator fun Vector2.plus(other: Vector2): Vector2 = other
+
+fun f(v: Vector2) {
+    var t = v
+    t += v
+}

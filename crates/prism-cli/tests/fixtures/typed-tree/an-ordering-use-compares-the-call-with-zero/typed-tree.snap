@@ -1,0 +1,23 @@
+module main
+struct main::Version : Copy @2:1
+  field 0 val major: Int
+fun main::Version.compareTo(this, other: &Version): Int @4:1
+  local %0 this: &Version (receiver)
+  local %1 other: &Version (parameter)
+  binary -: Int @4:56
+    field 0 major: Int @4:56
+      deref: Version @4:56
+        local %0 this: &Version @4:56
+    field 0 major: Int @4:64
+      deref: Version @4:64
+        local %1 other: &Version @4:64
+fun main::f(a: Version, b: Version): Bool @6:1
+  local %0 a: Version (parameter)
+  local %1 b: Version (parameter)
+  binary <: Bool @6:39
+    call operator < main::Version.compareTo: Int @6:39
+      receiver: borrow (receiver): &Version @6:39
+        local %0 a: Version @6:39
+      argument other: borrow (argument): &Version @6:43
+        local %1 b: Version @6:43
+    literal 0: Int @6:39

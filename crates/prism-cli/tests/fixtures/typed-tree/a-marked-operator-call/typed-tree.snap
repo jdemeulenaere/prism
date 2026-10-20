@@ -1,0 +1,16 @@
+module main
+struct main::Vector2 : Copy @2:1
+  field 0 val x: Int
+fun main::Vector2.plus(this, other: Vector2): Vector2 @4:1
+  local %0 this: &Vector2 (receiver)
+  local %1 other: Vector2 (parameter)
+  copy: Vector2 @4:54
+    local %1 other: Vector2 @4:54
+fun main::f(a: Vector2, b: Vector2): Vector2 @6:1
+  local %0 a: Vector2 (parameter)
+  local %1 b: Vector2 (parameter)
+  call operator + main::Vector2.plus: Vector2 @6:42
+    receiver: borrow (receiver): &Vector2 @6:42
+      local %0 a: Vector2 @6:42
+    argument other: copy: Vector2 @6:46
+      local %1 b: Vector2 @6:46

@@ -1,0 +1,40 @@
+module main
+fun main::Text.plus(_1: Text, _2: &Text): Text @4:1
+  local _0: Text (return)
+  local _1 this: Text (argument)
+  local _2 other: &Text (argument)
+  local _3: String (temporary)
+  local _4: &String (temporary)
+  local _5: &String (temporary)
+  bb0:
+    storage_live _3 @4:61
+    storage_live _4 @4:61
+    _4 = &_1.s (operator) @4:61
+    storage_live _5 @4:65
+    _5 = &(*_2).s (operator) @4:65
+    _3 = move _4 + move _5 @4:61
+    _0 = struct main::Text(move _3) @4:56
+    storage_dead _5 @4:56
+    storage_dead _4 @4:56
+    storage_dead _3 @4:56
+    drop _1 -> bb1 @4:1
+  bb1:
+    return @4:1
+fun main::g(_1: &Text): Text @6:1
+  local _0: Text (return)
+  local _1 t: &Text (argument)
+  local _2 a: Text (user, var)
+  local _3: Text (temporary)
+  bb0:
+    storage_live _2 @7:5
+    _2 = struct main::Text(const "x") @7:13
+    storage_live _3 @8:5
+    _3 = call main::Text.plus(move _2, copy _1) -> bb1 @8:5
+  bb1:
+    _2 = move _3 @8:5
+    storage_dead _3 @8:5
+    _0 = move _2 @9:12
+    drop _2 -> bb2 @9:5
+  bb2:
+    storage_dead _2 @9:5
+    return @6:1

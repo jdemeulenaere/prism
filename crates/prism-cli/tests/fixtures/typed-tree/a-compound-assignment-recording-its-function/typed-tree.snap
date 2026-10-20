@@ -1,0 +1,19 @@
+module main
+struct main::Vector2 : Copy @2:1
+  field 0 val x: Int
+fun main::Vector2.plus(this, other: Vector2): Vector2 @4:1
+  local %0 this: &Vector2 (receiver)
+  local %1 other: Vector2 (parameter)
+  copy: Vector2 @4:54
+    local %1 other: Vector2 @4:54
+fun main::f(v: Vector2): Unit @6:1
+  local %0 v: Vector2 (parameter)
+  local %1 t: Vector2 (var)
+  block: Unit @6:19
+    let %1 t @7:5
+      copy: Vector2 @7:13
+        local %0 v: Vector2 @7:13
+    compound-assign + through main::Vector2.plus @8:5
+      target: local %1 t: Vector2 @8:5
+      value: copy: Vector2 @8:10
+        local %0 v: Vector2 @8:10

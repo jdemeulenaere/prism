@@ -1,0 +1,52 @@
+module main
+struct main::Item @2:1
+  field 0 val name: String
+struct main::Bag @3:1
+  field 0 var items: List<Item>
+fun main::Bag.iterator(this): Int @5:1
+  local %0 this: &Bag (receiver)
+  literal 0: Int @5:36
+fun main::Bag.hasNext(this, cursor: &Int): Bool @6:1
+  local %0 this: &Bag (receiver)
+  local %1 cursor: &Int (parameter)
+  binary <: Bool @6:48
+    deref: Int @6:48
+      local %1 cursor: &Int @6:48
+    call builtin size<Item>: Int @6:57
+      receiver: borrow (receiver): &List<Item> @6:57
+        field 0 items: List<Item> @6:57
+          deref: Bag @6:57
+            local %0 this: &Bag @6:57
+fun main::Bag.next(this, cursor: &mut Int): &Item @7:1
+  local %0 this: &Bag (receiver)
+  local %1 cursor: &mut Int (parameter)
+  local %2 i: Int (val)
+  block: &Item @7:48
+    let %2 i @8:5
+      copy: Int @8:18
+        deref: Int @8:18
+          local %1 cursor: &mut Int @8:18
+    assign @9:5
+      target: deref: Int @9:6
+        local %1 cursor: &mut Int @9:6
+      value: binary +: Int @9:15
+        local %2 i: Int @9:15
+        literal 1: Int @9:19
+    tail: coerce diverge: &Item @10:5
+      return: Nothing @10:5
+        borrow (written): &Item @10:12
+          index: Item @10:13
+            base: field 0 items: List<Item> @10:13
+              deref: Bag @10:13
+                local %0 this: &Bag @10:13
+            index: local %2 i: Int @10:19
+fun main::f(b: &Bag): Unit @13:1
+  local %0 b: &Bag (parameter)
+  local %1 item: &Item (for)
+  block: Unit @13:16
+    for #0 %1 item @14:5
+      cursor Int: iterator main::Bag.iterator, hasNext main::Bag.hasNext, next main::Bag.next, element &Item
+      iterable: borrow (iteration): &Bag @14:18
+        deref: Bag @14:18
+          local %0 b: &Bag @14:18
+      body: block: Unit @14:21
