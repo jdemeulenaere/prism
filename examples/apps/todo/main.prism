@@ -4,8 +4,8 @@
 // under `prism run --watch examples/apps/todo/main.prism`.
 package apps.todo
 
-import screen
 import /prism/compose/ui
+import screen
 
 fun main() {
     runApp(title = "Todo", width = 480, height = 640) { TodoApp() }

@@ -8,7 +8,8 @@ use prism_lexer::TokenKind;
 /// An item of the top-level list.
 enum TopLevelItem<'a> {
     Package(&'a PackageDecl),
-    Import(&'a ImportDecl),
+    /// An import, printed at the place (the span) of the import that sorts there.
+    Import(&'a ImportDecl, Span),
     Declaration(&'a Declaration),
 }
 
@@ -16,10 +17,21 @@ impl TopLevelItem<'_> {
     fn span(&self) -> Span {
         match self {
             TopLevelItem::Package(package) => package.span,
-            TopLevelItem::Import(import) => import.span,
+            TopLevelItem::Import(_, place) => *place,
             TopLevelItem::Declaration(declaration) => declaration.span(),
         }
     }
+}
+
+/// The text an import is printed and sorted by: its path, with a leading `/` when it is
+/// root-anchored, so root-anchored imports sort before sibling ones (D9 of
+/// `explicit-library`).
+pub(crate) fn import_text(import: &ImportDecl) -> String {
+    format!(
+        "{}{}",
+        if import.is_root { "/" } else { "" },
+        import.path.join("/")
+    )
 }
 
 impl<'a> Printer<'a> {
@@ -28,7 +40,19 @@ impl<'a> Printer<'a> {
         if let Some(package) = &file.package {
             items.push(TopLevelItem::Package(package));
         }
-        items.extend(file.imports.iter().map(TopLevelItem::Import));
+        // The imports sorted by path, each printed at the place of the import that sorts there,
+        // unless a comment lies among them, which keeps them as written so that no comment
+        // moves relative to code (D9 of `explicit-library`).
+        let mut imports: Vec<&ImportDecl> = file.imports.iter().collect();
+        if !self.comment_among_imports(&file.imports) {
+            imports.sort_by_cached_key(|import| import_text(import));
+        }
+        items.extend(
+            imports
+                .into_iter()
+                .zip(&file.imports)
+                .map(|(import, place)| TopLevelItem::Import(import, place.span)),
+        );
         items.extend(file.declarations.iter().map(TopLevelItem::Declaration));
         // One blank line after the package declaration, after the last import, and between
         // two declarations unless both are top-level `val`s (D8).
@@ -36,8 +60,8 @@ impl<'a> Printer<'a> {
             .map(|index| match (&items[index], items.get(index + 1)) {
                 (_, None) => false,
                 (TopLevelItem::Package(_), _) => true,
-                (TopLevelItem::Import(_), Some(TopLevelItem::Import(_))) => false,
-                (TopLevelItem::Import(_), _) => true,
+                (TopLevelItem::Import(..), Some(TopLevelItem::Import(..))) => false,
+                (TopLevelItem::Import(..), _) => true,
                 (
                     TopLevelItem::Declaration(Declaration::Var(_)),
                     Some(TopLevelItem::Declaration(Declaration::Var(_))),
@@ -53,17 +77,27 @@ impl<'a> Printer<'a> {
                 TopLevelItem::Package(package) => {
                     text(format!("package {}", package.path.join(".")))
                 }
-                TopLevelItem::Import(import) => text(format!(
-                    "import {}{}",
-                    if import.is_root { "/" } else { "" },
-                    import.path.join("/")
-                )),
+                TopLevelItem::Import(import, _) => text(format!("import {}", import_text(import))),
                 TopLevelItem::Declaration(declaration) => printer.declaration(declaration),
             },
             source_length,
             |index| blank_after[index],
         )
         .unwrap_or(Document::Empty)
+    }
+
+    /// Whether a comment starts between the first import's start and the end of the last
+    /// import's line.
+    fn comment_among_imports(&self, imports: &[ImportDecl]) -> bool {
+        let (Some(first), Some(last)) = (imports.first(), imports.last()) else {
+            return false;
+        };
+        let line_end = self.source[last.span.end..]
+            .find('\n')
+            .map_or(self.source.len(), |offset| last.span.end + offset);
+        self.comments
+            .iter()
+            .any(|comment| comment.span.start >= first.span.start && comment.span.start < line_end)
     }
 
     fn declaration(&mut self, declaration: &Declaration) -> Document {

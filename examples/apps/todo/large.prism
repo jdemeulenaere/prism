@@ -3,9 +3,9 @@
 // `crates/prism-cli/tests/app_frame_timing.rs` headless.
 package apps.todo
 
+import /prism/compose/ui
 import model
 import screen
-import /prism/compose/ui
 
 // The screen over 1,000 items.
 compose fun LargeTodoApp() {

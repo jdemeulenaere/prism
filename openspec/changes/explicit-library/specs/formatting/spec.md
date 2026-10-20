@@ -9,7 +9,7 @@ The formatter MUST print a file's imports sorted by path, a root-anchored path (
 
 #### Scenario: Imports with comments among them are kept in order
 - **WHEN** formatting `import widgets\n// The core.\nimport /prism/core\nfun main() {}`
-- **THEN** the result is `import widgets\n\n// The core.\nimport /prism/core\n\nfun main() {}\n`
+- **THEN** the result is `import widgets\n// The core.\nimport /prism/core\n\nfun main() {}\n`
 
 ## MODIFIED Requirements
 

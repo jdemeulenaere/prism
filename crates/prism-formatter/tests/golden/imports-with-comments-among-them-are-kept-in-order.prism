@@ -1,0 +1,4 @@
+import widgets
+// The core.
+import /prism/core
+fun main() {}

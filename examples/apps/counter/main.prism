@@ -5,9 +5,9 @@
 // reload under `prism run --watch examples/apps/counter/main.prism`.
 package apps.counter
 
-import /prism/compose/ui
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/compose/ui
 
 compose fun Counter() {
     val count = remember { mutableStateOf(0) }

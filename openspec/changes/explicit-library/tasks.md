@@ -19,8 +19,8 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 4. Sorted imports (D9)
 
-- [ ] 4.1 In `crates/prism-formatter/src/printer/declarations.rs`, sort the imports by their printed path (`/` and the segments joined by `/`, a stable sort) unless a comment lies between the first import's start and the last import's end, in which case keep the written order. In `verify.rs`, compare the input's and output's imports as lists sorted the same way, so the verification still catches any other difference. Add golden tests under `crates/prism-formatter/tests/golden/` and `formatting/` fixtures for "Imports sorted by path" and "Imports with comments among them are kept in order"; re-bless the goldens whose imports reorder, reading each diff. Verify with `cargo test -p prism-formatter` and `cargo test -p prism-cli --test fmt_cli_tests`.
-- [ ] 4.2 Run `cargo run -q -p prism-cli -- fmt examples/` and read the diff (imports reorder only). Commit ("Implement explicit-library: sorted imports").
+- [x] 4.1 In `crates/prism-formatter/src/printer/declarations.rs`, sort the imports by their printed path (`/` and the segments joined by `/`, a stable sort) unless a comment lies between the first import's start and the last import's end, in which case keep the written order. In `verify.rs`, compare the input's and output's imports as lists sorted the same way, so the verification still catches any other difference. Add golden tests under `crates/prism-formatter/tests/golden/` and `formatting/` fixtures for "Imports sorted by path" and "Imports with comments among them are kept in order"; re-bless the goldens whose imports reorder, reading each diff. Verify with `cargo test -p prism-formatter` and `cargo test -p prism-cli --test fmt_cli_tests`.
+- [x] 4.2 Run `cargo run -q -p prism-cli -- fmt examples/` and read the diff (imports reorder only). Commit ("Implement explicit-library: sorted imports").
 
 ## 5. No prelude, the member scope and the migration (D1 to D4, D7, D10, D11)
 

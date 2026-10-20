@@ -6,7 +6,7 @@
 //! members, statements, branches, parameters, arguments) place the comments before, after and
 //! between their items; any other comment is printed before the next node that starts after it.
 
-mod declarations;
+pub(crate) mod declarations;
 mod expressions;
 mod statements;
 

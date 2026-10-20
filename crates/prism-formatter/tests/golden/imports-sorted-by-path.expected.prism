@@ -1,0 +1,8 @@
+package app
+
+import /app/model
+import /prism/collections
+import /prism/core
+import widgets
+
+fun main() {}

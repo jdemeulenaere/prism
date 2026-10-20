@@ -5,9 +5,9 @@
 // is Material 3's baseline light scheme, a value until composition locals exist.
 package prism.compose
 
-import ui
 import foundation
 import layout
+import ui
 
 // The colours of the Material theme that the components use.
 public struct ColorScheme : Copy {

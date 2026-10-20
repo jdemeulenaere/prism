@@ -16,6 +16,12 @@ pub(crate) fn same_meaning(
     let mut after = reparsed.file.clone();
     erase_file(&mut before);
     erase_file(&mut after);
+    // Import order has no meaning, and the formatter sorts imports (D9 of `explicit-library`):
+    // compare them as lists sorted the same way, so any other difference still shows.
+    for file in [&mut before, &mut after] {
+        file.imports
+            .sort_by_cached_key(crate::printer::declarations::import_text);
+    }
     if before != after {
         return Err(
             "the formatted source parses to a different syntax tree; the input was left unchanged"
