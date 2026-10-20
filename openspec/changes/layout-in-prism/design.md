@@ -32,6 +32,17 @@ The `ui` block "Layout and Drawing After a Reload" is modified here on `layout-p
 - `App::settle` lays out again, up to eight times, while a layout's policies invalidated scopes (its D24).
 - At archive, the main text of "Constraint Layout in Logical Pixels" and "Dumping the Laid-Out Tree" was shortened under 500 characters, with the same rules.
 
+**Baseline update (task 1.1, reconciled on `0aad5be8`, 2026-10-20).** `vararg`, `core-library-in-prism`, `field-visibility`, `compose-library-in-prism` and `layout-primitive` are archived.
+
+- The MODIFIED block "Layout and Drawing After a Reload" is the main text as `layout-primitive` left it, with "or holding a `layout` modifier" added and both of its scenarios kept unchanged; `openspec validate layout-in-prism --strict` is clean, with no INFO lines.
+- Names as landed:
+  - the measurement is `measure`, `start`, `start_full`, `complete` and `finish` over a `Fold` in `crates/prism-ui/src/layout.rs`, whose `Frame` stack lives in `LayoutState` (`state.layout`);
+  - `ChainEntry { element, bounds }` (`node.rs`), `ModifierMirror`, `ElementMirror` and `Element` (`modifier.rs`), `HandlerKind` (`handlers.rs`), `prism_ui_run_app` (`entry.rs`), `App::reload_point` with `UiTree::mark_policies_for_measure` (`app.rs`, `tree.rs`);
+  - the Rust policies of `test_support.rs` (`policy`, `counting_policy`, `probe_policy`, `first_only_policy`) call `layout::measure_child`, `begin_placement`, `place`, `end_placement` and `measured`;
+  - in `ui.prism`, `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope` and `MeasureResult` are `Copy` structs over a `package val node: Int`, and the containers of `layout.prism` call `prism_ui_measure`, `prism_ui_measured` and `prism_ui_place` directly (`layout-primitive` D25).
+- The decoded chain skips `None` elements and unknown tags, so an element's index (D5) is its index in the node's chain, not in the Prism `Modifier`.
+- Sizes and paddings are clamped to `MAX_EXTENT` when decoded (`layout-primitive` D23); D11 below uses that.
+
 **Current state**, once `layout-primitive` has landed:
 
 - `Context::measure` (`crates/prism-ui/src/layout.rs`) folds a node's chain in two loops over at most 16 elements:
@@ -225,6 +236,22 @@ The native `Padding`, `Size`, `DefaultMinSize` and `FillMax` arms are removed fr
   - `ui_timing`'s ratios;
 - the paced toggle and typing sessions' `layout` medians may grow by at most 0.05 ms over this change's baseline;
 - the resize session's `layout` median may grow by at most 1.5×.
+
+**Baseline (task 1.2)**, on `0aad5be8`, an idle Apple M4 Pro and a release build:
+
+| Measurement | Median | p99 |
+|---|---|---|
+| counter, click then frame: `frame` | 0.004 ms | 0.005 ms |
+| todo of 1,000, paced toggle: `layout` / `recomposition` / `frame` | 0.006 / 0.138 / 1.925 ms | 0.007 / 0.187 / 2.245 ms |
+| todo of 1,000, paced typing: `layout` / `recomposition` / `frame` | 0.002 / 1.565 / 2.507 ms | 0.007 / 1.925 / 2.867 ms |
+| todo of 1,000, resize: `layout` | 0.528 ms (2.98× the native 0.177 ms) | 0.586 ms |
+| todo of 1,000, resize: allocations after the first frame | none in 100 of 101 frames | |
+| todo app's first frame, cold / warm | 42.853 / 4.173 ms | |
+| `ui_timing`, full layout of 10,000 nodes (Rust policies) | 0.546 ms (1.11× the native 0.493 ms) | |
+| `ui_timing`, layout growth per ×10 | 3.93, 12.56 | |
+| `ui_run_timing`, a click in an app of 1,000 texts | 0.235 ms | |
+
+So the budgets are: resize `layout` median at most 0.79 ms, paced toggle and typing `layout` medians at most 0.056 and 0.052 ms.
 
 ### D10. A step must place the rest of its chain (autonomous)
 

@@ -10,7 +10,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
 
 ## 1. Reconcile and baseline
 
-- [ ] 1.1 Check that `layout-primitive` and the packets it depends on are archived, and stop if one is not.
+- [x] 1.1 Check that `layout-primitive` and the packets it depends on are archived, and stop if one is not.
   - Re-read the main `ui` and `example-apps` specs.
   - Rebase the MODIFIED block "Layout and Drawing After a Reload" on the main text as `layout-primitive` left it, keeping every scenario.
   - Check the names the tasks use, as `layout-primitive` landed them:
@@ -20,7 +20,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
     - `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope` and `MeasureResult` in `library/prism/compose/ui.prism`, and `runApp`.
   - Get `openspec validate layout-in-prism --strict` clean with no INFO lines.
   - Record the reconciliation as a "Baseline update" paragraph in `design.md`.
-- [ ] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D9) the medians and 99th percentiles of:
+- [x] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D9) the medians and 99th percentiles of:
   - `cargo test --release -p prism-cli --test app_frame_timing -- --ignored --nocapture`, which has `layout-primitive`'s resize session;
   - `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-ui --test ui_timing -- --ignored --nocapture`;
   - `--test ui_run_timing -- --ignored --nocapture`.
