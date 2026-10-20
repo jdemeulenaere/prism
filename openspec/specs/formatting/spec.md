@@ -309,6 +309,13 @@ The formatter MUST print a file's imports sorted by path, a root-anchored path (
 - **WHEN** `prism fmt -` reads `public  operator mut fun Bag.get( index :Int ):&mut Item = &mut items[index]`, `val c = m[ 1,2 ]` and `val b = x  !in xs`
 - **THEN** it writes `public operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]`, `val c = m[1, 2]` and `val b = x !in xs`
 
+### Requirement: Vararg Parameters and Spread Arguments Are Printed
+The formatter MUST print `vararg` and one space before a vararg parameter's name, and `*` directly before a spread argument's expression, after `name = ` when the argument is named.
+
+#### Scenario: Vararg and spread formatted
+- **WHEN** formatting `fun f( vararg   xs:Int,last:Int=0):Int=g(  *  xs)+h(items= * xs)`
+- **THEN** the result is `fun f(vararg xs: Int, last: Int = 0): Int = g(*xs) + h(items = *xs)`
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):

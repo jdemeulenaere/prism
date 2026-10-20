@@ -290,7 +290,7 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 - **THEN** the declaration parses
 
 ### Requirement: Contextual Keyword Identifier Permissibility
-`attached`, `capture`, `compose`, `consuming`, `context`, `escaping`, `external` and `intrinsic` MUST be contextual modifiers, usable as identifiers in member access and parameter declarations. `capture` and `consuming` are ones only directly before `fun`; `context`, `external` and `intrinsic` only at a top-level declaration's start, `context` directly before `(`; `attached` and `escaping` only at a parameter type's start. Elsewhere each is a name, `attached` and `escaping` also type names.
+`attached`, `capture`, `compose`, `consuming`, `context`, `escaping`, `external`, `intrinsic` and `vararg` MUST be contextual modifiers. `capture` and `consuming` are ones only directly before `fun`; `context`, `external` and `intrinsic` only at a top-level declaration's start, `context` directly before `(`; `attached` and `escaping` only at a parameter type's start; `vararg` only before a parameter's name. Elsewhere each is a name, `attached`, `escaping` and `vararg` also type names.
 
 #### Scenario: Member access on compose identifier
 - **WHEN** code accesses a property or method named compose (`pipeline.compose(step)`)
@@ -319,6 +319,10 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 #### Scenario: attached and capture as identifiers
 - **WHEN** parsing `fun attached(attached: Int): Int = attached`, `fun f(x: attached, capture: Int) {}`, `fun g() { val capture = 1; h(attached = capture) }` and `x.capture()`
 - **THEN** each `attached` and `capture` parses as a function, parameter, variable, argument, member or type name, not as a modifier
+
+#### Scenario: vararg as an identifier
+- **WHEN** parsing `fun vararg(vararg: Int): Int = vararg`, `fun f(vararg vararg: Int) {}`, `fun g(x: vararg) {}`, `fun h() { val vararg = 1; k(vararg = vararg) }` and `x.vararg()`
+- **THEN** each `vararg` parses as a function, parameter, variable, argument, member or type name, except the first `vararg` of `f`, which is the modifier of the parameter `vararg`
 
 ### Requirement: Braces Are Closures in Expression Position
 A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST declare no parameters, and the syntax tree MUST record whether a closure has a header, so that the empty header `{ -> body }` stays distinct from no header. Every closure body MUST be a block.
@@ -561,7 +565,7 @@ A struct or enum declaration MUST accept an optional marker, `: Copy` or `: Clon
 - **THEN** both declarations parse
 
 ### Requirement: Writing Through a Reference
-An assignment target MAY start with one or more prefix `*` operators followed by an operand parsed at prefix precedence, so postfix operators bind tighter (`*r.x = 1` is `*(r.x) = 1`). A `*` that starts any other expression MUST be rejected with `E2001`, with a message saying that `*` is only allowed on the left of `=` and that reads through references are implicit. A newline before `*` MUST end the previous expression.
+An assignment target MAY start with one or more prefix `*` operators followed by an operand parsed at prefix precedence, so postfix operators bind tighter (`*r.x = 1` is `*(r.x) = 1`). A `*` that starts any other expression, except a spread argument ("Spread Arguments"), MUST be rejected with `E2001`, with a message saying that `*` is only allowed on the left of `=` and that reads through references are implicit. A newline before `*` MUST end the previous expression.
 
 #### Scenario: Write-through statement
 - **WHEN** parsing the statements `*r = 5`, `**rr = 0` and `*pick(&mut a, &mut b) = 1`
@@ -580,7 +584,7 @@ An assignment target MAY start with one or more prefix `*` operators followed by
 - **THEN** each body is an assignment through `r`
 
 #### Scenario: Prefix star outside an assignment target rejected
-- **WHEN** a `*` starts an expression that is not an assignment target (`val x = *r`, `g(*r)`, `return *r`, `(*r).x = 1`, or the statement `*r` with no `=`)
+- **WHEN** a `*` starts an expression that is neither an assignment target nor an argument (`val x = *r`, `return *r`, `(*r).x = 1`, `g((*r))`, or the statement `*r` with no `=`)
 - **THEN** the parser reports `E2001` at the `*`, saying that `*` writes through a reference only on the left of `=` and that reads through references are implicit
 
 #### Scenario: Multiplication unchanged
@@ -892,6 +896,24 @@ An index expression MUST hold one or more comma-separated index expressions, `a[
 - **WHEN** parsing `fun f(m: M): Int = m[]`
 - **THEN** the parser reports `E2001` at `]`
 
+### Requirement: Vararg Parameter Modifier
+A parameter of a `fun` declaration MAY be written with `vararg` before its name (`vararg elements: T`), the written type being the element type. A second `vararg` parameter in one declaration, a default value on one, `escaping` or `attached` in its type, and `vararg` on a struct's constructor field, a closure parameter, a context parameter or a parameter in a function type MUST each be rejected with `E2001`.
+
+#### Scenario: Vararg parameters
+- **WHEN** parsing `fun sum(vararg xs: Int): Int = 0`, `public fun <T> listOf(vararg elements: T): List<T> = elements`, `fun Builder.items(vararg names: String, separator: String = ", ") {}` and `compose fun Row(vararg labels: String) {}`
+- **THEN** `xs`, `elements`, `names` and `labels` are vararg parameters with the element types `Int`, `T`, `String` and `String`, and `separator` is an ordinary parameter after the vararg
+
+#### Scenario: Misplaced vararg rejected
+- **WHEN** parsing `fun a(vararg x: Int, vararg y: Int) {}`, `fun b(vararg x: Int = 1) {}`, `fun c(vararg f: escaping () -> Unit) {}`, `struct S(vararg xs: Int)`, `fun d(f: (vararg Int) -> Unit) {}` or `fun e() { val g = { vararg x -> x } }`
+- **THEN** the parser reports `E2001` for each, the first saying that a function has at most one vararg parameter and the second that a vararg's default is the empty list
+
+### Requirement: Spread Arguments
+An argument of a call MAY start with `*`, after its name when it is named, marking a spread argument whose expression follows (`sum(*numbers)`, `listOf(elements = *xs)`, `f(1, *a.items())`). Which spreads a call accepts is the rule of `vararg-parameters`. A `*` after an expression in an argument MUST stay multiplication.
+
+#### Scenario: Spread arguments parse
+- **WHEN** parsing `sum(*numbers)`, `listOf(elements = *xs)`, `f(1, *a.items())` and `f(a * b, a *b)`
+- **THEN** the first three have one spread argument each, of the expressions `numbers`, `xs` and `a.items()`, and the last has two multiplications as arguments
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -992,3 +1014,7 @@ Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed wit
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **`operator`, membership operators and index lists** (D5, D8, D9). `operator` is a contextual modifier after visibility and `external`/`intrinsic`; `in` and `!in` bind between `?:` and comparisons and are non-associative, as Kotlin's named checks; `!in` is one token unless an identifier character follows; an index holds one or more indices (`m[r, c]`).
+
+Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 2026-10-20; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the rules themselves are in `vararg-parameters`):
+
+- **`vararg` and spreads** (D1, D5, D9). `vararg` is a contextual modifier before a parameter's name, on `fun` parameters only, so it stays a name elsewhere; a spread is `*` at an argument's start, after `name =` when named, which was `E2001` before, so neither form changes the meaning of an existing program. Misplaced varargs (a second one, a default, `escaping` or `attached`, struct fields, closure, context and function-type parameters) are `E2001`.

@@ -558,7 +558,7 @@ A list whose capacity is 0, or whose element type is zero-sized, MUST own no mem
 - **THEN** it prints `3` and makes no allocation
 
 ### Requirement: Lists Grow by Doubling
-`listOf` with `n` arguments MUST allocate a buffer of capacity exactly `n`, or none for `n = 0`. An `add` or `insert` on a full list MUST first grow it to twice its capacity, or to 4 from 0, moving the elements bitwise through the runtime, so `add` takes amortized constant time; otherwise `add` MUST write in place without calling the runtime. `removeAt`, `removeLast` and `clear` MUST keep the capacity. A buffer size that does not fit in a machine word MUST be the runtime error "out of memory".
+A vararg's list of `n` elements (`listOf`'s among them) MUST have capacity exactly `n`, and no buffer for `n = 0`. A full list's `add` or `insert` MUST first grow it to twice its capacity, or to 4 from 0, moving elements bitwise through the runtime, so `add` takes amortized constant time; otherwise `add` MUST write in place without calling the runtime. `removeAt`, `removeLast` and `clear` MUST keep the capacity. A buffer size beyond a machine word MUST be the runtime error "out of memory".
 
 #### Scenario: Growing during a million adds
 - **WHEN** `fun main() { var xs = listOf<Int>(); for (i in 0..<1000000) xs.add(i); var sum = 0; for (x in xs) sum += x; println(sum) }` runs with `--check-allocations`

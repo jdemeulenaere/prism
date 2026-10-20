@@ -73,7 +73,6 @@ An `intrinsic fun` or `intrinsic val` MUST declare, without a body, a function o
 ### Requirement: Intrinsic Calls Are Typed by Their Signatures
 A call of an intrinsic MUST be checked as a call of its declared signature, except for those the catalog types by a rule:
 - `print` and `println` (`fun <T> print(value: &T)`) take an argument with a text form (type-system, "Output Built-In Arguments"), and `println` also none;
-- `listOf` (`fun <T> listOf(element: T): List<T>`) takes any number of elements;
 - `contains` and `indexOf` of `List<T>` also need `==` on `T`;
 - `remember` also takes keys ("Remember Takes Up to Three Keys").
 
@@ -82,8 +81,8 @@ A call of an intrinsic MUST be checked as a call of its declared signature, exce
 - **THEN** the type checker emits `E4004`, since `isEmpty` is declared with no parameter
 
 #### Scenario: A rule-typed intrinsic
-- **WHEN** `fun f() { println(); println(1); val xs = listOf(1, 2, 3) }` is checked
-- **THEN** the file typechecks, although `println` and `listOf` are declared with one parameter
+- **WHEN** `fun f() { println(); println(1) }` is checked
+- **THEN** the file typechecks, although `println` is declared with one parameter
 
 ### Requirement: Remember Takes Up to Three Keys
 A call of `remember` (`fun <T> remember(calculation: () -> T): T`, whose result the catalog types as a copy of a `Copy` `T` and as a shared borrow of any other `T`) MUST also accept up to three keys before the calculation, each typed by a type parameter of its own bounded by `Copy` and borrow-free (compose, "Remembering With Keys").
@@ -290,11 +289,15 @@ A scenario of these specifications whose program uses a library function, extens
 - **THEN** its fixture declares `import /prism/collections` and `import /prism/core`, and prints `2`
 
 ### Requirement: The Collections Module Declares Lists and Their Helpers
-`/prism/collections` MUST declare, as public intrinsics, `listOf` and the members of `List<T>` (collections, "List Members Are Typed as Extensions", "Mutating Members", "Size and Indices Are Read Without Parentheses"), and, as public Prism functions, the higher-order helpers (collections, "Higher-Order Helpers").
+`/prism/collections` MUST declare, as public intrinsics, the members of `List<T>` (collections, "List Members Are Typed as Extensions", "Mutating Members", "Size and Indices Are Read Without Parentheses"), and, as public Prism functions, `listOf` (collections, "Lists Are Built With listOf") and the higher-order helpers (collections, "Higher-Order Helpers").
 
 #### Scenario: Helpers are imported
 - **WHEN** `import /prism/collections`, `import /prism/core` and `fun main() { val xs = listOf(1, 2, 3); println(xs.map { x -> x * 2 }.sumOf { x -> x }) }` run
 - **THEN** it prints `12`
+
+#### Scenario: listOf is written in Prism
+- **WHEN** `cargo test -p prism-cli --test library_tests` checks the library, and `prism dump-typed-tree` runs on a file declaring `import /prism/collections` and `fun f(): List<Int> = listOf(1, 2)`
+- **THEN** `library/prism/collections.prism` declares `public fun <T> listOf(vararg elements: T): List<T> = elements` and passes its checks, the intrinsic catalog has no `listOf`, and the body of `f` is a call of `prism/collections::listOf<Int>` whose argument is a call of `builtin varargList<Int>` with the literals `1` and `2`
 
 ### Requirement: The State Declarations of the Compose Runtime Module
 `/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T>`, `MutableState<T>` and `WeakReference<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the member `update` of `MutableState<T>`, the capture functions `weak` of `State<T>` and of `MutableState<T>`, the member `get` of `WeakReference<T>`, and the composable `SideEffect`.
@@ -376,3 +379,7 @@ Decisions from `explicit-library` (review item A4, agreed with the user on 2026-
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **Intrinsic operators** (D8). The catalog records whether an intrinsic is an operator, and a declaration whose `operator` flag differs is `E4029`; `List<T>.contains` is the only one, serving `in` and `!in`.
+
+Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 2026-10-20; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the rules themselves are in `vararg-parameters`):
+
+- **`listOf` leaves the catalog** (D10, D11). `/prism/collections` declares `listOf` in Prism with a `vararg`, so its typing rule and catalog entry are gone. `print`, `println`, `remember` and `key` stay rule-typed: they take arguments of different types (Kotlin's `Any?`), which a homogeneous vararg cannot type.

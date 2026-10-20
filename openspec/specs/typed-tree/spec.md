@@ -464,6 +464,13 @@ A `for` loop over a cursor MUST record the iteration as a cursor loop naming its
 - **WHEN** the `Bag` cursor protocol of `operators` is declared and `fun f(b: &Bag) { for (item in b) {} }` is checked
 - **THEN** the loop iterates by cursor through a shared borrow of the dereferenced binding `b` whose origin is the loop, naming `iterator`, `hasNext` and `next` of `Bag`, the cursor type `Int`, and binds `item` of type `&Item`
 
+### Requirement: Vararg Arguments Are List Constructions
+A call's argument for a vararg parameter MUST be a call of the built-in `varargList` holding the elements in source order, with the element type as its type argument and type `List<E>`, or the spread's operand, consumed. Its evaluation order MUST place the vararg at its first element's position, or, with no element, after the written arguments before it. `prism dump-typed-tree` MUST print the construction as `call builtin varargList<E>`.
+
+#### Scenario: Vararg arguments in the typed tree
+- **WHEN** `fun sum(vararg xs: Int): Int = xs.size` is declared and `prism dump-typed-tree` runs on `fun f(ys: List<Int>): Int = sum(1, 2) + sum() + sum(*ys)`
+- **THEN** the first call of `main::sum` has one argument, `call builtin varargList<Int>: List<Int>` with the literals `1` and `2`; the second has a `varargList` call with no argument; and the third has the move of `ys`
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
