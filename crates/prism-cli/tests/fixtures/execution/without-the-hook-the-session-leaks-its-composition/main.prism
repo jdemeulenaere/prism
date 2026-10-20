@@ -1,0 +1,9 @@
+// expect: ok
+// run: 102
+import /prism/core
+import /prism/composer
+
+
+struct Session { val id: Int }
+fun open(): Session = Session(startComposition { k -> })
+fun main() { val a = open(); println("done") }

@@ -400,6 +400,18 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// E4036: A call of a drop hook by name (`s.drop()`), through any reference, box or `?.`
+    /// (D3 of `drop-and-clone-hooks`): the value would be dropped again where its scope ends.
+    DropHookCalled { type_name: String, span: Span },
+
+    /// E4017: A pattern or destructuring declaration that moves a part out of a value whose
+    /// type has a drop hook, which would skip the hook (D5 of `drop-and-clone-hooks`).
+    TakeApartWithDropHook {
+        type_name: String,
+        help: String,
+        span: Span,
+    },
+
     /// E4027: A generic function reaches a call of itself, or a generic struct or enum reaches
     /// itself through its fields or payloads, with a type argument that nests its own type
     /// parameter in another type, so it would need infinitely many instances (D8 and D9 of
@@ -671,6 +683,8 @@ impl TypeError {
             TypeError::NoTextForm { .. } => "E4026",
             TypeError::InvalidLibraryDeclaration { .. } => "E4029",
             TypeError::InvalidOperatorDeclaration { .. } => "E4035",
+            TypeError::DropHookCalled { .. } => "E4036",
+            TypeError::TakeApartWithDropHook { .. } => "E4017",
             TypeError::MissingOperatorFunction { .. } => "E4002",
             TypeError::PolymorphicRecursion { .. } => "E4027",
             TypeError::CannotCaptureByValue { .. } => "E4028",
@@ -730,6 +744,8 @@ impl TypeError {
             TypeError::NoTextForm { span, .. } => *span,
             TypeError::InvalidLibraryDeclaration { span, .. } => *span,
             TypeError::InvalidOperatorDeclaration { span, .. } => *span,
+            TypeError::DropHookCalled { span, .. } => *span,
+            TypeError::TakeApartWithDropHook { span, .. } => *span,
             TypeError::MissingOperatorFunction { span, .. } => *span,
             TypeError::PolymorphicRecursion { span, .. } => *span,
             TypeError::CannotCaptureByValue { span, .. } => *span,
@@ -956,6 +972,14 @@ impl TypeError {
             }
             TypeError::InvalidLibraryDeclaration { message, .. } => message.clone(),
             TypeError::InvalidOperatorDeclaration { message, .. } => message.clone(),
+            TypeError::DropHookCalled { type_name, .. } => format!(
+                "the drop hook of '{}' cannot be called by name: it runs where the value is dropped, and the value would be dropped again",
+                type_name
+            ),
+            TypeError::TakeApartWithDropHook { type_name, .. } => format!(
+                "cannot take apart a value of '{}': '{}' has a drop hook, which runs on the whole value, so its parts cannot be moved out",
+                type_name, type_name
+            ),
             TypeError::MissingOperatorFunction { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),

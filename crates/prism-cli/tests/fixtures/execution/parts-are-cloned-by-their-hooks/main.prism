@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/collections
+
+struct Ticket : Clone { val id: Int }
+operator fun Ticket.clone(): Ticket { println("clone " + id.toString()); return Ticket(id + 100) }
+struct Pass : Clone { val ticket: Ticket, val owner: String }
+fun <T : Clone> copyOf(x: &T): T = x.clone()
+fun main() { val p = Pass(Ticket(2), "ada").clone(); println(p.ticket.id); val xs = listOf(Ticket(3), Ticket(4)).clone(); println(xs[1].id); val h = Heap(Ticket(5)).clone(); println(h.id); println(copyOf(&Ticket(6)).id) }

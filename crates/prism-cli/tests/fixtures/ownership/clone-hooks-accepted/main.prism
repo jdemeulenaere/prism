@@ -1,0 +1,7 @@
+// expect: ok
+import /prism/core
+
+struct Ticket : Clone { val id: Int }
+operator fun Ticket.clone(): Ticket = Ticket(id + 100)
+struct Owned<T> : Clone { val v: T }
+operator fun <T : Clone> Owned<T>.clone(): Owned<T> = Owned(v.clone())

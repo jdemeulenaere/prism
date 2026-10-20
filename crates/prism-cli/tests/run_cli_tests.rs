@@ -2703,3 +2703,56 @@ fn list_search_calling_equals() {
     );
     assert!(!glue.contains("prism_rt_string_equals"), "{}", glue);
 }
+
+// --- Drop and clone hooks (drop-and-clone-hooks)
+
+/// code-generation: "Drop glue calls the hook through its slot".
+#[test]
+fn drop_glue_calls_the_hook_through_its_slot() {
+    let directory = single_file(
+        "drop_hook_slot",
+        "struct Session { val id: Int, val name: String }\noperator mut fun Session.drop() {}\nfun f(s: Session) {}\n",
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let glue = function_ir(&dump, "main#drop(main::Session)");
+    let slot = glue
+        .find("symbol %\"main::main.Session.drop#slot\"")
+        .unwrap_or_else(|| panic!("no hook slot in\n{}", glue));
+    let hook = glue
+        .find("call_indirect")
+        .unwrap_or_else(|| panic!("no hook call in\n{}", glue));
+    let string = glue
+        .find("call fn2(")
+        .unwrap_or_else(|| panic!("no string drop in\n{}", glue));
+    assert!(glue.contains("fn2 = %\"prism_rt_string_drop\""), "{}", glue);
+    assert!(slot < hook && hook < string, "{}", glue);
+    let f = function_ir(&dump, "main::f");
+    assert!(f.contains("%\"main#drop(main::Session)\""), "{}", f);
+    assert!(!f.contains("call_indirect"), "{}", f);
+}
+
+/// code-generation: "An importer's glue calls the hook of an imported type".
+#[test]
+fn an_importer_s_glue_calls_the_hook_of_an_imported_type() {
+    let directory = temporary_directory("importer_hook_glue");
+    write(
+        &directory.join("lib/net.prism"),
+        "package lib\npublic struct Session(val id: Int)\noperator mut fun Session.drop() {}\n",
+    );
+    write(
+        &directory.join("app/main.prism"),
+        "package app\nimport /lib/net\nfun f(s: Session) {}\n",
+    );
+    let output = prism(&["dump-clif", "app/main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let glue = function_ir(&dump, "app/main#drop(lib/net::Session)");
+    assert!(
+        glue.contains("symbol %\"lib/net::lib/net.Session.drop#slot\""),
+        "{}",
+        glue
+    );
+    assert!(glue.contains("call_indirect"), "{}", glue);
+}

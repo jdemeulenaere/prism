@@ -656,6 +656,15 @@ impl Codec for TypeTable {
         for id in equality {
             id.encode(encoder);
         }
+        for hooks in [
+            self.drop_hook_types().collect::<Vec<_>>(),
+            self.clone_hook_types().collect(),
+        ] {
+            encoder.length(hooks.len());
+            for id in hooks {
+                id.encode(encoder);
+            }
+        }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         let length = decoder.sequence_length()?;
@@ -691,6 +700,14 @@ impl Codec for TypeTable {
         let equality = decoder.sequence_length()?;
         for _ in 0..equality {
             table.insert_equality_operator(decoder.decode()?);
+        }
+        let drop_hooks = decoder.sequence_length()?;
+        for _ in 0..drop_hooks {
+            table.insert_drop_hook(decoder.decode()?);
+        }
+        let clone_hooks = decoder.sequence_length()?;
+        for _ in 0..clone_hooks {
+            table.insert_clone_hook(decoder.decode()?);
         }
         Some(table)
     }

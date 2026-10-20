@@ -1,19 +1,19 @@
 ## ADDED Requirements
 
 ### Requirement: Glue Calls Hooks Through the Function Table
-Drop and clone glue MUST call a type's hook as a call of a Prism function: through the slot of the hook's symbol (`<module>::<Type>.drop` or `<module>::<Type>.clone`, an instance's symbol for a generic type), never directly, whether the glue belongs to the type's own unit, an importer's or an instance's. Glue MUST run no user code other than hooks.
+Drop and clone glue MUST call a type's hook as a call of a Prism function: through the slot of the hook's symbol, an extension's (`main::main.Session.drop`, its receiver named with its module) or, for a generic type, an instance's (`main::main.Owned.clone<String>`), never directly, whether the glue belongs to the type's own unit, an importer's or an instance's. Glue MUST run no user code other than hooks.
 
 #### Scenario: Drop glue calls the hook through its slot
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct Session { val id: Int, val name: String }`, `operator mut fun Session.drop() {}` and `fun f(s: Session) {}`
-- **THEN** it prints `function main#drop(main::Session)`, which loads the slot of `main::Session.drop` and calls it with the value's address before calling the runtime's string drop for `name`, and `f` calls `main#drop(main::Session)` directly
+- **THEN** it prints `function main#drop(main::Session)`, which loads the slot of `main::main.Session.drop` and calls it with the value's address before calling the runtime's string drop for `name`, and `f` calls `main#drop(main::Session)` directly
 
 #### Scenario: An importer's glue calls the hook of an imported type
 - **WHEN** `lib/net.prism` declares `public struct Session(val id: Int)` and `operator mut fun Session.drop() {}`, and `app/main.prism` imports `/lib/net` and declares `fun f(s: Session) {}`
-- **THEN** `prism dump-clif app/main.prism` prints `app/main#drop(lib/net::Session)`, which calls `lib/net::Session.drop` through its slot
+- **THEN** `prism dump-clif app/main.prism` prints `app/main#drop(lib/net::Session)`, which calls `lib/net::lib/net.Session.drop` through its slot
 
 #### Scenario: Clone glue calls a generic type's clone hook instance
 - **WHEN** a file declares `struct Owned<T> : Clone { val v: T }`, `operator fun <T : Clone> Owned<T>.clone(): Owned<T> = Owned(v.clone())` and `fun f(o: &Owned<String>): Owned<String> = o.clone()`
-- **THEN** `prism dump-clif --instances main.prism` prints `main#clone(main::Owned<String>)`, which calls the instance `main::Owned.clone<String>` through its slot, and the instance's unit
+- **THEN** `prism dump-clif --instances main.prism` prints `main#clone(main::Owned<String>)`, which calls the instance `main::main.Owned.clone<String>` through its slot, and the instance's unit
 
 ## MODIFIED Requirements
 

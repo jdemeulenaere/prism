@@ -1,0 +1,3 @@
+// expect: E4035
+struct Pair<A, B>(val a: A, val b: B)
+operator mut fun <A> Pair<A, Int>.drop() {}

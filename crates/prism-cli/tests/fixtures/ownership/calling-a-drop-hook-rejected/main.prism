@@ -1,0 +1,5 @@
+// expect: E4036
+struct Session { val id: Int }
+operator mut fun Session.drop() {}
+fun f(s: Session) { var t = s; t.drop() }
+fun g(h: &mut Heap<Session>) { h.drop() }

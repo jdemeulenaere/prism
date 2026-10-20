@@ -1,0 +1,3 @@
+package lib
+
+public struct Session(val id: Int)

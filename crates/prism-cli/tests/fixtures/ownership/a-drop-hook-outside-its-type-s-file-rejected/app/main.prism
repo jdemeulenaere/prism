@@ -1,0 +1,7 @@
+// expect: E4035
+// entry: app/main.prism
+package app
+
+import /lib/net
+
+operator mut fun Session.drop() {}

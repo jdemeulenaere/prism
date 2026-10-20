@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+struct Handle { val id: Int }
+operator mut fun Handle.drop() { println(id) }
+struct Pair { val a: Handle, val n: Int }
+fun main() { val p = Pair(Handle(4), 1) }

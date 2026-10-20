@@ -1,0 +1,3 @@
+// expect: E4035
+struct Ticket : Clone { val id: Int }
+operator mut fun Ticket.clone(): Ticket = Ticket(id)

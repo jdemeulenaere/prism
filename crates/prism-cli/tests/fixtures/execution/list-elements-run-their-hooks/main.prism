@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/collections
+
+struct Noisy { val name: String }
+operator mut fun Noisy.drop() { println("drop " + name) }
+fun main() { var xs = listOf(Noisy("1"), Noisy("2"), Noisy("3")); xs[0] = Noisy("4"); val second = xs.removeAt(1); println("end") }

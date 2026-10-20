@@ -1,0 +1,5 @@
+// expect: ok
+fun <T> drop(x: T) {}
+struct Token { val id: Int }
+mut fun Token.drop() {}
+fun f(t: Token) { var u = t; u.drop(); drop(u) }

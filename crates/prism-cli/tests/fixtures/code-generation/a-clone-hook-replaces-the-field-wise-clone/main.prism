@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+struct Tag : Clone { val name: String, val id: Int }
+operator fun Tag.clone(): Tag = Tag("copy of " + name, id + 1)
+struct Labeled : Clone { val tag: Tag, val n: Int }
+fun main() { val a = Labeled(Tag(1.toString(), 1), 5); val b = a.clone(); println(b.tag.name); println(b.tag.id); println(b.n) }

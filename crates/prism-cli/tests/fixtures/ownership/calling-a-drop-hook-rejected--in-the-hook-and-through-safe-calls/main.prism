@@ -1,0 +1,4 @@
+// expect: E4036
+struct Session { val id: Int }
+operator mut fun Session.drop() { this.drop() }
+fun f(s: &mut Session?) { s?.drop() }

@@ -1,0 +1,5 @@
+// expect: ok
+fun open(): Int = 1
+struct Session : Clone { val id: Int }
+operator mut fun Session.drop() {}
+operator fun Session.clone(): Session = Session(open())

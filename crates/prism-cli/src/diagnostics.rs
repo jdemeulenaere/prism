@@ -477,8 +477,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::UnboundPatternName { name, .. } => {
             out.push_str(&format!("   = help: to bind it, write 'val {}'\n", name));
         }
-        TypeError::CannotTakeApart { help, .. } => {
+        TypeError::CannotTakeApart { help, .. } | TypeError::TakeApartWithDropHook { help, .. } => {
             out.push_str(&format!("   = help: {}\n", help));
+        }
+        TypeError::DropHookCalled { .. } => {
+            out.push_str("   = help: a value is dropped where its owner's scope ends; to drop it earlier, move it into a function or a block that ends\n");
         }
         TypeError::CompoundAssignmentOfStateValue {
             handle,

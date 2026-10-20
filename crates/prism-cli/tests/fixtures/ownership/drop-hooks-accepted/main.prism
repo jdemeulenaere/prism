@@ -1,0 +1,9 @@
+// expect: ok
+import /prism/core
+
+struct Session { val id: Int }
+operator mut fun Session.drop() { println(id) }
+enum Slot { Full(String), Empty }
+operator mut fun Slot.drop() {}
+struct Owned<T>(val v: T)
+operator mut fun <T> Owned<T>.drop() {}

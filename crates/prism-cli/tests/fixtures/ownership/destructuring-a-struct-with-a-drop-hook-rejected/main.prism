@@ -1,0 +1,4 @@
+// expect: E4017
+struct Named { val name: String, val id: Int }
+operator mut fun Named.drop() {}
+fun f(n: Named): String { val (name) = n; return name }

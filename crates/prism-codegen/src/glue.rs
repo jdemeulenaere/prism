@@ -39,8 +39,14 @@
 //! glue of the types its bodies drop, clone and compare through boxes or beyond the inline
 //! budget, and of the parts those reach, as functions local to the unit and called directly, never through the function table:
 //! a unit's code depends only on its own MIR, and instances of generic types get glue where they
-//! are used. Glue is queued when first asked for and lowered after the unit's bodies. It runs no
-//! user code. It checks the stack on entry, as bodies do, raising "stack overflow" without a
+//! are used. Glue is queued when first asked for and lowered after the unit's bodies. It runs
+//! user code only through hooks (D9 of `drop-and-clone-hooks`): the drop glue of a struct or
+//! enum with a drop hook calls the hook first, with the value's address, then drops the parts;
+//! the clone glue of one with a clone hook calls it with the destination's and the source's
+//! addresses instead of cloning field by field. Hooks are called through the slots of their
+//! symbols, as Prism functions are, so a hook's body is never part of the glue that calls it. A
+//! type that owns no storage but reaches a hook through its fields, payloads or nullables has glue
+//! too ([`needs_glue`]). Glue checks the stack on entry, as bodies do, raising "stack overflow" without a
 //! location when a structure is deeper than the stack allows.
 
 use crate::equality::Compared;
@@ -113,6 +119,19 @@ fn owns_storage_at(ty: &Type, types: &TypeTable, depth: usize) -> bool {
         | Type::Opaque(_)
         | Type::Error => false,
     }
+}
+
+/// Whether values of `ty` need glue of `kind`: drop glue when they own storage or reach a drop
+/// hook, clone glue when they own storage or reach a clone hook (D9 of `drop-and-clone-hooks`),
+/// and any other glue when they own storage. A type that needs no drop glue drops by running no
+/// code, and one that needs no clone glue clones by a bitwise copy.
+pub fn needs_glue(kind: GlueKind, ty: &Type, types: &TypeTable) -> bool {
+    owns_storage(ty, types)
+        || match kind {
+            GlueKind::Drop => types.reaches_drop_hook(ty),
+            GlueKind::Clone => types.reaches_clone_hook(ty),
+            GlueKind::Equals | GlueKind::IndexOf | GlueKind::Identity => false,
+        }
 }
 
 /// What glue does: drop a value, clone one, or compare two.
@@ -249,11 +268,11 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
 }
 
 impl<M: Module> UnitContext<'_, M> {
-    /// The glue of `kind` for `ty`, or `None` when `ty` owns no storage, so that its drop does
-    /// nothing and its clone is a copy. A generated function is declared, and queued for
+    /// The glue of `kind` for `ty`, or `None` when `ty` needs none ([`needs_glue`]), so that its
+    /// drop does nothing and its clone is a copy. A generated function is declared, and queued for
     /// lowering, the first time it is asked for.
     pub fn glue(&mut self, kind: GlueKind, ty: &Type) -> Result<Option<Glue>, BackendError> {
-        if !owns_storage(ty, &self.file.types) {
+        if !needs_glue(kind, ty, &self.file.types) {
             return Ok(None);
         }
         if *ty == Type::String {
@@ -603,6 +622,20 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             }
             (GlueKind::Clone, Type::Heap(contents)) => {
                 lowering.clone_box(contents, parameters[0], parameters[1])?
+            }
+            // A type's drop hook runs first, then its parts are dropped (D2 and D9 of
+            // `drop-and-clone-hooks`).
+            (GlueKind::Drop, Type::Struct { id, arguments } | Type::Enum { id, arguments })
+                if lowering.context.file.types.has_drop_hook(id) =>
+            {
+                lowering.call_hook(id, arguments, "drop", &[parameters[0]])?;
+                lowering.drop_parts(ty, &layout, parameters[0])?
+            }
+            // A type's clone hook builds the clone in place of a field-wise one (D6 and D9).
+            (GlueKind::Clone, Type::Struct { id, arguments } | Type::Enum { id, arguments })
+                if lowering.context.file.types.has_clone_hook(id) =>
+            {
+                lowering.call_hook(id, arguments, "clone", &[parameters[0], parameters[1]])?
             }
             (GlueKind::Drop, _) => lowering.drop_parts(ty, &layout, parameters[0])?,
             (GlueKind::Clone, _) => {
@@ -961,7 +994,7 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         let original = self.builder.ins().load(pointer, flags, source, 0);
         let layout = self.layout(contents)?;
         let copy = self.allocate(&layout)?;
-        if owns_storage(contents, &self.context.file.types) {
+        if needs_glue(GlueKind::Clone, contents, &self.context.file.types) {
             self.call_glue(GlueKind::Clone, contents, &[copy, original])?;
         } else if layout.size > 0 {
             self.copy(copy, original, &layout);
@@ -1006,7 +1039,7 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
             .builder
             .ins()
             .load(pointer, flags, destination, pointer_offset);
-        if owns_storage(element, &self.context.file.types) {
+        if needs_glue(GlueKind::Clone, element, &self.context.file.types) {
             let each = begin_element_loop(&mut self.builder, pointer, source, layout.size);
             let offset = self
                 .builder
@@ -1162,6 +1195,39 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         Ok(())
     }
 
+    /// Calls the hook `name` (`drop` or `clone`) of the struct or enum `id` with type arguments
+    /// `arguments` through the slot of its symbol, as every call of a Prism function goes, with
+    /// the glue's own arguments: the value's address for a drop hook, which borrows it mutably;
+    /// the destination's and the source's for a clone hook, which returns its result through
+    /// the first (D9 of `drop-and-clone-hooks`). The symbol is the instance's for a generic
+    /// type, whose instance is planned from the summaries (D11).
+    fn call_hook(
+        &mut self,
+        id: &prism_typed_tree::NominalId,
+        arguments: &[Type],
+        name: &str,
+        call_arguments: &[Value],
+    ) -> Result<(), BackendError> {
+        let symbol = hook_symbol(id, arguments, name);
+        let pointer = self.context.pointer;
+        let slot = self.context.slot(&symbol)?;
+        let global = data_global(self.builder.func, slot);
+        let slot_address = self.builder.ins().symbol_value(pointer, global);
+        let target = self
+            .builder
+            .ins()
+            .load(pointer, MemFlagsData::trusted(), slot_address, 0);
+        let mut signature = ir::Signature::new(self.context.call_conv);
+        for _ in call_arguments {
+            signature.params.push(AbiParam::new(pointer));
+        }
+        let signature = self.builder.import_signature(signature);
+        self.builder
+            .ins()
+            .call_indirect(signature, target, call_arguments);
+        Ok(())
+    }
+
     /// The members whose glue a value of `ty` with `layout` runs, by case: for a struct, its
     /// fields; for an enum, the payloads of each variant, keyed by its index; for a nullable, its
     /// payload when the tag is 1.
@@ -1198,9 +1264,10 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
     }
 
     /// Runs `each` on the members of the value at `address` that its current case holds and that
-    /// own storage, in order.
+    /// need glue of `kind`, in order.
     fn for_owning_parts(
         &mut self,
+        kind: GlueKind,
         ty: &Type,
         layout: &Layout,
         address: Value,
@@ -1209,7 +1276,7 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         let owning = |lowering: &Self, members: Vec<Member>| -> Vec<Member> {
             members
                 .into_iter()
-                .filter(|member| owns_storage(&member.ty, &lowering.context.file.types))
+                .filter(|member| needs_glue(kind, &member.ty, &lowering.context.file.types))
                 .collect()
         };
         match self.parts(ty, layout)? {
@@ -1270,7 +1337,7 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         layout: &Layout,
         address: Value,
     ) -> Result<(), BackendError> {
-        self.for_owning_parts(ty, layout, address, |lowering, member| {
+        self.for_owning_parts(GlueKind::Drop, ty, layout, address, |lowering, member| {
             let part = lowering.add(address, member.offset);
             lowering.call_glue(GlueKind::Drop, &member.ty, &[part])
         })
@@ -1283,12 +1350,24 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         destination: Value,
         source: Value,
     ) -> Result<(), BackendError> {
-        self.for_owning_parts(ty, layout, source, |lowering, member| {
+        self.for_owning_parts(GlueKind::Clone, ty, layout, source, |lowering, member| {
             let to = lowering.add(destination, member.offset);
             let from = lowering.add(source, member.offset);
             lowering.call_glue(GlueKind::Clone, &member.ty, &[to, from])
         })
     }
+}
+
+/// The symbol of the hook `name` (`drop` or `clone`) of the struct or enum `id` for type
+/// arguments `arguments`: the extension's symbol, or its instance's for a generic type (D9 of
+/// `drop-and-clone-hooks`).
+pub fn hook_symbol(id: &prism_typed_tree::NominalId, arguments: &[Type], name: &str) -> String {
+    let receiver = Type::Struct {
+        id: id.clone(),
+        arguments: arguments.to_vec(),
+    };
+    let path = prism_typed_tree::DeclarationPath::extension(id.module.clone(), receiver, name);
+    crate::symbols::instance_symbol(&path, arguments)
 }
 
 /// The members a glue function handles: always, by the value of a tag at offset 0, or the

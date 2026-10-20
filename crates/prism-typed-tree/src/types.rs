@@ -296,6 +296,11 @@ pub struct TypeTable {
     /// The structs and enums with an `equals` operator, which `==` calls wherever their values
     /// are compared (D6 of `operator-conventions`), from their declarations and ABI records.
     equality_operators: std::collections::BTreeSet<NominalId>,
+    /// The structs and enums with a drop hook, which their drop glue calls first, and with a
+    /// clone hook, which their clone glue calls (D10 of `drop-and-clone-hooks`), from their
+    /// declarations and ABI records.
+    drop_hooks: std::collections::BTreeSet<NominalId>,
+    clone_hooks: std::collections::BTreeSet<NominalId>,
 }
 
 /// The position of each member of `definition` by name, the first of a repeated name.
@@ -551,6 +556,12 @@ impl TypeTable {
             if self.equality_operators.contains(&id) {
                 restricted.equality_operators.insert(id.clone());
             }
+            if self.drop_hooks.contains(&id) {
+                restricted.drop_hooks.insert(id.clone());
+            }
+            if self.clone_hooks.contains(&id) {
+                restricted.clone_hooks.insert(id.clone());
+            }
             if let Some(marker) = self.markers.get(&id) {
                 restricted.markers.insert(id, marker.clone());
             }
@@ -597,6 +608,93 @@ impl TypeTable {
         self.equality_operators.iter()
     }
 
+    /// Records that the struct or enum `id` has a drop hook (D10 of `drop-and-clone-hooks`).
+    pub fn insert_drop_hook(&mut self, id: NominalId) {
+        self.drop_hooks.insert(id);
+    }
+
+    /// Records that the struct or enum `id` has a clone hook (D10 of `drop-and-clone-hooks`).
+    pub fn insert_clone_hook(&mut self, id: NominalId) {
+        self.clone_hooks.insert(id);
+    }
+
+    /// Whether the struct or enum `id` has a drop hook. A set lookup.
+    pub fn has_drop_hook(&self, id: &NominalId) -> bool {
+        self.drop_hooks.contains(id)
+    }
+
+    /// Whether the struct or enum `id` has a clone hook. A set lookup.
+    pub fn has_clone_hook(&self, id: &NominalId) -> bool {
+        self.clone_hooks.contains(id)
+    }
+
+    /// The types with a drop hook, in order.
+    pub fn drop_hook_types(&self) -> impl Iterator<Item = &NominalId> {
+        self.drop_hooks.iter()
+    }
+
+    /// The types with a clone hook, in order.
+    pub fn clone_hook_types(&self) -> impl Iterator<Item = &NominalId> {
+        self.clone_hooks.iter()
+    }
+
+    /// Whether dropping a value of `ty` runs a drop hook: `ty` is a struct or enum with one,
+    /// or holds one through its fields or payloads (type arguments substituted), nullables,
+    /// boxes or list elements. Linear in the types reached; constant when the table records no
+    /// drop hook.
+    pub fn reaches_drop_hook(&self, ty: &Type) -> bool {
+        !self.drop_hooks.is_empty() && self.reaches_hook(ty, &self.drop_hooks)
+    }
+
+    /// Whether cloning a value of `ty` runs a clone hook, as [`TypeTable::reaches_drop_hook`]
+    /// says for drop hooks.
+    pub fn reaches_clone_hook(&self, ty: &Type) -> bool {
+        !self.clone_hooks.is_empty() && self.reaches_hook(ty, &self.clone_hooks)
+    }
+
+    fn reaches_hook(&self, ty: &Type, hooks: &std::collections::BTreeSet<NominalId>) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut pending = vec![ty.clone()];
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Type::Nullable(inner) | Type::Heap(inner) | Type::List(inner) => {
+                    pending.push(*inner)
+                }
+                Type::Struct {
+                    ref id,
+                    ref arguments,
+                }
+                | Type::Enum {
+                    ref id,
+                    ref arguments,
+                } => {
+                    if hooks.contains(id) {
+                        return true;
+                    }
+                    if !seen.insert(ty.clone()) {
+                        continue;
+                    }
+                    match self.definitions.get(id) {
+                        Some(TypeDef::Struct { fields, .. }) => pending.extend(
+                            fields
+                                .iter()
+                                .map(|(_, _, field)| field.substitute(arguments)),
+                        ),
+                        Some(TypeDef::Enum { variants, .. }) => pending.extend(
+                            variants
+                                .iter()
+                                .flat_map(|(_, payloads)| payloads)
+                                .map(|payload| payload.substitute(arguments)),
+                        ),
+                        None => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Adds the definitions and markers of `other` that this table does not record. Two tables
     /// of one program never disagree about a type, since a [`NominalId`] is unique in a program
     /// and every definition comes from the same declarations (D5 of `monomorphization`).
@@ -605,6 +703,8 @@ impl TypeTable {
             .extend(other.captured_weakly.iter().cloned());
         self.equality_operators
             .extend(other.equality_operators.iter().cloned());
+        self.drop_hooks.extend(other.drop_hooks.iter().cloned());
+        self.clone_hooks.extend(other.clone_hooks.iter().cloned());
         for (id, definition) in &other.definitions {
             debug_assert!(
                 self.definitions

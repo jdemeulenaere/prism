@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/collections
+
+struct Ticket : Clone { val id: Int }
+operator fun Ticket.clone(): Ticket { println("clone " + id.toString()); return Ticket(id + 100) }
+fun main() { val a = Ticket(1); val b = a.clone(); println(b.id); println(a.id) }

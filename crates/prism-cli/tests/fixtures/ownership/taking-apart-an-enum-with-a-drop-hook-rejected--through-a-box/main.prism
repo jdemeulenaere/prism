@@ -1,0 +1,4 @@
+// expect: E4017
+enum Slot { Full(String), Empty }
+operator mut fun Slot.drop() {}
+fun f(s: Heap<Slot>): String = when (s) { Slot.Full(val t) -> t; Slot.Empty -> "" }

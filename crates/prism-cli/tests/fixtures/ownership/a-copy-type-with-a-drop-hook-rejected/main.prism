@@ -1,0 +1,3 @@
+// expect: E4035
+struct Handle : Copy { val id: Int }
+operator mut fun Handle.drop() {}

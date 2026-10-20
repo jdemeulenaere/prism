@@ -322,7 +322,7 @@ impl<'t> LayoutTable<'t> {
                 Some(CaptureMode::Owned | CaptureMode::Weak)
             );
             if is_owned {
-                needs_drop |= crate::glue::owns_storage(&ty, self.types);
+                needs_drop |= crate::glue::needs_glue(crate::glue::GlueKind::Drop, &ty, self.types);
                 members.push((String::new(), ty));
             } else {
                 members.push((

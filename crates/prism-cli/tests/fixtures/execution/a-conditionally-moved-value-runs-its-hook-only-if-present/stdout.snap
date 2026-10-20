@@ -1,0 +1,5 @@
+consume x
+drop x
+end f
+end f
+drop x

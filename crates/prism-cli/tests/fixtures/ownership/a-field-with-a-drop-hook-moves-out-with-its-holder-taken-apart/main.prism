@@ -1,0 +1,5 @@
+// expect: ok
+struct Session { val id: Int }
+operator mut fun Session.drop() {}
+struct Holder { val session: Session, val tag: Int }
+fun f(h: Holder): Session { val (session) = h; return session }

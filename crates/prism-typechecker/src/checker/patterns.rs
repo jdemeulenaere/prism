@@ -846,7 +846,14 @@ impl TypeChecker {
             }
         };
         if pattern.moves() {
-            self.check_take_apart_source(initializer, "destructure");
+            match self.hooked_type_taken_apart(&pattern) {
+                Some(type_name) => self.errors.push(TypeError::TakeApartWithDropHook {
+                    type_name,
+                    help: format!("destructure a borrow of it instead: '&{}'", initializer),
+                    span: initializer.span,
+                }),
+                None => self.check_take_apart_source(initializer, "destructure"),
+            }
             value = self.as_place(value);
         }
         for binding in &bindings.bound {
@@ -915,6 +922,30 @@ impl TypeChecker {
                     ),
                     span: extra.span,
                 });
+        }
+    }
+
+    /// The name of the first struct or enum with a drop hook that `pattern` takes apart: a
+    /// constructor pattern of it with a part moved out (D5 of `drop-and-clone-hooks`). One set
+    /// lookup per constructor pattern.
+    pub(super) fn hooked_type_taken_apart(&self, pattern: &Pattern) -> Option<String> {
+        match pattern {
+            Pattern::Struct { id, fields, .. }
+            | Pattern::Variant {
+                enum_id: id,
+                fields,
+                ..
+            } => {
+                if self.types.has_drop_hook(id) && fields.iter().any(Pattern::moves) {
+                    Some(id.name.clone())
+                } else {
+                    fields
+                        .iter()
+                        .find_map(|field| self.hooked_type_taken_apart(field))
+                }
+            }
+            Pattern::NonNull(inner) | Pattern::Deref(inner) => self.hooked_type_taken_apart(inner),
+            _ => None,
         }
     }
 

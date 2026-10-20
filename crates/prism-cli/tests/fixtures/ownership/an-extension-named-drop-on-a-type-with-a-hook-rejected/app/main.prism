@@ -1,0 +1,7 @@
+// expect: E4010
+// entry: app/main.prism
+package app
+
+import /lib/net
+
+mut fun Session.drop() {}

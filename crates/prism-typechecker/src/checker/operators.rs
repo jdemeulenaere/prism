@@ -84,7 +84,57 @@ fn served(name: &str) -> &'static str {
 }
 
 /// The names of every convention, for the help of an unknown one.
-const CONVENTION_NAMES: &str = "plus, minus, times, div, rem, unaryMinus, not, compareTo, equals, contains, get, set, invoke, iterator, hasNext, next";
+const CONVENTION_NAMES: &str = "plus, minus, times, div, rem, unaryMinus, not, compareTo, equals, contains, get, set, invoke, iterator, hasNext, next, and the hooks drop and clone";
+
+/// A drop or clone hook (D1 of `drop-and-clone-hooks`): an `operator` extension that the
+/// language calls when a value of its type is dropped or cloned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hook {
+    /// `operator mut fun T.drop()`.
+    Drop,
+    /// `operator fun T.clone(): T`.
+    Clone,
+}
+
+impl Hook {
+    /// The hook a function named `name` would be.
+    pub(crate) fn named(name: &str) -> Option<Hook> {
+        match name {
+            "drop" => Some(Hook::Drop),
+            "clone" => Some(Hook::Clone),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Hook::Drop => "drop",
+            Hook::Clone => "clone",
+        }
+    }
+
+    /// The hook's declaration for a receiver written `receiver`, as diagnostics show it.
+    fn declaration(self, receiver: &str) -> String {
+        match self {
+            Hook::Drop => format!("operator mut fun {}.drop()", receiver),
+            Hook::Clone => format!("operator fun {r}.clone(): {r}", r = receiver),
+        }
+    }
+
+    /// What a hook of this kind is, for a receiver written `receiver`.
+    fn shape(self, receiver: &str) -> String {
+        match self {
+            Hook::Drop => format!(
+                "a drop hook is '{}' declared without a visibility modifier in the file of a struct or enum: a mutable borrow of its value, with no parameter, returning 'Unit'",
+                self.declaration(receiver)
+            ),
+            Hook::Clone => format!(
+                "a clone hook is '{}' declared without a visibility modifier in the file of a 'Clone' struct or enum: a shared borrow of its value, with no parameter, returning the clone",
+                self.declaration(receiver)
+            ),
+        }
+    }
+}
 
 /// The suffix of the extension-table name and declaration path name of a `mut` accessor
 /// (`operator mut fun Bag.get`, `operator mut fun Bag.next`), which a type may declare beside a
@@ -131,6 +181,11 @@ impl TypeChecker {
             });
             false
         };
+        // Drop and clone hooks are conventions of their type, with their own rules (D3 of
+        // `drop-and-clone-hooks`).
+        if let Some(hook) = Hook::named(&f.name) {
+            return self.check_hook_declaration(f, receiver, hook);
+        }
         let Some(receiver_ty) = receiver else {
             return report(
                 self,
@@ -299,6 +354,9 @@ impl TypeChecker {
     /// `set` returns `Unit`, `iterator` a cursor holding no reference, and a `mut` `get` or
     /// `next` a mutable borrow. Gives whether it is valid.
     pub(super) fn check_operator_result(&mut self, f: &FunctionDecl, result: &Type) -> bool {
+        if let Some(hook) = Hook::named(&f.name) {
+            return self.check_hook_result(f, hook, result);
+        }
         let Some(convention) = convention(&f.name) else {
             return true;
         };
@@ -414,6 +472,260 @@ impl TypeChecker {
             return false;
         }
         true
+    }
+
+    /// Reports `E4035` when the drop or clone hook `f` breaks the rules of D3, D4 and D6 of
+    /// `drop-and-clone-hooks`: an extension of a struct or enum of this file that is not
+    /// intrinsic, without a visibility modifier, `compose`, context or default values, with a
+    /// `mut` receiver for `drop` and a shared one for `clone`, no parameter, the type's own type
+    /// parameters in order (unbounded, or bounded by `Clone` for a marker parameter of a clone
+    /// hook) and the result `Unit` or the type; no drop hook on a `Copy` type, a clone hook beside
+    /// the drop hook of a `Clone` type, and clone hooks only on `Clone` types that are not `Copy`.
+    /// A fixed amount of work. Gives whether the declaration is valid.
+    fn check_hook_declaration(
+        &mut self,
+        f: &FunctionDecl,
+        receiver: Option<&Type>,
+        hook: Hook,
+    ) -> bool {
+        let report = |checker: &mut Self, message: String, help: Option<String>| {
+            checker.errors.push(TypeError::InvalidOperatorDeclaration {
+                message,
+                help,
+                span: f.span,
+            });
+            false
+        };
+        // The receiver as written in the type's own file (`Pair<A, B>`), or `T`.
+        let written = |checker: &Self, ty: Option<&Type>| -> String {
+            match ty {
+                Some(Type::Struct { id, .. } | Type::Enum { id, .. }) => {
+                    let parameters = checker.types.parameters(id);
+                    if parameters.is_empty() {
+                        id.name.clone()
+                    } else {
+                        let names: Vec<&str> = parameters.iter().map(|p| p.name.as_str()).collect();
+                        format!("{}<{}>", id.name, names.join(", "))
+                    }
+                }
+                _ => "T".to_string(),
+            }
+        };
+        let Some(receiver_ty) = receiver else {
+            return report(self, hook.shape("T"), None);
+        };
+        let (id, arguments) = match receiver_ty {
+            Type::Struct { id, arguments } | Type::Enum { id, arguments }
+                if id.intrinsic().is_none()
+                    && *id != prism_typed_tree::NominalId::builtin_range() =>
+            {
+                (id.clone(), arguments.clone())
+            }
+            _ => return report(self, hook.shape("T"), None),
+        };
+        let receiver_name = written(self, Some(receiver_ty));
+        if id.module != self.module_path {
+            return report(
+                self,
+                format!(
+                    "a {} hook of '{}' cannot be declared here: a {} hook belongs to the file declaring '{}'",
+                    hook.name(),
+                    id.name,
+                    hook.name(),
+                    id.name
+                ),
+                Some(format!(
+                    "a type's hooks run wherever its values are {}, so they are declared beside the type, as '{}'",
+                    match hook {
+                        Hook::Drop => "dropped",
+                        Hook::Clone => "cloned",
+                    },
+                    hook.declaration(&receiver_name)
+                )),
+            );
+        }
+        let mode = f
+            .receiver
+            .as_ref()
+            .map_or(ReceiverMode::Shared, |receiver| receiver.mode);
+        let mode_ok = match hook {
+            Hook::Drop => mode == ReceiverMode::Mutable,
+            Hook::Clone => mode == ReceiverMode::Shared,
+        };
+        let defaults = f.params.iter().any(|p| p.default_value.is_some());
+        if f.visibility != Visibility::Private
+            || !mode_ok
+            || !f.params.is_empty()
+            || f.is_compose
+            || f.context.is_some()
+            || defaults
+        {
+            return report(self, hook.shape(&receiver_name), None);
+        }
+        // The type's own type parameters, in order: a hook serves every instantiation.
+        let parameter_count = self.types.parameters(&id).len();
+        let marker_parameters = self.types.marker_parameters(&id).to_vec();
+        let own_parameters = self.types.parameters(&id);
+        let in_order = f.type_parameters.len() == parameter_count
+            && arguments.len() == parameter_count
+            && arguments.iter().enumerate().all(|(index, argument)| {
+                matches!(argument, Type::Parameter(parameter) if parameter.index as usize == index)
+            })
+            && f
+                .type_parameters
+                .iter()
+                .zip(own_parameters)
+                .all(|(written, own)| written.name == own.name);
+        let bounds_ok = f
+            .type_parameters
+            .iter()
+            .enumerate()
+            .all(|(index, parameter)| match (hook, parameter.bound) {
+                (_, None) => true,
+                (Hook::Clone, Some(prism_ast::TypeMarker::Clone)) => {
+                    marker_parameters.contains(&(index as u32))
+                }
+                _ => false,
+            });
+        if !in_order || !bounds_ok {
+            let rule = match hook {
+                Hook::Drop => "with its type parameters in order and unbounded",
+                Hook::Clone => {
+                    "with its type parameters in order, each unbounded or, for a parameter the marker depends on, bounded by 'Clone'"
+                }
+            };
+            return report(
+                self,
+                format!(
+                    "a {} hook of '{}' is declared for every '{}', {}",
+                    hook.name(),
+                    id.name,
+                    receiver_name,
+                    rule
+                ),
+                Some(format!("declare it as '{}'", {
+                    let parameters: Vec<String> = self
+                        .types
+                        .parameters(&id)
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let list = if parameters.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<{}> ", parameters.join(", "))
+                    };
+                    hook.declaration(&receiver_name)
+                        .replacen("fun ", &format!("fun {}", list), 1)
+                })),
+            );
+        }
+        // Markers (D4 and D6).
+        let marker = self.types.marker(&id);
+        match hook {
+            Hook::Drop if marker == Some(prism_ast::TypeMarker::Copy) => {
+                return report(
+                    self,
+                    format!(
+                        "'{}' is ': Copy', so it cannot have a drop hook: a 'Copy' value is copied bitwise wherever it is read, so a hook would run once per copy",
+                        id.name
+                    ),
+                    Some(format!("remove ': Copy' from '{}'", id.name)),
+                );
+            }
+            Hook::Drop
+                if marker == Some(prism_ast::TypeMarker::Clone)
+                    && !self.types.has_clone_hook(&id) =>
+            {
+                return report(
+                    self,
+                    format!(
+                        "'{}' is ': Clone' and has a drop hook, so it needs a clone hook: a field-by-field clone would duplicate what its drop hook releases",
+                        id.name
+                    ),
+                    Some(format!(
+                        "declare '{}', building a value that owns its own resources",
+                        Hook::Clone.declaration(&receiver_name)
+                    )),
+                );
+            }
+            Hook::Clone if marker == Some(prism_ast::TypeMarker::Copy) => {
+                return report(
+                    self,
+                    format!(
+                        "'{}' is ': Copy', so it cannot have a clone hook: a 'Copy' value is copied bitwise, and cloning it is a copy",
+                        id.name
+                    ),
+                    None,
+                );
+            }
+            Hook::Clone if marker.is_none() => {
+                return report(
+                    self,
+                    format!(
+                        "'{}' is not ': Clone', so it cannot have a clone hook",
+                        id.name
+                    ),
+                    Some(format!(
+                        "declare '{}' with the marker, as in 'struct {} : Clone'",
+                        id.name, id.name
+                    )),
+                );
+            }
+            _ => {}
+        }
+        match &f.return_type {
+            Some(annotation) => {
+                let type_parameters = super::type_parameters_of(&f.type_parameters);
+                let result =
+                    self.with_type_parameters(type_parameters, |c| c.lower_type(annotation));
+                self.check_hook_result(f, hook, &result)
+            }
+            None if matches!(f.body, Some(FunctionBody::Block(_)) | None) => {
+                self.check_hook_result(f, hook, &Type::Unit)
+            }
+            // An inferred result is checked once inferred.
+            None => true,
+        }
+    }
+
+    /// Reports `E4035` when the hook `f` does not return what its kind returns: `Unit` for a
+    /// drop hook, its receiver's type for a clone hook. Gives whether it is valid.
+    fn check_hook_result(&mut self, f: &FunctionDecl, hook: Hook, result: &Type) -> bool {
+        let Some(receiver) = f.receiver.as_ref() else {
+            return true;
+        };
+        if result == &Type::Error {
+            return true;
+        }
+        let type_parameters = super::type_parameters_of(&f.type_parameters);
+        let receiver_ty =
+            self.with_type_parameters(type_parameters, |c| c.lower_type(&receiver.ty));
+        let expected = match hook {
+            Hook::Drop => Type::Unit,
+            Hook::Clone => receiver_ty.clone(),
+        };
+        if *result == expected || receiver_ty == Type::Error {
+            return true;
+        }
+        let written = match &receiver_ty {
+            Type::Struct { id, .. } | Type::Enum { id, .. } => {
+                let parameters = self.types.parameters(id);
+                if parameters.is_empty() {
+                    id.name.clone()
+                } else {
+                    let names: Vec<&str> = parameters.iter().map(|p| p.name.as_str()).collect();
+                    format!("{}<{}>", id.name, names.join(", "))
+                }
+            }
+            _ => "T".to_string(),
+        };
+        self.errors.push(TypeError::InvalidOperatorDeclaration {
+            message: hook.shape(&written),
+            help: None,
+            span: f.span,
+        });
+        false
     }
 
     /// Reports `E4010` for the operator function `f` on `receiver_ty` with parameter types

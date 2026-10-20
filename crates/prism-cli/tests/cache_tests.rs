@@ -1716,3 +1716,104 @@ fn editing_an_operator_body_recompiles_nothing_downstream() {
         explained
     );
 }
+
+// --- Drop and clone hooks (drop-and-clone-hooks)
+
+const SESSION_LIB: &str = "package lib\npublic struct Session(val id: Int)\n";
+const SESSION_IMPORTER: &str = "package app\nimport /lib/net\nfun f(s: Session) {}\n";
+
+/// The ABI hash `prism abi <file>` prints.
+fn abi_hash(workspace: &Workspace, file: &str) -> String {
+    let output = workspace.run(&["abi", file]);
+    assert_success(&output);
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.split("ABI Hash: ").nth(1).map(str::to_string))
+        .expect("an ABI hash")
+}
+
+/// compilation-and-abi: "Adding a drop hook changes the hashes".
+#[test]
+fn adding_a_drop_hook_changes_the_hashes() {
+    let workspace = Workspace::new(
+        "drop_hook_flag",
+        &[
+            ("lib/net.prism", SESSION_LIB),
+            ("app/main.prism", SESSION_IMPORTER),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked lib/net.prism", "checked app/main.prism"])
+    );
+    let before = abi_hash(&workspace, "lib/net.prism");
+    workspace.write(
+        "lib/net.prism",
+        &format!("{}operator mut fun Session.drop() {{}}\n", SESSION_LIB),
+    );
+    assert_ne!(abi_hash(&workspace, "lib/net.prism"), before);
+    let abi = workspace.run(&["abi", "lib/net.prism"]);
+    assert!(
+        String::from_utf8_lossy(&abi.stdout)
+            .contains("  public struct Session { val id: Int } with a drop hook\n"),
+        "{}",
+        String::from_utf8_lossy(&abi.stdout)
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked lib/net.prism", "checked app/main.prism"])
+    );
+}
+
+/// compilation-and-abi: "A reachable type's hook is recorded".
+#[test]
+fn a_reachable_type_s_hook_is_recorded() {
+    let workspace = Workspace::new(
+        "reachable_hook",
+        &[(
+            "lib/a.prism",
+            "package lib\nstruct Secret { val k: Int }\noperator mut fun Secret.drop() {}\npublic struct Outer { val s: Secret }\n",
+        )],
+    );
+    let output = workspace.run(&["abi", "lib/a.prism"]);
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("  struct lib/a::Secret { val k: Int } with a drop hook\n"),
+        "{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("  public struct Outer { val s: Secret }\n"),
+        "{}",
+        stdout
+    );
+}
+
+/// compilation-and-abi: "Editing a hook's body recompiles nothing downstream".
+#[test]
+fn editing_a_hook_s_body_recompiles_nothing_downstream() {
+    let library = "package lib\nimport /prism/core\npublic struct Session(val id: Int)\n\
+                   operator mut fun Session.drop() { println(\"closed\") }\n";
+    let workspace = Workspace::new(
+        "hook_body",
+        &[
+            ("lib/net.prism", library),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/net\nfun main() { val s = Session(1) }\n",
+            ),
+        ],
+    );
+    let (stdout, _) = workspace.run_explain("app/main.prism");
+    assert_eq!(stdout, "closed\n");
+    let before = abi_hash(&workspace, "lib/net.prism");
+    workspace.write("lib/net.prism", &library.replace("closed", "bye"));
+    assert_eq!(abi_hash(&workspace, "lib/net.prism"), before);
+    let (stdout, explanation) = workspace.run_explain("app/main.prism");
+    assert_eq!(stdout, "bye\n");
+    assert_eq!(
+        explanation,
+        lines(&["checked lib/net.prism", "reused app/main.prism"])
+    );
+}

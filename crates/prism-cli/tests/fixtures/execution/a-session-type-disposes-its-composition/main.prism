@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/collections
+import /prism/composer
+
+
+struct Session : Clone { val id: Int }
+fun open(): Session = Session(startComposition { k -> })
+operator mut fun Session.drop() { disposeComposition(id) }
+operator fun Session.clone(): Session = open()
+fun main() { val a = open(); val b = a.clone(); val all = listOf(open(), open()); val boxed = Heap(open()); println("done") }

@@ -1218,6 +1218,12 @@ impl TypeChecker {
                 _ => continue,
             };
             let Some(marker) = marker else { continue };
+            // A clone hook builds the type's clones, so its fields need not be `Clone` (D6 of
+            // `drop-and-clone-hooks`).
+            let id = NominalId::new(self.module_path.clone(), type_name.clone());
+            if marker == TypeMarker::Clone && self.types.has_clone_hook(&id) {
+                continue;
+            }
             // Each marker parameter counts as satisfying the marker (D6 of `generics`): it is
             // lowered as a type parameter bounded by it.
             let member_types: Vec<&prism_ast::types::Type> =
@@ -2001,6 +2007,13 @@ impl TypeChecker {
             if definition.equality {
                 self.types.insert_equality_operator(id.clone());
             }
+            // So are its hooks (D10 of `drop-and-clone-hooks`).
+            if definition.drop_hook {
+                self.types.insert_drop_hook(id.clone());
+            }
+            if definition.clone_hook {
+                self.types.insert_clone_hook(id.clone());
+            }
             self.types
                 .insert_marker(id.clone(), marker.marker, marker.parameters);
             self.types.insert_definition(id, type_definition);
@@ -2014,6 +2027,8 @@ impl TypeChecker {
                 marker,
                 marker_parameters,
                 equality,
+                drop_hook,
+                clone_hook,
                 ..
             }
             | ExportedSymbol::Enum {
@@ -2021,14 +2036,23 @@ impl TypeChecker {
                 marker,
                 marker_parameters,
                 equality,
+                drop_hook,
+                clone_hook,
                 ..
             } = sym
             {
                 let id = NominalId::new(abi.module.clone(), name.clone());
                 // An exported type's `equals` operator is part of its definition, which every
-                // `==` of it calls (D6 of `operator-conventions`).
+                // `==` of it calls (D6 of `operator-conventions`), and so are its hooks (D10 of
+                // `drop-and-clone-hooks`).
                 if *equality {
                     self.types.insert_equality_operator(id.clone());
+                }
+                if *drop_hook {
+                    self.types.insert_drop_hook(id.clone());
+                }
+                if *clone_hook {
+                    self.types.insert_clone_hook(id.clone());
                 }
                 self.types
                     .insert_marker(id.clone(), *marker, marker_parameters.clone());
@@ -2501,6 +2525,17 @@ impl TypeChecker {
                 _ => continue,
             };
             self.define_top_level(symbol);
+        }
+        // A type's hooks are part of its definition, known before any body or extension is
+        // checked (D10 of `drop-and-clone-hooks`); their shapes are checked with the extensions.
+        let hooks = prism_abi::hook_types(source_file);
+        for name in hooks.drop {
+            let id = NominalId::new(self.module_path.clone(), name.to_string());
+            self.types.insert_drop_hook(id);
+        }
+        for name in hooks.clone {
+            let id = NominalId::new(self.module_path.clone(), name.to_string());
+            self.types.insert_clone_hook(id);
         }
 
         for decl in &source_file.declarations {
@@ -3108,7 +3143,20 @@ impl TypeChecker {
                 ),
                 span: f.span,
             });
-        } else if f.name == "clone" && self.is_clone(&receiver_ty) {
+        } else if f.name == "drop"
+            && !f.is_operator
+            && receiver_ty
+                .nominal_id()
+                .is_some_and(|id| self.types.has_drop_hook(id))
+        {
+            self.errors.push(TypeError::UncallableExtension {
+                message: format!(
+                    "extension '{}.drop' can never be called: the drop hook of '{}' always takes precedence, and a drop hook is never called by name",
+                    receiver_ty, receiver_ty
+                ),
+                span: f.span,
+            });
+        } else if f.name == "clone" && !f.is_operator && self.is_clone(&receiver_ty) {
             self.errors.push(TypeError::UncallableExtension {
                 message: format!(
                     "extension '{}.clone' can never be called: '{}' is 'Clone', and the built-in 'clone()' always takes precedence",
@@ -3124,7 +3172,7 @@ impl TypeChecker {
                 ),
                 span: f.span,
             });
-        } else if f.is_operator {
+        } else if f.is_operator && operators::Hook::named(&f.name).is_none() {
             if let SymbolKind::Function {
                 fn_type: Type::Fn { params, .. },
                 ..
@@ -6302,7 +6350,20 @@ impl TypeChecker {
             .iter()
             .any(|branch| branch.patterns.iter().any(Pattern::moves));
         if let (true, Some(target), Some(id)) = (takes_apart, target, subject) {
-            self.check_take_apart_source(target, "match on");
+            let hooked = tree_branches.iter().find_map(|branch| {
+                branch
+                    .patterns
+                    .iter()
+                    .find_map(|pattern| self.hooked_type_taken_apart(pattern))
+            });
+            match hooked {
+                Some(type_name) => self.errors.push(TypeError::TakeApartWithDropHook {
+                    type_name,
+                    help: format!("match on a borrow of it instead: 'when (&{})'", target),
+                    span: target.span,
+                }),
+                None => self.check_take_apart_source(target, "match on"),
+            }
             subject = Some(self.as_place(id));
         }
 
@@ -7997,6 +8058,23 @@ impl TypeChecker {
                 expected,
                 span,
             );
+        }
+
+        // A drop hook is a member of its type that is never called by name (D3 of
+        // `drop-and-clone-hooks`), through any `&`, `&mut`, `Heap<T>` or `?.`.
+        if member == "drop" {
+            let target_ty = clone_target(&receiver_ty, is_safe_nav).0;
+            if let Some(id) = peel_indirection(&target_ty).nominal_id() {
+                if self.types.has_drop_hook(id) {
+                    let type_name = peel_indirection(&target_ty).to_string();
+                    let call = self.give_up_call(receiver, args, span);
+                    self.errors.push(TypeError::DropHookCalled {
+                        type_name,
+                        span: callee.span,
+                    });
+                    return call;
+                }
+            }
         }
 
         // 2. The built-in `clone()` of a `Clone` type, and `toString()` of a scalar.

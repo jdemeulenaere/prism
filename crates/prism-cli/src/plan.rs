@@ -105,8 +105,16 @@ pub fn program_types(definitions: &ProgramDefinitions) -> TypeTable {
     let mut sorted: Vec<&AbiTypeDefinition> = definitions.values().collect();
     sorted.sort_by(|a, b| (&a.module, &a.name).cmp(&(&b.module, &b.name)));
     for definition in sorted {
+        let (drop_hook, clone_hook) = (definition.drop_hook, definition.clone_hook);
         let (id, definition, marker) =
             prism_typechecker::types::type_definition_from_abi(definition);
+        // A type's hooks are part of its definition (D10 of `drop-and-clone-hooks`).
+        if drop_hook {
+            types.insert_drop_hook(id.clone());
+        }
+        if clone_hook {
+            types.insert_clone_hook(id.clone());
+        }
         types.insert_marker(id.clone(), marker.marker, marker.parameters);
         types.insert_definition(id, definition);
     }

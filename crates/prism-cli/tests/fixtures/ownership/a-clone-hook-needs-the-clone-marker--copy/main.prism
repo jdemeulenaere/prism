@@ -1,0 +1,3 @@
+// expect: E4035
+struct Point : Copy { val x: Int }
+operator fun Point.clone(): Point = Point(x)

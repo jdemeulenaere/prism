@@ -630,6 +630,8 @@ fn run_abi(path: &str) {
                 marker_parameters,
                 fields,
                 equality,
+                drop_hook,
+                clone_hook,
                 ..
             } => {
                 let f_str = fields
@@ -646,7 +648,7 @@ fn run_abi(path: &str) {
                     type_parameter_list(type_parameters),
                     generic_marker_suffix(*marker, type_parameters, marker_parameters),
                     f_str,
-                    equality_suffix(*equality)
+                    definition_suffix(*equality, *drop_hook, *clone_hook)
                 );
             }
             prism_abi::ExportedSymbol::Enum {
@@ -657,6 +659,8 @@ fn run_abi(path: &str) {
                 marker_parameters,
                 variants,
                 equality,
+                drop_hook,
+                clone_hook,
             } => {
                 let v_str = variants
                     .iter()
@@ -677,7 +681,7 @@ fn run_abi(path: &str) {
                     type_parameter_list(type_parameters),
                     generic_marker_suffix(*marker, type_parameters, marker_parameters),
                     v_str,
-                    equality_suffix(*equality)
+                    definition_suffix(*equality, *drop_hook, *clone_hook)
                 );
             }
             prism_abi::ExportedSymbol::Var {
@@ -727,17 +731,31 @@ fn run_abi(path: &str) {
                 &definition.marker_parameters
             ),
             members.join(", "),
-            equality_suffix(definition.equality)
+            definition_suffix(
+                definition.equality,
+                definition.drop_hook,
+                definition.clone_hook
+            )
         );
     }
 }
 
-/// What `prism abi` prints after a struct or enum whose file declares its `equals` operator.
-fn equality_suffix(equality: bool) -> &'static str {
-    if equality {
-        " with operator equals"
+/// What `prism abi` prints after a struct or enum whose file declares its `equals` operator,
+/// its drop hook or its clone hook (D10 of `drop-and-clone-hooks`): ` with operator equals, a
+/// drop hook, a clone hook`, naming those it has.
+fn definition_suffix(equality: bool, drop_hook: bool, clone_hook: bool) -> String {
+    let parts: Vec<&str> = [
+        (equality, "operator equals"),
+        (drop_hook, "a drop hook"),
+        (clone_hook, "a clone hook"),
+    ]
+    .into_iter()
+    .filter_map(|(present, part)| present.then_some(part))
+    .collect();
+    if parts.is_empty() {
+        String::new()
     } else {
-        ""
+        format!(" with {}", parts.join(", "))
     }
 }
 

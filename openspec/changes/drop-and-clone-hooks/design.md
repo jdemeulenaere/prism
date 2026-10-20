@@ -249,6 +249,14 @@ Rejected:
 
 No migration: no program declares `operator` functions before `operator-conventions`, and nothing changes for types without hooks. The `execution` text "glue runs no user code" becomes "only through hooks". Build-cache entries are keyed by the compiler's hash, so nothing cached is reused. Rollback: revert the commits.
 
+## Implementation Notes
+
+Recorded while applying (2026-10-20); none changes a decision above.
+
+- **Declarations (group 2).** `prism_abi::hook_types` is the one syntactic match of D10, used by Phase 1 and by the type checker, which records the file's own flags in `TypeTable` before any extension is registered, so that `E4010`, `E4036` and `E4035`'s marker rules see them; a malformed hook may still set a flag, but its `E4035` stops the program. The shape checks are `check_hook_declaration` and `check_hook_result` in `checker/operators.rs`. A hook's type parameters must also carry the type's own names, which is what rejects `operator mut fun <B, A> Pair<B, A>.drop()` (its parameters are positionally the type's). `E4036` is decided from the type's flag before extensions are looked up, so an importer, to which the private hook is invisible, gets it too. Taking apart a hooked value is the new `TypeError::TakeApartWithDropHook` (`E4017`), searched through nested constructor, `NonNull` and box patterns.
+- **Scenario forms corrected.** In "Drop hook shapes rejected", `operator mut fun drop() {}` is a syntax error (a `mut` receiver mode needs a receiver), so the form without a receiver is `operator fun drop() {}`; and the public form is written `public operator mut fun Session.drop(): Unit {}`, since a public function without its result is `E4011` besides. In `code-generation`, symbols name an extension's receiver with its module (`main::main.Session.drop`, `lib/net::lib/net.Session.drop`, `main::main.Owned.clone<String>`), as `symbols.rs` always has; the scenarios now say so.
+- **Glue (group 3).** `glue::needs_glue(kind, ty, types)` is the predicate of D9 (`owns_storage`, or `TypeTable::reaches_drop_hook`/`reaches_clone_hook`, which are constant time for a table without hooks and otherwise walk each reachable type once). The hook is called through the slot of `glue::hook_symbol`, with the glue's own parameters, which are exactly the hook's machine signature (`(&mut T)` is one pointer; `(&T) -> T` is a result address and a pointer). `LayoutTable::environment_layout` asks the same predicate, so a hooked capture is never kept inline without a drop entry. The program's type table that instances are compiled over (`plan::program_types`) carries the flags too, which the first probe of "Parts are cloned by their hooks" found missing.
+
 ## Open Questions
 
 - Should `library-in-prism` add `forget` (or a consuming `into...` pattern) for handles given back to the runtime? Decide with the first library type that needs it.

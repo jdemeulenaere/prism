@@ -8,7 +8,7 @@ A struct or enum MAY have one drop hook, `operator mut fun T.drop()`, declared i
 - **THEN** the file typechecks successfully
 
 #### Scenario: Drop hook shapes rejected
-- **WHEN** a file declaring `struct Session { val id: Int }` declares, one at a time, `operator fun Session.drop() {}`, `operator consuming fun Session.drop() {}`, `operator mut fun Session.drop(now: Bool) {}`, `operator mut fun Session.drop(): Int = 0`, `public operator mut fun Session.drop() {}`, `operator mut fun String.drop() {}` and `operator mut fun drop() {}`
+- **WHEN** a file declaring `struct Session { val id: Int }` declares, one at a time, `operator fun Session.drop() {}`, `operator consuming fun Session.drop() {}`, `operator mut fun Session.drop(now: Bool) {}`, `operator mut fun Session.drop(): Int = 0`, `public operator mut fun Session.drop(): Unit {}`, `operator mut fun String.drop() {}` and `operator fun drop() {}`
 - **THEN** the type checker emits `E4035` for each, saying that a drop hook is `operator mut fun Session.drop()` declared without a visibility modifier in the file of a struct or enum
 
 #### Scenario: A drop hook outside its type's file rejected

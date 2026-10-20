@@ -106,6 +106,12 @@ pub enum ExportedSymbol {
         /// Whether its file declares an `equals` operator for it, which `==` calls everywhere
         /// (D6 and D15 of `operator-conventions`).
         equality: bool,
+        /// Whether its file declares a drop hook for it, which its drop glue calls everywhere
+        /// (D10 of `drop-and-clone-hooks`).
+        drop_hook: bool,
+        /// Whether its file declares a clone hook for it, which its clone glue calls (D10 of
+        /// `drop-and-clone-hooks`).
+        clone_hook: bool,
     },
     Enum {
         visibility: Visibility,
@@ -118,6 +124,10 @@ pub enum ExportedSymbol {
         /// Whether its file declares an `equals` operator for it (D15 of
         /// `operator-conventions`).
         equality: bool,
+        /// Whether its file declares a drop hook for it (D10 of `drop-and-clone-hooks`).
+        drop_hook: bool,
+        /// Whether its file declares a clone hook for it (D10 of `drop-and-clone-hooks`).
+        clone_hook: bool,
     },
     /// An exported top-level `val` (top-level declarations are always immutable).
     Var {
@@ -220,6 +230,8 @@ impl ExportedSymbol {
                 fields,
                 intrinsic,
                 equality,
+                drop_hook,
+                clone_hook,
             } => {
                 // An ordinary struct keeps the tag it always had.
                 hasher.write_str(if *intrinsic {
@@ -242,6 +254,7 @@ impl ExportedSymbol {
                 if *equality {
                     hasher.write_str("equals");
                 }
+                hash_hooks(*drop_hook, *clone_hook, hasher);
             }
             ExportedSymbol::Enum {
                 visibility,
@@ -251,6 +264,8 @@ impl ExportedSymbol {
                 marker_parameters,
                 variants,
                 equality,
+                drop_hook,
+                clone_hook,
             } => {
                 hasher.write_str("enum");
                 hasher.write_str(visibility.as_str());
@@ -271,6 +286,7 @@ impl ExportedSymbol {
                 if *equality {
                     hasher.write_str("equals");
                 }
+                hash_hooks(*drop_hook, *clone_hook, hasher);
             }
             ExportedSymbol::Var {
                 visibility,
@@ -617,6 +633,12 @@ pub struct AbiTypeDefinition {
     /// Whether the defining file declares an `equals` operator for the type, which equality of
     /// its values calls (D6 and D15 of `operator-conventions`).
     pub equality: bool,
+    /// Whether the defining file declares a drop hook for the type, which drop glue of its
+    /// values calls first (D10 of `drop-and-clone-hooks`).
+    pub drop_hook: bool,
+    /// Whether the defining file declares a clone hook for the type, which clone glue of its
+    /// values calls instead of cloning field by field (D10 of `drop-and-clone-hooks`).
+    pub clone_hook: bool,
 }
 
 impl AbiTypeDefinition {
@@ -688,6 +710,18 @@ impl AbiTypeDefinition {
         if self.equality {
             hasher.write_str("equals");
         }
+        hash_hooks(self.drop_hook, self.clone_hook, hasher);
+    }
+}
+
+/// Feeds a type's hook flags into `hasher`; a type without hooks keeps the bytes it always had
+/// (D10 of `drop-and-clone-hooks`).
+fn hash_hooks(drop_hook: bool, clone_hook: bool, hasher: &mut DeterministicHasher) {
+    if drop_hook {
+        hasher.write_str("drop hook");
+    }
+    if clone_hook {
+        hasher.write_str("clone hook");
     }
 }
 
@@ -716,6 +750,7 @@ pub fn type_definitions(
 ) -> Vec<AbiTypeDefinition> {
     let bind = own_binder(file, module, bind_import);
     let equality = equality_types(file);
+    let hooks = hook_types(file);
     file.declarations
         .iter()
         .filter_map(|decl| match decl {
@@ -727,6 +762,8 @@ pub fn type_definitions(
                 marker_parameters: struct_header(s).marker_parameters,
                 members: AbiTypeMembers::Fields(struct_fields(s, &bind)),
                 equality: equality.contains(s.name.as_str()),
+                drop_hook: hooks.drop.contains(s.name.as_str()),
+                clone_hook: hooks.clone.contains(s.name.as_str()),
             }),
             Declaration::Enum(e) => Some(AbiTypeDefinition {
                 module: module.to_string(),
@@ -736,6 +773,8 @@ pub fn type_definitions(
                 marker_parameters: enum_header(e).marker_parameters,
                 members: AbiTypeMembers::Variants(enum_variants(e, &bind)),
                 equality: equality.contains(e.name.as_str()),
+                drop_hook: hooks.drop.contains(e.name.as_str()),
+                clone_hook: hooks.clone.contains(e.name.as_str()),
             }),
             _ => None,
         })
@@ -774,6 +813,65 @@ pub fn equality_types(file: &SourceFile) -> std::collections::HashSet<&str> {
             _ => None,
         })
         .collect()
+}
+
+/// The names of the structs and enums of `file` with a drop hook and with a clone hook.
+#[derive(Debug, Default)]
+pub struct HookTypes<'f> {
+    /// Types with `operator mut fun T.drop()`.
+    pub drop: std::collections::HashSet<&'f str>,
+    /// Types with `operator fun T.clone()`.
+    pub clone: std::collections::HashSet<&'f str>,
+}
+
+/// The structs and enums of `file` for which it declares a drop hook, an `operator` extension
+/// named `drop` with a `mut` receiver, or a clone hook, one named `clone` with a shared
+/// receiver, on a struct or enum of the file that is not intrinsic, by a syntactic match of the
+/// receiver's name, generic or not (D3 and D10 of `drop-and-clone-hooks`). The type checker
+/// checks the declarations' shapes (`E4035`).
+pub fn hook_types(file: &SourceFile) -> HookTypes<'_> {
+    let mut hooks = HookTypes::default();
+    if !file.declarations.iter().any(|decl| {
+        matches!(decl, Declaration::Function(f) if f.is_operator && (f.name == "drop" || f.name == "clone"))
+    }) {
+        return hooks;
+    }
+    let types: std::collections::HashSet<&str> = file
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Declaration::Struct(s) if !s.is_intrinsic() => Some(s.name.as_str()),
+            Declaration::Enum(e) => Some(e.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    for decl in &file.declarations {
+        let Declaration::Function(f) = decl else {
+            continue;
+        };
+        if !f.is_operator {
+            continue;
+        }
+        let Some(receiver) = f.receiver.as_ref() else {
+            continue;
+        };
+        let prism_ast::types::TypeKind::Named { name, .. } = &receiver.ty.kind else {
+            continue;
+        };
+        if !types.contains(name.as_str()) {
+            continue;
+        }
+        match (f.name.as_str(), receiver.mode) {
+            ("drop", prism_ast::decl::ReceiverMode::Mutable) => {
+                hooks.drop.insert(name.as_str());
+            }
+            ("clone", prism_ast::decl::ReceiverMode::Shared) => {
+                hooks.clone.insert(name.as_str());
+            }
+            _ => {}
+        }
+    }
+    hooks
 }
 
 /// Feeds the defining module and name of every struct and enum occurring in `ty` into `out`:
@@ -966,6 +1064,7 @@ impl FileAbi {
 
         let bind = own_binder(file, module, bind_import);
         let equality = equality_types(file);
+        let hooks = hook_types(file);
 
         for decl in &file.declarations {
             // Default visibility is `private`. Private declarations are EXCLUDED from the ABI.
@@ -1078,6 +1177,8 @@ impl FileAbi {
                         fields,
                         intrinsic: s.is_intrinsic(),
                         equality: equality.contains(s.name.as_str()),
+                        drop_hook: hooks.drop.contains(s.name.as_str()),
+                        clone_hook: hooks.clone.contains(s.name.as_str()),
                     });
                 }
 
@@ -1092,6 +1193,8 @@ impl FileAbi {
                         marker_parameters: enum_header(e).marker_parameters,
                         variants,
                         equality: equality.contains(e.name.as_str()),
+                        drop_hook: hooks.drop.contains(e.name.as_str()),
+                        clone_hook: hooks.clone.contains(e.name.as_str()),
                     });
                 }
 

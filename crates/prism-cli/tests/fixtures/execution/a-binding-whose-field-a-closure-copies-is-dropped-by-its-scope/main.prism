@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/collections
+
+struct Ticket { val id: Int }
+operator mut fun Ticket.drop() { println("drop ticket") }
+fun make(t: Ticket): () -> Int = { t.id }
+fun main() { val f = make(Ticket(7)); println("made"); println(f()) }

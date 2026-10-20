@@ -1,0 +1,5 @@
+drop a
+consume b
+drop b
+end
+drop c

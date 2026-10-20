@@ -1,0 +1,7 @@
+// expect: ok
+import /prism/core
+
+struct Named { val name: String, val id: Int }
+operator mut fun Named.drop() {}
+fun f(n: Named): Int { val (id) = n; return id }
+fun g(n: &Named): Int = when (n) { Named(name = val s, id = _) -> s.length }

@@ -1,0 +1,3 @@
+// expect: E4035
+struct Session { val id: Int }
+public operator mut fun Session.drop(): Unit {}

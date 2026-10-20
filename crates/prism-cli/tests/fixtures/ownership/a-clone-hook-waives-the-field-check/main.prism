@@ -1,0 +1,6 @@
+// expect: ok
+import /prism/core
+
+struct Task : Clone { val name: String, val run: () -> Unit }
+operator fun Task.clone(): Task = Task(name.clone(), { println(1) })
+fun f(t: &Task): Task = t.clone()

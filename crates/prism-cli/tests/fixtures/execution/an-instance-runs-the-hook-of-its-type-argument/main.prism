@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/collections
+
+struct Noisy { val name: String }
+operator mut fun Noisy.drop() { println("drop " + name) }
+fun <T> discard(x: T) {}
+fun <T> pick(a: T, b: T, first: Bool): T = if (first) a else b
+fun main() { discard(Noisy("g")); val p = pick(Noisy("a"), Noisy("b"), true); println("end") }

@@ -1,0 +1,8 @@
+// expect: ok
+// run: 3
+import /prism/core
+import /prism/system
+
+struct Noisy { val name: String }
+operator mut fun Noisy.drop() { println("drop " + name) }
+fun main() { val n = Noisy("n"); println("bye"); exitProcess(3) }

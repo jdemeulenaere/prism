@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+struct Inner { val name: String }
+operator mut fun Inner.drop() { println("inner") }
+struct Outer { val inner: Inner, val label: String }
+operator mut fun Outer.drop() { println("outer " + inner.name) }
+fun main() { val o = Outer(Inner(1.toString()), 2.toString()) }
