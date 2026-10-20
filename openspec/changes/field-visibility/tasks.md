@@ -6,13 +6,13 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement fi
 
 ## 1. Reconcile and baseline
 
-- [ ] 1.1 Check that `drop-and-clone-hooks`, `vararg` and `core-library-in-prism` are archived, and stop if one is not.
+- [x] 1.1 Check that `drop-and-clone-hooks`, `vararg` and `core-library-in-prism` are archived, and stop if one is not.
   - Re-read the main `syntax`, `type-system`, `extension-functions`, `patterns`, `compilation-and-abi`, `formatting`, `ui` and `diagnostics` specs.
   - Check that no requirement this packet ADDS exists by then. Check that "Only Visible Fields Count" still matches the field rules of `extension-functions` as `core-library-in-prism` left them, its extension property rules included.
   - Check the names the tasks use: `StructField` (`crates/prism-ast/src/decl.rs`), the struct field parsing in `crates/prism-parser/src/parser.rs`, `ExportedSymbol::Struct` (`crates/prism-abi/src/signature.rs`), `register_extension_decl`, `infer_member_access` and the construction and place paths of `crates/prism-typechecker/src/checker.rs`, and `check_take_apart_source` and the struct pattern checks of `checker/patterns.rs`.
   - Get `openspec validate field-visibility --strict` clean.
   - Record the reconciliation as a "Baseline update" paragraph in `design.md`.
-- [ ] 1.2 On an idle machine and a release build, record in `design.md` the `struct-fields` stages of `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`, as the baseline that task 5.1 compares with.
+- [x] 1.2 On an idle machine and a release build, record in `design.md` the `struct-fields` stages of `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`, as the baseline that task 5.1 compares with.
 
 ## 2. Syntax and formatting (D1, D8)
 

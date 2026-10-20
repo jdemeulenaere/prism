@@ -14,6 +14,8 @@ The user is away. Every decision the user might take differently is marked **(au
 
 This packet modifies no requirement of the main specs: it only ADDS requirements, so it cannot conflict with them. In particular, the field precedence rules of `extension-functions`, which `core-library-in-prism` modifies ("Members Take Precedence Over Extensions", "Extension Declarations Are Checked") and extends (its ADDED "Extension Properties Are Read Like Fields" and "Extension Property Declarations Are Checked"), are qualified by one ADDED requirement here ("Only Visible Fields Count"), rather than rewritten. The first task re-checks this.
 
+**Baseline update (apply, on `d2cfc9cb`).** `drop-and-clone-hooks`, `vararg` and `core-library-in-prism` are archived, and so is nothing else since `b56208a`; three packets were proposed in between (`compose-library-in-prism`, `layout-primitive`, `layout-in-prism`), each building on this one, none touching the blocks it adds. This packet only ADDS requirements, and none of them exists in the main specs (no `syntax`, `type-system`, `extension-functions`, `patterns`, `compilation-and-abi`, `formatting` or `ui` requirement mentions field visibility; `diagnostics` still has `E4007` for `package` declarations only and `E2001` without field modifiers). "Only Visible Fields Count" matches the field rules as `core-library-in-prism` left them: "Members Take Precedence Over Extensions" counts a field first (and a member property as a field), "Extension Properties Are Read Like Fields" reads a property only when the receiver's struct has no field of the name, and "Extension Property Declarations Are Checked" makes a property named like a field `E4010`; each of these is about the field, so qualifying "field" with "visible in the file" is consistent for calls, property reads, bare names and both `E4010` rules, and a hidden field then falls through to the member property, extension property or extension of its name in the order those requirements give. Every name the tasks use exists: `StructField` (`crates/prism-ast/src/decl.rs`), `parse_struct` in `crates/prism-parser/src/parser.rs` (both struct forms), `ExportedSymbol::Struct` (`crates/prism-abi/src/signature.rs`, whose `fields` are `(name, is_var, type)` shared with `AbiTypeMembers::Fields`), `register_extension_decl` (also registering extension properties), `infer_member_access`, `check_take_apart_source` and the struct pattern and destructuring checks of `checker/patterns.rs` (`struct_sub_patterns`, `check_destructure`). The build cache stores no ABI symbol (it re-extracts them), so it has no ABI codec to update. The checker's field records live in the `TypeTable` of `prism-typed-tree`, which MIR, code generation and the instance records also read, so the visibilities go in a table of the checker's own (task 4.1), and the type table, its codec and type fingerprints stay as they are. `openspec validate field-visibility --strict` is clean.
+
 Current state (main specs and code):
 
 - A struct field is `val` or `var` with a name and a type (`StructField` in `crates/prism-ast/src/decl.rs`), visible wherever its struct is.
@@ -151,6 +153,14 @@ A hidden field is a visibility violation like a `package` declaration used from 
 ### D10. Compile timing (autonomous)
 
 `crates/prism-cli/tests/compile_timing.rs` gains the shape `field-visibility` at 256, 1,024 and 4,096: that many structs with a `private`, a `package` and an unmarked field, each constructed, read, written and matched by a named pattern in the struct's file, timing parse and check. Under `PRISM_ASSERT_TIMING=1`, each stage grows by at most ×4.6 per ×4.
+
+**Baseline (task 1.2, on `d2cfc9cb`, idle machine, release build).** The `struct-fields` shape, in ms:
+
+| program | lex | parse | abi | type | mir | borrow | compose | inst | lower | clif |
+|---|---|---|---|---|---|---|---|---|---|---|
+| struct-fields-256 | 0.0 | 0.1 | 0.0 | 0.3 | 0.2 | 0.8 | 0.0 | 0.0 | 0.6 | 2.4 |
+| struct-fields-1024 | 0.1 | 0.3 | 0.0 | 1.1 | 0.7 | 3.3 | 0.2 | 0.0 | 2.4 | 6.2 |
+| struct-fields-4096 | 0.5 | 1.0 | 0.1 | 4.3 | 3.4 | 13.6 | 0.7 | 0.2 | 9.6 | 28.3 |
 
 ## Risks / Trade-offs
 
