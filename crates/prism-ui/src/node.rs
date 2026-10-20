@@ -145,6 +145,10 @@ pub struct Node {
     pub value_change: Option<HandlerId>,
     /// The measure policy of a node of a policy kind (D8 of `layout-primitive`).
     pub policy: Option<HandlerId>,
+    /// Its first `weight` (0.0 for none) with its `fill`, and its first `align`, as its
+    /// parent's policy reads them: [`Node::weight`] and [`Node::own_alignment`], kept when the
+    /// chain is set so that a policy's read is one load.
+    pub parent_data: (f64, bool, Option<Alignment>),
 
     /// The constraints of the last measurement, if any.
     pub last_constraints: Option<Constraints>,
@@ -186,6 +190,7 @@ impl Node {
             chain: Vec::new(),
             value_change: None,
             policy: None,
+            parent_data: (0.0, false, None),
             last_constraints: None,
             size: Size::ZERO,
             x: 0,
@@ -221,6 +226,12 @@ impl Node {
             Element::Weight { weight, fill } => Some((weight, fill)),
             _ => None,
         })
+    }
+
+    /// The parent data its chain gives, to keep in [`Node::parent_data`].
+    pub fn chain_parent_data(&self) -> (f64, bool, Option<Alignment>) {
+        let (weight, fill) = self.weight().unwrap_or((0.0, false));
+        (weight, fill, self.own_alignment())
     }
 
     /// The node's own alignment in its parent: the first `align` of its chain.

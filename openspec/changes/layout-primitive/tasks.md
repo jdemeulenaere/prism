@@ -133,15 +133,15 @@ Implementation note: groups 3 to 7 landed in one commit. Removing the native con
 
 ## 8. Examples, timing and documents (D18, D19)
 
-- [ ] 8.1 Add a `FlowRow` over `Layout` to `examples/demo/ui/ui.prism` and compose it in the tour. Re-bless `touring-the-toolkit.stdout.snap` and read the diff: only the new nodes may appear.
+- [x] 8.1 Add a `FlowRow` over `Layout` to `examples/demo/ui/ui.prism` and compose it in the tour. Re-bless `touring-the-toolkit.stdout.snap` and read the diff: only the new nodes may appear.
   - Add the `run_cli_tests.rs` test "Resizing a thousand items allocates nothing".
   - Run `prism fmt --check examples/`, `prism check` on every file under `examples/`, `prism run --check-allocations examples/run/main.prism`, and each UI entry with `--check-allocations --headless`, as `openspec/config.yaml` lists.
-- [ ] 8.2 Timing.
+- [x] 8.2 Timing.
   - Add the resize session and its targets (layout p99 under 4 ms, resize frames after the first allocate nothing, and the median printed against task 1.2's native baseline) to `crates/prism-cli/tests/app_frame_timing.rs`, with its header table updated.
   - Add the `layout-policies` shape to `crates/prism-cli/tests/compile_timing.rs` at 256, 1024 and 4096.
-- [ ] 8.3 On an idle machine and a release build, re-run task 1.2's measurements and `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record them in `design.md` against the baseline and check D18's budgets. Investigate a miss before going on.
-- [ ] 8.4 Documents.
+- [x] 8.3 On an idle machine and a release build, re-run task 1.2's measurements and `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record them in `design.md` against the baseline and check D18's budgets. Investigate a miss before going on.
+- [x] 8.4 Documents.
   - In `docs/architecture.md`, replace the note that layout is native "for now" with a pointer to the `ui` spec.
   - Tick item 11a of "After Milestone 2: the review round" in `ROADMAP.md`.
   - Mark the layout part of A4 in `docs/milestone-2-review-notes.md` as half done, naming `layout-in-prism` as what remains.
-- [ ] 8.5 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, reading the `test result:` lines.
+- [x] 8.5 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, reading the `test result:` lines.

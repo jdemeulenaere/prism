@@ -1,11 +1,13 @@
 // A tour of the UI toolkit: one screen that composes every composable of
 // `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3`, and uses
 // every modifier, the three shapes, named and constructed colours, every arrangement and every
-// alignment at least once, around a remembered counter, a checkbox and a text field. Run it
+// alignment at least once, around a remembered counter, a checkbox and a text field, and a
+// layout of its own over `Layout`, a flow row. Run it
 // with `prism run examples/demo/ui/ui.prism`, or headless with
 // `prism run --headless --events <script> examples/demo/ui/ui.prism`.
 package demo.ui
 
+import /prism/collections
 import /prism/compose/foundation
 import /prism/compose/layout
 import /prism/compose/material3
@@ -146,6 +148,72 @@ compose fun Alignments() {
     }
 }
 
+// Its children in lines as wide as its constraints allow, a new line starting when the next
+// child would not fit, with `spacing` pixels between children and between lines: a layout of
+// the tour's own over `Layout`, as Compose's `FlowRow`.
+compose fun FlowRow(spacing: Int, content: compose () -> Unit) {
+    Layout(content = content) { measurables, constraints ->
+        val placeables = measurables.map {
+            it.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        }
+        var width = 0
+        var height = 0
+        var lineWidth = 0
+        var lineHeight = 0
+        for (placeable in placeables) {
+            if (lineWidth > 0 && lineWidth + spacing + placeable.width > constraints.maxWidth) {
+                height += lineHeight + spacing
+                lineWidth = 0
+                lineHeight = 0
+            }
+            if (lineWidth > 0) {
+                lineWidth += spacing
+            }
+            lineWidth += placeable.width
+            if (lineWidth > width) {
+                width = lineWidth
+            }
+            if (placeable.height > lineHeight) {
+                lineHeight = placeable.height
+            }
+        }
+        height += lineHeight
+        layout(constraints.constrainWidth(width), constraints.constrainHeight(height)) {
+            var x = 0
+            var y = 0
+            var rowHeight = 0
+            for (placeable in placeables) {
+                if (x > 0 && x + spacing + placeable.width > constraints.maxWidth) {
+                    y += rowHeight + spacing
+                    x = 0
+                    rowHeight = 0
+                }
+                if (x > 0) {
+                    x += spacing
+                }
+                placeable.place(x, y)
+                x += placeable.width
+                if (placeable.height > rowHeight) {
+                    rowHeight = placeable.height
+                }
+            }
+        }
+    }
+}
+
+// Tags in a flow row, wrapping inside a fixed width.
+compose fun Tags() {
+    Box(Modifier.width(200.dp).border(1.dp, Color.Gray)) {
+        FlowRow(spacing = 4) {
+            Text("layout")
+            Text("measure")
+            Text("place")
+            Text("constraints")
+            Text("policy")
+        }
+    }
+}
+
 // The tour: a surface holding a title, the counter, the inputs, the arrangements and the
 // alignments, with a weighted column and a minimum size.
 compose fun Tour() {
@@ -164,6 +232,7 @@ compose fun Tour() {
             Inputs()
             Arrangements()
             Alignments()
+            Tags()
             Row(Modifier.fillMaxWidth().height(24.dp)) {
                 Box(Modifier.weight(1.0).fillMaxHeight().background(Color(0xFFE8DEF8))) {}
                 Column(Modifier.weight(2.0, fill = false)) {

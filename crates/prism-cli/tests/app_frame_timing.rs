@@ -24,6 +24,14 @@
 //! | both, a click on empty space then `frame` | allocations of those frames | zero |
 //! | counter clicks and todo toggles | live allocations after each frame | constant |
 //! | todo app, `main.prism` | first frame after start, cold and warm | under 50 ms, under 20 ms |
+//! | `large.prism`, a first `frame`, then `resize 801 600`, `frame`, `resize 800 600`, `frame` | `layout` p99 | under 4 ms |
+//! | the same | allocations of the frames after the first | zero |
+//!
+//! The resize session lays out the 1,000-item app in full at every frame, about 7,000 nodes,
+//! every container through its measure policy written in Prism (`layout-primitive` D18), and
+//! prints its `layout` median against the native layout's, measured before that change on the
+//! machine that set the budget ([`NATIVE_RESIZE_LAYOUT`]), which it should stay within three
+//! times of.
 //!
 //! The todo inputs are paced 100 ms apart, as a person's (D15 and D16 of `strong-skipping`): the
 //! same work takes longer on a core that clocked down while the program slept, which is what a
@@ -34,6 +42,10 @@ use std::process::Command;
 
 const RUNS: usize = 5;
 const FIRST_FRAME_RUNS: usize = 20;
+
+/// The `layout` median of the resize session with the native layout pass, in milliseconds, on
+/// the M4 Pro that measured `layout-primitive`'s baseline (D18).
+const NATIVE_RESIZE_LAYOUT: f64 = 0.177;
 
 /// The `examples/` workspace.
 fn examples() -> PathBuf {
@@ -255,6 +267,14 @@ fn the_example_apps_meet_their_frame_budgets() {
         "todo-empty.events",
         format!("frame\n{}", "click 600 80\nframe\n".repeat(50)),
     );
+    // A full relayout at every frame: a new width gives every row new constraints.
+    let resizes = script(
+        "resizes.events",
+        format!(
+            "frame\n{}",
+            "resize 801 600\nframe\nresize 800 600\nframe\n".repeat(50)
+        ),
+    );
     let warm = cache.as_os_str();
     // The first runs fill the build cache.
     run("apps/counter/main.prism", None, warm);
@@ -273,6 +293,14 @@ fn the_example_apps_meet_their_frame_budgets() {
     counter_idle.print("counter, a click on empty space then frame");
     let todo_idle = Measurement::take("apps/todo/large.prism", &todo_empty, warm);
     todo_idle.print("todo of 1,000 items, a click on empty space then frame");
+    let resizing = Measurement::take("apps/todo/large.prism", &resizes, warm);
+    resizing.print("todo of 1,000 items, resized between 800 and 801 wide, frame after each");
+    println!(
+        "  resize layout median {:.3} ms, {:.2} x the native layout's {:.3} ms (budget 3 x)",
+        resizing.median_of_medians("layout"),
+        resizing.median_of_medians("layout") / NATIVE_RESIZE_LAYOUT,
+        NATIVE_RESIZE_LAYOUT
+    );
 
     let first_frames = |cache: &std::ffi::OsStr| {
         let mut times: Vec<f64> = (0..FIRST_FRAME_RUNS)
@@ -333,6 +361,14 @@ fn the_example_apps_meet_their_frame_budgets() {
         (
             "live allocations constant over clicks and toggles",
             counter.constant_live() && todo.constant_live() && back_to_back.constant_live(),
+        ),
+        (
+            "todo resize layout p99 under 4 ms",
+            resizing.largest_p99("layout") < 4.0,
+        ),
+        (
+            "todo resize frames after the first allocate nothing",
+            idle_frames_allocate_nothing(&resizing),
         ),
         ("first frame under 50 ms cold", cold < 50.0),
         ("first frame under 20 ms warm", warm_first < 20.0),

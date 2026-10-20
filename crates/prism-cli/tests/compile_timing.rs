@@ -653,6 +653,45 @@ fn ui_calls(n: usize) -> String {
     )
 }
 
+/// `n` composables each calling `Layout` with a measure policy that measures its children,
+/// sums their sizes and places them in its placement block (`layout-primitive` D18): a lambda
+/// with a receiver checked against the policy's function type, a nested lambda with the
+/// placement scope's receiver, and context calls of `place`.
+fn layout_policies(n: usize) -> String {
+    let imports = join(TOOLKIT.len(), "\n", |i| format!("import /{}", TOOLKIT[i]));
+    let mut source = format!("{imports}\nimport /prism/collections\n");
+    for i in 0..n {
+        writeln!(
+            source,
+            "compose fun Layout{i}(content: compose () -> Unit) {{\n\
+             Layout(content = content) {{ measurables, constraints ->\n\
+             val placeables = measurables.map {{ it.measure(constraints) }}\n\
+             var width = 0\n\
+             var height = 0\n\
+             for (placeable in placeables) {{\n\
+             width += placeable.width\n\
+             height += placeable.height + {i}\n\
+             }}\n\
+             layout(width, height) {{\n\
+             var y = 0\n\
+             for (placeable in placeables) {{\n\
+             placeable.place(0, y)\n\
+             y += placeable.height\n\
+             }}\n\
+             }}\n\
+             }}\n\
+             }}"
+        )
+        .unwrap();
+    }
+    writeln!(
+        source,
+        "fun main() {{ runApp {{ Layout0 {{ Text(\"a\") }} }} }}"
+    )
+    .unwrap();
+    source
+}
+
 /// `n` instances of a generic whose body builds a closure.
 fn generic_closures(n: usize) -> String {
     let mut source = String::from(
@@ -1408,6 +1447,7 @@ fn shapes() -> Vec<Shape> {
             generic_hook_instances,
         ),
         shape("ui-calls", true, SIZES, ui_calls),
+        shape("layout-policies", true, SIZES, layout_policies),
         shape("vararg-calls", true, SIZES, vararg_calls),
         shape("extension-properties", true, SIZES, extension_properties),
         shape("field-visibility", true, SIZES, field_visibility),

@@ -567,6 +567,33 @@ A missed budget is investigated before archiving, as `compose-library-in-prism` 
 
 **Correction of the resize session (autonomous).** A height change of one pixel does not relayout `large.prism` in full: past the first screen, the column gives its rows a main-axis maximum of 0 at either height, so they keep their constraints and their cached sizes (0.017 ms above). A width change gives every row a new cross-axis maximum, so each of the about 7,000 nodes is measured again (0.177 ms, the first frame's layout). The resize session and the scenario "Resizing a thousand items allocates nothing" therefore alternate between 800 × 600 and 801 × 600. Rejected: keeping the height change, which would measure the cache, not the policies.
 
+**After (task 8.3, 2026-10-20, release build on the implementation, same machine, no other build running).**
+
+| Measurement | Baseline | After | Budget |
+|---|---|---|---|
+| `ui_timing` full layout, 1,000 / 10,000 / 100,000 nodes (Rust policies) | 0.066 / 0.493 / 2.708 ms | 0.047 / 0.503 / 6.122 ms | 10,000 within 2× (1.02×): met; growth ×10.7, ×12.2 and display list ×11.0, ×13.5, under ×15: met |
+| `app_frame_timing` counter click, frame median / p99 | 0.003 / 0.003 ms | 0.004 / 0.005 ms | under 1 / 2 ms: met |
+| todo toggle (paced), `layout` median | 0.002 ms | 0.009 ms | +0.05 ms at most: met |
+| todo toggle (paced), recomposition median / frame p99 | 0.134 / 3.686 ms | 0.181 / 4.227 ms | under 1 ms: met; under 4 ms: **missed** (see below) |
+| todo typing (paced), `layout` median | 0.002 ms | 0.003 ms | +0.05 ms at most: met |
+| todo typing (paced), recomposition median / frame p99 | 1.499 / 4.489 ms | 1.827 / 4.948 ms | under 2 ms: met; under 4 ms: missed, as at baseline |
+| todo toggle back to back, frame median / p99 | 0.159 / 0.202 ms | 0.175 / 0.268 ms | no target |
+| frames changing nothing, allocations | none | none | met |
+| resize `large.prism` between widths 800 and 801, `layout` median / p99 | 0.177 / 0.196 ms (native) | 0.610 / 0.635 ms | p99 under 4 ms: met; median within 3×: **missed** (3.45×) |
+| resize frames after the first, allocations | none in 99 of 101 | none in 100 of 101 | met (a first relayout's growth of the tree's dirty list, also native, now reserved) |
+| resize between heights 600 and 601, `layout` median | 0.017 ms | 0.058 ms | no target |
+| todo first frame, cold / warm | 31.6 / 3.14 ms | 39.4 / 3.73 ms | +3 ms cold: **missed** (+7.8 ms); +1 ms warm: met (+0.59 ms); under 50 / 20 ms: met |
+| `ui_run_timing`, a click among 1,000 texts | 0.208 ms | 0.231 ms | under 1 ms: met |
+| `compile_timing` `ui-calls`, `compose` 256 / 1024 / 4096 | 11.5 / 51.2 / 227.3 ms | 12.2 / 53.5 / 238.1 ms | linear: met |
+| `compile_timing` `layout-policies`, slowest stage growth | — | ×4.1 (`borrow`, `clif`), `compose` ×4.9 / ×5.1 per ×4 | under ×8: met |
+
+**The misses, investigated (autonomous: accepted, with follow-ups).**
+
+- **Resize layout at 3.45× the native layout.** The Rust side of the protocol is cheap: `ui_timing`, whose containers are Rust policies through the same entry points, lays out at 1.02× the native pass once the chain fold was passed by reference (it was 2.2× while the fold's arrays were moved through each step) and parent data was kept in the node (two chain scans per read before). What remains is the count of crossings: about 55 entry calls per todo row (per child: a parent-data read in each of up to three loops, a measure, a `measured` and a place; per container: two property reads and the two halves of `layout`), each a call out of Tier 1 code and one borrow of the thread's state, plus the arithmetic in Tier 1 code. A sample of fifty thousand resizes shows thread-local access and `RefCell` borrows as the largest single items. The absolute target (p99 under 4 ms) holds with a margin of six. Follow-ups: package entry points that return a child's placeable with its parent data in one call, and a Tier 2 build that inlines the entry calls.
+- **Cold first frame +7.8 ms.** The library is compiled cold: `/prism/compose/ui` grew by the primitive (about 30 functions) and costs 3.0 ms more to compile without a cache, `/prism/compose/layout` by its policies and helpers, 4.3 ms more (an import-only program: 7.5 → 10.5 ms with `ui`, 12.5 → 19.8 ms with `layout`). Warm, from the build cache, it is +0.59 ms. Follow-up, as `compose-library-in-prism` noted: compiling library functions on first use.
+- **Paced toggle frame p99 4.23 ms** (3.69 at baseline, target 4 ms). Its `layout` stage grew by 0.007 ms; the rest is the paced measurement's spread on a core clocked down between inputs (F4 in `docs/milestone-2-review-notes.md`: the same frame measured 3.0 to 6.0 ms p99 across runs), and about 10 % in stages that walk every node (display list, hit test), which `Node`'s 40 more bytes (policy, parent data, stamps) slow on 7,000 nodes. Back to back, the frame grows from 0.159 to 0.175 ms median.
+
+
 ### D19. Behaviour is unchanged; the tour shows a custom layout (autonomous)
 
 Every program keeps its output and exit status, `--check-allocations` included, and every example session keeps its snapshot, except the toolkit tour, which gains a custom `Layout` (a `FlowRow` over a few `Text`s) so that the examples show the primitive.
@@ -600,7 +627,10 @@ Added at implementation (task 3.3). D14's rule means every entry call a policy m
 - A measurement is a short sequence of **steps**, each one borrow of the state: the cache check and the chain fold, then, for a text or text field, the content and the fold back to the outermost element in the same borrow; for a policy kind, pushing the frame and lending the children; the policy call with no borrow; then popping the frame and the fold back. `measure_child` does its frame checks and the child's first step in one borrow, so measuring a text child is one borrow.
 - The fold's arrays (seventeen constraints and offsets) live on the measuring Rust frame and are passed by reference, never moved: moving them through the steps' results cost a third of the full layout's time in `ui_timing` (2.2× the native layout, against 1.3× by reference).
 
-**Run-time cost.** Per policy node, two borrows of the thread's state around the call; per child, one borrow per entry call. `ui_timing`'s full layout of 10,000 nodes: 0.65 ms against the native 0.49 ms (1.3×, budget 2×).
+- A node keeps its parent data (first `weight` with its `fill`, first `align`), recomputed when its chain is set, so a policy's read is one load instead of two scans of the chain. The fold's arrays are left uninitialized past the chain's length, so a measurement the cache answers costs no 800-byte fill.
+- The end of a policy's run visits its children again only when one was not measured or not placed, or was unplaced before.
+
+**Run-time cost.** Per policy node, two borrows of the thread's state around the call; per child, one borrow per entry call. `ui_timing`'s full layout of 10,000 nodes: 0.50 ms against the native 0.49 ms (1.02×, budget 2×).
 
 Rejected:
 

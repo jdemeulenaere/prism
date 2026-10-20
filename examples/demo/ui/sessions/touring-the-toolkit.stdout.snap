@@ -1,6 +1,6 @@
 window 640x800
   box #1 0,0 640x800 contentColor #FF000000 fillMaxSize background(#FFFFFFFF)
-    column #2 0,0 640x494 arrangement spacedBy(12) padding(16)
+    column #2 0,0 640x550 arrangement spacedBy(12) padding(16)
       box #3 16,16 224x36 background(#FF6750A4) padding(12,4,12,4) defaultMinSize(200x28) clickable
         text #4 28,20 104x20 "Prism UI tour" color #FFFFFFFF
       row #5 16,64 264x40 arrangement spacedBy(8) alignment CenterVertically
@@ -75,11 +75,18 @@ window 640x800
             box #74 232,382 12x12 size(12x12) background(#FF00FF00 RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
           box #75 244,406 12x12 align(CenterVertically)
             box #76 244,406 12x12 size(12x12) background(#FF0000FF RoundedCorner(50%)) border(1 #FF444444 RoundedCorner(50%))
-      row #77 16,454 608x24 fillMaxWidth height(24)
-        box #78 16,454 202x24 weight(1.0) fillMaxHeight background(#FFE8DEF8)
-        column #79 218,454 72x24 weight(2.0 nofill)
-          box #80 218,454 72x24 weight(1.0) background(#FFCCCCCC) padding(4,2,4,2)
-            text #81 222,456 64x20 "weighted"
+      box #77 16,454 200x44 width(200) border(1 #FF888888)
+        layout #78 16,454 152x44
+          text #79 16,454 48x20 "layout"
+          text #80 68,454 56x20 "measure"
+          text #81 128,454 40x20 "place"
+          text #82 16,478 88x20 "constraints"
+          text #83 108,478 48x20 "policy"
+      row #84 16,510 608x24 fillMaxWidth height(24)
+        box #85 16,510 202x24 weight(1.0) fillMaxHeight background(#FFE8DEF8)
+        column #86 218,510 72x24 weight(2.0 nofill)
+          box #87 218,510 72x24 weight(1.0) background(#FFCCCCCC) padding(4,2,4,2)
+            text #88 222,512 64x20 "weighted"
 clear 640x800 #FFFFFFFF
 rect 0,0 640x800 #FFFFFFFF
 rect 16,16 224x36 #FF6750A4
@@ -152,6 +159,12 @@ rect 232,382 12x12 #FF00FF00 radius 6
 border 232,382 12x12 width 1 #FF444444 radius 6
 rect 244,406 12x12 #FF0000FF radius 6
 border 244,406 12x12 width 1 #FF444444 radius 6
-rect 16,454 202x24 #FFE8DEF8
-rect 218,454 72x24 #FFCCCCCC
-text 222,456 size 16 #FF000000 "weighted"
+border 16,454 200x44 width 1 #FF888888
+text 16,454 size 16 #FF000000 "layout"
+text 68,454 size 16 #FF000000 "measure"
+text 128,454 size 16 #FF000000 "place"
+text 16,478 size 16 #FF000000 "constraints"
+text 108,478 size 16 #FF000000 "policy"
+rect 16,510 202x24 #FFE8DEF8
+rect 218,510 72x24 #FFCCCCCC
+text 222,512 size 16 #FF000000 "weighted"

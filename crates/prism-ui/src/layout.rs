@@ -60,6 +60,7 @@ use crate::text::{break_lines, line_width, Line, TextMeasurer};
 use crate::thread::{with_state, State};
 use prism_compose::Handle;
 use prism_runtime::{FunctionValue, PrismList};
+use std::mem::MaybeUninit;
 
 /// The layout pass as the app drives it: its counter of the last run.
 #[derive(Debug, Default)]
@@ -79,6 +80,13 @@ struct Frame {
     placing: bool,
     /// The size `layout` gave.
     size: Size,
+    /// The node's children, how many the policy measured and placed, and whether every child
+    /// was placed before it ran: when all are measured and placed and were placed before, the
+    /// end of the run has no child to update.
+    children: usize,
+    measured: usize,
+    placed: usize,
+    all_placed_before: bool,
 }
 
 /// The state of the running layout pass, kept in the thread's state so that the entry points
@@ -198,92 +206,102 @@ fn fraction_of(maximum: i64, fraction: f64) -> i64 {
 }
 
 /// The chain fold of one measurement: the constraints each element receives and the offset
-/// of the rest at its position; index `count` is what the content receives.
+/// of the rest at its position; index `count` is what the content receives. Only the entries
+/// up to `count` are written by [`Fold::fold`] and read afterwards, so a fold costs nothing to
+/// make for a measurement the cache answers.
 struct Fold {
-    received: [Constraints; CAPACITY + 1],
-    offsets: [(i64, i64); CAPACITY + 1],
+    received: [MaybeUninit<Constraints>; CAPACITY + 1],
+    offsets: [MaybeUninit<(i64, i64)>; CAPACITY + 1],
     count: usize,
 }
 
 impl Fold {
     fn new() -> Fold {
         Fold {
-            received: [Constraints::up_to(0, 0); CAPACITY + 1],
-            offsets: [(0, 0); CAPACITY + 1],
+            received: [const { MaybeUninit::uninit() }; CAPACITY + 1],
+            offsets: [const { MaybeUninit::uninit() }; CAPACITY + 1],
             count: 0,
         }
     }
 
     /// Folds `node`'s chain from the first element under `constraints`, in place.
     fn fold(&mut self, node: &Node, constraints: Constraints) {
-        let Fold {
-            received,
-            offsets,
-            count,
-        } = self;
-        received[0] = constraints;
-        offsets[0] = (0, 0);
-        *count = node.chain.len().min(CAPACITY);
-        let count = *count;
+        let count = node.chain.len().min(CAPACITY);
+        self.count = count;
+        let (mut c, mut x, mut y) = (constraints, 0i64, 0i64);
+        self.received[0].write(c);
+        self.offsets[0].write((x, y));
         for index in 0..count {
-            let c = received[index];
-            let (x, y) = offsets[index];
-            let (next, offset) = match node.chain[index].element {
+            match node.chain[index].element {
                 Element::Padding {
                     start,
                     top,
                     end,
                     bottom,
-                } => (c.deflated(start + end, top + bottom), (x + start, y + top)),
+                } => {
+                    c = c.deflated(start + end, top + bottom);
+                    x += start;
+                    y += top;
+                }
                 Element::Size { width, height } => {
-                    let mut next = c;
                     if let Some(width) = width {
-                        next = next.with_exact_width(width);
+                        c = c.with_exact_width(width);
                     }
                     if let Some(height) = height {
-                        next = next.with_exact_height(height);
+                        c = c.with_exact_height(height);
                     }
-                    (next, (x, y))
                 }
                 Element::DefaultMinSize { width, height } => {
-                    let mut next = c;
-                    if let (Some(width), 0) = (width, c.min_width) {
-                        next.min_width = width.min(c.max_width);
+                    let old = c;
+                    if let (Some(width), 0) = (width, old.min_width) {
+                        c.min_width = width.min(old.max_width);
                     }
-                    if let (Some(height), 0) = (height, c.min_height) {
-                        next.min_height = height.min(c.max_height);
+                    if let (Some(height), 0) = (height, old.min_height) {
+                        c.min_height = height.min(old.max_height);
                     }
-                    (next, (x, y))
                 }
                 Element::FillMax {
                     width,
                     height,
                     fraction,
                 } => {
-                    let mut next = c;
-                    if width && c.max_width != UNBOUNDED {
-                        next = next.with_exact_width(fraction_of(c.max_width, fraction));
+                    let old = c;
+                    if width && old.max_width != UNBOUNDED {
+                        c = c.with_exact_width(fraction_of(old.max_width, fraction));
                     }
-                    if height && c.max_height != UNBOUNDED {
-                        next = next.with_exact_height(fraction_of(c.max_height, fraction));
+                    if height && old.max_height != UNBOUNDED {
+                        c = c.with_exact_height(fraction_of(old.max_height, fraction));
                     }
-                    (next, (x, y))
                 }
-                _ => (c, (x, y)),
-            };
-            received[index + 1] = next;
-            offsets[index + 1] = offset;
+                _ => {}
+            }
+            self.received[index + 1].write(c);
+            self.offsets[index + 1].write((x, y));
         }
+    }
+
+    /// The constraints element `index` receives, `count` being the content's.
+    fn received(&self, index: usize) -> Constraints {
+        assert!(index <= self.count);
+        // SAFETY: `fold` wrote every entry up to `count`.
+        unsafe { self.received[index].assume_init() }
+    }
+
+    /// The offset of the rest of the chain at element `index`.
+    fn offset(&self, index: usize) -> (i64, i64) {
+        assert!(index <= self.count);
+        // SAFETY: `fold` wrote every entry up to `count`.
+        unsafe { self.offsets[index].assume_init() }
     }
 
     /// The constraints of the content.
     fn content_constraints(&self) -> Constraints {
-        self.received[self.count]
+        self.received(self.count)
     }
 
     /// The content's origin in the node.
     fn content_origin(&self) -> (i64, i64) {
-        self.offsets[self.count]
+        self.offset(self.count)
     }
 }
 
@@ -434,13 +452,13 @@ fn finish(
                 end,
                 bottom,
             } => {
-                size = fold.received[index].constrain(Size::new(
+                size = fold.received(index).constrain(Size::new(
                     size.width + start + end,
                     size.height + top + bottom,
                 ));
             }
             element if element.records_bounds() => {
-                let (x, y) = fold.offsets[index];
+                let (x, y) = fold.offset(index);
                 let bounds = Rect::new(x, y, size.width, size.height);
                 changed |= entry.bounds != bounds;
                 entry.bounds = bounds;
@@ -613,9 +631,12 @@ fn prepare_policy(
     let buffer = &mut layout.buffers[depth];
     buffer.clear();
     let mut child = node.first_child;
+    let mut all_placed_before = true;
     while let Some(current) = child {
         buffer.push(current.word());
-        child = tree.node(current).unwrap().next;
+        let node = tree.node(current).unwrap();
+        all_placed_before &= node.placed;
+        child = node.next;
     }
     // The list header over the buffer: never null, as an empty list's pointer is its element
     // alignment.
@@ -636,6 +657,10 @@ fn prepare_policy(
         layout_called: false,
         placing: false,
         size: Size::ZERO,
+        children: buffer.len(),
+        measured: 0,
+        placed: 0,
+        all_placed_before,
     });
     Ok(PolicyCall {
         function,
@@ -669,6 +694,15 @@ fn end_policy(state: &mut State, id: NodeId, c: Constraints) -> UiResult<Size> {
     let State { tree, layout, .. } = state;
     let frame = layout.frames.pop().expect("the policy's frame");
     debug_assert_eq!(frame.node, id);
+    if !frame.layout_called {
+        return Err(NO_LAYOUT);
+    }
+    let size = c.constrain(frame.size);
+    if frame.all_placed_before && frame.measured == frame.children && frame.placed == frame.children
+    {
+        // Every child measured and placed, as before: nothing to update.
+        return Ok(size);
+    }
     let mut child = tree.node(id).unwrap().first_child;
     while let Some(current) = child {
         let node = tree.node_mut(current).unwrap();
@@ -684,10 +718,7 @@ fn end_policy(state: &mut State, id: NodeId, c: Constraints) -> UiResult<Size> {
         node.placed = placed;
         child = node.next;
     }
-    if !frame.layout_called {
-        return Err(NO_LAYOUT);
-    }
-    Ok(c.constrain(frame.size))
+    Ok(size)
 }
 
 /// Whether constraints have minimums of at least 0 and at most their maximums.
@@ -715,6 +746,7 @@ pub fn measure_child(child: NodeId, constraints: Constraints) -> UiResult<Size> 
             return Err(INVALID_CONSTRAINTS);
         }
         node.stamp = frame.stamp;
+        state.layout.frames.last_mut().unwrap().measured += 1;
         Ok(start(state, child, constraints, &mut fold))
     })?;
     Ok(complete(child, constraints, step, &mut fold))
@@ -766,8 +798,9 @@ pub fn end_placement(node: NodeId) -> UiResult<()> {
 /// `(x, y)` from the content's top-left corner, while that frame is placing.
 pub fn place(parent: NodeId, child: NodeId, x: i64, y: i64) -> UiResult<()> {
     with_state(|state| {
-        let frame = *state.layout.frames.last().ok_or(PLACED_OUTSIDE)?;
-        let node = state.tree.node(child).ok_or(PLACED_OUTSIDE)?;
+        let State { tree, layout, .. } = state;
+        let frame = layout.frames.last_mut().ok_or(PLACED_OUTSIDE)?;
+        let node = tree.node_mut(child).ok_or(PLACED_OUTSIDE)?;
         if frame.node != parent
             || !frame.placing
             || node.parent != Some(parent)
@@ -775,9 +808,16 @@ pub fn place(parent: NodeId, child: NodeId, x: i64, y: i64) -> UiResult<()> {
         {
             return Err(PLACED_OUTSIDE);
         }
-        let (origin_x, origin_y) = frame.origin;
-        set_position(state, child, origin_x + x, origin_y + y);
-        state.tree.node_mut(child).unwrap().placed_stamp = frame.stamp;
+        let (x, y) = (frame.origin.0 + x, frame.origin.1 + y);
+        if node.x != x || node.y != y {
+            node.x = x;
+            node.y = y;
+            layout.changed = true;
+        }
+        if node.placed_stamp != frame.stamp {
+            node.placed_stamp = frame.stamp;
+            frame.placed += 1;
+        }
         Ok(())
     })
 }
@@ -800,10 +840,7 @@ pub fn alignment(node: NodeId) -> UiResult<Alignment> {
 /// A child's parent data (D9): its first `weight` (0.0 for none) with its `fill`, and its
 /// first `align` (`None` for none).
 pub fn parent_data(node: NodeId) -> UiResult<(f64, bool, Option<Alignment>)> {
-    read(node, |node| {
-        let (weight, fill) = node.weight().unwrap_or((0.0, false));
-        (weight, fill, node.own_alignment())
-    })
+    read(node, |node| node.parent_data)
 }
 
 /// The absolute bounds of `id`, from the positions relative to each parent.

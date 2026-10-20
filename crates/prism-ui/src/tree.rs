@@ -61,7 +61,9 @@ impl UiTree {
             numbers: 0,
             redraw: true,
             release_stack: Vec::new(),
-            dirty: Vec::new(),
+            // Room for the first relayouts, so that one after the first frame (a resize marks
+            // the root) allocates nothing.
+            dirty: Vec::with_capacity(16),
         }
     }
 
@@ -395,7 +397,7 @@ impl UiTree {
         let Some(node) = self.node(id) else {
             return Ok(None);
         };
-        let old_parent_data = (node.weight(), node.own_alignment());
+        let old_parent_data = node.parent_data;
         let old = &node.chain;
         let chain_equal = new.len() == old.len()
             && new.iter().zip(old).enumerate().all(|(index, (new, old))| {
@@ -476,8 +478,9 @@ impl UiTree {
                 });
             }
         }
+        node.parent_data = node.chain_parent_data();
         // A weight or alignment is read by the parent, whose policy must run again.
-        if (node.weight(), node.own_alignment()) != old_parent_data {
+        if node.parent_data != old_parent_data {
             if let Some(parent) = node.parent {
                 self.mark_needs_measure(parent);
             }

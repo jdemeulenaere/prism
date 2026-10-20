@@ -2650,6 +2650,43 @@ fn typing_into_the_field_of_a_thousand_items_skips_every_row_without_allocating(
     assert!(median < 100, "{}", stderr);
 }
 
+/// example-apps: "Resizing a thousand items allocates nothing" (`layout-primitive`): each
+/// resize lays out the 1,000-item app in full, through the containers' measure policies and the
+/// measurables lent to them, and no frame after the first allocates.
+#[test]
+fn resizing_a_thousand_items_allocates_nothing() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let directory = temporary_directory("resizing_allocations");
+    let events = directory.join("events");
+    write(
+        &events,
+        &format!(
+            "frame\n{}",
+            "resize 801 600\nframe\nresize 800 600\nframe\n".repeat(10)
+        ),
+    );
+    let output = prism(
+        &[
+            "run",
+            "--frame-stats",
+            "--headless",
+            "--events",
+            events.to_str().unwrap(),
+            "apps/todo/large.prism",
+        ],
+        &examples,
+    );
+    let _ = fs::remove_dir_all(&directory);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("frame stats: allocations per frame median 0, "),
+        "{}",
+        stderr
+    );
+    assert!(stderr.contains("none in 20 of 21 frames"), "{}", stderr);
+}
+
 /// The declarations of the code-generation scenarios of `operator-conventions`: a `User` whose
 /// `equals` compares ids, inside a `Team`.
 const USER_WITH_EQUALS: &str = "struct User { val id: Int, val name: String }\n\
