@@ -67,6 +67,7 @@ Up to three agents worked on `main` at once (a proposer next to an implementer, 
 - **Real OS input needs a permission.** The window tests feed input through the window's own event handling, which covers the mapping code but not the OS's event delivery. Posting real mouse and keyboard events (CGEventPost) needs the Accessibility permission for the process running the tests. That is the user's security setting to grant: ask, never work around it.
 - **The display may be locked** during unattended runs. The window tests above still run, and checks that need a person and real hardware go to the user under a "Needs the user" item in `ROADMAP.md`.
 - **Watch tests spawn `prism run --watch`.** Their helpers must kill and reap the child on drop, or a failed test leaves the program spinning forever.
+- **macOS has no `timeout` command.** An agent wrapped its test runs in it, the runs silently never happened, and a commit landed on a false pass. Read the `test result:` lines before trusting a run.
 - **Rate limits and crashes** interrupted agents several times. A per-group commit plus resuming the same agent (SendMessage with its id) lost no work. A long silence from a fresh agent was usually a slow start, not a hang: ask for a status line before restarting it.
 
 ## 7. Working with the user
