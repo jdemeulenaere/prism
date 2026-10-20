@@ -201,7 +201,7 @@ public struct Dps : Copy { val Unspecified: Dp }
 public val Dp: Dps = Dps(Unspecified = Dp(-1))
 
 // `n` logical pixels, as `16.dp`.
-public intrinsic val Int.dp: Dp
+public val Int.dp: Dp get() = Dp(this)
 
 // A font size in whole logical pixels; negative values are unspecified.
 public struct TextUnit : Copy { val value: Int }
@@ -213,7 +213,7 @@ public struct TextUnits : Copy { val Unspecified: TextUnit }
 public val TextUnit: TextUnits = TextUnits(Unspecified = TextUnit(-1))
 
 // A font size of `n` logical pixels, as `14.sp`.
-public intrinsic val Int.sp: TextUnit
+public val Int.sp: TextUnit get() = TextUnit(this)
 
 // How a text is drawn: its colour and font size, either unspecified.
 public struct TextStyle : Copy { val color: Color, val fontSize: TextUnit }

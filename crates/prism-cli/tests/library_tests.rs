@@ -501,8 +501,8 @@ fn the_public_signature_of_run_app() {
         .filter_map(ExportedSymbol::declaration_text)
         .collect();
     for expected in [
-        "public intrinsic val Int.dp: Dp",
-        "public intrinsic val Int.sp: TextUnit",
+        "public val Int.dp: Dp",
+        "public val Int.sp: TextUnit",
         "public intrinsic struct HandlerId : Copy",
     ] {
         assert!(

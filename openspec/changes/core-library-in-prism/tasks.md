@@ -90,7 +90,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 6. Unit properties (D7)
 
-- [ ] 6.1 `library/prism/compose/ui.prism`: `public val Int.dp: Dp get() = Dp(this)` and `public val Int.sp: TextUnit get() = TextUnit(this)`.
+- [x] 6.1 `library/prism/compose/ui.prism`: `public val Int.dp: Dp get() = Dp(this)` and `public val Int.sp: TextUnit get() = TextUnit(this)`.
   - Remove the `dp` and `sp` catalog entries, `BuiltinFunction::{DpOfInt, TextUnitOfInt}` (retiring codec tags 38 and 39), the unit construction in `crates/prism-mir/src/build/call.rs`, and `int_property_read`'s use for them.
   - Rename and re-bless the fixtures: `mir/a-unit-in-mir` becomes `mir/a-unit-property-in-mir`, and the `standard-library` case of "Unit properties are members of Int" becomes "A file's own unit property shadows the import" (executable).
   - Update "The public signature of runApp", and check that `explicit-library`'s import help still names `/prism/compose/ui` for `16.dp` without the import ("An extension of a built-in type from another module is imported", `crates/prism-cli/src/library_index.rs`).

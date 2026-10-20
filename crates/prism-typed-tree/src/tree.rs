@@ -786,10 +786,6 @@ pub enum BuiltinFunction {
     /// `runApp(title, width, height, content)` of `/prism/compose/ui`: runs an app of the
     /// composable `content` until its window closes (D15 of `ui-toolkit`).
     RunApp,
-    /// `n.dp` of an `Int`: the construction `Dp(n)` (D7 of `ui-toolkit`).
-    DpOfInt,
-    /// `n.sp` of an `Int`: the construction `TextUnit(n)`.
-    TextUnitOfInt,
 }
 
 /// The declared signature of a built-in list member (D5 of `collections`), written with the
@@ -842,8 +838,6 @@ impl BuiltinFunction {
             BuiltinFunction::UiNode => "Node",
             BuiltinFunction::UiLeafNode => "LeafNode",
             BuiltinFunction::RunApp => "runApp",
-            BuiltinFunction::DpOfInt => "dp",
-            BuiltinFunction::TextUnitOfInt => "sp",
         }
     }
 

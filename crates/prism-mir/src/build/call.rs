@@ -2,8 +2,8 @@
 
 use super::{BodySlots, Builder, Preallocated};
 use crate::mir::{
-    AggregateKind, Body, BodyId, BodyOwner, BorrowOrigin, Callee, Constant, Operand, Place,
-    Projection, Rvalue, TerminatorKind,
+    Body, BodyId, BodyOwner, BorrowOrigin, Callee, Constant, Operand, Place, Projection, Rvalue,
+    TerminatorKind,
 };
 use prism_ast::{DefaultInputs, Span};
 use prism_typed_tree::ParameterKind;
@@ -160,22 +160,6 @@ impl Builder<'_> {
         ty: &Type,
         span: Span,
     ) {
-        // `n.dp` and `n.sp` build their unit from the `Int`, with no call (D7 of `ui-toolkit`).
-        if let (
-            TreeCallee::Builtin(BuiltinFunction::DpOfInt | BuiltinFunction::TextUnitOfInt),
-            [Argument::Written(value)],
-            Type::Struct { id, .. },
-        ) = (&call.callee, call.arguments.as_slice(), ty)
-        {
-            let operand = self.argument(*value, false);
-            if self.current.is_none() {
-                return;
-            }
-            let destination = self.destination_or_temporary(destination, ty, span);
-            let kind = AggregateKind::plain_struct(id.clone());
-            self.assign(destination, Rvalue::Aggregate(kind, vec![operand]), span);
-            return;
-        }
         let callee = match &call.callee {
             TreeCallee::Function(path) => Callee::Function(path.clone()),
             TreeCallee::External(path) => Callee::External(path.clone()),

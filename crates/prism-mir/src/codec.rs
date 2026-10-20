@@ -777,8 +777,9 @@ impl Codec for StateOperation {
 }
 
 /// The tags of the built-ins. A retired built-in's tag is never reused: 5 (`toString` of a
-/// scalar), 10 (`indices`), 11 (`isEmpty`) and 12 (`isNotEmpty`), now members written in Prism
-/// (D11 of `core-library-in-prism`).
+/// scalar), 10 (`indices`), 11 (`isEmpty`) and 12 (`isNotEmpty`), now members written in Prism,
+/// and 38 (`dp`) and 39 (`sp`), now extension properties written in Prism (D11 of
+/// `core-library-in-prism`).
 impl Codec for BuiltinFunction {
     fn encode(&self, encoder: &mut Encoder) {
         encoder.u8(match self {
@@ -816,8 +817,6 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::UiNode => 35,
             BuiltinFunction::UiLeafNode => 36,
             BuiltinFunction::RunApp => 37,
-            BuiltinFunction::DpOfInt => 38,
-            BuiltinFunction::TextUnitOfInt => 39,
             BuiltinFunction::RangeContains => 40,
         });
     }
@@ -857,8 +856,6 @@ impl Codec for BuiltinFunction {
             35 => BuiltinFunction::UiNode,
             36 => BuiltinFunction::UiLeafNode,
             37 => BuiltinFunction::RunApp,
-            38 => BuiltinFunction::DpOfInt,
-            39 => BuiltinFunction::TextUnitOfInt,
             40 => BuiltinFunction::RangeContains,
             _ => return None,
         })

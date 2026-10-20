@@ -10434,32 +10434,6 @@ impl TypeChecker {
     /// A call of the built-in string member `builtin` (`length` or `get`) on the string `base`,
     /// with a shared receiver borrow of it and then `arguments` (D5 and D6 of
     /// `runtime-strings-and-drops`). A string that is not a place is borrowed in a temporary.
-    /// A read of the intrinsic property `member` of the `Int` `base`, of type `ty`: a call of
-    /// its built-in with the `Int` copied as its receiver (D7 of `ui-toolkit`).
-    fn int_property_read(
-        &mut self,
-        base: ExpressionId,
-        ty: Type,
-        member: &str,
-        span: Span,
-    ) -> ExpressionId {
-        let builtin = self.member_property_builtin(&Type::Int, member);
-        let base = self.consume(base);
-        let call = Call {
-            callee: Callee::Builtin(builtin),
-            evaluation_order: vec![0],
-            parameter_kinds: vec![ParameterKind::Plain],
-            arguments: vec![Argument::Written(base)],
-            parameters: vec![(Some(THIS.to_string()), Type::Int)],
-            type_arguments: Vec::new(),
-            has_receiver: true,
-            has_context: false,
-            is_compose: false,
-            operator: None,
-        };
-        self.add(ExpressionKind::Call(call), ty, span)
-    }
-
     /// The built-in of the member property `member` of the built-in type `receiver`, which
     /// [`Self::member_type`] found.
     fn member_property_builtin(&self, receiver: &Type, member: &str) -> BuiltinFunction {
@@ -10760,7 +10734,6 @@ impl TypeChecker {
                 let builtin = self.member_property_builtin(&reached, member);
                 self.list_member_read(builtin, (**element).clone(), base, span)
             }
-            Type::Int => self.int_property_read(base, member_ty.clone(), member, span),
             _ => {
                 let variant = self.variant_node(&reached, member, reached.clone(), span);
                 self.discard_then(base, variant)

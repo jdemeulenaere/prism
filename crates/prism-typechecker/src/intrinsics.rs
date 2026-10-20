@@ -292,9 +292,8 @@ pub const CATALOG: &[Intrinsic] = &[
         "public intrinsic compose fun SideEffect(effect: attached () -> Unit): Unit",
         false,
     ),
-    // `/prism/compose/ui` (D3, D7 and D15 of `ui-toolkit`): the two node composables the
-    // toolkit is written over, which the transform lowers to node groups, the app's entry and
-    // the unit properties, lowered to constructions.
+    // `/prism/compose/ui` (D3 and D15 of `ui-toolkit`): the two node composables the toolkit is
+    // written over, which the transform lowers to node groups, and the app's entry.
     entry(
         COMPOSE_UI,
         None,
@@ -317,22 +316,6 @@ pub const CATALOG: &[Intrinsic] = &[
         "runApp",
         BuiltinFunction::RunApp,
         "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit",
-        false,
-    ),
-    entry(
-        COMPOSE_UI,
-        Some("Int"),
-        "dp",
-        BuiltinFunction::DpOfInt,
-        "public intrinsic val Int.dp: Dp",
-        false,
-    ),
-    entry(
-        COMPOSE_UI,
-        Some("Int"),
-        "sp",
-        BuiltinFunction::TextUnitOfInt,
-        "public intrinsic val Int.sp: TextUnit",
         false,
     ),
 ];
