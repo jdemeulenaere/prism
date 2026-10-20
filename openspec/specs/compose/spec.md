@@ -1017,6 +1017,24 @@ The bundled module `/prism/compose/runtime` MUST declare `Composition`, `composi
 - **WHEN** a file declares `fun mutableStateOf(n: Int): Int = n + 1` and `fun main() { println(mutableStateOf(1)) }`
 - **THEN** it runs and prints `2`: the call resolves to the file's own `mutableStateOf`
 
+### Requirement: Hooks of Values a Composition Releases Run After the Pass
+A remembered or kept value with a drop hook that a pass releases MUST run its hook when the pass releases it, after the pass has ended, in the release order. A state's value with a drop hook MUST run it when the state's cell is freed, not when the state is retired. Such hooks run outside composition, as handlers do: a state they write invalidates its readers for the next pass.
+
+#### Scenario: A remembered value's hook runs when its group leaves
+- **WHEN** `struct Noisy { val name: String }`, `operator mut fun Noisy.drop() { println("drop " + name) }`, `val Visible: MutableState<Bool> = mutableStateOf(true)` and `compose fun Kept() { val n = remember { Noisy("kept") }; println("composed " + n.name) }` are declared, and `fun main() { val c = composition { if (Visible.value) { Kept() } }; Visible.value = false; c.recompose(); println("done") }` runs with `--check-allocations`
+- **THEN** it prints `composed kept`, `drop kept` and `done`, and exits with status 0
+
+#### Scenario: A state's value runs its hook when its cell is freed
+- **WHEN** with that `Noisy` and `Visible`, `compose fun Held() { val s = remember { mutableStateOf(Noisy("held")) }; println("composed") }` and `fun dispose(c: Composition) {}` are declared, and `fun main() { val c = composition { if (Visible.value) { Held() } }; Visible.value = false; c.recompose(); println("removed"); dispose(c); println("done") }` runs with `--check-allocations`
+- **THEN** it prints `composed`, `removed`, `drop held` and `done`: the state retired by the pass is freed, and its value dropped, when the last composition is disposed
+
+### Requirement: Hooks Run During a Pass Follow the Pass's Rules
+A hook that runs while a pass runs, for a value dropped in a composable body or in a function it calls, MUST obey the rules of the pass: writing a state there MUST end the program with `state written during composition`, located at the write in the hook.
+
+#### Scenario: A hook writing state during composition
+- **WHEN** `val Count: MutableState<Int> = mutableStateOf(0)`, `struct Bump { val n: Int }`, `operator mut fun Bump.drop() { Count.value += n }` and `compose fun Content() { val b = Bump(1) }` are declared, and `fun main() { val c = composition { Content() } }` runs
+- **THEN** stderr is `panic: state written during composition` and the location of `Count.value += n` in the hook, and the exit status is 101
+
 ## Design Rationale
 
 Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-18 and 2026-10-19, and logged in `docs/decisions-for-review.md`). It implements the runtime side of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D1, D6, D7, D10, D11 and D23).
@@ -1112,3 +1130,7 @@ Decisions from `strong-skipping` (review item A1, agreed with the user on 2026-1
 - **No glue becomes dead** (D12, audit). Kept values compare as `Copy` values, function values (descriptor and environment, whose captures are `Copy` or weak) or identities (two words); no non-`Copy` value is compared through its glue, and no identity record names glue of its referent. Function-value equality stays for handlers, and cells keep their value's glue for equal writes.
 - **Hot reload needs no new rule** (D13). Identities are data: an edited call passes another address, an edited top-level initializer gets new storage at a new address, and a changed referent type changes the composable's contract, whose restart scopes reset, and the identity slot's fingerprint.
 - **Costs** (D18). Compile time: a test per parameter type, one scan and backward worklist per composable body over its reference assignments, constant work per classified assignment, argument and closure capture (`borrowed-arguments` in `compile_timing.rs`, near-linear). Run time: per borrowed argument one more word and, when kept, one `keep` of two words; per state read feeding a borrowed argument one `state version` call; per storing write or exclusive flag a counter increment; no allocation. Memory: 8 bytes per state, 16 per kept borrow.
+
+Decisions from `drop-and-clone-hooks` (part L2 of the review's agreed item A4, planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the user decided in A4 that there is no `unsafe` layer for now, so hooks serve types wrapping runtime handles, not raw memory):
+
+- **Hooks run after the pass when the composition releases values, when the cell is freed for state values, and under the pass's rules inside it** (D15, following R1 and R2 of `owned-state`): a remembered value's hook runs as its slot is released, after `end_pass`, so it may write states (invalidating readers for the next pass) and start, recompose or dispose other compositions; a state's value runs its hook when its cell is freed, one pass after the state is dropped, the price of R2's guarantee that no handler meets a freed cell; a value dropped during a pass runs its hook there, where a state write is the run-time error `state written during composition`. Releases are a queue processed with no borrow of the runtime's state held, so a hook that runs a nested pass of another composition drains the queue with it (found safe in review). Rejected: deferring every hook run during a pass to its end (a hidden queue changing when locals die).

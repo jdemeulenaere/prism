@@ -446,6 +446,36 @@ Phase 1 MUST record whether an exported function is `operator`, and, in the reco
 - **WHEN** the body of the exported `equals` or `plus` of `models/user` changes
 - **THEN** the exported ABI hash is unchanged, so no importer is re-checked
 
+### Requirement: Drop and Clone Hooks in the ABI
+The ABI MUST record, for each exported struct and enum and in each reachable definition, whether the type has a drop hook and whether it has a clone hook, taken from the declaring file's declarations alone. The ABI hash and the hash of definitions that keys instances MUST cover both flags. A hook's body MUST NOT be part of the ABI.
+
+#### Scenario: Adding a drop hook changes the hashes
+- **WHEN** `lib/net.prism` declares `public struct Session(val id: Int)` and `app/main.prism` imports `/lib/net`, and `lib/net.prism` then gains `operator mut fun Session.drop() {}`
+- **THEN** the ABI hash of `lib/net` changes, `prism abi lib/net.prism` shows `Session` with a drop hook, and `prism check --explain-cache app/main.prism` checks `app/main.prism` again
+
+#### Scenario: A reachable type's hook is recorded
+- **WHEN** `lib/a.prism` declares `struct Secret { val k: Int }`, `operator mut fun Secret.drop() {}` and `public struct Outer { val s: Secret }`
+- **THEN** `prism abi lib/a.prism` lists among the reachable types the definition of `Secret` with a drop hook, so an importer's drop glue of `Outer` calls it
+
+#### Scenario: Editing a hook's body recompiles nothing downstream
+- **WHEN** `lib/net.prism` declares `public struct Session(val id: Int)` and `operator mut fun Session.drop() { println("closed") }`, `app/main.prism` imports `/lib/net` and declares `fun main() { val s = Session(1) }`, the program has been run, and the hook's body changes to `println("bye")`
+- **THEN** the ABI hash of `lib/net` is unchanged, the next `prism run --explain-cache app/main.prism` prints `  checked lib/net.prism` and `  reused app/main.prism`, and the program prints `bye`
+
+### Requirement: Hook Instances Are Planned From Summaries
+Each file's summary MUST request the drop hook instance of every generic type with a drop hook that the types its bodies drop or clone, and the type arguments of its generic calls, reach through fields, payloads, nullables, boxes, lists and function environments, and the clone hook instance of each such type that is `Clone` at its type arguments. A generic's summary MUST request them with its own type parameters left as they are, which planning substitutes as it does for calls.
+
+#### Scenario: Hook instances of a generic type
+- **WHEN** `lib/own.prism` declares `public struct Owned<T>(val v: T)` and `operator mut fun <T> Owned<T>.drop() { println("drop owned") }`, and `app/main.prism` imports `/lib/own` and declares `fun <T> hold(x: T) {}` and `fun main() { hold(Owned(1)); val xs = listOf(Owned("a")) }`
+- **THEN** `prism check --explain-cache app/main.prism` lists `  instantiate lib/own::Owned.drop<Int>` and `  instantiate lib/own::Owned.drop<String>`, and `prism run --check-allocations app/main.prism` prints `drop owned` twice
+
+#### Scenario: A hook instance requested inside a generic
+- **WHEN** `app/main.prism` declares `struct Owned<T>(val v: T)`, `operator mut fun <T> Owned<T>.drop() { println("drop owned") }`, `fun <T> wrap(x: T) { val o = Owned(x) }` and `fun main() { wrap(true) }`
+- **THEN** `prism check --explain-cache app/main.prism` lists `  instantiate app/main::wrap<Bool>` and `  instantiate app/main::Owned.drop<Bool>`, and running it prints `drop owned`
+
+#### Scenario: Hook requests join the polymorphic recursion check
+- **WHEN** `app/main.prism` declares `struct Owned<T>(val v: T)`, `operator mut fun <T> Owned<T>.drop() { val deeper = Owned(listOf<T>()) }` and `fun main() { val o = Owned(1) }`, and `prism check app/main.prism` runs
+- **THEN** it reports `E6004` naming `app/main::Owned.drop`, whose instances would request `Owned.drop<List<T>>` without end, as it reports polymorphic recursion through calls across files
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
@@ -519,3 +549,8 @@ Decisions from `explicit-library` (review item A4, agreed with the user on 2026-
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **Operator flags and equality operators are in the ABI** (D15). `ExportedSymbol::Function::is_operator` and an `equality` flag on struct and enum symbols and reachable definitions are covered by the ABI hash and the structural hash of definitions, so marking a function `operator` or adding `equals` re-checks importers and changes instance keys reaching the type, while editing an operator's body changes nothing downstream. An importer reads the flag from both the exported symbols and the reachable definitions (review fix).
+
+Decisions from `drop-and-clone-hooks` (part L2 of the review's agreed item A4, planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the user decided in A4 that there is no `unsafe` layer for now, so hooks serve types wrapping runtime handles, not raw memory):
+
+- **Hook flags are part of a type's definition** (D10): `drop_hook` and `clone_hook` on exported struct and enum records and on reachable definitions, set in Phase 1 by a syntactic match of the file's own hook declarations (`prism_abi::hook_types`, also used by the type checker), covered by the ABI hash and by the structural hash of definitions that keys instances. Adding or removing a hook re-checks importers; editing a hook's body changes no hash. An importer's `TypeTable` takes the flags from both the exported symbols and the reachable definitions.
+- **Hook instances of generic types are planned from summaries** (D11): Phase 2 walks the local types of every compiled body and the type arguments of its calls through fields, payloads, nullables, boxes and lists (`HookWalk` in `prism-mir`'s `summary.rs`, each distinct type once per file, nothing when the file's table has no generic type with a hook), and requests `<Type>.drop<Args>` for each generic type with a drop hook it reaches and `<Type>.clone<Args>` for each one `Clone` at its arguments: as roots for non-generic bodies, and with type parameters left as they are for generics (once for the function and its closures, once per default), which planning substitutes. A type an instance drops is built from types its record names or from its type arguments, so every hook instance is found; a type argument an instance only borrows still requests its hook (one instance compiled, never a missed one). Requests are ordinary `InstanceRequest`s, so summaries and the cache need no new field, and they join the cross-file polymorphic recursion check (`E6004`, also within one file, with a note when the growing request is a hook's). Compile-time cost: linear in the distinct types walked and in requests (shape `generic-hook-instances`). Rejected: walking types in the planner (it has no definitions), requesting instances while generating glue (instance keys and `--explain-cache` would be decided after planning), deferring generic hooks (`library-in-prism`'s state needs them).

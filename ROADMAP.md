@@ -251,7 +251,7 @@ Follow-ups of `runtime-strings-and-drops`:
 - [ ] A character iterator, so `for (c in s)` walks a string in O(n); indexing non-ASCII text is a scan, so a loop over `s[i]` is quadratic on it (D4, as a third built-in iterable beside `Range` and `List` (`collections`, D10) or through the iteration protocol).
 - [ ] Further string members (`substring`, `isEmpty`, conversions from text such as `toInt()`), and a `StringBuilder` or append API (non-goals of the change).
 - [ ] A size-class allocator (mimalloc, or per-thread caches for compose) behind `prism_rt_allocate` and `prism_rt_free`, whose sized frees already allow it (D8).
-- [ ] Destructors running user code (a `Drop` trait), once traits exist; glue frees memory only (non-goal of the change).
+- [x] Destructors running user code (a `Drop` trait), once traits exist; glue frees memory only (non-goal of the change). Done without traits by `drop-and-clone-hooks`: `operator mut fun T.drop()` and `operator fun T.clone(): T`, which glue calls through the function table.
 - [ ] Revisit the evaluation order of `s[i]` and `s.length`: the receiver is borrowed after the index, like every receiver, so `s[{ s = "cd"; 0 }]` reads the new `s` where Kotlin reads the old one (D22).
 
 Follow-ups of `heap-boxes`:
@@ -457,6 +457,17 @@ Follow-ups of `operator-conventions`:
 - [ ] `h == h2` for `h: Heap<O>?` and `h2: Heap<O>` is `E4002` (`expected 'Heap<O>?', found 'O'`), reported twice, although `==` reads both through their boxes (found while reviewing the change; not caused by it).
 - [ ] A cursor protocol whose `hasNext` or `next` exists but is not declared `operator` is reported as missing rather than with help saying to mark it `operator`, as other operators are (found while reviewing the change).
 
+Follow-ups of `drop-and-clone-hooks`:
+- [ ] A way to end a value without running its hook (`forget`, `ManuallyDrop`, or a consuming `into...` pattern) for handles given back to the runtime; today a consuming function disarms the hook through a `var` field it checks. Decide with the first library type that needs it in `library-in-prism` (D5, open question of the change).
+- [ ] A library `fun <T> drop(x: T)` to end a value early by name, and a `close()`/`use { }` protocol (non-goals of the change).
+- [ ] Replace `Composition`'s compiler drop, and the state and node handles' runtime calls, by hooks written in Prism (`library-in-prism`); hooks on intrinsic structs and built-in types stay out (non-goals of the change).
+- [ ] `equals` operators on generic types through the same planning as hook instances (D11 requests of `<Type>.equals<Args>`), with `operator-conventions`' follow-up (open question of the change).
+- [ ] Exact hook instance requests: a type argument an instance only borrows still requests its hook's instance (D11); worth refining only if programs show unused hook instances.
+- [ ] Running the remaining drops, and so hooks, after a runtime error, for resources outside the process (files or sockets, once externals give them); a runtime error ends the program without drops today (D14), with the unwinding item of `runtime-strings-and-drops` above.
+- [ ] A drop hook writing `*this = ...` drops the old value, which runs the hook again until `stack overflow`; a check rejecting writes of the whole `this` in a drop hook would report it at compile time (found while reviewing the change).
+- [ ] A hook of a state's old value that reads the same state while an assignment replaces it stops with `state accessed while borrowed`, since the write holds the cell's flag while it drops the old value; dropping the old value after releasing the flag would let the hook read the new one (found while reviewing the change).
+- [ ] A release hook that runs a pass of another composition (`recomposeComposition`) drains the shared release queue under that pass's identifier, so a state retired by the rest of the outer pass's releases invalidates readers that ran in the outer pass, costing them one extra recomposition; keep one release identifier per queued release (found while reviewing the change).
+
 Follow-ups of `ui-toolkit`:
 - [ ] A public `Layout` with measure policies in Prism and a `ModifierNodeElement`-style API for custom modifiers, which would make `NodeId` public (D3, D11, D25, non-goals of the change).
 - [ ] `LazyColumn`, scrolling, `Modifier.clip` and `BoxScope.matchParentSize` (non-goals of the change).
@@ -535,7 +546,7 @@ Agreed with the user in the post–Milestone 2 review ([`docs/milestone-2-review
 5. [x] `strong-skipping` (A1): every restartable composable can skip; `Copy` parameters compare by value, borrowed ones by provenance identity; no inference, no deep comparison.
 6. [x] `explicit-library` (A4): the library's sources move to a top-level `library/` directory, still imported as `/prism/...` from any workspace; no prelude, every function imported explicitly; built-in type names and their members stay in scope. Follow-ups under "Follow-ups of `explicit-library`" above.
 7. [x] `operator-conventions` (A4, L1): Kotlin-style `operator fun` (`get`, `set`, `iterator`, `plus`, `compareTo`, `equals`, `contains`, `invoke`), with `in`/`!in`, index lists, accessor places and a cursor protocol for `for` ([`operators`](openspec/specs/operators/spec.md)). Follow-ups under "Follow-ups of `operator-conventions`" above.
-8. [ ] `drop-and-clone-hooks` (A4, L2): custom drop and clone for owning library types.
+8. [x] `drop-and-clone-hooks` (A4, L2): custom drop and clone for owning library types: `operator mut fun T.drop()` and `operator fun T.clone(): T`, declared with their type and run by glue wherever values are dropped or cloned, generic hooks planned from summaries, hooks in the ABI and type fingerprints, and top-level values dropped with their hooks by the allocation check ([`ownership`](openspec/specs/ownership/spec.md), [`execution`](openspec/specs/execution/spec.md)). Follow-ups under "Follow-ups of `drop-and-clone-hooks`" above.
 9. [ ] `vararg` (A4, L4): variadic parameters, so `listOf` is ordinary code.
 10. [ ] `library-in-prism` (A4): `remember`, `key`, state, `Composition`, `print`, `toString` and the collection helpers written in Prism over runtime externals and the composer primitive, keeping the intrinsics to the minimum (`List`, `String` and `Heap` stay Rust-backed: no `unsafe` for now). Split into sequential changes (`core-library-in-prism` D1, which classifies every intrinsic and external of the library), with the language feature the compose half needs first (`field-visibility`):
     - [ ] 10a. `core-library-in-prism`: extension properties with getters; `/prism/core` as the one member module, declaring every member of the built-in types, intrinsic or written in Prism (scalars' `toString()`, `isEmpty`, `isNotEmpty`, `indices`); `Int.dp` and `Int.sp` in Prism; `print`, `println` and the Rust-backed members stay intrinsic.

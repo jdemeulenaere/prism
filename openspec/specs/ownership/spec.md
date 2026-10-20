@@ -71,7 +71,7 @@ Every `Copy` type and `String` MUST be `Clone`, and `T?` and `Heap<T>` MUST be `
 - **THEN** the file typechecks successfully
 
 ### Requirement: Marker Declarations Are Checked Structurally
-A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`) when any field or variant payload is not `Copy`, and a `: Clone` declaration when any is not `Clone`; its marker parameters, if generic, count as satisfying it. The diagnostic MUST name the marker, the field (or the variant and payload position) and its type, once per offending field. A local or imported struct or enum is `Copy` or `Clone` as its marker and, for a generic type, its type arguments say.
+A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`) when any field or variant payload is not `Copy`, and a `: Clone` declaration when any is not `Clone`, unless the type has a clone hook; marker parameters count as satisfying it. The diagnostic MUST name the marker, the field (or variant and payload position) and its type, once per field. A local or imported struct or enum is `Copy` or `Clone` as its marker and, for a generic type, its type arguments say.
 
 #### Scenario: Copy declaration with a non-Copy field rejected
 - **WHEN** `struct User : Copy { val id: Int, val name: String, val tags: Heap<Int> }` is declared
@@ -100,6 +100,103 @@ A `: Copy` declaration MUST be rejected with `InvalidMarkerDeclaration` (`E4016`
 #### Scenario: Generic fields of a marked declaration
 - **WHEN** `struct Box<T> : Copy { val v: T }`, `struct Cell<T> : Clone { val v: T, val next: Heap<T>? }` and `struct Bad<T> : Copy { val b: Box<String> }` are declared
 - **THEN** `Box` and `Cell` typecheck successfully, and the type checker emits `E4016` for `Bad.b`, because `Box<String>` is not `Copy`
+
+#### Scenario: A clone hook waives the field check
+- **WHEN** `struct Task : Clone { val name: String, val run: () -> Unit }` and `operator fun Task.clone(): Task = Task(name.clone(), { println(1) })` are declared, and `fun f(t: &Task): Task = t.clone()` is checked
+- **THEN** the file typechecks successfully, although the field `run` is not `Clone`
+
+### Requirement: Drop Hooks Are Declared With Their Type
+A struct or enum MAY have one drop hook, `operator mut fun T.drop()`, declared in its own file without a visibility modifier, with no parameter, a `Unit` result, and no type parameters but the type's own, in order and unbounded. Any other `operator` function named `drop` MUST be rejected with `InvalidOperatorDeclaration` (`E4035`), naming the rule it breaks. A drop hook runs whenever a value of its type is dropped (`execution`).
+
+#### Scenario: Drop hooks accepted
+- **WHEN** a file declares `struct Session { val id: Int }`, `operator mut fun Session.drop() { println(id) }`, `enum Slot { Full(String), Empty }`, `operator mut fun Slot.drop() {}`, `struct Owned<T>(val v: T)` and `operator mut fun <T> Owned<T>.drop() {}`
+- **THEN** the file typechecks successfully
+
+#### Scenario: Drop hook shapes rejected
+- **WHEN** a file declaring `struct Session { val id: Int }` declares, one at a time, `operator fun Session.drop() {}`, `operator consuming fun Session.drop() {}`, `operator mut fun Session.drop(now: Bool) {}`, `operator mut fun Session.drop(): Int = 0`, `public operator mut fun Session.drop(): Unit {}`, `operator mut fun String.drop() {}` and `operator fun drop() {}`
+- **THEN** the type checker emits `E4035` for each, saying that a drop hook is `operator mut fun Session.drop()` declared without a visibility modifier in the file of a struct or enum
+
+#### Scenario: A drop hook outside its type's file rejected
+- **WHEN** `lib/net.prism` declares `public struct Session(val id: Int)`, and `app/main.prism` imports `/lib/net` and declares `operator mut fun Session.drop() {}`
+- **THEN** the type checker emits `E4035` for the hook in `app/main.prism`, saying that a drop hook belongs to the file declaring `Session`
+
+#### Scenario: Generic drop hook shapes rejected
+- **WHEN** a file declaring `struct Pair<A, B>(val a: A, val b: B)` declares, one at a time, `operator mut fun <A> Pair<A, Int>.drop() {}`, `operator mut fun <B, A> Pair<B, A>.drop() {}` and `operator mut fun <A : Clone, B> Pair<A, B>.drop() {}`
+- **THEN** the type checker emits `E4035` for each, saying that a drop hook of `Pair` is declared for every `Pair<A, B>`, with its type parameters in order and unbounded
+
+### Requirement: A Type With a Drop Hook Is Not Copy
+A struct or enum declared `: Copy` MUST NOT have a drop hook: its declaration MUST be rejected with `E4035`, saying that a `Copy` value is copied bitwise, so a hook would run once per copy.
+
+#### Scenario: A Copy type with a drop hook rejected
+- **WHEN** a file declares `struct Handle : Copy { val id: Int }` and `operator mut fun Handle.drop() {}`
+- **THEN** the type checker emits `E4035` at the hook, naming the `: Copy` marker of `Handle`
+
+### Requirement: A Clone Type With a Drop Hook Has a Clone Hook
+A struct or enum declared `: Clone` that has a drop hook MUST also have a clone hook, so that cloning never duplicates what its drop releases. Otherwise its drop hook MUST be rejected with `E4035`, with help suggesting `operator fun T.clone(): T`.
+
+#### Scenario: A Clone type with a drop hook alone rejected
+- **WHEN** a file declares `struct Session : Clone { val id: Int }` and `operator mut fun Session.drop() {}`
+- **THEN** the type checker emits `E4035` at the hook, with help suggesting `operator fun Session.clone(): Session`
+
+#### Scenario: A Clone type with both hooks accepted
+- **WHEN** a file declares `fun open(): Int = 1`, `struct Session : Clone { val id: Int }`, `operator mut fun Session.drop() {}` and `operator fun Session.clone(): Session = Session(open())`
+- **THEN** the file typechecks successfully
+
+### Requirement: Drop Hooks Are Never Called by Name
+A call of `drop()` on a value whose type has a drop hook, through any `&`, `&mut`, `Heap<T>` or `?.`, the hook's own `this` included, MUST be rejected with `DropHookCalled` (`E4036`), with help saying that a value is dropped where its owner's scope ends and that moving it into a function or a block drops it earlier. An extension named `drop` on such a type, in any file, MUST be rejected with `E4010`.
+
+#### Scenario: Calling a drop hook rejected
+- **WHEN** a file declares `struct Session { val id: Int }` and `operator mut fun Session.drop() {}`, and `fun f(s: Session) { var t = s; t.drop() }` and `fun g(h: &mut Heap<Session>) { h.drop() }` are checked
+- **THEN** the type checker emits `E4036` for each call
+
+#### Scenario: An extension named drop on a type with a hook rejected
+- **WHEN** `lib/net.prism` declares `public struct Session(val id: Int)` and `operator mut fun Session.drop() {}`, and `app/main.prism` imports `/lib/net` and declares `mut fun Session.drop() {}`
+- **THEN** the type checker emits `E4010` for the extension, saying that the drop hook of `Session` always takes precedence and is never called by name
+
+#### Scenario: Functions named drop stay ordinary
+- **WHEN** a file declares `fun <T> drop(x: T) {}`, `struct Token { val id: Int }` and `mut fun Token.drop() {}`, and `fun f(t: Token) { var u = t; u.drop(); drop(u) }` is checked
+- **THEN** the file typechecks successfully: `Token` has no drop hook, so `drop` is an ordinary extension, and the top-level `drop` an ordinary function
+
+### Requirement: Values With Drop Hooks Are Not Taken Apart
+A pattern or destructuring declaration that would move a part out of a value whose type has a drop hook MUST be rejected with `E4017`, saying that the type has a drop hook and cannot be taken apart, with help suggesting a borrow (`when (&s)`). Binding `Copy` parts, wildcards and borrowing patterns MUST stay accepted.
+
+#### Scenario: Taking apart an enum with a drop hook rejected
+- **WHEN** a file declares `enum Slot { Full(String), Empty }` and `operator mut fun Slot.drop() {}`, and `fun f(s: Slot): String = when (s) { Slot.Full(val t) -> t; Slot.Empty -> "" }` is checked
+- **THEN** the type checker emits `E4017` for `val t`, saying that `Slot` has a drop hook and cannot be taken apart, with help suggesting `when (&s)`
+
+#### Scenario: Destructuring a struct with a drop hook rejected
+- **WHEN** a file declares `struct Named { val name: String, val id: Int }` and `operator mut fun Named.drop() {}`, and `fun f(n: Named): String { val (name) = n; return name }` and `consuming fun Named.take(): String { val (name) = this; return name }` are checked
+- **THEN** the type checker emits `E4017` for both destructuring declarations
+
+#### Scenario: Copy parts and borrows of a value with a drop hook
+- **WHEN** with that `Named`, `fun f(n: Named): Int { val (id) = n; return id }` and `fun g(n: &Named): Int = when (n) { Named(name = val s, id = _) -> s.length }` are checked
+- **THEN** the file typechecks successfully: `id` is copied and `s` borrows its field, so nothing is taken apart
+
+#### Scenario: A field with a drop hook moves out with its holder taken apart
+- **WHEN** a file declares `struct Session { val id: Int }`, `operator mut fun Session.drop() {}` and `struct Holder { val session: Session, val tag: Int }`, and `fun f(h: Holder): Session { val (session) = h; return session }` is checked
+- **THEN** the file typechecks successfully: `Holder` has no drop hook, so it can be taken apart, and `session` keeps its hook
+
+### Requirement: Clone Hooks Are Declared With Their Type
+A struct or enum declared `: Clone` MAY have one clone hook, `operator fun T.clone(): T`, declared in its own file without a visibility modifier, with a shared receiver, no parameter, the result `T`, and no type parameters but the type's own, in order, each unbounded or, for a marker parameter, bounded by `Clone`. Any other `operator` function named `clone` MUST be rejected with `E4035`. The clone hook replaces the type's field-wise clone (`execution`).
+
+#### Scenario: Clone hooks accepted
+- **WHEN** a file declares `struct Ticket : Clone { val id: Int }`, `operator fun Ticket.clone(): Ticket = Ticket(id + 100)`, `struct Owned<T> : Clone { val v: T }` and `operator fun <T : Clone> Owned<T>.clone(): Owned<T> = Owned(v.clone())`
+- **THEN** the file typechecks successfully
+
+#### Scenario: Clone hook shapes rejected
+- **WHEN** a file declaring `struct Ticket : Clone { val id: Int }` declares, one at a time, `operator mut fun Ticket.clone(): Ticket = Ticket(id)`, `operator fun Ticket.clone(): Int = id`, `operator fun Ticket.clone(deep: Bool): Ticket = Ticket(id)` and `public operator fun Ticket.clone(): Ticket = Ticket(id)`
+- **THEN** the type checker emits `E4035` for each, saying that a clone hook is `operator fun Ticket.clone(): Ticket` declared without a visibility modifier
+
+#### Scenario: A clone hook needs the Clone marker
+- **WHEN** a file declares `struct Token { val id: Int }` and `operator fun Token.clone(): Token = Token(id)`, or `struct Point : Copy { val x: Int }` and `operator fun Point.clone(): Point = Point(x)`
+- **THEN** the type checker emits `E4035` for each hook: with help suggesting `: Clone` on `Token`, and saying that a `Copy` value is copied bitwise for `Point`
+
+### Requirement: Hooks Cost Constant Compile Time per Declaration and Use
+Checking a hook declaration, a call that resolves to a drop hook, a pattern's subject and a marker declaration MUST each take constant time beyond what they take today, and planning hook instances MUST take time linear in the distinct types a program drops, clones and instantiates, so that files and programs using hooks check in time linear in their size.
+
+#### Scenario: Many hooked types check in linear time
+- **WHEN** `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` runs the `drop-hooks` and `generic-hook-instances` shapes at their three sizes
+- **THEN** each shape's time grows at most 4.6 times for each fourfold size
 
 ### Requirement: Explicit Clone
 Every `Clone` type MUST have a built-in `clone()` member taking no arguments, unless a field named `clone` takes precedence. It looks through `&` and `&mut` and returns an owned temporary of the receiver's type without those borrows (a receiver that is not a place is a temporary, see `references`). `x?.clone()` MUST work on nullables. On a type that is not `Clone`, `x.clone()` MUST call a visible extension named `clone`, or else report `NotCloneable` (`E4018`) naming the type.
@@ -172,7 +269,7 @@ A value MUST be consumed when it initializes a local, a parameter default or a t
 - **THEN** the type checker emits `E4017` for `u?.name`, with help suggesting `u?.name?.clone()`, and accepts `&u?.id`, whose temporary is a copy
 
 ### Requirement: Moves Take Whole Values Only
-A non-`Copy` value in a consuming position MUST be a whole owned local or by-value parameter, or a temporary (a call, constructor, literal or variant). Taking it from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation or a top-level `val` MUST be rejected with `CannotMoveOut` (`E4017`), naming the source. Its help MUST suggest a borrow, `.clone()` for a `Clone` type, and a destructuring declaration for a field of a whole owned local. The error type is never reported.
+A non-`Copy` value in a consuming position MUST be a whole owned local or by-value parameter, or a temporary (a call, constructor, literal or variant). Taking it from a field (also through a borrow, `Heap<T>` or a temporary), a safe navigation or a top-level `val` MUST be rejected with `CannotMoveOut` (`E4017`), naming the source. Its help MUST suggest a borrow, `.clone()` for a `Clone` type, and destructuring a whole owned local without a drop hook. The error type is never reported.
 
 #### Scenario: Moving a non-Copy field rejected
 - **WHEN** `struct User { val id: Int, val name: String }` is declared and a body of `fun f(u: User)` declares `val n = u.name`
@@ -588,4 +685,15 @@ Decisions from `escaping-closures` (planned autonomously on 2026-10-18, revised 
 Decisions from `path-captures` (review item A2b, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: closures capture paths such as `todo.done`, like Rust 2021's disjoint captures, decided syntactically at no inference cost; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Owning closures copy a path only when no later write could change it** (D3): its type is `Copy`, its binding a `val`, it dereferences no `&mut` and reads only `val` fields past a reference. Kotlin captures the object `todo` refers to, whose `val` fields never change, so the copy reads what a Kotlin closure would; a `var` field of a by-value `val` cannot be written either, so it is copied too. Any other path makes the closure own the whole binding by the rules above (moved, copied, `E4028` for a `var`, `E5007` for a reference), so no valid program is newly rejected. Rejected: Rust 2021's partial move of a non-`Copy` field (partial moves are out of the language, D7 of `payload-patterns`); a new error for a path that cannot be copied; copying `var` fields read through references or paths through a `&mut` (the copy would silently go stale); cloning `Clone` paths implicitly (a hidden allocation per closure built).
-- **A binding no closure takes is dropped by its owner** (D9). When a closure copies `u.id` instead of moving `u`, `u` is dropped at the end of its own scope, not with the closure's environment. Nothing observes the difference while drops run no user code; `drop-and-clone-hooks` must state that a closure keeps exactly the values it captures by value, as Rust 2021 did. Rejected: moving the whole binding whenever an owning closure reads any of its paths (`u` would be unusable after `Button({ u.id })`).
+- **A binding no closure takes is dropped by its owner** (D9). When a closure copies `u.id` instead of moving `u`, `u` is dropped at the end of its own scope, not with the closure's environment. Nothing observes the difference while drops run no user code; `drop-and-clone-hooks` states that a closure keeps exactly the values it captures by value, as Rust 2021 did (`execution`, "A Closure Keeps Only What It Captures by Value"). Rejected: moving the whole binding whenever an owning closure reads any of its paths (`u` would be unusable after `Button({ u.id })`).
+
+Decisions from `drop-and-clone-hooks` (part L2 of the review's agreed item A4, planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the user decided in A4 that there is no `unsafe` layer for now, so hooks serve types wrapping runtime handles, not raw memory):
+
+- **Hooks are operator conventions of their type** (D1): `operator mut fun T.drop()` and `operator fun T.clone(): T`, the form `operator-conventions` gave `equals`, with the language's own words for what happens to values. Rejected: a `deinit { }` block in the struct body (Swift; a new grammar form and code inside a struct, which Prism has nowhere else), a `Drop` trait (no traits), reusing `close()`/`dispose()` (called explicitly in Kotlin and Compose), C++'s `~T()`.
+- **The drop hook borrows its value mutably and runs before the parts** (D2), as Rust's `fn drop(&mut self)`: it reads every field, may write `var` fields or replace an inner value, and cannot move anything out (`E4017`), so the glue that follows drops a whole value. Rejected: a `consuming` receiver (the hook would drop `this` again at its end, or could move it elsewhere), a shared receiver (a hook could not reset what it releases), parts first (the hook would see dropped fields). A hook writing `*this = ...` drops the old value, which runs the hook again: it recurses until `stack overflow`, as a clone hook calling `this.clone()` does (found in review; any recursion ends that way).
+- **Hooks belong to their type** (D3): declared in the type's file, at most one of each, without a visibility modifier, with no parameter and exactly the type's type parameters in order (unbounded for `drop`; a marker parameter may be bounded by `Clone` for `clone`); built-in types and intrinsic structs have none. A hook reaches importers as a flag of its type's ABI record, so it needs no visibility, and the single-file compilation invariant holds: an importer knows from the type's file alone whether its drop calls a hook. Every other shape is `E4035`. A drop hook is never called by name (`E4036` `DropHookCalled`, through any `&`, `&mut`, `Heap<T>` or `?.`), since the value would be dropped again; it is a member of its type, so an extension named `drop` on it is `E4010`. Rejected: hooks in any file, the type's visibility as for `equals`, explicit calls, specialized hooks (`Owned<Int>.drop`).
+- **A drop hook excludes `Copy`, and a `Clone` type with a drop hook needs a clone hook** (D4): a bitwise copy would run the hook once per copy (Rust's `E0184`), and a field-wise clone would duplicate the handle the drop releases. Rejected: Rust's freedom to derive `Clone` beside `Drop`, found only at run time.
+- **A value with a drop hook is never taken apart** (D5): a pattern or destructuring declaration moving a part out would skip the hook, so it is `E4017` with help suggesting a borrow (Rust's `E0509`); `Copy` parts, wildcards and borrowing patterns stay accepted, and a holder without a hook can still be taken apart, its hooked field moving out whole. A consuming function that ends a value without its hook's effect sets a `var` field the hook checks. The help for moving a field out of such a value offers a borrow and a clone, never the destructuring (review fix). Rejected: skipping the hook (a silent leak), running it first (the bindings would hold released parts), `forget` now.
+- **The clone hook replaces field-wise cloning everywhere; `: Clone` stays required and its field check is waived** (D6): the marker is what signatures, bounds and the ABI read, and the hook builds the copy, so a type holding a function value can be `Clone`. A clone need not be `==` to its source: nothing in the compiler or the compose runtime clones implicitly and compares. Rejected: a clone hook making a type `Clone` without the marker, keeping the field check.
+- **Moves, drop flags and borrows need nothing new** (D7): whether a hook runs is whether a drop runs, which drop elaboration already decides; no value a hook reaches holds a borrow, so Rust's drop check has nothing to check.
+- **Diagnostics** (D16): `E4035` widened to hook shapes and markers, one new code `E4036` for a new kind of mistake with its own fix, and the `E4017`, `E4010`, `E4016` and `E6004` rows extended. Compile-time cost: a name match per `operator` declaration, a fixed shape check per hook, one flag test per marker declaration, per method call resolving to `drop` and per pattern that moves a part.
