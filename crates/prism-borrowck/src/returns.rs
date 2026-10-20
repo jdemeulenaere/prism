@@ -42,7 +42,7 @@ pub(crate) fn check_returns(
     borrows: &BorrowSet,
     flow: &Results<LoanFlow>,
 ) -> Vec<BorrowError> {
-    let keeper = places::contains_keeper(body.return_type());
+    let keeper = places::contains_keeper(body.return_type(), &file.types);
     if !places::is_input_borrow(body.return_type()) && !keeper {
         return Vec::new();
     }

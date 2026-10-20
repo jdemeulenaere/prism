@@ -1,0 +1,11 @@
+// expect: E4030
+// library: lib
+import /prism/test
+
+compose fun Screen() {
+    drive()
+}
+
+fun later() {
+    drive()
+}

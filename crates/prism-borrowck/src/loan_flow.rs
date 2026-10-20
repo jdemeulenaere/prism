@@ -392,7 +392,7 @@ impl<'a> LoanFlow<'a> {
             return Vec::new();
         };
         if matches!(capture, Capture::Owned(_))
-            && !places::carries_loans(&place.ty(self.body, &self.file.types))
+            && !places::carries_loans(&place.ty(self.body, &self.file.types), &self.file.types)
         {
             return Vec::new();
         }
@@ -543,7 +543,8 @@ impl<'a> LoanFlow<'a> {
                     (loan.mutable || !mutable_only).then_some(loan.place.local)
                 }
                 Item::Input(local) => {
-                    places::writes_loans_through(&self.body.locals[local].ty).then_some(local)
+                    places::writes_loans_through(&self.body.locals[local].ty, &self.file.types)
+                        .then_some(local)
                 }
             })
             .filter(|local| self.borrows.carrier(*local).is_some())
@@ -576,9 +577,10 @@ impl<'a> LoanFlow<'a> {
         let attached = self.attached_items(state, arguments, parameter_kinds);
         let mut keepers: Vec<LocalId> = Vec::new();
         for (argument, parameter) in arguments.iter().zip(parameters) {
-            if places::carries_loans(parameter) {
-                let keeps = referent(parameter).is_some_and(|ty| places::contains_keeper(&ty));
-                let writes = if places::writes_loans_through(parameter) {
+            if places::carries_loans(parameter, &self.file.types) {
+                let keeps = referent(parameter)
+                    .is_some_and(|ty| places::contains_keeper(&ty, &self.file.types));
+                let writes = if places::writes_loans_through(parameter, &self.file.types) {
                     Some(referent(parameter))
                 } else if places::contains_function(parameter) {
                     Some(None)
@@ -725,7 +727,7 @@ impl LoanFlow<'_> {
         } = &terminator.kind
         {
             let ty = destination.ty(self.body, &self.file.types);
-            let keeper = places::contains_keeper(&ty);
+            let keeper = places::contains_keeper(&ty, &self.file.types);
             let mut items = self.call_items(state, callee, arguments, parameters);
             // A keeper's result also holds what it keeps: the arguments of its `attached`
             // parameters (D24 of `owned-state`).

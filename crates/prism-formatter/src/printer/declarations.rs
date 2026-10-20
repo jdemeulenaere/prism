@@ -101,6 +101,40 @@ impl<'a> Printer<'a> {
     }
 
     fn declaration(&mut self, declaration: &Declaration) -> Document {
+        let annotations = declaration.annotations();
+        let Some(last) = annotations.last() else {
+            return self.declaration_after_annotations(declaration);
+        };
+        // Annotations on their own lines above the declaration, in order (D2 of
+        // `compose-library-in-prism`); comments between them stay before what follows them.
+        let mut parts = Vec::new();
+        for (index, annotation) in annotations.iter().enumerate() {
+            if index > 0 {
+                parts.push(self.comments_before(annotation.span.start));
+            }
+            parts.push(text(format!("@{}", annotation.name)));
+            parts.push(hard_line());
+        }
+        let rest_start = self
+            .token_at(last.span.end)
+            .map_or(last.span.end, |token| token.span.start);
+        parts.push(self.comments_before(rest_start));
+        // The rest is printed as a declaration starting after the annotations, so its written
+        // visibility is read at its own start.
+        let mut rest = declaration.clone();
+        rest.annotations_mut().clear();
+        match &mut rest {
+            Declaration::Function(f) => f.span.start = rest_start,
+            Declaration::Struct(s) => s.span.start = rest_start,
+            Declaration::Enum(e) => e.span.start = rest_start,
+            Declaration::Var(v) => v.span.start = rest_start,
+            Declaration::ExtensionProperty(p) => p.span.start = rest_start,
+        }
+        parts.push(self.declaration_after_annotations(&rest));
+        concat(parts)
+    }
+
+    fn declaration_after_annotations(&mut self, declaration: &Declaration) -> Document {
         match declaration {
             Declaration::Function(function) => self.function(function),
             Declaration::Struct(structure) => self.structure(structure),

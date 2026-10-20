@@ -491,3 +491,9 @@ Runtime crates gain two entries and change `prism_ui_run_app`'s content. The bui
 - Annotations for workspace code, starting with `@NonRestartableComposable` and how hot reload finds the scopes of a body without a group.
 - `remember` in Prism once overloading exists, and whether its result typing can then be stated with an elision rule over `currentComposer`.
 - A typed `Composer` for the protocol module.
+
+## Implementation Notes
+
+- **The annotation is one token** (group 2). D2 had `@` as a token of its own followed by an identifier. The formatter's corpus tests insert comments and spaces between any two tokens and expect the parse to survive, which an `@` and its name as two tokens would not. The lexer reads `@` directly followed by a name as one `Annotation(name)` token, and an `@` without a name as a lexer error, reported as `E2001` like every lexer error. The grammar is unchanged: nothing can come between `@` and the name.
+- **Keepers are read through the type table** (group 2). `Type::contains_keeper` takes the `TypeTable`, so the borrow checker's `carries_loans`, `contains_keeper` and `writes_loans_through` take it too; `BorrowSet` computes the returned locals once (they need the table). Until group 5 annotates `Composition`, `contains_keeper` also accepts the catalog's `IntrinsicStruct::is_keeper`.
+- **`E4030` from the flag** (group 2). The checker keeps the declaration paths of the `@DrivesComposition` functions it declares or imports, plain and extensions, and reports a direct call of one in a composable context; the `BuiltinFunction` list stays until groups 5 and 6 remove the intrinsics.

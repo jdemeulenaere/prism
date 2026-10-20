@@ -90,6 +90,10 @@ pub enum TokenKind {
     RBrace,        // }
     LBracket,      // [
     RBracket,      // ]
+    /// An annotation, `@` directly followed by a name (`@Keeper`, D2 of
+    /// `compose-library-in-prism`), holding the name: one token, so nothing can come between
+    /// the two.
+    Annotation(String),
 
     // String templates (D3 of `string-templates`): a literal with a `$name` or `${...}` part is
     // a flat run of these tokens, with the ordinary tokens of each expression part between its
@@ -218,6 +222,7 @@ impl fmt::Display for TokenKind {
             TokenKind::RBrace => write!(f, "}}"),
             TokenKind::LBracket => write!(f, "["),
             TokenKind::RBracket => write!(f, "]"),
+            TokenKind::Annotation(name) => write!(f, "@{}", name),
             TokenKind::TemplateStart | TokenKind::TemplateEnd => write!(f, "\""),
             TokenKind::TemplateText(text) => write!(f, "{}", text),
             TokenKind::TemplateName(name) => write!(f, "${}", name),

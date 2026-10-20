@@ -28,11 +28,11 @@ struct PendingReceiver {
 
 /// Whether a value of `ty` may hold a borrow its call's operands lent: a reference, a function
 /// value or a keeper, or a nullable or box of one.
-fn may_hold_borrow(ty: &Type) -> bool {
+fn may_hold_borrow(ty: &Type, types: &TypeTable) -> bool {
     match ty {
         Type::Reference { .. } | Type::Fn { .. } => true,
-        Type::Nullable(inner) | Type::Heap(inner) => may_hold_borrow(inner),
-        other => other.contains_keeper(),
+        Type::Nullable(inner) | Type::Heap(inner) => may_hold_borrow(inner, types),
+        other => other.contains_keeper(types),
     }
 }
 
@@ -122,7 +122,7 @@ impl Builder<'_> {
     /// Whether the guards a call's operands take end with the call: outside composable contexts,
     /// for a call whose result holds no borrow and one of whose operands reads a state's value.
     fn guards_end_with_call(&mut self, call: &Call, ty: &Type) -> bool {
-        if self.is_compose || may_hold_borrow(ty) {
+        if self.is_compose || may_hold_borrow(ty, self.types) {
             return false;
         }
         call.arguments.iter().any(|argument| match argument {

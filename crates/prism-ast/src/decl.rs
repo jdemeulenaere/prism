@@ -170,9 +170,38 @@ pub struct LibraryModifier {
     pub span: Span,
 }
 
+/// An annotation written before a top-level declaration (`@Keeper`), Kotlin's syntax: a name
+/// and no arguments. Only the bundled library may write them (D2 of `compose-library-in-prism`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Annotation {
+    /// The name after `@`.
+    pub name: String,
+    /// The span of `@` and the name.
+    pub span: Span,
+}
+
+/// `@ExplicitGroupsComposable`: a composable of the library that starts no group of its own
+/// (D5 of `compose-library-in-prism`).
+pub const EXPLICIT_GROUPS_ANNOTATION: &str = "ExplicitGroupsComposable";
+
+/// `@Keeper`: a struct of the library whose values keep the attached arguments of the calls
+/// that make or change them (D6 of `compose-library-in-prism`).
+pub const KEEPER_ANNOTATION: &str = "Keeper";
+
+/// `@DrivesComposition`: a function of the library that runs composition passes, which no
+/// composable context may call (D6 of `compose-library-in-prism`).
+pub const DRIVES_COMPOSITION_ANNOTATION: &str = "DrivesComposition";
+
+/// Whether `annotations` hold one named `name`.
+pub fn has_annotation(annotations: &[Annotation], name: &str) -> bool {
+    annotations.iter().any(|annotation| annotation.name == name)
+}
+
 /// Function declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
+    /// The annotations written before the declaration, in order.
+    pub annotations: Vec<Annotation>,
     /// The context parameter written before the declaration's modifiers
     /// (`context(scope: RowScope) fun Modifier.weight()`), at most one.
     pub context: Option<Box<ContextParameter>>,
@@ -201,6 +230,16 @@ pub struct FunctionDecl {
 }
 
 impl FunctionDecl {
+    /// Whether it is annotated `@DrivesComposition`.
+    pub fn drives_composition(&self) -> bool {
+        has_annotation(&self.annotations, DRIVES_COMPOSITION_ANNOTATION)
+    }
+
+    /// Whether it is annotated `@ExplicitGroupsComposable`.
+    pub fn has_explicit_groups(&self) -> bool {
+        has_annotation(&self.annotations, EXPLICIT_GROUPS_ANNOTATION)
+    }
+
     /// Whether the declaration is `intrinsic`.
     pub fn is_intrinsic(&self) -> bool {
         matches!(
@@ -258,6 +297,8 @@ impl TypeMarker {
 /// Struct declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructDecl {
+    /// The annotations written before the declaration, in order.
+    pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
     pub name: String,
     /// The span of the name, where diagnostics about the declaration as a whole point.
@@ -273,6 +314,11 @@ pub struct StructDecl {
 }
 
 impl StructDecl {
+    /// Whether it is annotated `@Keeper`.
+    pub fn is_keeper(&self) -> bool {
+        has_annotation(&self.annotations, KEEPER_ANNOTATION)
+    }
+
     /// Whether the struct is an `intrinsic struct`.
     pub fn is_intrinsic(&self) -> bool {
         self.intrinsic.is_some()
@@ -290,6 +336,8 @@ pub struct EnumVariant {
 /// Enum / Algebraic Data Type declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumDecl {
+    /// The annotations written before the declaration, in order.
+    pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
     pub name: String,
     /// The span of the name, where diagnostics about the declaration as a whole point.
@@ -304,6 +352,8 @@ pub struct EnumDecl {
 /// by the parser, because top-level state is immutable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TopLevelVarDecl {
+    /// The annotations written before the declaration, in order.
+    pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
     pub name: String,
     pub ty: Option<Type>,
@@ -317,6 +367,8 @@ pub struct TopLevelVarDecl {
 /// `core-library-in-prism`). Both are read without parentheses.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExtensionPropertyDecl {
+    /// The annotations written before the declaration, in order.
+    pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
     /// The `intrinsic` modifier; `None` for a property with a getter.
     pub library: Option<LibraryModifier>,
@@ -364,6 +416,7 @@ impl ExtensionPropertyDecl {
     pub fn getter_function(&self) -> Option<FunctionDecl> {
         let getter = self.getter.as_ref()?;
         Some(FunctionDecl {
+            annotations: Vec::new(),
             context: None,
             visibility: self.visibility,
             is_compose: false,
@@ -423,6 +476,28 @@ impl Declaration {
             Declaration::Enum(e) => e.span,
             Declaration::Var(v) => v.span,
             Declaration::ExtensionProperty(p) => p.span,
+        }
+    }
+
+    /// The annotations written before the declaration.
+    pub fn annotations(&self) -> &[Annotation] {
+        match self {
+            Declaration::Function(f) => &f.annotations,
+            Declaration::Struct(s) => &s.annotations,
+            Declaration::Enum(e) => &e.annotations,
+            Declaration::Var(v) => &v.annotations,
+            Declaration::ExtensionProperty(p) => &p.annotations,
+        }
+    }
+
+    /// Mutable access to the annotations written before the declaration.
+    pub fn annotations_mut(&mut self) -> &mut Vec<Annotation> {
+        match self {
+            Declaration::Function(f) => &mut f.annotations,
+            Declaration::Struct(s) => &mut s.annotations,
+            Declaration::Enum(e) => &mut e.annotations,
+            Declaration::Var(v) => &mut v.annotations,
+            Declaration::ExtensionProperty(p) => &mut p.annotations,
         }
     }
 

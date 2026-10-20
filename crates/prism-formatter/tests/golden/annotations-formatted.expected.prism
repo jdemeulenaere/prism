@@ -1,0 +1,17 @@
+package prism
+
+// A keeper.
+@Keeper
+public struct C(private val handle: Int)
+
+@DrivesComposition
+@ExplicitGroupsComposable
+public fun f(): Unit {}
+
+@Keeper
+// Between the annotation and the declaration.
+private struct D(private val n: Int)
+
+@ExplicitGroupsComposable
+context(scope: Int)
+compose fun G(): Unit {}

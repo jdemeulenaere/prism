@@ -1,0 +1,2 @@
+// expect: E3002
+@Keeper struct S(val n: Int)

@@ -1,0 +1,14 @@
+// expect: E5005
+// library: lib
+import /prism/test
+import /prism/compose/runtime
+import /prism/core
+
+fun consume(s: MutableState<Int>) {}
+
+fun main() {
+    val s = mutableStateOf(0)
+    val h = hold { println(s.value) }
+    consume(s)
+    val k = h
+}

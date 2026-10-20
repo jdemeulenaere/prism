@@ -659,6 +659,7 @@ impl Codec for TypeTable {
         for hooks in [
             self.drop_hook_types().collect::<Vec<_>>(),
             self.clone_hook_types().collect(),
+            self.keeper_types().collect(),
         ] {
             encoder.length(hooks.len());
             for id in hooks {
@@ -708,6 +709,10 @@ impl Codec for TypeTable {
         let clone_hooks = decoder.sequence_length()?;
         for _ in 0..clone_hooks {
             table.insert_clone_hook(decoder.decode()?);
+        }
+        let keepers = decoder.sequence_length()?;
+        for _ in 0..keepers {
+            table.insert_keeper(decoder.decode()?);
         }
         Some(table)
     }

@@ -397,6 +397,43 @@ impl Parser {
     // --- Declarations ---
 
     pub fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
+        // Annotations, before the context parameter and every modifier (D2 of
+        // `compose-library-in-prism`). The declaration's span starts at the first one.
+        let annotations = self.parse_annotations()?;
+        let mut declaration = self.parse_declaration_after_annotations()?;
+        if let Some(first) = annotations.first() {
+            let start = first.span;
+            match &mut declaration {
+                Declaration::Function(f) => f.span = start.merge(f.span),
+                Declaration::Struct(s) => s.span = start.merge(s.span),
+                Declaration::Enum(e) => e.span = start.merge(e.span),
+                Declaration::Var(v) => v.span = start.merge(v.span),
+                Declaration::ExtensionProperty(p) => p.span = start.merge(p.span),
+            }
+        }
+        *declaration.annotations_mut() = annotations;
+        Ok(declaration)
+    }
+
+    /// The annotations before a declaration: each `@` directly followed by a name, without
+    /// arguments, on the declaration's line or on lines of their own.
+    fn parse_annotations(&mut self) -> Result<Vec<Annotation>, ParseError> {
+        let mut annotations = Vec::new();
+        while let TokenKind::Annotation(name) = self.peek_kind() {
+            let name = name.clone();
+            let span = self.bump().span;
+            if self.peek_kind() == &TokenKind::LParen && !self.peek().is_preceded_by_newline {
+                return Err(ParseError::new(
+                    format!("An annotation takes no arguments; write '@{}' alone", name),
+                    self.peek().span,
+                ));
+            }
+            annotations.push(Annotation { name, span });
+        }
+        Ok(annotations)
+    }
+
+    fn parse_declaration_after_annotations(&mut self) -> Result<Declaration, ParseError> {
         // A context parameter, before every other modifier (D6 of `receiver-lambdas`).
         let context = self.parse_context_parameter()?;
 
@@ -418,6 +455,12 @@ impl Parser {
                 visibility = Visibility::Private;
             }
             _ => {}
+        }
+        if matches!(self.peek_kind(), TokenKind::Annotation(_)) {
+            return Err(ParseError::new(
+                "Annotations come before the context parameter and every modifier, as in '@Keeper public struct Session(...)'",
+                self.peek().span,
+            ));
         }
         if self.at_context_parameter() {
             return Err(ParseError::new(
@@ -758,6 +801,7 @@ impl Parser {
         }
 
         Ok(FunctionDecl {
+            annotations: Vec::new(),
             context: None,
             visibility,
             is_compose,
@@ -1144,6 +1188,7 @@ impl Parser {
                 ));
             }
             return Ok(ExtensionPropertyDecl {
+                annotations: Vec::new(),
                 visibility,
                 library,
                 type_parameters,
@@ -1201,6 +1246,7 @@ impl Parser {
             }
         };
         Ok(ExtensionPropertyDecl {
+            annotations: Vec::new(),
             visibility,
             library: None,
             type_parameters,
@@ -1475,6 +1521,7 @@ impl Parser {
         };
 
         Ok(StructDecl {
+            annotations: Vec::new(),
             visibility,
             name,
             name_span,
@@ -1522,6 +1569,7 @@ impl Parser {
             ));
         }
         Ok(StructDecl {
+            annotations: Vec::new(),
             visibility,
             name,
             name_span,
@@ -1585,6 +1633,7 @@ impl Parser {
         let end_span = self.expect(TokenKind::RBrace)?.span;
 
         Ok(EnumDecl {
+            annotations: Vec::new(),
             visibility,
             name,
             name_span,
@@ -1615,6 +1664,7 @@ impl Parser {
         let end_span = initializer.span;
 
         Ok(TopLevelVarDecl {
+            annotations: Vec::new(),
             visibility,
             name,
             ty,
@@ -2272,6 +2322,11 @@ impl Parser {
                     "A '{}' declaration is only allowed as a statement; wrap it in braces",
                     self.peek_kind()
                 ),
+                self.peek().span,
+            )),
+
+            TokenKind::Annotation(_) => Err(ParseError::new(
+                "An annotation is written only before a top-level declaration, as in '@Keeper public struct Session(...)'",
                 self.peek().span,
             )),
 

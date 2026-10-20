@@ -181,7 +181,7 @@ pub(crate) fn check_escapes(
                     continue;
                 };
                 let ty = place.ty(body, &file.types);
-                if !places::contains_function(&ty) && !places::contains_keeper(&ty) {
+                if !places::contains_function(&ty) && !places::contains_keeper(&ty, &file.types) {
                     continue;
                 }
                 let items = flow.analysis.holds(state, place.local);
@@ -199,7 +199,7 @@ pub(crate) fn check_escapes(
             }
         }
         let ty = destination.ty(body, &file.types);
-        let keeper = places::contains_keeper(&ty);
+        let keeper = places::contains_keeper(&ty, &file.types);
         if !places::contains_function(&ty) && !keeper {
             continue;
         }
@@ -537,7 +537,9 @@ impl Escapes<'_> {
             .collect();
         let item = *attached.first()?;
         for (operand, parameter) in arguments.iter().zip(parameters) {
-            let Some(keeper) = referent(parameter).filter(places::contains_keeper) else {
+            let Some(keeper) =
+                referent(parameter).filter(|ty| places::contains_keeper(ty, &self.file.types))
+            else {
                 continue;
             };
             let Some(place) = operand.place() else {
@@ -568,12 +570,12 @@ impl Escapes<'_> {
     fn tracks_loans(&self, place: &Place) -> bool {
         let mut prefix = Place::local(place.local);
         for projection in &place.projections {
-            if !places::carries_loans(&prefix.ty(self.body, &self.file.types)) {
+            if !places::carries_loans(&prefix.ty(self.body, &self.file.types), &self.file.types) {
                 return false;
             }
             prefix.projections.push(*projection);
         }
-        places::carries_loans(&prefix.ty(self.body, &self.file.types))
+        places::carries_loans(&prefix.ty(self.body, &self.file.types), &self.file.types)
     }
 
     /// `E5010` for a value of type `ty` holding the attached `item` that escapes at `span`.
@@ -590,7 +592,7 @@ impl Escapes<'_> {
                     span: declaration.span,
                     message: format!("{} is an attached parameter here", places::quoted(&name)),
                 }];
-                let holder = if places::contains_keeper(ty) {
+                let holder = if places::contains_keeper(ty, &self.file.types) {
                     AttachedHolder::Composition(name)
                 } else {
                     AttachedHolder::Parameter(name)
@@ -614,7 +616,7 @@ impl Escapes<'_> {
                     span: capture.span,
                     message: format!("{} is captured weakly here", places::quoted(&name)),
                 }];
-                if places::contains_keeper(ty) {
+                if places::contains_keeper(ty, &self.file.types) {
                     (
                         AttachedHolder::Composition(name.clone()),
                         related,
@@ -873,7 +875,8 @@ fn escaping_type(ty: &Type) -> String {
 /// The type of `place` when a value of it may escape: it contains a function type or a
 /// keeper. A whole local's type is tested in place, without copying it.
 fn escape_candidate_type(body: &Body, file: &MirFile, place: &Place) -> Option<Type> {
-    let escapes = |ty: &Type| places::contains_function(ty) || places::contains_keeper(ty);
+    let escapes =
+        |ty: &Type| places::contains_function(ty) || places::contains_keeper(ty, &file.types);
     if place.projections.is_empty() {
         let ty = &body.locals[place.local].ty;
         return escapes(ty).then(|| ty.clone());

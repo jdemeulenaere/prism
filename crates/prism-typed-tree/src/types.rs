@@ -301,6 +301,10 @@ pub struct TypeTable {
     /// declarations and ABI records.
     drop_hooks: std::collections::BTreeSet<NominalId>,
     clone_hooks: std::collections::BTreeSet<NominalId>,
+    /// The structs annotated `@Keeper` (D6 of `compose-library-in-prism`), from their
+    /// declarations and ABI records: their values keep the attached arguments of the calls
+    /// that make or change them.
+    keepers: std::collections::BTreeSet<NominalId>,
 }
 
 /// The position of each member of `definition` by name, the first of a repeated name.
@@ -562,6 +566,9 @@ impl TypeTable {
             if self.clone_hooks.contains(&id) {
                 restricted.clone_hooks.insert(id.clone());
             }
+            if self.keepers.contains(&id) {
+                restricted.keepers.insert(id.clone());
+            }
             if let Some(marker) = self.markers.get(&id) {
                 restricted.markers.insert(id, marker.clone());
             }
@@ -616,6 +623,22 @@ impl TypeTable {
     /// Records that the struct or enum `id` has a clone hook (D10 of `drop-and-clone-hooks`).
     pub fn insert_clone_hook(&mut self, id: NominalId) {
         self.clone_hooks.insert(id);
+    }
+
+    /// Records that the struct `id` is a keeper, annotated `@Keeper` (D6 of
+    /// `compose-library-in-prism`).
+    pub fn insert_keeper(&mut self, id: NominalId) {
+        self.keepers.insert(id);
+    }
+
+    /// Whether the struct `id` is a keeper. A set lookup.
+    pub fn is_keeper(&self, id: &NominalId) -> bool {
+        self.keepers.contains(id)
+    }
+
+    /// The keepers, in order.
+    pub fn keeper_types(&self) -> impl Iterator<Item = &NominalId> {
+        self.keepers.iter()
     }
 
     /// Whether the struct or enum `id` has a drop hook. A set lookup.
@@ -705,6 +728,7 @@ impl TypeTable {
             .extend(other.equality_operators.iter().cloned());
         self.drop_hooks.extend(other.drop_hooks.iter().cloned());
         self.clone_hooks.extend(other.clone_hooks.iter().cloned());
+        self.keepers.extend(other.keepers.iter().cloned());
         for (id, definition) in &other.definitions {
             debug_assert!(
                 self.definitions
@@ -1076,10 +1100,16 @@ impl Type {
 
     /// Whether the type is a keeper (D24 of `owned-state`), or a nullable or `Heap<T>` of one:
     /// a value that may hold the borrows of the weak captures of the attached content it keeps.
-    pub fn contains_keeper(&self) -> bool {
+    ///
+    /// Keepers are the structs `types` records as annotated `@Keeper` (D6 of
+    /// `compose-library-in-prism`): a set lookup.
+    pub fn contains_keeper(&self, types: &TypeTable) -> bool {
         match self {
-            Type::Struct { id, .. } => id.intrinsic().is_some_and(IntrinsicStruct::is_keeper),
-            Type::Nullable(inner) | Type::Heap(inner) => inner.contains_keeper(),
+            // `Composition` is the catalog's keeper until the library annotates it.
+            Type::Struct { id, .. } => {
+                types.is_keeper(id) || id.intrinsic().is_some_and(IntrinsicStruct::is_keeper)
+            }
+            Type::Nullable(inner) | Type::Heap(inner) => inner.contains_keeper(types),
             _ => false,
         }
     }

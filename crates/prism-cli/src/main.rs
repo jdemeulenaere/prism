@@ -546,6 +546,7 @@ fn run_abi(path: &str) {
                 is_compose,
                 is_capture,
                 is_operator,
+                drives_composition,
                 receiver,
                 context,
                 name,
@@ -553,6 +554,11 @@ fn run_abi(path: &str) {
                 params,
                 return_type,
             } => {
+                let annotation = if *drives_composition {
+                    "@DrivesComposition "
+                } else {
+                    ""
+                };
                 let context = context
                     .as_ref()
                     .map_or_else(String::new, |c| format!("context({}) ", c));
@@ -584,7 +590,8 @@ fn run_abi(path: &str) {
                     list => format!("{} ", list),
                 };
                 println!(
-                    "  {}{} {}{}fun {}{}{}({}): {}",
+                    "  {}{}{} {}{}fun {}{}{}({}): {}",
+                    annotation,
                     context,
                     visibility,
                     comp,
@@ -630,8 +637,10 @@ fn run_abi(path: &str) {
                 equality,
                 drop_hook,
                 clone_hook,
+                keeper,
                 ..
             } => {
+                let annotation = if *keeper { "@Keeper " } else { "" };
                 let f_str = fields
                     .iter()
                     .zip(field_visibilities)
@@ -648,7 +657,8 @@ fn run_abi(path: &str) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "  {} struct {}{}{} {{ {} }}{}",
+                    "  {}{} struct {}{}{} {{ {} }}{}",
+                    annotation,
                     visibility,
                     name,
                     type_parameter_list(type_parameters),
@@ -726,7 +736,8 @@ fn run_abi(path: &str) {
             prism_abi::NominalKind::Enum => "enum",
         };
         println!(
-            "  {} {}::{}{}{} {{ {} }}{}",
+            "  {}{} {}::{}{}{} {{ {} }}{}",
+            if definition.keeper { "@Keeper " } else { "" },
             kind,
             definition.module,
             definition.name,

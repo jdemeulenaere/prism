@@ -208,10 +208,17 @@ pub fn format_parse_error(path: &Path, source: Option<&str>, err: &ParseError) -
 pub fn format_abi_error(path: &Path, source: Option<&str>, err: &AbiError) -> String {
     let mut out = String::new();
     if let AbiError::LibraryOnlyDeclaration { modifier, span } = err {
-        out.push_str(&format!(
-            "error[E3002]: '{}' declaration outside the bundled library\n",
-            modifier
-        ));
+        if modifier.starts_with('@') {
+            out.push_str(&format!(
+                "error[E3002]: annotation '{}' outside the bundled library\n",
+                modifier
+            ));
+        } else {
+            out.push_str(&format!(
+                "error[E3002]: '{}' declaration outside the bundled library\n",
+                modifier
+            ));
+        }
         out.push_str(&format!(
             "  --> {}:{}:{}\n",
             display_path(path),
@@ -223,9 +230,11 @@ pub fn format_abi_error(path: &Path, source: Option<&str>, err: &AbiError) -> St
         {
             out.push_str(&format!("{}\n", snippet));
         }
-        out.push_str(
-            "   = help: only the bundled library may declare external or intrinsic functions\n",
-        );
+        out.push_str(if modifier.starts_with('@') {
+            "   = help: only the bundled library may write annotations\n"
+        } else {
+            "   = help: only the bundled library may declare external or intrinsic functions\n"
+        });
         return out;
     }
     out.push_str("error[E3001]: ABI specification violation\n");

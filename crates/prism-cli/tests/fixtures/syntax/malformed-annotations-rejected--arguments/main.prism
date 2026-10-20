@@ -1,0 +1,2 @@
+// expect: E2001
+@Keeper(1) struct B(val n: Int)

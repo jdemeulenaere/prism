@@ -704,6 +704,9 @@ pub struct TypeChecker {
     intrinsic_functions: HashMap<(String, String), BuiltinFunction>,
     /// The external functions the file declares or imports (D5 of `standard-library`).
     externals: Vec<DeclarationPath>,
+    /// The functions annotated `@DrivesComposition` the file declares or imports, whose direct
+    /// calls in a composable context are `E4030` (D6 of `compose-library-in-prism`).
+    drives_composition: HashSet<DeclarationPath>,
     /// The members of the built-in types the member modules declare, which every workspace
     /// file sees without an import, consulted after the file's own and imported members (D2 of
     /// `explicit-library`); `None` for a library file.
@@ -804,6 +807,7 @@ impl TypeChecker {
             members: HashMap::new(),
             intrinsic_functions: HashMap::new(),
             externals: Vec::new(),
+            drives_composition: HashSet::new(),
             member_scope: None,
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
@@ -945,6 +949,69 @@ impl TypeChecker {
         if starts_or_drives && self.is_in_compose() {
             self.errors.push(TypeError::CompositionInComposable {
                 operation: builtin.name().to_string(),
+                span,
+            });
+        }
+    }
+
+    /// Reports `E4029` for each annotation of `source_file` that breaks a rule of library
+    /// annotations (D2 of `compose-library-in-prism`): an unknown name, a declaration of a kind
+    /// it does not apply to, a repeat, and `@DrivesComposition` on a composable. Only library
+    /// files reach the checker with annotations (a workspace file's are `E3002`), so this is
+    /// one name match per annotation.
+    fn check_annotations(&mut self, source_file: &SourceFile) {
+        for declaration in &source_file.declarations {
+            let annotations = declaration.annotations();
+            for (index, annotation) in annotations.iter().enumerate() {
+                let name = annotation.name.as_str();
+                let repeated = annotations[..index]
+                    .iter()
+                    .any(|earlier| earlier.name == name);
+                let compose_function =
+                    matches!(declaration, Declaration::Function(f) if f.is_compose);
+                let function = matches!(declaration, Declaration::Function(_));
+                let problem = match name {
+                    _ if repeated => Some(format!("'@{}' is written twice", name)),
+                    prism_ast::EXPLICIT_GROUPS_ANNOTATION if !compose_function => Some(format!(
+                        "'@{}' applies only to a composable function ('compose fun')",
+                        name
+                    )),
+                    prism_ast::KEEPER_ANNOTATION
+                        if !matches!(declaration, Declaration::Struct(_)) =>
+                    {
+                        Some(format!("'@{}' applies only to a struct", name))
+                    }
+                    prism_ast::DRIVES_COMPOSITION_ANNOTATION if !function || compose_function => {
+                        Some(format!(
+                            "'@{}' applies only to a function that is not composable: a composable always runs during a pass",
+                            name
+                        ))
+                    }
+                    prism_ast::EXPLICIT_GROUPS_ANNOTATION
+                    | prism_ast::KEEPER_ANNOTATION
+                    | prism_ast::DRIVES_COMPOSITION_ANNOTATION => None,
+                    _ => Some(format!("there is no annotation '@{}'", name)),
+                };
+                if let Some(message) = problem {
+                    self.errors.push(TypeError::InvalidLibraryDeclaration {
+                        message,
+                        help: Some(
+                            "the library's annotations are '@ExplicitGroupsComposable' on a composable function, '@Keeper' on a struct and '@DrivesComposition' on a function that is not composable"
+                                .to_string(),
+                        ),
+                        span: annotation.span,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Reports `E4030` for a direct call of `path`, a function annotated `@DrivesComposition`,
+    /// in a composable context (D6 of `compose-library-in-prism`).
+    fn reject_driving_call(&mut self, path: &DeclarationPath, span: Span) {
+        if self.is_in_compose() {
+            self.errors.push(TypeError::CompositionInComposable {
+                operation: path.name.clone(),
                 span,
             });
         }
@@ -2165,6 +2232,10 @@ impl TypeChecker {
             if definition.clone_hook {
                 self.types.insert_clone_hook(id.clone());
             }
+            // And whether it is a keeper (D12 of `compose-library-in-prism`).
+            if definition.keeper {
+                self.types.insert_keeper(id.clone());
+            }
             self.types
                 .insert_marker(id.clone(), marker.marker, marker.parameters);
             self.types.insert_definition(id, type_definition);
@@ -2173,6 +2244,13 @@ impl TypeChecker {
             self.record_nominals(ty);
         }
         for sym in &abi.symbols {
+            if let ExportedSymbol::Struct {
+                keeper: true, name, ..
+            } = sym
+            {
+                self.types
+                    .insert_keeper(NominalId::new(abi.module.clone(), name.clone()));
+            }
             if let ExportedSymbol::Struct {
                 name,
                 marker,
@@ -2238,6 +2316,7 @@ impl TypeChecker {
                     is_compose,
                     is_capture,
                     is_operator,
+                    drives_composition,
                     receiver,
                     context,
                     name,
@@ -2328,6 +2407,9 @@ impl TypeChecker {
                                 context: context_ty,
                                 is_operator: *is_operator,
                             };
+                            if *drives_composition {
+                                self.drives_composition.insert(extension.path(name));
+                            }
                             self.ingest_extension(&abi.module, key, extension);
                         }
                         None => {
@@ -2344,6 +2426,10 @@ impl TypeChecker {
                                 if !self.externals.contains(&path) {
                                     self.externals.push(path);
                                 }
+                            }
+                            if *drives_composition {
+                                self.drives_composition
+                                    .insert(DeclarationPath::new(abi.module.clone(), name.clone()));
                             }
                             let context_ty = context
                                 .as_ref()
@@ -2624,6 +2710,7 @@ impl TypeChecker {
     /// Every struct and enum name is declared before any annotation is lowered, so field and
     /// signature types may name types declared later in the file.
     pub fn register_module_declarations(&mut self, source_file: &SourceFile) {
+        self.check_annotations(source_file);
         // `Heap(...)` always constructs a box, so a top-level declaration named `Heap` could
         // never be called or named (D2 of `heap-boxes`), and `List` is the built-in list type
         // (D2 of `collections`). An extension is named by its receiver.
@@ -2723,6 +2810,15 @@ impl TypeChecker {
         for name in hooks.clone {
             let id = NominalId::new(self.module_path.clone(), name.to_string());
             self.types.insert_clone_hook(id);
+        }
+        // So is the keeper annotation (D6 of `compose-library-in-prism`).
+        for decl in &source_file.declarations {
+            if let Declaration::Struct(s) = decl {
+                if s.is_keeper() {
+                    let id = NominalId::new(self.module_path.clone(), s.name.clone());
+                    self.types.insert_keeper(id);
+                }
+            }
         }
 
         for decl in &source_file.declarations {
@@ -3207,6 +3303,10 @@ impl TypeChecker {
                 self.externals.push(path);
             }
         }
+        if f.drives_composition() {
+            let path = DeclarationPath::new(self.module_path.clone(), f.name.clone());
+            self.drives_composition.insert(path);
+        }
         let sym = self.function_symbol(f);
         self.define_top_level(sym);
     }
@@ -3444,6 +3544,9 @@ impl TypeChecker {
             context,
             is_operator: f.is_operator,
         };
+        if f.drives_composition() {
+            self.drives_composition.insert(extension.path(&f.name));
+        }
         let module = self.module_path.clone();
         self.own_extensions
             .entry(key)
@@ -7941,6 +8044,9 @@ impl TypeChecker {
                     Callee::Builtin(builtin)
                 } else if self.is_external(&path) {
                     Callee::External(path)
+                } else if self.drives_composition.contains(&path) {
+                    self.reject_driving_call(&path, span);
+                    Callee::Function(path)
                 } else {
                     Callee::Function(path)
                 };
@@ -9228,7 +9334,13 @@ impl TypeChecker {
                         self.reject_state_member_in_composable(builtin, span);
                         Callee::Builtin(builtin)
                     }
-                    None => Callee::Function(extension.path(member)),
+                    None => {
+                        let path = extension.path(member);
+                        if self.drives_composition.contains(&path) {
+                            self.reject_driving_call(&path, span);
+                        }
+                        Callee::Function(path)
+                    }
                 };
                 let has_context = context.is_some();
                 let mut parameter_kinds = parameter_kinds;
@@ -12742,6 +12854,7 @@ mod tests {
                     is_compose: false,
                     is_capture: false,
                     is_operator: false,
+                    drives_composition: false,
                     receiver: None,
                     context: None,
                     name: "add".to_string(),
@@ -12772,6 +12885,7 @@ mod tests {
                     is_compose: false,
                     is_capture: false,
                     is_operator: false,
+                    drives_composition: false,
                     receiver: None,
                     context: None,
                     name: "internal_calc".to_string(),
@@ -13166,6 +13280,7 @@ mod tests {
             imports: Vec::new(),
             declarations: vec![
                 Declaration::Struct(prism_ast::StructDecl {
+                    annotations: Vec::new(),
                     visibility: Visibility::Public,
                     name: "DupPoint".to_string(),
                     name_span: Span::dummy(),
@@ -13191,6 +13306,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 Declaration::Enum(prism_ast::EnumDecl {
+                    annotations: Vec::new(),
                     visibility: Visibility::Public,
                     name: "DupEnum".to_string(),
                     name_span: Span::dummy(),

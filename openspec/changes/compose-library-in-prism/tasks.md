@@ -33,9 +33,9 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 2. Annotations (D2, D12, D16)
 
-- [ ] 2.1 Lexer and AST: an `@` token, and `annotations: Vec<Annotation>` (name and span) on every top-level declaration. Parser: annotations before `context(...)`, the visibility and the other modifiers, on the same line or their own. `E2001` for an `@` not followed by an identifier, arguments, and annotations elsewhere. Add fixtures under `syntax/` for "Annotations before declarations" and "Malformed annotations rejected". Verify with `cargo test -p prism-lexer -p prism-parser`.
-- [ ] 2.2 Formatter: annotations on their own lines above the declaration, in order, with comments kept above the first. `verify.rs` compares them. Add a case for "Annotations formatted", and an idempotency check. Verify with `cargo test -p prism-formatter -p prism-cli --test fmt_cli_tests`.
-- [ ] 2.3 Checks:
+- [x] 2.1 Lexer and AST: an `@` token, and `annotations: Vec<Annotation>` (name and span) on every top-level declaration. Parser: annotations before `context(...)`, the visibility and the other modifiers, on the same line or their own. `E2001` for an `@` not followed by an identifier, arguments, and annotations elsewhere. Add fixtures under `syntax/` for "Annotations before declarations" and "Malformed annotations rejected". Verify with `cargo test -p prism-lexer -p prism-parser`.
+- [x] 2.2 Formatter: annotations on their own lines above the declaration, in order, with comments kept above the first. `verify.rs` compares them. Add a case for "Annotations formatted", and an idempotency check. Verify with `cargo test -p prism-formatter -p prism-cli --test fmt_cli_tests`.
+- [x] 2.3 Checks:
   - Phase 1 reports `E3002` for any annotation in a workspace file, at its `@`.
   - The type checker reports `E4029` in library modules for an unknown annotation, a wrong target, a repeat, and `@DrivesComposition` on a composable.
   - Annotation flags are recorded in `TypeTable` (keeper) and on function signatures (drives composition, explicit groups).

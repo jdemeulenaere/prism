@@ -72,6 +72,9 @@ pub(crate) fn erase_file(file: &mut SourceFile) {
 }
 
 fn erase_declaration(declaration: &mut Declaration) {
+    for annotation in declaration.annotations_mut() {
+        erase(&mut annotation.span);
+    }
     match declaration {
         Declaration::Function(function) => {
             erase(&mut function.span);

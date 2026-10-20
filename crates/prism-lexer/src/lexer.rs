@@ -313,6 +313,25 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 TokenKind::RBracket
             }
+            b'@' => {
+                self.bump();
+                if !self.is_eof()
+                    && (self.peek_byte().is_ascii_alphabetic() || self.peek_byte() == b'_')
+                {
+                    let start = self.cursor;
+                    while !self.is_eof()
+                        && (self.peek_byte().is_ascii_alphanumeric() || self.peek_byte() == b'_')
+                    {
+                        self.bump();
+                    }
+                    TokenKind::Annotation(self.input[start..self.cursor].to_string())
+                } else {
+                    TokenKind::Error(
+                        "Expected an annotation name directly after '@', as in '@Keeper'"
+                            .to_string(),
+                    )
+                }
+            }
             b'"' => self.lex_string(),
             b'\'' => self.lex_char(),
             b'0'..=b'9' => self.lex_number(),

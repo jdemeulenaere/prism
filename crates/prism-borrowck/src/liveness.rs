@@ -17,27 +17,15 @@
 use crate::borrows::BorrowSet;
 use crate::dataflow::{Analysis, BitSet, Direction};
 use crate::location::Location;
-use crate::places;
 use crate::uses::{statement_effects, terminator_effects, PlaceEffect};
-use prism_mir::{Body, LocalId, LocalKind, Statement, Terminator, TerminatorKind};
+use prism_mir::{Body, LocalId, Statement, Terminator, TerminatorKind};
 use prism_typed_tree::ArenaId;
 
 /// The locals every `Return` of `body` uses: its loan-carrying capture locals and its
 /// arguments of type `&mut R` (or `(&mut R)?`) whose `R` carries loans, which the caller sees
 /// afterwards.
-pub fn returned_locals(body: &Body, borrows: &BorrowSet) -> Vec<LocalId> {
-    body.locals
-        .iter()
-        .filter(|(local, declaration)| {
-            borrows.carrier(*local).is_some()
-                && match declaration.kind {
-                    LocalKind::Capture => true,
-                    LocalKind::Argument => places::writes_loans_through(&declaration.ty),
-                    _ => false,
-                }
-        })
-        .map(|(local, _)| local)
-        .collect()
+pub fn returned_locals(borrows: &BorrowSet) -> Vec<LocalId> {
+    borrows.returned.clone()
 }
 
 /// The loan-carrying locals that may be used later.
@@ -56,7 +44,7 @@ pub struct Liveness<'a> {
 
 impl<'a> Liveness<'a> {
     pub fn new(body: &Body, borrows: &'a BorrowSet) -> Self {
-        let returned = returned_locals(body, borrows);
+        let returned = returned_locals(borrows);
         let carrier = |local: LocalId| borrows.carrier(local).map(|bit| bit as u32);
         let mut effects = Vec::new();
         let mut effect_starts = Vec::new();

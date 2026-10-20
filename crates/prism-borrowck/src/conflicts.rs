@@ -337,7 +337,7 @@ pub(crate) fn check_conflicts(
         captures,
         borrows,
         flow,
-        returned: returned_locals(body, borrows),
+        returned: returned_locals(borrows),
         dominators: Dominators::compute(body),
     };
     let mut live_cursor = liveness.cursor(body);

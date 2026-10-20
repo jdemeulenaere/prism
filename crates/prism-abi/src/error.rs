@@ -58,6 +58,13 @@ impl fmt::Display for AbiError {
                     span, visibility, var_name
                 )
             }
+            AbiError::LibraryOnlyDeclaration { modifier, span } if modifier.starts_with('@') => {
+                write!(
+                    f,
+                    "annotation '{}' outside the bundled library at {}",
+                    modifier, span
+                )
+            }
             AbiError::LibraryOnlyDeclaration { modifier, span } => {
                 write!(
                     f,

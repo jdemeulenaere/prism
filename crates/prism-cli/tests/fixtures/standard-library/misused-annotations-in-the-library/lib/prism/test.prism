@@ -1,0 +1,11 @@
+package prism
+
+@Stable public fun a(): Int = 1
+
+@Keeper public fun b(): Int = 1
+
+@ExplicitGroupsComposable public fun c(): Unit {}
+
+@Keeper @Keeper public struct D(private val n: Int)
+
+@DrivesComposition public compose fun E(): Unit {}

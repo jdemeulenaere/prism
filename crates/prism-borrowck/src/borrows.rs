@@ -79,6 +79,8 @@ pub struct BorrowSet {
     pub carriers: Vec<LocalId>,
     /// The position of each local in `carriers`.
     carrier_index: Vec<Option<usize>>,
+    /// The loan-carrying locals every `Return` uses (`liveness::returned_locals`).
+    pub returned: Vec<LocalId>,
     /// The position of each local in `inputs`.
     input_index: Vec<Option<usize>>,
     /// The loans each statement makes.
@@ -98,7 +100,7 @@ impl BorrowSet {
         let mut inputs = Vec::new();
         let mut input_index = vec![None; body.locals.len()];
         for (local, declaration) in body.locals.iter() {
-            if places::carries_loans(&declaration.ty) {
+            if places::carries_loans(&declaration.ty, &file.types) {
                 carrier_index[local.index()] = Some(carriers.len());
                 carriers.push(local);
             }
@@ -106,7 +108,7 @@ impl BorrowSet {
             // `escaping-closures`), so it has no input.
             if matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
                 && !declaration.parameter_kind.is_escaping()
-                && places::carries_loans(&declaration.ty)
+                && places::carries_loans(&declaration.ty, &file.types)
             {
                 input_index[local.index()] = Some(inputs.len());
                 inputs.push(local);
@@ -182,11 +184,29 @@ impl BorrowSet {
                 mutable_by_root[loan.place.local.index()].push(id);
             }
         }
+        // The locals every `Return` uses: the loan-carrying captures, and the arguments through
+        // which loans can be written, which the caller sees afterwards.
+        let returned = body
+            .locals
+            .iter()
+            .filter(|(local, declaration)| {
+                carrier_index[local.index()].is_some()
+                    && match declaration.kind {
+                        LocalKind::Capture => true,
+                        LocalKind::Argument => {
+                            places::writes_loans_through(&declaration.ty, &file.types)
+                        }
+                        _ => false,
+                    }
+            })
+            .map(|(local, _)| local)
+            .collect();
         Self {
             loans,
             inputs,
             carriers,
             carrier_index,
+            returned,
             input_index,
             by_location,
             by_root,

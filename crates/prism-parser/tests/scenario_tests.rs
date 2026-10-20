@@ -2050,3 +2050,61 @@ fn misplaced_field_modifiers_rejected() {
         );
     }
 }
+
+// --- compose-library-in-prism ---
+
+/// The names of the annotations of the only declaration of `src`.
+fn annotation_names(declaration: &Declaration) -> Vec<&str> {
+    declaration
+        .annotations()
+        .iter()
+        .map(|annotation| annotation.name.as_str())
+        .collect()
+}
+
+/// Scenario "Annotations before declarations".
+#[test]
+fn annotations_before_declarations() {
+    let file = parse(
+        "@Keeper\npublic struct C { private val handle: Int }\n\
+         @DrivesComposition public fun f(): Unit {}\n\
+         @ExplicitGroupsComposable\npublic compose fun S(): Unit {}\n\
+         @A @B context(s: Int) fun g() {}",
+    );
+    let [keeper, drives, groups, both] = &file.declarations[..] else {
+        panic!("expected four declarations, got {:?}", file.declarations);
+    };
+    assert_eq!(annotation_names(keeper), ["Keeper"]);
+    assert!(matches!(keeper, Declaration::Struct(s) if s.visibility == Visibility::Public));
+    assert_eq!(annotation_names(drives), ["DrivesComposition"]);
+    assert!(
+        matches!(drives, Declaration::Function(f) if f.visibility == Visibility::Public && !f.is_compose)
+    );
+    assert_eq!(annotation_names(groups), ["ExplicitGroupsComposable"]);
+    assert!(matches!(groups, Declaration::Function(f) if f.is_compose));
+    assert_eq!(annotation_names(both), ["A", "B"]);
+    assert!(matches!(both, Declaration::Function(f) if f.context.is_some()));
+    // The declaration's span starts at its first annotation.
+    assert_eq!(keeper.span().start, 0);
+}
+
+/// Scenario "Malformed annotations rejected".
+#[test]
+fn malformed_annotations_rejected() {
+    for src in [
+        "@ Keeper struct A(val n: Int)",
+        "@1 fun f() {}",
+        "@Keeper(1) struct B(val n: Int)",
+        "fun g() { @Keeper val x = 1 }",
+        "public @Keeper struct D(val n: Int)",
+    ] {
+        let err = parse_source(src).unwrap_err();
+        assert_eq!(err.code, "E2001", "{}", src);
+        assert!(
+            err.message.contains("annotation") || err.message.contains("Annotation"),
+            "{}: {}",
+            src,
+            err.message
+        );
+    }
+}

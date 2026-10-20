@@ -2791,3 +2791,61 @@ fn without_the_check_a_top_level_value_runs_no_hook() {
     assert_eq!(stdout(&output), "global\n");
     assert_eq!(stderr(&output), "");
 }
+
+/// compilation-and-abi: "Annotations change the ABI hash" (`compose-library-in-prism` D12):
+/// `@Keeper` is part of a library struct's ABI entry, hashed and printed.
+#[test]
+fn annotations_change_the_abi_hash() {
+    let hash_and_text = |name: &str, source: &str| {
+        let directory = single_file(name, source);
+        let output = prism(&["abi", "main.prism"], &directory);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let text = stdout(&output);
+        let hash = text
+            .lines()
+            .find_map(|line| line.strip_prefix("ABI Hash: "))
+            .expect("an ABI hash")
+            .to_string();
+        (hash, text)
+    };
+    let (keeper_hash, keeper) = hash_and_text(
+        "annotated_keeper",
+        "package prism\n@Keeper public struct H(private val n: Int)\n",
+    );
+    let (plain_hash, plain) = hash_and_text(
+        "plain_keeper",
+        "package prism\npublic struct H(private val n: Int)\n",
+    );
+    assert_ne!(keeper_hash, plain_hash);
+    assert!(keeper.contains("  @Keeper public struct H"), "{}", keeper);
+    assert!(plain.contains("  public struct H"), "{}", plain);
+    assert!(!plain.contains("@Keeper"), "{}", plain);
+    let (driving_hash, driving) = hash_and_text(
+        "annotated_driver",
+        "package prism\n@DrivesComposition public fun drive(): Unit {}\n",
+    );
+    let (_, explicit) = hash_and_text(
+        "explicit_groups",
+        "package prism\n@ExplicitGroupsComposable public compose fun G(): Unit {}\n",
+    );
+    let (plain_composable_hash, _) = hash_and_text(
+        "plain_composable",
+        "package prism\npublic compose fun G(): Unit {}\n",
+    );
+    let (plain_driver_hash, _) = hash_and_text(
+        "plain_driver",
+        "package prism\npublic fun drive(): Unit {}\n",
+    );
+    assert_ne!(driving_hash, plain_driver_hash);
+    assert!(
+        driving.contains("  @DrivesComposition public fun drive(): Unit"),
+        "{}",
+        driving
+    );
+    // `@ExplicitGroupsComposable` changes only its own body's lowering (D5).
+    let explicit_hash = explicit
+        .lines()
+        .find_map(|line| line.strip_prefix("ABI Hash: "))
+        .unwrap();
+    assert_eq!(explicit_hash, plain_composable_hash);
+}

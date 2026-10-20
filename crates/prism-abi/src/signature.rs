@@ -95,6 +95,9 @@ pub enum ExportedSymbol {
         /// Whether it is an `operator` function, which operator syntax may call (D15 of
         /// `operator-conventions`).
         is_operator: bool,
+        /// Whether it is annotated `@DrivesComposition`, so no composable context may call it
+        /// (D12 of `compose-library-in-prism`).
+        drives_composition: bool,
         /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
         receiver: Option<AbiReceiver>,
         /// The type of the context parameter (`context(scope: RowScope)`), bound like any
@@ -130,6 +133,9 @@ pub enum ExportedSymbol {
         /// Whether its file declares a clone hook for it, which its clone glue calls (D10 of
         /// `drop-and-clone-hooks`).
         clone_hook: bool,
+        /// Whether it is annotated `@Keeper`: its values keep the attached arguments of the
+        /// calls that make or change them (D12 of `compose-library-in-prism`).
+        keeper: bool,
     },
     Enum {
         visibility: Visibility,
@@ -180,6 +186,7 @@ impl ExportedSymbol {
                 is_compose,
                 is_capture,
                 is_operator,
+                drives_composition,
                 receiver,
                 context,
                 name,
@@ -203,6 +210,10 @@ impl ExportedSymbol {
                 // So does a function that is no operator.
                 if *is_operator {
                     hasher.write_str("operator");
+                }
+                // So does a function without `@DrivesComposition`.
+                if *drives_composition {
+                    hasher.write_str("drives composition");
                 }
                 match receiver {
                     Some(receiver) => {
@@ -257,6 +268,7 @@ impl ExportedSymbol {
                 equality,
                 drop_hook,
                 clone_hook,
+                keeper,
             } => {
                 // An ordinary struct keeps the tag it always had.
                 hasher.write_str(if *intrinsic {
@@ -287,6 +299,10 @@ impl ExportedSymbol {
                     hasher.write_str("equals");
                 }
                 hash_hooks(*drop_hook, *clone_hook, hasher);
+                // A struct without `@Keeper` keeps the bytes it always had.
+                if *keeper {
+                    hasher.write_str("keeper");
+                }
             }
             ExportedSymbol::Enum {
                 visibility,
@@ -365,6 +381,7 @@ impl ExportedSymbol {
                 is_compose,
                 is_capture,
                 is_operator,
+                drives_composition,
                 receiver,
                 context,
                 name,
@@ -373,6 +390,9 @@ impl ExportedSymbol {
                 return_type,
             } => {
                 let mut text = String::new();
+                if *drives_composition {
+                    text.push_str("@DrivesComposition ");
+                }
                 if let Some(context) = context {
                     text.push_str(&format!("context({}) ", context));
                 }
@@ -672,6 +692,9 @@ pub struct AbiTypeDefinition {
     /// Whether the defining file declares a clone hook for the type, which clone glue of its
     /// values calls instead of cloning field by field (D10 of `drop-and-clone-hooks`).
     pub clone_hook: bool,
+    /// Whether the type is a struct annotated `@Keeper` (D12 of `compose-library-in-prism`),
+    /// which a file holding its values must know without importing its module.
+    pub keeper: bool,
 }
 
 impl AbiTypeDefinition {
@@ -744,6 +767,9 @@ impl AbiTypeDefinition {
             hasher.write_str("equals");
         }
         hash_hooks(self.drop_hook, self.clone_hook, hasher);
+        if self.keeper {
+            hasher.write_str("keeper");
+        }
     }
 }
 
@@ -797,6 +823,7 @@ pub fn type_definitions(
                 equality: equality.contains(s.name.as_str()),
                 drop_hook: hooks.drop.contains(s.name.as_str()),
                 clone_hook: hooks.clone.contains(s.name.as_str()),
+                keeper: s.is_keeper(),
             }),
             Declaration::Enum(e) => Some(AbiTypeDefinition {
                 module: module.to_string(),
@@ -808,6 +835,7 @@ pub fn type_definitions(
                 equality: equality.contains(e.name.as_str()),
                 drop_hook: hooks.drop.contains(e.name.as_str()),
                 clone_hook: hooks.clone.contains(e.name.as_str()),
+                keeper: false,
             }),
             _ => None,
         })
@@ -1081,15 +1109,21 @@ impl FileAbi {
         in_library: bool,
     ) -> Result<Self, AbiError> {
         if !in_library {
-            if let Some(modifier) = file
-                .declarations
-                .iter()
-                .find_map(Declaration::library_modifier)
-            {
-                return Err(AbiError::LibraryOnlyDeclaration {
-                    modifier: modifier.kind.as_str().to_string(),
-                    span: modifier.span,
-                });
+            // The first `external` or `intrinsic` modifier, or annotation (D2 of
+            // `compose-library-in-prism`), in source order.
+            let first = file.declarations.iter().find_map(|declaration| {
+                let annotation = declaration
+                    .annotations()
+                    .first()
+                    .map(|annotation| (format!("@{}", annotation.name), annotation.span));
+                annotation.or_else(|| {
+                    declaration
+                        .library_modifier()
+                        .map(|modifier| (modifier.kind.as_str().to_string(), modifier.span))
+                })
+            });
+            if let Some((modifier, span)) = first {
+                return Err(AbiError::LibraryOnlyDeclaration { modifier, span });
             }
         }
         let package = file.package.as_ref().map(|p| p.package_string());
@@ -1196,6 +1230,7 @@ impl FileAbi {
                         is_compose: f.is_compose,
                         is_capture: f.is_capture,
                         is_operator: f.is_operator,
+                        drives_composition: f.drives_composition(),
                         receiver,
                         context: f.context.as_ref().map(|c| lower(&c.ty)),
                         name: f.name.clone(),
@@ -1225,6 +1260,7 @@ impl FileAbi {
                         equality: equality.contains(s.name.as_str()),
                         drop_hook: hooks.drop.contains(s.name.as_str()),
                         clone_hook: hooks.clone.contains(s.name.as_str()),
+                        keeper: s.is_keeper(),
                     });
                 }
 

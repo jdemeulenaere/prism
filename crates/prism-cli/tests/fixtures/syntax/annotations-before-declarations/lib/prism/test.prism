@@ -1,0 +1,9 @@
+package prism
+
+@Keeper
+public struct C { private val handle: Int }
+
+@DrivesComposition public fun f(): Unit {}
+
+@ExplicitGroupsComposable
+public compose fun S(): Unit {}

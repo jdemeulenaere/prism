@@ -1,0 +1,2 @@
+// expect: E2001
+@ Keeper struct A(val n: Int)

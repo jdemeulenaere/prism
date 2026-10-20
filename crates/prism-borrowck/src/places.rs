@@ -12,19 +12,19 @@ use prism_typed_tree::{Type, TypeTable};
 /// borrows and a capturing closure cannot be stored in them. Neither does a value of a type
 /// parameter: type arguments are borrow-free, and a capturing closure is never passed for one
 /// (D7 of `generics`).
-pub fn carries_loans(ty: &Type) -> bool {
+pub fn carries_loans(ty: &Type, types: &TypeTable) -> bool {
     match ty {
         Type::Reference { .. } | Type::Fn { .. } => true,
-        Type::Struct { .. } => ty.contains_keeper(),
-        Type::Nullable(inner) | Type::Heap(inner) => carries_loans(inner),
+        Type::Struct { .. } => ty.contains_keeper(types),
+        Type::Nullable(inner) | Type::Heap(inner) => carries_loans(inner, types),
         _ => false,
     }
 }
 
 /// Whether a value of type `ty` keeps attached function values past the call that gives them
 /// (D24 of `owned-state`): a keeper, or a nullable or `Heap<T>` of one.
-pub fn contains_keeper(ty: &Type) -> bool {
-    ty.contains_keeper()
+pub fn contains_keeper(ty: &Type, types: &TypeTable) -> bool {
+    ty.contains_keeper(types)
 }
 
 /// Whether `ty` is a function type, or a nullable or `Heap<T>` of one. A type parameter is not:
@@ -40,16 +40,16 @@ pub fn contains_function(ty: &Type) -> bool {
 /// Whether a value of type `ty` lets whoever holds it write loans into what it points at: a
 /// `&mut R` whose `R` carries loans (`&mut &Int`), a reference to a keeper (`&Composition`), or
 /// a nullable of one.
-pub fn writes_loans_through(ty: &Type) -> bool {
+pub fn writes_loans_through(ty: &Type, types: &TypeTable) -> bool {
     match ty {
         Type::Reference {
             mutable: true,
             inner,
-        } => carries_loans(inner),
+        } => carries_loans(inner, types),
         // A keeper keeps what an `attached` argument holds through any reference to it (D24 of
         // `owned-state`).
-        Type::Reference { inner, .. } if inner.contains_keeper() => true,
-        Type::Nullable(inner) => writes_loans_through(inner),
+        Type::Reference { inner, .. } if inner.contains_keeper(types) => true,
+        Type::Nullable(inner) => writes_loans_through(inner, types),
         _ => false,
     }
 }
@@ -204,9 +204,9 @@ mod tests {
             });
             let nullable = parameter.clone().nullable();
             for ty in [&parameter, &nullable] {
-                assert!(!carries_loans(ty), "{}", ty);
+                assert!(!carries_loans(ty, &TypeTable::new()), "{}", ty);
                 assert!(!contains_function(ty), "{}", ty);
-                assert!(!writes_loans_through(ty), "{}", ty);
+                assert!(!writes_loans_through(ty, &TypeTable::new()), "{}", ty);
                 assert!(!is_input_borrow(ty), "{}", ty);
                 assert!(!can_borrow_reference(ty), "{}", ty);
             }
@@ -215,7 +215,7 @@ mod tests {
                 mutable: false,
                 inner: Box::new(parameter),
             };
-            assert!(is_input_borrow(&borrowed) && carries_loans(&borrowed));
+            assert!(is_input_borrow(&borrowed) && carries_loans(&borrowed, &TypeTable::new()));
         }
     }
 
@@ -335,10 +335,13 @@ fun f(o: &mut Order, h: Heap<Point>, s: String) {
             inner: Box::new(Type::Int),
         };
         let function = Type::function(false, vec![], Type::Int);
-        assert!(carries_loans(&int_reference));
-        assert!(carries_loans(&int_reference.clone().nullable()));
-        assert!(carries_loans(&function));
-        assert!(!carries_loans(&Type::String));
+        assert!(carries_loans(&int_reference, &TypeTable::new()));
+        assert!(carries_loans(
+            &int_reference.clone().nullable(),
+            &TypeTable::new()
+        ));
+        assert!(carries_loans(&function, &TypeTable::new()));
+        assert!(!carries_loans(&Type::String, &TypeTable::new()));
         assert!(contains_function(&function.clone().nullable()));
         assert!(!contains_function(&int_reference));
         assert!(is_input_borrow(&int_reference.clone().nullable()));
