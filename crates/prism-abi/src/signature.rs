@@ -17,7 +17,7 @@ pub struct AbiReceiver {
     pub ty: AbiType,
 }
 
-/// A parameter of an exported function: its name, type, whether it is `escaping`, the
+/// A parameter of an exported function: its name, type, whether it is `escaping` or `attached`, the
 /// span-free hash of its default value's syntax, if it has one, and the inputs that default
 /// reads, which its generator takes (D26 of `ui-toolkit`). The inputs follow from the hashed
 /// syntax, so they are not hashed again.
@@ -25,7 +25,7 @@ pub struct AbiReceiver {
 pub struct AbiParameter {
     pub name: String,
     pub ty: AbiType,
-    pub escaping: bool,
+    pub kind: ParameterKind,
     pub default: Option<String>,
     pub default_inputs: prism_ast::DefaultInputs,
 }
@@ -76,6 +76,8 @@ pub enum ExportedSymbol {
         /// Whether the function has a body, or is intrinsic or external.
         kind: FunctionKind,
         is_compose: bool,
+        /// Whether it is a `capture` function (D12 of `owned-state`).
+        is_capture: bool,
         /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
         receiver: Option<AbiReceiver>,
         /// The type of the context parameter (`context(scope: RowScope)`), bound like any
@@ -136,6 +138,7 @@ impl ExportedSymbol {
                 visibility,
                 kind,
                 is_compose,
+                is_capture,
                 receiver,
                 context,
                 name,
@@ -152,6 +155,10 @@ impl ExportedSymbol {
                 });
                 hasher.write_str(visibility.as_str());
                 hasher.write_u8(if *is_compose { 1 } else { 0 });
+                // A function that is no capture function keeps the bytes it always had.
+                if *is_capture {
+                    hasher.write_str("capture");
+                }
                 match receiver {
                     Some(receiver) => {
                         hasher.write_u8(1);
@@ -175,7 +182,12 @@ impl ExportedSymbol {
                 for parameter in params {
                     hasher.write_str(&parameter.name);
                     parameter.ty.hash_into(hasher);
-                    hasher.write_u8(u8::from(parameter.escaping));
+                    // Plain and `escaping` keep the bytes they always had.
+                    hasher.write_u8(match parameter.kind {
+                        ParameterKind::Plain => 0,
+                        ParameterKind::Escaping => 1,
+                        ParameterKind::Attached => 2,
+                    });
                     if let Some(def) = &parameter.default {
                         hasher.write_u8(1);
                         hasher.write_str(def);
@@ -281,6 +293,7 @@ impl ExportedSymbol {
                 visibility,
                 kind,
                 is_compose,
+                is_capture,
                 receiver,
                 context,
                 name,
@@ -296,6 +309,9 @@ impl ExportedSymbol {
                 if *kind != FunctionKind::Prism {
                     text.push_str(kind.as_str());
                     text.push(' ');
+                }
+                if *is_capture {
+                    text.push_str("capture ");
                 }
                 if *is_compose {
                     text.push_str("compose ");
@@ -313,10 +329,7 @@ impl ExportedSymbol {
                 }
                 let params: Vec<String> = params
                     .iter()
-                    .map(|p| {
-                        let modifier = if p.escaping { "escaping " } else { "" };
-                        format!("{}: {}{}", p.name, modifier, p.ty)
-                    })
+                    .map(|p| format!("{}: {}{}", p.name, p.kind, p.ty))
                     .collect();
                 text.push_str(&format!("{}({}): {}", name, params.join(", "), return_type));
                 Some(text)
@@ -943,7 +956,7 @@ impl FileAbi {
                             AbiParameter {
                                 name: p.name.clone(),
                                 ty: lower(&p.ty),
-                                escaping: p.escaping,
+                                kind: p.kind,
                                 default: def_str,
                                 default_inputs,
                             }
@@ -959,6 +972,7 @@ impl FileAbi {
                         visibility: vis,
                         kind: FunctionKind::of(f),
                         is_compose: f.is_compose,
+                        is_capture: f.is_capture,
                         receiver,
                         context: f.context.as_ref().map(|c| lower(&c.ty)),
                         name: f.name.clone(),

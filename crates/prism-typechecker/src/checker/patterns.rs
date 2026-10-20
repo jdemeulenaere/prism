@@ -196,7 +196,7 @@ impl TypeChecker {
                 ty: ty.clone(),
                 mutable: is_var,
                 kind: LocalKind::PatternBinding,
-                escaping: false,
+                parameter_kind: prism_typed_tree::ParameterKind::Plain,
                 span,
             })
         });

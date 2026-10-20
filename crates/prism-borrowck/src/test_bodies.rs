@@ -17,7 +17,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         mutable: false,
         name: None,
         binding: None,
-        escaping: false,
+        parameter_kind: prism_typed_tree::ParameterKind::Plain,
         span: Span::dummy(),
     });
     let mut blocks = Arena::new();

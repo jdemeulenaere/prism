@@ -434,12 +434,21 @@ impl Parser {
         // names everywhere else.
         let library = self.parse_library_modifier()?;
 
+        // The `capture` modifier (`intrinsic capture fun T.weak()`, D12 of `owned-state`),
+        // directly before `fun`. Before `compose`, `mut` or `consuming` it is read as the
+        // modifier too, since an identifier never starts a declaration, for a better error.
+        let capture = self.parse_capture_modifier(library, false)?;
+
         // Check compose modifier (`compose fun`)
         let mut is_compose = false;
         if self.peek_kind() == &TokenKind::Compose {
             self.bump();
             is_compose = true;
         }
+        let capture = match capture {
+            Some(span) => Some(span),
+            None => self.parse_capture_modifier(library, is_compose)?,
+        };
 
         // Receiver mode modifier (`mut fun T.name()`, `consuming fun T.name()`), always last.
         let mut mode = None;
@@ -513,6 +522,18 @@ impl Parser {
             TokenKind::Fun => {
                 let mut func =
                     self.parse_function(visibility, is_compose, mode, library, start_span)?;
+                if let Some(span) = capture {
+                    if func.receiver.is_none() {
+                        return Err(ParseError::new(
+                            format!(
+                                "'capture' marks the extension that captures a value of its receiver's type, as in 'intrinsic capture fun <T> MutableState<T>.weak()'; '{}' has no receiver",
+                                func.name
+                            ),
+                            span,
+                        ));
+                    }
+                    func.is_capture = true;
+                }
                 if let Some(context) = &context {
                     Self::reject_context_type_parameters(context, &func.type_parameters)?;
                 }
@@ -727,6 +748,7 @@ impl Parser {
             context: None,
             visibility,
             is_compose,
+            is_capture: false,
             receiver,
             name,
             type_parameters,
@@ -736,6 +758,47 @@ impl Parser {
             library,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// The `capture` modifier at the cursor, if any: its span. It is a modifier directly before
+    /// `fun`, `compose`, `mut` or `consuming` on the same line, and a name everywhere else. It
+    /// must follow `intrinsic`, come directly before `fun` and not join `compose` (`compose`
+    /// written before it), `mut` or `consuming`.
+    fn parse_capture_modifier(
+        &mut self,
+        library: Option<LibraryModifier>,
+        is_compose: bool,
+    ) -> Result<Option<Span>, ParseError> {
+        let following = &self.tokens[(self.cursor + 1).min(self.tokens.len() - 1)];
+        let at_modifier = matches!(self.peek_kind(), TokenKind::Ident(word) if word == "capture")
+            && !following.is_preceded_by_newline
+            && match &following.kind {
+                TokenKind::Fun | TokenKind::Compose | TokenKind::Mut => true,
+                TokenKind::Ident(word) => word == "consuming",
+                _ => false,
+            };
+        if !at_modifier {
+            return Ok(None);
+        }
+        let span = self.bump().span;
+        let misplaced = |message: &str| Err(ParseError::new(message.to_string(), span));
+        if !matches!(
+            library,
+            Some(LibraryModifier {
+                kind: LibraryKind::Intrinsic,
+                ..
+            })
+        ) {
+            return misplaced(
+                "'capture' marks an intrinsic extension of the library, written 'intrinsic capture fun T.weak()'",
+            );
+        }
+        if is_compose || self.peek_kind() != &TokenKind::Fun {
+            return misplaced(
+                "'capture' comes directly before 'fun', and a capture function is neither 'compose', 'mut' nor 'consuming'",
+            );
+        }
+        Ok(Some(span))
     }
 
     /// Whether the next tokens are `context(`, the start of a context parameter: `context` is a
@@ -865,7 +928,7 @@ impl Parser {
             | TokenKind::Val
             | TokenKind::Var
             | TokenKind::Struct => true,
-            TokenKind::Ident(word) => word == "consuming",
+            TokenKind::Ident(word) => word == "consuming" || word == "capture",
             _ => false,
         };
         let next = self.peek_ahead(1).clone();
@@ -1003,7 +1066,7 @@ impl Parser {
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
             let (param_name, p_span) = self.expect_ident()?;
             self.expect(TokenKind::Colon)?;
-            let (escaping, ty) = self.parse_parameter_type()?;
+            let (kind, ty) = self.parse_parameter_type()?;
             let mut default_value = None;
             if self.peek_kind() == &TokenKind::Eq {
                 self.bump();
@@ -1013,7 +1076,7 @@ impl Parser {
             params.push(Param {
                 name: param_name,
                 ty,
-                escaping,
+                kind,
                 default_value,
                 span: p_span.merge(end_p_span),
             });
@@ -1313,49 +1376,53 @@ impl Parser {
 
     // --- Type Parsing ---
 
-    /// Whether the next tokens are `escaping` written before a type on the same line: the
-    /// modifier, directly before `(`, `compose`, `mut` or a receiver's type name, or misplaced before a type that cannot take it
-    /// (`escaping Int`, `escaping &T`). Before anything else `escaping` is a name, also a type
-    /// name.
-    fn at_escaping_before_type(&self) -> bool {
-        self.at_escaping_before(|kind| {
-            matches!(
-                kind,
-                TokenKind::LParen
-                    | TokenKind::Compose
-                    | TokenKind::Mut
-                    | TokenKind::Ident(_)
-                    | TokenKind::Amp
-                    | TokenKind::AmpAmp
-            )
-        })
-    }
-
-    fn at_escaping_before(&self, next: impl Fn(&TokenKind) -> bool) -> bool {
+    /// The parameter modifier at the cursor, `escaping` or `attached` written before a type on
+    /// the same line: the modifier, directly before `(`, `compose`, `mut` or a receiver's type
+    /// name, or misplaced before a type that cannot take it (`escaping Int`, `attached &T`).
+    /// Before anything else either word is a name, also a type name.
+    fn parameter_modifier_before_type(&self) -> Option<ParameterKind> {
+        let kind = match self.peek_kind() {
+            TokenKind::Ident(name) if name == "escaping" => ParameterKind::Escaping,
+            TokenKind::Ident(name) if name == "attached" => ParameterKind::Attached,
+            _ => return None,
+        };
         let following = &self.tokens[(self.cursor + 1).min(self.tokens.len() - 1)];
-        matches!(self.peek_kind(), TokenKind::Ident(name) if name == "escaping")
-            && !following.is_preceded_by_newline
-            && next(&following.kind)
+        let before_type = matches!(
+            following.kind,
+            TokenKind::LParen
+                | TokenKind::Compose
+                | TokenKind::Mut
+                | TokenKind::Ident(_)
+                | TokenKind::Amp
+                | TokenKind::AmpAmp
+        );
+        (!following.is_preceded_by_newline && before_type).then_some(kind)
     }
 
-    fn escaping_misplaced(span: Span) -> ParseError {
-        ParseError::new("'escaping' marks parameters of function type", span)
-    }
-
-    /// The type of a parameter of a declaration or a function type, with its `escaping`
-    /// modifier: `escaping () -> Unit`, `escaping compose () -> Unit`,
-    /// `escaping mut Builder.() -> Unit` or `escaping (() -> Unit)?`. The modifier is accepted only before a function type or a
-    /// parenthesized nullable function type.
-    fn parse_parameter_type(&mut self) -> Result<(bool, Type), ParseError> {
-        if !self.at_escaping_before_type() {
-            return Ok((false, self.parse_type()?));
+    fn parameter_modifier_misplaced(kind: ParameterKind, span: Span) -> ParseError {
+        match kind {
+            ParameterKind::Attached => ParseError::new(
+                "'attached' marks parameters of function type that the composition keeps",
+                span,
+            ),
+            _ => ParseError::new("'escaping' marks parameters of function type", span),
         }
+    }
+
+    /// The type of a parameter of a declaration or a function type, with its `escaping` or
+    /// `attached` modifier: `escaping () -> Unit`, `attached compose () -> Unit`,
+    /// `escaping mut Builder.() -> Unit` or `attached (() -> Unit)?`. A modifier is accepted
+    /// only before a function type or a parenthesized nullable function type, and only one.
+    fn parse_parameter_type(&mut self) -> Result<(ParameterKind, Type), ParseError> {
+        let Some(kind) = self.parameter_modifier_before_type() else {
+            return Ok((ParameterKind::Plain, self.parse_type()?));
+        };
         let modifier = self.bump().span;
         if !matches!(
             self.peek_kind(),
             TokenKind::LParen | TokenKind::Compose | TokenKind::Mut | TokenKind::Ident(_)
         ) {
-            return Err(Self::escaping_misplaced(modifier));
+            return Err(Self::parameter_modifier_misplaced(kind, modifier));
         }
         let ty = self.parse_type()?;
         let is_function = match &ty.kind {
@@ -1364,9 +1431,9 @@ impl Parser {
             _ => false,
         };
         if !is_function {
-            return Err(Self::escaping_misplaced(modifier));
+            return Err(Self::parameter_modifier_misplaced(kind, modifier));
         }
-        Ok((true, ty))
+        Ok((kind, ty))
     }
 
     pub fn parse_type(&mut self) -> Result<Type, ParseError> {
@@ -1379,9 +1446,10 @@ impl Parser {
     fn parse_type_inner(&mut self) -> Result<Type, ParseError> {
         let start_span = self.peek().span;
 
-        // `escaping` outside a parameter's type (`val h: escaping () -> Unit`).
-        if self.at_escaping_before_type() {
-            return Err(Self::escaping_misplaced(start_span));
+        // `escaping` or `attached` outside a parameter's type (`val h: escaping () -> Unit`),
+        // or after another modifier (`escaping attached () -> Unit`).
+        if let Some(kind) = self.parameter_modifier_before_type() {
+            return Err(Self::parameter_modifier_misplaced(kind, start_span));
         }
 
         // 1. Borrow reference: &T or &mut T
@@ -1537,15 +1605,17 @@ impl Parser {
     ) -> Result<Type, ParseError> {
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
-        let mut escaping = Vec::new();
-        let mut first_escaping = None;
+        let mut parameter_kinds = Vec::new();
+        let mut first_modifier = None;
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-            if first_escaping.is_none() && self.at_escaping_before_type() {
-                first_escaping = Some(self.peek().span);
+            if first_modifier.is_none() {
+                if let Some(kind) = self.parameter_modifier_before_type() {
+                    first_modifier = Some((kind, self.peek().span));
+                }
             }
-            let (is_escaping, param) = self.parse_parameter_type()?;
+            let (kind, param) = self.parse_parameter_type()?;
             params.push(param);
-            escaping.push(is_escaping);
+            parameter_kinds.push(kind);
             if self.peek_kind() == &TokenKind::Comma {
                 self.bump();
             } else {
@@ -1564,16 +1634,16 @@ impl Parser {
                     is_compose,
                     receiver,
                     params,
-                    escaping,
+                    parameter_kinds,
                     return_type: Box::new(ret),
                 },
                 span,
             ));
         }
-        // `escaping` inside parentheses that are not a function type's parameter list, as in
-        // `val h: (escaping () -> Unit)?`.
-        if let Some(span) = first_escaping {
-            return Err(Self::escaping_misplaced(span));
+        // `escaping` or `attached` inside parentheses that are not a function type's parameter
+        // list, as in `val h: (escaping () -> Unit)?`.
+        if let Some((kind, span)) = first_modifier {
+            return Err(Self::parameter_modifier_misplaced(kind, span));
         }
         if is_compose || receiver.is_some() {
             return Err(ParseError::new(

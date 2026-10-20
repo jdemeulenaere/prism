@@ -1,0 +1,5 @@
+// expect: ok
+fun Button(onClick: attached () -> Unit, content: compose () -> Unit) {}
+fun runApp(content: attached compose () -> Unit) {}
+fun later(f: attached (() -> Unit)? = null) {}
+fun register(r: (attached (Bool) -> Unit) -> Int) {}

@@ -6,6 +6,7 @@ use crate::mir::{
     Projection, Rvalue, TerminatorKind,
 };
 use prism_ast::{DefaultInputs, Span};
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     Argument, BorrowOrigin as TreeBorrowOrigin, BuiltinFunction, Call, Callee as TreeCallee,
     ExpressionId, ExpressionKind, FunctionItem, SafeNavigationOrigin, Type, TypeTable, TypedFile,
@@ -188,7 +189,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
-            call.escaping.clone(),
+            call.parameter_kinds.clone(),
             call.type_arguments.clone(),
             destination,
             call.is_compose,
@@ -205,7 +206,7 @@ impl Builder<'_> {
         callee: Callee,
         arguments: Vec<Operand>,
         parameters: Vec<Type>,
-        escaping: Vec<bool>,
+        parameter_kinds: Vec<ParameterKind>,
         type_arguments: Vec<Type>,
         destination: Place,
         is_compose: bool,
@@ -223,7 +224,7 @@ impl Builder<'_> {
             callee,
             arguments,
             parameters,
-            escaping,
+            parameter_kinds,
             type_arguments,
             destination,
             target,
@@ -368,12 +369,12 @@ impl Builder<'_> {
             parameter: index - usize::from(call.has_receiver) - usize::from(call.has_context),
             name: name.unwrap_or_default(),
         };
-        let escaping = vec![false; parameters.len()];
+        let parameter_kinds = vec![ParameterKind::Plain; parameters.len()];
         self.emit_call(
             callee,
             arguments,
             parameters,
-            escaping,
+            parameter_kinds,
             call.type_arguments.clone(),
             Place::local(result),
             false,

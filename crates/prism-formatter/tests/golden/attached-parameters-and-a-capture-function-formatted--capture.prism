@@ -1,0 +1,1 @@
+public  intrinsic capture fun<T>MutableState<T>.weak():WeakReference<MutableState<T>>

@@ -1,0 +1,4 @@
+// expect: E2001
+fun g() {
+    val k: attached () -> Unit = {}
+}

@@ -1020,7 +1020,7 @@ fn a_receiver_function_type_round_trips() {
     let AbiType::Fn {
         receiver: true,
         params,
-        escaping,
+        kinds,
         ..
     } = &content
     else {
@@ -1029,7 +1029,7 @@ fn a_receiver_function_type_round_trips() {
             content
         );
     };
-    assert_eq!(escaping, &[false]);
+    assert_eq!(kinds, &[prism_ast::ParameterKind::Plain]);
     let [AbiType::Ref {
         mutable: false,
         inner,

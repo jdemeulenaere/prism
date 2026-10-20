@@ -8,12 +8,13 @@
 //! type, and nothing reads fields, bodies or other files.
 
 use prism_mir::{Body, BodyOwner, LocalId};
-use prism_typed_tree::{Type, TypeTable};
+use prism_typed_tree::{ParameterKind, Type, TypeTable};
 
-/// Whether a parameter of type `ty`, `escaping` or not, is stable.
-pub fn is_stable(ty: &Type, escaping: bool, types: &TypeTable) -> bool {
+/// Whether a parameter of type `ty`, declared with `kind`, is stable: an `escaping` or
+/// `attached` function value is kept as one (D9 of `owned-state`).
+pub fn is_stable(ty: &Type, kind: ParameterKind, types: &TypeTable) -> bool {
     if is_function_parameter(ty) {
-        return escaping && !is_composable_function(ty);
+        return kind.keeps() && !is_composable_function(ty);
     }
     types.is_copy(ty) && ty.reference_outside_functions().is_none() && !is_reference(ty)
 }
@@ -54,7 +55,7 @@ pub fn is_skippable(body: &Body, types: &TypeTable) -> bool {
     }
     (1..=body.argument_count).all(|index| {
         let local = &body.locals[LocalId(index as u32)];
-        is_stable(&local.ty, local.escaping, types)
+        is_stable(&local.ty, local.parameter_kind, types)
     })
 }
 
@@ -85,7 +86,7 @@ mod tests {
             is_compose,
             receiver: false,
             params: Vec::new(),
-            escaping: Vec::new(),
+            kinds: Vec::new(),
             ret: Box::new(Type::Unit),
         }
     }
@@ -101,37 +102,44 @@ mod tests {
             })
         };
         let stable = [
-            (Type::Int, false),
-            (Type::Float, false),
-            (Type::Bool, false),
-            (Type::Char, false),
-            (Type::Int.nullable(), false),
-            (Type::plain_struct(NominalId::new("main", "Point")), false),
-            (parameter(Some(TypeMarker::Copy)), false),
-            (function(false), true),
-            (function(false).nullable(), true),
+            (Type::Int, ParameterKind::Plain),
+            (Type::Float, ParameterKind::Plain),
+            (Type::Bool, ParameterKind::Plain),
+            (Type::Char, ParameterKind::Plain),
+            (Type::Int.nullable(), ParameterKind::Plain),
+            (
+                Type::plain_struct(NominalId::new("main", "Point")),
+                ParameterKind::Plain,
+            ),
+            (parameter(Some(TypeMarker::Copy)), ParameterKind::Plain),
+            (function(false), ParameterKind::Escaping),
+            (function(false), ParameterKind::Attached),
+            (function(false).nullable(), ParameterKind::Escaping),
         ];
-        for (ty, escaping) in &stable {
-            assert!(is_stable(ty, *escaping, &types), "{} is stable", ty);
+        for (ty, kind) in &stable {
+            assert!(is_stable(ty, *kind, &types), "{} is stable", ty);
         }
         let unstable = [
-            (Type::String, false),
-            (Type::plain_struct(NominalId::new("main", "User")), false),
+            (Type::String, ParameterKind::Plain),
+            (
+                Type::plain_struct(NominalId::new("main", "User")),
+                ParameterKind::Plain,
+            ),
             (
                 Type::Reference {
                     mutable: false,
                     inner: Box::new(Type::Int),
                 },
-                false,
+                ParameterKind::Plain,
             ),
-            (parameter(None), false),
-            (parameter(Some(TypeMarker::Clone)), false),
-            (function(false), false),
-            (function(true), true),
-            (Type::List(Box::new(Type::Int)), false),
+            (parameter(None), ParameterKind::Plain),
+            (parameter(Some(TypeMarker::Clone)), ParameterKind::Plain),
+            (function(false), ParameterKind::Plain),
+            (function(true), ParameterKind::Escaping),
+            (Type::List(Box::new(Type::Int)), ParameterKind::Plain),
         ];
-        for (ty, escaping) in &unstable {
-            assert!(!is_stable(ty, *escaping, &types), "{} is not stable", ty);
+        for (ty, kind) in &unstable {
+            assert!(!is_stable(ty, *kind, &types), "{} is not stable", ty);
         }
     }
 }

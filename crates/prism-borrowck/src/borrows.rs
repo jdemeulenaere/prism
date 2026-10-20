@@ -99,7 +99,7 @@ impl BorrowSet {
             // An `escaping` argument holds no borrow of the caller's (D4 of
             // `escaping-closures`), so it has no input.
             if matches!(declaration.kind, LocalKind::Argument | LocalKind::Capture)
-                && !declaration.escaping
+                && !declaration.parameter_kind.is_escaping()
                 && places::carries_loans(&declaration.ty)
             {
                 input_index[local.index()] = Some(inputs.len());

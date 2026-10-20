@@ -1,0 +1,2 @@
+// expect: E2001
+capture fun Int.weak(): Int = 1

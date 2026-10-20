@@ -1,0 +1,2 @@
+// expect: E3002
+public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>

@@ -15,6 +15,7 @@ use crate::mir::{
     TerminatorKind,
 };
 use prism_ast::Span;
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::Type;
 use std::collections::HashMap;
 
@@ -204,7 +205,7 @@ impl Builder<'_> {
             mutable: false,
             name: None,
             binding: None,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span,
         });
         self.schedule(local, span);

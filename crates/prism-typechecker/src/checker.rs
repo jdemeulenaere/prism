@@ -28,7 +28,7 @@ use prism_ast::{Span, TypeMarker, Visibility};
 use prism_typed_tree::{
     Argument, BinaryOperator, BorrowOrigin, BuiltinFunction, Call, Callee, CoercionKind,
     ConstructField, ConstructKind, DeclarationPath, EnumItem, ExpressionId, ExpressionKind,
-    ForIteration, FunctionItem, Item, Local, LocalKind, LogicalOperator, Pattern,
+    ForIteration, FunctionItem, Item, Local, LocalKind, LogicalOperator, ParameterKind, Pattern,
     SafeNavigationOrigin, StatementId, StatementKind as TreeStatementKind, StructItem,
     TemplatePart as TreeTemplatePart, TypeTable, TypedFile, UnaryOperator, ValueItem,
 };
@@ -1351,7 +1351,7 @@ impl TypeChecker {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                parameter_kinds,
                 return_type,
             } => {
                 // The receiver is the first parameter, a borrow of its type.
@@ -1362,15 +1362,15 @@ impl TypeChecker {
                         mutable: receiver.mutable,
                         inner: Box::new(self.lower_type(&receiver.ty)),
                     });
-                    flags.push(false);
+                    flags.push(ParameterKind::Plain);
                 }
                 lowered.extend(params.iter().map(|p| self.lower_type(p)));
-                flags.extend(escaping.iter().copied());
+                flags.extend(parameter_kinds.iter().copied());
                 Type::Fn {
                     is_compose: *is_compose,
                     receiver: receiver.is_some(),
                     params: lowered,
-                    escaping: flags,
+                    kinds: flags,
                     ret: Box::new(self.lower_type(return_type)),
                 }
             }
@@ -1459,7 +1459,7 @@ impl TypeChecker {
                             Type::Fn {
                                 is_compose: self.is_in_compose(),
                                 receiver: receiver.is_some(),
-                                escaping: vec![false; params.len()],
+                                kinds: vec![ParameterKind::Plain; params.len()],
                                 params,
                                 ret: Box::new(ret),
                             }
@@ -2000,6 +2000,7 @@ impl TypeChecker {
                     visibility,
                     kind,
                     is_compose,
+                    is_capture: _,
                     receiver,
                     context,
                     name,
@@ -2021,7 +2022,7 @@ impl TypeChecker {
                         is_compose: *is_compose,
                         receiver: false,
                         params: param_types,
-                        escaping: params.iter().map(|p| p.escaping).collect(),
+                        kinds: params.iter().map(|p| p.kind).collect(),
                         ret: Box::new(type_from_abi(return_type, &type_parameters)),
                     };
                     let symbol = Symbol::function_with_defaults(
@@ -2888,7 +2889,7 @@ impl TypeChecker {
             is_compose: f.is_compose,
             receiver: false,
             params,
-            escaping: f.params.iter().map(|p| p.escaping).collect(),
+            kinds: f.params.iter().map(|p| p.kind).collect(),
             ret: Box::new(ret),
         };
 
@@ -3270,7 +3271,7 @@ impl TypeChecker {
             ty: ty.clone(),
             mutable: mutability == Mutability::Var,
             kind,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span,
         });
         Symbol::variable(name, ty, mutability, span).with_local(local)
@@ -3410,7 +3411,7 @@ impl TypeChecker {
                 p.span,
             );
             let local = Self::local_of(&sym).expect("a bound local");
-            self.builder.body_mut().locals[local].escaping = p.escaping;
+            self.builder.body_mut().locals[local].parameter_kind = p.kind;
             self.builder.body_mut().parameters.push(local);
             self.define_local(sym);
             parameters.push((p.name.clone(), p_ty));
@@ -3466,7 +3467,7 @@ impl TypeChecker {
                             is_compose: f.is_compose,
                             receiver: false,
                             params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
-                            escaping: f.params.iter().map(|p| p.escaping).collect(),
+                            kinds: f.params.iter().map(|p| p.kind).collect(),
                             ret: Box::new(expr_ty),
                         };
                         match &receiver_ty {
@@ -3739,7 +3740,7 @@ impl TypeChecker {
                 is_compose,
                 receiver: expected_receiver,
                 params: exp_params,
-                escaping: exp_escaping,
+                kinds: exp_kinds,
                 ret: exp_ret,
             } = function_type
             {
@@ -3750,7 +3751,7 @@ impl TypeChecker {
                     *is_compose,
                     *expected_receiver,
                     exp_params,
-                    exp_escaping,
+                    exp_kinds,
                     ClosureReturn::Expected(exp_ret),
                     expr.span,
                 );
@@ -3843,7 +3844,7 @@ impl TypeChecker {
     }
 
     /// Checks the closure `{ params -> body }` against a function type with parameter types
-    /// `exp_params`, whose `escaping` flags `exp_escaping` its parameters take, and, when known,
+    /// `exp_params`, whose kinds `exp_kinds` its parameters take, and, when known,
     /// return type `exp_ret`; without one the body's type is the closure's return type, or its
     /// referent for [`ClosureReturn::InferredReferent`]. A closure
     /// without a header (`has_header` false) expecting one parameter gets the implicit parameter
@@ -3857,7 +3858,7 @@ impl TypeChecker {
         is_compose: bool,
         receiver: bool,
         exp_params: &[Type],
-        exp_escaping: &[bool],
+        exp_kinds: &[ParameterKind],
         exp_ret: ClosureReturn,
         span: Span,
     ) -> ExpressionId {
@@ -3929,8 +3930,8 @@ impl TypeChecker {
                 parameter_span,
             );
             let local = Self::local_of(&sym).expect("a bound local");
-            self.builder.body_mut().locals[local].escaping =
-                exp_escaping.get(index).copied().unwrap_or(false);
+            self.builder.body_mut().locals[local].parameter_kind =
+                exp_kinds.get(index).copied().unwrap_or_default();
             parameters.push(local);
             // A lambda with a receiver is its body's context (D7 of `receiver-lambdas`).
             if kind == LocalKind::ClosureReceiver {
@@ -3966,8 +3967,8 @@ impl TypeChecker {
             is_compose,
             receiver,
             params: exp_params.to_vec(),
-            escaping: (0..exp_params.len())
-                .map(|index| exp_escaping.get(index).copied().unwrap_or(false))
+            kinds: (0..exp_params.len())
+                .map(|index| exp_kinds.get(index).copied().unwrap_or_default())
                 .collect(),
             ret: Box::new(self.ty(body_id)),
         };
@@ -6158,7 +6159,7 @@ impl TypeChecker {
                     callee: Callee::Builtin(BuiltinFunction::ListOf),
                     arguments,
                     parameters: parameter_list(&names, &signature.params),
-                    escaping: vec![false; signature.params.len()],
+                    parameter_kinds: vec![ParameterKind::Plain; signature.params.len()],
                     type_arguments: solution,
                     evaluation_order,
                     has_receiver: false,
@@ -6237,7 +6238,7 @@ impl TypeChecker {
             is_compose: false,
             receiver: false,
             params: Vec::new(),
-            escaping: Vec::new(),
+            kinds: Vec::new(),
             ret: Box::new(value_parameter.as_type()),
         });
         names.push("calculation".to_string());
@@ -6272,7 +6273,7 @@ impl TypeChecker {
                     callee: Callee::Builtin(BuiltinFunction::Remember),
                     arguments,
                     parameters: parameter_list(&names, &signature.params),
-                    escaping: vec![false; signature.params.len()],
+                    parameter_kinds: vec![ParameterKind::Plain; signature.params.len()],
                     type_arguments: solution,
                     evaluation_order,
                     has_receiver: false,
@@ -6338,7 +6339,7 @@ impl TypeChecker {
         let call = Call {
             callee: Callee::Builtin(builtin),
             evaluation_order: (0..arguments.len()).collect(),
-            escaping: vec![false; parameters.len()],
+            parameter_kinds: vec![ParameterKind::Plain; parameters.len()],
             arguments,
             parameters,
             type_arguments: Vec::new(),
@@ -6409,7 +6410,7 @@ impl TypeChecker {
                     callee: Callee::Builtin(BuiltinFunction::HeapAllocate),
                     arguments,
                     parameters: parameter_list(&names, &signature.params),
-                    escaping: vec![false; signature.params.len()],
+                    parameter_kinds: vec![ParameterKind::Plain; signature.params.len()],
                     type_arguments: solution,
                     evaluation_order,
                     has_receiver: false,
@@ -6510,7 +6511,7 @@ impl TypeChecker {
         context: (ExpressionId, Type),
         arguments: &mut Vec<Argument>,
         parameters: &mut Vec<(Option<String>, Type)>,
-        escaping: &mut Vec<bool>,
+        parameter_kinds: &mut Vec<ParameterKind>,
         evaluation_order: &mut Vec<usize>,
     ) {
         let (argument, context_ty) = context;
@@ -6525,7 +6526,7 @@ impl TypeChecker {
                 },
             ),
         );
-        escaping.insert(0, false);
+        parameter_kinds.insert(0, ParameterKind::Plain);
         for index in evaluation_order.iter_mut() {
             *index += 1;
         }
@@ -6551,7 +6552,7 @@ impl TypeChecker {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                kinds: parameter_kinds,
                 ret,
             } => {
                 // Composable context enforcement (first-class compose invariant, E4008)
@@ -6615,13 +6616,13 @@ impl TypeChecker {
                             mut evaluation_order,
                         }) => {
                             let mut parameters = parameter_list(&param_names, &params);
-                            let mut escaping = escaping;
+                            let mut parameter_kinds = parameter_kinds;
                             if let Some(context) = context {
                                 Self::prepend_context(
                                     context,
                                     &mut arguments,
                                     &mut parameters,
-                                    &mut escaping,
+                                    &mut parameter_kinds,
                                     &mut evaluation_order,
                                 );
                             }
@@ -6629,7 +6630,7 @@ impl TypeChecker {
                                 callee_node,
                                 arguments,
                                 parameters,
-                                escaping,
+                                parameter_kinds,
                                 Vec::new(),
                                 evaluation_order,
                                 is_compose,
@@ -6673,13 +6674,13 @@ impl TypeChecker {
                         // arguments (D9 of `generics`).
                         let mut parameters = parameter_list(&param_names, &signature.params);
                         let ret = signature.ret.substitute(&solution);
-                        let mut escaping = escaping;
+                        let mut parameter_kinds = parameter_kinds;
                         if let Some(context) = context {
                             Self::prepend_context(
                                 context,
                                 &mut arguments,
                                 &mut parameters,
-                                &mut escaping,
+                                &mut parameter_kinds,
                                 &mut evaluation_order,
                             );
                         }
@@ -6687,7 +6688,7 @@ impl TypeChecker {
                             callee_node,
                             arguments,
                             parameters,
-                            escaping,
+                            parameter_kinds,
                             solution,
                             evaluation_order,
                             is_compose,
@@ -6967,7 +6968,7 @@ impl TypeChecker {
         declared: &Type,
         expr: &Expr,
     ) -> ExpressionId {
-        let (is_compose, receiver, params, escaping, ret) =
+        let (is_compose, receiver, params, parameter_kinds, ret) =
             closure_signature(declared).expect("deferred closures have a function type");
         let ExprKind::Closure {
             params: written,
@@ -7006,7 +7007,7 @@ impl TypeChecker {
             is_compose,
             receiver,
             &params,
-            &escaping,
+            &parameter_kinds,
             closure_return,
             expr.span,
         );
@@ -7028,7 +7029,7 @@ impl TypeChecker {
         callee_node: ExpressionId,
         arguments: Vec<Argument>,
         parameters: Vec<(Option<String>, Type)>,
-        escaping: Vec<bool>,
+        parameter_kinds: Vec<ParameterKind>,
         type_arguments: Vec<Type>,
         evaluation_order: Vec<usize>,
         is_compose: bool,
@@ -7039,7 +7040,7 @@ impl TypeChecker {
             callee_node,
             arguments,
             parameters,
-            escaping,
+            parameter_kinds,
             type_arguments,
             evaluation_order,
             is_compose,
@@ -7056,7 +7057,7 @@ impl TypeChecker {
         callee_node: ExpressionId,
         arguments: Vec<Argument>,
         parameters: Vec<(Option<String>, Type)>,
-        escaping: Vec<bool>,
+        parameter_kinds: Vec<ParameterKind>,
         type_arguments: Vec<Type>,
         evaluation_order: Vec<usize>,
         is_compose: bool,
@@ -7085,7 +7086,7 @@ impl TypeChecker {
                     callee,
                     arguments,
                     parameters,
-                    escaping,
+                    parameter_kinds,
                     type_arguments,
                     evaluation_order,
                     has_receiver: false,
@@ -7130,7 +7131,7 @@ impl TypeChecker {
                     callee: Callee::Value(callee_node),
                     arguments,
                     parameters,
-                    escaping,
+                    parameter_kinds,
                     type_arguments,
                     evaluation_order,
                     has_receiver: false,
@@ -7792,7 +7793,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::Unbox),
             arguments: vec![Argument::Written(moved)],
             parameters: vec![(Some(THIS.to_string()), boxed)],
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
@@ -7906,7 +7907,7 @@ impl TypeChecker {
         let Type::Fn {
             is_compose,
             params,
-            escaping,
+            kinds: parameter_kinds,
             ret,
             ..
         } = self.ty(callee_node)
@@ -7937,7 +7938,7 @@ impl TypeChecker {
                     callee_node,
                     all_arguments,
                     parameters,
-                    escaping,
+                    parameter_kinds,
                     Vec::new(),
                     order,
                     is_compose,
@@ -8115,7 +8116,7 @@ impl TypeChecker {
                 Type::Fn {
                     is_compose,
                     params,
-                    escaping,
+                    kinds: parameter_kinds,
                     ret,
                     ..
                 },
@@ -8146,8 +8147,8 @@ impl TypeChecker {
             None => None,
         };
         // The receiver is never `escaping`.
-        let escaping: Vec<bool> = std::iter::once(false)
-            .chain(escaping.iter().copied())
+        let parameter_kinds: Vec<ParameterKind> = std::iter::once(ParameterKind::Plain)
+            .chain(parameter_kinds.iter().copied())
             .collect();
         let (is_compose, params, param_names, defaults, ret) = (
             *is_compose,
@@ -8246,13 +8247,13 @@ impl TypeChecker {
                     None => Callee::Function(extension.path(member)),
                 };
                 let has_context = context.is_some();
-                let mut escaping = escaping;
+                let mut parameter_kinds = parameter_kinds;
                 if let Some(context) = context {
                     Self::prepend_context(
                         context,
                         &mut all_arguments,
                         &mut parameters,
-                        &mut escaping,
+                        &mut parameter_kinds,
                         &mut order,
                     );
                 }
@@ -8260,7 +8261,7 @@ impl TypeChecker {
                     callee,
                     arguments: all_arguments,
                     parameters,
-                    escaping,
+                    parameter_kinds,
                     type_arguments,
                     evaluation_order: order,
                     has_receiver: true,
@@ -9423,7 +9424,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::Clone),
             arguments: vec![Argument::Written(borrow)],
             parameters: vec![(Some(THIS.to_string()), borrow_ty)],
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
@@ -9458,7 +9459,7 @@ impl TypeChecker {
         let call = Call {
             callee: Callee::Builtin(builtin),
             evaluation_order: vec![0],
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             arguments: vec![Argument::Written(base)],
             parameters: vec![(Some(THIS.to_string()), Type::Int)],
             type_arguments: Vec::new(),
@@ -9490,7 +9491,7 @@ impl TypeChecker {
         let call = Call {
             callee: Callee::Builtin(builtin),
             evaluation_order: (0..written.len()).collect(),
-            escaping: vec![false; parameters.len()],
+            parameter_kinds: vec![ParameterKind::Plain; parameters.len()],
             arguments: written,
             parameters,
             type_arguments: Vec::new(),
@@ -9520,7 +9521,7 @@ impl TypeChecker {
             callee: Callee::Builtin(builtin),
             arguments: vec![Argument::Written(borrow)],
             parameters: builtin.list_member_parameters().expect("a list member"),
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             type_arguments: vec![element],
             evaluation_order: vec![0],
             has_receiver: true,
@@ -9567,7 +9568,7 @@ impl TypeChecker {
             callee: Callee::Builtin(BuiltinFunction::ToString),
             arguments: vec![Argument::Written(copy)],
             parameters: vec![(Some(THIS.to_string()), copy_ty)],
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             type_arguments: Vec::new(),
             evaluation_order: vec![0],
             has_receiver: true,
@@ -10520,8 +10521,8 @@ fn this_member(member: &str, span: Span) -> Expr {
 }
 
 /// The signature a closure literal is checked against: its compose flag, whether it has a
-/// receiver, its parameter types, their `escaping` flags and its return type.
-type ClosureSignature = (bool, bool, Vec<Type>, Vec<bool>, Type);
+/// receiver, its parameter types, their kinds and its return type.
+type ClosureSignature = (bool, bool, Vec<Type>, Vec<ParameterKind>, Type);
 
 /// The function type a closure argument is checked against, for a parameter of declared type
 /// `declared`: a function type, possibly nullable.
@@ -10531,13 +10532,13 @@ fn closure_signature(declared: &Type) -> Option<ClosureSignature> {
             is_compose,
             receiver,
             params,
-            escaping,
+            kinds: parameter_kinds,
             ret,
         } => Some((
             *is_compose,
             *receiver,
             params.clone(),
-            escaping.clone(),
+            parameter_kinds.clone(),
             (**ret).clone(),
         )),
         Type::Nullable(inner) => closure_signature(inner),
@@ -11364,6 +11365,7 @@ mod tests {
                     visibility: Visibility::Public,
                     kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
+                    is_capture: false,
                     receiver: None,
                     context: None,
                     name: "add".to_string(),
@@ -11372,14 +11374,14 @@ mod tests {
                         prism_abi::AbiParameter {
                             name: "a".to_string(),
                             ty: AbiType::Prim(PrimKind::Int),
-                            escaping: false,
+                            kind: ParameterKind::Plain,
                             default: None,
                             default_inputs: prism_ast::DefaultInputs::ALL,
                         },
                         prism_abi::AbiParameter {
                             name: "b".to_string(),
                             ty: AbiType::Prim(PrimKind::Int),
-                            escaping: false,
+                            kind: ParameterKind::Plain,
                             default: None,
                             default_inputs: prism_ast::DefaultInputs::ALL,
                         },
@@ -11390,6 +11392,7 @@ mod tests {
                     visibility: Visibility::Package,
                     kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
+                    is_capture: false,
                     receiver: None,
                     context: None,
                     name: "internal_calc".to_string(),

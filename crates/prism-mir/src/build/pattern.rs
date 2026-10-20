@@ -19,6 +19,7 @@ use crate::mir::{
     Projection, Rvalue, StatementKind,
 };
 use prism_ast::Span;
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     BinaryOperator, BindingMode, BuiltinFunction, ExpressionId, LocalId as TreeLocalId, Pattern,
     Type,
@@ -72,7 +73,7 @@ impl Builder<'_> {
                     mutable: tree_local.mutable,
                     name: Some(tree_local.name.clone()),
                     binding: Some(binding),
-                    escaping: false,
+                    parameter_kind: ParameterKind::Plain,
                     span: tree_local.span,
                 });
                 self.schedule_unstarted(id);
@@ -91,7 +92,7 @@ impl Builder<'_> {
                     mutable: false,
                     name: None,
                     binding: None,
-                    escaping: false,
+                    parameter_kind: ParameterKind::Plain,
                     span: self.span,
                 });
                 self.schedule_unstarted(id);
@@ -128,7 +129,7 @@ impl Builder<'_> {
                 mutable: false,
                 name: None,
                 binding: None,
-                escaping: false,
+                parameter_kind: ParameterKind::Plain,
                 span: self.span,
             });
             self.schedule_unstarted(id);
@@ -505,7 +506,7 @@ impl Builder<'_> {
                 Callee::Builtin(BuiltinFunction::Unbox),
                 vec![Operand::Move(place, span)],
                 vec![ty.clone()],
-                vec![false],
+                vec![ParameterKind::Plain],
                 Vec::new(),
                 Place::local(temporary),
                 false,

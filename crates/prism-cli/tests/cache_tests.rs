@@ -319,6 +319,36 @@ fn marking_a_parameter_escaping_changes_the_hashes() {
     );
 }
 
+/// compilation-and-abi: "Marking a parameter attached changes the hashes".
+#[test]
+fn marking_a_parameter_attached_changes_the_hashes() {
+    let workspace = Workspace::new(
+        "attached",
+        &[
+            (
+                "lib/store.prism",
+                "package lib\npublic fun store(f: escaping () -> Unit): Int = 1\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/store\nfun f(): Int = store { }\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked lib/store.prism", "checked app/main.prism"])
+    );
+    workspace.write(
+        "lib/store.prism",
+        "package lib\npublic fun store(f: attached () -> Unit): Int = 1\n",
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked lib/store.prism", "checked app/main.prism"])
+    );
+}
+
 /// compilation-and-abi: "Modifying private helper function".
 #[test]
 fn modifying_private_helper_function() {

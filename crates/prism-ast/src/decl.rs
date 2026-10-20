@@ -3,7 +3,7 @@
 use crate::expr::Expr;
 use crate::span::Span;
 use crate::statement::Block;
-use crate::types::Type;
+use crate::types::{ParameterKind, Type};
 use std::fmt;
 
 /// Declaration visibility modifier.
@@ -74,8 +74,9 @@ impl ImportDecl {
 pub struct Param {
     pub name: String,
     pub ty: Type,
-    /// Whether the parameter is written `escaping`: its function value may be kept by the callee.
-    pub escaping: bool,
+    /// How the parameter is written: plain, or `escaping` or `attached` before a function type,
+    /// when the callee may keep its function value.
+    pub kind: ParameterKind,
     pub default_value: Option<Expr>,
     pub span: Span,
 }
@@ -175,6 +176,10 @@ pub struct FunctionDecl {
     pub visibility: Visibility,
     /// Native `compose` modifier (`compose fun`) per the first-class compose invariant.
     pub is_compose: bool,
+    /// The `capture` modifier (`intrinsic capture fun T.weak()`): the function that closures
+    /// given to `attached` parameters use to capture a value of the receiver's type (D12 of
+    /// `owned-state`).
+    pub is_capture: bool,
     /// The receiver of an extension function (`fun T.name()`), the only kind of method; `None`
     /// for a plain function.
     pub receiver: Option<Box<Receiver>>,

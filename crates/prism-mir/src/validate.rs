@@ -171,14 +171,16 @@ impl Validator<'_> {
                     local.0, parameter
                 ));
             }
-            // Only an argument of function type is `escaping` (D4 of `escaping-closures`).
-            if declaration.escaping
+            // Only an argument of function type is `escaping` or `attached` (D4 of
+            // `escaping-closures`).
+            if declaration.parameter_kind.keeps()
                 && (declaration.kind != LocalKind::Argument
                     || !(declaration.ty.is_function_value() || declaration.ty == Type::Error))
             {
                 self.report(format!(
-                    "_{} is escaping but is not an argument of function type",
-                    local.0
+                    "_{} is {} but is not an argument of function type",
+                    local.0,
+                    declaration.parameter_kind.to_string().trim_end()
                 ));
             }
         }
@@ -498,17 +500,17 @@ impl Validator<'_> {
                 callee,
                 arguments,
                 parameters,
-                escaping,
+                parameter_kinds,
                 type_arguments,
                 destination,
                 target,
                 ..
             } => {
-                if escaping.len() != parameters.len() {
+                if parameter_kinds.len() != parameters.len() {
                     self.report(format!(
                         "{} has {} escaping flags for {} parameters",
                         at,
-                        escaping.len(),
+                        parameter_kinds.len(),
                         parameters.len()
                     ));
                 }
@@ -524,7 +526,7 @@ impl Validator<'_> {
                 // change words, `Int`s after its declared parameters (D19 of
                 // `compose-transform`).
                 let all_parameters = parameters;
-                let (parameters, escaping) = match callee {
+                let (parameters, parameter_kinds) = match callee {
                     Callee::Value(place, _) if self.file.phase == MirPhase::Composed => {
                         match place.try_ty(self.body, self.types) {
                             Some(Type::Fn {
@@ -540,13 +542,13 @@ impl Validator<'_> {
                                 }
                                 (
                                     &parameters[..params.len()],
-                                    &escaping[..params.len().min(escaping.len())],
+                                    &parameter_kinds[..params.len().min(parameter_kinds.len())],
                                 )
                             }
-                            _ => (&parameters[..], &escaping[..]),
+                            _ => (&parameters[..], &parameter_kinds[..]),
                         }
                     }
-                    _ => (&parameters[..], &escaping[..]),
+                    _ => (&parameters[..], &parameter_kinds[..]),
                 };
                 if let Callee::Value(place, _) = callee {
                     let callee_ty = self.place_type(place, &at);
@@ -557,9 +559,7 @@ impl Validator<'_> {
                                 at
                             ));
                         }
-                        Some(Type::Fn {
-                            escaping: flags, ..
-                        }) if flags != escaping => {
+                        Some(Type::Fn { kinds: flags, .. }) if flags != parameter_kinds => {
                             self.report(format!(
                                 "{} calls a function value with other escaping flags",
                                 at
@@ -1391,7 +1391,7 @@ mod tests {
                 )],
                 parameters: StateOperation::Read
                     .parameters(prism_typed_tree::IntrinsicStruct::MutableState),
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: vec![Type::Int],
                 destination: Place::local(LocalId(2)),
                 target: Some(BlockId(1)),
@@ -1484,7 +1484,7 @@ mod tests {
             callee: Callee::Function(prism_typed_tree::DeclarationPath::new("main", "g")),
             arguments: vec![Operand::Constant(Constant::Int(1))],
             parameters: vec![Type::String],
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             type_arguments: Vec::new(),
             destination: Place::local(LocalId(2)),
             target: None,
@@ -1510,7 +1510,7 @@ mod tests {
             callee: Callee::Function(prism_typed_tree::DeclarationPath::new("main", "g")),
             arguments: vec![Operand::Constant(Constant::Int(1))],
             parameters: vec![parameter_t()],
-            escaping: vec![false],
+            parameter_kinds: vec![ParameterKind::Plain],
             type_arguments: vec![Type::String],
             destination: Place::local(LocalId(2)),
             target: Some(BlockId(1)),
@@ -1532,7 +1532,7 @@ mod tests {
                 callee: Callee::Builtin(builtin),
                 arguments: vec![argument],
                 parameters: vec![parameter],
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments,
                 destination: Place::local(LocalId(2)),
                 target: Some(BlockId(1)),
@@ -1830,7 +1830,7 @@ mod tests {
             terminator(TerminatorKind::Call {
                 callee: Callee::Composer(operation),
                 parameters: vec![Type::Int; arguments.len()],
-                escaping: vec![false; arguments.len()],
+                parameter_kinds: vec![ParameterKind::Plain; arguments.len()],
                 arguments,
                 type_arguments: Vec::new(),
                 destination: Place::return_place(),

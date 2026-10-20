@@ -1,0 +1,10 @@
+// expect: ok
+fun attached(attached: Int): Int = attached
+fun f(x: attached, capture: Int) {}
+fun h(attached: Int) {}
+fun g() {
+    val capture = 1
+    h(attached = capture)
+}
+fun Int.capture(): Int = this
+fun k(x: Int): Int = x.capture()

@@ -119,7 +119,7 @@ impl<'t> TypeFingerprints<'t> {
             Type::Fn {
                 is_compose,
                 params,
-                escaping,
+                kinds,
                 ret,
                 ..
             } => {
@@ -127,8 +127,12 @@ impl<'t> TypeFingerprints<'t> {
                 hasher.write_u8(u8::from(*is_compose));
                 hasher.write_u64(params.len() as u64);
                 let mut lowest = usize::MAX;
-                for (param, escaping) in params.iter().zip(escaping) {
-                    hasher.write_u8(u8::from(*escaping));
+                for (param, kind) in params.iter().zip(kinds) {
+                    hasher.write_u8(match kind {
+                        prism_typed_tree::ParameterKind::Plain => 0,
+                        prism_typed_tree::ParameterKind::Escaping => 1,
+                        prism_typed_tree::ParameterKind::Attached => 2,
+                    });
                     lowest = lowest.min(self.hash_type(param, stack, cycles, hasher));
                 }
                 lowest.min(self.hash_type(ret, stack, cycles, hasher))

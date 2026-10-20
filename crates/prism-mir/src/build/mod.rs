@@ -27,6 +27,7 @@ use crate::mir::{
 };
 use crate::types::mir_type_table;
 use prism_ast::Span;
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     Arena, ExpressionId, FunctionItem, Item, StatementId, Type, TypeTable, TypedFile, ValueItem,
 };
@@ -397,7 +398,7 @@ impl<'a> Builder<'a> {
             mutable: false,
             name: None,
             binding: None,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span,
         });
     }
@@ -412,7 +413,7 @@ impl<'a> Builder<'a> {
             local.span,
         );
         self.locals[id].mutable = local.mutable;
-        self.locals[id].escaping = local.escaping;
+        self.locals[id].parameter_kind = local.parameter_kind;
         self.bindings.insert(binding, Place::local(id));
     }
 
@@ -435,7 +436,7 @@ impl<'a> Builder<'a> {
             mutable: false,
             name,
             binding,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span,
         });
         self.argument_count += 1;

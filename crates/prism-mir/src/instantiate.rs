@@ -251,13 +251,13 @@ impl Instance<'_> {
                 callee,
                 arguments,
                 parameters,
-                escaping,
+                parameter_kinds,
                 type_arguments,
                 destination,
                 target,
                 is_compose,
             } => TerminatorKind::Call {
-                escaping: escaping.clone(),
+                parameter_kinds: parameter_kinds.clone(),
                 callee: match callee {
                     Callee::Value(place, span) => Callee::Value(self.place(place), *span),
                     // A composed generic's slot types mention its type parameters (D21 of

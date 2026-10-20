@@ -450,10 +450,7 @@ pub fn declaration_text(f: &FunctionDecl) -> String {
     let parameters: Vec<String> = f
         .params
         .iter()
-        .map(|p| {
-            let modifier = if p.escaping { "escaping " } else { "" };
-            format!("{}: {}{}", p.name, modifier, p.ty)
-        })
+        .map(|p| format!("{}: {}{}", p.name, p.kind, p.ty))
         .collect();
     let result = f
         .return_type

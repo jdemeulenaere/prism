@@ -16,6 +16,7 @@ use crate::mir::{
     Operand, Place, Projection, Rvalue,
 };
 use prism_ast::Span;
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     CaptureMode as TreeCaptureMode, CaptureProjection, DeclarationPath, ExpressionId,
     ExpressionKind, NominalId, Type,
@@ -94,7 +95,7 @@ impl Builder<'_> {
                 mutable,
                 name: Some(capture.path_text(&binding.name, &binding.ty, self.types)),
                 binding: Some(capture.local),
-                escaping: false,
+                parameter_kind: ParameterKind::Plain,
                 span: capture.span,
             });
             closure.capture_count += 1;
@@ -219,7 +220,7 @@ impl Builder<'_> {
             params: declared_parameters,
             ret: declared_result,
             is_compose: declared_compose,
-            escaping: declared_escaping,
+            kinds: declared_escaping,
             ..
         } = &expression.ty
         else {
@@ -249,7 +250,7 @@ impl Builder<'_> {
             params: parameters,
             ret: result,
             is_compose,
-            escaping: value_escaping,
+            kinds: value_escaping,
             ..
         } = value_type
         else {
@@ -279,9 +280,9 @@ impl Builder<'_> {
         let arguments: Vec<LocalId> = parameters
             .iter()
             .zip(value_escaping)
-            .map(|(parameter, &escaping)| {
+            .map(|(parameter, &parameter_kinds)| {
                 let argument = closure.add_argument(parameter.clone(), None, None, span);
-                closure.locals[argument].escaping = escaping;
+                closure.locals[argument].parameter_kind = parameter_kinds;
                 argument
             })
             .collect();

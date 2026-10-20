@@ -59,7 +59,7 @@ pub(crate) fn elaborate_body(
             mutable: false,
             name: None,
             binding: None,
-            escaping: false,
+            parameter_kind: prism_typed_tree::ParameterKind::Plain,
             span: body.locals[*local].span,
         });
     }

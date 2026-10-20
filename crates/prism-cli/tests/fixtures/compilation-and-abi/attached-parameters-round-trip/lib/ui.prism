@@ -1,0 +1,3 @@
+package lib
+
+public fun button(onClick: attached () -> Unit): Int = 1

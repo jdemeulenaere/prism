@@ -22,11 +22,81 @@ pub enum TypeKind {
         /// `ColumnScope.() -> Unit`); `params` holds the written parameters only.
         receiver: Option<Box<FunctionTypeReceiver>>,
         params: Vec<Type>,
-        /// Whether each parameter is written `escaping`, one flag per parameter, as in
-        /// `(escaping () -> Unit) -> Unit`.
-        escaping: Vec<bool>,
+        /// How each parameter is written, one kind per parameter: plain, `escaping` as in
+        /// `(escaping () -> Unit) -> Unit`, or `attached`.
+        parameter_kinds: Vec<ParameterKind>,
         return_type: Box<Type>,
     },
+}
+
+/// How a callee may keep the function value given for a parameter of function type: plain
+/// (it keeps nothing), `escaping` (it may keep it anywhere) or `attached` (the composition keeps
+/// it, and releases it no later than the group that passed it: D9 of `owned-state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+pub enum ParameterKind {
+    #[default]
+    Plain,
+    Escaping,
+    Attached,
+}
+
+impl ParameterKind {
+    /// The kind written as `escaping` when `escaping` holds, else plain.
+    pub fn escaping_if(escaping: bool) -> Self {
+        if escaping {
+            ParameterKind::Escaping
+        } else {
+            ParameterKind::Plain
+        }
+    }
+
+    /// Whether the parameter is `escaping`.
+    pub fn is_escaping(self) -> bool {
+        self == ParameterKind::Escaping
+    }
+
+    /// Whether the parameter is `attached`.
+    pub fn is_attached(self) -> bool {
+        self == ParameterKind::Attached
+    }
+
+    /// Whether the callee may keep the value past the call: `escaping` or `attached`.
+    pub fn keeps(self) -> bool {
+        self != ParameterKind::Plain
+    }
+
+    /// The modifier written before the parameter's type, if any.
+    pub fn modifier(self) -> Option<&'static str> {
+        match self {
+            ParameterKind::Plain => None,
+            ParameterKind::Escaping => Some("escaping"),
+            ParameterKind::Attached => Some("attached"),
+        }
+    }
+
+    /// Whether a function value whose parameter has this kind converts in place to one whose
+    /// parameter has the kind `target` (D9 of `owned-state`, contravariance): a callee that keeps
+    /// nothing accepts anything, an attached callee what an escaping one accepts.
+    pub fn converts_to(self, target: ParameterKind) -> bool {
+        matches!(
+            (self, target),
+            (ParameterKind::Plain, _)
+                | (
+                    ParameterKind::Attached,
+                    ParameterKind::Attached | ParameterKind::Escaping
+                )
+                | (ParameterKind::Escaping, ParameterKind::Escaping)
+        )
+    }
+}
+
+impl fmt::Display for ParameterKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(modifier) = self.modifier() {
+            write!(f, "{} ", modifier)?;
+        }
+        Ok(())
+    }
 }
 
 /// The receiver of a function type: `ColumnScope` in `ColumnScope.() -> Unit`, or `Builder` in
@@ -144,7 +214,7 @@ impl fmt::Display for Type {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                parameter_kinds,
                 return_type,
             } => {
                 if *is_compose {
@@ -161,10 +231,8 @@ impl fmt::Display for Type {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    if escaping.get(i).copied().unwrap_or(false) {
-                        write!(f, "escaping ")?;
-                    }
-                    write!(f, "{}", p)?;
+                    let kind = parameter_kinds.get(i).copied().unwrap_or_default();
+                    write!(f, "{}{}", kind, p)?;
                 }
                 write!(f, ") -> {}", return_type)
             }

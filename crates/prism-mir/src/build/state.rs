@@ -17,6 +17,7 @@
 use super::Builder;
 use crate::mir::{Callee, Constant, Operand, Place, Rvalue, StateOperation};
 use prism_ast::Span;
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     Argument, BinaryOperator, BuiltinFunction, Call, CoercionKind, ExpressionId, ExpressionKind,
     IntrinsicStruct, Type,
@@ -46,12 +47,12 @@ impl Builder<'_> {
         span: Span,
     ) {
         let parameters = operation.parameters(kind);
-        let escaping = vec![false; parameters.len()];
+        let parameter_kinds = vec![ParameterKind::Plain; parameters.len()];
         self.emit_call(
             Callee::State(operation),
             arguments,
             parameters,
-            escaping,
+            parameter_kinds,
             vec![value.clone()],
             destination,
             false,
@@ -315,12 +316,12 @@ impl Builder<'_> {
                     }
                     _ => self.destination_or_temporary(destination, &result_ty, span),
                 };
-                let escaping = vec![false; closure_parameters.len()];
+                let parameter_kinds = vec![ParameterKind::Plain; closure_parameters.len()];
                 self.emit_call(
                     Callee::Value(function, closure_span),
                     vec![Operand::Move(Place::local(lent_local), span)],
                     closure_parameters,
-                    escaping,
+                    parameter_kinds,
                     Vec::new(),
                     result.clone(),
                     false,

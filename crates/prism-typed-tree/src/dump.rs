@@ -73,11 +73,11 @@ impl TypedFile {
                         .get(f.leading_parameters()..)
                         .unwrap_or_default();
                     for (index, (name, ty)) in f.parameters.iter().enumerate() {
-                        let escaping = declared
+                        let kind = declared
                             .get(index)
-                            .is_some_and(|&local| self.bodies[f.body].locals[local].escaping);
-                        let modifier = if escaping { "escaping " } else { "" };
-                        parameters.push(format!("{}: {}{}", name, modifier, ty));
+                            .map(|&local| self.bodies[f.body].locals[local].parameter_kind)
+                            .unwrap_or_default();
+                        parameters.push(format!("{}: {}{}", name, kind, ty));
                     }
                     let type_parameters = TypeParameter::render_list(&f.type_parameters);
                     writeln!(
@@ -209,15 +209,24 @@ impl Printer<'_> {
         for (id, local) in self.body.locals.iter() {
             let kind = match local.kind {
                 LocalKind::Receiver => "receiver",
-                LocalKind::Parameter if local.escaping => "escaping parameter",
+                LocalKind::Parameter if local.parameter_kind.is_escaping() => "escaping parameter",
+                LocalKind::Parameter if local.parameter_kind.is_attached() => "attached parameter",
                 LocalKind::Parameter => "parameter",
                 LocalKind::Let if local.mutable => "var",
                 LocalKind::Let => "val",
                 LocalKind::ForVariable => "for",
-                LocalKind::ClosureParameter if local.escaping => "escaping closure parameter",
+                LocalKind::ClosureParameter if local.parameter_kind.is_escaping() => {
+                    "escaping closure parameter"
+                }
+                LocalKind::ClosureParameter if local.parameter_kind.is_attached() => {
+                    "attached closure parameter"
+                }
                 LocalKind::ClosureParameter => "closure parameter",
-                LocalKind::ImplicitClosureParameter if local.escaping => {
+                LocalKind::ImplicitClosureParameter if local.parameter_kind.is_escaping() => {
                     "escaping implicit closure parameter"
+                }
+                LocalKind::ImplicitClosureParameter if local.parameter_kind.is_attached() => {
+                    "attached implicit closure parameter"
                 }
                 LocalKind::ImplicitClosureParameter => "implicit closure parameter",
                 LocalKind::ClosureReceiver => "closure receiver",
@@ -818,7 +827,7 @@ fn render_type_arguments(arguments: &[Type]) -> String {
 pub(crate) mod tests {
     use crate::arena::Arena;
     use crate::tree::*;
-    use crate::types::Type;
+    use crate::types::{ParameterKind, Type};
     use prism_ast::{Literal, Span, Visibility};
 
     fn span(line: u32, column: u32) -> Span {
@@ -834,7 +843,7 @@ pub(crate) mod tests {
             ty: Type::Int,
             mutable: false,
             kind: LocalKind::Parameter,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span: span(1, 7),
         });
         body.parameters.push(a);

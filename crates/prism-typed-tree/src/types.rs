@@ -3,6 +3,7 @@
 //! The rules over these types (lowering from annotations and ABIs, assignability, joins) live in
 //! the type checker; this module holds only the representation and its rendering.
 
+pub use prism_ast::ParameterKind;
 use prism_ast::TypeMarker;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -624,16 +625,17 @@ pub enum Type {
     /// A type name with no struct or enum declaration in scope. Opaque types compare by name,
     /// and have no members.
     Opaque(String),
-    /// First-class function type, with whether each parameter is `escaping`: one flag per
-    /// parameter, always as many as `params`. With `receiver`, a function type with a receiver
-    /// (`ColumnScope.(Int) -> Unit`, D2 of `receiver-lambdas`): `params[0]` is the receiver's
-    /// borrow, `&T` or `&mut T` for `mut T.() -> R`, and is never `escaping`. The flag is part of
-    /// the type's identity, but not of its representation: `converts_in_place` ignores it.
+    /// First-class function type, with each parameter's kind (plain, `escaping` or `attached`):
+    /// one per parameter, always as many as `params`. With `receiver`, a function type with a
+    /// receiver (`ColumnScope.(Int) -> Unit`, D2 of `receiver-lambdas`): `params[0]` is the
+    /// receiver's borrow, `&T` or `&mut T` for `mut T.() -> R`, and is always plain. The kinds
+    /// are part of the type's identity, but not of its representation: `converts_in_place`
+    /// relates them by [`ParameterKind::converts_to`].
     Fn {
         is_compose: bool,
         receiver: bool,
         params: Vec<Type>,
-        escaping: Vec<bool>,
+        kinds: Vec<ParameterKind>,
         ret: Box<Type>,
     },
     /// A type parameter of the enclosing generic declaration (`T` in `fun <T> id(x: T)`).
@@ -643,12 +645,12 @@ pub enum Type {
 }
 
 impl Type {
-    /// The function type with `params` and `ret`, no parameter `escaping`.
+    /// The function type with `params` and `ret`, every parameter plain.
     pub fn function(is_compose: bool, params: Vec<Type>, ret: Type) -> Type {
         Type::Fn {
             is_compose,
             receiver: false,
-            escaping: vec![false; params.len()],
+            kinds: vec![ParameterKind::Plain; params.len()],
             params,
             ret: Box::new(ret),
         }
@@ -709,13 +711,13 @@ impl Type {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                kinds,
                 ret,
             } => Type::Fn {
                 is_compose: *is_compose,
                 receiver: *receiver,
                 params: params.iter().map(|ty| ty.substitute(arguments)).collect(),
-                escaping: escaping.clone(),
+                kinds: kinds.clone(),
                 ret: Box::new(ret.substitute(arguments)),
             },
             other => other.clone(),
@@ -807,8 +809,9 @@ impl Type {
     /// representation (D8 of `closures`): the types are equal, or differ only by `&mut T`
     /// weakening to `&T` (behind shared borrows too, inside a nullable, and in the parameters
     /// and result of a function type, contravariantly in the parameters). Compose flags must
-    /// match, and a parameter may gain `escaping` (D3 of `escaping-closures`): a function that
-    /// accepts any function value also accepts an owned one, and both move their argument. An
+    /// match, and a parameter's kind may change by [`ParameterKind::converts_to`] (D3 of
+    /// `escaping-closures`, D9 of `owned-state`): a function that accepts any function value
+    /// also accepts an owned one, and both move their argument. An
     /// error on either side converts, so earlier errors are not reported again.
     ///
     /// The type checker allows a function value other than a named function or variant
@@ -868,24 +871,24 @@ impl Type {
                 Type::Fn {
                     is_compose,
                     params,
-                    escaping,
+                    kinds,
                     ret,
                     ..
                 },
                 Type::Fn {
                     is_compose: target_compose,
                     params: target_params,
-                    escaping: target_escaping,
+                    kinds: target_kinds,
                     ret: target_ret,
                     ..
                 },
             ) => {
                 is_compose == target_compose
                     && params.len() == target_params.len()
-                    && escaping
+                    && kinds
                         .iter()
-                        .zip(target_escaping)
-                        .all(|(&flag, &target)| target || !flag)
+                        .zip(target_kinds)
+                        .all(|(&kind, &target)| kind.converts_to(target))
                     && target_params
                         .iter()
                         .zip(params)
@@ -963,16 +966,9 @@ impl Type {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                kinds,
                 ret,
-            } => render_function(
-                *is_compose,
-                *receiver,
-                params,
-                escaping,
-                ret,
-                Type::qualified,
-            ),
+            } => render_function(*is_compose, *receiver, params, kinds, ret, Type::qualified),
             other => other.to_string(),
         }
     }
@@ -1010,19 +1006,12 @@ impl fmt::Display for Type {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                kinds,
                 ret,
             } => write!(
                 f,
                 "{}",
-                render_function(
-                    *is_compose,
-                    *receiver,
-                    params,
-                    escaping,
-                    ret,
-                    Type::to_string
-                )
+                render_function(*is_compose, *receiver, params, kinds, ret, Type::to_string)
             ),
             Type::Parameter(parameter) => write!(f, "{}", parameter.name),
             Type::Error => write!(f, "<error>"),
@@ -1036,7 +1025,7 @@ fn render_function(
     is_compose: bool,
     receiver: bool,
     params: &[Type],
-    escaping: &[bool],
+    kinds: &[ParameterKind],
     ret: &Type,
     render: impl Fn(&Type) -> String,
 ) -> String {
@@ -1060,24 +1049,15 @@ fn render_function(
         .enumerate()
         .skip(skipped)
         .map(|(index, param)| {
-            render_parameter(
-                param,
-                escaping.get(index).copied().unwrap_or(false),
-                &render,
+            format!(
+                "{}{}",
+                kinds.get(index).copied().unwrap_or_default(),
+                render(param)
             )
         })
         .collect();
     text.push_str(&format!("({}) -> {}", rendered.join(", "), render(ret)));
     text
-}
-
-/// Renders a function type's parameter, with `escaping ` before it when it is marked.
-fn render_parameter(param: &Type, escaping: bool, render: impl Fn(&Type) -> String) -> String {
-    if escaping {
-        format!("escaping {}", render(param))
-    } else {
-        render(param)
-    }
 }
 
 /// Renders a nominal type's arguments (`<Int, String>`), or nothing when it has none.
@@ -1114,7 +1094,7 @@ mod tests {
         Type::Fn {
             is_compose: false,
             receiver: false,
-            escaping: vec![true; params.len()],
+            kinds: vec![ParameterKind::Escaping; params.len()],
             params,
             ret: Box::new(ret),
         }
@@ -1143,7 +1123,7 @@ mod tests {
         Type::Fn {
             is_compose: false,
             receiver: true,
-            escaping: vec![false; all.len()],
+            kinds: vec![ParameterKind::Plain; all.len()],
             params: all,
             ret: Box::new(ret),
         }

@@ -14,6 +14,7 @@ use prism_mir::{
     LocalDeclaration, LocalId, LocalKind, Operand, Place, Statement, StatementKind, Terminator,
     TerminatorKind,
 };
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{Arena, Type};
 
 fn local(ty: Type, kind: LocalKind, name: Option<String>, span: Span) -> LocalDeclaration {
@@ -23,7 +24,7 @@ fn local(ty: Type, kind: LocalKind, name: Option<String>, span: Span) -> LocalDe
         mutable: false,
         name,
         binding: None,
-        escaping: false,
+        parameter_kind: ParameterKind::Plain,
         span,
     }
 }
@@ -91,7 +92,7 @@ pub(crate) fn restart_body(
                 }),
                 arguments: vec![copy(composer)],
                 parameters: vec![Type::Int],
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: Vec::new(),
                 destination: Place::local(*local),
                 target: Some(prism_mir::BlockId((index + 1) as u32)),
@@ -131,10 +132,10 @@ pub(crate) fn restart_body(
         .map(|local| original.locals[local].ty.clone())
         .collect::<Vec<_>>();
     parameters.extend(std::iter::repeat_n(Type::Int, 1 + words));
-    let escaping = original
+    let parameter_kinds = original
         .arguments()
-        .map(|local| original.locals[local].escaping)
-        .chain(std::iter::repeat_n(false, 1 + words))
+        .map(|local| original.locals[local].parameter_kind)
+        .chain(std::iter::repeat_n(ParameterKind::Plain, 1 + words))
         .collect();
     let type_arguments = original
         .type_parameters
@@ -148,7 +149,7 @@ pub(crate) fn restart_body(
             callee: Callee::Function(path.clone()),
             arguments,
             parameters,
-            escaping,
+            parameter_kinds,
             type_arguments,
             destination: Place::return_place(),
             target: Some(prism_mir::BlockId((call_block + 1) as u32)),
@@ -215,7 +216,7 @@ pub(crate) fn root_content_body(
                 Operand::Constant(Constant::Int(FORCE)),
             ],
             parameters: vec![Type::Int, Type::Int],
-            escaping: vec![false, false],
+            parameter_kinds: vec![ParameterKind::Plain, ParameterKind::Plain],
             type_arguments: Vec::new(),
             destination: Place::return_place(),
             target: Some(prism_mir::BlockId(1)),

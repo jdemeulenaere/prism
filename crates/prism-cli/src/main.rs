@@ -544,6 +544,7 @@ fn run_abi(path: &str) {
                 visibility,
                 kind,
                 is_compose,
+                is_capture,
                 receiver,
                 context,
                 name,
@@ -554,11 +555,12 @@ fn run_abi(path: &str) {
                 let context = context
                     .as_ref()
                     .map_or_else(String::new, |c| format!("context({}) ", c));
+                let capture = if *is_capture { "capture " } else { "" };
                 let comp = match kind.as_str() {
                     "" if *is_compose => "compose ".to_string(),
                     "" => String::new(),
-                    library if *is_compose => format!("{} compose ", library),
-                    library => format!("{} ", library),
+                    library if *is_compose => format!("{} {}compose ", library, capture),
+                    library => format!("{} {}", library, capture),
                 };
                 let (mode, receiver) = match receiver {
                     Some(r) if r.mode.as_str().is_empty() => (String::new(), format!("{}.", r.ty)),
@@ -568,7 +570,7 @@ fn run_abi(path: &str) {
                 let param_str = params
                     .iter()
                     .map(|p| {
-                        let modifier = if p.escaping { "escaping " } else { "" };
+                        let modifier = p.kind;
                         match &p.default {
                             Some(d) => format!("{}: {}{} = {}", p.name, modifier, p.ty, d),
                             None => format!("{}: {}{}", p.name, modifier, p.ty),

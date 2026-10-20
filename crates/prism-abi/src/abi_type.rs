@@ -1,7 +1,7 @@
 //! Structured, module-qualified types recorded in a file's ABI.
 
 use crate::hasher::DeterministicHasher;
-use prism_ast::{Type as AstType, TypeKind, TypeMarker};
+use prism_ast::{ParameterKind, Type as AstType, TypeKind, TypeMarker};
 use std::fmt;
 
 /// A built-in primitive type.
@@ -128,14 +128,15 @@ pub enum AbiType {
     Heap(Box<AbiType>),
     /// The built-in growable list `List<T>` (D2 of `collections`).
     List(Box<AbiType>),
-    /// A function type, possibly composable, with whether each parameter is `escaping`. With
+    /// A function type, possibly composable, with each parameter's kind (plain, `escaping` or
+    /// `attached`). With
     /// `receiver`, the first parameter is the receiver's borrow, `&T` for `T.() -> R` and
     /// `&mut T` for `mut T.() -> R` (D9 of `receiver-lambdas`).
     Fn {
         compose: bool,
         receiver: bool,
         params: Vec<AbiType>,
-        escaping: Vec<bool>,
+        kinds: Vec<ParameterKind>,
         ret: Box<AbiType>,
     },
 }
@@ -206,7 +207,7 @@ impl AbiType {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                parameter_kinds,
                 return_type,
             } => {
                 let mut lowered = Vec::with_capacity(params.len() + 1);
@@ -216,15 +217,15 @@ impl AbiType {
                         mutable: receiver.mutable,
                         inner: Box::new(lower(&receiver.ty)),
                     });
-                    flags.push(false);
+                    flags.push(ParameterKind::Plain);
                 }
                 lowered.extend(params.iter().map(lower));
-                flags.extend(escaping.iter().copied());
+                flags.extend(parameter_kinds.iter().copied());
                 AbiType::Fn {
                     compose: *is_compose,
                     receiver: receiver.is_some(),
                     params: lowered,
-                    escaping: flags,
+                    kinds: flags,
                     ret: Box::new(lower(return_type)),
                 }
             }
@@ -280,7 +281,7 @@ impl AbiType {
                 compose,
                 receiver,
                 params,
-                escaping,
+                kinds,
                 ret,
             } => {
                 hasher.write_u8(8);
@@ -290,8 +291,13 @@ impl AbiType {
                     hasher.write_u8(12);
                 }
                 Self::hash_list(params, hasher);
-                for flag in escaping {
-                    hasher.write_u8(u8::from(*flag));
+                // Plain and `escaping` keep the bytes they always had.
+                for kind in kinds {
+                    hasher.write_u8(match kind {
+                        ParameterKind::Plain => 0,
+                        ParameterKind::Escaping => 1,
+                        ParameterKind::Attached => 2,
+                    });
                 }
                 ret.hash_into(hasher);
             }
@@ -358,7 +364,7 @@ impl fmt::Display for AbiType {
                 compose,
                 receiver,
                 params,
-                escaping,
+                kinds,
                 ret,
             } => {
                 let mut receiver_text = String::new();
@@ -375,11 +381,8 @@ impl fmt::Display for AbiType {
                     .enumerate()
                     .map(|(index, param)| {
                         let index = index + skipped;
-                        if escaping.get(index).copied().unwrap_or(false) {
-                            format!("escaping {}", param)
-                        } else {
-                            param.to_string()
-                        }
+                        let kind = kinds.get(index).copied().unwrap_or_default();
+                        format!("{}{}", kind, param)
                     })
                     .collect();
                 write!(

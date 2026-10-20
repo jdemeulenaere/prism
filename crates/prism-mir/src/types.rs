@@ -175,7 +175,7 @@ mod tests {
                 mutable: false,
                 name: None,
                 binding: None,
-                escaping: false,
+                parameter_kind: prism_typed_tree::ParameterKind::Plain,
                 span: Span::dummy(),
             });
         }

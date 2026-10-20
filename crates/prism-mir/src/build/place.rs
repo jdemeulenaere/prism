@@ -7,6 +7,7 @@ use crate::mir::{
     Rvalue, StatementKind,
 };
 use prism_ast::{Literal, Span};
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     CoercionKind, ConstructKind, ExpressionId, ExpressionKind, ForIteration, NominalId,
     StatementId, StatementKind as TreeStatementKind, TemplatePart, Type,
@@ -769,7 +770,7 @@ impl Builder<'_> {
             mutable: local.mutable,
             name: Some(local.name.clone()),
             binding: Some(binding),
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span: local.span,
         });
         self.schedule(id, span);

@@ -207,7 +207,7 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
             is_compose,
             receiver,
             params,
-            escaping,
+            kinds,
             ret,
         } => {
             let mut receiver_name = String::new();
@@ -221,16 +221,9 @@ pub(crate) fn qualified_name(ty: &Type) -> String {
             }
             let params: Vec<String> = params
                 .iter()
-                .zip(escaping)
+                .zip(kinds)
                 .skip(skipped)
-                .map(|(param, &flag)| {
-                    let name = qualified_name(param);
-                    if flag {
-                        format!("escaping {}", name)
-                    } else {
-                        name
-                    }
-                })
+                .map(|(param, kind)| format!("{}{}", kind, qualified_name(param)))
                 .collect();
             format!(
                 "{}{}({}) -> {}",

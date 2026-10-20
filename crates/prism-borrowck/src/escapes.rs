@@ -56,7 +56,7 @@ pub(crate) fn check_escapes(
                 callee,
                 arguments,
                 parameters,
-                escaping,
+                parameter_kinds,
                 ..
             } = &terminator.kind
             else {
@@ -69,8 +69,16 @@ pub(crate) fn check_escapes(
                 // callee; a generic slot's body sees a value of a type parameter.
                 let position = if *callee == Callee::Builtin(BuiltinFunction::HeapAllocate) {
                     "stored in a box here"
-                } else if escaping.get(index).copied().unwrap_or(false) {
+                } else if parameter_kinds
+                    .get(index)
+                    .is_some_and(|kind| kind.is_escaping())
+                {
                     "passed to an escaping parameter here"
+                } else if parameter_kinds
+                    .get(index)
+                    .is_some_and(|kind| kind.is_attached())
+                {
+                    "passed to an attached parameter here"
                 } else if matches!(callee, Callee::State(_))
                     && parameter.mentions_parameter_outside_functions()
                 {

@@ -22,7 +22,7 @@
 //! borrowed.
 
 use crate::error::{CaptureRefusal, TypeError};
-use prism_ast::Span;
+use prism_ast::{ParameterKind, Span};
 use prism_typed_tree::{
     Argument, BindingMode, Body, BuiltinFunction, Callee, Capture, CaptureMode, CaptureProjection,
     ConstructKind, ExpressionId, ExpressionKind, LocalId, LocalKind, OwnershipReason,
@@ -586,8 +586,18 @@ impl<'a> Graph<'a> {
                     };
                     let kind = if call.callee == Callee::Builtin(BuiltinFunction::HeapAllocate) {
                         Some(OwnershipReasonKind::StoredInBox)
-                    } else if call.escaping.get(index).copied().unwrap_or(false) {
-                        Some(OwnershipReasonKind::PassedToEscapingParameter)
+                    } else if let Some(kind) =
+                        call.parameter_kinds.get(index).and_then(|kind| match kind {
+                            ParameterKind::Escaping => {
+                                Some(OwnershipReasonKind::PassedToEscapingParameter)
+                            }
+                            ParameterKind::Attached => {
+                                Some(OwnershipReasonKind::PassedToAttachedParameter)
+                            }
+                            ParameterKind::Plain => None,
+                        })
+                    {
+                        Some(kind)
                     } else if call
                         .parameters
                         .get(index)

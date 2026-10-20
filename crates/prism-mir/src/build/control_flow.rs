@@ -13,6 +13,7 @@ use crate::mir::{
 };
 use crate::types::RANGE_END_INCLUSIVE;
 use prism_ast::Span;
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     BinaryOperator, BuiltinFunction, ExpressionId, ExpressionKind, LocalId as TreeLocalId,
     LogicalOperator, Pattern, StatementId, Type, WhenBranch,
@@ -1186,7 +1187,7 @@ impl Builder<'_> {
             Callee::Builtin(BuiltinFunction::ListSize),
             vec![Operand::Move(Place::local(receiver), span)],
             parameters,
-            vec![false],
+            vec![ParameterKind::Plain],
             vec![element],
             Place::local(size),
             false,

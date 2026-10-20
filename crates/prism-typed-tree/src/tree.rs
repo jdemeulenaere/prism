@@ -18,7 +18,7 @@
 //!   no node or binding of the error type.
 
 use crate::arena::{Arena, BodyId, ExpressionId, LocalId, StatementId};
-use crate::types::{NominalId, Type, TypeParameter, TypeTable};
+use crate::types::{NominalId, ParameterKind, Type, TypeParameter, TypeTable};
 use prism_ast::{Literal, ReceiverMode, Span, TypeMarker, Visibility};
 use std::fmt;
 
@@ -240,9 +240,11 @@ pub struct Local {
     /// Whether the binding is a `var`.
     pub mutable: bool,
     pub kind: LocalKind,
-    /// Whether a parameter or closure parameter is `escaping`: its function value holds no
-    /// borrow and may be kept (D4 of `escaping-closures`). Always false for other bindings.
-    pub escaping: bool,
+    /// How a parameter or closure parameter is declared: `escaping`, when its function value
+    /// holds no borrow and may be kept (D4 of `escaping-closures`), `attached`, when the
+    /// composition may keep it (D9 of `owned-state`), else plain. Always plain for other
+    /// bindings.
+    pub parameter_kind: ParameterKind,
     pub span: Span,
 }
 
@@ -561,9 +563,10 @@ pub struct Call {
     /// parameters. An extension's receiver is `this`, of the type it is passed as (`&T`, `&mut T`
     /// or `T`). The type of argument `i` is [`Call::parameter_type`].
     pub parameters: Vec<(Option<String>, Type)>,
-    /// Whether each parameter is `escaping`, in the same order: the callee may keep what is
-    /// passed for it (D3 of `escaping-closures`). The receiver of an extension never is.
-    pub escaping: Vec<bool>,
+    /// The kind of each parameter, in the same order: whether the callee may keep what is passed
+    /// for it, anywhere (`escaping`, D3 of `escaping-closures`) or in the composition
+    /// (`attached`, D9 of `owned-state`). The receiver of an extension is always plain.
+    pub parameter_kinds: Vec<ParameterKind>,
     /// The type arguments of a generic callee, written or inferred, in the order of its type
     /// parameters; empty for any other callee. Inside a generic body they may mention the
     /// body's own type parameters (D9 of `generics`).
@@ -1355,6 +1358,9 @@ pub enum OwnershipReasonKind {
     PassedToGenericParameter,
     /// An argument for an `escaping` parameter.
     PassedToEscapingParameter,
+    /// An argument for an `attached` parameter (D10 of `owned-state`): the composition keeps the
+    /// closure, which captures states through weak handles.
+    PassedToAttachedParameter,
     /// A capture of a closure that owns its captures.
     CapturedByOwningClosure,
     /// A store into a binding declared outside the block of the captured binding `name`; the
@@ -1388,6 +1394,9 @@ impl OwnershipReason {
             OwnershipReasonKind::PassedToGenericParameter => "passed to a generic parameter here",
             OwnershipReasonKind::PassedToEscapingParameter => {
                 "passed to an escaping parameter here"
+            }
+            OwnershipReasonKind::PassedToAttachedParameter => {
+                "passed to an attached parameter here"
             }
             OwnershipReasonKind::CapturedByOwningClosure => {
                 "captured here by a closure that owns its captures"

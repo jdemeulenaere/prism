@@ -1,0 +1,6 @@
+// expect: ok
+package app
+
+import /lib/ui
+
+fun f(count: &MutableState<Int>): Int = button { count.value += 1 }

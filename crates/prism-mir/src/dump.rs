@@ -552,7 +552,7 @@ pub(crate) mod tests {
             mutable: false,
             name: name.map(str::to_string),
             binding: None,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span: span(1, 1),
         }
     }

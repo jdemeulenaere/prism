@@ -152,7 +152,7 @@ impl Validator<'_> {
             }
             let what = format!("binding '{}'", local.name);
             self.check_type_parameters_of(&local.ty, &what);
-            if local.escaping
+            if local.parameter_kind.keeps()
                 && (!matches!(
                     local.kind,
                     LocalKind::Parameter
@@ -161,8 +161,9 @@ impl Validator<'_> {
                 ) || !(local.ty.is_function_value() || local.ty == Type::Error))
             {
                 let message = format!(
-                    "binding '{}' is escaping but is not a parameter of function type",
-                    local.name
+                    "binding '{}' is {} but is not a parameter of function type",
+                    local.name,
+                    local.parameter_kind.to_string().trim_end()
                 );
                 self.report(message);
             }
@@ -1604,12 +1605,9 @@ fn has_misshapen_escaping_flags(ty: &Type) -> bool {
             arguments.iter().any(has_misshapen_escaping_flags)
         }
         Type::Fn {
-            params,
-            escaping,
-            ret,
-            ..
+            params, kinds, ret, ..
         } => {
-            params.len() != escaping.len()
+            params.len() != kinds.len()
                 || params.iter().any(has_misshapen_escaping_flags)
                 || has_misshapen_escaping_flags(ret)
         }
@@ -1633,7 +1631,7 @@ fn contains_error(ty: &Type) -> bool {
 mod tests {
     use crate::arena::{ExpressionId, LocalId, StatementId};
     use crate::tree::*;
-    use crate::types::Type;
+    use crate::types::{ParameterKind, Type};
     use prism_ast::{Literal, Span};
 
     fn file() -> TypedFile {
@@ -1909,7 +1907,7 @@ mod tests {
                 callee: Callee::Value(closure),
                 arguments: vec![],
                 parameters: vec![],
-                escaping: vec![],
+                parameter_kinds: vec![],
                 type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
@@ -2012,7 +2010,7 @@ mod tests {
                 callee: Callee::Function(DeclarationPath::new("main", "g")),
                 arguments: vec![],
                 parameters: vec![(Some("a".to_string()), Type::Int)],
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: vec![],
                 evaluation_order: vec![],
                 has_receiver: false,
@@ -2061,7 +2059,7 @@ mod tests {
                     Some("value".to_string()),
                     BuiltinFunction::heap_contents_parameter().as_type(),
                 )],
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: vec![Type::Int],
                 evaluation_order: vec![0],
                 has_receiver: false,
@@ -2076,7 +2074,7 @@ mod tests {
                 callee: Callee::Builtin(BuiltinFunction::Unbox),
                 arguments: vec![Argument::Written(heap)],
                 parameters: vec![(Some("this".to_string()), boxed)],
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: vec![],
                 evaluation_order: vec![0],
                 has_receiver: true,
@@ -2135,7 +2133,7 @@ mod tests {
                 callee: Callee::Function(DeclarationPath::new("main", "g")),
                 arguments: vec![Argument::Written(one)],
                 parameters: vec![(Some("x".to_string()), parameter_t())],
-                escaping: vec![false],
+                parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: vec![Type::String],
                 evaluation_order: vec![0],
                 has_receiver: false,
@@ -2209,7 +2207,7 @@ mod tests {
             ty: n_type,
             mutable: false,
             kind: LocalKind::PatternBinding,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span: Span::dummy(),
         });
         let subject = ExpressionId(0);

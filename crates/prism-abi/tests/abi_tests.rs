@@ -3,6 +3,7 @@ mod tests {
     use prism_abi::{
         no_imports, AbiError, AbiType, ExportedSymbol, FileAbi, NominalHeader, NominalKind,
     };
+    use prism_ast::ParameterKind;
     use prism_parser::parse_source;
 
     #[test]
@@ -275,14 +276,73 @@ mod tests {
         let ExportedSymbol::Function { params, .. } = &abi.symbols[0] else {
             panic!("Expected exported function");
         };
-        let flags: Vec<bool> = params.iter().map(|p| p.escaping).collect();
-        assert_eq!(flags, [true, false]);
+        let flags: Vec<ParameterKind> = params.iter().map(|p| p.kind).collect();
+        assert_eq!(flags, [ParameterKind::Escaping, ParameterKind::Plain]);
         assert_eq!(params[0].ty.to_string(), "() -> Unit");
         assert_eq!(params[1].ty.to_string(), "(escaping () -> Unit) -> Unit");
-        let AbiType::Fn { escaping, .. } = &params[1].ty else {
+        let AbiType::Fn { kinds, .. } = &params[1].ty else {
             panic!("Expected a function type");
         };
-        assert_eq!(escaping, &[true]);
+        assert_eq!(kinds, &[ParameterKind::Escaping]);
+    }
+
+    /// compilation-and-abi: "Attached parameters round-trip" (the ABI half).
+    #[test]
+    fn test_attached_parameters_round_trip() {
+        let abi = extract(
+            "public fun button(onClick: attached () -> Unit, register: (attached () -> Unit) -> Unit): Int = 1\n",
+        );
+        let ExportedSymbol::Function { params, .. } = &abi.symbols[0] else {
+            panic!("Expected exported function");
+        };
+        let kinds: Vec<ParameterKind> = params.iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [ParameterKind::Attached, ParameterKind::Plain]);
+        assert_eq!(params[1].ty.to_string(), "(attached () -> Unit) -> Unit");
+        assert_eq!(
+            abi.symbols[0].declaration_text().unwrap(),
+            "public fun button(onClick: attached () -> Unit, register: (attached () -> Unit) -> Unit): Int"
+        );
+        // Each kind hashes differently, and plain and `escaping` keep their bytes.
+        let hash = |source: &str| extract(source).abi_hash_hex();
+        let plain = hash("public fun store(f: () -> Unit): Int = 1\n");
+        let escaping = hash("public fun store(f: escaping () -> Unit): Int = 1\n");
+        let attached = hash("public fun store(f: attached () -> Unit): Int = 1\n");
+        assert!(plain != escaping && escaping != attached && plain != attached);
+    }
+
+    /// compilation-and-abi: a capture function is recorded and hashed.
+    #[test]
+    fn test_capture_functions_are_recorded() {
+        let library = |src: &str| {
+            FileAbi::extract_with_origin(
+                &parse_source(src).unwrap(),
+                "prism/test",
+                &no_imports,
+                &|_, _| None,
+                true,
+            )
+            .unwrap()
+        };
+        let capture = library(
+            "public intrinsic capture fun <T> Box<T>.weak(): Int\npublic struct Box<T> { val x: Int }\n",
+        );
+        let plain = library(
+            "public intrinsic fun <T> Box<T>.weak(): Int\npublic struct Box<T> { val x: Int }\n",
+        );
+        let function = capture
+            .symbols
+            .iter()
+            .find(|symbol| matches!(symbol, ExportedSymbol::Function { .. }))
+            .expect("an exported function");
+        let ExportedSymbol::Function { is_capture, .. } = function else {
+            unreachable!()
+        };
+        assert!(*is_capture);
+        assert_eq!(
+            function.declaration_text().unwrap(),
+            "public intrinsic capture fun <T> Box<T>.weak(): Int"
+        );
+        assert_ne!(capture.abi_hash_hex(), plain.abi_hash_hex());
     }
 
     #[test]

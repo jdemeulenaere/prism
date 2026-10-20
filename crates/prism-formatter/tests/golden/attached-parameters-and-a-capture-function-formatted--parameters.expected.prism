@@ -1,0 +1,1 @@
+fun b(o: attached () -> Unit, c: attached compose () -> Unit, r: (attached () -> Unit) -> Unit) {}

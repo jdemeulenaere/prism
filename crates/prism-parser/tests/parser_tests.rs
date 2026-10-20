@@ -1294,7 +1294,7 @@ mod tests {
         let Declaration::Function(f) = &file.declarations[0] else {
             panic!("Expected function");
         };
-        let flags: Vec<bool> = f.params.iter().map(|p| p.escaping).collect();
+        let flags: Vec<bool> = f.params.iter().map(|p| p.kind.is_escaping()).collect();
         assert_eq!(flags, [true, true, true, false, false]);
         let shown: Vec<String> = f.params.iter().map(|p| p.ty.to_string()).collect();
         assert_eq!(
@@ -1307,10 +1307,16 @@ mod tests {
                 "(escaping () -> Unit, Int) -> Unit",
             ]
         );
-        let TypeKind::Function { escaping, .. } = &f.params[4].ty.kind else {
+        let TypeKind::Function {
+            parameter_kinds, ..
+        } = &f.params[4].ty.kind
+        else {
             panic!("Expected function type");
         };
-        assert_eq!(escaping, &[true, false]);
+        assert_eq!(
+            parameter_kinds,
+            &[ParameterKind::Escaping, ParameterKind::Plain]
+        );
     }
 
     #[test]
@@ -1336,6 +1342,116 @@ mod tests {
         assert_eq!(shown, ["escaping", "escaping?", "escaping<Int>"]);
         parse_source("fun escaping(escaping: Int): Int = escaping").unwrap();
         parse_source("fun g() { val escaping = 1; h(escaping = escaping); x.escaping() }").unwrap();
+    }
+
+    #[test]
+    fn attached_parameters() {
+        let file = parse_source(
+            "fun b(onClick: attached () -> Unit, content: attached compose () -> Unit, f: attached (() -> Unit)? = null, n: Int, r: (attached (Bool) -> Unit) -> Int) {}",
+        )
+        .unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let kinds: Vec<ParameterKind> = f.params.iter().map(|p| p.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                ParameterKind::Attached,
+                ParameterKind::Attached,
+                ParameterKind::Attached,
+                ParameterKind::Plain,
+                ParameterKind::Plain,
+            ]
+        );
+        let shown: Vec<String> = f.params.iter().map(|p| p.ty.to_string()).collect();
+        assert_eq!(
+            shown,
+            [
+                "() -> Unit",
+                "compose () -> Unit",
+                "(() -> Unit)?",
+                "Int",
+                "(attached (Bool) -> Unit) -> Int",
+            ]
+        );
+        let TypeKind::Function {
+            parameter_kinds, ..
+        } = &f.params[4].ty.kind
+        else {
+            panic!("Expected function type");
+        };
+        assert_eq!(parameter_kinds, &[ParameterKind::Attached]);
+    }
+
+    #[test]
+    fn attached_on_another_type_or_with_escaping_rejected() {
+        for src in [
+            "fun f(n: attached Int) {}",
+            "fun f(n: attached &Int) {}",
+            "fun h() { val k: attached () -> Unit = {} }",
+            "fun h(f: escaping attached () -> Unit) {}",
+            "fun h(f: attached escaping () -> Unit) {}",
+            "fun m(): attached () -> Unit = {}",
+        ] {
+            assert_parse_error(src, "marks parameters of function type");
+        }
+    }
+
+    #[test]
+    fn attached_and_capture_as_identifiers() {
+        let types = param_types("fun f(x: attached, y: attached?, capture: Int) {}");
+        let shown: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+        assert_eq!(shown, ["attached", "attached?", "Int"]);
+        parse_source("fun attached(attached: Int): Int = attached").unwrap();
+        parse_source("fun g() { val capture = 1; h(attached = capture); x.capture() }").unwrap();
+    }
+
+    #[test]
+    fn a_capture_function() {
+        let file = parse_source(
+            "public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>",
+        )
+        .unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        assert!(f.is_capture && f.is_intrinsic());
+        assert_eq!(f.name, "weak");
+        assert_eq!(f.type_parameters.len(), 1);
+        assert_eq!(
+            f.receiver.as_ref().map(|r| r.ty.to_string()),
+            Some("MutableState<T>".to_string())
+        );
+    }
+
+    #[test]
+    fn capture_outside_its_form_rejected() {
+        for (src, message) in [
+            ("capture fun Int.weak(): Int = 1", "intrinsic extension"),
+            (
+                "public intrinsic capture fun weak(): Int",
+                "has no receiver",
+            ),
+            (
+                "public intrinsic capture mut fun Int.weak(): Int",
+                "directly before 'fun'",
+            ),
+            (
+                "public intrinsic capture compose fun Int.weak(): Int",
+                "directly before 'fun'",
+            ),
+            (
+                "public intrinsic compose capture fun Int.weak(): Int",
+                "directly before 'fun'",
+            ),
+            (
+                "public intrinsic capture consuming fun Int.weak(): Int",
+                "directly before 'fun'",
+            ),
+        ] {
+            assert_parse_error(src, message);
+        }
     }
 
     #[test]
@@ -1642,7 +1758,7 @@ mod tests {
         let Declaration::Function(later) = &file.declarations[0] else {
             panic!("Expected function");
         };
-        assert!(later.params[0].escaping);
+        assert!(later.params[0].kind.is_escaping());
         let TypeKind::Function { return_type, .. } = &types[3].kind else {
             panic!("Expected function type");
         };

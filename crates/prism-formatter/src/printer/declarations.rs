@@ -153,6 +153,9 @@ impl<'a> Printer<'a> {
         if let Some(library) = function.library {
             parts.push(text(format!("{} ", library.kind.as_str())));
         }
+        if function.is_capture {
+            parts.push(text("capture "));
+        }
         if function.is_compose {
             parts.push(text("compose "));
         }
@@ -220,9 +223,7 @@ impl<'a> Printer<'a> {
 
     fn parameter(&mut self, parameter: &Param) -> Document {
         let mut parts = vec![text(format!("{}: ", parameter.name))];
-        if parameter.escaping {
-            parts.push(text("escaping "));
-        }
+        parts.push(text(parameter.kind.to_string()));
         parts.push(self.ty(&parameter.ty));
         if let Some(default) = &parameter.default_value {
             parts.push(text(" = "));
@@ -422,7 +423,7 @@ impl<'a> Printer<'a> {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                parameter_kinds,
                 return_type,
             } => {
                 let mut parts = Vec::new();
@@ -441,9 +442,8 @@ impl<'a> Printer<'a> {
                     if index > 0 {
                         parts.push(text(", "));
                     }
-                    if escaping.get(index).copied().unwrap_or(false) {
-                        parts.push(text("escaping "));
-                    }
+                    let kind = parameter_kinds.get(index).copied().unwrap_or_default();
+                    parts.push(text(kind.to_string()));
                     parts.push(self.ty(parameter));
                 }
                 parts.push(text(") -> "));

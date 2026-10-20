@@ -26,6 +26,7 @@ use prism_mir::{
     ComposerOperation, Constant, GroupId, GroupKey, LocalDeclaration, LocalId, LocalKind, MirFile,
     Operand, Place, Projection, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{Arena, ArenaId, BuiltinFunction, Type, TypeTable};
 use std::collections::HashMap;
 
@@ -74,7 +75,7 @@ pub(crate) fn word_function() -> Type {
         is_compose: false,
         receiver: false,
         params: vec![Type::Int],
-        escaping: vec![false],
+        kinds: vec![ParameterKind::Plain],
         ret: Box::new(Type::Unit),
     }
 }
@@ -202,7 +203,7 @@ impl<'a> Rewriter<'a> {
             mutable: false,
             name: Some(name),
             binding: None,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span: self.span,
         };
         self.composer = Some(locals.alloc(argument("$composer".to_string())));
@@ -276,13 +277,13 @@ impl<'a> Rewriter<'a> {
         span: Span,
     ) {
         let next = self.new_block();
-        let escaping = vec![false; parameters.len()];
+        let parameter_kinds = vec![ParameterKind::Plain; parameters.len()];
         self.terminate(
             TerminatorKind::Call {
                 callee,
                 arguments,
                 parameters,
-                escaping,
+                parameter_kinds,
                 type_arguments: Vec::new(),
                 destination,
                 target: Some(next),
@@ -320,7 +321,7 @@ impl<'a> Rewriter<'a> {
             mutable: false,
             name: None,
             binding: None,
-            escaping: false,
+            parameter_kind: ParameterKind::Plain,
             span: self.span,
         });
         self.temporaries.push(local);
@@ -542,7 +543,7 @@ impl<'a> Rewriter<'a> {
                 callee: Callee::Builtin(builtin),
                 arguments,
                 parameters,
-                escaping,
+                parameter_kinds,
                 type_arguments,
                 destination,
                 target,
@@ -587,7 +588,7 @@ impl<'a> Rewriter<'a> {
                             callee: Callee::Builtin(builtin),
                             arguments,
                             parameters,
-                            escaping,
+                            parameter_kinds,
                             type_arguments,
                             destination,
                             target,
@@ -601,7 +602,7 @@ impl<'a> Rewriter<'a> {
                 callee,
                 mut arguments,
                 mut parameters,
-                mut escaping,
+                mut parameter_kinds,
                 type_arguments,
                 destination,
                 target,
@@ -611,11 +612,11 @@ impl<'a> Rewriter<'a> {
                 let words = self.change_words(&arguments, span);
                 arguments.push(self.composer());
                 parameters.push(Type::Int);
-                escaping.push(false);
+                parameter_kinds.push(ParameterKind::Plain);
                 for word in words {
                     arguments.push(word);
                     parameters.push(Type::Int);
-                    escaping.push(false);
+                    parameter_kinds.push(ParameterKind::Plain);
                 }
                 if let Some(local) = destination.as_local() {
                     self.sources.remove(&local);
@@ -634,7 +635,7 @@ impl<'a> Rewriter<'a> {
                         callee,
                         arguments,
                         parameters,
-                        escaping,
+                        parameter_kinds,
                         type_arguments,
                         destination,
                         target: call_target,

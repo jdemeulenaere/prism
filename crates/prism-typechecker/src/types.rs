@@ -153,26 +153,28 @@ impl TypeRelations for Type {
             Type::Fn {
                 is_compose: self_comp,
                 params: self_params,
-                escaping: self_escaping,
+                kinds: self_kinds,
                 ret: self_ret,
                 ..
             },
             Type::Fn {
                 is_compose: exp_comp,
                 params: exp_params,
-                escaping: exp_escaping,
+                kinds: exp_kinds,
                 ret: exp_ret,
                 ..
             },
         ) = (self, expected)
         {
-            // A parameter may gain `escaping`, never lose it (D3 of `escaping-closures`).
+            // A parameter may gain `escaping`, never lose it (D3 of `escaping-closures`), and
+            // an unmarked one may become `attached`, an `attached` one `escaping` (D9 of
+            // `owned-state`).
             if self_comp == exp_comp
                 && self_params.len() == exp_params.len()
-                && self_escaping
+                && self_kinds
                     .iter()
-                    .zip(exp_escaping)
-                    .all(|(&given, &wanted)| wanted || !given)
+                    .zip(exp_kinds)
+                    .all(|(&given, &wanted)| given.converts_to(wanted))
                 && exp_params
                     .iter()
                     .zip(self_params.iter())
@@ -275,13 +277,13 @@ pub fn type_from_abi(ty: &AbiType, parameters: &[TypeParameter]) -> Type {
             compose,
             receiver,
             params,
-            escaping,
+            kinds,
             ret,
         } => Type::Fn {
             is_compose: *compose,
             receiver: *receiver,
             params: params.iter().map(convert).collect(),
-            escaping: escaping.clone(),
+            kinds: kinds.clone(),
             ret: Box::new(convert(ret)),
         },
     }
@@ -353,20 +355,20 @@ fn same_modulo_errors(a: &Type, b: &Type) -> bool {
             Type::Fn {
                 is_compose: a_compose,
                 params: a_params,
-                escaping: a_escaping,
+                kinds: a_kinds,
                 ret: a_ret,
                 ..
             },
             Type::Fn {
                 is_compose: b_compose,
                 params: b_params,
-                escaping: b_escaping,
+                kinds: b_kinds,
                 ret: b_ret,
                 ..
             },
         ) => {
             a_compose == b_compose
-                && a_escaping == b_escaping
+                && a_kinds == b_kinds
                 && a_params.len() == b_params.len()
                 && a_params
                     .iter()

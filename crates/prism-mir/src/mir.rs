@@ -22,6 +22,7 @@
 //!   ([`Capture::Owned`], D2 of `escaping-closures`).
 
 use prism_ast::Span;
+pub use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     define_id, Arena, BinaryOperator, BuiltinFunction, DeclarationPath, NominalId, OwnershipReason,
     Type, TypeParameter, TypeTable, UnaryOperator,
@@ -341,9 +342,10 @@ pub struct LocalDeclaration {
     pub name: Option<String>,
     /// The typed-tree binding the local stands for, if any.
     pub binding: Option<prism_typed_tree::LocalId>,
-    /// Whether an argument is an `escaping` parameter, which holds no borrow of the caller's
-    /// (D4 of `escaping-closures`). Always false for other locals.
-    pub escaping: bool,
+    /// How an argument's parameter is declared: `escaping`, when it holds no borrow of the
+    /// caller's (D4 of `escaping-closures`), `attached` (D9 of `owned-state`), else plain.
+    /// Always plain for other locals.
+    pub parameter_kind: ParameterKind,
     pub span: Span,
 }
 
@@ -444,9 +446,10 @@ pub enum TerminatorKind {
         /// type parameters. The operand of parameter `i` has the type `parameters[i]` with
         /// `type_arguments` substituted ([`TerminatorKind::parameter_type`]).
         parameters: Vec<Type>,
-        /// Whether each parameter is `escaping`, in the same order: what is passed for it escapes
-        /// (D4 of `escaping-closures`).
-        escaping: Vec<bool>,
+        /// The kind of each parameter, in the same order: what is passed for an `escaping` one
+        /// escapes (D4 of `escaping-closures`), and the composition keeps what is passed for an
+        /// `attached` one (D9 of `owned-state`).
+        parameter_kinds: Vec<ParameterKind>,
         /// The type arguments of a generic callee, in the order of its type parameters; empty
         /// for any other callee. Inside a generic body they may mention the body's own type
         /// parameters (D9 of `generics`).

@@ -18,6 +18,7 @@ use crate::mir::{
 };
 use crate::record::GenericRecord;
 use prism_ast::{Span, TypeMarker};
+use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
     Arena, ArenaId, BinaryOperator, BuiltinFunction, CaptureProjection, DeclarationPath, NominalId,
     OwnershipReason, OwnershipReasonKind, Type, TypeDef, TypeParameter, TypeTable, UnaryOperator,
@@ -218,6 +219,24 @@ impl Codec for bool {
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         decoder.bool()
+    }
+}
+
+impl Codec for ParameterKind {
+    fn encode(&self, encoder: &mut Encoder) {
+        encoder.u8(match self {
+            ParameterKind::Plain => 0,
+            ParameterKind::Escaping => 1,
+            ParameterKind::Attached => 2,
+        });
+    }
+    fn decode(decoder: &mut Decoder) -> Option<Self> {
+        Some(match decoder.u8()? {
+            0 => ParameterKind::Plain,
+            1 => ParameterKind::Escaping,
+            2 => ParameterKind::Attached,
+            _ => return None,
+        })
     }
 }
 
@@ -471,7 +490,7 @@ impl Codec for Type {
                 is_compose,
                 receiver,
                 params,
-                escaping,
+                kinds: parameter_kinds,
                 ret,
             } => {
                 // A function type with a receiver has its own tag, so plain ones encode as
@@ -479,7 +498,7 @@ impl Codec for Type {
                 encoder.u8(if *receiver { 17 } else { 14 });
                 is_compose.encode(encoder);
                 params.encode(encoder);
-                escaping.encode(encoder);
+                parameter_kinds.encode(encoder);
                 ret.encode(encoder);
             }
             Type::Parameter(parameter) => {
@@ -518,15 +537,15 @@ impl Codec for Type {
                 let receiver = tag == 17;
                 let is_compose = decoder.decode()?;
                 let params: Vec<Type> = decoder.decode()?;
-                let escaping: Vec<bool> = decoder.decode()?;
-                if escaping.len() != params.len() || (receiver && params.is_empty()) {
+                let parameter_kinds: Vec<ParameterKind> = decoder.decode()?;
+                if parameter_kinds.len() != params.len() || (receiver && params.is_empty()) {
                     return None;
                 }
                 Type::Fn {
                     is_compose,
                     receiver,
                     params,
-                    escaping,
+                    kinds: parameter_kinds,
                     ret: decoder.decode()?,
                 }
             }
@@ -883,6 +902,7 @@ impl Codec for OwnershipReason {
                 name.encode(encoder);
             }
             OwnershipReasonKind::StoredInState => encoder.u8(11),
+            OwnershipReasonKind::PassedToAttachedParameter => encoder.u8(12),
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -902,6 +922,7 @@ impl Codec for OwnershipReason {
                 name: decoder.decode()?,
             },
             11 => OwnershipReasonKind::StoredInState,
+            12 => OwnershipReasonKind::PassedToAttachedParameter,
             _ => return None,
         };
         Some(OwnershipReason { span, kind })
@@ -1020,7 +1041,7 @@ impl Codec for LocalDeclaration {
             mutable,
             name,
             binding,
-            escaping,
+            parameter_kind,
             span,
         } = self;
         ty.encode(encoder);
@@ -1028,7 +1049,7 @@ impl Codec for LocalDeclaration {
         mutable.encode(encoder);
         name.encode(encoder);
         binding.encode(encoder);
-        escaping.encode(encoder);
+        parameter_kind.encode(encoder);
         span.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1038,7 +1059,7 @@ impl Codec for LocalDeclaration {
             mutable: decoder.decode()?,
             name: decoder.decode()?,
             binding: decoder.decode()?,
-            escaping: decoder.decode()?,
+            parameter_kind: decoder.decode()?,
             span: decoder.decode()?,
         })
     }
@@ -1757,7 +1778,7 @@ impl Codec for TerminatorKind {
                 callee,
                 arguments,
                 parameters,
-                escaping,
+                parameter_kinds,
                 type_arguments,
                 destination,
                 target,
@@ -1767,7 +1788,7 @@ impl Codec for TerminatorKind {
                 callee.encode(encoder);
                 arguments.encode(encoder);
                 parameters.encode(encoder);
-                escaping.encode(encoder);
+                parameter_kinds.encode(encoder);
                 type_arguments.encode(encoder);
                 destination.encode(encoder);
                 target.encode(encoder);
@@ -1808,7 +1829,7 @@ impl Codec for TerminatorKind {
                 callee: decoder.decode()?,
                 arguments: decoder.decode()?,
                 parameters: decoder.decode()?,
-                escaping: decoder.decode()?,
+                parameter_kinds: decoder.decode()?,
                 type_arguments: decoder.decode()?,
                 destination: decoder.decode()?,
                 target: decoder.decode()?,
@@ -2033,7 +2054,7 @@ mod tests {
                     arguments: vec![Type::Heap(Box::new(Type::String))],
                 })),
             ],
-            escaping: vec![false, true],
+            kinds: vec![ParameterKind::Plain, ParameterKind::Escaping],
             ret: Box::new(Type::Enum {
                 id: NominalId::new("a", "E"),
                 arguments: vec![],

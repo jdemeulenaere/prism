@@ -83,7 +83,7 @@ impl TypeChecker {
                 callee: Callee::Builtin(BuiltinFunction::StateValue),
                 arguments: vec![Argument::Written(handle)],
                 parameters: vec![(Some(super::THIS.to_string()), handle_ty)],
-                escaping: vec![false],
+                parameter_kinds: vec![prism_typed_tree::ParameterKind::Plain],
                 type_arguments: vec![value.clone()],
                 evaluation_order: vec![0],
                 has_receiver: true,
