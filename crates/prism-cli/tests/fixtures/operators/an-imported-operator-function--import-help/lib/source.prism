@@ -1,0 +1,5 @@
+package lib
+
+import /geometry/vector
+
+public fun make(): Vector2 = Vector2(1, 2)

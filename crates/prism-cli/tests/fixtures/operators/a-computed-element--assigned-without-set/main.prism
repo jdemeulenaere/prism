@@ -1,0 +1,10 @@
+// expect: E4003
+// run: 1
+// An element its `get` computes is assigned through `set`, which the help names.
+struct Matrix { val columns: Int, var cells: List<Double> }
+
+operator fun Matrix.get(row: Int, column: Int): Double = cells[row * columns + column]
+
+fun f(m: &mut Matrix) {
+    m[0, 1] = 2.0
+}

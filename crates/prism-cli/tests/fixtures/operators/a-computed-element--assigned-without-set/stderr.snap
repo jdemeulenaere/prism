@@ -1,0 +1,5 @@
+error[E4003]: cannot assign to 'm[0, 1]'
+  --> main.prism:9:5
+    9 |     m[0, 1] = 2.0
+      |     ^
+   = help: the element is a value its 'get' operator computes: declare 'operator mut fun Matrix.set(..., value: Double)' to assign it, or a 'get' returning a borrow

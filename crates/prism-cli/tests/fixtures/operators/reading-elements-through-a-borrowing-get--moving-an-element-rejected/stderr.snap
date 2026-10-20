@@ -1,0 +1,5 @@
+error[E4017]: cannot move out of an element of 'b': its type 'Item' is not 'Copy', and a move takes a whole value
+  --> main.prism:12:17
+   12 |     val first = b[0]
+      |                 ^
+   = help: borrow it instead: '&b[0]'

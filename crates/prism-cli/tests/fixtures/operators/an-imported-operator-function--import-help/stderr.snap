@@ -1,0 +1,25 @@
+error[E4002]: operator '+' cannot be applied to 'Vector2' and 'Vector2'
+  --> app/main.prism:11:13
+   11 |     val v = make() + make()
+      |             ^
+   = help: 'Vector2' is defined in module 'geometry/vector', which this file does not import: add 'import /geometry/vector' if it declares 'plus', or declare 'operator fun Vector2.plus(other: Vector2)'
+error[E4002]: 'Vector2' cannot be indexed
+  --> app/main.prism:12:13
+   12 |     val x = make()[0]
+      |             ^
+   = help: 'Vector2' is defined in module 'geometry/vector', which this file does not import: add 'import /geometry/vector' if it declares 'get', or declare 'operator fun Vector2.get(index: Int): &E', returning a borrow of the element 'E' or the element itself
+error[E4004]: type 'Vector2' cannot be called as a function; 'Vector2' is defined in module 'geometry/vector', which this file does not import: add 'import /geometry/vector' if it declares 'invoke'
+  --> app/main.prism:13:13
+   13 |     val y = make()()
+      |             ^
+   = help: verify parameter counts, argument types, or named parameters
+error[E4002]: type mismatch: expected 'Range', found 'Vector2'
+  --> app/main.prism:14:15
+   14 |     for (c in make()) {}
+      |               ^
+   = help: a 'for' loop iterates a 'Range', a 'List<T>' or a type with the operators 'iterator', 'hasNext' and 'next'; 'Vector2' is defined in module 'geometry/vector', which this file does not import: add 'import /geometry/vector' if it declares them
+error[E4002]: operator '+=' cannot be applied to 'Vector2' and 'Vector2'
+  --> app/main.prism:16:5
+   16 |     t += make()
+      |     ^
+   = help: 'Vector2' is defined in module 'geometry/vector', which this file does not import: add 'import /geometry/vector' if it declares 'plus', or declare 'operator fun Vector2.plus(other: Vector2): Vector2'

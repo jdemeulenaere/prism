@@ -497,6 +497,18 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 handle, operator, value
             ));
         }
+        TypeError::ConsumingCompoundTarget {
+            function, operator, ..
+        } => {
+            out.push_str(&format!(
+                "   = help: declare it with a shared receiver, 'operator fun {}', which borrows the target in place\n",
+                function
+            ));
+            out.push_str(&format!(
+                "   = help: or move the value into a 'var', use '{}=' on it there and put the result back\n",
+                operator
+            ));
+        }
         TypeError::MoveInGuard { name, .. } => {
             out.push_str(&format!(
                 "   = help: read or borrow '{}' in the guard, and move it in the branch body\n",

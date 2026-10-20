@@ -42,6 +42,9 @@ pub(crate) struct BodyBuilder {
     /// dereference node, which a write switches to the `mut` `get` (D9 of
     /// `operator-conventions`).
     pub(crate) accessor_places: HashMap<ExpressionId, AccessorPlace>,
+    /// The span of each index through a `get` operator, whose element is not a list's, so a
+    /// move out of it suggests no `removeAt` (`E4017`).
+    pub(crate) accessor_index_spans: HashSet<Span>,
 }
 
 /// An element place `a[i]` reached through a shared `get` operator returning a borrow:
@@ -78,6 +81,7 @@ impl BodyBuilder {
             reported_state_values: HashSet::new(),
             state_value_spans: HashSet::new(),
             accessor_places: HashMap::new(),
+            accessor_index_spans: HashSet::new(),
         }
     }
 

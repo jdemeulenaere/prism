@@ -1,0 +1,17 @@
+// expect: E4017
+// run: 1
+// The error names the consuming function and says how to change the element or the function,
+// for an element and for a field.
+struct Text { val s: String }
+
+struct Holder { var t: Text }
+
+operator consuming fun Text.plus(other: &Text): Text = Text(s + other.s)
+
+fun f(xs: &mut List<Text>, i: Int, t: &Text) {
+    xs[i] += t
+}
+
+fun g(h: &mut Holder, t: &Text) {
+    h.t += t
+}

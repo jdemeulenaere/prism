@@ -1591,6 +1591,23 @@ impl TypeChecker {
             && !self.direct_imports.contains(&id.module)
     }
 
+    /// The help clause pointing at the module of `ty`, a struct or enum read through its `&`,
+    /// `&mut` and `Heap<T>` layers, when the file does not import that module, whose operator
+    /// functions it then cannot see (D3 of `operator-conventions`): `'Vector2' is defined in
+    /// module 'geometry/vector', which this file does not import: add 'import /geometry/vector'`.
+    /// Computed on error paths only.
+    fn unimported_module_help(&self, ty: &Type) -> Option<String> {
+        match peel_indirection(ty) {
+            Type::Struct { id, .. } | Type::Enum { id, .. } if self.is_unimported(id) => {
+                Some(format!(
+                    "'{}' is defined in module '{}', which this file does not import: add 'import /{}'",
+                    id.name, id.module, id.module
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// The single type named `name` that reached this file through an import's signature but is
     /// defined in a module the file does not import.
     fn unimported_type_named(&self, name: &str) -> Option<NominalId> {
@@ -5331,7 +5348,21 @@ impl TypeChecker {
                                 ..
                             })
                         ) {
-                        "the element is a value its 'get' operator computes: declare 'operator mut fun ... .set(...)' to assign it, or a 'get' returning a borrow".to_string()
+                        // The receiver, the call's first argument, names the indexed type.
+                        let indexed = match self.builder.kind(node) {
+                            ExpressionKind::Call(call) => match call.arguments.first() {
+                                Some(Argument::Written(receiver)) => {
+                                    peel_indirection(&self.ty(*receiver)).to_string()
+                                }
+                                _ => "...".to_string(),
+                            },
+                            _ => "...".to_string(),
+                        };
+                        format!(
+                            "the element is a value its 'get' operator computes: declare 'operator mut fun {}.set(..., value: {})' to assign it, or a 'get' returning a borrow",
+                            indexed,
+                            self.ty(node)
+                        )
                     } else {
                         "the characters of a string cannot be assigned: strings are immutable"
                             .to_string()
@@ -6041,13 +6072,12 @@ impl TypeChecker {
                 if let Some(iteration) = self.cursor_iteration(iterable, peeled, &iterable_ty) {
                     return iteration;
                 }
+                let mut help = "a 'for' loop iterates a 'Range', a 'List<T>' or a type with the operators 'iterator', 'hasNext' and 'next'".to_string();
+                if let Some(import) = self.unimported_module_help(&ty) {
+                    help = format!("{}; {} if it declares them", help, import);
+                }
                 self.with_origin(Origin::Value, |c| {
-                    c.report_mismatch_with_help(
-                        &range,
-                        ty,
-                        iterable.span,
-                        Some("a 'for' loop iterates a 'Range', a 'List<T>' or a type with the operators 'iterator', 'hasNext' and 'next'".to_string()),
-                    )
+                    c.report_mismatch_with_help(&range, ty, iterable.span, Some(help))
                 });
                 (self.wrap_error(peeled), ForIteration::Range, Type::Int)
             }
@@ -9799,9 +9829,13 @@ impl TypeChecker {
             ExprKind::This => !self.is_default_input(THIS) && self.is_capture(THIS),
             _ => false,
         };
-        // An element of a list is taken out by `removeAt` (D7 of `collections`).
+        // An element of a list is taken out by `removeAt` (D7 of `collections`); one a `get`
+        // operator reaches is not a list's.
         let remove = match &expr.kind {
-            ExprKind::Index { target, indices } if indices.len() == 1 => {
+            ExprKind::Index { target, indices }
+                if indices.len() == 1
+                    && !self.builder.accessor_index_spans.contains(&expr.span) =>
+            {
                 Some(format!("{}.removeAt({})", target, indices[0]))
             }
             _ => None,
@@ -10509,6 +10543,7 @@ impl TypeChecker {
             peel_indirection(&target_ty),
             Type::List(_) | Type::String | Type::Error
         ) {
+            self.builder.accessor_index_spans.insert(span);
             return self.infer_accessor_index(
                 target,
                 (target_id, is_place, target_writable),

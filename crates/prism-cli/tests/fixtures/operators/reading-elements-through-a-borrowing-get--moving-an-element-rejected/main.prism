@@ -1,0 +1,13 @@
+// expect: E4017
+// run: 1
+// An element a `get` operator reaches is not a list's: the help borrows it, and suggests no
+// `removeAt`.
+struct Item { val name: String }
+
+struct Bag { var items: List<Item> }
+
+operator fun Bag.get(index: Int): &Item = &items[index]
+
+fun f(b: &Bag) {
+    val first = b[0]
+}

@@ -1,0 +1,9 @@
+package geometry
+
+public struct Vector2 : Copy { val x: Int, val y: Int }
+
+public operator fun Vector2.plus(other: Vector2): Vector2 = Vector2(x + other.x, y + other.y)
+
+public operator fun Vector2.get(index: Int): Int = if (index == 0) x else y
+
+public operator fun Vector2.invoke(): Int = x

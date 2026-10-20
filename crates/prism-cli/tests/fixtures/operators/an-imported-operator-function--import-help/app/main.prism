@@ -1,0 +1,17 @@
+// expect: E4002 E4004
+// run: 1
+// entry: app/main.prism
+package app
+
+import /lib/source
+
+// `Vector2`'s operator functions live in its module, which this file does not import: each
+// error says to import it.
+fun f() {
+    val v = make() + make()
+    val x = make()[0]
+    val y = make()()
+    for (c in make()) {}
+    var t = make()
+    t += make()
+}

@@ -427,7 +427,10 @@ impl TypeChecker {
         receiver_ty: &Type,
         parameters: &[Type],
     ) -> bool {
-        let operand = |ty: &Type| super::peel_references(ty).clone();
+        // A built-in operator reads its operands through their `&`, `&mut` and `Heap<T>`
+        // layers, so it shadows functions on and for such layers too.
+        let operand = |ty: &Type| super::peel_indirection(ty).clone();
+        let receiver_ty = super::peel_indirection(receiver_ty);
         let range = matches!(receiver_ty, Type::Struct { id, .. } if *id == prism_typed_tree::NominalId::builtin_range());
         let clash = match (f.name.as_str(), receiver_ty) {
             (
@@ -718,7 +721,14 @@ impl TypeChecker {
     ) {
         let reached = super::peel_indirection(receiver).clone();
         let help = match miss {
-            OperatorMiss::Missing => format!("declare '{}'", declaration),
+            OperatorMiss::Missing => match self.unimported_module_help(&reached) {
+                // The function may well exist where the type does (D3): say so first.
+                Some(import) => format!(
+                    "{} if it declares '{}', or declare '{}'",
+                    import, function, declaration
+                ),
+                None => format!("declare '{}'", declaration),
+            },
             OperatorMiss::Unmarked => format!(
                 "'{}' must be declared 'operator fun {}.{}' to serve {}",
                 function,
@@ -1203,22 +1213,15 @@ impl TypeChecker {
             let before = self.errors.len();
             self.check_move_source(target, target_ty);
             if self.errors.len() > before {
-                if let Some(TypeError::CannotMoveOut {
-                    source,
-                    borrow,
-                    clone,
-                    destructure,
-                    remove,
-                    ..
-                }) = self.errors.last_mut()
-                {
-                    *source = format!(
-                        "{}, which the consuming '{}' would take for '{}='",
+                if let Some(TypeError::CannotMoveOut { source, span, .. }) = self.errors.last() {
+                    let (source, span) = (source.clone(), *span);
+                    self.errors.pop();
+                    self.errors.push(TypeError::ConsumingCompoundTarget {
                         source,
-                        name,
-                        operator.as_str()
-                    );
-                    (*borrow, *clone, *destructure, *remove) = (None, None, None, None);
+                        function: format!("{}.{}", reached, name),
+                        operator: operator.as_str().to_string(),
+                        span,
+                    });
                 }
                 return Err(None);
             }
@@ -1366,7 +1369,10 @@ impl TypeChecker {
             Err(miss) => {
                 let ty = self.ty(node);
                 let reason = match miss {
-                    OperatorMiss::Missing => String::new(),
+                    OperatorMiss::Missing => match self.unimported_module_help(&ty) {
+                        Some(import) => format!("; {} if it declares 'invoke'", import),
+                        None => String::new(),
+                    },
                     OperatorMiss::Unmarked => {
                         ": its 'invoke' is not declared 'operator'".to_string()
                     }
@@ -1446,20 +1452,28 @@ impl TypeChecker {
                             .map(|(i, ty)| format!("index{}: {}", i + 1, ty))
                             .collect(),
                     };
+                    let explain = miss == OperatorMiss::Missing;
                     self.report_missing_operator(
                         miss,
                         format!("'{}' cannot be indexed", indexed),
                         &indexed,
                         "get",
                         format!(
-                            "operator fun {}.get({}): &E', returning a borrow of the element 'E' or the element itself, to index it",
+                            "operator fun {}.get({}): &E",
                             indexed,
                             parameters.join(", ")
-                        )
-                        .replacen("&E'", "&E", 1),
+                        ),
                         format!("{}?.get(...)", target),
                         span,
                     );
+                    if let Some(TypeError::MissingOperatorFunction {
+                        help: Some(help), ..
+                    }) = self.errors.last_mut().filter(|_| explain)
+                    {
+                        help.push_str(
+                            ", returning a borrow of the element 'E' or the element itself",
+                        );
+                    }
                 }
                 return (self.error_node(children, span), false);
             }

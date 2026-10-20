@@ -1,0 +1,12 @@
+error[E4017]: cannot use '+=' on an element of 'xs': the consuming 'Text.plus' would move it out, and only a whole variable can be moved and assigned back
+  --> main.prism:12:5
+   12 |     xs[i] += t
+      |     ^
+   = help: declare it with a shared receiver, 'operator fun Text.plus', which borrows the target in place
+   = help: or move the value into a 'var', use '+=' on it there and put the result back
+error[E4017]: cannot use '+=' on field 't' of 'h': the consuming 'Text.plus' would move it out, and only a whole variable can be moved and assigned back
+  --> main.prism:16:5
+   16 |     h.t += t
+      |     ^
+   = help: declare it with a shared receiver, 'operator fun Text.plus', which borrows the target in place
+   = help: or move the value into a 'var', use '+=' on it there and put the result back

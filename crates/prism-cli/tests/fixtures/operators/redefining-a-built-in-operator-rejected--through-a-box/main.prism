@@ -1,0 +1,5 @@
+// expect: E4010
+// The built-in operators read their operands through boxes, so they serve these too.
+operator fun Int.plus(other: Heap<Int>): Int = 0
+
+operator fun Double.compareTo(other: Heap<Double>): Int = 0

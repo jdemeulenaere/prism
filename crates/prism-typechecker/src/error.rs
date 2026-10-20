@@ -277,6 +277,17 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// E4017: A compound assignment through a `consuming` operator function whose target is not
+    /// a whole variable (`xs[i] += t`, `h.t += t`), which the function would move out (D13 of
+    /// `operator-conventions`). `source` describes the target ("an element of 'xs'"),
+    /// `function` names the operator function (`Text.plus`).
+    ConsumingCompoundTarget {
+        source: String,
+        function: String,
+        operator: String,
+        span: Span,
+    },
+
     /// E4017: A pattern or destructuring declaration would take apart a value that is not a whole
     /// owned value (D6 of `payload-patterns`). `source` describes it, `help` the fix.
     CannotTakeApart {
@@ -646,6 +657,7 @@ impl TypeError {
             TypeError::InvalidMarkerDeclaration { .. } => "E4016",
             TypeError::CannotMoveOut { .. } => "E4017",
             TypeError::CompoundAssignmentOfStateValue { .. } => "E4017",
+            TypeError::ConsumingCompoundTarget { .. } => "E4017",
             TypeError::CannotTakeApart { .. } => "E4017",
             TypeError::MoveInGuard { .. } => "E4017",
             TypeError::NotCloneable { .. } => "E4018",
@@ -707,6 +719,7 @@ impl TypeError {
             TypeError::NotCloneable { span, .. } => *span,
             TypeError::CannotMoveOut { span, .. } => *span,
             TypeError::CompoundAssignmentOfStateValue { span, .. } => *span,
+            TypeError::ConsumingCompoundTarget { span, .. } => *span,
             TypeError::NotAReference { span, .. } => *span,
             TypeError::WrongTypeArgumentCount { span, .. } => *span,
             TypeError::UnsatisfiedBound { span, .. } => *span,
@@ -1024,6 +1037,15 @@ impl TypeError {
             TypeError::CannotMoveOut { source, ty, .. } => format!(
                 "cannot move out of {}: its type '{}' is not 'Copy', and a move takes a whole value",
                 source, ty
+            ),
+            TypeError::ConsumingCompoundTarget {
+                source,
+                function,
+                operator,
+                ..
+            } => format!(
+                "cannot use '{}=' on {}: the consuming '{}' would move it out, and only a whole variable can be moved and assigned back",
+                operator, source, function
             ),
             TypeError::CompoundAssignmentOfStateValue {
                 handle,
