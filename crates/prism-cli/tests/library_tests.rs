@@ -598,7 +598,11 @@ fn the_measurement_mirrors_match_the_layout_of_the_library() {
         &[
             ("width", "Int", offset_of!(MeasuredChildMirror, width)),
             ("height", "Int", offset_of!(MeasuredChildMirror, height)),
-            ("alignment", "Int", offset_of!(MeasuredChildMirror, alignment)),
+            (
+                "alignment",
+                "Int",
+                offset_of!(MeasuredChildMirror, alignment),
+            ),
         ],
     );
     expect(
@@ -607,7 +611,11 @@ fn the_measurement_mirrors_match_the_layout_of_the_library() {
         &[
             ("code", "Int", offset_of!(LinePropertiesMirror, code)),
             ("space", "Int", offset_of!(LinePropertiesMirror, space)),
-            ("alignment", "Int", offset_of!(LinePropertiesMirror, alignment)),
+            (
+                "alignment",
+                "Int",
+                offset_of!(LinePropertiesMirror, alignment),
+            ),
         ],
     );
     expect(
