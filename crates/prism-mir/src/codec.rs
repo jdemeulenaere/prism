@@ -783,8 +783,10 @@ impl Codec for StateOperation {
 
 /// The tags of the built-ins. A retired built-in's tag is never reused: 5 (`toString` of a
 /// scalar), 10 (`indices`), 11 (`isEmpty`) and 12 (`isNotEmpty`), now members written in Prism,
-/// and 38 (`dp`) and 39 (`sp`), now extension properties written in Prism (D11 of
-/// `core-library-in-prism`).
+/// 38 (`dp`) and 39 (`sp`), now extension properties written in Prism (D11 of
+/// `core-library-in-prism`), and 21 to 24 (`composition`, `setContent`, `recompose`, `dump`),
+/// 27 (`currentRecomposeScope`), 28 (`invalidate`) and 34 (`SideEffect`), now written in Prism
+/// (D13 of `compose-library-in-prism`).
 impl Codec for BuiltinFunction {
     fn encode(&self, encoder: &mut Encoder) {
         encoder.u8(match self {
@@ -805,20 +807,13 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::ListRemoveLast => 18,
             BuiltinFunction::ListReverse => 19,
             BuiltinFunction::ListClear => 20,
-            BuiltinFunction::Composition => 21,
-            BuiltinFunction::SetContent => 22,
-            BuiltinFunction::Recompose => 23,
-            BuiltinFunction::DumpComposition => 24,
             BuiltinFunction::Remember => 25,
             BuiltinFunction::Key => 26,
-            BuiltinFunction::CurrentRecomposeScope => 27,
-            BuiltinFunction::InvalidateScope => 28,
             BuiltinFunction::MutableStateOf => 29,
             BuiltinFunction::StateValue => 30,
             BuiltinFunction::StateWeak => 31,
             BuiltinFunction::StateUpdate => 32,
             BuiltinFunction::WeakGet => 33,
-            BuiltinFunction::SideEffect => 34,
             BuiltinFunction::UiNode => 35,
             BuiltinFunction::UiLeafNode => 36,
             BuiltinFunction::RunApp => 37,
@@ -845,20 +840,13 @@ impl Codec for BuiltinFunction {
             18 => BuiltinFunction::ListRemoveLast,
             19 => BuiltinFunction::ListReverse,
             20 => BuiltinFunction::ListClear,
-            21 => BuiltinFunction::Composition,
-            22 => BuiltinFunction::SetContent,
-            23 => BuiltinFunction::Recompose,
-            24 => BuiltinFunction::DumpComposition,
             25 => BuiltinFunction::Remember,
             26 => BuiltinFunction::Key,
-            27 => BuiltinFunction::CurrentRecomposeScope,
-            28 => BuiltinFunction::InvalidateScope,
             29 => BuiltinFunction::MutableStateOf,
             30 => BuiltinFunction::StateValue,
             31 => BuiltinFunction::StateWeak,
             32 => BuiltinFunction::StateUpdate,
             33 => BuiltinFunction::WeakGet,
-            34 => BuiltinFunction::SideEffect,
             35 => BuiltinFunction::UiNode,
             36 => BuiltinFunction::UiLeafNode,
             37 => BuiltinFunction::RunApp,
@@ -967,6 +955,8 @@ impl Codec for OwnershipReason {
 
 // --- MIR
 
+/// The tags of body owners. Tag 5, the retired root content adapter (D13 of
+/// `compose-library-in-prism`), is never reused.
 impl Codec for BodyOwner {
     fn encode(&self, encoder: &mut Encoder) {
         match self {
@@ -997,10 +987,6 @@ impl Codec for BodyOwner {
                 encoder.u8(4);
                 function.encode(encoder);
             }
-            BodyOwner::RootContent { parent } => {
-                encoder.u8(5);
-                parent.encode(encoder);
-            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1018,9 +1004,6 @@ impl Codec for BodyOwner {
             },
             4 => BodyOwner::Restart {
                 function: decoder.decode()?,
-            },
-            5 => BodyOwner::RootContent {
-                parent: decoder.decode()?,
             },
             _ => return None,
         })
@@ -1471,6 +1454,10 @@ impl Codec for crate::mir::GroupKey {
     }
 }
 
+/// The tags of the composer operations. A retired operation's tag is never reused: 12 to 17
+/// (`current_scope`, `start_composition`, `set_content`, `recompose`, `dump`, `invalidate`)
+/// and 21 (`side_effect`), now calls of library functions written in Prism (D13 of
+/// `compose-library-in-prism`).
 impl Codec for crate::mir::ComposerOperation {
     fn encode(&self, encoder: &mut Encoder) {
         use crate::mir::ComposerOperation as Operation;
@@ -1506,19 +1493,12 @@ impl Codec for crate::mir::ComposerOperation {
             }
             Operation::Keepable => encoder.u8(10),
             Operation::Duplicate => encoder.u8(11),
-            Operation::CurrentScope => encoder.u8(12),
-            Operation::StartComposition => encoder.u8(13),
-            Operation::SetContent => encoder.u8(14),
-            Operation::Recompose => encoder.u8(15),
-            Operation::Dump => encoder.u8(16),
-            Operation::Invalidate => encoder.u8(17),
             Operation::Keep(ty) => {
                 encoder.u8(18);
                 ty.encode(encoder);
             }
             Operation::BeginRemember => encoder.u8(19),
             Operation::EndRemember => encoder.u8(20),
-            Operation::SideEffect => encoder.u8(21),
             Operation::StartNodeGroup { key } => {
                 encoder.u8(22);
                 key.encode(encoder);
@@ -1554,16 +1534,9 @@ impl Codec for crate::mir::ComposerOperation {
             },
             10 => Operation::Keepable,
             11 => Operation::Duplicate,
-            12 => Operation::CurrentScope,
-            13 => Operation::StartComposition,
-            14 => Operation::SetContent,
-            15 => Operation::Recompose,
-            16 => Operation::Dump,
-            17 => Operation::Invalidate,
             18 => Operation::Keep(decoder.decode()?),
             19 => Operation::BeginRemember,
             20 => Operation::EndRemember,
-            21 => Operation::SideEffect,
             22 => Operation::StartNodeGroup {
                 key: decoder.decode()?,
             },

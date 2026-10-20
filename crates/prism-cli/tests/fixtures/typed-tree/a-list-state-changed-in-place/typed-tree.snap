@@ -1,4 +1,8 @@
 module main
+import struct prism/compose/runtime::Composition
+  field 0 val handle: Int
+import struct prism/compose/runtime::RecomposeScope : Copy
+  field 0 val word: Int
 fun main::g(s: &MutableState<List<Int>>): Unit @4:1
   local %0 s: &MutableState<List<Int>> (parameter)
   block: Unit @4:36

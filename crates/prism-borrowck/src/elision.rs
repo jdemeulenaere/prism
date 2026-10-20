@@ -85,9 +85,7 @@ impl Signature {
                 has_receiver: body.owner.has_receiver(),
                 has_context: body.owner.has_context(),
             },
-            BodyOwner::Closure { .. }
-            | BodyOwner::Restart { .. }
-            | BodyOwner::RootContent { .. } => Signature::FunctionValue,
+            BodyOwner::Closure { .. } | BodyOwner::Restart { .. } => Signature::FunctionValue,
             BodyOwner::Default { .. } => Signature::Default,
         }
     }

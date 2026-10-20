@@ -13,7 +13,7 @@ fun main::main(): Unit @6:1
     storage_live _1 @7:5
     storage_live _2 @7:25
     _2 = closure main::main#closure0 [] @7:25
-    _1 = call builtin composition(move _2) -> bb1 @7:13
+    _1 = call prism/compose/runtime::composition(move _2) -> bb1 @7:13
   bb1:
     storage_dead _2 @7:5
     _0 = const () @6:12
@@ -21,7 +21,7 @@ fun main::main(): Unit @6:1
   bb2:
     storage_dead _1 @11:1
     return @6:1
-compose closure main::main#closure0(): Unit @7:25 /* argument 0 of composition call 0 */
+compose closure main::main#closure0(): Unit @7:25 /* argument 0 of prism/compose/runtime::composition call 0 */
   local _0: Unit (return)
   local _1: Unit (temporary)
   local _2: Unit (temporary)

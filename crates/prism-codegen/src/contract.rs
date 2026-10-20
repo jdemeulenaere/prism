@@ -277,8 +277,6 @@ pub enum BodyKind {
     /// A restart function, whose contract also covers its composable's (D8 of
     /// `compose-hot-reload`, adopted by `compose-transform`).
     Restart,
-    /// A root content adapter.
-    RootContent,
 }
 
 impl BodyKind {
@@ -290,7 +288,6 @@ impl BodyKind {
             BodyOwner::Default { .. } => BodyKind::Default,
             BodyOwner::Closure { .. } => BodyKind::Closure,
             BodyOwner::Restart { .. } => BodyKind::Restart,
-            BodyOwner::RootContent { .. } => BodyKind::RootContent,
         }
     }
 
@@ -302,7 +299,7 @@ impl BodyKind {
             BodyKind::Accessor => 4,
             BodyKind::Closure => 5,
             BodyKind::Restart => 6,
-            BodyKind::RootContent => 7,
+            // 7 was the retired root content adapter (D13 of `compose-library-in-prism`).
         }
     }
 }

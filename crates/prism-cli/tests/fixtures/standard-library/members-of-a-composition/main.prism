@@ -1,4 +1,11 @@
-// expect: E4010
+// expect: ok
+// run: 0
 import /prism/compose/runtime
+import /prism/core
 
 fun Composition.recompose(): Bool = false
+
+fun main() {
+    val c = composition { }
+    println(c.recompose())
+}

@@ -25,12 +25,14 @@
 //!   parameter after the change words; a composable closure owns the versions of the
 //!   references it borrows from as hidden captures; a call whose borrow has none runs in a
 //!   replaceable group ([`identity`]).
-//! - **The compose runtime module** (D12 to D15). `remember`, `key` and `currentRecomposeScope`, and
-//!   in any body the composition operations, become composer operations; the content given to
-//!   `composition` and `setContent` is wrapped in a root content adapter.
+//! - **The compose runtime module** (D12 to D15). `remember` and `key` become composer
+//!   operations, and `currentComposer` a copy of the composer (D3 of `compose-library-in-prism`).
+//!   Everything else of the compose library is ordinary Prism, called like any function.
+//! - **Explicit groups** (D5 of `compose-library-in-prism`). A composable annotated
+//!   `@ExplicitGroupsComposable` gets the calling convention but no group of its own.
 //!
-//! Each body is walked once, with constant work per statement, argument and group, and a body
-//! that composes nothing costs a scan of its terminators (D24).
+//! Only composable bodies are rewritten; each is walked once, with constant work per statement,
+//! argument and group (D24).
 
 mod identity;
 pub mod keys;
@@ -38,7 +40,7 @@ mod restart;
 mod rewrite;
 pub mod stability;
 
-use prism_mir::{Body, BodyId, BodyOwner, Callee, MirFile, MirPhase, TerminatorKind};
+use prism_mir::{Body, BodyId, BodyOwner, MirFile, MirPhase};
 use prism_typed_tree::ArenaId;
 
 /// The composed MIR of `file`, elaborated MIR without errors.
@@ -54,7 +56,7 @@ pub fn compose_file(file: &MirFile) -> MirFile {
         bodies: Vec::new(),
     };
     for (id, body) in file.bodies.iter() {
-        if body.is_compose || uses_composition_operations(body) {
+        if body.is_compose {
             composed.bodies[id] = rewrite::compose_body(file, id, &keys, &mut appended, &hidden);
         }
         // The body key a reload names the body by (D5 of `compose-hot-reload`).
@@ -75,23 +77,8 @@ pub fn compose_file(file: &MirFile) -> MirFile {
     composed
 }
 
-/// Whether `body` calls a composition operation of `/prism/compose/runtime`, which any body may
-/// call: one test per call terminator.
-fn uses_composition_operations(body: &Body) -> bool {
-    body.blocks.iter().any(|(_, block)| {
-        matches!(
-            &block.terminator.kind,
-            TerminatorKind::Call {
-                callee: Callee::Builtin(builtin),
-                ..
-            } if rewrite::is_composition_operation(*builtin)
-        )
-    })
-}
-
-/// The bodies the transform adds after the file's: restart functions and root content
-/// adapters, each reserved before it is built so that the bodies building its value can name
-/// it.
+/// The bodies the transform adds after the file's: restart functions, each reserved before it
+/// is built so that the bodies building its value can name it.
 pub(crate) struct Appended {
     next: usize,
     bodies: Vec<(BodyId, Body)>,
@@ -147,9 +134,7 @@ impl BodyKeys {
                     }
                     None => keys.bodies[parent.index()].clone(),
                 },
-                BodyOwner::Restart { function: parent } | BodyOwner::RootContent { parent } => {
-                    keys.bodies[parent.index()].clone()
-                }
+                BodyOwner::Restart { function: parent } => keys.bodies[parent.index()].clone(),
             };
             let mut regions = Vec::with_capacity(body.groups.len());
             for (_, region) in body.groups.iter() {

@@ -642,8 +642,8 @@ fn a_workspace_file_may_not_declare_library_forms() {
 #[test]
 fn intrinsic_structs_in_the_abi() {
     let source = "package prism.compose\n\
-        public intrinsic struct Composition\n\
-        public intrinsic struct RecomposeScope : Copy\n";
+        public intrinsic struct State<T>\n\
+        public intrinsic struct WeakReference<T> : Copy\n";
     let abi = {
         let file = prism_parser::parse_source(source).expect("the source parses");
         let no_definition = |_: &str, _: &str| None;
@@ -664,8 +664,8 @@ fn intrinsic_structs_in_the_abi() {
     assert_eq!(
         texts,
         [
-            "public intrinsic struct Composition",
-            "public intrinsic struct RecomposeScope : Copy",
+            "public intrinsic struct State<T>",
+            "public intrinsic struct WeakReference<T> : Copy",
         ]
     );
     let without_marker = {
@@ -684,7 +684,7 @@ fn intrinsic_structs_in_the_abi() {
     // An ordinary struct of the same name and marker hashes differently.
     let ordinary = {
         let file = prism_parser::parse_source(
-            "package prism.compose\npublic struct Composition {}\npublic struct RecomposeScope : Copy {}\n",
+            "package prism.compose\npublic struct State<T> {}\npublic struct WeakReference<T> : Copy {}\n",
         )
         .unwrap();
         let no_definition = |_: &str, _: &str| None;

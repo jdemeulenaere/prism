@@ -318,10 +318,9 @@ impl Returns<'_> {
     /// The primary label of a returned value at `span`, by the body's owner.
     fn primary(&self, span: Span) -> Label {
         let message = match self.body.owner {
-            BodyOwner::Function(_)
-            | BodyOwner::Closure { .. }
-            | BodyOwner::Restart { .. }
-            | BodyOwner::RootContent { .. } => "returned here",
+            BodyOwner::Function(_) | BodyOwner::Closure { .. } | BodyOwner::Restart { .. } => {
+                "returned here"
+            }
             BodyOwner::Value(_) => "assigned to a top-level value here",
             BodyOwner::Default { .. } => "returned as a default value here",
         };

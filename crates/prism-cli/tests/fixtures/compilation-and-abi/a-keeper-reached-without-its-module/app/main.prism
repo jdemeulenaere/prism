@@ -1,0 +1,12 @@
+// expect: E5005
+// entry: app/main.prism
+package app
+
+import /app/screen
+
+fun main() {
+    val s = state()
+    val c = show(s)
+    consume(s)
+    val d = c
+}

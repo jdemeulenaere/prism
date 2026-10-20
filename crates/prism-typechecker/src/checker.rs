@@ -939,13 +939,7 @@ impl TypeChecker {
     /// context (D17 of `compose-transform`). A closure that is not composable, a handler
     /// written in a composable, is no composable context, so it may start compositions.
     fn reject_composition_in_composable(&mut self, builtin: BuiltinFunction, span: Span) {
-        let starts_or_drives = matches!(
-            builtin,
-            BuiltinFunction::Composition
-                | BuiltinFunction::SetContent
-                | BuiltinFunction::Recompose
-                | BuiltinFunction::RunApp
-        );
+        let starts_or_drives = matches!(builtin, BuiltinFunction::RunApp);
         if starts_or_drives && self.is_in_compose() {
             self.errors.push(TypeError::CompositionInComposable {
                 operation: builtin.name().to_string(),

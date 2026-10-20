@@ -36,6 +36,10 @@ import struct prism/compose/material3::MaterialThemeValues : Copy
 import struct prism/compose/material3::Typography : Copy
   field 0 val bodyLarge: TextStyle
   field 1 val labelLarge: TextStyle
+import struct prism/compose/runtime::Composition
+  field 0 val handle: Int
+import struct prism/compose/runtime::RecomposeScope : Copy
+  field 0 val word: Int
 import struct prism/compose/ui::Alignment : Copy
   field 0 val code: Int
 import struct prism/compose/ui::Alignments : Copy

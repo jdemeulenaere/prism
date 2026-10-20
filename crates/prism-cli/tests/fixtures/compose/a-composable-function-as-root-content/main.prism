@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /prism/compose/runtime
+import /prism/core
+
+compose fun Screen() {
+    println("screen")
+}
+
+fun main() {
+    val c = composition(Screen)
+    c.setContent(Screen)
+}

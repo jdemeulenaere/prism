@@ -72,9 +72,6 @@ impl MirFile {
                 format!("{}#closure{}", self.body_name(*parent), index)
             }
             BodyOwner::Restart { function } => format!("{}#restart", self.body_name(*function)),
-            BodyOwner::RootContent { parent } => {
-                format!("{}#root-content", self.body_name(*parent))
-            }
         }
     }
 
@@ -106,8 +103,7 @@ impl MirFile {
             BodyOwner::Function(_)
             | BodyOwner::Default { .. }
             | BodyOwner::Closure { .. }
-            | BodyOwner::Restart { .. }
-            | BodyOwner::RootContent { .. } => {
+            | BodyOwner::Restart { .. } => {
                 let keyword = match body.owner {
                     BodyOwner::Function(_) => "fun",
                     BodyOwner::Default { .. } => "default",

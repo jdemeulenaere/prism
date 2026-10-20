@@ -1871,9 +1871,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
     }
 
     /// A call of a composer operation (D20 of `compose-transform`): a direct call of the compose
-    /// runtime's entry point, slot values passed by address and moved into the runtime, the
-    /// handles of compositions and scopes loaded from their one word; `Keepable` and
-    /// `Duplicate` read the function value's descriptor inline.
+    /// runtime's entry point, slot values passed by address and moved into the runtime;
+    /// `Keepable` and `Duplicate` read the function value's descriptor inline.
     fn composer_call(
         &mut self,
         operation: &prism_mir::ComposerOperation,
@@ -1888,14 +1887,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 .get(index)
                 .ok_or_else(|| BackendError::new("a composer operation without its operand"))?;
             lowering.operand(operand, span)?.scalar()
-        };
-        // The handle word of the composition or scope a reference operand points at.
-        let handle = |lowering: &mut Self, index: usize| -> Result<Value, BackendError> {
-            let address = word(lowering, index)?;
-            Ok(lowering
-                .builder
-                .ins()
-                .load(types::I64, aligned(), address, 0))
         };
         let key = |lowering: &mut Self, key: &prism_mir::GroupKey| {
             lowering.builder.ins().iconst(types::I64, key.hash as i64)
@@ -2048,35 +2039,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let destination = self.address(destination)?;
                 self.duplicate_function(destination, value, &ty)?;
             }
-            Operation::CurrentScope => {
-                let composer = word(self, 0)?;
-                let scope = self.call_runtime("prism_compose_current_scope", &[composer])?[0];
-                self.write_place(destination, Lowered::Scalar(scope), false)?;
-            }
-            Operation::StartComposition => {
-                let content = self.slot_value(&arguments[0], &parameters[0], span)?;
-                let composition = self.call_runtime("prism_compose_start", &[content])?[0];
-                self.write_place(destination, Lowered::Scalar(composition), false)?;
-            }
-            Operation::SetContent => {
-                let composition = handle(self, 0)?;
-                let content = self.slot_value(&arguments[1], &parameters[1], span)?;
-                self.call_runtime("prism_compose_set_content", &[composition, content])?;
-            }
-            Operation::Recompose => {
-                let composition = handle(self, 0)?;
-                let result = self.call_runtime("prism_compose_recompose", &[composition])?;
-                self.write_place(destination, Lowered::Scalar(result[0]), false)?;
-            }
-            Operation::Dump => {
-                let composition = handle(self, 0)?;
-                let destination = self.address(destination)?;
-                self.call_runtime("prism_compose_dump", &[destination, composition])?;
-            }
-            Operation::Invalidate => {
-                let scope = handle(self, 0)?;
-                self.call_runtime("prism_compose_invalidate", &[scope])?;
-            }
             Operation::BeginRemember | Operation::EndRemember => {
                 let composer = word(self, 0)?;
                 let name = match operation {
@@ -2084,11 +2046,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     _ => "prism_compose_end_remember",
                 };
                 self.call_runtime(name, &[composer])?;
-            }
-            Operation::SideEffect => {
-                let composer = word(self, 0)?;
-                let effect = self.slot_value(&arguments[1], &parameters[1], span)?;
-                self.call_runtime("prism_compose_side_effect", &[composer, effect])?;
             }
         }
         Ok(())

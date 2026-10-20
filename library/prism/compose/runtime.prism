@@ -1,29 +1,44 @@
 // The compose runtime for application code, after Jetpack Compose's `androidx.compose.runtime`:
 // owned compositions, positional memoization with `remember`, keyed groups and restart scopes.
-// A file uses it after `import /prism/compose/runtime`. Every declaration here is an intrinsic:
-// the compiler lowers its calls to the compose runtime's protocol itself.
+// A file uses it after `import /prism/compose/runtime`. `remember`, `key` and the state
+// declarations are intrinsics, which the compiler lowers to the compose runtime's protocol
+// itself; the rest is written over the composer and the runtime's entry points, as Compose's
+// library is written over `currentComposer`.
 package prism.compose
 
-// A composition: the groups, slots and nodes of one tree of composables. It is owned, neither
-// `Copy` nor `Clone`, and dropping it disposes everything it holds.
-public intrinsic struct Composition
+import /prism/composer
 
-// A handle of a restart scope of a composition, which `invalidate` marks for recomposition.
-public intrinsic struct RecomposeScope : Copy
+// A composition: the groups, slots and nodes of one tree of composables. It is owned, neither
+// `Copy` nor `Clone`, and dropping it disposes everything it holds. It keeps the content it
+// was given, so the states that content captures stay borrowed while it is used.
+@Keeper
+public struct Composition { private val handle: Int }
+
+// Disposes the composition: removes and releases every group, then its content.
+operator mut fun Composition.drop() {
+    prism_compose_dispose(handle)
+}
 
 // Starts a composition of `content` and composes it once. The composition keeps the content,
 // which captures the states it uses weakly, so those states stay borrowed while the
 // composition is used.
-public intrinsic fun composition(content: attached compose () -> Unit): Composition
+@DrivesComposition
+public fun composition(content: attached compose () -> Unit): Composition = Composition(
+    prism_compose_start_composable(content),
+)
 
 // Replaces the content of this composition and recomposes its root.
-public intrinsic fun Composition.setContent(content: attached compose () -> Unit): Unit
+@DrivesComposition
+public fun Composition.setContent(
+    content: attached compose () -> Unit,
+): Unit = prism_compose_set_composable(handle, content)
 
 // Recomposes the invalid scopes of this composition, giving whether any was invalid.
-public intrinsic fun Composition.recompose(): Bool
+@DrivesComposition
+public fun Composition.recompose(): Bool = prism_compose_recompose(handle)
 
 // The text dump of this composition: its groups and slots, then its nodes.
-public intrinsic fun Composition.dump(): String
+public fun Composition.dump(): String = prism_compose_dump(handle)
 
 // The value `calculation` gave the first time this position of the composition was composed,
 // computed again when one of the keys written before `calculation` changed: a copy of a `Copy`
@@ -35,11 +50,18 @@ public intrinsic compose fun <T> remember(calculation: () -> T): T
 // are reordered among their siblings.
 public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit
 
-// The innermost restart scope being composed, or the composition's root scope.
-public intrinsic compose fun currentRecomposeScope(): RecomposeScope
+// A handle of a restart scope of a composition, which `invalidate` marks for recomposition.
+public struct RecomposeScope : Copy { private val word: Int }
+
+// The innermost restart scope being composed, or the composition's root scope. It starts no
+// group of its own.
+@ExplicitGroupsComposable
+public compose fun currentRecomposeScope(): RecomposeScope = RecomposeScope(
+    prism_compose_current_scope(currentComposer()),
+)
 
 // Marks this scope for recomposition by the next pass of its composition.
-public intrinsic fun RecomposeScope.invalidate(): Unit
+public fun RecomposeScope.invalidate(): Unit = prism_compose_invalidate(word)
 
 // A read-only state object: it owns one state, whose value lives in the compose runtime and
 // never moves, so a state may be a field, an element or a local like any value. Dropping it
@@ -78,5 +100,37 @@ public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableSt
 // The state this reference names, or `null` once its owner dropped it.
 public intrinsic fun <T> WeakReference<T>.get(): (&T)?
 
-// Runs `effect` after the pass that composed this call, outside composition.
-public intrinsic compose fun SideEffect(effect: attached () -> Unit): Unit
+// Runs `effect` after the pass that composed this call, outside composition. It starts no
+// group and never skips, so every pass that calls it queues its effect.
+@ExplicitGroupsComposable
+public compose fun SideEffect(effect: attached () -> Unit): Unit = prism_compose_side_effect(
+    currentComposer(),
+    effect,
+)
+
+// Starts a composition of composable content.
+private external fun prism_compose_start_composable(content: attached compose () -> Unit): Int
+
+// Replaces a composition's content by composable content.
+private external fun prism_compose_set_composable(
+    composition: Int,
+    content: attached compose () -> Unit,
+)
+
+// Runs a pass over a composition's invalid scopes.
+private external fun prism_compose_recompose(composition: Int): Bool
+
+// Disposes a composition.
+private external fun prism_compose_dispose(composition: Int)
+
+// A composition's dump.
+private external fun prism_compose_dump(composition: Int): String
+
+// The current scope.
+private external fun prism_compose_current_scope(composer: Int): Int
+
+// Invalidates a scope.
+private external fun prism_compose_invalidate(scope: Int)
+
+// Queues a side effect of the current pass.
+private external fun prism_compose_side_effect(composer: Int, effect: attached () -> Unit)

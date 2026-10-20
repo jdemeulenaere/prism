@@ -8,9 +8,8 @@
 //! - composable calls get the composer and change words, each argument's two bits computed from
 //!   a block-local map of what each local copies: a constant, or a parameter of the body, whose
 //!   own bits are forwarded (D4);
-//! - `remember`, `key` and `currentRecomposeScope` become slot reads and writes, movable groups
-//!   and the current scope; in any body, the composition operations become composer
-//!   operations, the content wrapped in a root content adapter (D12, D13, D15);
+//! - `remember` and `key` become slot reads and writes and movable groups, and
+//!   `currentComposer` a copy of the composer (D12, D13; D3 of `compose-library-in-prism`);
 //! - every return goes to one end block, which ends the body group.
 //!
 //! The prologue that starts the body group, and for a skippable body keeps and compares the
@@ -57,19 +56,6 @@ pub(crate) fn bit_position(index: usize) -> (usize, i64) {
     )
 }
 
-/// Whether a call of `builtin` is a composition operation, which any body may call.
-pub(crate) fn is_composition_operation(builtin: BuiltinFunction) -> bool {
-    matches!(
-        builtin,
-        BuiltinFunction::Composition
-            | BuiltinFunction::SetContent
-            | BuiltinFunction::Recompose
-            | BuiltinFunction::DumpComposition
-            | BuiltinFunction::InvalidateScope
-            | BuiltinFunction::RunApp
-    )
-}
-
 /// The kind and value type of the state object a `&State<T>` or `&MutableState<T>` borrows.
 pub(crate) fn state_object(ty: &Type) -> (prism_typed_tree::IntrinsicStruct, Type) {
     let object = match ty {
@@ -86,7 +72,7 @@ pub(crate) fn state_object(ty: &Type) -> (prism_typed_tree::IntrinsicStruct, Typ
     }
 }
 
-/// The `(Int) -> Unit` type of restart functions and root content adapters.
+/// The `(Int) -> Unit` type of restart functions.
 pub(crate) fn word_function() -> Type {
     Type::Fn {
         is_compose: false,
@@ -163,8 +149,6 @@ pub(crate) struct Rewriter<'a> {
     node_ordinals: HashMap<Option<GroupId>, u32>,
     /// The next ordinal of call-site groups, per loop that a `continue` targets (D26).
     call_site_ordinals: HashMap<GroupId, u32>,
-    /// The root content adapter of the body, once one is needed.
-    adapter: Option<(BodyId, Type)>,
     /// A `Unit` temporary that operations without a result write.
     unit: Option<LocalId>,
     /// The hidden version captures of the file's composable closures (D6 of `strong-skipping`).
@@ -220,7 +204,6 @@ impl<'a> Rewriter<'a> {
             key_ordinals: HashMap::new(),
             node_ordinals: HashMap::new(),
             call_site_ordinals: HashMap::new(),
-            adapter: None,
             unit: None,
             hidden,
             version_arguments: vec![None; declared],
@@ -888,7 +871,7 @@ impl<'a> Rewriter<'a> {
                     } else {
                         self.intrinsic(call);
                     }
-                } else if is_composition_operation(builtin) || self.body.is_compose {
+                } else if self.body.is_compose {
                     self.intrinsic(call);
                 } else {
                     // A composable intrinsic outside a composable body never type-checks.
@@ -1154,75 +1137,8 @@ impl<'a> Rewriter<'a> {
                 span,
             ),
             BuiltinFunction::Key => self.key(arguments, target, span),
-            // A side effect is moved to the composition's queue (D13 of `state-handles`).
-            BuiltinFunction::SideEffect => {
-                let composer = self.composer();
-                let mut arguments = arguments;
-                arguments.insert(0, composer);
-                let mut parameters = parameters;
-                parameters.insert(0, Type::Int);
-                self.operation(
-                    ComposerOperation::SideEffect,
-                    arguments,
-                    parameters,
-                    destination,
-                    span,
-                );
-                self.goto(target, span);
-            }
-            BuiltinFunction::CurrentRecomposeScope => {
-                let composer = self.composer();
-                self.operation(
-                    ComposerOperation::CurrentScope,
-                    vec![composer],
-                    vec![Type::Int],
-                    destination,
-                    span,
-                );
-                self.goto(target, span);
-            }
-            BuiltinFunction::Composition | BuiltinFunction::SetContent => {
-                let content_index = arguments.len() - 1;
-                let content_type = parameters[content_index].clone();
-                let mut arguments = arguments;
-                let content = arguments.pop().expect("the content");
-                let adapter = self.adapter_value(content, content_type, span);
-                arguments.push(Operand::Move(Place::local(adapter), span));
-                let mut parameters = parameters;
-                parameters[content_index] = word_function();
-                let operation = if builtin == BuiltinFunction::Composition {
-                    ComposerOperation::StartComposition
-                } else {
-                    ComposerOperation::SetContent
-                };
-                self.operation(operation, arguments, parameters, destination, span);
-                self.goto(target, span);
-            }
-            // `runApp` keeps its call and its composable content, which the UI runtime calls
-            // with the composer and the force bit (D4 of `compose-library-in-prism`).
-            BuiltinFunction::RunApp => {
-                self.call(
-                    Callee::Builtin(BuiltinFunction::RunApp),
-                    arguments,
-                    parameters,
-                    destination,
-                    span,
-                );
-                self.goto(target, span);
-            }
             BuiltinFunction::UiNode | BuiltinFunction::UiLeafNode => {
                 self.node(builtin, arguments, parameters, target, span)
-            }
-            BuiltinFunction::Recompose
-            | BuiltinFunction::DumpComposition
-            | BuiltinFunction::InvalidateScope => {
-                let operation = match builtin {
-                    BuiltinFunction::Recompose => ComposerOperation::Recompose,
-                    BuiltinFunction::DumpComposition => ComposerOperation::Dump,
-                    _ => ComposerOperation::Invalidate,
-                };
-                self.operation(operation, arguments, parameters, destination, span);
-                self.goto(target, span);
             }
             other => panic!("internal error: {} is no compose intrinsic", other.name()),
         }
@@ -1518,38 +1434,11 @@ impl<'a> Rewriter<'a> {
         }
     }
 
-    /// The root content adapter value built from `content` (D15), in a new temporary.
-    fn adapter_value(&mut self, content: Operand, content_type: Type, span: Span) -> LocalId {
-        let adapter = match &self.adapter {
-            Some((adapter, _)) => *adapter,
-            None => {
-                let adapter = self.appended.reserve();
-                self.adapter = Some((adapter, content_type.clone()));
-                adapter
-            }
-        };
-        let value = self.temporary(word_function());
-        self.assign(
-            value,
-            Rvalue::Closure {
-                body: adapter,
-                captures: vec![Capture::Owned(content)],
-            },
-            span,
-        );
-        value
-    }
-
     // The prologue and the end.
 
     fn finish(mut self) -> Body {
         if self.body.is_compose {
             self.composable_prologue_and_end();
-        }
-        if let Some((adapter, content_type)) = self.adapter.take() {
-            let body =
-                crate::restart::root_content_body(&self.body, self.id, content_type, self.span);
-            self.appended.fill(adapter, body);
         }
         // Every new temporary is live from the entry to every return.
         let lives: Vec<Statement> = self

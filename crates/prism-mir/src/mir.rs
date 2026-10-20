@@ -115,20 +115,13 @@ pub enum BodyOwner {
     /// nothing of type `(Int) -> Unit` that reads the kept arguments and calls the composable
     /// with the force bit (D10 of `compose-transform`).
     Restart { function: BodyId },
-    /// The adapter through which the runtime calls a composition's content, given to
-    /// `composition` and `setContent` in the body `parent`: a closure of type `(Int) -> Unit`
-    /// owning the content, which it calls with the composer and the force bit (D15).
-    RootContent { parent: BodyId },
 }
 
 impl BodyOwner {
     /// Whether the body's code is a closure's, called through a function value with its
-    /// environment: a closure, a restart function or a root content adapter.
+    /// environment: a closure or a restart function.
     pub fn is_closure(&self) -> bool {
-        matches!(
-            self,
-            BodyOwner::Closure { .. } | BodyOwner::Restart { .. } | BodyOwner::RootContent { .. }
-        )
+        matches!(self, BodyOwner::Closure { .. } | BodyOwner::Restart { .. })
     }
 
     /// Whether the body's first argument is a receiver: exactly for the body of an extension,
@@ -1010,8 +1003,8 @@ pub struct GroupKey {
 }
 
 /// An operation of the composition protocol (D19 of `compose-transform`). The composer is the
-/// first operand of every operation of a pass; the composition operations take the
-/// composition or the scope instead.
+/// first operand of every operation of a pass; `keepable` and `duplicate` take a function
+/// value instead.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComposerOperation {
     /// `(composer)`: starts the restart group of a skippable body.
@@ -1053,27 +1046,12 @@ pub enum ComposerOperation {
     Keepable,
     /// `(&function value) -> function value`: a duplicate of a keepable function value.
     Duplicate,
-    /// `(composer) -> RecomposeScope`: the current scope.
-    CurrentScope,
-    /// `(root content adapter moved) -> Composition`: starts a composition.
-    StartComposition,
-    /// `(&Composition, root content adapter moved)`: sets a composition's content.
-    SetContent,
-    /// `(&Composition) -> Bool`: recomposes a composition's invalid scopes.
-    Recompose,
-    /// `(&Composition) -> String`: dumps a composition.
-    Dump,
-    /// `(&RecomposeScope)`: invalidates a scope.
-    Invalidate,
     /// `(composer)`: before a `remember` calculation that runs, opens the window whose state
     /// cells belong to the slot the result is stored in (D11 of `state-handles`).
     BeginRemember,
     /// `(composer)`: after the result's slot is written, closes the window and attaches its
     /// cells to that slot.
     EndRemember,
-    /// `(composer, effect moved)`: queues a side effect, a `() -> Unit` function value, to run
-    /// after the pass (D13 of `state-handles`).
-    SideEffect,
 }
 
 impl ComposerOperation {
@@ -1095,31 +1073,9 @@ impl ComposerOperation {
             ComposerOperation::KeptVersion { .. } => "kept_version",
             ComposerOperation::Keepable => "keepable",
             ComposerOperation::Duplicate => "duplicate",
-            ComposerOperation::CurrentScope => "current_scope",
-            ComposerOperation::StartComposition => "start_composition",
-            ComposerOperation::SetContent => "set_content",
-            ComposerOperation::Recompose => "recompose",
-            ComposerOperation::Dump => "dump",
-            ComposerOperation::Invalidate => "invalidate",
             ComposerOperation::BeginRemember => "begin_remember",
             ComposerOperation::EndRemember => "end_remember",
-            ComposerOperation::SideEffect => "side_effect",
         }
-    }
-
-    /// Whether the operation works on a composition or a scope rather than on a pass, so it
-    /// may be called outside composable bodies.
-    pub fn is_composition_operation(&self) -> bool {
-        matches!(
-            self,
-            ComposerOperation::StartComposition
-                | ComposerOperation::SetContent
-                | ComposerOperation::Recompose
-                | ComposerOperation::Dump
-                | ComposerOperation::Invalidate
-                | ComposerOperation::Keepable
-                | ComposerOperation::Duplicate
-        )
     }
 
     /// The slot type the operation names, if any.

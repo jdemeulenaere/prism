@@ -1,0 +1,10 @@
+package app
+
+import /prism/compose/runtime
+import /prism/core
+
+public fun state(): MutableState<Int> = mutableStateOf(0)
+
+public fun show(s: &MutableState<Int>): Composition = composition { println(s.value) }
+
+public fun consume(s: MutableState<Int>): Unit {}

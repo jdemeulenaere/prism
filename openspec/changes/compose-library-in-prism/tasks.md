@@ -41,7 +41,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
   - Annotation flags are recorded in `TypeTable` (keeper) and on function signatures (drives composition, explicit groups).
 
   Add fixtures for "Annotations outside the bundled library rejected" (`standard-library/`) and "Misused annotations in the library".
-- [ ] 2.4 ABI (D12): `ExportedSymbol::Struct` and `AbiTypeDefinition` gain `keeper`, and `ExportedSymbol::Function` gains `drives_composition`, all hashed. Importers fill `TypeTable` from both sources, as for `equality` and the hook flags. `prism abi` prints the annotations. Add cases for "Annotations change the ABI hash" and, after group 5, "A keeper reached without its module". Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
+- [x] 2.4 ABI (D12): `ExportedSymbol::Struct` and `AbiTypeDefinition` gain `keeper`, and `ExportedSymbol::Function` gains `drives_composition`, all hashed. Importers fill `TypeTable` from both sources, as for `equality` and the hook flags. `prism abi` prints the annotations. Add cases for "Annotations change the ABI hash" and, after group 5, "A keeper reached without its module". Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
 - [ ] 2.5 Make the keeper and `E4030` read the flags instead of names:
   - `Type::contains_keeper` reads the keeper flag through the type table;
   - `E4030` is reported for direct calls of functions with the drives-composition flag, naming the function.
@@ -75,15 +75,15 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 5. The runtime module in Prism (D6, D7, D13)
 
-- [ ] 5.1 `library/prism/compose/runtime.prism`: write `Composition` (`@Keeper`, private `handle`, drop hook), `composition`, `setContent` and `recompose` (`@DrivesComposition`), `dump`, `RecomposeScope` (private `word`), `invalidate`, `currentRecomposeScope` and `SideEffect` (`@ExplicitGroupsComposable`), as in design D6 and D7. Use private externals of the compose runtime and `import /prism/composer` for `currentComposer`, and check that `library_tests.rs` accepts an external declared by two modules. Remove their catalog entries, and `IntrinsicStruct::{Composition, RecomposeScope}`.
-- [ ] 5.2 Remove:
+- [x] 5.1 `library/prism/compose/runtime.prism`: write `Composition` (`@Keeper`, private `handle`, drop hook), `composition`, `setContent` and `recompose` (`@DrivesComposition`), `dump`, `RecomposeScope` (private `word`), `invalidate`, `currentRecomposeScope` and `SideEffect` (`@ExplicitGroupsComposable`), as in design D6 and D7. Use private externals of the compose runtime and `import /prism/composer` for `currentComposer`, and check that `library_tests.rs` accepts an external declared by two modules. Remove their catalog entries, and `IntrinsicStruct::{Composition, RecomposeScope}`.
+- [x] 5.2 Remove:
   - `BuiltinFunction::{Composition, SetContent, Recompose, DumpComposition, InvalidateScope, SideEffect, CurrentRecomposeScope}`;
   - `ComposerOperation::{StartComposition, SetContent, Recompose, Dump, Invalidate, SideEffect, CurrentScope}`;
   - `BodyOwner::RootContent`, `root_content_body`, `adapter_value`, `is_composition_operation` and `uses_composition_operations`;
   - `Composition`'s glue special case.
 
   Retire their codec tags. The transform now rewrites composable bodies only.
-- [ ] 5.3 Add fixtures for:
+- [x] 5.3 Add fixtures for:
   - "A side effect adds no group", "A side effect never skips", "A composable function as root content", "A composition cannot be forged" and "Members of a composition" (`compose/`, `standard-library/`);
   - "A composition started in MIR" (`mir/`) and "A side effect in the tree" (`typed-tree/`);
   - "Layout of a composition" and "The drop glue of a composition calls its hook" (`code-generation/`).

@@ -51,10 +51,6 @@ pub const COMPOSE_UI_MODULE: &str = "prism/compose/ui";
 /// make and use its values. Each is one word, a runtime handle, which `==` compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicStruct {
-    /// An owned composition, neither `Copy` nor `Clone`, disposed by its drop.
-    Composition,
-    /// A `Copy` handle of a restart scope.
-    RecomposeScope,
     /// `State<T>`, an owned, read-only state object: one word naming the state cell it owns,
     /// retired by its drop (D1 and D5 of `owned-state`).
     State,
@@ -74,9 +70,7 @@ pub enum IntrinsicStruct {
 
 impl IntrinsicStruct {
     /// Every intrinsic struct, in the order of the library's declarations.
-    pub const ALL: [IntrinsicStruct; 7] = [
-        IntrinsicStruct::Composition,
-        IntrinsicStruct::RecomposeScope,
+    pub const ALL: [IntrinsicStruct; 5] = [
         IntrinsicStruct::State,
         IntrinsicStruct::MutableState,
         IntrinsicStruct::WeakReference,
@@ -97,8 +91,6 @@ impl IntrinsicStruct {
     /// Its name in the library.
     pub fn name(self) -> &'static str {
         match self {
-            IntrinsicStruct::Composition => "Composition",
-            IntrinsicStruct::RecomposeScope => "RecomposeScope",
             IntrinsicStruct::State => "State",
             IntrinsicStruct::MutableState => "MutableState",
             IntrinsicStruct::NodeId => "NodeId",
@@ -110,10 +102,7 @@ impl IntrinsicStruct {
     /// The names of its type parameters: `T`, the value type, for the state handles.
     pub fn type_parameters(self) -> &'static [&'static str] {
         match self {
-            IntrinsicStruct::Composition
-            | IntrinsicStruct::RecomposeScope
-            | IntrinsicStruct::NodeId
-            | IntrinsicStruct::HandlerId => &[],
+            IntrinsicStruct::NodeId | IntrinsicStruct::HandlerId => &[],
             IntrinsicStruct::State
             | IntrinsicStruct::MutableState
             | IntrinsicStruct::WeakReference => &["T"],
@@ -123,14 +112,6 @@ impl IntrinsicStruct {
     /// Whether it is a state object, `State<T>` or `MutableState<T>`.
     pub fn is_state_handle(self) -> bool {
         matches!(self, IntrinsicStruct::State | IntrinsicStruct::MutableState)
-    }
-
-    /// Whether its values keep attached function values past the call that receives them (D24
-    /// of `owned-state`): a *keeper*, whose values carry the borrows of the weak captures of
-    /// the content they keep. Only `Composition` is one: `runApp` returns once its app has
-    /// ended, and the toolkit's handlers are kept by nodes of the composition.
-    pub fn is_keeper(self) -> bool {
-        self == IntrinsicStruct::Composition
     }
 
     /// The library module declaring it.
@@ -169,13 +150,10 @@ impl IntrinsicStruct {
         match self {
             // A state object owns its state, so it is move-only whatever its value type (D1 of
             // `owned-state`).
-            IntrinsicStruct::Composition
-            | IntrinsicStruct::State
-            | IntrinsicStruct::MutableState => None,
+            IntrinsicStruct::State | IntrinsicStruct::MutableState => None,
             // The markers of an intrinsic struct hold for every type argument: a weak reference
             // is `Copy` whatever it names.
-            IntrinsicStruct::RecomposeScope
-            | IntrinsicStruct::WeakReference
+            IntrinsicStruct::WeakReference
             | IntrinsicStruct::NodeId
             | IntrinsicStruct::HandlerId => Some(TypeMarker::Copy),
         }
@@ -1105,10 +1083,7 @@ impl Type {
     /// `compose-library-in-prism`): a set lookup.
     pub fn contains_keeper(&self, types: &TypeTable) -> bool {
         match self {
-            // `Composition` is the catalog's keeper until the library annotates it.
-            Type::Struct { id, .. } => {
-                types.is_keeper(id) || id.intrinsic().is_some_and(IntrinsicStruct::is_keeper)
-            }
+            Type::Struct { id, .. } => types.is_keeper(id),
             Type::Nullable(inner) | Type::Heap(inner) => inner.contains_keeper(types),
             _ => false,
         }

@@ -133,9 +133,6 @@ pub fn symbol_of(body: &Body, file: &MirFile) -> String {
         BodyOwner::Restart { function } => {
             format!("{}#restart", symbol_of(&file.bodies[*function], file))
         }
-        BodyOwner::RootContent { parent } => {
-            format!("{}#root-content", symbol_of(&file.bodies[*parent], file))
-        }
     }
 }
 
@@ -173,9 +170,6 @@ pub fn symbols_of(file: &MirFile) -> Vec<String> {
                     format!("{}#closure{}", parent_symbol(parent), index)
                 }
                 BodyOwner::Restart { function } => format!("{}#restart", parent_symbol(function)),
-                BodyOwner::RootContent { parent } => {
-                    format!("{}#root-content", parent_symbol(parent))
-                }
                 _ => symbol_of(body, file),
             };
             symbols[body_id.index()] = Some(symbol);
@@ -218,19 +212,15 @@ mod tests {
             .collect()
     }
 
-    /// D19 of `compose-transform`: a restart function and a root content adapter are named
-    /// after the body they belong to, an instance's after the instance.
+    /// D19 of `compose-transform`: a restart function is named after the body it belongs to,
+    /// an instance's after the instance.
     #[test]
-    fn restart_and_root_content_symbols() {
+    fn restart_symbols() {
         let mut file = lower_source("fun <T> show(x: T) {}\nfun main() {}\n");
         let show = prism_mir::BodyId(0);
-        let main = prism_mir::BodyId(1);
         let mut restart = file.bodies[show].clone();
         restart.owner = BodyOwner::Restart { function: show };
         file.bodies.alloc(restart);
-        let mut adapter = file.bodies[main].clone();
-        adapter.owner = BodyOwner::RootContent { parent: main };
-        file.bodies.alloc(adapter);
         let mut instance = file.bodies[show].clone();
         instance.type_parameters.clear();
         instance.type_arguments = vec![Type::Int];
@@ -242,7 +232,6 @@ mod tests {
             "main::show",
             "main::main",
             "main::show#restart",
-            "main::main#root-content",
             "main::show<Int>",
             "main::show<Int>#restart",
         ];

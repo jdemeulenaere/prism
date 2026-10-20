@@ -48,23 +48,19 @@ fun main::main(): Unit @6:1
   local _0: Unit (return)
   local _1 c: Composition (user)
   local _2: compose () -> Unit (temporary)
-  local _3: (Int) -> Unit (temporary)
   bb0:
-    storage_live _3 @6:1
     storage_live _1 @7:5
     storage_live _2 @7:25
     _2 = closure main::main#closure0 [] @7:25
-    _3 = closure main::main#root-content [move _2] @7:13
-    _1 = call composer start_composition(move _3) -> bb2 @7:13
+    _1 = call prism/compose/runtime::composition(move _2) -> bb1 @7:13
   bb1:
-    storage_dead _1 @8:1
-    storage_dead _3 @6:1
-    return @6:1
-  bb2:
     storage_dead _2 @7:5
     _0 = const () @6:12
-    drop _1 -> bb1 @8:1
-compose composed closure main::main#closure0(_1: Int, _2: Int): Unit @7:25 /* argument 0 of composition call 0 */
+    drop _1 -> bb2 @8:1
+  bb2:
+    storage_dead _1 @8:1
+    return @6:1
+compose composed closure main::main#closure0(_1: Int, _2: Int): Unit @7:25 /* argument 0 of prism/compose/runtime::composition call 0 */
   local _0: Unit (return)
   local _1 $composer: Int (argument)
   local _2 $changed: Int (argument)
@@ -72,7 +68,7 @@ compose composed closure main::main#closure0(_1: Int, _2: Int): Unit @7:25 /* ar
   local _4: Unit (temporary)
   bb0:
     storage_live _4 @7:25
-    _4 = call composer start_group key 0x8ea950d8b6a64c03 /* closure argument 0 of composition call 0 */(copy _1) -> bb2 @7:25
+    _4 = call composer start_group key 0x19379605bfe12df5 /* closure argument 0 of prism/compose/runtime::composition call 0 */(copy _1) -> bb2 @7:25
   bb1:
     storage_dead _3 @7:27
     _0 = const () @7:27
@@ -90,11 +86,3 @@ closure main::Hello#restart(_1: Int): Unit @4:1
     _0 = call compose main::Hello(copy _1, const 1) -> bb1 @4:1
   bb1:
     return @4:1
-closure main::main#root-content(_1: Int): Unit @6:1
-  local _0: Unit (return)
-  local _1 $composer: Int (argument)
-  local _2 content: compose () -> Unit (capture)
-  bb0:
-    _0 = call compose _2(copy _1, const 1) -> bb1 @6:1
-  bb1:
-    return @6:1

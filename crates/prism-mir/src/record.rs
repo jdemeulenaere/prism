@@ -70,11 +70,9 @@ impl GenericRecord {
                     }
                     record
                 }
-                // A restart function and a root content adapter belong to the record of the
-                // body they belong to, like its closures (D19 of `compose-transform`).
-                BodyOwner::Closure { parent, .. }
-                | BodyOwner::Restart { function: parent }
-                | BodyOwner::RootContent { parent } => {
+                // A restart function belongs to the record of the body it belongs to, like its
+                // closures (D19 of `compose-transform`).
+                BodyOwner::Closure { parent, .. } | BodyOwner::Restart { function: parent } => {
                     let record = owners.get(parent.index()).copied().flatten();
                     if let Some(record) = record {
                         records[record].closures.push(body.clone());
@@ -155,9 +153,8 @@ impl GenericRecord {
 /// Renames the bodies `body` names, its closure parent and the closures it builds, by
 /// `numbers`.
 fn renumber_bodies(body: &mut Body, numbers: &HashMap<BodyId, BodyId>) {
-    if let BodyOwner::Closure { parent, .. }
-    | BodyOwner::Restart { function: parent }
-    | BodyOwner::RootContent { parent } = &mut body.owner
+    if let BodyOwner::Closure { parent, .. } | BodyOwner::Restart { function: parent } =
+        &mut body.owner
     {
         *parent = numbers[parent];
     }
@@ -172,12 +169,12 @@ fn renumber_bodies(body: &mut Body, numbers: &HashMap<BodyId, BodyId>) {
     }
 }
 
-/// The body a closure, restart function or root content adapter belongs to.
+/// The body a closure or restart function belongs to.
 pub fn parent_of(owner: &BodyOwner) -> Option<BodyId> {
     match owner {
-        BodyOwner::Closure { parent, .. }
-        | BodyOwner::Restart { function: parent }
-        | BodyOwner::RootContent { parent } => Some(*parent),
+        BodyOwner::Closure { parent, .. } | BodyOwner::Restart { function: parent } => {
+            Some(*parent)
+        }
         BodyOwner::Function(_) | BodyOwner::Value(_) | BodyOwner::Default { .. } => None,
     }
 }

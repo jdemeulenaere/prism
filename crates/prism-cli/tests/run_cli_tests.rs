@@ -2849,3 +2849,57 @@ fn annotations_change_the_abi_hash() {
         .unwrap();
     assert_eq!(explicit_hash, plain_composable_hash);
 }
+
+/// code-generation: "The drop glue of a composition calls its hook" (`compose-library-in-prism`
+/// D6, D13): `Composition` is disposed by its drop hook, called through its slot from drop glue
+/// like any hooked type's, with no special case in the backend.
+#[test]
+fn the_drop_glue_of_a_composition_calls_its_hook() {
+    let directory = single_file(
+        "composition_drop_glue",
+        "import /prism/compose/runtime\n\nstruct Screen { val c: Composition }\n\nfun f(s: Screen) {}\n",
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let glue = |name: &str| {
+        let start = dump
+            .find(&format!("function {}\n", name))
+            .unwrap_or_else(|| panic!("no {} in\n{}", name, dump));
+        let rest = &dump[start..];
+        rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_string()
+    };
+    let screen = glue("main#drop(main::Screen)");
+    assert!(
+        screen.contains("%\"main#drop(prism/compose/runtime::Composition)\""),
+        "{}",
+        screen
+    );
+    let composition = glue("main#drop(prism/compose/runtime::Composition)");
+    assert!(
+        composition.contains("prism/compose/runtime.Composition.drop#slot")
+            && composition.contains("call_indirect"),
+        "{}",
+        composition
+    );
+    assert!(!dump.contains("prism_compose_dispose"), "{}", dump);
+}
+
+/// code-generation: "A weak reference passed as a word" (`compose-library-in-prism` D13): the
+/// state handles are the only intrinsic structs, and travel as one 64-bit word.
+#[test]
+fn a_weak_reference_passed_as_a_word() {
+    let directory = single_file(
+        "weak_reference_word",
+        "import /prism/compose/runtime\n\nfun f(r: WeakReference<MutableState<Int>>): WeakReference<MutableState<Int>> = r\n",
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    assert!(
+        dump.contains("function %\"main::f\"(i64) -> i64 system_v")
+            || dump.contains("function %\"main::f\"(i64) -> i64 apple_aarch64"),
+        "{}",
+        dump
+    );
+}

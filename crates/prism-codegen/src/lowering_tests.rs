@@ -47,6 +47,22 @@ fn compile(source: &str) -> Program {
     compile_files(vec![lower_source(source)])
 }
 
+/// The program of `source` with the compose runtime module and the composer protocol it is
+/// written over (D6 and D7 of `compose-library-in-prism`).
+fn compile_with_compose_runtime(source: &str) -> Program {
+    compile_files(lower_files(&[
+        (
+            "prism/composer",
+            include_str!("../../../library/prism/composer.prism"),
+        ),
+        (
+            "prism/compose/runtime",
+            include_str!("../../../library/prism/compose/runtime.prism"),
+        ),
+        ("main", source),
+    ]))
+}
+
 /// The compiled function `symbol` of `program`, as a function pointer of type `F`.
 fn function<F: Copy>(program: &Program, symbol: &str) -> F {
     let address = program
@@ -1137,7 +1153,7 @@ fn compose_entry_points_resolve() {
 /// second has nothing to do; the composition is disposed when it is dropped.
 #[test]
 fn composed_bodies_run() {
-    let program = compile(
+    let program = compile_with_compose_runtime(
         "compose fun Once() { val s = currentRecomposeScope(); val first = remember { s.invalidate(); 0 } }\n\
          fun passes(): Int {\n\
              val c = composition { Once() }\n\

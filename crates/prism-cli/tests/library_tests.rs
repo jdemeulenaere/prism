@@ -55,13 +55,16 @@ fn every_declaration_says_what_it_does() {
             .iter()
             .any(|start| line.starts_with(start));
             if declares {
-                // A context parameter's line is part of the declaration below it (D10 of
-                // `receiver-lambdas`), so the comment is above it.
-                let index = if index > 0 && lines[index - 1].starts_with("context(") {
-                    index - 1
-                } else {
-                    index
-                };
+                // A context parameter's line and an annotation's are part of the declaration
+                // below them (D10 of `receiver-lambdas`, D2 of `compose-library-in-prism`), so
+                // the comment is above them.
+                let mut index = index;
+                while index > 0
+                    && (lines[index - 1].starts_with("context(")
+                        || lines[index - 1].starts_with('@'))
+                {
+                    index -= 1;
+                }
                 assert!(
                     index > 0 && lines[index - 1].starts_with("//"),
                     "{}:{}: the declaration has no comment above it: {}",
@@ -354,16 +357,14 @@ fn signatures_of_the_compose_module() {
         .filter_map(prism_abi::ExportedSymbol::declaration_text)
         .collect();
     for expected in [
-        "public intrinsic struct Composition",
-        "public intrinsic struct RecomposeScope : Copy",
-        "public intrinsic fun composition(content: attached compose () -> Unit): Composition",
-        "public intrinsic fun Composition.setContent(content: attached compose () -> Unit): Unit",
-        "public intrinsic fun Composition.recompose(): Bool",
-        "public intrinsic fun Composition.dump(): String",
+        "@DrivesComposition public fun composition(content: attached compose () -> Unit): Composition",
+        "@DrivesComposition public fun Composition.setContent(content: attached compose () -> Unit): Unit",
+        "@DrivesComposition public fun Composition.recompose(): Bool",
+        "public fun Composition.dump(): String",
         "public intrinsic compose fun <T> remember(calculation: () -> T): T",
         "public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit",
-        "public intrinsic compose fun currentRecomposeScope(): RecomposeScope",
-        "public intrinsic fun RecomposeScope.invalidate(): Unit",
+        "public compose fun currentRecomposeScope(): RecomposeScope",
+        "public fun RecomposeScope.invalidate(): Unit",
         // standard-library: "Signatures of the state declarations" (`owned-state`).
         "public intrinsic struct State<T>",
         "public intrinsic struct MutableState<T>",
@@ -375,7 +376,7 @@ fn signatures_of_the_compose_module() {
         "public intrinsic capture fun <T> State<T>.weak(): WeakReference<State<T>>",
         "public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>",
         "public intrinsic fun <T> WeakReference<T>.get(): (&T)?",
-        "public intrinsic compose fun SideEffect(effect: attached () -> Unit): Unit",
+        "public compose fun SideEffect(effect: attached () -> Unit): Unit",
     ] {
         assert!(
             texts.contains(expected),
@@ -384,7 +385,40 @@ fn signatures_of_the_compose_module() {
             texts
         );
     }
-    assert_eq!(texts.len(), 21, "{:?}", texts);
+    // The structs written in Prism, with their private fields (`compose-library-in-prism` D6
+    // and D7), `Composition` a keeper.
+    let structs: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(|symbol| match symbol {
+            prism_abi::ExportedSymbol::Struct {
+                name,
+                fields,
+                field_visibilities,
+                keeper,
+                intrinsic: false,
+                ..
+            } => Some(format!(
+                "{}{} {:?} {:?}",
+                if *keeper { "@Keeper " } else { "" },
+                name,
+                fields
+                    .iter()
+                    .map(|(name, _, ty)| format!("{}: {}", name, ty))
+                    .collect::<Vec<_>>(),
+                field_visibilities
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        structs,
+        [
+            "@Keeper Composition [\"handle: Int\"] [Private]",
+            "RecomposeScope [\"word: Int\"] [Private]",
+        ]
+    );
+    assert_eq!(texts.len(), 19, "{:?}", texts);
 }
 
 /// `ui-toolkit` task 11.1: `prism-ui`'s mirrors of `Modifier`, `ModifierElements` and

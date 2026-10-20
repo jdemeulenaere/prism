@@ -1,0 +1,3 @@
+package prism.compose
+
+public intrinsic struct Composition

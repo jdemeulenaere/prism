@@ -1,4 +1,4 @@
-//! Restart functions and root content adapters (D10 and D15 of `compose-transform`).
+//! Restart functions (D10 of `compose-transform`).
 //!
 //! A skippable composable `F` gets `F#restart`, a closure capturing nothing of type
 //! `(Int) -> Unit`: it reads each kept argument from the slots of its scope's group, in
@@ -10,9 +10,9 @@
 use crate::rewrite::{bit_position, word_count, FORCE, SAME};
 use prism_ast::Span;
 use prism_mir::{
-    BasicBlock, Body, BodyId, BodyOwner, Callee, CaptureMode, ComposerOperation, Constant,
-    LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue, Statement, StatementKind,
-    Terminator, TerminatorKind,
+    BasicBlock, Body, BodyId, BodyOwner, Callee, ComposerOperation, Constant, LocalDeclaration,
+    LocalId, LocalKind, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
+    TerminatorKind,
 };
 use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{Arena, Type};
@@ -262,66 +262,4 @@ pub(crate) fn restart_body(
     // The call of a generic composable names its type parameters.
     body.requests_instances = body.scan_requests_instances();
     body
-}
-
-/// The root content adapter of the body `parent`, whose content has type `content_type`.
-pub(crate) fn root_content_body(
-    parent_body: &Body,
-    parent: BodyId,
-    content_type: Type,
-    span: Span,
-) -> Body {
-    let mut locals = Arena::new();
-    locals.alloc(local(Type::Unit, LocalKind::Return, None, span));
-    let composer = locals.alloc(local(
-        Type::Int,
-        LocalKind::Argument,
-        Some("$composer".to_string()),
-        span,
-    ));
-    let content = locals.alloc(local(
-        content_type,
-        LocalKind::Capture,
-        Some("content".to_string()),
-        span,
-    ));
-    let mut blocks = Arena::new();
-    blocks.alloc(block(
-        Vec::new(),
-        TerminatorKind::Call {
-            callee: Callee::Value(Place::local(content), span),
-            arguments: vec![
-                Operand::Copy(Place::local(composer), span),
-                Operand::Constant(Constant::Int(FORCE)),
-            ],
-            parameters: vec![Type::Int, Type::Int],
-            parameter_kinds: vec![ParameterKind::Plain, ParameterKind::Plain],
-            type_arguments: Vec::new(),
-            destination: Place::return_place(),
-            target: Some(prism_mir::BlockId(1)),
-            is_compose: true,
-        },
-        span,
-    ));
-    blocks.alloc(block(Vec::new(), TerminatorKind::Return, span));
-    Body {
-        owner: BodyOwner::RootContent { parent },
-        is_compose: false,
-        explicit_groups: false,
-        type_parameters: parent_body.type_parameters.clone(),
-        type_arguments: Vec::new(),
-        locals,
-        argument_count: 1,
-        capture_count: 1,
-        capture_modes: vec![CaptureMode::Owned],
-        ownership_reason: None,
-        capture_widenings: Vec::new(),
-        blocks,
-        groups: Arena::new(),
-        origin: None,
-        body_key: None,
-        // It calls only its content value.
-        requests_instances: false,
-        span,
-    }
 }

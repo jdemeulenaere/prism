@@ -1,0 +1,4 @@
+// expect: E4007
+import /prism/compose/runtime
+
+fun forge(): Composition = Composition(1)

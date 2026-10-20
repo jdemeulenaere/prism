@@ -737,16 +737,6 @@ pub enum BuiltinFunction {
     ListReverse,
     /// `xs.clear()`: drops every element, keeping the buffer.
     ListClear,
-    /// `composition(content)` of `/prism/compose/runtime`: starts a composition of the
-    /// composable `content`, composes it once and gives the owned `Composition` (D15 of
-    /// `compose-transform`).
-    Composition,
-    /// `c.setContent(content)`: replaces a composition's content and recomposes its root.
-    SetContent,
-    /// `c.recompose()`: recomposes a composition's invalid scopes, giving whether any ran.
-    Recompose,
-    /// `c.dump()`: the text dump of a composition.
-    DumpComposition,
     /// `remember(keys..., calculation)`, a composable: the kept value of its slot, or the
     /// calculation's result when the slot is new or a key changed (D12). Typed by a rule: up to
     /// three keys, each of a type parameter of its own bounded by `Copy`, before the
@@ -755,10 +745,6 @@ pub enum BuiltinFunction {
     /// `key(value) { content }`, a composable: composes `content` in a movable group whose
     /// data key is `value` (D13).
     Key,
-    /// `currentRecomposeScope()`, a composable: the innermost restart scope being composed.
-    CurrentRecomposeScope,
-    /// `s.invalidate()` of a `RecomposeScope`.
-    InvalidateScope,
     /// `mutableStateOf(value)`: creates a state holding `value`, moved in, and gives the
     /// `MutableState<T>` that owns it (D2 of `state-handles`, D1 of `owned-state`). Its type
     /// argument is the value type.
@@ -779,8 +765,6 @@ pub enum BuiltinFunction {
     /// borrow of a state object reaching it, the reference's own word viewed as one (D11 of
     /// `owned-state`). Its type argument is the state object's type `S`.
     WeakGet,
-    /// `SideEffect(effect)`, a composable: queues `effect` to run after the pass (D13).
-    SideEffect,
     /// `Node(kind, update, content)` of `/prism/compose/ui`, a composable: a node group of
     /// `kind` whose node `update` receives, holding `content` (D3 of `ui-toolkit`).
     UiNode,
@@ -828,20 +812,13 @@ impl BuiltinFunction {
             BuiltinFunction::ListRemoveLast => "removeLast",
             BuiltinFunction::ListReverse => "reverse",
             BuiltinFunction::ListClear => "clear",
-            BuiltinFunction::Composition => "composition",
-            BuiltinFunction::SetContent => "setContent",
-            BuiltinFunction::Recompose => "recompose",
-            BuiltinFunction::DumpComposition => "dump",
             BuiltinFunction::Remember => "remember",
             BuiltinFunction::Key => "key",
-            BuiltinFunction::CurrentRecomposeScope => "currentRecomposeScope",
-            BuiltinFunction::InvalidateScope => "invalidate",
             BuiltinFunction::MutableStateOf => "mutableStateOf",
             BuiltinFunction::StateValue => "value",
             BuiltinFunction::StateUpdate => "update",
             BuiltinFunction::StateWeak => "weak",
             BuiltinFunction::WeakGet => "get",
-            BuiltinFunction::SideEffect => "SideEffect",
             BuiltinFunction::UiNode => "Node",
             BuiltinFunction::UiLeafNode => "LeafNode",
             BuiltinFunction::RunApp => "runApp",
@@ -965,10 +942,9 @@ impl BuiltinFunction {
     }
 
     /// Whether the built-in's first argument is a receiver: that of every built-in member
-    /// (`clone`, `length`, `get`, `toString`, `unbox`, the list members and the members of
-    /// `Composition`, `RecomposeScope` and the state handles), not the arguments of `print`,
-    /// `println`, `Heap`, `varargList`, `composition`, `remember`, `key`, `currentRecomposeScope`,
-    /// `mutableStateOf` and `SideEffect`.
+    /// (`clone`, `length`, `get`, `toString`, `unbox`, the list members and the members of the
+    /// state handles), not the arguments of `print`, `println`, `Heap`, `varargList`,
+    /// `remember`, `key`, `mutableStateOf` and `currentComposer`.
     pub fn has_receiver(self) -> bool {
         !matches!(
             self,
@@ -976,12 +952,9 @@ impl BuiltinFunction {
                 | BuiltinFunction::PrintLine
                 | BuiltinFunction::HeapAllocate
                 | BuiltinFunction::VarargList
-                | BuiltinFunction::Composition
                 | BuiltinFunction::Remember
                 | BuiltinFunction::Key
-                | BuiltinFunction::CurrentRecomposeScope
                 | BuiltinFunction::MutableStateOf
-                | BuiltinFunction::SideEffect
                 | BuiltinFunction::UiNode
                 | BuiltinFunction::UiLeafNode
                 | BuiltinFunction::RunApp
@@ -994,15 +967,8 @@ impl BuiltinFunction {
     pub fn is_compose_runtime(self) -> bool {
         matches!(
             self,
-            BuiltinFunction::Composition
-                | BuiltinFunction::SetContent
-                | BuiltinFunction::Recompose
-                | BuiltinFunction::DumpComposition
-                | BuiltinFunction::Remember
+            BuiltinFunction::Remember
                 | BuiltinFunction::Key
-                | BuiltinFunction::CurrentRecomposeScope
-                | BuiltinFunction::InvalidateScope
-                | BuiltinFunction::SideEffect
                 | BuiltinFunction::UiNode
                 | BuiltinFunction::UiLeafNode
                 | BuiltinFunction::RunApp

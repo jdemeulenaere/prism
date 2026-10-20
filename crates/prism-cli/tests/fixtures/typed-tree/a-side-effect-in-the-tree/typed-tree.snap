@@ -1,0 +1,11 @@
+module main
+import struct prism/compose/runtime::Composition
+  field 0 val handle: Int
+import struct prism/compose/runtime::RecomposeScope : Copy
+  field 0 val word: Int
+compose fun main::C(): Unit @4:1
+  block: Unit @4:17
+    expression @5:5
+      call compose prism/compose/runtime::SideEffect: Unit @5:5
+        argument effect: closure (): () -> Unit @5:16
+          block: Unit @5:18

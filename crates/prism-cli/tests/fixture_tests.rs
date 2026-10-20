@@ -604,7 +604,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
     "a-key-lambda-captures-a-version",
     "a-composable-lambda-takes-the-composer",
     "a-skippable-body-and-its-restart-closure",
-    "the-adapter-of-a-composition",
+    "a-composition-started-in-mir",
     "dumping-composed-mir",
     "composed-remember-of-a-state",
     "a-toolkit-composable-starts-a-node-group",

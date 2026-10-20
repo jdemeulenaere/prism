@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /prism/compose/runtime
+import /prism/core
+
+compose fun Log(n: Int) {
+    SideEffect { println("effect $n") }
+}
+
+fun main() {
+    val c = composition { Log(1) }
+    print(c.dump())
+}

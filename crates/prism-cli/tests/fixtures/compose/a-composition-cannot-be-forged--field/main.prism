@@ -1,0 +1,7 @@
+// expect: E4007
+import /prism/compose/runtime
+
+fun open(c: &Composition): Int {
+    val (handle) = c
+    return handle
+}

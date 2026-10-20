@@ -1,4 +1,4 @@
 // expect: E4024
 import /prism/compose/runtime
 
-fun g(s: RecomposeScope) { val (h) = s }
+fun g(r: WeakReference<MutableState<Int>>) { val (h) = r }
