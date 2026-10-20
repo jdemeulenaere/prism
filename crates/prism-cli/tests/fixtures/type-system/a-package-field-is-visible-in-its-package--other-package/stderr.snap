@@ -1,0 +1,4 @@
+error[E4007]: the field 'cost' of 'Order' is package-visible, in package 'shop' only, so it cannot be read, written or borrowed here
+  --> app/main.prism:6:28
+    6 | fun cost(o: &Order): Int = o.cost
+      |                            ^

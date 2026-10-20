@@ -2071,11 +2071,14 @@ fn hiding_a_field_re_checks_importers() {
     );
     assert_ne!(abi_hash(&workspace, "lib/id.prism"), before);
     let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        explanation(&output).contains(&"checked app/main.prism".to_string()),
+        stderr.contains("error[E4007]") && stderr.contains("the field 'n' of 'Id' is private"),
         "{}",
-        report(&output)
+        stderr
     );
+    assert!(stderr.contains("app/main.prism"), "{}", stderr);
 }
 
 /// compilation-and-abi: "The ABI shows field modifiers".

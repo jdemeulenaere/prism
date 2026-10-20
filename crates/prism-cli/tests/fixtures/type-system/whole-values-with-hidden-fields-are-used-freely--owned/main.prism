@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /lib/secret
+import /prism/core
+fun keep(s: Secret): Secret = s
+fun main() {
+    val a = secret("x")
+    val b = a.clone()
+    println(a == b)
+    val c = keep(b)
+    println(c == secret("y"))
+    println(c.label)
+}

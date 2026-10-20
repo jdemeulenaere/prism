@@ -11,7 +11,7 @@
 //! wildcards and bindings take the box itself (D9 of `heap-boxes`).
 
 use super::{binding_name, TypeChecker, THIS};
-use crate::error::TypeError;
+use crate::error::{HiddenFieldUse, TypeError};
 use crate::scope::{Mutability, Symbol, SymbolKind};
 use crate::types::{NominalId, Type};
 use prism_ast::expr::{Expr, ExprKind, PatternArgument, PatternKind};
@@ -620,7 +620,23 @@ impl TypeChecker {
                 }
                 Some(name) => {
                     seen_named = true;
-                    match fields.iter().position(|(field, _, _)| field == name) {
+                    let position = fields.iter().position(|(field, _, _)| field == name);
+                    // A named sub-pattern reads its field (D4 of `field-visibility`).
+                    let hidden =
+                        position.and_then(|index| Some((index, self.hidden_field(id, index)?)));
+                    match position {
+                        Some(index) if hidden.is_some() => {
+                            let visibility = hidden.expect("checked above").1;
+                            let error = self.hidden_field_error(
+                                id,
+                                index,
+                                visibility,
+                                HiddenFieldUse::NamedPattern,
+                                argument.span,
+                            );
+                            self.errors.push(error);
+                            self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
+                        }
                         Some(index) if slots[index].is_some() => {
                             invalid.get_or_insert((
                                 format!("field '{}' is matched twice", name),
@@ -669,6 +685,30 @@ impl TypeChecker {
                 ),
                 arguments[fields.len()].span,
             ));
+        }
+        // A positional pattern gives every field, so each must be visible (D4 of
+        // `field-visibility`).
+        let first_hidden = if invalid.is_none() && !seen_named && positional > 0 {
+            self.first_hidden_field(id)
+        } else {
+            None
+        };
+        if let Some((index, visibility)) = first_hidden {
+            let span = arguments
+                .iter()
+                .map(|a| a.span)
+                .reduce(Span::merge)
+                .unwrap_or_default();
+            let error = self.hidden_field_error(
+                id,
+                index,
+                visibility,
+                HiddenFieldUse::PositionalPattern,
+                span,
+            );
+            self.errors.push(error);
+            self.sub_patterns_of_error(arguments, mode, bindings);
+            return fields.iter().map(|_| Pattern::Wildcard).collect();
         }
         if let Some((message, span)) = invalid {
             self.errors.push(TypeError::InvalidPattern {
@@ -764,7 +804,30 @@ impl TypeChecker {
             (Some(fields), Type::Struct { id, arguments }) => {
                 let mut slots: Vec<Option<&DestructureEntry>> = vec![None; fields.len()];
                 for (position, entry) in entries.iter().enumerate() {
-                    match fields.iter().position(|(name, _, _)| name == &entry.field) {
+                    let found = fields.iter().position(|(name, _, _)| name == &entry.field);
+                    // An entry reads the field it names (D4 of `field-visibility`).
+                    let hidden =
+                        found.and_then(|index| Some((index, self.hidden_field(id, index)?)));
+                    match found {
+                        Some(index) if hidden.is_some() => {
+                            let visibility = hidden.expect("checked above").1;
+                            let error = self.hidden_field_error(
+                                id,
+                                index,
+                                visibility,
+                                HiddenFieldUse::Destructuring,
+                                entry.field_span,
+                            );
+                            self.errors.push(error);
+                            self.bind_pattern_name(
+                                &entry.name,
+                                is_var,
+                                &Type::Error,
+                                mode,
+                                entry.name_span,
+                                &mut bindings,
+                            );
+                        }
                         Some(index) if slots[index].is_some() => {
                             self.errors.push(TypeError::InvalidPattern {
                                 message: format!("field '{}' is destructured twice", entry.field),
@@ -786,7 +849,8 @@ impl TypeChecker {
                         Some(index) => slots[index] = Some(entry),
                         None => {
                             // Written the Kotlin way: positions are not fields (D13).
-                            let help = fields.get(position).map(|(field, _, _)| {
+                            let visible = self.hidden_field(id, position).is_none();
+                            let help = fields.get(position).filter(|_| visible).map(|(field, _, _)| {
                                 format!(
                                     "a destructuring declaration binds fields by name: to bind field '{}', write '{} as {}'",
                                     field, field, entry.name

@@ -1,0 +1,3 @@
+package lib
+public struct Handle : Copy { private val word: Int }
+public fun make(): Handle = Handle(7)

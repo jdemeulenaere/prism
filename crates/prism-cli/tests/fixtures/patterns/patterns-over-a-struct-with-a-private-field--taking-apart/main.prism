@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+import /bank/account
+import /prism/core
+fun c(x: &Account): Bool = when (x) { Account(owner = "ann") -> true; else -> false }
+fun d(x: Account): String { val (owner) = x; return owner }
+fun e(x: Account): String = when (x) { Account(owner = val o) -> o }
+fun main() {
+    println(c(&open("ann")))
+    println(d(open("bob")))
+    println(e(open("cy")))
+}

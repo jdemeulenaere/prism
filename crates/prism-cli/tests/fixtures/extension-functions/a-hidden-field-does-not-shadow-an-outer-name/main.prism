@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+import /lib/box
+import /prism/core
+val size: Int = 10
+fun Box.twice(): Int = size * 2
+fun main() { println(box().twice()) }

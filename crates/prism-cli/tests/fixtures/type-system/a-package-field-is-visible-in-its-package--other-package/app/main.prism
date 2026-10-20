@@ -1,0 +1,7 @@
+// expect: E4007
+// entry: app/main.prism
+// run: 1
+package app
+import /shop/models
+fun cost(o: &Order): Int = o.cost
+fun main() {}

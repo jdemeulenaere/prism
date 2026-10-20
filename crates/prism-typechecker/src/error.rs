@@ -1,7 +1,7 @@
 //! Semantic analysis and type checker diagnostic error representations.
 
 use crate::types::Type;
-use prism_ast::{Span, TypeMarker};
+use prism_ast::{Span, TypeMarker, Visibility};
 use std::fmt;
 
 /// Semantic and type checking error categories (`E4001` - `E4025`).
@@ -156,6 +156,21 @@ pub enum TypeError {
         symbol: String,
         defining_package: String,
         accessing_package: String,
+        span: Span,
+    },
+
+    /// E4007: A field not visible in this file is read, written or borrowed, given by a
+    /// construction, or named by a pattern or destructuring entry (D2 to D4 of
+    /// `field-visibility`).
+    HiddenField {
+        field: String,
+        struct_name: String,
+        /// `Private` or `Package`.
+        visibility: Visibility,
+        /// Where the field is visible: the struct's module for a `private` field, its package
+        /// for a `package` one.
+        owner: String,
+        usage: HiddenFieldUse,
         span: Span,
     },
 
@@ -494,6 +509,21 @@ pub enum CaptureRefusal {
     DefaultValueInput,
 }
 
+/// What a [`TypeError::HiddenField`] tried to do with the hidden field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenFieldUse {
+    /// A read, write or borrow, also through a bare name in an extension body.
+    Access,
+    /// A construction of its struct, which gives every field.
+    Construction,
+    /// A positional struct pattern, which gives every field.
+    PositionalPattern,
+    /// A named sub-pattern naming it.
+    NamedPattern,
+    /// A destructuring entry naming it.
+    Destructuring,
+}
+
 impl CaptureRefusal {
     /// The note explaining the refusal.
     pub fn note(self, name: &str) -> String {
@@ -653,7 +683,7 @@ impl TypeError {
             TypeError::ArgumentTypeMismatch { .. } => "E4004",
             TypeError::ReturnTypeMismatch { .. } => "E4005",
             TypeError::UnknownField { .. } => "E4006",
-            TypeError::VisibilityViolation { .. } => "E4007",
+            TypeError::VisibilityViolation { .. } | TypeError::HiddenField { .. } => "E4007",
             TypeError::InvalidComposeContext { .. } => "E4008",
             TypeError::CompositionInComposable { .. } => "E4030",
             TypeError::NonExhaustiveWhen { .. } => "E4009",
@@ -716,7 +746,9 @@ impl TypeError {
             TypeError::ArgumentTypeMismatch { span, .. } => *span,
             TypeError::ReturnTypeMismatch { span, .. } => *span,
             TypeError::UnknownField { span, .. } => *span,
-            TypeError::VisibilityViolation { span, .. } => *span,
+            TypeError::VisibilityViolation { span, .. } | TypeError::HiddenField { span, .. } => {
+                *span
+            }
             TypeError::InvalidComposeContext { span, .. } => *span,
             TypeError::CompositionInComposable { span, .. } => *span,
             TypeError::NonExhaustiveWhen { span, .. } => *span,
@@ -918,6 +950,44 @@ impl TypeError {
                     "symbol '{}' in package '{}' has package visibility and cannot be accessed from package '{}'",
                     symbol, defining_package, accessing_package
                 )
+            }
+            TypeError::HiddenField {
+                field,
+                struct_name,
+                visibility,
+                owner,
+                usage,
+                ..
+            } => {
+                let hidden = match visibility {
+                    Visibility::Package => format!(
+                        "the field '{}' of '{}' is package-visible, in package '{}' only",
+                        field, struct_name, owner
+                    ),
+                    _ => format!(
+                        "the field '{}' of '{}' is private to '{}'",
+                        field, struct_name, owner
+                    ),
+                };
+                match usage {
+                    HiddenFieldUse::Access => {
+                        format!("{}, so it cannot be read, written or borrowed here", hidden)
+                    }
+                    HiddenFieldUse::Construction => format!(
+                        "'{}' cannot be constructed here: a construction gives every field, and {}",
+                        struct_name, hidden
+                    ),
+                    HiddenFieldUse::PositionalPattern => format!(
+                        "a positional pattern of '{}' gives every field, and {}; name the fields to match instead",
+                        struct_name, hidden
+                    ),
+                    HiddenFieldUse::NamedPattern => {
+                        format!("{}, so a pattern here cannot match it", hidden)
+                    }
+                    HiddenFieldUse::Destructuring => {
+                        format!("{}, so it cannot be destructured here", hidden)
+                    }
+                }
             }
             TypeError::InvalidComposeContext { callee, .. } => {
                 format!(

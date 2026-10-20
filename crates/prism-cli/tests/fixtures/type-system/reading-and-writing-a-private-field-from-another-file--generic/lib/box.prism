@@ -1,0 +1,3 @@
+package lib
+public struct Box<T> { private val v: T }
+public fun <T> boxOf(v: T): Box<T> = Box(v)

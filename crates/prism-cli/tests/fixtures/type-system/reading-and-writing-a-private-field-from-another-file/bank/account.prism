@@ -1,0 +1,4 @@
+package bank
+public struct Account { private var balance: Int, val owner: String }
+public fun open(owner: String): Account = Account(0, owner)
+public mut fun Account.deposit(n: Int): Unit { balance += n }

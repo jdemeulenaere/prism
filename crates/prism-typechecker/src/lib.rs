@@ -21,8 +21,8 @@ pub mod types;
 
 pub use checker::TypeChecker;
 pub use error::{
-    closure_parameter_count_help, CaptureRefusal, MissingImplicitParameter, NoTextFormReason,
-    TypeError,
+    closure_parameter_count_help, CaptureRefusal, HiddenFieldUse, MissingImplicitParameter,
+    NoTextFormReason, TypeError,
 };
 pub use members::MemberScope;
 #[cfg(any(test, feature = "test-support"))]

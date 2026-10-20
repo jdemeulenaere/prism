@@ -1,0 +1,5 @@
+// expect: E4010
+// run: 1
+struct Account { private val id: Int }
+fun Account.id(): Int = 1
+fun main() {}

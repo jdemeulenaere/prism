@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+import /lib/box
+import /prism/core
+fun main() {
+    var b = boxOf("a")
+    b.put("bc")
+    println(b.get())
+    println(b.matches(&"bc") { x, y -> x == y })
+    println(sized("abcd"))
+    println(boxOf(3).get())
+}

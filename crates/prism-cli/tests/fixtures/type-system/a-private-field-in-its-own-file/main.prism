@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+import /prism/core
+struct Account { private var balance: Int }
+mut fun Account.deposit(n: Int) { balance += n }
+fun main() {
+    var a = Account(1)
+    a.deposit(2)
+    println(a.balance)
+}

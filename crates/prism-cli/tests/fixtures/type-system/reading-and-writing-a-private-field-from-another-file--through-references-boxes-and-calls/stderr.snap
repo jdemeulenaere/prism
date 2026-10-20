@@ -1,0 +1,28 @@
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:4:33
+    4 | fun compound(a: &mut Account) { a.balance += 1 }
+      |                                 ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:5:34
+    5 | fun borrow(a: &Account): &Int = &a.balance
+      |                                  ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:6:36
+    6 | fun boxed(b: Heap<Account>): Int = b.balance
+      |                                    ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:7:35
+    7 | fun nullable(a: Account?): Int? = a?.balance
+      |                                   ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:8:30
+    8 | fun call(a: &Account): Int = a.balance()
+      |                              ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:10:18
+   10 |     val read = { a.balance }
+      |                  ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:13:27
+   13 | fun Account.bare(): Int = balance
+      |                           ^

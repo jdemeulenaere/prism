@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+import /bank/account
+import /prism/core
+fun Account.id(): Int = 42
+fun main() { println(open(7).id()) }

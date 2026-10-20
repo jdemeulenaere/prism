@@ -1,0 +1,5 @@
+// expect: ok
+// entry: shop/report.prism
+package shop
+import /shop/models
+fun margin(o: &Order): Int = o.price - o.cost

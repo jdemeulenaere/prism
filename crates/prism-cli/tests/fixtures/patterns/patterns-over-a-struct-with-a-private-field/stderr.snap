@@ -1,0 +1,8 @@
+error[E4007]: a positional pattern of 'Account' gives every field, and the field 'id' of 'Account' is private to 'bank/account'; name the fields to match instead
+  --> main.prism:4:46
+    4 | fun a(x: &Account): Int = when (x) { Account(_, _) -> 1 }
+      |                                              ^
+error[E4007]: the field 'id' of 'Account' is private to 'bank/account', so a pattern here cannot match it
+  --> main.prism:5:46
+    5 | fun b(x: &Account): Int = when (x) { Account(id = 1) -> 1; else -> 2 }
+      |                                              ^

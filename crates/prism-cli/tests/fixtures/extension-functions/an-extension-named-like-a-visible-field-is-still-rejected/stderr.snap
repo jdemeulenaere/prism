@@ -1,0 +1,4 @@
+error[E4010]: extension 'Account.id' can never be called: the field 'id' of 'Account' always takes precedence in this file
+  --> main.prism:4:1
+    4 | fun Account.id(): Int = 1
+      | ^

@@ -1,0 +1,14 @@
+// expect: E4007
+// run: 1
+import /bank/account
+fun compound(a: &mut Account) { a.balance += 1 }
+fun borrow(a: &Account): &Int = &a.balance
+fun boxed(b: Heap<Account>): Int = b.balance
+fun nullable(a: Account?): Int? = a?.balance
+fun call(a: &Account): Int = a.balance()
+fun captured(a: &Account): Int {
+    val read = { a.balance }
+    return read()
+}
+fun Account.bare(): Int = balance
+fun main() {}

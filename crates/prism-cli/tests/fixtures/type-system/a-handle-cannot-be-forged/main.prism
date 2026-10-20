@@ -1,0 +1,6 @@
+// expect: E4007
+// run: 1
+import /lib/handle
+fun forge(): Handle = Handle(7)
+fun named(): Handle = Handle(word = 7)
+fun main() {}

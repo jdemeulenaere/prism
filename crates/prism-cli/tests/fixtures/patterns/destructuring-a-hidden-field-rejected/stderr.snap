@@ -1,0 +1,4 @@
+error[E4007]: the field 'id' of 'Account' is private to 'bank/account', so it cannot be destructured here
+  --> main.prism:5:10
+    5 |     val (id) = x
+      |          ^

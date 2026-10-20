@@ -1,0 +1,4 @@
+// expect: ok
+import /shop/models
+fun f(o: &Order): Int = o.price
+fun g(): Order = Order(3)

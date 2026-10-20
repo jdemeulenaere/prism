@@ -27,17 +27,19 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement fi
 
 ## 4. Type checker (D2 to D5, D9)
 
-- [ ] 4.1 Field records in the checker (local and imported) hold their effective visibility. Add one helper, `field_visible(struct, field, file)`, comparing it with the current file and package.
-- [ ] 4.2 Accesses (D3):
+- [x] 4.1 Field records in the checker (local and imported) hold their effective visibility. Add one helper, `field_visible(struct, field, file)`, comparing it with the current file and package.
+  - Done (apply): the record is the checker's own map `field_visibilities` (structs with a marked field only), not the shared `TypeTable`, so typed trees, MIR, instance records and fingerprints are unchanged; the helper is `hidden_field(struct, index)`, comparing with the checker's current module and package, with `visible_field_index` for resolution (D11).
+- [x] 4.2 Accesses (D3):
   - `infer_member_access`, assignments, compound assignments, borrows, places and path captures report `E4007` for a hidden field, naming the field, its visibility and the declaring module;
   - bare names in extension bodies and lambdas with a receiver skip hidden fields, and report `E4007` only when nothing else resolves the name;
   - a hidden field never yields `E4006`.
 
   Add fixtures under `type-system/` for "Unmarked fields keep their meaning", "A package field is visible in its package", "Reading and writing a private field from another file", "A private field in its own file" and "Whole values with hidden fields are used freely". Verify with `cargo test -p prism-typechecker -p prism-cli --test fixture_tests`.
-- [ ] 4.3 Construction (D2): positional and named constructions check every field's visibility, reporting `E4007` for the first hidden one. Add fixtures for "A handle cannot be forged".
-- [ ] 4.4 Resolution (D5): the call precedence, the property reads of `core-library-in-prism`, bare names, and the `E4010` checks of `register_extension_decl` and of extension property declarations count only fields visible in the file. Add fixtures under `extension-functions/` for "An extension named like a hidden field", "An extension named like a visible field is still rejected" and "A hidden field does not shadow an outer name".
-- [ ] 4.5 Patterns (D4): positional struct patterns are `E4007` when any field is hidden; named sub-patterns and destructuring entries naming a hidden field are `E4007`; leaving hidden fields out stays valid, and exhaustiveness is unchanged. Add fixtures under `patterns/` for "Patterns over a struct with a private field" and "Destructuring a hidden field rejected". Verify with `cargo test --workspace`.
-- [ ] 4.6 Diagnostics catalog (`openspec/specs/diagnostics/spec.md`): widen the `E4007` row to hidden fields (reads, writes, borrows, path captures, constructions, patterns and destructuring entries), and the `E2001` row to misplaced field modifiers.
+  - Done (apply): the scenario's `g` returned `a.owner`, a move out of a borrow (`E4017`), so it became `a.owner.length`. Extra forms cover compound assignments, borrows, boxes, `?.`, calls, closure captures, bare names and generic code (D11).
+- [x] 4.3 Construction (D2): positional and named constructions check every field's visibility, reporting `E4007` for the first hidden one. Add fixtures for "A handle cannot be forged".
+- [x] 4.4 Resolution (D5): the call precedence, the property reads of `core-library-in-prism`, bare names, and the `E4010` checks of `register_extension_decl` and of extension property declarations count only fields visible in the file. Add fixtures under `extension-functions/` for "An extension named like a hidden field", "An extension named like a visible field is still rejected" and "A hidden field does not shadow an outer name".
+- [x] 4.5 Patterns (D4): positional struct patterns are `E4007` when any field is hidden; named sub-patterns and destructuring entries naming a hidden field are `E4007`; leaving hidden fields out stays valid, and exhaustiveness is unchanged. Add fixtures under `patterns/` for "Patterns over a struct with a private field" and "Destructuring a hidden field rejected". Verify with `cargo test --workspace`.
+- [x] 4.6 Diagnostics catalog (`openspec/specs/diagnostics/spec.md`): widen the `E4007` row to hidden fields (reads, writes, borrows, path captures, constructions, patterns and destructuring entries), and the `E2001` row to misplaced field modifiers.
 
 ## 5. Library, timing and verification (D7, D10)
 

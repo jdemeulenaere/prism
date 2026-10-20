@@ -1,0 +1,8 @@
+error[E4007]: 'Handle' cannot be constructed here: a construction gives every field, and the field 'word' of 'Handle' is private to 'lib/handle'
+  --> main.prism:4:23
+    4 | fun forge(): Handle = Handle(7)
+      |                       ^
+error[E4007]: 'Handle' cannot be constructed here: a construction gives every field, and the field 'word' of 'Handle' is private to 'lib/handle'
+  --> main.prism:5:23
+    5 | fun named(): Handle = Handle(word = 7)
+      |                       ^

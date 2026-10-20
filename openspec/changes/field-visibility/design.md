@@ -154,6 +154,21 @@ A hidden field is a visibility violation like a `package` declaration used from 
 
 `crates/prism-cli/tests/compile_timing.rs` gains the shape `field-visibility` at 256, 1,024 and 4,096: that many structs with a `private`, a `package` and an unmarked field, each constructed, read, written and matched by a named pattern in the struct's file, timing parse and check. Under `PRISM_ASSERT_TIMING=1`, each stage grows by at most ×4.6 per ×4.
 
+### D11. Field visibility is checked where the code is written, once (autonomous, apply)
+
+Added while applying. A field access is checked in the file whose source contains it, with that file's privileges, and nowhere else:
+
+- **Generic bodies** are checked once at their declaration (`generics`), so a generic function or extension of a struct's own file reads and writes its private fields, and its instances, planned for and built in any program, re-check nothing. Code generic over `T` cannot name a field of whatever `T` is at all, so no instance can reach a field its body did not name.
+- **Default values** are checked and generated in the declaring file (`mir`, default generators), so `public fun sized(text: String, b: Box<String> = Box(text.clone()))` builds a `Box` with a private field for callers in any file.
+- **Bare names** in an extension body are rewritten to `this.name` only for a visible field (D5), and a bare name nothing else resolves that names a hidden field of the receiver is reported as that field (`E4007`, D3).
+- **The error points at the access**, as `E4006` does for an unknown field: member accesses carry no span of their member name, so the caret is at the start of `a.balance`.
+
+The record of the visibilities is the checker's own (`field_visibilities`, per struct with a marked field), not the shared type table, so typed trees, MIR, instance records and type fingerprints are unchanged.
+
+**Compile-time cost.** None beyond D3: no instance or default re-checks anything.
+
+Rejected: **re-checking instances with the caller's privileges**, which would re-check bodies per instance (against `generics`, checked once) and reject library generics that use their own types' fields.
+
 **Baseline (task 1.2, on `d2cfc9cb`, idle machine, release build).** The `struct-fields` shape, in ms:
 
 | program | lex | parse | abi | type | mir | borrow | compose | inst | lower | clif |

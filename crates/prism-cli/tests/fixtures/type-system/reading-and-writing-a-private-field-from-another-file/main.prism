@@ -1,0 +1,9 @@
+// expect: E4007
+// run: 1
+import /bank/account
+fun f(a: &mut Account): Int {
+    a.balance = 5
+    return a.balance
+}
+fun g(a: &Account): Int = a.owner.length
+fun main() {}

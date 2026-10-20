@@ -1,0 +1,8 @@
+// expect: E4007
+// run: 1
+import /bank/account
+fun e(x: &Account): Int {
+    val (id) = x
+    return id
+}
+fun main() {}

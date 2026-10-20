@@ -1,0 +1,3 @@
+package lib
+public struct Id : Copy { private val n: Int }
+public fun id(n: Int): Id = Id(n)

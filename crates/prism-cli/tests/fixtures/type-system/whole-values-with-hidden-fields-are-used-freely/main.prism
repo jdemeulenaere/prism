@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+import /lib/id
+import /prism/core
+fun main() {
+    val a = id(1)
+    val b = a
+    println(a == b)
+    println(a == id(2))
+}

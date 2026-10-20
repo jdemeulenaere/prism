@@ -1,0 +1,8 @@
+// expect: E4007
+// run: 1
+import /bank/account
+fun a(x: &Account): Int = when (x) { Account(_, _) -> 1 }
+fun b(x: &Account): Int = when (x) { Account(id = 1) -> 1; else -> 2 }
+fun c(x: &Account): Bool = when (x) { Account(owner = "ann") -> true; else -> false }
+fun d(x: Account): String { val (owner) = x; return owner }
+fun main() {}

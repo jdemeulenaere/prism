@@ -6,7 +6,7 @@
 
 use crate::builder::{BodyBuilder, FileBuilder};
 use crate::captures::{decide_captures, BodyKind};
-use crate::error::{MissingImplicitParameter, NoTextFormReason, TypeError};
+use crate::error::{HiddenFieldUse, MissingImplicitParameter, NoTextFormReason, TypeError};
 use crate::exhaustiveness;
 use crate::inference::Unknowns;
 use crate::scope::{
@@ -600,6 +600,43 @@ struct EnclosingClosureContext {
     missing_implicit_parameter: Option<MissingImplicitParameter>,
 }
 
+/// The effective visibility of each field of a struct with a marked field, in declaration
+/// order, and the struct's package (D1 of `field-visibility`).
+#[derive(Debug, Clone)]
+struct FieldVisibilities {
+    package: Option<String>,
+    fields: Vec<Visibility>,
+}
+
+impl FieldVisibilities {
+    /// The record of a struct of visibility `struct_visibility` in `package` whose fields are
+    /// marked `fields` (`Public` for an unmarked one), or `None` when no field is marked
+    /// narrower than `public`, so every field is visible wherever the struct is.
+    fn of(
+        struct_visibility: Visibility,
+        package: Option<String>,
+        fields: impl Iterator<Item = Visibility>,
+    ) -> Option<Self> {
+        let rank = |visibility: Visibility| match visibility {
+            Visibility::Private => 0,
+            Visibility::Package => 1,
+            Visibility::Public => 2,
+        };
+        let mut marked = false;
+        let fields: Vec<Visibility> = fields
+            .map(|field| {
+                marked |= field != Visibility::Public;
+                if rank(field) < rank(struct_visibility) {
+                    field
+                } else {
+                    struct_visibility
+                }
+            })
+            .collect();
+        marked.then_some(Self { package, fields })
+    }
+}
+
 /// How the value of a `when` is used.
 #[derive(Debug, Clone, Copy)]
 enum WhenUse<'a> {
@@ -681,6 +718,11 @@ pub struct TypeChecker {
     /// module it imports) is in the type table for layout only, and its members stay hidden
     /// (D4 of `codegen-aggregates`).
     exported_nominals: HashSet<NominalId>,
+    /// The structs, the file's own and imported, with a field marked `private` or `package`:
+    /// each field's effective visibility, the narrower of its own and its struct's, and the
+    /// struct's package (D1 and D3 of `field-visibility`). A struct without such a field has
+    /// no entry, so its fields cost one failed lookup here.
+    field_visibilities: HashMap<NominalId, FieldVisibilities>,
     /// While a parameter's default value is checked: the bindings it borrows (`this` and the
     /// earlier parameters), and the number of closures open around the default. Moving one of
     /// them outside a closure of the default is a move out of a borrow (D11 of `borrowck-moves`).
@@ -766,6 +808,7 @@ impl TypeChecker {
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
             exported_nominals: HashSet::new(),
+            field_visibilities: HashMap::new(),
             default_inputs: None,
             bound_spreads: HashSet::new(),
             type_parameter_scope: Vec::new(),
@@ -1278,6 +1321,96 @@ impl TypeChecker {
         !self.is_layout_only(id) && self.types.definition(id).is_some()
     }
 
+    /// The visibility of field `index` of struct `id` when this file cannot see it: `private`
+    /// outside the struct's file, `package` outside its package (D1 and D3 of
+    /// `field-visibility`). `None` for a visible field, at the cost of one table lookup.
+    fn hidden_field(&self, id: &NominalId, index: usize) -> Option<Visibility> {
+        let record = self.field_visibilities.get(id)?;
+        match record.fields.get(index)? {
+            Visibility::Public => None,
+            Visibility::Private => (id.module != self.module_path).then_some(Visibility::Private),
+            Visibility::Package => {
+                let package = record.package.as_deref().unwrap_or("");
+                (package != self.current_package.as_deref().unwrap_or(""))
+                    .then_some(Visibility::Package)
+            }
+        }
+    }
+
+    /// The first field of struct `id` this file cannot see, with its visibility.
+    fn first_hidden_field(&self, id: &NominalId) -> Option<(usize, Visibility)> {
+        let record = self.field_visibilities.get(id)?;
+        (0..record.fields.len()).find_map(|index| Some((index, self.hidden_field(id, index)?)))
+    }
+
+    /// Whether field `index` of struct `id` is visible in some files only, by its own marking
+    /// or its struct's: what the `E4010` message of an extension named like it says.
+    fn field_is_marked(&self, id: &NominalId, index: usize) -> bool {
+        self.field_visibilities
+            .get(id)
+            .and_then(|record| record.fields.get(index))
+            .is_some_and(|visibility| *visibility != Visibility::Public)
+    }
+
+    /// The position of the field `name` of struct `id` if its members are visible and the
+    /// field is visible in this file: the only fields that take part in resolution (D5 of
+    /// `field-visibility`).
+    fn visible_field_index(&self, id: &NominalId, name: &str) -> Option<usize> {
+        if self.is_layout_only(id) {
+            return None;
+        }
+        let index = self.types.field_index(id, name)?;
+        self.hidden_field(id, index).is_none().then_some(index)
+    }
+
+    /// The error for a use of the hidden field `index` of struct `id` at `span`.
+    fn hidden_field_error(
+        &self,
+        id: &NominalId,
+        index: usize,
+        visibility: Visibility,
+        usage: HiddenFieldUse,
+        span: Span,
+    ) -> TypeError {
+        let field = self
+            .types
+            .struct_fields(id)
+            .and_then(|fields| fields.get(index))
+            .map_or(String::new(), |(name, _, _)| name.clone());
+        let owner = match visibility {
+            Visibility::Package => self
+                .field_visibilities
+                .get(id)
+                .and_then(|record| record.package.clone())
+                .unwrap_or_default(),
+            _ => id.module.clone(),
+        };
+        TypeError::HiddenField {
+            field,
+            struct_name: id.name.clone(),
+            visibility,
+            owner,
+            usage,
+            span,
+        }
+    }
+
+    /// The struct, field position and visibility of a field named `name` of the struct behind
+    /// `ty` (through borrows, `Heap<T>` and `?`) that this file cannot see.
+    fn hidden_field_named(&self, ty: &Type, name: &str) -> Option<(NominalId, usize, Visibility)> {
+        let mut ty = ty;
+        while let Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) = ty {
+            ty = inner;
+        }
+        let id = ty.nominal_id()?;
+        if self.is_layout_only(id) {
+            return None;
+        }
+        let index = self.types.field_index(id, name)?;
+        let visibility = self.hidden_field(id, index)?;
+        Some((id.clone(), index, visibility))
+    }
+
     /// The position of the variant `name` of enum `id`, if its definition is known, its members
     /// are visible and it has one.
     fn variant_index(&self, id: &NominalId, name: &str) -> Option<usize> {
@@ -1503,6 +1636,22 @@ impl TypeChecker {
                 };
                 self.errors
                     .push(TypeError::UnresolvedImplicitParameter { missing, span });
+                None
+            }
+            Err(TypeError::UnresolvedSymbol { .. })
+                if self
+                    .current_receiver()
+                    .is_some_and(|receiver| self.hidden_field_named(&receiver, name).is_some()) =>
+            {
+                // Nothing else resolves a bare name that a hidden field of the receiver has (D3
+                // of `field-visibility`).
+                let receiver = self.current_receiver().expect("checked above");
+                let (id, index, visibility) = self
+                    .hidden_field_named(&receiver, name)
+                    .expect("checked above");
+                let error =
+                    self.hidden_field_error(&id, index, visibility, HiddenFieldUse::Access, span);
+                self.errors.push(error);
                 None
             }
             Err(TypeError::UnresolvedSymbol { .. }) if self.outer_receiver_with(name).is_some() => {
@@ -2256,11 +2405,22 @@ impl TypeChecker {
                     }
                 }
                 ExportedSymbol::Struct {
+                    visibility,
                     name,
                     type_parameters,
                     fields,
+                    field_visibilities,
                     ..
                 } => {
+                    if let Some(visibilities) = FieldVisibilities::of(
+                        *visibility,
+                        abi.package.clone(),
+                        field_visibilities.iter().copied(),
+                    ) {
+                        self.field_visibilities
+                            .entry(NominalId::new(abi.module.clone(), name.clone()))
+                            .or_insert(visibilities);
+                    }
                     let parameters = type_parameters_from_abi(type_parameters);
                     let fields = fields
                         .iter()
@@ -2576,6 +2736,15 @@ impl TypeChecker {
                             .collect()
                     });
                     let id = NominalId::new(self.module_path.clone(), s.name.clone());
+                    if let Some(visibilities) = FieldVisibilities::of(
+                        s.visibility,
+                        self.current_package.clone(),
+                        s.fields
+                            .iter()
+                            .map(|f| f.visibility.unwrap_or(Visibility::Public)),
+                    ) {
+                        self.field_visibilities.insert(id.clone(), visibilities);
+                    }
                     self.types
                         .replace_definition(id, TypeDef::Struct { parameters, fields });
                 }
@@ -3155,11 +3324,17 @@ impl TypeChecker {
             ReceiverKey::of(&receiver_ty),
             operators::extension_name(&f.name, receiver.mode, f.is_operator),
         );
+        // Only a field visible in this file takes precedence, so only it makes the extension
+        // uncallable (D5 of `field-visibility`).
         let field_clash = match &receiver_ty {
-            Type::Struct { id, .. } => self
-                .struct_fields(id)
-                .is_some_and(|fields| fields.iter().any(|(name, _, _)| name == &f.name)),
-            _ => false,
+            Type::Struct { id, .. } => self.visible_field_index(id, &f.name).map(|index| {
+                if self.field_is_marked(id, index) {
+                    " in this file"
+                } else {
+                    ""
+                }
+            }),
+            _ => None,
         };
         // A read of a variant's name on an enum value names the variant, so a property of that
         // name could never be read (a call is not a variant, so a function may share it).
@@ -3196,11 +3371,11 @@ impl TypeChecker {
         } else {
             ("extension", "called")
         };
-        if field_clash {
+        if let Some(where_visible) = field_clash {
             self.errors.push(TypeError::UncallableExtension {
                 message: format!(
-                    "{} '{}.{}' can never be {}: the field '{}' of '{}' always takes precedence",
-                    what, receiver_ty, f.name, used, f.name, receiver_ty
+                    "{} '{}.{}' can never be {}: the field '{}' of '{}' always takes precedence{}",
+                    what, receiver_ty, f.name, used, f.name, receiver_ty, where_visible
                 ),
                 span: f.span,
             });
@@ -7855,6 +8030,18 @@ impl TypeChecker {
             return self.error_node(children, span);
         }
         let fields = self.struct_fields(&id).unwrap_or_default();
+        // A construction gives every field, so each must be visible (D2 of
+        // `field-visibility`): the first hidden one is reported.
+        if let Some((index, visibility)) = self.first_hidden_field(&id) {
+            let error =
+                self.hidden_field_error(&id, index, visibility, HiddenFieldUse::Construction, span);
+            self.errors.push(error);
+            let children = args
+                .iter()
+                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
+                .collect();
+            return self.error_node(children, span);
+        }
         let type_parameters = self.types.parameters(&id).to_vec();
         let field_types: Vec<Type> = fields.iter().map(|(_, _, ty)| ty.clone()).collect();
         if type_parameters.is_empty() {
@@ -10394,9 +10581,8 @@ impl TypeChecker {
                 }
                 // By the type table's index of member names, so that a lookup does not cost
                 // the struct's fields.
-                Type::Struct { id, .. } => {
-                    return !self.is_layout_only(id) && self.types.field_index(id, name).is_some()
-                }
+                // Only a field visible in this file counts (D5 of `field-visibility`).
+                Type::Struct { id, .. } => return self.visible_field_index(id, name).is_some(),
                 // Member properties read like fields: `length` of a `String`, `size` and
                 // `indices` of a list (D7 of `standard-library`, D3 of `core-library-in-prism`).
                 _ if is_built_in_type(ty) => return self.has_member_property(ty, name),
@@ -10585,9 +10771,8 @@ impl TypeChecker {
         // Borrowed until a property is found, so a field read pays no clone.
         let reached = peel_indirection(base_ty);
         let field_or_variant = match reached {
-            Type::Struct { id, .. } => {
-                !self.is_layout_only(id) && self.types.field_index(id, member).is_some()
-            }
+            // A hidden field leaves the name to properties (D5 of `field-visibility`).
+            Type::Struct { id, .. } => self.visible_field_index(id, member).is_some(),
             Type::Enum { id, .. } => self.variant_index(id, member).is_some(),
             Type::Error | Type::Nullable(_) => true,
             _ => false,
@@ -10916,12 +11101,25 @@ impl TypeChecker {
         match &peeled_ty {
             Type::Struct { id, arguments } if self.members_visible(id) => {
                 // Fields have their declared types with the type arguments substituted.
-                let field = self.types.field_index(id, member).and_then(|index| {
+                let field = self.visible_field_index(id, member).and_then(|index| {
                     let is_var = self.types.struct_fields(id)?[index].1;
                     Some((is_var, self.types.instantiated_field(id, arguments, index)?))
                 });
                 if let Some((is_var, f_ty)) = field {
                     (wrap(f_ty), Some(is_var))
+                } else if let Some((id, index, visibility)) =
+                    self.hidden_field_named(&peeled_ty, member)
+                {
+                    // A hidden field is not "no field" (D3 of `field-visibility`).
+                    let error = self.hidden_field_error(
+                        &id,
+                        index,
+                        visibility,
+                        HiddenFieldUse::Access,
+                        span,
+                    );
+                    self.errors.push(error);
+                    (Type::Error, None)
                 } else {
                     self.errors.push(TypeError::UnknownField {
                         target_type: peeled_ty.clone(),

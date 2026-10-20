@@ -1,0 +1,8 @@
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:5:5
+    5 |     a.balance = 5
+      |     ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:6:12
+    6 |     return a.balance
+      |            ^

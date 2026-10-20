@@ -1,0 +1,9 @@
+package lib
+public struct Box<T> { private var v: T }
+public fun <T> boxOf(v: T): Box<T> = Box(v)
+public fun <T : Clone> Box<T>.get(): T = v.clone()
+public mut fun <T> Box<T>.put(value: T): Unit { v = value }
+public fun <T> Box<T>.matches(other: &T, same: (&T, &T) -> Bool): Bool = when (this) {
+    Box(v = val inner) -> same(inner, other)
+}
+public fun sized(text: String, b: Box<String> = Box(text.clone())): Int = b.get().length

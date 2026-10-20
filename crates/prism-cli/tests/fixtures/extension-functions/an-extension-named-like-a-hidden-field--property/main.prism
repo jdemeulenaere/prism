@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+import /bank/account
+import /prism/core
+val Account.id: Int get() = 42
+fun Account.twice(): Int = id * 2
+fun main() {
+    val a = open(7)
+    println(a.id)
+    println(a.twice())
+}

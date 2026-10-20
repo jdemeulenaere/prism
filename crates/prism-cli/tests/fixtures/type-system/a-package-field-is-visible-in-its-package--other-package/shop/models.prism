@@ -1,0 +1,2 @@
+package shop
+public struct Order { package val cost: Int, val price: Int }

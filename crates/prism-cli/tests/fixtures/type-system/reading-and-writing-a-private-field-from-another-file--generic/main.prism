@@ -1,0 +1,6 @@
+// expect: E4007
+// run: 1
+import /lib/box
+fun <T> peek(b: &Box<T>): &T = &b.v
+fun <T> make(v: T): Box<T> = Box(v)
+fun main() {}
