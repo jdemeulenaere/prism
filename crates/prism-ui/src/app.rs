@@ -49,7 +49,7 @@ use crate::text::TextMeasurer;
 use crate::thread::{install_tree, release_dropped, with_state, RunningApp, State};
 use prism_compose::{Composition, Handle, RootContent};
 use prism_runtime::allocation_counter::thread_counts;
-use prism_runtime::reload;
+use prism_runtime::{reload, FunctionValue};
 use std::time::{Duration, Instant};
 
 /// What an app did, for tests of idling.
@@ -96,42 +96,57 @@ pub struct App {
 const SETTLE_ROUNDS: usize = 8;
 
 /// Runs an app titled `title` of `width` × `height` with the configured host, composing
-/// `content`, which it owns, until the host's events end.
+/// `content`, which it owns, until the host's events end. Its layout modifiers are measured by
+/// `element_measurer`, `/prism/compose/ui`'s, which it owns too (D2 of `layout-in-prism`).
 pub fn run_app(
     title: &str,
     width: i64,
     height: i64,
     content: impl Into<RootContent>,
+    element_measurer: FunctionValue,
 ) -> UiResult<()> {
     let content = content.into();
     let called = Instant::now();
+    let refuse = |content: RootContent, element_measurer, error| {
+        release_functions(&mut vec![content.into_function(), element_measurer]);
+        Err(error)
+    };
     if with_state(|state| state.app.is_some()) {
-        release_functions(&mut vec![content.into_function()]);
-        return Err(APP_RUNNING);
+        return refuse(content, element_measurer, APP_RUNNING);
     }
     // `runApp` reached during a pass, through a function value or a wrapper that `E4030` does
     // not see, is the composition misuse before any window opens (compose, "One Pass at a
     // Time").
     if prism_compose::active_composer().is_some() {
-        release_functions(&mut vec![content.into_function()]);
-        return Err(prism_compose::composer::DURING_PASS.into());
+        return refuse(
+            content,
+            element_measurer,
+            prism_compose::composer::DURING_PASS.into(),
+        );
     }
     let Some(host) = configured_host(title, width, height) else {
-        release_functions(&mut vec![content.into_function()]);
-        return Err(NO_WINDOW_SYSTEM);
+        return refuse(content, element_measurer, NO_WINDOW_SYSTEM);
     };
     let measurer = host.measurer();
-    run_app_from(host, measurer, content, called).map(|_| ())
+    run_app_from(host, measurer, content, called, element_measurer).map(|_| ())
 }
 
-/// Runs an app against `host`, measuring text with `measurer`, and gives what it did. When the
-/// app ends normally, the final-frame sink sees its last display list.
+/// Runs an app of Rust content against `host`, measuring text with `measurer` and layout
+/// modifiers with the Rust steps of [`crate::test_support::element_measurer`] (D7 of
+/// `layout-in-prism`), and gives what it did. When the app ends normally, the final-frame sink
+/// sees its last display list.
 pub fn run_app_with(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
     content: impl Into<RootContent>,
 ) -> UiResult<Counters> {
-    run_app_from(host, measurer, content.into(), Instant::now())
+    run_app_from(
+        host,
+        measurer,
+        content.into(),
+        Instant::now(),
+        crate::test_support::element_measurer(),
+    )
 }
 
 /// [`run_app_with`] of an app whose `runApp` was called at `called`.
@@ -140,12 +155,13 @@ fn run_app_from(
     measurer: Box<dyn TextMeasurer>,
     content: RootContent,
     called: Instant,
+    element_measurer: FunctionValue,
 ) -> UiResult<Counters> {
     // Reloads wait for the frame loop's reload point while the app runs, and apply at the
     // program's next call again once it ends, a pending one included (D2 of
     // `compose-hot-reload`).
     reload::defer_to_reload_points(wake_for_reload);
-    let result = run_deferring(host, measurer, content, called);
+    let result = run_deferring(host, measurer, content, called, element_measurer);
     reload::apply_at_next_call();
     result
 }
@@ -155,6 +171,7 @@ fn run_deferring(
     measurer: Box<dyn TextMeasurer>,
     content: RootContent,
     called: Instant,
+    element_measurer: FunctionValue,
 ) -> UiResult<Counters> {
     // Recompositions are counted only for a script that dumps them (D14 of
     // `strong-skipping`), from the first composition on.
@@ -166,7 +183,7 @@ fn run_deferring(
             .collect();
         prism_compose::counts::enable(&keys);
     }
-    let started = App::start_at(host, measurer, content, called);
+    let started = App::start_at(host, measurer, content, called, element_measurer);
     let mut app = match started {
         Ok(app) => app,
         Err(error) => {
@@ -201,25 +218,35 @@ fn run_deferring(
 }
 
 impl App {
-    /// Starts an app: its tree, its composition and the first pass.
+    /// Starts an app of Rust content: its tree, its composition and the first pass. Its
+    /// layout modifiers are measured by the Rust steps of
+    /// [`crate::test_support::element_measurer`] (D7 of `layout-in-prism`).
     pub fn start(
         host: Box<dyn Host>,
         measurer: Box<dyn TextMeasurer>,
         content: impl Into<RootContent>,
     ) -> UiResult<App> {
-        Self::start_at(host, measurer, content.into(), Instant::now())
+        Self::start_at(
+            host,
+            measurer,
+            content.into(),
+            Instant::now(),
+            crate::test_support::element_measurer(),
+        )
     }
 
     /// Starts an app whose `runApp` was called at `called`, measuring its frames when frame
-    /// statistics are on: the first frame holds the first composition.
+    /// statistics are on: the first frame holds the first composition. The app owns
+    /// `element_measurer` until it ends.
     fn start_at(
         host: Box<dyn Host>,
         measurer: Box<dyn TextMeasurer>,
         content: RootContent,
         called: Instant,
+        element_measurer: FunctionValue,
     ) -> UiResult<App> {
         if with_state(|state| state.app.is_some()) {
-            release_functions(&mut vec![content.into_function()]);
+            release_functions(&mut vec![content.into_function(), element_measurer]);
             return Err(APP_RUNNING);
         }
         let run_started = crate::host::frame_statistics();
@@ -228,7 +255,10 @@ impl App {
         let composed = statistics.as_ref().map(|_| Instant::now());
         let (width, height) = host.size();
         install_tree(width, height);
-        with_state(|state| state.app = Some(RunningApp { composition: None }));
+        with_state(|state| {
+            state.app = Some(RunningApp { composition: None });
+            state.layout.element_measurer = Some(element_measurer);
+        });
         let composition = match Composition::start(Box::new(UiApplier), content) {
             Ok(composition) => composition,
             Err(misuse) => {
@@ -701,6 +731,7 @@ impl App {
             } = state;
             tree.release_all(handlers, drops);
             handlers.release_all(drops);
+            drops.extend(state.layout.element_measurer.take());
             state.app = None;
         });
         release_dropped();
@@ -1324,7 +1355,13 @@ mod tests {
         configure(HostConfiguration::None);
         reset_drops();
         assert_eq!(
-            run_app("Prism", 800, 600, handler("content", || {})),
+            run_app(
+                "Prism",
+                800,
+                600,
+                handler("content", || {}),
+                element_measurer()
+            ),
             Err(NO_WINDOW_SYSTEM)
         );
         assert_eq!(drops(), ["drop content"]);
@@ -1346,10 +1383,12 @@ mod tests {
                     1,
                     "nest",
                     handler("nest", move || {
-                        *result.borrow_mut() = Some(run_app("Prism", 1, 1, content(|_| {})));
+                        *result.borrow_mut() =
+                            Some(run_app("Prism", 1, 1, content(|_| {}), element_measurer()));
                     }),
                 );
             }),
+            element_measurer(),
         )
         .unwrap();
         assert_eq!(nested.borrow_mut().take(), Some(Err(APP_RUNNING)));
@@ -1369,7 +1408,13 @@ mod tests {
         let composition = Composition::start(
             Box::new(prism_compose::NodeTree::new()),
             content(move |_| {
-                *result.borrow_mut() = Some(run_app("Prism", 1, 1, handler("inner", || {})));
+                *result.borrow_mut() = Some(run_app(
+                    "Prism",
+                    1,
+                    1,
+                    handler("inner", || {}),
+                    element_measurer(),
+                ));
             }),
         )
         .unwrap();
@@ -1489,8 +1534,15 @@ mod tests {
             }
         })));
         let count = Rc::new(Cell::new(0));
-        run_app("Prism", 1, 1, counter(count.clone(), log())).unwrap();
-        run_app("Prism", 1, 1, counter(count, log())).unwrap();
+        run_app(
+            "Prism",
+            1,
+            1,
+            counter(count.clone(), log()),
+            element_measurer(),
+        )
+        .unwrap();
+        run_app("Prism", 1, 1, counter(count, log()), element_measurer()).unwrap();
         crate::host::set_final_frame_sink(None);
         configure(HostConfiguration::None);
         // Lines are 30 high: the button starts at 16 + 30 + 8, and its row is 30 + 16 high.

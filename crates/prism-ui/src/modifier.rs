@@ -29,8 +29,14 @@
 //! | 9 | `Clickable(HandlerId, Bool, Int)` | 8, 24, 16 |
 //! | 10 | `Toggleable(HandlerId, Bool, Bool, Int)` | 8, 24, 25, 16 |
 //! | 11 | `TextFieldFrame(Color, Color)` | 8, 16 |
+//! | 12 | `Offset(Int, Int)` | 8, 16 |
+//!
+//! The layout elements (`Padding`, `Size`, `DefaultMinSize`, `FillMax` and `Offset`) are
+//! measurement steps (D1 of `layout-in-prism`): layout calls the app's element measurer, Prism
+//! code, with the element encoded again from its decoded form ([`ElementMirror::encode`]), so
+//! that its sizes and paddings are already bounded (D11 of `layout-in-prism`).
 
-use crate::geometry::MAX_EXTENT;
+use crate::geometry::{clamp_extent, MAX_EXTENT};
 use crate::handle::HandlerId;
 use crate::properties::{Alignment, Color, Role, Shape};
 
@@ -95,6 +101,11 @@ pub enum Element {
         unfocused: Color,
         focused: Color,
     },
+    /// The rest of the chain placed at an offset, within `MAX_EXTENT` on each axis.
+    Offset {
+        x: i64,
+        y: i64,
+    },
 }
 
 /// What an element is for.
@@ -115,6 +126,7 @@ impl Element {
             | Element::Size { .. }
             | Element::DefaultMinSize { .. }
             | Element::FillMax { .. }
+            | Element::Offset { .. }
             | Element::Weight { .. }
             | Element::Align(_) => ElementClass::Layout,
             Element::Background { .. }
@@ -122,6 +134,19 @@ impl Element {
             | Element::TextFieldFrame { .. } => ElementClass::Drawing,
             Element::Clickable { .. } | Element::Toggleable { .. } => ElementClass::Input,
         }
+    }
+
+    /// Whether the element is a measurement step (D1 of `layout-in-prism`): a layout element
+    /// other than the parent data `weight` and `align`, which pass the constraints on.
+    pub fn is_step(&self) -> bool {
+        matches!(
+            self,
+            Element::Padding { .. }
+                | Element::Size { .. }
+                | Element::DefaultMinSize { .. }
+                | Element::FillMax { .. }
+                | Element::Offset { .. }
+        )
     }
 
     /// Whether the element records the bounds at its position (drawing and input elements).
@@ -181,7 +206,7 @@ pub struct ModifierMirror {
 
 /// The offset of each payload of each variant of `ModifierElement`, by tag, in declaration
 /// order, as `prism dump-layout` prints them.
-pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 12] = [
+pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 13] = [
     ("None", &[]),
     ("Padding", &[8, 16, 24, 32]),
     ("Size", &[8, 16]),
@@ -194,6 +219,7 @@ pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 12] = [
     ("Clickable", &CLICKABLE),
     ("Toggleable", &TOGGLEABLE),
     ("TextFieldFrame", &[8, 16]),
+    ("Offset", &[8, 16]),
 ];
 
 /// `FillMax(width: Bool, height: Bool, fraction: Double)`.
@@ -215,6 +241,7 @@ const TAG_BORDER: u8 = 8;
 const TAG_CLICKABLE: u8 = 9;
 const TAG_TOGGLEABLE: u8 = 10;
 const TAG_TEXT_FIELD_FRAME: u8 = 11;
+const TAG_OFFSET: u8 = 12;
 
 impl ElementMirror {
     pub const NONE: ElementMirror = ElementMirror {
@@ -301,6 +328,10 @@ impl ElementMirror {
             TAG_TEXT_FIELD_FRAME => Element::TextFieldFrame {
                 unfocused: Color(self.int(8)),
                 focused: Color(self.int(16)),
+            },
+            TAG_OFFSET => Element::Offset {
+                x: clamp_extent(self.int(8)),
+                y: clamp_extent(self.int(16)),
             },
             TAG_NONE => return None,
             _ => return None,
@@ -396,6 +427,11 @@ impl ElementMirror {
                 mirror.bytes[0] = TAG_TEXT_FIELD_FRAME;
                 mirror.set_int(8, unfocused.0);
                 mirror.set_int(16, focused.0);
+            }
+            Element::Offset { x, y } => {
+                mirror.bytes[0] = TAG_OFFSET;
+                mirror.set_int(8, x);
+                mirror.set_int(16, y);
             }
         }
         mirror
@@ -596,6 +632,7 @@ mod tests {
                 unfocused: Color(0xFF79_747E),
                 focused: Color(0xFF67_50A4),
             },
+            Element::Offset { x: -3, y: 4 },
         ]
     }
 
@@ -613,7 +650,7 @@ mod tests {
     fn every_element_round_trips_through_memory() {
         let elements = every_element();
         let mirror = ModifierMirror::encode(&elements);
-        assert_eq!(mirror.count, 11);
+        assert_eq!(mirror.count, 12);
         assert_eq!(mirror.decode().as_slice(), &elements[..]);
     }
 

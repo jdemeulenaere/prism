@@ -178,7 +178,7 @@ pub static UI_FUNCTIONS: &[RuntimeFunction] = &[
     RuntimeFunction {
         name: "prism_ui_run_app",
         address: address(prism_ui_run_app as *const ()),
-        parameters: &[Pointer, I64, I64, Pointer],
+        parameters: &[Pointer, I64, I64, Pointer, Pointer],
         result: None,
         never_returns: false,
     },

@@ -68,6 +68,7 @@ pub const LAYOUT_OUTSIDE: UiError = misuse("layout was called outside its node's
 pub const PLACED_OUTSIDE: UiError = misuse("a placeable was placed outside its parent's placement");
 pub const NO_LAYOUT: UiError = misuse("a measure policy returned without calling layout");
 pub const NO_POLICY: UiError = misuse("a layout node has no measure policy");
+pub const NOT_PLACED: UiError = misuse("a layout modifier did not place its content");
 
 /// The misuse for a node kind no composable has.
 pub fn unknown_kind(kind: i64) -> UiError {

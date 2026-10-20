@@ -170,6 +170,33 @@ impl FunctionValue {
         code(result, self.environment, first, second, third)
     }
 
+    /// [`FunctionValue::call_with_addresses`] with four parameters, as the element measurer
+    /// `MeasureScope.(&ModifierElement, Measurable, Constraints) -> MeasureResult` of
+    /// `/prism/compose/ui` is called (D2 of `layout-in-prism`).
+    ///
+    /// # Safety
+    ///
+    /// As for [`FunctionValue::call_with_addresses`].
+    pub unsafe fn call_with_four_addresses(
+        &self,
+        result: *mut u8,
+        first: *const u8,
+        second: *const u8,
+        third: *const u8,
+        fourth: *const u8,
+    ) {
+        let code = (*(*self.descriptor).slot).load(Ordering::Acquire);
+        let code: unsafe extern "C" fn(
+            *mut u8,
+            *mut u8,
+            *const u8,
+            *const u8,
+            *const u8,
+            *const u8,
+        ) = std::mem::transmute(code);
+        code(result, self.environment, first, second, third, fourth)
+    }
+
     /// Calls the value as a `() -> Unit` function: [`FunctionValue::call`].
     ///
     /// # Safety

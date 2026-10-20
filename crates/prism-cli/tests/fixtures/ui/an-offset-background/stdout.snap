@@ -1,0 +1,4 @@
+window 400x300
+  box #1 0,0 20x20 offset(10,5) background(#FFFF0000) size(20x20)
+clear 400x300 #FFFFFFFF
+rect 10,5 20x20 #FFFF0000

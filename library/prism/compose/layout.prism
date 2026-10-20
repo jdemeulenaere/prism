@@ -93,6 +93,13 @@ public fun Modifier.fillMaxSize(fraction: Double = 1.0): Modifier = append(
     ModifierElement.FillMax(true, true, fraction),
 )
 
+// This chain followed by the rest of the chain placed `x` to the right and `y` down, without
+// changing the node's size or its place in its parent: the elements after it, the content and
+// the children are drawn and hit there. Compose's `offset`.
+public fun Modifier.offset(x: Dp = 0.dp, y: Dp = 0.dp): Modifier = append(
+    ModifierElement.Offset(x.value, y.value),
+)
+
 // In a row, a share by `weight` of the width the children without one leave, exactly with
 // `fill` and at most without it.
 context(scope: RowScope)

@@ -210,6 +210,76 @@ fn resizing_an_app_allocates_nothing() {
     app.finish();
 }
 
+/// A column of 20 rows whose nodes carry every built-in layout step: a filled, padded row of a
+/// sized box holding a text with a minimum width, a spacer of a width and an offset text.
+fn padded_rows() -> prism_runtime::FunctionValue {
+    content(|k| {
+        node_group(k, 1, 1);
+        for index in 0..20 {
+            let key = 10 + index * 10;
+            let row = node_group(k, key, 2);
+            setters::set_modifier(
+                row,
+                &ModifierMirror::encode(&[fill_max(true, false, 0.5), padding_each(2, 1, 2, 1)]),
+            )
+            .unwrap();
+            let boxed = node_group(k, key + 1, 3);
+            setters::set_modifier(boxed, &ModifierMirror::encode(&[size(30, 20)])).unwrap();
+            let text = node_group(k, key + 2, 4);
+            setters::set_modifier(text, &ModifierMirror::encode(&[default_min_size(12, -1)]))
+                .unwrap();
+            setters::set_text(text, "item").unwrap();
+            k.end_group().unwrap();
+            k.end_group().unwrap();
+            let spacer = node_group(k, key + 3, 5);
+            setters::set_modifier(spacer, &ModifierMirror::encode(&[width(4)])).unwrap();
+            k.end_group().unwrap();
+            let text = node_group(k, key + 4, 4);
+            let offset = prism_ui::modifier::Element::Offset { x: 3, y: 1 };
+            setters::set_modifier(text, &ModifierMirror::encode(&[offset, padding(1)])).unwrap();
+            setters::set_text(text, "label").unwrap();
+            k.end_group().unwrap();
+            k.end_group().unwrap();
+        }
+        k.end_group().unwrap();
+    })
+}
+
+/// The scenario "Resizing padded rows allocates nothing" (`layout-in-prism`): 100 resizes
+/// alternating between two window widths, each followed by a layout of the whole tree, through
+/// the steps of every layout element and the policies, and a display list build.
+#[test]
+fn resizing_padded_rows_allocates_nothing() {
+    let _lock = lock();
+    prism_ui::host::set_frame_statistics(None);
+    let mut app = App::start(
+        Box::new(NoEvents),
+        Box::new(FixedAdvanceMetrics),
+        padded_rows(),
+    )
+    .unwrap();
+    app.settle().unwrap();
+    let mut counts = Vec::with_capacity(100);
+    let layouts = app.counters.layouts;
+    COUNTING.with(|counting| counting.set(true));
+    for index in 0..100 {
+        let width = if index % 2 == 0 { 401 } else { 400 };
+        app.handle(HostEvent::Resize(width, 300)).unwrap();
+        app.settle().unwrap();
+        app.build_display_list(true);
+        counts.push(ALLOCATIONS.with(Cell::get));
+    }
+    COUNTING.with(|counting| counting.set(false));
+    assert_eq!(app.counters.layouts, layouts + 100, "every resize laid out");
+    assert_eq!(
+        counts[99],
+        counts[0],
+        "allocations after the first iteration: {:?}",
+        &counts[..10]
+    );
+    app.finish();
+}
+
 /// A host giving 100 frames of a press, a release and a frame, which records this thread's
 /// allocation count at each present into a buffer allocated beforehand.
 struct Frames {

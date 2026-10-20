@@ -119,6 +119,7 @@ import enum prism/compose/ui::ModifierElement : Copy
   variant 9 Clickable(HandlerId, Bool, Int)
   variant 10 Toggleable(HandlerId, Bool, Bool, Int)
   variant 11 TextFieldFrame(Color, Color)
+  variant 12 Offset(Int, Int)
 import struct prism/compose/ui::ModifierElements : Copy
   field 0 val e0: ModifierElement
   field 1 val e1: ModifierElement

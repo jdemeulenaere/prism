@@ -126,21 +126,23 @@ impl Constraints {
         }
     }
 
-    /// The constraints less `horizontal` and `vertical` pixels on each bound, floored at 0;
-    /// an unbounded maximum stays unbounded.
-    pub fn deflated(self, horizontal: i64, vertical: i64) -> Constraints {
-        let shrink = |value: i64, by: i64| {
+    /// The constraints with `horizontal` added to each width bound and `vertical` to each
+    /// height bound, at least 0, an unbounded maximum staying unbounded: Compose's
+    /// `Constraints.offset`, as `/prism/compose/ui` writes it (D2 of `layout-in-prism`).
+    pub fn offset(self, horizontal: i64, vertical: i64) -> Constraints {
+        let minimum = |value: i64, by: i64| value.saturating_add(by).max(0);
+        let maximum = |value: i64, by: i64| {
             if value == UNBOUNDED {
                 UNBOUNDED
             } else {
-                value.saturating_sub(by).max(0)
+                minimum(value, by)
             }
         };
         Constraints {
-            min_width: shrink(self.min_width, horizontal),
-            max_width: shrink(self.max_width, horizontal),
-            min_height: shrink(self.min_height, vertical),
-            max_height: shrink(self.max_height, vertical),
+            min_width: minimum(self.min_width, horizontal),
+            max_width: maximum(self.max_width, horizontal),
+            min_height: minimum(self.min_height, vertical),
+            max_height: maximum(self.max_height, vertical),
         }
     }
 
@@ -185,14 +187,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deflating_floors_at_zero_and_keeps_unbounded() {
+    fn offsetting_floors_at_zero_and_keeps_unbounded() {
         let c = Constraints {
             min_width: 10,
             max_width: 100,
             min_height: 0,
             max_height: UNBOUNDED,
         };
-        let d = c.deflated(16, 8);
+        let d = c.offset(-16, -8);
         assert_eq!(
             d,
             Constraints {

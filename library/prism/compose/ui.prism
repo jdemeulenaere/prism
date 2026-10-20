@@ -9,6 +9,7 @@
 // of elements that its node applies; no modifier composes.
 package prism.compose
 
+import /prism/core
 import runtime
 
 // A node of the UI tree: one word naming a node of the UI runtime, `Copy`.
@@ -269,6 +270,7 @@ public enum ModifierElement : Copy {
     Clickable(HandlerId, Bool, Int)
     Toggleable(HandlerId, Bool, Bool, Int)
     TextFieldFrame(Color, Color)
+    Offset(Int, Int)
 }
 
 // Eight elements of a chain.
@@ -372,7 +374,13 @@ public fun runApp(
     width: Int = 800,
     height: Int = 600,
     content: attached compose () -> Unit,
-): Unit = prism_ui_run_app(title, width, height, content)
+): Unit = prism_ui_run_app(
+    title,
+    width,
+    height,
+    content,
+    { element, measurable, constraints -> measureElement(element, measurable, constraints) },
+)
 
 // Minimum and maximum widths and heights in logical pixels, which a parent gives a child it
 // measures; `Constraints.Infinity` is an unbounded maximum. Compose's `Constraints`.
@@ -563,6 +571,118 @@ public fun Placeable.placeRelative(x: Int, y: Int): Unit = prism_ui_place(
 context(scope: MeasureScope)
 public fun Dp.roundToPx(): Int = value
 
+// The step of a built-in layout element, Compose's `LayoutModifierNode.measure` of `PaddingNode`,
+// `SizeNode`, `UnspecifiedConstraintsNode`, `FillNode` and `OffsetNode`: measures `measurable`,
+// the rest of the chain after `element`, once, under the constraints the element gives, and
+// places it. The runtime calls it for every such element of a chain being measured, with the
+// element as it decoded it: sizes and paddings from 0 to `Int`'s largest 32-bit value, and -1
+// for an axis a size leaves unset or a negative minimum. Other elements pass the constraints on.
+// `runApp` gives it to the runtime; it lives here, beside `ModifierElement`, rather than in
+// `/prism/compose/layout` with the modifiers that make the elements, since one function must
+// see every variant.
+package fun MeasureScope.measureElement(
+    element: &ModifierElement,
+    measurable: Measurable,
+    constraints: Constraints,
+): MeasureResult = when (element) {
+    ModifierElement.Padding(val start, val top, val end, val bottom) -> {
+        val horizontal = start + end
+        val vertical = top + bottom
+        val rest = prism_ui_measure(
+            measurable.node,
+            measurable.element,
+            constraints.offset(-horizontal, -vertical),
+        )
+        placeRest(
+            rest,
+            constraints.constrainWidth(rest.width + horizontal),
+            constraints.constrainHeight(rest.height + vertical),
+            start,
+            top,
+        )
+    }
+    ModifierElement.Size(val width, val height) -> {
+        val exactWidth = constraints.constrainWidth(width)
+        val exactHeight = constraints.constrainHeight(height)
+        val rest = prism_ui_measure(
+            measurable.node,
+            measurable.element,
+            Constraints(
+                if (width == -1) constraints.minWidth else exactWidth,
+                if (width == -1) constraints.maxWidth else exactWidth,
+                if (height == -1) constraints.minHeight else exactHeight,
+                if (height == -1) constraints.maxHeight else exactHeight,
+            ),
+        )
+        placeRest(rest, rest.width, rest.height, 0, 0)
+    }
+    ModifierElement.DefaultMinSize(val width, val height) -> {
+        val rest = prism_ui_measure(
+            measurable.node,
+            measurable.element,
+            Constraints(
+                raisedMinimum(constraints.minWidth, width, constraints.maxWidth),
+                constraints.maxWidth,
+                raisedMinimum(constraints.minHeight, height, constraints.maxHeight),
+                constraints.maxHeight,
+            ),
+        )
+        placeRest(rest, rest.width, rest.height, 0, 0)
+    }
+    ModifierElement.FillMax(val width, val height, val fraction) -> {
+        val fillWidth = width && constraints.maxWidth != Constraints.Infinity
+        val fillHeight = height && constraints.maxHeight != Constraints.Infinity
+        val exactWidth = constraints.constrainWidth(
+            (constraints.maxWidth.toDouble() * fraction).toInt(),
+        )
+        val exactHeight = constraints.constrainHeight(
+            (constraints.maxHeight.toDouble() * fraction).toInt(),
+        )
+        val rest = prism_ui_measure(
+            measurable.node,
+            measurable.element,
+            Constraints(
+                if (fillWidth) exactWidth else constraints.minWidth,
+                if (fillWidth) exactWidth else constraints.maxWidth,
+                if (fillHeight) exactHeight else constraints.minHeight,
+                if (fillHeight) exactHeight else constraints.maxHeight,
+            ),
+        )
+        placeRest(rest, rest.width, rest.height, 0, 0)
+    }
+    ModifierElement.Offset(val x, val y) -> {
+        val rest = prism_ui_measure(measurable.node, measurable.element, constraints)
+        placeRest(rest, rest.width, rest.height, x, y)
+    }
+    else -> {
+        val rest = prism_ui_measure(measurable.node, measurable.element, constraints)
+        placeRest(rest, rest.width, rest.height, 0, 0)
+    }
+}
+
+// `minimum` raised to `value`, at most `maximum`, when it is 0 and `value` is specified (not
+// negative): `defaultMinSize`'s rule.
+private fun raisedMinimum(minimum: Int, value: Int, maximum: Int): Int {
+    if (minimum != 0 || value < 0) {
+        return minimum
+    }
+    return if (value < maximum) value else maximum
+}
+
+// A step's `layout(width, height) { rest.place(x, y) }`, through the runtime's entry points.
+private fun MeasureScope.placeRest(
+    rest: Placeable,
+    width: Int,
+    height: Int,
+    x: Int,
+    y: Int,
+): MeasureResult {
+    prism_ui_begin_placement(node, element, width, height)
+    prism_ui_place(node, element, rest.node, rest.element, x, y)
+    prism_ui_end_placement(node, element)
+    return MeasureResult(width, height, node, element)
+}
+
 // A child's data for the toolkit's layouts: the first `weight` of its chain (0.0 for none)
 // with its `fill`, and the code of its first `align` (-1 for none).
 package struct ParentData : Copy {
@@ -661,12 +781,13 @@ package external fun prism_ui_place(
 // A child's data for the toolkit's layouts.
 package external fun prism_ui_parent_data(node: Int): ParentData
 
-// Runs an app of composable content.
+// Runs an app of composable content, whose built-in layout modifiers `elementMeasurer` measures.
 private external fun prism_ui_run_app(
     title: &String,
     width: Int,
     height: Int,
     content: attached compose () -> Unit,
+    elementMeasurer: attached MeasureScope.(&ModifierElement, Measurable, Constraints) -> MeasureResult,
 )
 
 // Whether two handlers have the same code and equal captures.

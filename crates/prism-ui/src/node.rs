@@ -113,11 +113,27 @@ impl Drop for OwnedText {
 }
 
 /// One element of a node's chain, with the bounds at its position, relative to the node,
-/// which layout records for drawing and input elements (D11).
+/// which layout records for drawing and input elements (D11), and, for a layout element, what
+/// its measurement step last gave (D1 and D6 of `layout-in-prism`).
 #[derive(Debug, Clone, Copy)]
 pub struct ChainEntry {
     pub element: Element,
     pub bounds: Rect,
+    /// A step's last size: the size of the chain from this element.
+    pub step_size: Size,
+    /// Where a step last placed the rest of the chain, from its own top-left corner.
+    pub step_offset: (i64, i64),
+}
+
+impl ChainEntry {
+    pub fn new(element: Element) -> ChainEntry {
+        ChainEntry {
+            element,
+            bounds: Rect::ZERO,
+            step_size: Size::ZERO,
+            step_offset: (0, 0),
+        }
+    }
 }
 
 /// A node of the tree.
@@ -300,10 +316,7 @@ mod tests {
             },
             Element::Align(Alignment::CENTER),
         ] {
-            node.chain.push(ChainEntry {
-                element,
-                bounds: Rect::ZERO,
-            });
+            node.chain.push(ChainEntry::new(element));
         }
         assert_eq!(node.weight(), Some((2.0, false)));
         assert_eq!(node.own_alignment(), Some(Alignment::END));

@@ -272,21 +272,31 @@ pub unsafe extern "C" fn prism_ui_parent_data(result: *mut ParentDataMirror, nod
 
 /// Runs an app titled `title` of `width` × `height` composing `content`, `runApp`'s
 /// composable content, which it takes over and calls with the composer and the force bit (D4
-/// of `compose-library-in-prism`), and returns when its events end.
+/// of `compose-library-in-prism`), measuring its layout modifiers with `element_measurer`,
+/// which it takes over too (D2 of `layout-in-prism`), and returns when its events end.
 ///
 /// # Safety
 ///
-/// `title` must point at a string, and `content` at a `compose () -> Unit` function value the
-/// caller gives up.
+/// `title` must point at a string, `content` at a `compose () -> Unit` function value and
+/// `element_measurer` at a `MeasureScope.(&ModifierElement, Measurable, Constraints) ->
+/// MeasureResult` function value the caller gives up.
 #[no_mangle]
 pub unsafe extern "C" fn prism_ui_run_app(
     title: *const PrismString,
     width: i64,
     height: i64,
     content: *mut u8,
+    element_measurer: *mut u8,
 ) {
     let content = prism_compose::RootContent::Composable(FunctionValue::read_from(content));
-    or_raise(run_app((*title).as_str(), width, height, content))
+    let element_measurer = FunctionValue::read_from(element_measurer);
+    or_raise(run_app(
+        (*title).as_str(),
+        width,
+        height,
+        content,
+        element_measurer,
+    ))
 }
 
 #[cfg(test)]
@@ -426,7 +436,16 @@ mod tests {
             unreachable!()
         };
         let mut content = std::mem::ManuallyDrop::new(content);
-        unsafe { prism_ui_run_app(&title, 10, 10, (&mut *content as *mut FunctionValue).cast()) };
+        let mut steps = std::mem::ManuallyDrop::new(crate::test_support::element_measurer());
+        unsafe {
+            prism_ui_run_app(
+                &title,
+                10,
+                10,
+                (&mut *content as *mut FunctionValue).cast(),
+                (&mut *steps as *mut FunctionValue).cast(),
+            )
+        };
         unreachable!()
     }
 

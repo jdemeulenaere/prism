@@ -37,27 +37,27 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
 
 ## 3. Steps in the native fold (D1, D6, D7, D10, D11)
 
-- [ ] 3.1 `ChainEntry` keeps each element's raw words as `ModifierMirror` read them (`modifier.rs`), beside the decoded `Element`.
-- [ ] 3.2 Rewrite `Context::measure`'s fold as D6 describes:
+- [x] 3.1 ~~`ChainEntry` keeps each element's raw words as `ModifierMirror` read them (`modifier.rs`), beside the decoded `Element`.~~ Revised while applying (D11): the element is encoded again from its decoded, bounded form when its step is called, and `ChainEntry` keeps the step's last size and offset instead.
+- [x] 3.2 Rewrite `Context::measure`'s fold as D6 describes:
   - walk from element 0, passing non-layout elements through;
   - at a layout element, push the frame `(node, k)` and call the app's element measurer (task 4.2) with the raw element by address, the measurable `(node, k + 1)` and the constraints;
   - measure the content at the end;
   - then compute the offsets from the placements and record the bounds of drawing and input elements in one backward loop.
 
   A step that did not place its measurable raises `ui misuse: a layout modifier did not place its content` (new constant in `error.rs`). Remove the native `Padding`, `Size`, `DefaultMinSize` and `FillMax` arms.
-- [ ] 3.3 In `crates/prism-ui/src/test_support.rs`, add the Rust element measurer porting those arms exactly, and give it to every test app and `TreeBuilder` tree. Keep every test of `layout.rs` passing unchanged, `incremental_relayouts_match_full_layouts` included. Add a unit test for the misuse of task 3.2.
-- [ ] 3.4 Extend `crates/prism-ui/tests/allocations.rs` with "Resizing padded rows allocates nothing". Verify with `cargo test -p prism-ui`.
+- [x] 3.3 In `crates/prism-ui/src/test_support.rs`, add the Rust element measurer porting those arms exactly, and give it to every test app and `TreeBuilder` tree. Keep every test of `layout.rs` passing unchanged, `incremental_relayouts_match_full_layouts` included. Add a unit test for the misuse of task 3.2.
+- [x] 3.4 Extend `crates/prism-ui/tests/allocations.rs` with "Resizing padded rows allocates nothing". Verify with `cargo test -p prism-ui`.
 
 ## 4. The library's steps (D2, D4)
 
-- [ ] 4.1 In `library/prism/compose/ui.prism`:
+- [x] 4.1 In `library/prism/compose/ui.prism`:
   - add the variant `ModifierElement.Offset(Int, Int)`;
   - write `MeasureScope.measureElement` with the steps of `Padding`, `Size`, `DefaultMinSize`, `FillMax` and `Offset`, porting D2's arithmetic exactly, and a private `Nothing` external for any other element;
   - make `runApp` pass `{ element, measurable, constraints -> measureElement(element, measurable, constraints) }` to `prism_ui_run_app`.
-- [ ] 4.2 `prism_ui_run_app` (`entry.rs`, `functions.rs`, `app.rs`) takes the element measurer as a fifth parameter: the app owns it, calls it for built-in steps, and releases it when the app ends.
+- [x] 4.2 `prism_ui_run_app` (`entry.rs`, `functions.rs`, `app.rs`) takes the element measurer as a fifth parameter: the app owns it, calls it for built-in steps, and releases it when the app ends.
   - `modifier.rs` decodes `Offset` and dumps it as `offset(<x>,<y>)`.
   - In `library/prism/compose/layout.prism`, add `Modifier.offset(x: Dp = 0.dp, y: Dp = 0.dp)`.
-- [ ] 4.3 Run every `ui`, `compose` and `example-apps` fixture and `example_app_sessions`: every dump, display list and session must stay byte-identical. Investigate any difference as a port bug, never re-bless it.
+- [x] 4.3 Run every `ui`, `compose` and `example-apps` fixture and `example_app_sessions`: every dump, display list and session must stay byte-identical. Investigate any difference as a port bug, never re-bless it.
   - Add fixtures for "Layout modifiers inside a custom layout", "An offset background" and "The clickable area follows an offset".
   - Verify with `cargo test -p prism-cli --test fixture_tests --test run_library_tests`.
 

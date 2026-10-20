@@ -263,11 +263,12 @@ Compose lets a layout modifier skip placing its content, which then is not drawn
 
 Rejected: **Compose's silent hiding**, for the cost above, while no toolkit modifier needs it.
 
-### D11. Elements keep their raw words; dumps are unchanged (autonomous)
+### D11. Elements are passed as decoded; dumps are unchanged (autonomous, revised while applying)
 
-- `ModifierMirror` decodes each element into `Element` for drawing, input and dumps, as today.
-- Each chain entry also keeps the element's raw words, its `ModifierElement` value as Prism lays it out, so the dispatcher can receive it by address. `ChainEntry` grows by the element's size, at most 16 per node.
-- Two variants are added to the decoding: `Offset` (`offset(x,y)`) and `Layout` (`layout`, a handler element).
+- `ModifierMirror` decodes each element into `Element` for drawing, input and dumps, as before.
+- **Revised while applying:** a chain entry does not keep the element's raw words. Before calling the dispatcher, the native side encodes the decoded `Element` again into a 40-byte `ElementMirror` on its stack (`ElementMirror::encode`) and passes it by address. Decoding has already clamped sizes and paddings into `0..MAX_EXTENT`, offsets into `±MAX_EXTENT` and unset axes to -1 (`layout-primitive` D23). So the Prism steps' sums cannot overflow, and they need no clamping of their own. `ChainEntry` grows by a step's last size and offset instead (D6, 24 bytes).
+  - Rejected: keeping the raw words. They cost 40 bytes per entry, and the Prism steps would then have to clamp every value themselves: more calls per step, and a second copy of D23's rule.
+- Two variants are added to the decoding: `Offset` (tag 12, `offset(x,y)`) and `Layout` (tag 13, `layout`, a handler element).
 
 Every existing dump line keeps its text. The tour gains `offset` and `Modifier.layout`, so its snapshot changes (the toolkit tour requirement asks for every modifier kind).
 
@@ -281,6 +282,34 @@ Each becomes an unchecked follow-up in `ROADMAP.md` at archive:
 - **`padding(PaddingValues)`**.
 - **Letting a step leave its content unplaced** (D10).
 - **Intrinsic measurements through modifiers** (with `layout-primitive`'s intrinsics follow-up).
+
+### D13. Children move with the content after the steps (autonomous, found while applying)
+
+A node's steps run outside in. The content's policy runs inside the innermost step's `measure`, before any step has placed the rest of its chain. So the content's origin, the sum of the steps' offsets, is not known while the policy places the children.
+
+- A policy places each child at the content's origin from the node's **last** measurement, plus the child's offset.
+- When the node's measurement ends, if the new origin differs, every child placed in this measurement moves by the difference, and the layout counts as changed. A node whose steps keep their offsets moves nothing.
+- `node.x` and `node.y` keep their meaning, the position relative to the parent's top-left corner. Dumps, drawing, hit testing and script targets are unchanged.
+
+**Run-time cost.** One comparison per measured node, and one pass over the children only when the content moved.
+
+Rejected:
+- **Positions relative to the parent's content**: every reader of positions would add the parent's content origin.
+- **A second placement walk**, as Compose's deferred placement: an owned closure per node and a second walk (`layout-primitive` D6).
+
+### D14. Rust content gets the Rust steps; buffers follow nested policies (autonomous, found while applying)
+
+- `prism_ui_run_app` and `app::run_app` take the element measurer, as D2 says. `App::start` and `app::run_app_with` run Rust content (the engine's tests, `prism-desktop`'s window tests), so they install the Rust steps of `test_support::element_measurer` (D7) instead of taking a new parameter.
+- `TreeBuilder` installs the same steps while it lays out (`TreeBuilder::steps`, which a test can replace).
+- The app owns its element measurer in the thread's layout state (`LayoutState::element_measurer`) and releases it with its handlers.
+- The lent measurables' buffers stay indexed by the depth of **nested policies**, not of all frames. Indexing them by the frame stack, with steps' frames in it, put one node's children in different buffers in full layouts and in relayouts. A buffer then grew once more after the first frame: the counter's "Repeated clicks keep the live allocations constant" found it.
+
+### D15. Steps follow Compose's arithmetic where the native rule was silent (autonomous)
+
+- `padding` measures the rest under `Constraints.offset(-horizontal, -vertical)`, Compose's `PaddingNode`. The removed native rule kept an unbounded **minimum** unbounded. `offset` lowers it to `Infinity - horizontal`, as Compose does. Valid constraints with an unbounded minimum need a policy asking for them, and no fixture or session does. `geometry::Constraints::offset` replaces `deflated` with Compose's rule, for the Rust steps.
+- `fillMax*` truncates `maximum × fraction` with `Double.toInt()`, where the native rule rounded down. For a negative fraction, both are clamped to the minimum, so the results are equal.
+- The dispatcher's `else` branch measures the rest under the same constraints and places it at `(0, 0)`, the pass-through every non-step element does. It never runs, since the native side calls the dispatcher only for steps. This avoids a `Nothing` external with its own error message.
+- `/prism/compose/ui` now imports `/prism/core`, for `Int.toDouble()` and `Double.toInt()`.
 
 ## Risks / Trade-offs
 

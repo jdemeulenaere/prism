@@ -13,7 +13,7 @@
 //!   entry is program code.
 
 use crate::error::{unknown_kind, UiResult};
-use crate::geometry::{Rect, Size};
+use crate::geometry::Size;
 use crate::handle::{Arena, HandlerId, NodeId};
 use crate::handlers::{HandlerKind, HandlerTable};
 use crate::modifier::{compare_elements, ChainChange, Element, CAPACITY};
@@ -472,10 +472,7 @@ impl UiTree {
                     Some(handler) => element.with_handler(handler),
                     None => *element,
                 };
-                node.chain.push(ChainEntry {
-                    element,
-                    bounds: Rect::ZERO,
-                });
+                node.chain.push(ChainEntry::new(element));
             }
         }
         node.parent_data = node.chain_parent_data();

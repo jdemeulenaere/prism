@@ -1,0 +1,4 @@
+window 400x300
+  layout #1 0,0 26x38
+    text #2 0,0 16x28 "a" padding(4)
+    text #3 16,28 10x10 "b" size(10x10) padding(2)

@@ -6,6 +6,7 @@
 //! crate does not depend on how the two runtimes spell them.
 
 use crate::geometry::Constraints;
+use crate::modifier::ElementMirror;
 use prism_compose::Handle;
 use prism_runtime::{FunctionValue, PrismList, PrismString};
 
@@ -161,6 +162,55 @@ pub unsafe fn call_measure_policy(
         (&mut result as *mut MeasureResultMirror).cast(),
         (scope as *const MeasureScopeMirror).cast(),
         (list as *const PrismList).cast(),
+        (constraints as *const ConstraintsMirror).cast(),
+    );
+    result
+}
+
+/// Calls the app's element measurer with its scope, a built-in layout element, the measurable of
+/// the rest of the chain and the constraints (D2 of `layout-in-prism`).
+///
+/// # Safety
+///
+/// `function` must be a live function value of type `MeasureScope.(&ModifierElement,
+/// Measurable, Constraints) -> MeasureResult`, and `element` must hold a `ModifierElement` laid
+/// out as Prism lays it out.
+pub unsafe fn call_element_measurer(
+    function: &FunctionValue,
+    scope: &MeasureScopeMirror,
+    element: &ElementMirror,
+    measurable: &MeasurableMirror,
+    constraints: &ConstraintsMirror,
+) -> MeasureResultMirror {
+    let mut result = MeasureResultMirror::default();
+    function.call_with_four_addresses(
+        (&mut result as *mut MeasureResultMirror).cast(),
+        (scope as *const MeasureScopeMirror).cast(),
+        (element as *const ElementMirror).cast(),
+        (measurable as *const MeasurableMirror).cast(),
+        (constraints as *const ConstraintsMirror).cast(),
+    );
+    result
+}
+
+/// Calls a `Modifier.layout` step with its scope, the measurable of the rest of the chain and
+/// the constraints (D3 of `layout-in-prism`).
+///
+/// # Safety
+///
+/// `function` must be a live function value of type `MeasureScope.(Measurable, Constraints) ->
+/// MeasureResult`.
+pub unsafe fn call_layout_modifier(
+    function: &FunctionValue,
+    scope: &MeasureScopeMirror,
+    measurable: &MeasurableMirror,
+    constraints: &ConstraintsMirror,
+) -> MeasureResultMirror {
+    let mut result = MeasureResultMirror::default();
+    function.call_with_addresses(
+        (&mut result as *mut MeasureResultMirror).cast(),
+        (scope as *const MeasureScopeMirror).cast(),
+        (measurable as *const MeasurableMirror).cast(),
         (constraints as *const ConstraintsMirror).cast(),
     );
     result

@@ -17,6 +17,11 @@
 //!   node of those kinds its policy, and [`node_group`] does it in a composition.
 //!   [`counting_policy`] is a column's policy that counts its calls ([`policy_calls`]), and
 //!   [`probe_policy`] runs a Rust closure as a policy.
+//! - [`element_measurer`] gives the steps of the built-in layout modifiers (`padding`, `size`,
+//!   `defaultMinSize`, `fillMax*`, `offset`) as Rust code, a port of `/prism/compose/ui`'s
+//!   `measureElement` through the same entry points (D7 of `layout-in-prism`): the element
+//!   measurer of [`TreeBuilder`] trees and of the apps of [`crate::App::start`] and
+//!   [`crate::app::run_app_with`].
 //! - [`leak_node`] leaves a node in the thread's tree that no node group owns and no parent
 //!   holds, as a runtime bug would, for the allocation check's live-node report (D6 of
 //!   `reactive-app-verification`).
@@ -26,7 +31,7 @@ use crate::geometry::{Constraints, Size, UNBOUNDED};
 use crate::handle::{HandlerId, NodeId};
 use crate::handlers::{release_functions, HandlerKind, HandlerTable};
 use crate::layout::{self, Layout, Position};
-use crate::modifier::Element;
+use crate::modifier::{Element, ElementMirror};
 use crate::node::NodeKind;
 use crate::properties::{Alignment, Arrangement, Color, Role, Shape, TextStyle};
 use crate::runtime::{
@@ -324,6 +329,8 @@ pub struct TreeBuilder {
     pub tree: UiTree,
     pub handlers: HandlerTable,
     drops: Vec<FunctionValue>,
+    /// The element measurer its layouts use, [`element_measurer`] unless a test gives another.
+    pub steps: fn() -> FunctionValue,
 }
 
 impl TreeBuilder {
@@ -333,6 +340,7 @@ impl TreeBuilder {
             tree: UiTree::new(width, height),
             handlers: HandlerTable::new(),
             drops: Vec::new(),
+            steps: element_measurer,
         }
     }
 
@@ -366,13 +374,16 @@ impl TreeBuilder {
         self
     }
 
-    /// Runs `f` with this tree and handler table as the thread's, as an app's are, so that the
-    /// layout pass and the policies it calls reach them.
+    /// Runs `f` with this tree and handler table as the thread's, as an app's are, and its
+    /// element measurer as the app's, so that the layout pass and the policies and steps it
+    /// calls reach them.
     pub fn installed<R>(&mut self, f: impl FnOnce() -> R) -> R {
-        let swap = |builder: &mut TreeBuilder| {
+        let mut steps = Some((self.steps)());
+        let mut swap = |builder: &mut TreeBuilder| {
             crate::thread::with_state(|state| {
                 std::mem::swap(&mut state.tree, &mut builder.tree);
                 std::mem::swap(&mut state.handlers, &mut builder.handlers);
+                std::mem::swap(&mut state.layout.element_measurer, &mut steps);
             })
         };
         swap(self);
@@ -953,6 +964,114 @@ fn measure_line(
     }
     or_raise(layout::end_placement(scope));
     size
+}
+
+static STEP_SLOT: AtomicUsize = AtomicUsize::new(0);
+static STEP_DESCRIPTOR: Descriptor = Descriptor {
+    slot: &STEP_SLOT,
+    drop_environment: None,
+    equals_environment: Some(prism_rt_empty_environments_equal_entry),
+    duplicate_environment: None,
+};
+
+/// The element measurer of Rust trees and apps: the steps of the built-in layout modifiers,
+/// ported from `/prism/compose/ui`'s `measureElement` (D7 of `layout-in-prism`). Capture-free,
+/// so building and dropping it costs nothing.
+pub fn element_measurer() -> FunctionValue {
+    STEP_SLOT.store(element_step as *const () as usize, Ordering::Release);
+    FunctionValue {
+        descriptor: &STEP_DESCRIPTOR,
+        environment: std::ptr::null_mut(),
+    }
+}
+
+/// The share of the maximum `fraction` gives, truncated toward zero, 0 for NaN, saturated: as
+/// `Double.toInt()`.
+fn fraction_of(maximum: i64, fraction: f64) -> i64 {
+    let value = maximum as f64 * fraction;
+    if value.is_nan() {
+        0
+    } else {
+        value as i64
+    }
+}
+
+/// The step of a built-in layout element: `(result, environment, scope, element, measurable,
+/// constraints)`.
+unsafe extern "C" fn element_step(
+    result: *mut MeasureResultMirror,
+    _: *mut u8,
+    scope: *const MeasureScopeMirror,
+    element: *const ElementMirror,
+    measurable: *const MeasurableMirror,
+    constraints: *const ConstraintsMirror,
+) {
+    let scope = Position::of_words((*scope).node, (*scope).element);
+    let rest = Position::of_words((*measurable).node, (*measurable).element);
+    let c: Constraints = (*constraints).into();
+    let element = (*element).decode();
+    // The constraints of the rest, and where it goes.
+    let (inner, x, y) = match element {
+        Some(Element::Padding {
+            start,
+            top,
+            end,
+            bottom,
+        }) => (c.offset(-(start + end), -(top + bottom)), start, top),
+        Some(Element::Size { width, height }) => {
+            let mut inner = c;
+            if let Some(width) = width {
+                inner = inner.with_exact_width(width);
+            }
+            if let Some(height) = height {
+                inner = inner.with_exact_height(height);
+            }
+            (inner, 0, 0)
+        }
+        Some(Element::DefaultMinSize { width, height }) => {
+            let mut inner = c;
+            if let (Some(width), 0) = (width, c.min_width) {
+                inner.min_width = width.min(c.max_width);
+            }
+            if let (Some(height), 0) = (height, c.min_height) {
+                inner.min_height = height.min(c.max_height);
+            }
+            (inner, 0, 0)
+        }
+        Some(Element::FillMax {
+            width,
+            height,
+            fraction,
+        }) => {
+            let mut inner = c;
+            if width && c.max_width != UNBOUNDED {
+                inner = inner.with_exact_width(fraction_of(c.max_width, fraction));
+            }
+            if height && c.max_height != UNBOUNDED {
+                inner = inner.with_exact_height(fraction_of(c.max_height, fraction));
+            }
+            (inner, 0, 0)
+        }
+        Some(Element::Offset { x, y }) => (c, x, y),
+        _ => (c, 0, 0),
+    };
+    let measured = or_raise(layout::measure_position(rest, inner));
+    let size = match element {
+        Some(Element::Padding {
+            start,
+            top,
+            end,
+            bottom,
+        }) => Size::new(
+            c.clamp_width(measured.width + start + end),
+            c.clamp_height(measured.height + top + bottom),
+        ),
+        _ => measured,
+    };
+    or_raise(layout::begin_placement(scope, size.width, size.height));
+    or_raise(layout::place(scope, rest, x, y));
+    or_raise(layout::end_placement(scope));
+    write_result(result, scope, size);
 }
 
 /// Creates a text node in the thread's tree and never places or releases it.

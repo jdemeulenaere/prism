@@ -1,66 +1,78 @@
 //! Constraint layout (D11 of `ui-toolkit`): one measure-and-place pass over the tree, in
 //! whole logical pixels, whose containers are measured by their measure policies
-//! (`layout-primitive`).
+//! (`layout-primitive`) and whose layout modifiers are measurement steps (`layout-in-prism`).
 //!
-//! Measuring a node under constraints folds its modifier chain from the first element,
-//! Compose's outermost, each layout element changing the constraints it passes on and the
-//! size it gets back, then measures the content under what remains:
+//! Measuring a node under constraints walks its modifier chain from the first element,
+//! Compose's outermost, as Compose's chain of layout modifier nodes (D1 and D6 of
+//! `layout-in-prism`):
 //!
-//! - `padding` deflates the constraints, floored at 0, offsets the rest, and returns the
-//!   rest's size plus the padding, clamped into its constraints;
-//! - `size` makes each set axis exact, clamped into the constraints;
-//! - `defaultMinSize` raises a minimum of 0 to a specified value, at most the maximum;
-//! - `fillMax*` makes each bounded axis exactly the maximum times the fraction, rounded down;
+//! - a **layout element** (`padding`, `width`, `height`, `size`, `defaultMinSize`,
+//!   `fillMax*`, `offset`) is a step: layout calls the app's element measurer, Prism code of
+//!   `/prism/compose/ui`, with the element, the measurable of the rest of the chain and the
+//!   constraints. The step measures the rest once, under constraints it chooses, and calls
+//!   `layout` with the size of the chain from it, placing the rest at an offset from its own
+//!   top-left corner;
 //! - `weight` and `align` are parent data, read by the parent's policy, the first in a chain
-//!   counting;
-//! - drawing and input elements record the bounds at their position, the offset of the
-//!   elements before them and the size of the elements after them.
+//!   counting, and pass the constraints on, as drawing and input elements do;
+//! - past the last element, the content is measured: natively for a text or a text field, by
+//!   the window for its children (under its size, at its top-left corner), and by its
+//!   **measure policy** for every other node (a column, row, box, spacer or user layout), a
+//!   function value of the program kept in the handler table (D8 of `layout-primitive`).
 //!
-//! The content of a text or a text field is measured natively; the window measures its
-//! children under its size and places them at its top-left corner; every other node (a
-//! column, row, box, spacer or user layout) is measured by calling its **measure policy**, a
-//! function value of the program kept in the handler table (D8 of `layout-primitive`).
+//! Once the node is measured, one walk over the chain sums the steps' offsets into each
+//! position's origin, the content's included, and records at each drawing and input element
+//! the bounds at its position: that origin and the size of the chain from it.
 //!
-//! **The measurement protocol** (D6). While a policy runs, the pass keeps a stack of
-//! measurement frames: the node, a fresh stamp, the content's origin, whether `layout` was
-//! called and whether placement is running. The policy calls back through the entry points:
-//! [`measure_child`] measures a child of the innermost frame's node once, [`begin_placement`]
-//! and [`end_placement`] bracket `layout`'s placement block, and [`place`] positions a child
-//! measured in the frame. The children are lent to the policy as a `&List<Measurable>` over a
-//! buffer of their words, one buffer per depth of nested policies, reused across passes (D4).
+//! **The measurement protocol** (D6 of `layout-primitive`, D5 of `layout-in-prism`). While a
+//! policy or a step runs, the pass keeps a stack of measurement frames: the node and the chain
+//! position the frame measures from (a step's element, or the chain's length for the content),
+//! a fresh stamp, the content's origin, whether `layout` was called and whether placement is
+//! running. The program calls back through the entry points: [`measure_position`] measures a
+//! child of the innermost content frame's node, or the rest of the innermost step's chain,
+//! once; [`begin_placement`] and [`end_placement`] bracket `layout`'s placement block; and
+//! [`place`] positions what the frame measured. The children are lent to a policy as a
+//! `&List<Measurable>` over a buffer of their words, one buffer per depth of nested policies,
+//! reused across passes (D4). A step that did not place the rest of its chain is a misuse (D10
+//! of `layout-in-prism`).
 //!
-//! **Re-entrancy** (D14, D21). A policy is program code, which calls the entry points, which
-//! use the thread's state. So no borrow of the thread's state is held while a policy runs:
-//! every step of the pass borrows the state for its own reads and writes ([`with_state`]), and
-//! the pass's own state (frames, buffers, the text measurer of the run) lives in the thread's
-//! state too ([`LayoutState`]).
+//! **Positions.** A content policy places children before the steps around it have placed
+//! the content: a child is placed at the content's origin of the node's last measurement plus
+//! its offset, and when the steps move the content, the end of the measurement moves the
+//! children it placed by as much.
+//!
+//! **Re-entrancy** (D14, D21). Policies and steps are program code, which call the entry
+//! points, which use the thread's state. So no borrow of the thread's state is held while
+//! program code runs: every step of the pass borrows the state for its own reads and writes
+//! ([`with_state`]), and the pass's own state (frames, buffers, the text measurer of the run)
+//! lives in the thread's state too ([`LayoutState`]).
 //!
 //! **The cache.** A node that is neither `needs_measure` nor `child_needs_measure` and is
 //! measured with its last constraints returns its last size without visiting its subtree. A
 //! node that is only `child_needs_measure` re-measures its dirty children with their last
 //! constraints, and when each keeps its size, keeps its own size and its children's positions
-//! without running its policy; otherwise its policy runs. So a relayout is linear in the dirty
-//! nodes, their ancestors and those ancestors' children, and a change that keeps a node's size
-//! costs a flag check per sibling on its path. A policy is taken to depend only on its
+//! without running its steps or its policy; otherwise they run. So a relayout is linear in the
+//! dirty nodes, their ancestors and those ancestors' children, and a change that keeps a node's
+//! size costs a flag check per sibling on its path. A policy is taken to depend only on its
 //! constraints, its children's sizes and parent data, its node's properties and its captures
 //! (D11): a child it did not measure has its last constraints cleared, so that its changes run
-//! the policy again.
+//! the policy again. Steps within a node run whenever the node is measured.
 
 use crate::error::{
     raise, UiResult, INVALID_CONSTRAINTS, LAYOUT_OUTSIDE, LAYOUT_TWICE, MEASURED_OUTSIDE,
-    MEASURED_TWICE, NO_LAYOUT, NO_POLICY, PLACED_OUTSIDE, STALE_NODE,
+    MEASURED_TWICE, NOT_PLACED, NO_LAYOUT, NO_POLICY, PLACED_OUTSIDE, STALE_NODE,
 };
-use crate::geometry::{clamp_extent, Constraints, Rect, Size, UNBOUNDED};
+use crate::geometry::{clamp_extent, Constraints, Rect, Size};
 use crate::handle::NodeId;
-use crate::modifier::{Element, CAPACITY};
+use crate::modifier::{ElementMirror, CAPACITY};
 use crate::node::{Node, NodeKind};
 use crate::properties::{Alignment, Arrangement};
-use crate::runtime::{self, ConstraintsMirror, MeasureResultMirror, MeasureScopeMirror};
+use crate::runtime::{
+    self, ConstraintsMirror, MeasurableMirror, MeasureResultMirror, MeasureScopeMirror,
+};
 use crate::text::{break_lines, line_width, Line, TextMeasurer};
 use crate::thread::{with_state, State};
 use prism_compose::Handle;
 use prism_runtime::{FunctionValue, PrismList};
-use std::mem::MaybeUninit;
 
 /// The layout pass as the app drives it: its counter of the last run.
 #[derive(Debug, Default)]
@@ -71,7 +83,8 @@ pub struct Layout {
 
 /// A position in a node's chain, as `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope`
 /// and `MeasureResult` name it (D5 of `layout-in-prism`): a child's measurable is its node at
-/// element 0, and the content's policy measures from the chain's length.
+/// element 0, a step's scope its element and the measurable it is given the next one, and the
+/// content's policy measures from the chain's length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     pub node: NodeId,
@@ -92,25 +105,45 @@ impl Position {
             element: usize::try_from(element).unwrap_or(usize::MAX),
         }
     }
+
+    /// The position after this one in its node's chain.
+    pub fn next(self) -> Position {
+        Position {
+            node: self.node,
+            element: self.element.saturating_add(1),
+        }
+    }
+
+    /// The words of a `Measurable`, a `MeasureScope` or a `PlacementScope` naming it.
+    fn mirror(self) -> MeasurableMirror {
+        MeasurableMirror {
+            node: self.node.word(),
+            element: self.element as u64,
+        }
+    }
 }
 
-/// One measurement frame: a policy running for `node`'s content, at its chain's length (D6 of
-/// `layout-primitive`, D5 of `layout-in-prism`).
+/// One measurement frame: a step of `node`'s chain at `element`, or the policy of its content,
+/// at the chain's length (D6 of `layout-primitive`, D5 of `layout-in-prism`).
 #[derive(Debug, Clone, Copy)]
 struct Frame {
     node: NodeId,
     /// The chain position the frame measures from.
     element: usize,
+    /// Whether the frame is a step's, which measures and places the rest of its chain, rather
+    /// than a policy's, which measures and places the node's children.
+    step: bool,
     stamp: u64,
-    /// The content's origin in the node, where `place(0, 0)` puts a child.
+    /// A policy's content's origin in the node as last measured, where `place(0, 0)` puts a
+    /// child; a step's offset of the rest of its chain, as it placed it.
     origin: (i64, i64),
     layout_called: bool,
     placing: bool,
     /// The size `layout` gave.
     size: Size,
-    /// The node's children, how many the policy measured and placed, and whether every child
-    /// was placed before it ran: when all are measured and placed and were placed before, the
-    /// end of the run has no child to update.
+    /// The node's children (one, the rest, for a step), how many the policy measured and
+    /// placed, and whether every child was placed before it ran: when all are measured and
+    /// placed and were placed before, the end of the run has no child to update.
     children: usize,
     measured: usize,
     placed: usize,
@@ -118,22 +151,28 @@ struct Frame {
 }
 
 /// The state of the running layout pass, kept in the thread's state so that the entry points
-/// a policy calls reach it (D21). Its buffers are reused across passes.
+/// a policy or a step calls reach it (D21). Its buffers are reused across passes.
 #[derive(Debug, Default)]
 pub struct LayoutState {
     frames: Vec<Frame>,
-    /// The measurables lent to the policy running at each depth.
+    /// The measurables lent to the policy running at each depth of nested policies.
     buffers: Vec<Vec<u64>>,
+    /// How many policies are running, nested: the depth of the next one's buffer.
+    policies: usize,
     lines: Vec<Line>,
     measured: usize,
     /// The last stamp given to a frame.
     stamps: u64,
     /// The text measurer of the running pass, valid while it runs.
     measurer: Option<*const (dyn TextMeasurer + 'static)>,
-    /// The composition policies run as handlers of, when an app runs.
+    /// The composition policies and steps run as handlers of, when an app runs.
     composition: Option<Handle>,
     /// Whether the pass changed a node's size, position, content or element bounds.
     changed: bool,
+    /// The element measurer of the running app, `/prism/compose/ui`'s `measureElement`, which
+    /// `runApp` gives the runtime (D2 of `layout-in-prism`): the app installs it and releases
+    /// it when it ends.
+    pub element_measurer: Option<FunctionValue>,
 }
 
 impl LayoutState {
@@ -223,116 +262,6 @@ impl Layout {
     }
 }
 
-/// The share of the maximum `fraction` gives, rounded down.
-fn fraction_of(maximum: i64, fraction: f64) -> i64 {
-    let value = (maximum as f64 * fraction).floor();
-    if value.is_nan() {
-        0
-    } else {
-        value as i64
-    }
-}
-
-/// The chain fold of one measurement: the constraints each element receives and the offset
-/// of the rest at its position; index `count` is what the content receives. Only the entries
-/// up to `count` are written by [`Fold::fold`] and read afterwards, so a fold costs nothing to
-/// make for a measurement the cache answers.
-struct Fold {
-    received: [MaybeUninit<Constraints>; CAPACITY + 1],
-    offsets: [MaybeUninit<(i64, i64)>; CAPACITY + 1],
-    count: usize,
-}
-
-impl Fold {
-    fn new() -> Fold {
-        Fold {
-            received: [const { MaybeUninit::uninit() }; CAPACITY + 1],
-            offsets: [const { MaybeUninit::uninit() }; CAPACITY + 1],
-            count: 0,
-        }
-    }
-
-    /// Folds `node`'s chain from the first element under `constraints`, in place.
-    fn fold(&mut self, node: &Node, constraints: Constraints) {
-        let count = node.chain.len().min(CAPACITY);
-        self.count = count;
-        let (mut c, mut x, mut y) = (constraints, 0i64, 0i64);
-        self.received[0].write(c);
-        self.offsets[0].write((x, y));
-        for index in 0..count {
-            match node.chain[index].element {
-                Element::Padding {
-                    start,
-                    top,
-                    end,
-                    bottom,
-                } => {
-                    c = c.deflated(start + end, top + bottom);
-                    x += start;
-                    y += top;
-                }
-                Element::Size { width, height } => {
-                    if let Some(width) = width {
-                        c = c.with_exact_width(width);
-                    }
-                    if let Some(height) = height {
-                        c = c.with_exact_height(height);
-                    }
-                }
-                Element::DefaultMinSize { width, height } => {
-                    let old = c;
-                    if let (Some(width), 0) = (width, old.min_width) {
-                        c.min_width = width.min(old.max_width);
-                    }
-                    if let (Some(height), 0) = (height, old.min_height) {
-                        c.min_height = height.min(old.max_height);
-                    }
-                }
-                Element::FillMax {
-                    width,
-                    height,
-                    fraction,
-                } => {
-                    let old = c;
-                    if width && old.max_width != UNBOUNDED {
-                        c = c.with_exact_width(fraction_of(old.max_width, fraction));
-                    }
-                    if height && old.max_height != UNBOUNDED {
-                        c = c.with_exact_height(fraction_of(old.max_height, fraction));
-                    }
-                }
-                _ => {}
-            }
-            self.received[index + 1].write(c);
-            self.offsets[index + 1].write((x, y));
-        }
-    }
-
-    /// The constraints element `index` receives, `count` being the content's.
-    fn received(&self, index: usize) -> Constraints {
-        assert!(index <= self.count);
-        // SAFETY: `fold` wrote every entry up to `count`.
-        unsafe { self.received[index].assume_init() }
-    }
-
-    /// The offset of the rest of the chain at element `index`.
-    fn offset(&self, index: usize) -> (i64, i64) {
-        assert!(index <= self.count);
-        // SAFETY: `fold` wrote every entry up to `count`.
-        unsafe { self.offsets[index].assume_init() }
-    }
-
-    /// The constraints of the content.
-    fn content_constraints(&self) -> Constraints {
-        self.received(self.count)
-    }
-
-    /// The content's origin in the node.
-    fn content_origin(&self) -> (i64, i64) {
-        self.offset(self.count)
-    }
-}
-
 /// A policy call a measurement makes once the state is let go.
 struct PolicyCall {
     function: FunctionValue,
@@ -343,79 +272,62 @@ struct PolicyCall {
     composition: Option<Handle>,
 }
 
-/// A measurement under way: what is left to do once the state is let go. A step is taken
-/// within one borrow of the state, and the native kinds complete in it.
-enum Step {
+/// A step call a measurement makes once the state is let go (D1 of `layout-in-prism`).
+struct StepCall {
+    /// The app's element measurer, called with the element.
+    function: FunctionValue,
+    /// The element, as Prism lays it out.
+    element: ElementMirror,
+    /// The step's position.
+    scope: Position,
+    constraints: Constraints,
+    composition: Option<Handle>,
+}
+
+/// What measuring a node's chain from a position does once the state is let go.
+enum Next {
+    /// The content was measured natively, of this size.
     Done(Size),
-    /// The node is clean and measured with its last constraints, but has dirty children.
-    CheckChildren,
     /// The window's children are measured next.
     Window,
     /// The node's policy is called next, its frame pushed.
     Policy(PolicyCall),
+    /// A step is called next, its frame pushed.
+    Step(StepCall),
+}
+
+/// The first step of measuring a node: what its cache says.
+enum Start {
+    Done(Size),
+    /// The node is clean and measured with its last constraints, but has dirty children.
+    CheckChildren,
+    /// The node is measured in full.
+    Full,
 }
 
 /// Measures `id` under `constraints`, records its layout and gives its size.
 fn measure(id: NodeId, constraints: Constraints) -> Size {
-    let mut fold = Fold::new();
-    let step = with_state(|state| start(state, id, constraints, &mut fold));
-    complete(id, constraints, step, &mut fold)
+    let start = with_state(|state| start(state, id, constraints));
+    complete(id, constraints, start)
 }
 
-/// The first step of measuring `id`: from the cache, or [`start_full`].
-fn start(
-    state: &mut State,
-    id: NodeId,
-    constraints: Constraints,
-    fold: &mut Fold,
-) -> UiResult<Step> {
+/// The first step of measuring `id`: from the cache, or in full.
+fn start(state: &mut State, id: NodeId, constraints: Constraints) -> Start {
     let node = state.tree.node(id).unwrap();
     if !node.needs_measure && node.last_constraints == Some(constraints) {
         if node.child_needs_measure {
-            return Ok(Step::CheckChildren);
+            return Start::CheckChildren;
         }
-        return Ok(Step::Done(node.size));
+        return Start::Done(node.size);
     }
-    start_full(state, id, constraints, fold)
+    Start::Full
 }
 
-/// Measures `id` in full: folds its chain, then measures a text's or text field's content and
-/// completes, or prepares the window's children or the node's policy call.
-fn start_full(
-    state: &mut State,
-    id: NodeId,
-    constraints: Constraints,
-    fold: &mut Fold,
-) -> UiResult<Step> {
-    state.layout.measured += 1;
-    let node = state.tree.node(id).unwrap();
-    let kind = node.kind;
-    fold.fold(node, constraints);
-    let c = fold.content_constraints();
-    match kind {
-        NodeKind::Text | NodeKind::TextField => {
-            let content = native_content(state, id, c);
-            Ok(Step::Done(finish(state, id, constraints, fold, content)))
-        }
-        NodeKind::Window => Ok(Step::Window),
-        _ => Ok(Step::Policy(prepare_policy(
-            state,
-            id,
-            c,
-            fold.content_origin(),
-        )?)),
-    }
-}
-
-/// Takes the steps of a measurement left after `step`, letting the state go between them.
-fn complete(id: NodeId, constraints: Constraints, step: UiResult<Step>, fold: &mut Fold) -> Size {
-    let step = match step {
-        Ok(step) => step,
-        Err(error) => raise(&error),
-    };
-    match step {
-        Step::Done(size) => size,
-        Step::CheckChildren => {
+/// Takes the steps of a measurement left after `start`, letting the state go between them.
+fn complete(id: NodeId, constraints: Constraints, start: Start) -> Size {
+    match start {
+        Start::Done(size) => size,
+        Start::CheckChildren => {
             if remeasure_dirty_children(id) {
                 return with_state(|state| {
                     let node = state.tree.node_mut(id).unwrap();
@@ -423,95 +335,249 @@ fn complete(id: NodeId, constraints: Constraints, step: UiResult<Step>, fold: &m
                     node.size
                 });
             }
-            let step = with_state(|state| start_full(state, id, constraints, fold));
-            complete(id, constraints, step, fold)
+            measure_full(id, constraints)
         }
-        Step::Window => {
-            // The window: its children under its size, at its top-left corner.
-            let (x, y) = fold.content_origin();
-            let (window, first) = with_state(|state| {
-                let node = state.tree.node(id).unwrap();
-                (node.size, node.first_child)
-            });
-            let loose = Constraints::up_to(window.width, window.height);
-            let mut child = first;
-            while let Some(current) = child {
-                measure(current, loose);
-                child = with_state(|state| {
-                    set_position(state, current, x, y);
-                    let node = state.tree.node_mut(current).unwrap();
-                    state.layout.changed |= !node.placed;
-                    node.placed = true;
-                    node.next
-                });
-            }
-            with_state(|state| finish(state, id, constraints, fold, window))
-        }
-        Step::Policy(call) => {
+        Start::Full => measure_full(id, constraints),
+    }
+}
+
+/// Measures `id` in full: its chain from the first element, then its layout recorded.
+fn measure_full(id: NodeId, constraints: Constraints) -> Size {
+    let size = measure_from(Position::child(id), constraints);
+    with_state(|state| finish(state, id, constraints, size))
+}
+
+/// The value of `result`, or the runtime error it holds.
+fn or_raise<T>(result: UiResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => raise(&error),
+    }
+}
+
+/// Measures the chain of a node from `position` under `c`: the step there, which measures the
+/// rest, or past the last step the content. Gives the size of the chain from `position`.
+fn measure_from(position: Position, c: Constraints) -> Size {
+    let id = position.node;
+    match or_raise(with_state(|state| next_from(state, position, c))) {
+        Next::Done(size) => size,
+        Next::Window => measure_window(id),
+        Next::Policy(call) => {
             call_policy(id, &call);
-            let size = with_state(|state| {
-                let content = end_policy(state, id, fold.content_constraints())?;
-                Ok(finish(state, id, constraints, fold, content))
-            });
-            match size {
-                Ok(size) => size,
-                Err(error) => raise(&error),
-            }
+            or_raise(with_state(|state| end_policy(state, id, c)))
+        }
+        Next::Step(call) => {
+            call_step(&call);
+            or_raise(with_state(|state| end_step(state, call.scope, c)))
         }
     }
 }
 
-/// The last step of a measurement: back from the content to the outermost element, recording
-/// the node's layout.
-fn finish(
-    state: &mut State,
-    id: NodeId,
-    constraints: Constraints,
-    fold: &Fold,
-    content: Size,
-) -> Size {
-    let node = state.tree.node_mut(id).unwrap();
-    let mut changed = false;
-    // Sizes stay within `MAX_EXTENT`, whatever the constraints ask (D23).
+/// Finds the first step of `position`'s node at or after it, and prepares its call; past the
+/// last step, measures a text's or text field's content, or prepares the window's children or
+/// the node's policy call.
+fn next_from(state: &mut State, position: Position, c: Constraints) -> UiResult<Next> {
+    let id = position.node;
+    if position.element == 0 {
+        state.layout.measured += 1;
+    }
+    let node = state.tree.node(id).unwrap();
+    let count = node.chain.len();
+    let mut element = position.element;
+    while element < count && !node.chain[element].element.is_step() {
+        element += 1;
+    }
+    if element < count {
+        let entry = node.chain[element];
+        let function = state
+            .layout
+            .element_measurer
+            .as_ref()
+            .map(runtime::borrowed)
+            .expect("a layout modifier measured without an app's element measurer");
+        push_frame(state, id, element, true, (0, 0), 1, true);
+        return Ok(Next::Step(StepCall {
+            function,
+            element: ElementMirror::encode(&entry.element),
+            scope: Position { node: id, element },
+            constraints: c,
+            composition: state.layout.composition,
+        }));
+    }
+    match node.kind {
+        NodeKind::Text | NodeKind::TextField => {
+            let content = native_content(state, id, c);
+            Ok(Next::Done(content_measured(state, id, content)))
+        }
+        NodeKind::Window => Ok(Next::Window),
+        _ => Ok(Next::Policy(prepare_policy(state, id, c)?)),
+    }
+}
+
+/// Records the size of `id`'s content, at most `MAX_EXTENT` on each axis (D23 of
+/// `layout-primitive`), and gives it.
+fn content_measured(state: &mut State, id: NodeId, content: Size) -> Size {
     let content = content.bounded();
-    let mut size = content;
-    for index in (0..fold.count).rev() {
-        let entry = &mut node.chain[index];
-        match entry.element {
-            Element::Padding {
-                start,
-                top,
-                end,
-                bottom,
-            } => {
-                size = fold
-                    .received(index)
-                    .constrain(Size::new(
-                        size.width + start + end,
-                        size.height + top + bottom,
-                    ))
-                    .bounded();
-            }
-            element if element.records_bounds() => {
-                let (x, y) = fold.offset(index);
-                let bounds = Rect::new(x, y, size.width, size.height);
-                changed |= entry.bounds != bounds;
-                entry.bounds = bounds;
-            }
-            _ => {}
+    let node = state.tree.node_mut(id).unwrap();
+    if node.content.width != content.width || node.content.height != content.height {
+        node.content.width = content.width;
+        node.content.height = content.height;
+        state.layout.changed = true;
+    }
+    content
+}
+
+/// The window's content: its children under its size, at its content's top-left corner.
+fn measure_window(id: NodeId) -> Size {
+    let (window, first, (x, y)) = with_state(|state| {
+        let node = state.tree.node(id).unwrap();
+        (
+            node.size,
+            node.first_child,
+            (node.content.x, node.content.y),
+        )
+    });
+    let loose = Constraints::up_to(window.width, window.height);
+    let mut child = first;
+    while let Some(current) = child {
+        measure(current, loose);
+        child = with_state(|state| {
+            set_position(state, current, x, y);
+            let node = state.tree.node_mut(current).unwrap();
+            state.layout.changed |= !node.placed;
+            node.placed = true;
+            node.next
+        });
+    }
+    with_state(|state| content_measured(state, id, window))
+}
+
+/// Pushes a measurement frame of `node` from `element`.
+fn push_frame(
+    state: &mut State,
+    node: NodeId,
+    element: usize,
+    step: bool,
+    origin: (i64, i64),
+    children: usize,
+    all_placed_before: bool,
+) {
+    let layout = &mut state.layout;
+    layout.stamps += 1;
+    layout.frames.push(Frame {
+        node,
+        element,
+        step,
+        stamp: layout.stamps,
+        origin,
+        layout_called: false,
+        placing: false,
+        size: Size::ZERO,
+        children,
+        measured: 0,
+        placed: 0,
+        all_placed_before,
+    });
+}
+
+/// Calls a step with no state borrowed, as a handler of the app's composition when an app runs.
+fn call_step(call: &StepCall) {
+    let scope = call.scope.mirror();
+    let scope = MeasureScopeMirror {
+        node: scope.node,
+        element: scope.element,
+    };
+    let measurable = call.scope.next().mirror();
+    let constraints = ConstraintsMirror::from(call.constraints);
+    let run = || {
+        // SAFETY: the element measurer is the app's, of its function type, live while the app
+        // runs, and the element is encoded as Prism lays it out.
+        unsafe {
+            runtime::call_element_measurer(
+                &call.function,
+                &scope,
+                &call.element,
+                &measurable,
+                &constraints,
+            )
+        }
+    };
+    let _result: MeasureResultMirror = match call.composition {
+        Some(composition) => runtime::run_handler(composition, run),
+        None => run(),
+    };
+}
+
+/// After a step returned: pops its frame, checks that it placed the rest of its chain (D10 of
+/// `layout-in-prism`), records its size and offset in its chain entry, and gives the size,
+/// clamped into its constraints and at most `MAX_EXTENT`.
+fn end_step(state: &mut State, scope: Position, c: Constraints) -> UiResult<Size> {
+    let frame = state.layout.frames.pop().expect("the step's frame");
+    debug_assert!(frame.step && frame.node == scope.node && frame.element == scope.element);
+    if frame.placed == 0 {
+        return Err(NOT_PLACED);
+    }
+    let size = c.constrain(frame.size).bounded();
+    let entry = &mut state.tree.node_mut(scope.node).unwrap().chain[scope.element];
+    entry.step_size = size;
+    entry.step_offset = frame.origin;
+    Ok(size)
+}
+
+/// The last step of a measurement: sums the steps' offsets into each position's origin,
+/// records the bounds of the drawing and input elements and the content's origin, moves the
+/// children placed in this measurement when the content moved, and records the node's size,
+/// `size` being the size of its chain.
+fn finish(state: &mut State, id: NodeId, constraints: Constraints, size: Size) -> Size {
+    let node = state.tree.node_mut(id).unwrap();
+    let count = node.chain.len().min(CAPACITY);
+    let mut origins = [(0i64, 0i64); CAPACITY];
+    let (mut x, mut y) = (0i64, 0i64);
+    for (index, entry) in node.chain[..count].iter().enumerate() {
+        origins[index] = (x, y);
+        if entry.element.is_step() {
+            x += entry.step_offset.0;
+            y += entry.step_offset.1;
         }
     }
-    if node.kind == NodeKind::Window {
-        size = node.size;
+    let mut changed = false;
+    let mut rest = Size::new(node.content.width, node.content.height);
+    for (index, entry) in node.chain[..count].iter_mut().enumerate().rev() {
+        if entry.element.is_step() {
+            rest = entry.step_size;
+        } else if entry.element.records_bounds() {
+            let (x, y) = origins[index];
+            let bounds = Rect::new(x, y, rest.width, rest.height);
+            changed |= entry.bounds != bounds;
+            entry.bounds = bounds;
+        }
     }
-    let (content_x, content_y) = fold.content_origin();
-    let content = Rect::new(content_x, content_y, content.width, content.height);
-    changed |= node.content != content || node.size != size;
-    node.content = content;
+    let size = if node.kind == NodeKind::Window {
+        node.size
+    } else {
+        size
+    };
+    let moved = (x - node.content.x, y - node.content.y);
+    node.content.x = x;
+    node.content.y = y;
+    changed |= moved != (0, 0) || node.size != size;
     node.size = size;
     node.last_constraints = Some(constraints);
     node.needs_measure = false;
     node.child_needs_measure = false;
+    let first = node.first_child;
+    if moved != (0, 0) {
+        // The children were placed at the content's last origin (see "Positions").
+        let mut child = first;
+        while let Some(current) = child {
+            let node = state.tree.node_mut(current).unwrap();
+            if node.placed {
+                node.x += moved.0;
+                node.y += moved.1;
+            }
+            child = node.next;
+        }
+    }
     state.layout.changed |= changed;
     size
 }
@@ -563,7 +629,7 @@ fn clear_ancestors(id: NodeId) {
 /// dirty children with their last constraints, which are still theirs while every sibling
 /// keeps its size, and gives whether every one kept its size, in which case the node's size
 /// and its children's positions stand. Otherwise the caller measures the node again with its
-/// policy.
+/// steps and policy.
 fn remeasure_dirty_children(id: NodeId) -> bool {
     let mut child = with_state(|state| state.tree.node(id).unwrap().first_child);
     while let Some(current) = child {
@@ -640,14 +706,10 @@ fn native_content(state: &mut State, id: NodeId, c: Constraints) -> Size {
     size
 }
 
-/// Prepares the call of a node's policy (D6): pushes its frame and lends its children as
-/// measurables, in the buffer of the frame's depth.
-fn prepare_policy(
-    state: &mut State,
-    id: NodeId,
-    c: Constraints,
-    origin: (i64, i64),
-) -> UiResult<PolicyCall> {
+/// Prepares the call of a node's policy (D6): pushes its frame, at the chain's length and with
+/// the content's last origin, and lends its children as measurables, in the buffer of the
+/// frame's depth.
+fn prepare_policy(state: &mut State, id: NodeId, c: Constraints) -> UiResult<PolicyCall> {
     let State {
         tree,
         handlers,
@@ -660,7 +722,10 @@ fn prepare_policy(
         .and_then(|policy| handlers.function(policy))
         .ok_or(NO_POLICY)?;
     let element = node.chain.len();
-    let depth = layout.frames.len();
+    let origin = (node.content.x, node.content.y);
+    // One buffer per depth of nested policies, steps not counted.
+    let depth = layout.policies;
+    layout.policies += 1;
     if layout.buffers.len() == depth {
         layout.buffers.push(Vec::new());
     }
@@ -688,26 +753,22 @@ fn prepare_policy(
         size: children,
         capacity: children,
     };
-    layout.stamps += 1;
-    layout.frames.push(Frame {
-        node: id,
+    let composition = layout.composition;
+    push_frame(
+        state,
+        id,
         element,
-        stamp: layout.stamps,
+        false,
         origin,
-        layout_called: false,
-        placing: false,
-        size: Size::ZERO,
         children,
-        measured: 0,
-        placed: 0,
         all_placed_before,
-    });
+    );
     Ok(PolicyCall {
         function,
         element,
         list,
         constraints: c,
-        composition: layout.composition,
+        composition,
     })
 }
 
@@ -733,36 +794,37 @@ fn call_policy(id: NodeId, call: &PolicyCall) {
 
 /// After a node's policy returned: pops its frame, checks that it called `layout`, forgets the
 /// last constraints of the children it did not measure, notes which it placed, and gives the
-/// size `layout` gave, clamped into the content's constraints.
+/// size `layout` gave, clamped into the content's constraints, as the content's size.
 fn end_policy(state: &mut State, id: NodeId, c: Constraints) -> UiResult<Size> {
     let State { tree, layout, .. } = state;
     let frame = layout.frames.pop().expect("the policy's frame");
-    debug_assert_eq!(frame.node, id);
+    layout.policies -= 1;
+    debug_assert!(!frame.step && frame.node == id);
     if !frame.layout_called {
         return Err(NO_LAYOUT);
     }
     let size = c.constrain(frame.size);
-    if frame.all_placed_before && frame.measured == frame.children && frame.placed == frame.children
+    if !(frame.all_placed_before
+        && frame.measured == frame.children
+        && frame.placed == frame.children)
     {
-        // Every child measured and placed, as before: nothing to update.
-        return Ok(size);
-    }
-    let mut child = tree.node(id).unwrap().first_child;
-    while let Some(current) = child {
-        let node = tree.node_mut(current).unwrap();
-        if node.stamp != frame.stamp {
-            // Not measured: its changes run this policy again (D11).
-            node.last_constraints = None;
-            node.needs_measure = false;
-            node.child_needs_measure = false;
+        let mut child = tree.node(id).unwrap().first_child;
+        while let Some(current) = child {
+            let node = tree.node_mut(current).unwrap();
+            if node.stamp != frame.stamp {
+                // Not measured: its changes run this policy again (D11).
+                node.last_constraints = None;
+                node.needs_measure = false;
+                node.child_needs_measure = false;
+            }
+            // Placed by this run or not (D7).
+            let placed = node.placed_stamp == frame.stamp;
+            layout.changed |= placed != node.placed;
+            node.placed = placed;
+            child = node.next;
         }
-        // Placed by this run or not (D7).
-        let placed = node.placed_stamp == frame.stamp;
-        layout.changed |= placed != node.placed;
-        node.placed = placed;
-        child = node.next;
     }
-    Ok(size)
+    Ok(content_measured(state, id, size))
 }
 
 /// Whether constraints have minimums of at least 0 and at most their maximums.
@@ -773,24 +835,50 @@ fn valid(c: Constraints) -> bool {
         && c.min_height <= c.max_height
 }
 
-/// `Measurable.measure(constraints)` (D6): measures `child`, a child of the node whose policy
-/// is running innermost, at most once in that run, and gives its size.
+/// `Measurable.measure(constraints)` of a child (D6): measures `child`, a child of the node
+/// whose policy is running innermost, at most once in that run, and gives its size.
 pub fn measure_child(child: NodeId, constraints: Constraints) -> UiResult<Size> {
     measure_position(Position::child(child), constraints)
 }
 
+/// What [`measure_position`] measures once the state is let go.
+enum Measured {
+    /// A child of the running policy's node, from the start of its measurement.
+    Child(Start),
+    /// The rest of the running step's chain.
+    Rest,
+}
+
 /// `Measurable.measure(constraints)` of the measurable naming `position` (D5 of
-/// `layout-in-prism`): a child of the node whose policy is running innermost, at element 0.
+/// `layout-in-prism`): a child of the node whose policy is running innermost, at element 0, or
+/// the rest of the chain of the step running innermost, after its element; at most once in
+/// that run. Gives its size.
 pub fn measure_position(position: Position, constraints: Constraints) -> UiResult<Size> {
-    let child = position.node;
-    let mut fold = Fold::new();
-    let step = with_state(|state| {
-        let frame = *state.layout.frames.last().ok_or(MEASURED_OUTSIDE)?;
-        if position.element != 0 {
-            return Err(MEASURED_OUTSIDE);
+    let measured = with_state(|state| {
+        let frame = state.layout.frames.last_mut().ok_or(MEASURED_OUTSIDE)?;
+        if frame.step {
+            if position
+                != (Position {
+                    node: frame.node,
+                    element: frame.element,
+                })
+                .next()
+            {
+                return Err(MEASURED_OUTSIDE);
+            }
+            if frame.measured > 0 {
+                return Err(MEASURED_TWICE);
+            }
+            if !valid(constraints) {
+                return Err(INVALID_CONSTRAINTS);
+            }
+            frame.measured = 1;
+            return Ok(Measured::Rest);
         }
+        let frame = *frame;
+        let child = position.node;
         let node = state.tree.node_mut(child).ok_or(MEASURED_OUTSIDE)?;
-        if node.parent != Some(frame.node) {
+        if position.element != 0 || node.parent != Some(frame.node) {
             return Err(MEASURED_OUTSIDE);
         }
         if node.stamp == frame.stamp {
@@ -801,22 +889,18 @@ pub fn measure_position(position: Position, constraints: Constraints) -> UiResul
         }
         node.stamp = frame.stamp;
         state.layout.frames.last_mut().unwrap().measured += 1;
-        Ok(start(state, child, constraints, &mut fold))
+        Ok(Measured::Child(start(state, child, constraints)))
     })?;
-    Ok(complete(child, constraints, step, &mut fold))
+    Ok(match measured {
+        Measured::Child(start) => complete(position.node, constraints, start),
+        Measured::Rest => measure_from(position, constraints),
+    })
 }
 
-/// The size of `child`, measured in the innermost running frame: the placeable a container
+/// The size of `child`, measured in the innermost running policy: the placeable a container
 /// gets again in its placement block (D9).
 pub fn measured(child: NodeId) -> UiResult<Size> {
-    with_state(|state| {
-        let frame = *state.layout.frames.last().ok_or(PLACED_OUTSIDE)?;
-        let node = state.tree.node(child).ok_or(PLACED_OUTSIDE)?;
-        if node.parent != Some(frame.node) || node.stamp != frame.stamp {
-            return Err(PLACED_OUTSIDE);
-        }
-        Ok(node.size)
-    })
+    measured_child(child).map(|(size, _)| size)
 }
 
 /// The start of `layout(width, height) { ... }` in the measurement `scope` names (D6).
@@ -848,29 +932,31 @@ pub fn end_placement(scope: Position) -> UiResult<()> {
     })
 }
 
-/// `Placeable.place(x, y)` in the placement block of `scope`: places `placeable`, a child
-/// measured in the running frame of `scope`'s node, at `(x, y)` from the content's top-left
-/// corner, while that frame is placing.
+/// `Placeable.place(x, y)` in the placement block of `scope`: places `placeable`, measured in
+/// the running frame of `scope`, at `(x, y)` from the content's top-left corner for a child of
+/// a policy, or from the step's for the rest of a step's chain, while that frame is placing.
 pub fn place(scope: Position, placeable: Position, x: i64, y: i64) -> UiResult<()> {
-    let (parent, child) = (scope.node, placeable.node);
     with_state(|state| {
         let State { tree, layout, .. } = state;
         let frame = layout.frames.last_mut().ok_or(PLACED_OUTSIDE)?;
-        let node = tree.node_mut(child).ok_or(PLACED_OUTSIDE)?;
-        if frame.node != parent
-            || frame.element != scope.element
-            || placeable.element != 0
-            || !frame.placing
-            || node.parent != Some(parent)
-            || node.stamp != frame.stamp
-        {
+        if frame.node != scope.node || frame.element != scope.element || !frame.placing {
             return Err(PLACED_OUTSIDE);
         }
-        // Positions stay within `MAX_EXTENT` of the content (D23).
-        let (x, y) = (
-            frame.origin.0 + clamp_extent(x),
-            frame.origin.1 + clamp_extent(y),
-        );
+        // Positions stay within `MAX_EXTENT` of the content or the step (D23).
+        let (x, y) = (clamp_extent(x), clamp_extent(y));
+        if frame.step {
+            if placeable != scope.next() || frame.measured == 0 {
+                return Err(PLACED_OUTSIDE);
+            }
+            frame.origin = (x, y);
+            frame.placed = 1;
+            return Ok(());
+        }
+        let node = tree.node_mut(placeable.node).ok_or(PLACED_OUTSIDE)?;
+        if placeable.element != 0 || node.parent != Some(scope.node) || node.stamp != frame.stamp {
+            return Err(PLACED_OUTSIDE);
+        }
+        let (x, y) = (frame.origin.0 + x, frame.origin.1 + y);
         if node.x != x || node.y != y {
             node.x = x;
             node.y = y;
@@ -884,13 +970,13 @@ pub fn place(scope: Position, placeable: Position, x: i64, y: i64) -> UiResult<(
     })
 }
 
-/// The size and own alignment of `child`, measured in the innermost running frame: what a
+/// The size and own alignment of `child`, measured in the innermost running policy: what a
 /// container's placement block reads in one call (D25).
 pub fn measured_child(child: NodeId) -> UiResult<(Size, Option<Alignment>)> {
     with_state(|state| {
         let frame = *state.layout.frames.last().ok_or(PLACED_OUTSIDE)?;
         let node = state.tree.node(child).ok_or(PLACED_OUTSIDE)?;
-        if node.parent != Some(frame.node) || node.stamp != frame.stamp {
+        if frame.step || node.parent != Some(frame.node) || node.stamp != frame.stamp {
             return Err(PLACED_OUTSIDE);
         }
         Ok((node.size, node.parent_data.2))
@@ -940,8 +1026,8 @@ pub fn absolute_bounds(tree: &crate::tree::UiTree, id: NodeId) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modifier::Element;
     use crate::properties::{Arrangement, Shape};
-    use crate::runtime::MeasurableMirror;
     use crate::test_support::*;
     use crate::text::FixedAdvanceMetrics;
     use std::cell::Cell;
@@ -1392,9 +1478,16 @@ mod tests {
                     }
                 }
                 1 => {
-                    let chains: [&[Element]; 5] = [
+                    let chains: [&[Element]; 6] = [
                         &[],
                         &[padding(random(10) as i64)],
+                        &[
+                            Element::Offset {
+                                x: random(9) as i64 - 4,
+                                y: random(9) as i64 - 4,
+                            },
+                            padding(random(4) as i64),
+                        ],
                         &[size(random(60) as i64, random(60) as i64)],
                         &[weight(1.0 + random(3) as f64, random(2) == 0)],
                         &[
@@ -1402,7 +1495,7 @@ mod tests {
                             width(50),
                         ],
                     ];
-                    b.chain(node, chains[random(5) as usize]);
+                    b.chain(node, chains[random(6) as usize]);
                 }
                 2 => {
                     // Move the node first among its parent's children.
@@ -1600,6 +1693,100 @@ mod tests {
         assert_eq!(bounds(&b, leaves[1]), "0,20 32x20");
         assert_eq!(bounds(&b, second), "0,40 16x20");
         assert_eq!(bounds(&b, first), "0,60 24x20");
+    }
+
+    /// An element measurer whose steps measure the rest of their chain and call `layout`
+    /// without placing it.
+    fn hiding_steps() -> FunctionValue {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SLOT: AtomicUsize = AtomicUsize::new(0);
+        static DESCRIPTOR: prism_runtime::Descriptor = prism_runtime::Descriptor {
+            slot: &SLOT,
+            drop_environment: None,
+            equals_environment: None,
+            duplicate_environment: None,
+        };
+        unsafe extern "C" fn hide(
+            _: *mut MeasureResultMirror,
+            _: *mut u8,
+            scope: *const MeasureScopeMirror,
+            _: *const ElementMirror,
+            measurable: *const MeasurableMirror,
+            constraints: *const ConstraintsMirror,
+        ) {
+            let scope = Position::of_words((*scope).node, (*scope).element);
+            let rest = Position::of_words((*measurable).node, (*measurable).element);
+            let size = measure_position(rest, (*constraints).into()).unwrap();
+            begin_placement(scope, size.width, size.height).unwrap();
+            end_placement(scope).unwrap();
+        }
+        SLOT.store(hide as *const () as usize, Ordering::Release);
+        FunctionValue {
+            descriptor: &DESCRIPTOR,
+            environment: std::ptr::null_mut(),
+        }
+    }
+
+    /// The scenario "A layout modifier that hides its content", from Rust: a step that does not
+    /// place the rest of its chain ends the program.
+    fn hidden_content_in_child() -> ! {
+        let mut b = TreeBuilder::new(400, 300);
+        b.steps = hiding_steps;
+        let root = b.root();
+        let text = b.text(root, "a");
+        b.chain(text, &[padding(4)]);
+        lay_out(&mut b);
+        unreachable!("the layout pass ends the program")
+    }
+
+    #[test]
+    fn a_step_that_does_not_place_its_content() {
+        let output = run_in_child(
+            "layout::tests::a_step_that_does_not_place_its_content",
+            hidden_content_in_child,
+        );
+        assert_eq!(output.status.code(), Some(101));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "panic: ui misuse: a layout modifier did not place its content\n"
+        );
+    }
+
+    /// D1: steps place the rest of their chain, so an offset moves the elements after it, the
+    /// content and the children, and leaves the node's size; positions sum along the chain.
+    #[test]
+    fn offsets_and_paddings_move_the_rest_of_the_chain() {
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let column = b.add(root, NodeKind::Column);
+        b.chain(
+            column,
+            &[
+                padding(4),
+                Element::Offset { x: 10, y: 5 },
+                background(0xFFFF_0000, Shape::RECTANGLE),
+                padding(2),
+            ],
+        );
+        let text = b.text(column, "a");
+        lay_out(&mut b);
+        assert_eq!(bounds(&b, column), "0,0 20x32");
+        assert_eq!(bounds(&b, text), "16,11 8x20");
+        let node = b.tree.node(column).unwrap();
+        assert_eq!(node.chain[2].bounds, Rect::new(14, 9, 12, 24));
+        assert_eq!(node.content, Rect::new(16, 11, 8, 20));
+        // Moving the offset moves the child it placed, through a relayout of the column only.
+        b.chain(
+            column,
+            &[
+                padding(4),
+                Element::Offset { x: 0, y: 0 },
+                background(0xFFFF_0000, Shape::RECTANGLE),
+                padding(2),
+            ],
+        );
+        lay_out(&mut b);
+        assert_eq!(bounds(&b, text), "6,6 8x20");
     }
 
     /// D7: a child its parent does not place keeps its last bounds, and is printed unplaced.
