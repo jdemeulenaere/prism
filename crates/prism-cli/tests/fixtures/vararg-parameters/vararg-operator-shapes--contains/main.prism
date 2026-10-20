@@ -1,0 +1,4 @@
+// expect: E4035
+struct V : Copy { val x: Int }
+
+operator fun V.contains(vararg o: Int): Bool = true

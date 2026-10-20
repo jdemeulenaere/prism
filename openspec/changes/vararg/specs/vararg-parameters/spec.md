@@ -92,6 +92,17 @@ A vararg's elements MUST be stored in its list as values given to `listOf` are (
 - **WHEN** `fun runAll(vararg actions: () -> Unit) { for (a in actions) a() }` is declared and `fun f(r: &String) { val n = 7; runAll({ println(n) }, { println(1) }) }` and `fun g(r: &String) { runAll({ println(r) }) }` are checked
 - **THEN** the borrow checker accepts `f`, whose first closure owns a copy of `n`, and emits `E5007` for `g`
 
+### Requirement: Operator Functions Take a Vararg Only for Indices and Calls
+As in Kotlin, only `get`, `set` and `invoke` operator functions MAY declare a vararg parameter, and `set` only among its indices, before its value parameter. Any other convention with a vararg, and a `set` whose value parameter is the vararg, MUST be rejected with `E4035`. An indexed assignment through a `set` whose indices end with a vararg MUST pass the written indices as the vararg's elements and the assigned value to the last parameter.
+
+#### Scenario: Vararg operator shapes
+- **WHEN** `struct V : Copy { val x: Int }` is declared with, in turn, `operator fun V.plus(vararg o: Int): Int = 0`, `operator fun V.contains(vararg o: Int): Bool = true`, `operator mut fun V.set(i: Int, vararg value: Int) {}`, and with `operator fun V.get(vararg i: Int): Int = 0` and `operator fun V.invoke(vararg o: Int): Int = 0`
+- **THEN** the type checker emits `E4035` for each of the first three, saying which conventions may have a vararg or that `set`'s value parameter cannot be one, and accepts `get` and `invoke`
+
+#### Scenario: Indexing with vararg indices
+- **WHEN** `struct Grid { var cells: List<Int> }` is declared with `operator fun Grid.get(vararg at: Int): Int` and `operator mut fun Grid.set(vararg at: Int, value: Int)` over `cells[at.size]`, and `fun main() { var g = Grid(listOf(0, 0, 0)); g[1, 1] = 5; g[1, 1] += 2; g[9] = 3; println(g[1, 1]); println(g[4]) }` runs with `--check-allocations`
+- **THEN** it prints `7` and `3`, each on its own line, and exits with status 0
+
 ### Requirement: Vararg Calls Cost Linear Compile Time
 Typing a call with a vararg MUST cost time linear in its arguments, using the existing generic call inference over the expanded parameters, with no search over candidate types and no analysis beyond the call.
 

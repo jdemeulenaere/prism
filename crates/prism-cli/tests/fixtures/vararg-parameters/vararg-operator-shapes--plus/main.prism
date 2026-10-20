@@ -1,0 +1,4 @@
+// expect: E4035
+struct V : Copy { val x: Int }
+
+operator fun V.plus(vararg o: Int): Int = 0

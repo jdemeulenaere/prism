@@ -1,0 +1,8 @@
+// expect: ok
+struct V : Copy { val x: Int }
+
+operator fun V.get(vararg i: Int): Int = 0
+
+operator fun V.invoke(vararg o: Int): Int = 0
+
+fun f(v: V): Int = v[1, 2] + v[3] + v(1, 2) + v()

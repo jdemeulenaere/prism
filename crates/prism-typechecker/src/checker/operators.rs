@@ -247,6 +247,29 @@ impl TypeChecker {
                 None,
             );
         }
+        // As in Kotlin, only the indices of `get` and `set` and the arguments of `invoke` may
+        // be a vararg: every other convention takes its one operand as a parameter, and `set`
+        // takes the value last (D3 of `vararg`).
+        let vararg = f.params.iter().position(|parameter| parameter.is_vararg);
+        let vararg_ok = match convention {
+            Convention::Get | Convention::Invoke => true,
+            Convention::Set => vararg.is_none_or(|index| index + 1 < f.params.len()),
+            _ => vararg.is_none(),
+        };
+        if !vararg_ok {
+            let message = if convention == Convention::Set {
+                format!(
+                    "the value parameter of '{}' cannot be a vararg: only its indices may be",
+                    f.name
+                )
+            } else {
+                format!(
+                    "'{}' cannot have a vararg parameter: only 'get', 'set' and 'invoke' may have one",
+                    f.name
+                )
+            };
+            return report(self, message, None);
+        }
         let parameters: Vec<Type> = {
             let type_parameters = super::type_parameters_of(&f.type_parameters);
             self.with_type_parameters(type_parameters, |c| {
@@ -2072,9 +2095,17 @@ impl TypeChecker {
             is_trailing_lambda: false,
             is_spread: false,
         };
+        // The value is `set`'s last parameter. After a vararg of indices it is passed by that
+        // parameter's name, since every further positional argument would be an index (D3 of
+        // `vararg`).
+        let value_name = self.set_value_after_vararg(&receiver_ty);
+        let as_value = |value: Expr| CallArg {
+            name: value_name.clone(),
+            ..as_argument(value)
+        };
         let Some(operator) = compound else {
             let mut args: Vec<CallArg> = indices.iter().cloned().map(as_argument).collect();
-            args.push(as_argument(value.clone()));
+            args.push(as_value(value.clone()));
             let call = self.call_set(indexed, (receiver, is_place, writable), &args, span);
             let kind = prism_typed_tree::StatementKind::Expression { value: call };
             return Some(self.builder.add_statement(kind, span));
@@ -2163,7 +2194,7 @@ impl TypeChecker {
             span,
         );
         let mut args: Vec<CallArg> = names.into_iter().map(as_argument).collect();
-        args.push(as_argument(combined));
+        args.push(as_value(combined));
         let call = self.call_set(indexed, (receiver, is_place, writable), &args, span);
         self.env.exit_scope();
         let kind = ExpressionKind::Block {
@@ -2175,6 +2206,29 @@ impl TypeChecker {
         let block = self.add(kind, ty, span);
         let kind = prism_typed_tree::StatementKind::Expression { value: block };
         Some(self.builder.add_statement(kind, span))
+    }
+
+    /// The name of the value parameter of the `set` of `receiver_ty` when its indices end with
+    /// a vararg, which positional arguments would fill; `None` otherwise.
+    fn set_value_after_vararg(&self, receiver_ty: &Type) -> Option<String> {
+        let mut layers = Vec::new();
+        let ExtensionLookup::Found { extension, .. } = self
+            .find_extension_through_indirection(receiver_ty.clone(), "set", &mut layers)
+            .0
+        else {
+            return None;
+        };
+        let SymbolKind::Function {
+            param_names,
+            vararg: Some(vararg),
+            ..
+        } = &extension.symbol.kind
+        else {
+            return None;
+        };
+        (vararg + 1 < param_names.len())
+            .then(|| param_names.last().cloned())
+            .flatten()
     }
 
     /// Whether every index parameter of the `set` of `receiver_ty` is a borrow, so an index

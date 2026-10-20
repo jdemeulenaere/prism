@@ -1,0 +1,4 @@
+// expect: E4035
+struct V : Copy { val x: Int }
+
+operator mut fun V.set(i: Int, vararg value: Int) {}
