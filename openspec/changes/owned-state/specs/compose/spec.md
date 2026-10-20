@@ -53,6 +53,10 @@ For a non-`Copy` `T`, `s.value` MUST be a place of the state object `s`, reached
 - **WHEN** `fun add(todos: &MutableState<List<Int>>) { todos.value.add(todos.value.size + 1) }` is declared and `fun main() { val todos = mutableStateOf(listOf(1)); add(todos); add(todos); println(todos.value.size); println(todos.value[2]) }` runs with `--check-allocations`
 - **THEN** stdout is `3` and `3`, one per line, and the exit status is 0
 
+#### Scenario: Safe navigation through a nullable state's value
+- **WHEN** `fun main() { val name = mutableStateOf<String?>("a" + "b"); println(name.value?.length ?: 0); name.value = null; println(name.value?.length ?: 0) }` runs with `--check-allocations`
+- **THEN** stdout is `2` and `0`, one per line, and the exit status is 0: the flag of the receiver's borrow is taken before its `null` test reads the value
+
 #### Scenario: Moving a state's value out rejected
 - **WHEN** `compose fun C(s: &State<String>) { val t = s.value }` is checked
 - **THEN** the type checker emits `E4017`, saying that the value of a state cannot be moved out, with help suggesting a borrow or `.clone()`

@@ -197,6 +197,20 @@ impl Builder<'_> {
         Self::deref(Place::local(pointer))
     }
 
+    /// Takes the deferred guard of a receiver now if `place` reads through the reference its
+    /// begin call gives, as the null test of `s.value?.length` does before the call: the flag
+    /// is taken before the value is read (D3 of `owned-state`).
+    pub(super) fn take_guard_read_by(&mut self, place: &Place) {
+        if self
+            .deferred_guard
+            .as_ref()
+            .is_some_and(|deferred| deferred.pointer == place.local)
+        {
+            let deferred = self.deferred_guard.take().expect("a deferred guard");
+            self.take_deferred_guard(deferred);
+        }
+    }
+
     /// Takes the guard `deferred`: borrows its local and calls its begin operation.
     pub(super) fn take_deferred_guard(&mut self, deferred: DeferredGuard) {
         let DeferredGuard {

@@ -233,6 +233,7 @@ impl Builder<'_> {
         place_span: Span,
         span: Span,
     ) {
+        self.take_guard_read_by(&place);
         let tag = self.new_temporary(Type::Int, place_span);
         self.assign(Place::local(tag), Rvalue::Discriminant(place), place_span);
         let rvalue = Rvalue::Binary(

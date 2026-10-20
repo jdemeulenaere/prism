@@ -252,6 +252,7 @@ impl Builder<'_> {
     /// Reads the tag of the nullable `place` into a temporary and switches on it: returns the
     /// block where it is present and the block where it is `null`.
     pub(super) fn switch_on_tag(&mut self, place: Place, span: Span) -> (BlockId, BlockId) {
+        self.take_guard_read_by(&place);
         let tag = self.new_temporary(Type::Int, span);
         self.assign(Place::local(tag), Rvalue::Discriminant(place), span);
         let present = self.new_block();
