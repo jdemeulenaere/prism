@@ -192,7 +192,7 @@ A call whose callee is a value whose type, after its `&`, `&mut` and `Heap<T>` l
 - **THEN** the type checker emits `E4002` at `b`, saying that iterating a `Bag` needs `operator fun Bag.hasNext(cursor: &Int): Bool` and `operator fun Bag.next(cursor: &mut Int)`
 
 ### Requirement: Loop Variables Are What next Returns
-The loop variable MUST be a fresh immutable binding of `next`'s result type in each iteration: a `&E` borrows an element, a value is owned and dropped at the end of the iteration. Iterating a `&mut` iterable (`for (x in &mut y)`, or `y` of a `&mut` type, as for lists) MUST call a `mut` `next` returning `&mut E`, a second `next` of the receiver; with none it MUST be `E4003`, naming it. The cursor MUST be dropped when the loop ends.
+The loop variable MUST be a fresh immutable binding of `next`'s result type in each iteration: a `&E` borrows an element, a value is owned and dropped at the end of the iteration. Iterating a `&mut` iterable (`for (x in &mut y)`, or `y` of a `&mut` type, as for lists) MUST call a `mut` `next` returning `&mut E`, a second `next` of the receiver; with none, a written `&mut y` MUST be `E4003`, naming it, and a `y` of a `&mut` type iterates shared. The cursor MUST be dropped when the loop ends.
 
 #### Scenario: Iterating mutably through a mutable next
 - **WHEN** the `Bag` protocol above also declares `operator mut fun Bag.next(cursor: &mut Int): &mut Item { val i: Int = cursor; *cursor = i + 1; return &mut items[i] }` with `struct Item { var name: String }`, and `fun f(b: &mut Bag) { for (item in b) { item.name = "x" } }`, `fun g() { var b = Bag(listOf()); for (item in b) { item.name = "x" } }` and `fun h() { var b = Bag(listOf()); for (item in &mut b) { item.name = "x" } }` are checked

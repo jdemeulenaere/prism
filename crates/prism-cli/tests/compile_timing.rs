@@ -1105,6 +1105,58 @@ fn library_file(i: usize) -> String {
     )
 }
 
+/// `n` functions using the operator conventions on user types declared once (D18 of
+/// `operator-conventions`): `+`, `<`, `in` and `==` through operator functions, a borrowing
+/// index place, an indexed compound assignment through `set` and a cursor loop.
+fn operator_uses(n: usize) -> String {
+    let mut source = String::from(
+        "struct V : Copy { val x: Int, val y: Int }\n\
+         operator fun V.plus(other: V): V = V(x + other.x, y + other.y)\n\
+         operator fun V.compareTo(other: &V): Int = x - other.x\n\
+         struct Id { val n: Int, val tag: String }\n\
+         operator fun Id.equals(other: &Id): Bool = n == other.n\n\
+         struct Item { var count: Int }\n\
+         struct Bag { var items: List<Item> }\n\
+         operator fun Bag.get(index: Int): &Item = &items[index]\n\
+         operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]\n\
+         operator fun Bag.contains(count: Int): Bool = items.size > count\n\
+         operator fun Bag.iterator(): Int = 0\n\
+         operator fun Bag.hasNext(cursor: &Int): Bool = cursor < items.size\n\
+         operator fun Bag.next(cursor: &mut Int): &Item {\n\
+         \x20   val i: Int = cursor\n\
+         \x20   *cursor = i + 1\n\
+         \x20   return &items[i]\n\
+         }\n\
+         struct Grid { val columns: Int, var cells: List<Int> }\n\
+         operator fun Grid.get(row: Int, column: Int): Int = cells[row * columns + column]\n\
+         operator mut fun Grid.set(row: Int, column: Int, value: Int) {\n\
+         \x20   cells[row * columns + column] = value\n\
+         }\n",
+    );
+    for i in 0..n {
+        writeln!(
+            source,
+            "fun f{i}(a: V, b: &mut Bag, g: &mut Grid, p: &Id, q: &Id): Int {{\n\
+             \x20   val c = a + V({i}, 1)\n\
+             \x20   var total = if (c < a) 1 else 0\n\
+             \x20   if ({i} in b && p == q) total += b[0].count\n\
+             \x20   g[0, 1] += {i}\n\
+             \x20   for (item in b) total += item.count\n\
+             \x20   return total\n\
+             }}"
+        )
+        .unwrap();
+    }
+    source.push_str(
+        "fun main() {\n\
+         \x20   var b = Bag(listOf(Item(1)))\n\
+         \x20   var g = Grid(2, listOf(0, 0))\n\
+         \x20   println(f0(V(1, 2), &mut b, &mut g, &Id(1, \"a\"), &Id(1, \"b\")))\n\
+         }\n",
+    );
+    source
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -1233,6 +1285,7 @@ fn shapes() -> Vec<Shape> {
             nested_receiver_lambdas,
         ),
         shape("context-overloads", true, SIZES, context_overloads),
+        shape("operator-uses", true, SIZES, operator_uses),
         shape("ui-calls", true, SIZES, ui_calls),
     ]
 }

@@ -47,9 +47,9 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 9. Compile timing, catalog and documents (D18)
 
-- [ ] 9.1 Add the `operator-uses` shape to `crates/prism-cli/tests/compile_timing.rs` (D18) and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; record the times per size in `design.md`. This is the scenario "Many operator uses check in linear time".
-- [ ] 9.2 Update `openspec/specs/diagnostics/spec.md`: add `E4035` `InvalidOperatorDeclaration`; extend `E4002` (operator uses without an operator function, the `for` protocol, nullable operands), `E4003` (mutable index positions without a `mut` `get`, `for (x in &mut y)` without a `mut` `next`), `E4004` (index count on `List`/`String`), `E4010` (operator functions a built-in operator covers) and `E4029` (intrinsic operator flags). Add the `operators` spec to `AGENTS.md`'s reference list.
-- [ ] 9.3 Run the apply checks of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/`, `prism fmt --check examples/`, `prism run --check-allocations examples/run/main.prism`, and the headless UI entries with `--check-allocations`.
+- [x] 9.1 Add the `operator-uses` shape to `crates/prism-cli/tests/compile_timing.rs` (D18) and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; record the times per size in `design.md`. This is the scenario "Many operator uses check in linear time".
+- [x] 9.2 Update `openspec/specs/diagnostics/spec.md`: add `E4035` `InvalidOperatorDeclaration`; extend `E4002` (operator uses without an operator function, the `for` protocol, nullable operands), `E4003` (mutable index positions without a `mut` `get`, `for (x in &mut y)` without a `mut` `next`), `E4004` (index count on `List`/`String`), `E4010` (operator functions a built-in operator covers) and `E4029` (intrinsic operator flags). Add the `operators` spec to `AGENTS.md`'s reference list.
+- [x] 9.3 Run the apply checks of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/`, `prism fmt --check examples/`, `prism run --check-allocations examples/run/main.prism`, and the headless UI entries with `--check-allocations`.
 
 ## Workflow follow-up
 

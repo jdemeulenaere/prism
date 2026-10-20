@@ -357,6 +357,32 @@ mod tests {
         assert_eq!(import_suggestions, &["prism/core", "prism/test"]);
     }
 
+    /// A missing operator function a library module declares suggests its import, as a member
+    /// does (D3 of `operator-conventions`).
+    #[test]
+    fn a_missing_operator_function_suggests_its_module() {
+        let library = Library::with_modules(vec![(
+            "prism/test".to_string(),
+            "package prism\n\npublic struct Vec2 : Copy { val x: Int }\n\npublic operator fun Vec2.plus(other: Vec2): Vec2 = other\n".to_string(),
+        )]);
+        let mut errors = vec![TypeError::MissingOperatorFunction {
+            message: "operator '+' cannot be applied to 'Vec2' and 'Vec2'".to_string(),
+            receiver: Type::plain_struct(prism_typed_tree::NominalId::new("prism/test", "Vec2")),
+            function: "plus".to_string(),
+            help: None,
+            span: prism_ast::Span::dummy(),
+            import_suggestions: Vec::new(),
+        }];
+        suggest_library_imports(&library, &mut errors);
+        let TypeError::MissingOperatorFunction {
+            import_suggestions, ..
+        } = &errors[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(import_suggestions, &["prism/test"]);
+    }
+
     #[test]
     fn suggestions_fill_unresolved_names_and_members_only() {
         let span = prism_ast::Span::dummy();

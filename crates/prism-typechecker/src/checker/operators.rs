@@ -705,6 +705,7 @@ impl TypeChecker {
     /// `receiver` has no operator function `function` serving it: with help naming the
     /// declaration to add (`declaration`), saying to mark an existing function `operator`, or
     /// suggesting a safe call `safe_call` on a nullable receiver.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn report_missing_operator(
         &mut self,
         miss: OperatorMiss,
@@ -1064,9 +1065,12 @@ impl TypeChecker {
 }
 
 /// Whether a built-in operator may accept operands of type `ty`, so its own diagnostics apply
-/// when no operator function serves the use: the scalars, `String`, and the types that stand
-/// for none (errors, `Nothing`, type parameters, unresolved names).
+/// when no operator function serves the use: the scalars, `String`, the types that stand for
+/// none (errors, `Nothing`, type parameters, unresolved names), and nullables of them.
 pub(super) fn has_builtin_operators(ty: &Type) -> bool {
+    if let Type::Nullable(inner) = ty {
+        return has_builtin_operators(inner);
+    }
     matches!(
         ty,
         Type::Int
@@ -2022,8 +2026,25 @@ impl TypeChecker {
             }
             Err(_) => return None,
         };
-        let mutable = matches!(iterable_ty, Type::Reference { mutable: true, .. })
+        let mut mutable = matches!(iterable_ty, Type::Reference { mutable: true, .. })
             && super::contents_writable(iterable_ty, false);
+        // A `&mut` value iterates shared when the type has no `mut` `next`, unless the loop
+        // asks for mutable iteration with a written `&mut`.
+        let written_mutable = matches!(
+            iterable.kind,
+            ExprKind::Unary {
+                op: UnaryOp::BorrowMut,
+                ..
+            }
+        );
+        if mutable
+            && !written_mutable
+            && self
+                .operator_extension(&collection, &mutable_accessor_name("next"), span)
+                .is_err()
+        {
+            mutable = false;
+        }
         let (iterator_call, cursor) = self.protocol_call(&iterator, "iterator", &reached)?;
         let cursor_ref = |mutable: bool| Type::Reference {
             mutable,

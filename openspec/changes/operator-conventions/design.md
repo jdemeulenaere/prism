@@ -182,6 +182,8 @@ Rejected:
 
 **Compile-time cost.** One lookup per indexed assignment.
 
+**Implementation (apply, autonomous).** `a[i] op= v` through `set` is a block: each index into a local (`index#1`, a name no source can write), then `a.set(index#1, a[index#1] op v)`, the inner `a[index#1]` an ordinary index through `get`. The indexed value is read by both calls, so it must be a variable or a field path, which reads the same value twice (`E4003` otherwise, with help to hold it in a `var`); an index that both functions take by value must be `Copy` (`E4017`). Rejected: holding any indexed expression in a temporary, for a case (`make()[0] += 1`) whose `set` would write a value dropped at once.
+
 Rejected:
 - **The `mut` `get` first, `set` as a fallback**: a type could not observe writes it declared `set` for.
 - **Kotlin's rule that a compound assignment through `set` re-evaluates the indices**: Kotlin evaluates them once too; Prism states it.
@@ -198,7 +200,7 @@ Kotlin's `for` calls `iterator()` and then `hasNext()` and `next()` on the itera
 
 **Compile-time cost.** Three lookups per loop; MIR adds one loop shape (D14).
 
-**Implementation (apply, autonomous).** A cursor loop iterates mutably exactly when a list loop would: when the iterable has a `&mut` type, written `&mut b` or a `b: &mut Bag` parameter (`collections` D10). The proposal's scenario wrote `for (item in &mut b)` for a `b: &mut Bag` parameter, which is `E4003` (a `&mut` of a `val` binding); the scenario now shows both forms, and a shared loop variable's field write gets the help `for (item in &mut b)`, for list loops too. The loop's header evaluates `hasNext` in its own scope, so its borrows end before the branch.
+**Implementation (apply, autonomous).** A cursor loop iterates mutably exactly when a list loop would: when the iterable has a `&mut` type, written `&mut b` or a `b: &mut Bag` parameter (`collections` D10). The proposal's scenario wrote `for (item in &mut b)` for a `b: &mut Bag` parameter, which is `E4003` (a `&mut` of a `val` binding); the scenario now shows both forms, and a shared loop variable's field write gets the help `for (item in &mut b)`, for list loops too. Unlike a list, a cursor type may have no `mut` `next`: a value of a `&mut` type then iterates shared, and only a written `&mut b` without one is `E4003`. The loop's header evaluates `hasNext` in its own scope, so its borrows end before the branch.
 
 Rejected:
 - **Kotlin's iterator objects**: need a struct holding a borrow.
@@ -255,6 +257,8 @@ In `crates/prism-codegen/src/equality.rs`, expanding equality of a struct or enu
 
 `crates/prism-cli/tests/compile_timing.rs` gains the shape `operator-uses`: files of 256, 1,024 and 4,096 functions, each using `+`, `<`, `in`, `==` on a type with `equals`, a borrowing index place, an indexed compound assignment through `set` and a cursor loop, on user types declared once, asserting growth of at most ×4.6 per ×4 under `PRISM_ASSERT_TIMING=1`, as every stage's shapes do.
 
+**Measured (apply, release build, M-series Mac, the full `PRISM_ASSERT_TIMING=1` run passing).** `operator-uses` at 256, 1,024 and 4,096 functions, in ms: `type` 9.7, 38.5 and 165.8 (×4.0, ×4.3); `mir` 4.7, 20.9 and 93.9 (×4.4, ×4.5); `borrow` 24.7, 100.0 and 425.6 (×4.0, ×4.3); `lower` 10.6, 42.8 and 175.6; `clif` 21.1, 83.9 and 335.2; `compose` 1.1, 5.5 and 29.9 (×4.8, ×5.4, the small stage's memory effects that `list-loops` shows too, ×5.3). Every stage stays within the assertions; the type checker's operator lookups cost about 40 µs per function of seven operator uses.
+
 ## Risks / Trade-offs
 
 - **[A reborrow through the accessor's temporary]** `&b[0].name` derives from a temporary holding `get`'s `&Item`, whose storage ends with the statement. The borrow checker must treat the dereference as reaching `b` (references carry their borrows), not the temporary, or `fun first(b: &Bag): &String = &b[0].name` would be a false `E5006`/`E5008`. → D14 makes a whole-element borrow the call itself; field paths rely on "References Carry Their Borrows"; scenarios cover both, and the reviewer should probe them.
@@ -262,6 +266,10 @@ In `crates/prism-codegen/src/equality.rs`, expanding equality of a struct or enu
 - **[Two `get`s with different element types]** Imported shared and mutable accessors from different files could disagree. → The element type comes from the shared accessor; a mutable position whose `mut` accessor gives another type is `E4002`; same-file pairs are checked by `E4035`.
 - **[One function per name]** `Dp.times(Int)` and `Dp.times(Double)` cannot coexist. → Recorded deviation from Compose for `library-in-prism` to document in the `ui` spec; overloading is a follow-up.
 - **[`in` as an operator]** `in` is already a keyword, so no identifier is lost; an expression statement starting a line with `in` was a syntax error before and still is (a newline before `in` ends the expression).
+
+## Verification (apply)
+
+The flagged risks, probed with small programs under `--check-allocations`: reborrows through an accessor's temporary check and run (`fun first(b: &Bag): &String = &b[0].name`, `fun whole(b: &Bag): &Item = &b[0]`, a `&mut b[0]` written through), with no false `E5006` or `E5008`; holding `&b[0]` across `b.add(...)` is `E5003`. A user `equals` runs inside equality glue and the compose runtime: it serves list `==`, `contains` and `indexOf`, boxes, nullables, fields, enum payloads, `when` value patterns, a state write's equality check (an equal write invalidates nothing) and a kept argument's comparison (an equal argument skips the composable); an `equals` that reads a state works outside and during a pass, and one that writes a state works outside a pass and is the located runtime error `state written during composition` during one, never a runtime panic. Generic accessors, a generic cursor protocol and a generic `plus` with its compound assignment run. `a in b` evaluates `a` before a temporary `b` (MIR evaluates a receiver ordered after an argument in its turn). The apply checks of `openspec/config.yaml` pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` and `prism fmt --check` over `examples/`, `examples/run/main.prism` and the four UI entries headless under `--check-allocations`, and the full `PRISM_ASSERT_TIMING=1` compile-timing run.
 
 ## Migration Plan
 
