@@ -923,6 +923,21 @@ mod tests {
         );
     }
 
+    /// A value with a drop hook is never taken apart (`ownership`, "Values With Drop Hooks Are
+    /// Not Taken Apart"), so moving its field out suggests a borrow and a clone only.
+    #[test]
+    fn test_cannot_move_out_of_a_value_with_a_drop_hook_suggests_no_take_apart() {
+        let out = render_type_errors(
+            "struct User { val name: String }\noperator mut fun User.drop() {}\nfun f(u: User) {\n    val n = u.name\n}\n",
+        );
+        assert!(
+            out.contains("error[E4017]: cannot move out of field 'name' of 'u'"),
+            "{out}"
+        );
+        assert!(out.contains("help: borrow it instead: '&u.name'"), "{out}");
+        assert!(!out.contains("take the value apart"), "{out}");
+    }
+
     #[test]
     fn test_pattern_diagnostics_name_their_fixes() {
         let out = render_type_errors(

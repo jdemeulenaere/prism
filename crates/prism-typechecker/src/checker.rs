@@ -9941,13 +9941,15 @@ impl TypeChecker {
             _ => return None,
         };
         let sym = self.env.lookup(name)?;
+        // A struct with a drop hook is never taken apart (D5 of `drop-and-clone-hooks`), so it
+        // gets no such help.
         let is_struct_local = matches!(
             &sym.kind,
             SymbolKind::Variable {
-                ty: Type::Struct { .. },
+                ty: Type::Struct { id, .. },
                 local: Some(_),
                 ..
-            }
+            } if !self.types.has_drop_hook(id)
         );
         let borrowed = self.is_default_input(name) || self.is_capture(name);
         (is_struct_local && !borrowed).then(|| name.to_string())
