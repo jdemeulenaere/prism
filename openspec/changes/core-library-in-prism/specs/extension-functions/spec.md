@@ -49,9 +49,6 @@ A getter's body MUST be checked as the body of an extension function with a shar
 - **WHEN** `compose fun Leaf() {}`, `struct Box : Copy { val w: Int }` and `val Box.leaf: Int get() { Leaf(); return 1 }` are checked
 - **THEN** the type checker emits `E4008` for the call of `Leaf`
 
-### Requirement: Extension Property Declarations Are Checked
-An extension property MUST be rejected with `E4010` when the file declares another extension property or extension function of the same name on the same receiver type constructor, when it is named like a field of its receiver struct, or when it is named like a member of its receiver type (a member of a built-in type, or an intrinsic extension of a library type). An extension property and a top-level function or value MAY share a name.
-
 #### Scenario: A property and a function of one name rejected
 - **WHEN** a file declares `struct Box : Copy { val w: Int }`, `val Box.size: Int get() = w` and `fun Box.size(): Int = w`
 - **THEN** the type checker emits `E4010` for the second declaration
@@ -59,6 +56,10 @@ An extension property MUST be rejected with `E4010` when the file declares anoth
 #### Scenario: A property named like a field rejected
 - **WHEN** a file declares `struct Box : Copy { val w: Int }` and `val Box.w: Int get() = 0`
 - **THEN** the type checker emits `E4010`, saying that the field `w` always takes precedence
+
+#### Scenario: A property named like a variant rejected
+- **WHEN** a file declares `enum Color : Copy { Red, Green }` and `val Color.Red: Int get() = 1`
+- **THEN** the type checker emits `E4010`, saying that the variant `Red` always takes precedence
 
 #### Scenario: A property named like a member rejected
 - **WHEN** a file declares `val String.length: Int get() = 0` and `val <T> List<T>.indices: Range get() = 0..<1`

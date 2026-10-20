@@ -1,0 +1,7 @@
+// expect: E4010
+enum Color : Copy { Red, Green }
+
+val Color.Red: Int get() = 1
+
+// A function may share a variant's name: a call never names a variant.
+fun Color.Green(): Int = 2

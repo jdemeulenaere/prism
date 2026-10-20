@@ -3161,6 +3161,13 @@ impl TypeChecker {
                 .is_some_and(|fields| fields.iter().any(|(name, _, _)| name == &f.name)),
             _ => false,
         };
+        // A read of a variant's name on an enum value names the variant, so a property of that
+        // name could never be read (a call is not a variant, so a function may share it).
+        let variant_clash = property
+            && match &receiver_ty {
+                Type::Enum { id, .. } => self.variant_index(id, &f.name).is_some(),
+                _ => false,
+            };
         // An intrinsic member of the library always takes precedence (D7 of
         // `standard-library`).
         let member_clash = self.member(&receiver_ty, &f.name).map(|m| m.module.clone());
@@ -3194,6 +3201,14 @@ impl TypeChecker {
                 message: format!(
                     "{} '{}.{}' can never be {}: the field '{}' of '{}' always takes precedence",
                     what, receiver_ty, f.name, used, f.name, receiver_ty
+                ),
+                span: f.span,
+            });
+        } else if variant_clash {
+            self.errors.push(TypeError::UncallableExtension {
+                message: format!(
+                    "extension property '{}.{}' can never be read: the variant '{}' of '{}' always takes precedence",
+                    receiver_ty, f.name, f.name, receiver_ty
                 ),
                 span: f.span,
             });
